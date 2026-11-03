@@ -293,7 +293,7 @@ emu_cases() {
     # kernel's removal goes, and libusb's own line then says which error
     # it met (1 run in 5): only the driver's and sigrok-cli's lines count.
     logicpro_options
-    emu_case "unplug during the upload" --unplug out=0:3 --expect-fail --stderr --filter "/^sr: usb: Failed to open device/d; $U" -- -l 4 -d $F -C 0 --continuous -O bits
+    emu_case "unplug during the upload" --unplug out=0:3 --expect-fail --stderr --filter "$U; /^sr: usb: Failed to open device/d" -- -l 4 -d $F -C 0 --continuous -O bits
 
     # Unplugged during saleae_logic_pro_prepare(), after the write of
     # register 0x15 (the 61st command): the prepare ignores the failing
