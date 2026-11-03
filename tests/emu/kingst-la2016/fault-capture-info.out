@@ -1,0 +1,3 @@
+Cannot read 16 bytes from USB: LIBUSB_ERROR_PIPE.
+Cannot read capture info.
+Cannot start acquisition data download.

@@ -1,0 +1,4 @@
+High USB stream bandwidth: 3200Mbps.
+Cannot write 1 bytes to USB: LIBUSB_ERROR_PIPE.
+Cannot configure run mode 3.
+Cannot set 'runmode' to 'run'.

@@ -1,0 +1,3 @@
+Cannot claim USB interface. Another program or driver using it?
+Cannot communicate to MCU firmware.
+Unknown or unsupported device type.

@@ -1,0 +1,3 @@
+Cannot write 0 bytes to USB: LIBUSB_ERROR_PIPE.
+Cannot reset USB bulk state.
+Cannot start acquisition data download.

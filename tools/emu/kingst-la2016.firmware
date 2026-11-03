@@ -1,0 +1,15 @@
+# Firmware stand-ins for the kingst-la2016 model
+# (emu/src/models/kingst-la2016/mod.rs): the MCU firmware the driver
+# uploads to the bare FX2 (its name built from the product id) and the
+# FPGA bitstream of each emulated model. The sizes are those of the
+# model's constants, which a unit test checks; they are not the sizes
+# of the vendor's files, which the model does not need (it checks the
+# stand-ins byte for byte).
+kingst-la-01a2.fw 6221
+kingst-la2016a1-fpga.bitstream 149461
+kingst-la2016-fpga.bitstream 149333
+kingst-la1016-fpga.bitstream 149205
+kingst-la1016a1-fpga.bitstream 149077
+kingst-la1010a1-fpga.bitstream 148949
+kingst-la5016a1-fpga.bitstream 340181
+kingst-la5032a0-fpga.bitstream 340053

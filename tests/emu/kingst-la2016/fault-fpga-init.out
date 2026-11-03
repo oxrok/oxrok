@@ -1,0 +1,4 @@
+Cannot write 4 bytes to USB: LIBUSB_ERROR_PIPE.
+Cannot initiate FPGA bitstream upload.
+Cannot upload FPGA bitstream.
+Unknown or unsupported device type.
