@@ -294,6 +294,22 @@ pub fn read_string_ascii(t: &mut dyn Transport, index: u8) -> Result<String> {
         .collect())
 }
 
+/// The name libusb's `libusb_error_name()` gives the error a transfer
+/// failed with, for drivers that log as their libsigrok counterpart
+/// does: a STALL is `LIBUSB_ERROR_PIPE`, a vanished device
+/// `LIBUSB_ERROR_NO_DEVICE`, anything not mapped `LIBUSB_ERROR_IO`.
+pub fn libusb_error_name(e: &Error) -> &'static str {
+    match e {
+        Error::Timeout => "LIBUSB_ERROR_TIMEOUT",
+        Error::Disconnected => "LIBUSB_ERROR_NO_DEVICE",
+        Error::Busy => "LIBUSB_ERROR_BUSY",
+        Error::Device(m) if m.contains("stalled") => "LIBUSB_ERROR_PIPE",
+        Error::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied => "LIBUSB_ERROR_ACCESS",
+        Error::NotSupported(_) => "LIBUSB_ERROR_NOT_SUPPORTED",
+        _ => "LIBUSB_ERROR_IO",
+    }
+}
+
 /// A queue of bulk IN transfers, see [`Transport::bulk_in_stream`].
 pub trait BulkStream: Send {
     /// The next completed transfer, in order. A short transfer is not
@@ -444,6 +460,14 @@ mod tests {
         assert_eq!(read_string_ascii(&mut r, 1).unwrap(), "sig?");
         assert!(read_string_ascii(&mut r, 0).is_err());
         r.finish().unwrap();
+    }
+
+    #[test]
+    fn libusb_error_names() {
+        assert_eq!(libusb_error_name(&Error::device("endpoint stalled")), "LIBUSB_ERROR_PIPE");
+        assert_eq!(libusb_error_name(&Error::Disconnected), "LIBUSB_ERROR_NO_DEVICE");
+        assert_eq!(libusb_error_name(&Error::Timeout), "LIBUSB_ERROR_TIMEOUT");
+        assert_eq!(libusb_error_name(&Error::device("babble")), "LIBUSB_ERROR_IO");
     }
 
     #[test]

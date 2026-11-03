@@ -44,7 +44,8 @@ impl Hex {
     fn new(ctx: &OutputContext, width: usize) -> Self {
         let channels = ctx.enabled_logic();
         Hex {
-            width: width.max(1),
+            // Width 0: the C count never equals it, so no line ends.
+            width: if width == 0 { usize::MAX } else { width },
             count: 0,
             trigger: None,
             lines: channels.iter().map(|(_, n)| format!("{n}:")).collect(),

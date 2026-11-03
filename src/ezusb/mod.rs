@@ -117,6 +117,29 @@ pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     set_cpu_reset(t, false)
 }
 
+/// `ezusb_upload_firmware()` after its open and `SET_CONFIGURATION`:
+/// [`upload_firmware`] for a raw image, logging what `ezusb.c` logs, so
+/// that a driver's errors read as its libsigrok counterpart's (the C
+/// code installs the file as one raw image).
+pub fn upload_firmware_logged(t: &mut dyn Transport, name: &str, image: &[u8]) -> Result<()> {
+    let reset = |t: &mut dyn Transport, on: bool| {
+        log::info!("setting CPU reset mode {}...", if on { "on" } else { "off" });
+        set_cpu_reset(t, on).inspect_err(|e| {
+            log::error!("Unable to send control request: {}.", crate::usb::libusb_error_name(e));
+        })
+    };
+    reset(t, true)?;
+    log::info!("Uploading firmware '{name}'.");
+    for (i, chunk) in image.chunks(CHUNK).enumerate() {
+        load(t, (i * CHUNK) as u16, chunk).inspect_err(|e| {
+            log::error!("Unable to send firmware to device: {}.", crate::usb::libusb_error_name(e));
+        })?;
+        log::info!("Uploaded {} bytes.", chunk.len());
+    }
+    log::info!("Firmware upload done.");
+    reset(t, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,6 +154,20 @@ mod tests {
         assert!(parse_ihex(b":020000040000FA\n").is_err());
         let raw = parse_image(&[1, 2, 3]).unwrap();
         assert_eq!(raw, [Block { address: 0, data: vec![1, 2, 3] }]);
+    }
+
+    #[test]
+    fn logged_upload_stops_at_a_failed_chunk() {
+        let image = vec![0x5au8; CHUNK + 1];
+        let text = format!(
+            "# oxrok usb fixture 1\n\
+             device vid=77a1 pid=01a2\n\
+             ctl_out 40 a0 e600 0000 01 -> ok\n\
+             ctl_out 40 a0 0000 0000 5a{{{CHUNK}}} -> err device \"endpoint stalled\"\n"
+        );
+        let mut r = Replay::from_text(&text).unwrap();
+        assert!(upload_firmware_logged(&mut r, "x.fw", &image).is_err());
+        r.finish().unwrap();
     }
 
     #[test]

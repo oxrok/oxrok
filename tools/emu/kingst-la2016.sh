@@ -4,11 +4,13 @@
 # sample memory with the hardware trigger and their run length encoded
 # download, the streaming mode, the PWM outputs and the threshold.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". oxrok does not have the driver: every case is an oracle case.
+# model".
 EMU_MODEL=kingst-la2016
 EMU_OPTIONS="-o mcu=1"
 EMU_DRIVER=kingst-la2016
 EMU_GCOV_SHARED="src/usb.c src/ezusb.c"
+# oxrok has the driver: its cases must run full.
+EMU_FULL=kingst-la2016
 
 # The model's options for the cases that follow: every case's reset
 # builds the model with them, and re-attaches the device when its
@@ -58,11 +60,15 @@ emu_cases() {
     # A device that renumerated has an address the READY line did not
     # report.
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
-    # The last line of stderr: sigrok-cli's own words for the failure.
-    L='$!d'
+    # oxrok's log prefix ("oxrok: LEVEL: MODULE: ") as libsigrok's, so
+    # that the filters below read one form.
+    N='s/^oxrok: [a-z]+: oxrok::drivers::kingst_la2016[a-z0-9_:]*: /sr: kingst-la2016: /; s/^oxrok: [a-z]+: oxrok::ezusb: /sr: ezusb: /'
+    # The last line of stderr: the tool's own words for the failure, with
+    # sr_strerror()'s wording for oxrok's errors.
+    L='$!d; s/(invalid argument).*$/\1./; s/: (not supported|unknown option)[^.]*(\.?)$/: not applicable\2/'
     # Only the log lines that say what failed (the driver's sr_err and
-    # sr_warn, not libusb's or sigrok-cli's).
-    E='/kingst-la2016: /!d; s/^.*kingst-la2016: //'
+    # sr_warn, not libusb's or the tool's).
+    E="$N; /kingst-la2016: /!d; s/^.*kingst-la2016: //"
 
     # The firmware runs (EMU_OPTIONS): no upload, the FPGA is blank
     # and gets its bitstream in every scan. First, while the device is
@@ -71,6 +77,8 @@ emu_cases() {
     emu_case "scan" --keep-header --filter "$C" -- -d $K --scan
     emu_case "show" --keep-header --filter "$C" -- -d $K --show
     emu_case "by other ids" --stderr --filter "$E" -- -d $K:conn=77a1.01a3 --scan
+    # sr_usb_find()'s own message differs in its prefix: the driver's alone.
+    emu_case "bad conn" --stderr --filter "$N; /Cannot find/!d; s/^.*kingst-la2016: //" -- -d $K:conn=nonsense --scan
     emu_case "probe names" --keep-header -- -d $K:probe_names=a,b,c,d --scan
     emu_case "get samplerate" -- -d $K --get samplerate
     emu_case "get limit_samples" -- -d $K --get limit_samples
@@ -100,8 +108,12 @@ emu_cases() {
     emu_case "pwm2 get duty" -- -d $K -g PWM2 --get output_duty_cycle
     emu_case "pwm2 get enabled" -- -d $K -g PWM2 --get enabled
     emu_case "pwm1 enable" --no-output -- -d $K -g PWM1 --set -c enabled=on
-    emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5:enabled=on
-    emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
+    # sigrok-cli keeps the pairs of one -c in a GHashTable and sets them in
+    # its order, g_hash_table_iter_next() at session.c:700-701 (frequency,
+    # enabled, duty); oxrok sets them as given. The device ends up alike;
+    # the steps differ.
+    emu_case "pwm2 frequency and duty" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5:enabled=on
+    emu_case "pwm1 20 MHz" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0
@@ -125,8 +137,11 @@ emu_cases() {
     # Rates off the list are the driver's too: it sends clock / rate.
     emu_case "capture 3M" -- -d $K -c samplerate=3M --samples 40 -O hex
     # The lowest rate the driver takes, clock / 65536 = 3051 Hz: its
-    # divider, 65552, is truncated to 16 bits (16, 12.5 MHz).
-    emu_case "capture lowest rate" --stderr --filter '/Set sample config/!d; s/^.*kingst-la2016: //' -- -l 5 -d $K -c samplerate=3051 --samples 8 -O hex
+    # divider, 65552, is truncated to 16 bits (16, 12.5 MHz), at
+    # protocol.c:757 "divider_u16 = baseclock / devc->samplerate;". oxrok
+    # refuses the rate. sigrok-cli's stdout is what the .oracle keeps:
+    # the first channel's samples.
+    emu_case "capture lowest rate" --oracle-differs "protocol.c:757 truncates the divider to 16 bits" --expect-fail --stderr --filter "$N; /^CH0:|kingst-la2016: Too low/!d; s/^.*kingst-la2016: //" -- -l 5 -d $K -c samplerate=3051 --samples 8 -O hex
     # Two bulk IN transfers of 512 KiB: about 1.6 M samples each.
     emu_case "capture two transfers" --filter '1,/^CH15/!d' -- -d $K -c samplerate=100M --samples 2000000 -O hex
     emu_case "capture too fast" --expect-fail --stderr --filter "$E" -- -d $K -c samplerate=500M --samples 8 -O hex
@@ -151,11 +166,14 @@ emu_cases() {
     emu_case "trigger two edges falling first" --expect-fail --stderr --filter "$E" -- -d $K --samples 40 -t CH0=f,CH1=r -O bits
 
     # Streaming: no compression, the enabled channels in turn.
-    emu_case "stream" -- -d $K -c samplerate=1M:continuous=on --samples 100 -O hex
-    emu_case "stream three channels" -- -d $K -C CH0,CH4,CH9 -c samplerate=1M:continuous=on --samples 400 -O hex
-    emu_case "stream across transfers" -- -d $K -c samplerate=200k:continuous=on --samples 1000 -O hex
-    emu_case "stream fast" -- -d $K -c samplerate=20M:continuous=on --samples 300 -O hex
-    emu_case "stream trigger ignored" -- -d $K -c samplerate=1M:continuous=on --samples 64 -t CH0=r -O bits
+    # stream_data() (protocol.c:1490-1518) passes on every sample of the
+    # transfer and only then checks the limit (1532): 100 samples asked,
+    # 256 printed. oxrok stops at the limit; the transactions are the same.
+    emu_case "stream" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=1M:continuous=on --samples 100 -O hex
+    emu_case "stream three channels" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -C CH0,CH4,CH9 -c samplerate=1M:continuous=on --samples 400 -O hex
+    emu_case "stream across transfers" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=200k:continuous=on --samples 1000 -O hex
+    emu_case "stream fast" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=20M:continuous=on --samples 300 -O hex
+    emu_case "stream trigger ignored" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=1M:continuous=on --samples 64 -t CH0=r -O bits
 
     # The bare FX2: every run uploads the MCU firmware in the scan and
     # waits for the device to come back (1.8 s), then the bitstream.
@@ -165,7 +183,7 @@ emu_cases() {
     emu_case "bare capture" -- -d $K -c samplerate=1M --samples 40 -O hex
 
     # The boot loader refuses the reset hold, a chunk, the release.
-    U='/(kingst-la2016|ezusb): /!d; s/^.*(kingst-la2016|ezusb): //'
+    U="$N; /(kingst-la2016|ezusb): /!d; s/^.*(kingst-la2016|ezusb): //"
     for n in 1 2 4; do
         kingst_options mcu=0 stall=loader@$n
         emu_case "fault loader $n" --stderr --filter "$U" -- -d $K --scan
@@ -192,23 +210,30 @@ emu_cases() {
     emu_case "la1016a1 trigger" -- -d $K -c samplerate=5M --samples 50 -t CH0=f -O bits
     kingst_options mcu=1 model=la1010a1
     emu_case "la1010a1 show" --keep-header --filter "$C" -- -d $K --show
-    emu_case "la1010a1 capture" -- -d $K -c samplerate=1M --samples 100 -O hex
+    emu_case "la1010a1 capture" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=1M --samples 100 -O hex
     emu_case "la1010a1 not continuous" --expect-fail --stderr --filter "$L" -- -d $K -c continuous=off --samples 8 -O hex
     kingst_options mcu=1 model=la5016a1
     emu_case "la5016a1 capture 500M" -- -d $K -c samplerate=500M --samples 50 -O hex
+    # 800 MHz / 12207 is 65536, which divider_u16 (protocol.c:757) holds
+    # as 0, and protocol.c:758 divides by it: SIGFPE. oxrok refuses the rate.
+    emu_case "la5016a1 lowest rate crash" --oracle-bug "protocol.c:757-758 truncates the divider to 0 and divides by it" --expect-fail --stderr --filter "$E" -- -d $K -c samplerate=12207 --samples 8 -O hex
     emu_case "la5016a1 capture 200M" -- -d $K -c samplerate=200M --samples 50 -t CH1=r -O hex
     kingst_options mcu=1 model=la5032a0
     emu_case "la5032a0 scan" --keep-header --filter "$C" -- -d $K --scan
     emu_case "la5032a0 capture" -- -d $K -c samplerate=1M --samples 40 -O hex
     emu_case "la5032a0 trigger" -- -d $K -c samplerate=1M --samples 40 -t CH16=r -O hex
-    emu_case "la5032a0 stream" -- -d $K -C CH0,CH17 -c samplerate=1M:continuous=on --samples 64 -O hex
+    emu_case "la5032a0 stream" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -C CH0,CH17 -c samplerate=1M:continuous=on --samples 64 -O hex
 
     # The bitstream stays loaded: the check reads the FPGA and reuses
     # it. With a PWM output left running, or a run state the check does
     # not expect, the driver uploads it again.
     kingst_options mcu=1 fpga=1
     emu_case "loaded scan" --keep-header --filter "$C" -- -d $K --scan
-    emu_case "loaded capture" -- -d $K -c samplerate=1M --samples 30 -O hex
+    # Recorded: with the bitstream loaded the replay needs no firmware file.
+    emu_case "loaded capture" --record -- -d $K -c samplerate=1M --samples 30 -O hex
+    emu_case "loaded trigger" --record -- -d $K -c samplerate=1M --samples 40 -t CH0=r -O bits
+    # 256 samples are a whole transfer: here the limit cuts nothing.
+    emu_case "loaded stream" --record -- -d $K -c samplerate=1M:continuous=on --samples 256 -O hex
     kingst_options mcu=1 fpga=1 pwm=1
     emu_case "loaded pwm running" --keep-header --filter "$C" -- -d $K --scan
     kingst_options mcu=1 fpga=1 run-state=85e2
@@ -218,11 +243,11 @@ emu_cases() {
 
     # The EEPROM: the magic's other copies and their checks.
     kingst_options mcu=1 eeprom-id=02fd01fe00000000
-    emu_case "eeprom primary magic" --stderr --filter "/magic/!d; $E" -- -l 4 -d $K --scan
+    emu_case "eeprom primary magic" --stderr --filter "$N; /magic/!d; $E" -- -l 4 -d $K --scan
     kingst_options mcu=1 eeprom-id=08f7000000000000
-    emu_case "eeprom primary byte" --stderr --filter "/magic/!d; $E" -- -l 4 -d $K --scan
+    emu_case "eeprom primary byte" --stderr --filter "$N; /magic/!d; $E" -- -l 4 -d $K --scan
     kingst_options mcu=1 eeprom-id=0000000008f70000
-    emu_case "eeprom backup byte" --stderr --filter "/magic/!d; $E" -- -l 4 -d $K --scan
+    emu_case "eeprom backup byte" --stderr --filter "$N; /magic/!d; $E" -- -l 4 -d $K --scan
     kingst_options mcu=1 eeprom-id=ffffffffffffffff
     emu_case "eeprom no magic" --stderr --filter "$E" -- -d $K --scan
     kingst_options mcu=1 eeprom-id=30cf000030cf0000
@@ -254,9 +279,13 @@ emu_cases() {
     emu_case "fault fpga enable" --stderr --filter "$E" -- -d $K --scan
     # The register dump of the spew level (-l 5) is refused.
     kingst_options mcu=1 stall=read:0x00@1
-    emu_case "fault verbose dump" --stderr --filter '/registers space/!d; s/^.*kingst-la2016: //' -- -l 5 -d $K --scan
+    emu_case "fault verbose dump" --stderr --filter "$N; /registers space/!d; s/^.*kingst-la2016: //" -- -l 5 -d $K --scan
     kingst_options mcu=1 stall=read:0x00@1
-    emu_case "fault init run state" --stderr --filter "$E" -- -d $K --scan
+    # run_state() returns the failure as a state (protocol.c:910-913,
+    # SR_ERR_IO as 0xfff5), and la2016_init_hardware() warns about it
+    # (protocol.c:1892-1895). oxrok logs the failure alone. sigrok-cli's
+    # stdout is what the .oracle keeps: both find the device.
+    emu_case "fault init run state" --oracle-differs "protocol.c:912 returns the failed read as a run state" --stderr --filter "$N; /kingst-la2016: |^kingst-la2016:conn/!d; s/^.*kingst-la2016: //; $C" -- -d $K --scan
     kingst_options mcu=1 stall=bulk-reset@1
     emu_case "fault init bulk reset" --stderr --filter "$E" -- -d $K --scan
     kingst_options mcu=1 fpga=1 stall=read:0x00@1
@@ -295,21 +324,23 @@ emu_cases() {
     # dev_close() then frees them (la2016_release_resources()) and
     # libusb aborts on a freed mutex
     # (usbi_mutex_lock: Assertion `pthread_mutex_lock(mutex) == 0').
-    # sigrok-cli dies with SIGABRT; the cases keep the driver's lines.
+    # sigrok-cli dies with SIGABRT. oxrok logs the driver's lines, cancels
+    # the transfers and ends the capture (exit 0, as sigrok-cli after a
+    # failed download start without transfers: "fault capture info").
     kingst_options mcu=1 stall=bulk-start@1
-    emu_case "fault download start" --expect-fail --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "fault download start" --oracle-bug "protocol.c:1654-1657 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-reset@2
     emu_case "fault stream bulk reset" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=write:0x00@1
-    emu_case "fault stream run" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    emu_case "fault stream run" --oracle-bug "protocol.c:1613-1617 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-start@1
-    emu_case "fault stream start" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    emu_case "fault stream start" --oracle-bug "protocol.c:1619-1623 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 extra-packets=2
     emu_case "fault packet count" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 empty=2 stall-in=1
     emu_case "fault empty and stalled transfers" -- -d $K --samples 30 -O hex
     kingst_options mcu=1 empty=2 stall-in=1
-    emu_case "fault stream empty and stalled" -- -d $K -c continuous=on --samples 30 -O hex
+    emu_case "fault stream empty and stalled" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c continuous=on --samples 30 -O hex
     # A capture of several polls (1000 samples each at 20 kHz): the run
     # state is pre-trigger twice, waiting, then post-trigger twice.
     kingst_options mcu=1
@@ -321,13 +352,14 @@ emu_cases() {
     kingst_options mcu=1 extra-bytes=32
     emu_case "fault download overrun" -- -d $K --samples 30 -O hex
     kingst_options mcu=1 more-samples=2000000
-    emu_case "fault more samples" --filter "1,/^CH15/!d" -- -d $K --samples 30 -O hex
+    emu_case "fault more samples" --oracle-differs "send_chunk() (protocol.c:1381-1413) passes on all of the transfer in which the limit falls" --filter "1,/^CH15/!d" -- -d $K --samples 30 -O hex
     # A failed poll of the run state: run_state() returns SR_ERR_IO as
     # a u16 (0xfff5), whose idle bit is set, so the driver downloads a
     # capture that has not finished: the capture info is all zeros,
     # nothing comes, the transfers time out and the frame is empty.
     kingst_options mcu=1 stall=read:0x00@2
-    emu_case "fault poll run state" --no-output -- -d $K --samples 8 -O hex
+    # oxrok ends the capture there, halting the device.
+    emu_case "fault poll run state" --oracle-differs "protocol.c:912 returns the failed read as a run state, whose idle bit starts a download" --no-output -- -d $K --samples 8 -O hex
     # Unplugged once the first of two download transfers has come.
     kingst_options mcu=1
     emu_case "unplug during download" --filter '1,/^CH15/!d' --unplug in=6:1 -- -d $K -c samplerate=100M --samples 2000000 -O hex

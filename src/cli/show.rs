@@ -178,6 +178,12 @@ pub fn device_detail(registry: &Registry, args: &Args) -> Result<()> {
         parse::select_channels(device.as_mut(), spec)?;
     }
     let group = args.channel_group.as_deref();
+    // sr_dev_options() of a group whose config_list() answers
+    // SR_ERR_NA: sigrok-cli prints nothing more.
+    let options = match device.options(group) {
+        Err(Error::NotSupported(_)) if group.is_some() => return device.close(),
+        other => other?,
+    };
     let groups = device.channel_groups().to_vec();
     if !groups.is_empty() {
         println!("Channel groups:");
@@ -192,7 +198,6 @@ pub fn device_detail(registry: &Registry, args: &Args) -> Result<()> {
             println!("    {}: {label}", g.name);
         }
     }
-    let options = device.options(group)?;
     print!("Supported configuration options");
     if !groups.is_empty() {
         match group {

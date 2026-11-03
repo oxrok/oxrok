@@ -17,11 +17,12 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 10] = [
+const RECORDED: [&str; 11] = [
     "asix-sigma",
     "fx2lafw",
     "saleae-logic16",
     "ftdi-la",
+    "kingst-la2016",
     "microchip-pickit2",
     "dcttech-usbrelay",
     "brymen-bm86x",
