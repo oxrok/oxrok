@@ -17,7 +17,10 @@
 //! `hid[/CHIP]/sn=SERIAL` or `hid[/CHIP]/raw=PATH`, where CHIP is one
 //! of `bu86x`, `ch9325`, `cp2110` and `victor` and PATH the device
 //! node (`/dev/hidrawN` on Linux; it may hold slashes, so it runs to
-//! the end, as the serial number does). Without a chip any cable with
+//! the end, as the serial number does). sigrok's `usb=BUS.DEV.IF`
+//! (hidapi-libusb) and `iokit=PATH` (macOS) forms parse too, but the
+//! HID backend here names devices by node only, so they match nothing
+//! yet. Without a chip any cable with
 //! a known USB id is taken, and with a path the chip follows from the
 //! device's USB id; without a serial number or a path the first match
 //! is.
@@ -89,15 +92,51 @@ impl Chip {
     }
 }
 
-/// A parsed `hid[/CHIP][/sn=SERIAL|/raw=PATH]` port name.
+/// A parsed `hid[/CHIP][/sn=SERIAL|/raw=PATH|/usb=PATH|/iokit=PATH]`
+/// port name.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Spec {
     /// The chip, when named.
     pub chip: Option<Chip>,
     /// The serial number, when given.
     pub serial: Option<String>,
-    /// The device node, when given (`raw=`).
-    pub path: Option<String>,
+    /// The device path as the HID library has it (`/dev/hidrawN` from
+    /// `raw=`; `usb=` and `iokit=` converted back as sigrok's
+    /// `extract_hidapi_path` does), when given.
+    pub raw: Option<String>,
+}
+
+/// The device path a `raw=`, `usb=` or `iokit=` field of a port name
+/// stands for, as libsigrok's `extract_hidapi_path`: `raw=` is the path
+/// itself, `usb=` the hidapi-libusb `bus:device:interface` path with
+/// the colons written as periods, `iokit=` a macOS path without its
+/// `IOService:` prefix.
+fn hidapi_path(field: &str) -> Option<String> {
+    if let Some(p) = field.strip_prefix("iokit=") {
+        return Some(format!("IOService:{p}"));
+    }
+    if let Some(p) = field.strip_prefix("raw=") {
+        return Some(p.to_owned());
+    }
+    let p = field.strip_prefix("usb=")?;
+    Some(p.chars().map(|c| if c.is_ascii_hexdigit() || c == ':' { c } else { ':' }).collect())
+}
+
+/// The port name field for a device path, as libsigrok's
+/// `get_hidapi_path_copy`: hex digits and colons become `usb=` with
+/// periods, a path without a colon `raw=`, a macOS `IOService:` path
+/// `iokit=`. `None` for a path a port name cannot carry.
+fn port_path(path: &str) -> Option<String> {
+    if path.chars().all(|c| c.is_ascii_hexdigit() || c == ':') {
+        return Some(format!("usb={}", path.replace(':', ".")));
+    }
+    if !path.contains(':') {
+        return Some(format!("raw={path}"));
+    }
+    match path.strip_prefix("IOService:") {
+        Some(rest) if !rest.contains(':') => Some(format!("iokit={rest}")),
+        _ => None,
+    }
 }
 
 impl Spec {
@@ -122,11 +161,11 @@ impl Spec {
                 spec.serial = Some(sn.to_owned());
                 break;
             }
-            if let Some(path) = rest.strip_prefix("raw=") {
-                if path.is_empty() {
+            if let Some(path) = hidapi_path(rest) {
+                if rest.split_once('=').is_some_and(|(_, p)| p.is_empty()) {
                     return bad();
                 }
-                spec.path = Some(path.to_owned());
+                spec.raw = Some(path);
                 break;
             }
             let (field, tail) = rest.split_once('/').unwrap_or((rest, ""));
@@ -138,6 +177,61 @@ impl Spec {
         }
         Some(Ok(spec))
     }
+
+    /// The cable this spec picks among `devices`, in listing order, and
+    /// its chip; libsigrok's `ser_hid_chip_search`. A path picks that
+    /// node, of any USB id when the chip is named (a cable with an
+    /// unlisted id), else of a known one. Otherwise only cables with a
+    /// known USB id count, of the named chip when there is one, with
+    /// the serial number when there is one; the first such is taken.
+    pub fn select(&self, devices: &[Candidate<'_>]) -> Option<(Chip, usize)> {
+        devices.iter().enumerate().find_map(|(i, d)| {
+            if let Some(path) = &self.raw {
+                if d.path != Some(path.as_str()) {
+                    return None;
+                }
+                let chip = self.chip.or_else(|| Chip::for_usb_id(d.vendor_id, d.product_id))?;
+                return Some((chip, i));
+            }
+            let chip = Chip::for_usb_id(d.vendor_id, d.product_id)?;
+            if self.chip.is_some_and(|c| c != chip) {
+                return None;
+            }
+            if let Some(sn) = &self.serial
+                && d.serial != Some(sn.as_str())
+            {
+                return None;
+            }
+            Some((chip, i))
+        })
+    }
+
+    /// The full port name of the cable [`Spec::select`] picked: the
+    /// path as given, else the serial number, else the chip alone.
+    pub fn full_name(&self, chip: Chip, device: &Candidate<'_>) -> String {
+        let field = match (&self.raw, device.serial) {
+            (Some(path), _) => port_path(path),
+            (None, Some(sn)) if !sn.is_empty() => Some(format!("sn={sn}")),
+            _ => None,
+        };
+        match field {
+            Some(f) => format!("hid/{}/{f}", chip.name()),
+            None => format!("hid/{}", chip.name()),
+        }
+    }
+}
+
+/// What [`Spec::select`] needs to know of a HID device.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Candidate<'a> {
+    /// USB vendor id.
+    pub vendor_id: u16,
+    /// USB product id.
+    pub product_id: u16,
+    /// Serial number, when the device has one.
+    pub serial: Option<&'a str>,
+    /// The device path, when the system has one.
+    pub path: Option<&'a str>,
 }
 
 /// True when `name` names a HID port.
@@ -150,35 +244,20 @@ pub fn open(name: &str, params: Params) -> Result<Box<dyn Port>> {
     let spec =
         Spec::parse(name).ok_or_else(|| Error::Arg(format!("Not a HID port: '{name}'.")))??;
     let devices = crate::hid::list()?;
-    let found = devices.iter().find_map(|d| {
-        if let Some(path) = &spec.path {
-            // A named node is taken whatever its id when the chip is
-            // given, as sigrok does for cables with unlisted ids.
-            if d.path.as_deref() != Some(path.as_str()) {
-                return None;
-            }
-            let chip = spec.chip.or_else(|| Chip::for_usb_id(d.vendor_id, d.product_id))?;
-            return Some((chip, d));
-        }
-        let chip = Chip::for_usb_id(d.vendor_id, d.product_id)?;
-        if spec.chip.is_some_and(|c| c != chip) {
-            return None;
-        }
-        if let Some(sn) = &spec.serial
-            && d.serial.as_deref() != Some(sn.as_str())
-        {
-            return None;
-        }
-        Some((chip, d))
-    });
-    let Some((chip, info)) = found else {
+    let candidates: Vec<Candidate<'_>> = devices
+        .iter()
+        .map(|d| Candidate {
+            vendor_id: d.vendor_id,
+            product_id: d.product_id,
+            serial: d.serial.as_deref(),
+            path: d.path.as_deref(),
+        })
+        .collect();
+    let Some((chip, i)) = spec.select(&candidates) else {
         return Err(Error::device(format!("No HID cable matches '{name}'.")));
     };
-    let full = match (&spec.path, &info.serial) {
-        (Some(path), _) => format!("hid/{}/raw={path}", chip.name()),
-        (None, Some(sn)) if !sn.is_empty() => format!("hid/{}/sn={sn}", chip.name()),
-        _ => format!("hid/{}", chip.name()),
-    };
+    let full = spec.full_name(chip, &candidates[i]);
+    let info = &devices[i];
     log::info!("Opening {full} ({:04x}:{:04x}).", info.vendor_id, info.product_id);
     let dev = info.open()?;
     let mut port = HidPort::new(chip, dev, full);
@@ -386,7 +465,7 @@ mod tests {
         );
         assert_eq!(
             Spec::parse("hid/ch9325/sn=AB12").unwrap().unwrap(),
-            Spec { chip: Some(Chip::Ch9325), serial: Some("AB12".to_owned()), path: None }
+            Spec { chip: Some(Chip::Ch9325), serial: Some("AB12".to_owned()), raw: None }
         );
         assert_eq!(
             Spec::parse("hid/sn=X").unwrap().unwrap(),
@@ -395,11 +474,11 @@ mod tests {
         // A path or a serial number runs to the end, slashes included.
         assert_eq!(
             Spec::parse("hid/victor/raw=/dev/hidraw3").unwrap().unwrap(),
-            Spec { chip: Some(Chip::Victor), path: Some("/dev/hidraw3".to_owned()), serial: None }
+            Spec { chip: Some(Chip::Victor), raw: Some("/dev/hidraw3".to_owned()), serial: None }
         );
         assert_eq!(
             Spec::parse("hid/raw=/dev/hidraw0").unwrap().unwrap(),
-            Spec { path: Some("/dev/hidraw0".to_owned()), ..Spec::default() }
+            Spec { raw: Some("/dev/hidraw0".to_owned()), ..Spec::default() }
         );
         assert_eq!(
             Spec::parse("hid/sn=a/b").unwrap().unwrap(),
@@ -412,6 +491,77 @@ mod tests {
         assert!(Spec::parse("hid/nochip").unwrap().is_err());
         assert!(Spec::parse("hid/bu86x/victor").unwrap().is_err());
         assert_eq!(Chip::for_usb_id(0x04fa, 0x2490), Some(Chip::Ch9325));
+    }
+
+    #[test]
+    fn parses_the_usb_and_iokit_paths() {
+        // serial_hid.c: usb= turns its periods back into colons,
+        // iokit= gets its IOService: prefix back; both run to the end.
+        assert_eq!(
+            Spec::parse("hid/ch9325/usb=0001.0004.00").unwrap().unwrap(),
+            Spec { chip: Some(Chip::Ch9325), raw: Some("0001:0004:00".to_owned()), serial: None }
+        );
+        assert_eq!(
+            Spec::parse("hid/iokit=AppleUSB/x@1").unwrap().unwrap().raw.unwrap(),
+            "IOService:AppleUSB/x@1"
+        );
+        assert!(Spec::parse("hid/usb=").unwrap().is_err());
+        // And back, as get_hidapi_path_copy names a listed device.
+        assert_eq!(port_path("0001:0004:00").unwrap(), "usb=0001.0004.00");
+        assert_eq!(port_path("/dev/hidraw2").unwrap(), "raw=/dev/hidraw2");
+        assert_eq!(port_path("IOService:AppleUSB/x@1").unwrap(), "iokit=AppleUSB/x@1");
+        assert_eq!(port_path("IOService:a:b"), None);
+        assert_eq!(port_path("\\\\?\\hid#vid_1a86:x"), None);
+    }
+
+    fn cand(
+        vid: u16,
+        pid: u16,
+        serial: Option<&'static str>,
+        path: &'static str,
+    ) -> Candidate<'static> {
+        Candidate { vendor_id: vid, product_id: pid, serial, path: Some(path) }
+    }
+
+    #[test]
+    fn selects_a_cable_as_ser_hid_chip_search() {
+        let devices = [
+            cand(0x046d, 0xc077, None, "/dev/hidraw0"), // a mouse
+            cand(0x1244, 0xd237, None, "/dev/hidraw1"), // victor
+            cand(0x1a86, 0xe008, Some("A1"), "/dev/hidraw2"), // ch9325
+            cand(0x1a86, 0xe008, Some("B2"), "/dev/hidraw3"), // ch9325
+            cand(0x0820, 0x0001, Some(""), "/dev/hidraw4"), // bu86x
+        ];
+        let pick = |name: &str| {
+            let spec = Spec::parse(name).unwrap().unwrap();
+            spec.select(&devices).map(|(chip, i)| (chip, i, spec.full_name(chip, &devices[i])))
+        };
+        // No chip: the first cable with a known id, not the mouse.
+        assert_eq!(pick("hid"), Some((Chip::Victor, 1, "hid/victor".to_owned())));
+        // A chip: the first of its ids; its serial number names it.
+        assert_eq!(pick("hid/ch9325"), Some((Chip::Ch9325, 2, "hid/ch9325/sn=A1".to_owned())));
+        assert_eq!(
+            pick("hid/ch9325/sn=B2"),
+            Some((Chip::Ch9325, 3, "hid/ch9325/sn=B2".to_owned()))
+        );
+        assert_eq!(pick("hid/sn=B2"), Some((Chip::Ch9325, 3, "hid/ch9325/sn=B2".to_owned())));
+        assert_eq!(pick("hid/victor/sn=B2"), None);
+        assert_eq!(pick("hid/sn=C3"), None);
+        assert_eq!(pick("hid/cp2110"), None);
+        // An empty serial number is no serial number.
+        assert_eq!(pick("hid/bu86x"), Some((Chip::Bu86x, 4, "hid/bu86x".to_owned())));
+        // A path: the chip from the id, or as named for any id.
+        assert_eq!(
+            pick("hid/raw=/dev/hidraw3"),
+            Some((Chip::Ch9325, 3, "hid/ch9325/raw=/dev/hidraw3".to_owned()))
+        );
+        assert_eq!(pick("hid/raw=/dev/hidraw0"), None, "a mouse is no cable");
+        assert_eq!(
+            pick("hid/bu86x/raw=/dev/hidraw0"),
+            Some((Chip::Bu86x, 0, "hid/bu86x/raw=/dev/hidraw0".to_owned()))
+        );
+        assert_eq!(pick("hid/raw=/dev/hidraw9"), None);
+        assert_eq!(pick("hid/usb=0001.0004.00"), None, "nodes only");
     }
 
     #[test]

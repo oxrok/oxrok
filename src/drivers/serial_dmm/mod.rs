@@ -86,17 +86,19 @@ fn hid_conn(conn: &str) -> String {
     conn.to_owned()
 }
 
-/// Whether the port probed on keeps serving the device. A UART stays
-/// open: reopening it would toggle the handshake lines again, which
-/// resets some adapters. A serial over HID cable has no handshake
-/// lines and is closed after the probe and opened again for the
-/// device, as sigrok's scan does (`serial_close` at its end, then
-/// `serial_open` in `dev_open`): the open sets the cable's line
-/// parameters anew (a CH9325 or CP2110 feature report), and the
-/// reports a streaming meter sent in between are not read as the
-/// first samples of the capture.
+/// Whether the port probed on keeps serving the device. sigrok's scan
+/// always ends in `serial_close`, whatever the transport, and
+/// `dev_open` opens the port again; `serial_open` sets the parameters
+/// and flushes the receive side each time. A UART stays open here
+/// instead, because reopening it would toggle the handshake lines
+/// again, which resets some adapters; [`DmmDevice`] flushes it when it
+/// takes it over, so what a streaming meter sent since the probe does
+/// not become the first samples, as sigrok's flush on reopen ensures.
+/// A serial over HID cable has no handshake lines, so it is closed and
+/// reopened as in sigrok, which also sends its line parameters again
+/// (a CH9325 or CP2110 feature report).
 fn keep_probed(conn: &str) -> bool {
-    crate::serial::hid::Spec::parse(conn).is_none()
+    !crate::serial::hid::is_hid_name(conn)
 }
 
 impl Driver for SerialDmmDriver {
@@ -341,7 +343,13 @@ impl Device for DmmDevice {
             return Ok(());
         }
         let port = match self.pending.take() {
-            Some(p) => p,
+            // The probed port (or a replay): flushed as `serial_open`
+            // flushes a port it opens, so input from before the open
+            // is not taken for samples.
+            Some(mut p) => {
+                p.purge()?;
+                p
+            }
             None => crate::serial::open(&self.conn, self.params)?,
         };
         *self.port.lock().expect("port lock") = Some(port);
@@ -504,5 +512,52 @@ mod tests {
         assert!(!keep_probed("hid/cp2110/sn=0001"));
         assert!(!keep_probed("hid"));
         assert_eq!(hid_conn("1a86.e008"), "hid/ch9325");
+    }
+
+    /// A UART with bytes left over from the probe.
+    struct Stale(Arc<std::sync::Mutex<(Vec<u8>, usize)>>);
+
+    impl Port for Stale {
+        fn name(&self) -> &'static str {
+            "/dev/ttyUSB0"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+            let mut s = self.0.lock().unwrap();
+            let n = buf.len().min(s.0.len());
+            buf[..n].copy_from_slice(&s.0[..n]);
+            s.0.drain(..n);
+            Ok(n)
+        }
+        fn write(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            let mut s = self.0.lock().unwrap();
+            s.0.clear();
+            s.1 += 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_probed_uart_is_flushed_when_the_device_takes_it() {
+        // As sigrok's dev_open: serial_open flushes what arrived since
+        // the scan, so a stale packet is not the first sample.
+        let state = Arc::new(std::sync::Mutex::new((b"+1234 stale\r\n".to_vec(), 0)));
+        let model = models::find("victor-dmm").expect("a model");
+        let params = Params::parse("2400/8n1").unwrap();
+        let port = Box::new(Stale(Arc::clone(&state)));
+        let mut dev = DmmDevice::new(model, "/dev/ttyUSB0".to_owned(), params, Some(port));
+        dev.open().unwrap();
+        assert_eq!(*state.lock().unwrap(), (Vec::new(), 1));
+        // Already open: no second flush.
+        dev.open().unwrap();
+        assert_eq!(state.lock().unwrap().1, 1);
     }
 }
