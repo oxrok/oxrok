@@ -69,9 +69,12 @@ pub fn si_prefix(value: &mut f32, digits: &mut i32) -> &'static str {
     }
     let logval = value.abs().log10();
     let p = logval / 3.0 - if logval < 1.0 { 1.0 } else { 0.0 };
-    // C converts with cvttss2si, which gives INT_MIN for an infinite
-    // (an overload reading) or out of range value; Rust's `as`
-    // saturates, and INT_MAX would overflow `3 * prefix` below.
+    // The float to int conversion of an infinite (an overload reading)
+    // or out of range value is undefined in C. On x86-64, where the
+    // goldens are made, cvttss2si gives INT_MIN, which is what this
+    // does; on aarch64 C saturates to INT_MAX and prints another
+    // prefix. Rust's `as` saturates too, and INT_MAX would overflow
+    // `3 * prefix` below.
     let mut prefix = if p.is_finite() && p.abs() < 2e9 { p as i32 } else { i32::MIN };
     if prefix < -NEG {
         prefix = -NEG;

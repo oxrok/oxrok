@@ -8,6 +8,9 @@ use oxrok::core::session::Flow;
 use oxrok::core::{Device, Driver, Key, Mq, MqFlags, Packet, Session, Unit, Value};
 use oxrok::drivers::serial_dmm::{DmmDevice, SerialDmmDriver, detect, models};
 use oxrok::serial::record::Replay;
+use oxrok::serial::{Params, Port};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Readings (channel, value, mq, unit, flags, digits) from one run.
@@ -103,6 +106,25 @@ fn a_port_that_does_not_open_is_no_device() {
 }
 
 #[test]
+fn ut61e_noise_is_dropped_as_it_is_searched() {
+    // As handle_new_data: bytes that start no packet go as soon as the
+    // search steps past them, so a packet after more noise than the
+    // buffer holds still arrives whole (before, the noise filled a 128
+    // byte buffer, which was then dropped with the packet's start).
+    let noise = vec![b'?'; 250];
+    let a = ut61e(1, "12345", 0x3b, 0, 8 | 2);
+    let fixture = format!(
+        "# oxrok serial fixture 1\nport /dev/ttyUSB0 19200/7o1/rts=0/dtr=1\nread 256 -> {}\nread 256 -> {}\nread 256 -> {}\n",
+        hex(&noise),
+        hex(&a[..5]),
+        hex(&a[5..])
+    );
+    let out = run("uni-t-ut61e-ser", &fixture, 1);
+    assert_eq!(out.len(), 1);
+    assert!((out[0].1 - 12.345).abs() < 1e-4);
+}
+
+#[test]
 fn metex_requests_and_four_displays() {
     // A four display Metex: the driver sends 'D', the meter answers
     // four 14 byte packets. The time limit ends the run.
@@ -140,11 +162,8 @@ fn detection_finds_a_packet_in_noise() {
     assert!(detect(&mut port, &model.protocol, Duration::from_millis(300)).is_err());
 }
 
-#[test]
-fn bm86x_requests_and_two_displays() {
-    // A BM867s on the BU-86X adapter: the driver asks with four bytes,
-    // the meter answers 24 bytes in three HID reports, which reach the
-    // port as a byte stream. 1.2345 V AC and 50.0 Hz.
+/// A BM86x answer: 1.2345 V AC and 50.0 Hz.
+fn bm86x_packet() -> [u8; 24] {
     let mut p = [0u8; 24];
     p[16..20].copy_from_slice(&[0x86; 4]);
     for (i, b) in [0x50u8, 0x6d, 0x7c, 0x72, 0x3e].iter().enumerate() {
@@ -157,6 +176,15 @@ fn bm86x_requests_and_two_displays() {
     p[11] = 0x5f << 1;
     p[12] = (0x5f << 1) | 0x01;
     p[14] |= 0x04;
+    p
+}
+
+#[test]
+fn bm86x_requests_and_two_displays() {
+    // A BM867s on the BU-86X adapter: the driver asks with four bytes,
+    // the meter answers 24 bytes in three HID reports, which reach the
+    // port as a byte stream. 1.2345 V AC and 50.0 Hz.
+    let p = bm86x_packet();
     let fixture = format!(
         "# oxrok serial fixture 1\nport hid/bu86x 9600/8n1\nwrite 00008666\nread 128 -> {}\nread 128 -> {}\nread 128 -> {}\nwrite 00008666\nread 128 -> -\n",
         hex(&p[..8]),
@@ -170,6 +198,49 @@ fn bm86x_requests_and_two_displays() {
     assert!(out[0].4.contains(MqFlags::AC));
     assert_eq!((out[1].0, out[1].2), (1, Mq::Frequency));
     assert!((out[1].1 - 50.0).abs() < 1e-4);
+}
+
+#[test]
+fn a_delayed_request_is_not_sent_once_the_limit_is_met() {
+    // serial-dmm puts the next request off by the meter's delay
+    // (req_packet's req_next_at, 100 ms for the BM86x), so a run that
+    // the packet ends sends no request after it.
+    struct Counting(Replay, Arc<AtomicUsize>);
+    impl Port for Counting {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        fn set_params(&mut self, p: Params) -> oxrok::core::Result<()> {
+            self.0.set_params(p)
+        }
+        fn set_handshake(&mut self, r: Option<bool>, d: Option<bool>) -> oxrok::core::Result<()> {
+            self.0.set_handshake(r, d)
+        }
+        fn read(&mut self, buf: &mut [u8], t: Duration) -> oxrok::core::Result<usize> {
+            self.0.read(buf, t)
+        }
+        fn write(&mut self, data: &[u8]) -> oxrok::core::Result<()> {
+            self.1.fetch_add(1, Ordering::SeqCst);
+            self.0.write(data)
+        }
+        fn purge(&mut self) -> oxrok::core::Result<()> {
+            self.0.purge()
+        }
+    }
+    let p = bm86x_packet();
+    let fixture = format!(
+        "# oxrok serial fixture 1\nport hid/bu86x 9600/8n1\nwrite 00008666\nread 128 -> {}\nwrite 00008666\nread 128 -> -\n",
+        hex(&p)
+    );
+    let writes = Arc::new(AtomicUsize::new(0));
+    let port = Counting(Replay::from_text(&fixture).unwrap(), Arc::clone(&writes));
+    let mut dev = DmmDevice::from_port(models::find("brymen-bm86x").unwrap(), Box::new(port));
+    dev.open().unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    session.run(|_, _| Flow::Continue).unwrap();
+    assert_eq!(writes.load(Ordering::SeqCst), 1, "the first request only");
 }
 
 #[test]

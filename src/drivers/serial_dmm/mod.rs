@@ -35,7 +35,7 @@ use crate::core::{
     Access, AnalogData, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key,
     OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
-use crate::dmm::Protocol;
+use crate::dmm::{Protocol, Validity};
 use crate::serial::{Params, Port};
 use models::Model;
 use std::sync::Arc;
@@ -57,8 +57,11 @@ static DEV_OPTIONS: [OptionDesc; 3] = [
 const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long one read waits for data.
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
-/// The receive buffer; when it fills without a packet it is dropped.
+/// The scan's receive buffer (api.c's `buf[128]`).
 const BUF_SIZE: usize = 128;
+/// The acquisition's receive buffer (protocol.h's `DMM_BUFSIZE`); when
+/// it is full of bytes that start no packet it is dropped.
+const DMM_BUFSIZE: usize = 256;
 /// The default wait for a requested packet before asking again.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -429,8 +432,8 @@ impl Acquisition {
         sink.send(Packet::header());
         let started = Instant::now();
         let mut samples = 0u64;
-        let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
-        let mut chunk = [0u8; BUF_SIZE];
+        let mut buf: Vec<u8> = Vec::with_capacity(DMM_BUFSIZE);
+        let mut chunk = [0u8; DMM_BUFSIZE];
         let mut last_request = None;
         if let Some(req) = p.request {
             port.write(req)?;
@@ -443,7 +446,7 @@ impl Acquisition {
             if self.limit_msec > 0 && started.elapsed() >= Duration::from_millis(self.limit_msec) {
                 return Ok(());
             }
-            let room = BUF_SIZE - buf.len();
+            let room = DMM_BUFSIZE - buf.len();
             let n = port.read(&mut chunk[..room.max(1)], READ_TIMEOUT)?;
             if n == 0 {
                 if let (Some(req), Some(at)) = (p.request, last_request)
@@ -455,9 +458,23 @@ impl Acquisition {
                 continue;
             }
             buf.extend_from_slice(&chunk[..n]);
+            // As handle_new_data: step over the bytes that start no
+            // packet, one at a time, until fewer than a packet's are
+            // left or the protocol needs more.
             let mut pos = 0;
-            while let Some((skip, len)) = p.find_packet(&buf[pos..]) {
-                pos += skip;
+            let mut deferred = false;
+            while pos < buf.len() {
+                if buf.len() - pos < p.packet_size {
+                    break;
+                }
+                let len = match p.frame_at(&buf[pos..]) {
+                    Validity::Need => break,
+                    Validity::Invalid => {
+                        pos += 1;
+                        continue;
+                    }
+                    Validity::Valid(n) => n,
+                };
                 let packet = &buf[pos..pos + len];
                 log::debug!("DMM packet: {}", hex(packet));
                 let mut sent = false;
@@ -482,12 +499,17 @@ impl Acquisition {
                     samples += 1;
                 }
                 pos += len;
+                // As req_packet: without a delay the next request goes
+                // at once; with one it is put off (req_next_at) until
+                // after this read, and so not sent when the limit ends
+                // the run.
                 if let Some(req) = p.request {
-                    if !request_delay.is_zero() {
-                        std::thread::sleep(request_delay);
+                    if request_delay.is_zero() {
+                        port.write(req)?;
+                        last_request = Some(Instant::now());
+                    } else {
+                        deferred = true;
                     }
-                    port.write(req)?;
-                    last_request = Some(Instant::now());
                 }
             }
             buf.drain(..pos);
@@ -497,7 +519,12 @@ impl Acquisition {
             if self.limit_samples > 0 && samples >= self.limit_samples {
                 return Ok(());
             }
-            if buf.len() >= BUF_SIZE {
+            if let (Some(req), true) = (p.request, deferred) {
+                std::thread::sleep(request_delay);
+                port.write(req)?;
+                last_request = Some(Instant::now());
+            }
+            if buf.len() == DMM_BUFSIZE {
                 log::info!("Dropping unparsed data to resync.");
                 buf.clear();
             }
