@@ -11,7 +11,9 @@
 //   Gerhard Sittig, Martin Ling, Daniel Elstner, Jan Metzger,
 //   Michał Janiszewski, René Pecher, Romain Tartière, Yasushi SHOJI, g-user
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// This file is a port of the sigrok counterparts: api.c and protocol.c are
+//   GPL-3.0-or-later, as this file is; analyzer.c, analyzer.h and gl_usb.c
+//   carry a BSD-style licence, whose notice is at CLOCKS.
 
 //! The ZEROPLUS Logic Cube LAP-C series as libsigrok's
 //! `zeroplus-logic-cube` driver sees it: a vendor USB device with no
@@ -68,13 +70,37 @@
 //!   reading of those two registers is the model's, from their names and
 //!   the commit's "added together indicate how many samples we want".
 //!   Memory never written in the capture reads as 0.
-//! - As a consequence the driver delivers fewer samples than the limit:
-//!   1000 give 996 ("Device only sent 996 samples"), as it drops the two
-//!   bogus ones, the one `set_triggerbar()` takes off and the one at
-//!   `stop_address`. When a capture exactly fills the memory the now
-//!   address is 0, api.c:563-564 then takes it as wrapped, and the bogus
-//!   words are delivered (case "trigger fills memory output"). Both follow
-//!   from the model's reading, so neither is claimed as a bug of the driver.
+//! - With no `-t` the board reports trigger address 0: the trigger fires at
+//!   once at write 0 (commit 4c1433d1: "we trigger immediately"). A capture
+//!   whose limit equals the memory then ends with the now address just
+//!   before it, so api.c:556-557 and 591-592 make the trigger offset 0, and
+//!   api.c:639-640 sends the trigger with no check of `devc->trigger`: a
+//!   marker at sample 0 of a capture that asked for no trigger ("samples
+//!   2048", "samples 16384", "samples 32768", "all channels" and those of
+//!   the other boards at full memory). A smaller limit shows none, the
+//!   offset falling past the samples. The driver's lines are facts; that the
+//!   board reports 0 is the model's choice.
+//! - A capture delivers fewer samples than its limit (1000 give 996, "Device
+//!   only sent 996 samples"), and most of that is the driver's own, whatever
+//!   the model says. `set_triggerbar()` (protocol.c:113-120) makes
+//!   `ramsize_trigger + triggerbar` the limit - 1 with nothing before the
+//!   trigger and the limit - 2 with more than 2 samples before it (limit - 2
+//!   or - 3 with 1 or 2), and api.c:582-585 caps `valid_samples` at that sum.
+//!   Commit b9a5614d says those offsets "match the values sent by the windows
+//!   app", so the hardware may make up for them. `stop - now` (api.c:582, 597)
+//!   leaves out the sample at the last address written, by commit 42ceb777's
+//!   own definition of `stop_address`. api.c:577 drops the two bogus samples.
+//!   Only the rest of the 996 depends on the model's reading, that the two
+//!   registers count all the writes, the bogus ones included.
+//! - Very small limits deliver nothing. Limits 1 and 2 stop at address 0, the
+//!   empty capture of api.c:548. Limit 3 (stop 1, now moved to 2) underflows
+//!   at api.c:582, and the discard that follows covers the whole readout.
+//!   Limit 4 leaves `valid_samples` 0. The cases "samples 2", "samples 3" and
+//!   "samples 4" hold it; the numbers follow the model's reading.
+//! - When a capture exactly fills the memory, the bogus words are delivered
+//!   (case "trigger fills memory output"). That is the driver's logic under
+//!   its own stated facts: a now address of 0 makes api.c:563-564 clear
+//!   `STATUS_READY`, so the discard with its + 2 at api.c:577 is skipped.
 //! - A capture is busy for `fill` status reads (default 2) after GO, paced
 //!   by the polls and never by time. A trigger that cannot fire keeps the
 //!   busy bit for ever. An external clock is taken to be connected.
@@ -108,21 +134,29 @@
 //! so the three frequency registers are checked one by one, not as a triple.
 //! A bulk IN after a refused bulk read request is not flagged either: the
 //! driver ignores the refusal (`gl_usb.c`:103-107), and the model NAKs it
-//! until libusb's 5 s timeout, having no data to send.
+//! until the driver's own 5 s (`TIMEOUT_MS`, `gl_usb.c`:46, 108) run out,
+//! having no data to send.
 //!
 //! libsigrok bugs, each read line by line against the source:
 //!
 //! - `zp_set_samplerate()` loops on `ARRAY_SIZE(samplerates_200)`, always
-//!   true (api.c:148), so a rate not in the list reads past the array until
-//!   a match or a crash, and the check at api.c:152 cannot see it. SIGSEGV
-//!   here: `--expect-fail` cases "samplerate 3M crashes" and "samplerate
-//!   123456789 crashes". Whether another rate would meet its value in
-//!   memory depends on the build.
+//!   true (api.c:148), so a rate not in the list reads past the array until a
+//!   crash or a match, and the check at api.c:152 cannot fire. What happens
+//!   depends on the build's rodata. In the oracle's build 3M and 123456789
+//!   crash with SIGSEGV (`--expect-fail` cases "samplerate 3M crashes" and
+//!   "samplerate 123456789 crashes"). 46 (as 10, 41, 109, 116, 2669 and
+//!   3045960) meets its value there and is accepted, exit 0.
+//!   `__analyzer_set_freq()` then finds it in no table and returns -1
+//!   (analyzer.c:326-327), which nobody checks, so the board stays on its old
+//!   rate while the driver and the output say 46 Hz (case "samplerate 46
+//!   accepted", which a rebuilt oracle may turn into a crash).
 //! - A failed or short bulk read only warns (api.c:605-608, the count from
-//!   `gl_usb.c`:112), and the whole buffer goes out (api.c:615-648): the bytes
-//!   not read repeat the previous read's. Wrong samples, exit 0: cases "fault
-//!   bulk stall output", "fault bulk request output", "fault short read
-//!   output", "unplug mid data output".
+//!   `gl_usb.c`:112), and the whole buffer goes out (api.c:615-648). The bytes
+//!   not read repeat the previous read's or, in the first read, are whatever
+//!   the uninitialised `g_malloc()` buffer holds (api.c:553; no case sends
+//!   those, as they would differ between runs). Wrong samples, exit 0: cases
+//!   "fault bulk stall output", "fault bulk request output", "fault short
+//!   read output", "unplug mid data output".
 //! - `analyzer_wait()` (analyzer.c:407-416) has no timeout and takes an
 //!   error for a status. `LIBUSB_ERROR_PIPE`, -9, has the busy bit set: it
 //!   polls for ever (case "fault every status read hangs").
@@ -139,7 +173,9 @@
 //! for register REG (the one selected, or for `addr` the one being
 //! selected) and only the Nth that matches, counted since the model was
 //! built; a stalled request has no effect. `short=N[:LEN]` answers the Nth
-//! bulk IN with LEN bytes (default 1024), the rest of its request dropped.
+//! bulk IN with LEN bytes (default 1020), the rest of its request dropped;
+//! LEN is not a whole number of packets, since a transfer of 2048 bytes only
+//! ends early on a short packet.
 //! `stall_string=I,...` STALLs a string descriptor read. `fill=N` and
 //! `warm=1` are the board's own.
 //!
@@ -156,7 +192,6 @@
 //! libsigrok: analyzer.c:528 (a trigger on a disabled channel), analyzer.c:
 //! 546-548 and api.c:511-512 (an unknown match), api.c:375, 396-397, 436-437
 //! and 471 (no device, unknown keys). Not reachable from these tables:
-//! analyzer.c:327 (a rate past `zp_set_samplerate()`, which crashes first),
 //! api.c:458-460 (every board is 100 or 200 MHz), protocol.c:31 (a code
 //! above 8) and 38 (`clz(0)`: a limit of 1 takes the first branch).
 //! `dev_acquisition_stop()` (api.c:659-669): sigrok-cli never calls it, the
@@ -168,6 +203,10 @@
 //! (tried: it ended at the configuration with `LIBUSB_ERROR_OTHER`). In
 //! src/usb.c the driver calls only `sr_usb_open()` and `usb_get_port_path()`;
 //! their unreached lines are transport failures.
+//!
+//! The boards of 2 M samples (0x700d, 0x7016) have no capture case: a full
+//! readout is 4096 reads and its `.tx` golden alone 570 KB. Their memory code
+//! is checked by a unit test.
 
 use crate::descriptor::{self, DeviceDescriptor, STRING};
 use crate::model::{
@@ -223,6 +262,8 @@ pub const DEFAULT_PID: u16 = 0x700e;
 
 /// The bulk IN endpoint the samples come from (`gl_usb.c` `EP1_BULK_IN`).
 pub const EP_DATA: u8 = 1;
+/// What `short=N` answers: one packet and a short one.
+pub const SHORT: usize = 1020;
 /// Bulk packet size (high speed; the model's choice).
 pub const PACKET: usize = 512;
 /// The driver's bulk read size (api.c `PACKET_SIZE`).
@@ -304,6 +345,35 @@ pub const STATUS_READY: u8 = 0x02;
 
 /// The `START_STATUS` values the driver writes (analyzer.c:394-444).
 pub const START_VALUES: [u8; 8] = [0x40, 0x41, 0x42, 0x44, 0xc0, 0xc1, 0xe0, 0xf0];
+
+// This table is copied from analyzer.c:298-318, which carries this notice:
+//
+// Copyright (C) 2010 Sven Peter <sven@fail0verflow.com>
+// Copyright (C) 2010 Haxx Enterprises <bushing@gmail.com>
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or
+// without modification, are permitted provided that the following
+// conditions are met:
+//
+// * Redistributions of source code must retain the above copyright notice,
+//   this list of conditions and the following disclaimer.
+//
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
+//
+//  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+//  AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+//  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+//  ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+//  LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+//  CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+//  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+//  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+//  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+//  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+//  THE POSSIBILITY OF SUCH DAMAGE.
 
 /// `__analyzer_set_freq()`'s table (analyzer.c:298-318): selection,
 /// divider, multiplier.
@@ -442,12 +512,15 @@ impl Faults {
                         parse_count(k, n)?,
                         l.parse::<usize>()
                             .ok()
-                            .filter(|l| *l < READ_SIZE && l % 4 == 0)
+                            .filter(|l| *l < READ_SIZE && l % 4 == 0 && l % PACKET != 0)
                             .ok_or_else(|| {
-                                Error(format!("short={v}: LEN a multiple of 4 below {READ_SIZE}"))
+                                Error(format!(
+                                    "short={v}: LEN a multiple of 4 below {READ_SIZE}, not of \
+                                     {PACKET}"
+                                ))
                             })?,
                     ),
-                    None => (parse_count(k, v)?, READ_SIZE / 2),
+                    None => (parse_count(k, v)?, SHORT),
                 };
                 self.short = Some((n, len));
             }
@@ -1661,6 +1734,11 @@ mod tests {
         let mut d = done(0, 0, 10);
         d.faults.parse("stall", "bulk@1").unwrap();
         d.faults.parse("short", "2:101").unwrap_err();
+        // Whole packets would not end the transfer.
+        d.faults.parse("short", "2:1024").unwrap_err();
+        d.faults.parse("short", "2:0").unwrap_err();
+        d.faults.parse("short", "2").unwrap();
+        assert_eq!(d.faults.short, Some((2, SHORT)));
         d.faults.parse("short", "2:64").unwrap();
         let mut v = Violations::default();
         read_start(&mut d, &mut v);

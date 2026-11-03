@@ -1,12 +1,11 @@
-gcov zeroplus-logic-cube (libsigrok unknown): executable lines reached
-  analyzer.c   77.5%  179 of 231
+gcov zeroplus-logic-cube (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  analyzer.c   77.9%  180 of 231
   api.c        92.5%  260 of 281
   gl_usb.c     92.3%  48 of 52
   protocol.c   96.9%  62 of 64
-  total        87.4%  549 of 628
+  total        87.6%  550 of 628
 never reached, by function (line ranges hold no reached line):
   analyzer.c
-    __analyzer_set_freq: 327
     analyzer_add_triggers: 528, 546-548
     analyzer_add_filter: never called (556-584)
     analyzer_read_id: never called (634-636)
@@ -26,7 +25,7 @@ never reached, by function (line ranges hold no reached line):
   protocol.c
     get_memory_size: 31
     clz: 38
-gcov shared sources (libsigrok unknown): executable lines the session reached
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/usb.c   10.0%  23 of 229
   total       10.0%  23 of 229
 never reached, by function (line ranges hold no reached line):

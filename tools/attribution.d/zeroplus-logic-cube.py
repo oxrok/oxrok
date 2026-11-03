@@ -5,4 +5,5 @@ MAP["emu/src/models/zeroplus-logic-cube.rs"] = (
      "libsigrok/src/hardware/zeroplus-logic-cube/analyzer.h",
      "libsigrok/src/hardware/zeroplus-logic-cube/gl_usb.c (the requests)",
      "libsigrok/src/hardware/zeroplus-logic-cube/protocol.c (the memory sizes)"],
-    INDEPENDENT)
+    "a port of the sigrok counterparts: api.c and protocol.c are GPL-3.0-or-later, as this file is; "
+    "analyzer.c, analyzer.h and gl_usb.c carry a BSD-style licence, whose notice is at CLOCKS")

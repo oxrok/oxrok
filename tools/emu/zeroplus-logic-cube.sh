@@ -83,10 +83,13 @@ emu_cases() {
     emu_case "all channels" --digest --filter '1,40!d' -- -d $Z --samples 2048 -O hex
     # Sample counts: the memory size code and the post-trigger count
     # follow them (protocol.c set_limit_samples(), set_triggerbar()).
-    for n in 2 3 100 2047 2048 2049 3000 16384 16385 32768; do
+    for n in 2 3 4 100 2047 2048 2049 3000 16384 16385 32768; do
         emu_case "samples $n" --digest --filter "$B" -- -d $Z -C $CH --samples $n -O bits
     done
     emu_case "samples 2049 registers" --stderr --filter "$A" -- -l 5 -d $Z -C A0 --samples 2049 -O bits
+    # Three samples: stop - now underflows at api.c:582 and the discard
+    # that follows covers the whole readout.
+    emu_case "samples 3 registers" --stderr --filter "$A" -- -l 5 -d $Z -C A0 --samples 3 -O bits
     # One sample: set_triggerbar() asks for 0 after the trigger and the
     # board reports an empty capture.
     emu_case "samples 1" --stderr --filter "$A" -- -l 5 -d $Z -C A0 --samples 1 -O bits
@@ -109,11 +112,20 @@ emu_cases() {
         emu_case "samplerate $r refused" --expect-fail --stderr --filter "$E" -- -d $Z -C A0 -c samplerate=$r --samples 100 -O bits
     done
     # zp_set_samplerate() looks a rate up with a loop whose condition is
-    # ARRAY_SIZE(samplerates_200), always true (api.c:148): a rate not
-    # in the list reads past the array until it crashes.
+    # ARRAY_SIZE(samplerates_200), always true (api.c:148): a rate not in
+    # the list reads past the array until a crash or a match, which depends
+    # on the rodata of the oracle's build, as do these cases. The core dump
+    # line is what pins the crash (timeout prints it, the kernel handing
+    # dumps to systemd-coredump on these hosts): a driver that refused the
+    # rate with exit 1 would not pass.
     for r in 3M 123456789; do
-        emu_case "samplerate $r crashes" --expect-fail --stderr --filter '/sr_config_set\(\): key 30000/!d; s/.*hwdriver: //; s/sdi 0x[0-9a-f]+/sdi PTR/' -- -l 5 -d $Z -C A0 -c samplerate=$r --samples 100 -O bits
+        emu_case "samplerate $r crashes" --expect-fail --stderr --filter '/sr_config_set\(\): key 30000|dumped core/!d; s/.*hwdriver: //; s/sdi 0x[0-9a-f]+/sdi PTR/' -- -l 5 -d $Z -C A0 -c samplerate=$r --samples 100 -O bits
     done
+    # A value that does lie in that rodata: accepted, exit 0, though no
+    # table has it. __analyzer_set_freq() returns -1, unchecked
+    # (analyzer.c:326-327), and the capture writes no rate register: the
+    # board stays on the 1 MHz of the open while the output says 46 Hz.
+    emu_case "samplerate 46 accepted" --stderr --filter '/zeroplus-logic-cube: /!d; /(Setting samplerate|Status) /!d; s/.*zeroplus-logic-cube: //' -- -l 5 -d $Z -C A0 -c samplerate=46 --samples 100 -O bits
     # Triggers on the counter the model plays: channel n is bit n.
     emu_case "trigger A0 high" --digest --filter "$B" -- -d $Z -C $CH -t A0=1 --samples 1000 -O bits
     emu_case "trigger A1 low ratio 50" --digest --filter "$B" -- -d $Z -C $CH -t A1=0 -c captureratio=50 --samples 1000 -O bits
