@@ -1,0 +1,2 @@
+sr: chronovu-la: Failed to purge FTDI buffers (-1): FTDI purge of TX buffer failed.
+Failed to open device.

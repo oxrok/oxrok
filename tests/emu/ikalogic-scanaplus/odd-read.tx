@@ -1,0 +1,158 @@
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 14035300430041004e00410050004c0055005300
+ctl_out 40 00 0000 0001 - -> ok
+ctl_out 40 03 04e2 0201 - -> ok
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 14035300430041004e00410050004c0055005300
+ctl_out 40 00 0000 0001 - -> ok
+ctl_out 40 03 04e2 0201 - -> ok
+ctl_out 40 00 0001 0001 - -> ok
+ctl_out 40 00 0002 0001 - -> ok
+ctl_out 40 0b 00ff 0001 - -> ok
+ctl_out 40 0b 40ff 0001 - -> ok
+ctl_out 40 09 0002 0001 - -> ok
+ctl_in 40 90 0000 0010 2 -> 1ca3
+ctl_in 40 90 0000 0011 2 -> 5700
+bulk_out 02 8841 -> 2
+bulk_out 02 89648a64 -> 4
+bulk_out 02 8841 -> 2
+bulk_out 02 8840 -> 2
+bulk_out 02 8d018d058d018d02 -> 8
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8d06 -> 2
+bulk_out 02 8d02 -> 2
+bulk_out 02 8c1c -> 2
+bulk_out 02 8e23 -> 2
+bulk_out 02 8f57 -> 2
+bulk_out 02 8840 -> 2
+bulk_out 02 897f8a7f -> 4
+bulk_out 02 8840 -> 2
+bulk_out 02 8c00 -> 2
+bulk_out 02 8e00 -> 2
+bulk_out 02 8f00 -> 2
+bulk_out 02 8c1c -> 2
+bulk_out 02 8e23 -> 2
+bulk_out 02 8f57 -> 2
+bulk_in 81 16384 -> @16384:319df1a27b304ba29e3b5e45bbeafd320c3e35377d204a143b1b692f6a4d87dd
+bulk_in 81 16384 -> @16384:31a4c92c2ea8ec12ae10dfa28e23e2fce4c304b4426b9a89145162f8627c8b0f
+bulk_in 81 16384 -> @16384:e108893fa0171ba9de0570728f63bdf7dfb945af7ad93c7238eed18a97f92ee5
+bulk_in 81 16384 -> @16384:679676ecac8ee4eb4b6bec4f8d12e6384273ee2d81b736d270820a954ebe5972
+bulk_in 81 16384 -> 0160
+bulk_in 81 16384 -> 0160058003
+bulk_in 81 16384 -> 0160
+bulk_in 81 16384 -> @16384:9d6ac4581f5cb8189b053190da7433f3a4e4d80c622e1fcab23a39571ed551b7
+bulk_in 81 16384 -> @16384:4c15a9aef732c265e43aa042d9b56c87adfd3bccbc5a4b63bfe09d492402cb49
+bulk_in 81 16384 -> @16384:5f60d2e1ee965d4be29d3f9f1ffe60c920574f6084d6431ecbc2333e7de774bb
+bulk_in 81 16384 -> @16384:70d81d2ce99c1743994fe98fdaf18e36a90dd028f1cc364cfa06fa7a7461e9af
+bulk_in 81 16384 -> @16384:87367d406eade9ba4aa1c1db2a36fe69dcecc17332bdfb7709167b985f9e04f9

@@ -108,7 +108,7 @@ def holders(path):
     out = []
     with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
-            m = re.match(r"\s*\*\s*(Copyright \(C\) .*?)\s*$", line)
+            m = re.match(r"\s*\*\s*(Copyright \(C\) .*?)[\s,]*$", line)
             if m:
                 out.append(m.group(1))
             elif out and "*/" in line:

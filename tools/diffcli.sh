@@ -344,6 +344,24 @@ if [ $emu = 1 ]; then
     else
         emu_fail "firmware stand-ins"; cat "$TMP/fw.out"
     fi
+    # A --hangs case stops sigrok-cli with timeout's SIGTERM, of which
+    # it would die without writing its gcov counts. This preload makes
+    # the signal an exit(), whose handlers write them. An exit() from a
+    # signal handler can deadlock (the signal may land inside a lock an
+    # exit handler takes; it does now and then in hantek-6xxx), so an
+    # alarm ends such a run 2 s later, without counts but still as a
+    # timed out run (status 124). Without a C compiler the case still
+    # runs; it only counts nothing.
+    EMU_TERM_EXIT=""
+    printf '%s\n' '#include <signal.h>' '#include <stdlib.h>' '#include <unistd.h>' \
+        'static void on_term(int s) { (void)s; alarm(2); exit(1); }' \
+        '__attribute__((constructor)) static void init(void) { signal(SIGTERM, on_term); }' \
+        >"$TMP/term-exit.c"
+    if cc -shared -fPIC -o "$TMP/term-exit.so" "$TMP/term-exit.c" 2>"$TMP/term-exit.err"; then
+        EMU_TERM_EXIT=$TMP/term-exit.so
+    else
+        echo "note: no SIGTERM preload for --hangs cases (cc failed), so they write no gcov counts"
+    fi
 
     # The state letter of a process (/proc/PID/stat), empty when gone.
     emu_pstate() {
@@ -507,6 +525,32 @@ if [ $emu = 1 ]; then
         EMU_SECTION="# section $1" awk '$0 == ENVIRON["EMU_SECTION"] { on = 1; next }
             /^# section / { on = 0 } on && !/^#/' "$EMULOG/$EMU_MODEL.log"
     }
+    # The transactions of a --hangs case, made deterministic: a driver
+    # that never ends may repeat its last steps for as long as the
+    # timeout lets it, so where the log is periodic up to its end (a
+    # period of at most EMU_HANG_PERIOD lines, default 512, seen at
+    # least three times), it is cut after the first full period and a
+    # `~` line says so. Three periods are all the cut checks: they do
+    # not tell a loop that runs until the timeout from one that stops
+    # after a few rounds, and the line claims no more than that. Of the periods, the one that keeps the fewest lines wins (an
+    # outer loop over an inner one). A log without such a tail, a driver
+    # that waits without a transfer, is kept whole.
+    emu_hang_cut() {
+        awk -v pmax="${EMU_HANG_PERIOD:-512}" '
+            { l[NR] = $0 }
+            END {
+                n = NR; best = n; bp = 0
+                for (p = 1; p <= pmax && 3 * p <= n && p < best; p++) {
+                    # l[s..n] repeats with period p from s = j - p + 1.
+                    j = n
+                    while (j > p && l[j] == l[j - p]) j--
+                    s = j - p + 1
+                    if (n - s + 1 >= 3 * p && j < best) { best = j; bp = p }
+                }
+                for (i = 1; i <= best; i++) print l[i]
+                if (bp) printf "~ the last %d lines repeat to the end (3 or more times)\n", bp
+            }'
+    }
     emu_slug() {
         echo "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//'
     }
@@ -535,7 +579,7 @@ if [ $emu = 1 ]; then
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY] [--unplug WHEN] [--interrupt WHEN]
-    #          [--timeout S] [--record] -- ARGS...
+    #          [--timeout S] [--hangs] [--record] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -557,7 +601,13 @@ if [ $emu = 1 ]; then
     #   gets the attach before the unplug), or the tool gets SIGINT.
     #   --timeout stops each tool after S seconds rather than
     #   EMU_CASE_TIMEOUT; a sigrok-cli under --oracle-bug that has to be
-    #   stopped so fails as the case wants. --record records oxrok's
+    #   stopped so fails as the case wants. --hangs, an oracle case
+    #   where the C driver never ends: it passes when sigrok-cli is
+    #   stopped by the timeout (and fails when it ends on its own), its
+    #   transactions cut where they start repeating (emu_hang_cut), runs
+    #   of a repeated output line counted once; sigrok-cli's stdout is
+    #   lost with it, so such a case compares --stderr or --no-output.
+    #   --record records oxrok's
     #   run of a full case with OXROK_USB_RECORD and OXROK_HID_RECORD
     #   (the USB one kept when both wrote) as the replay fixture
     #   tests/fixtures/DRIVER/emu-SLUG.txt, its stdout as emu-SLUG.out
@@ -571,7 +621,7 @@ if [ $emu = 1 ]; then
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -588,6 +638,7 @@ if [ $emu = 1 ]; then
                 --interrupt) event="interrupt $2"; shift ;;
                 --timeout) case_timeout=$2; shift ;;
                 --record) record=1 ;;
+                --hangs) hangs=1 ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -613,6 +664,11 @@ if [ $emu = 1 ]; then
         if [ $mode = oracle ]; then
             case " $EMU_FULL " in *" $driver "*) why="; oxrok -L lacks $driver, which EMU_FULL lists" ;; esac
         fi
+        # oxrok's port must end where the C driver hangs: such a full
+        # case is an --oracle-bug one.
+        if [ $hangs = 1 ] && { [ $mode = full ] || [ -n "$bug" ]; }; then
+            why="$why; --hangs takes an oracle case (a full case whose sigrok-cli hangs is an --oracle-bug one)"
+        fi
         for t in $tools; do
             if [ $t = a ]; then tool=$SIGROK_CLI; else tool=$OXROK; fi
             if ! { emu_cmd reset && emu_cmd "section $t $name"; } >/dev/null; then
@@ -632,6 +688,9 @@ if [ $emu = 1 ]; then
                 interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
                 *) set -- "$tool" "$@" ;;
             esac
+            if [ $hangs = 1 ] && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
+                set -- env LD_PRELOAD="$EMU_TERM_EXIT" "$@"
+            fi
             if [ $record = 1 ] && [ $t = b ]; then
                 rm -f "$TMP/rec.usb" "$TMP/rec.hid"
                 set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
@@ -647,11 +706,17 @@ if [ $emu = 1 ]; then
             st=$?
             TOOLPID=""
             if [ -n "$WATCHPID" ]; then kill "$WATCHPID" 2>/dev/null; wait "$WATCHPID" 2>/dev/null; fi
-            if [ $st = 124 ] && { [ -z "$bug" ] || [ $t = b ]; }; then
+            if [ $st = 124 ] && { [ -z "$bug" ] || [ $t = b ]; } && [ $hangs = 0 ]; then
                 why="$why; $(basename "$tool") timed out after $case_timeout s"
             fi
             if [ -n "$bug" ] && [ $t = a ]; then
                 [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
+            elif [ $hangs = 1 ]; then
+                # 137: timeout's KILL, 5 s after a TERM that did not end it.
+                case $st in
+                    124 | 137) ;;
+                    *) why="$why; $(basename "$tool") exited $st before the timeout, where --hangs says it never ends" ;;
+                esac
             else
                 if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
                 if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
@@ -669,6 +734,9 @@ if [ $emu = 1 ]; then
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
+            if [ $hangs = 1 ]; then
+                emu_hang_cut <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+            fi
             # The attach's node names and address made generic first, so
             # that --filter and --names see the text the goldens hold.
             for f in out err; do
@@ -679,6 +747,8 @@ if [ $emu = 1 ]; then
             # do not change with the tools' versions.
             sed -E '1{/^(libsigrok|sigrok-cli|oxrok) /d;}' "$TMP/$t.cmp" >"$TMP/$t.n"
             mv "$TMP/$t.n" "$TMP/$t.cmp"
+            # A hung driver repeats its message as often as time allows.
+            if [ $hangs = 1 ]; then uniq "$TMP/$t.cmp" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.cmp"; fi
             if [ "$v" != 0 ]; then
                 why="$why; violations under $tname: $(grep -m1 '^!' "$TMP/$t.tx")"
             fi

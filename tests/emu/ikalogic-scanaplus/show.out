@@ -1,0 +1,8 @@
+Driver functions:
+    Logic analyzer
+ikalogic-scanaplus - IKALOGIC ScanaPLUS with 9 channels: 1 2 3 4 5 6 7 8 9
+Supported configuration options:
+    limit_samples: 
+    limit_time: 
+    samplerate - supported samplerates:
+      100 MHz (current)

@@ -5,7 +5,7 @@
 use crate::descriptor::{self, truncate};
 use crate::model::{
     Arm, CONTROL, Descriptors, DeviceModel, Endpoint, Event, RECIPIENT_DEVICE, RECIPIENT_ENDPOINT,
-    RECIPIENT_INTERFACE, Reply, STANDARD, Setup, Violations,
+    RECIPIENT_INTERFACE, Reply, STANDARD, Setup, StandardFault, Violations,
 };
 
 const GET_STATUS: u8 = 0;
@@ -150,15 +150,23 @@ impl Device {
                 setup.length
             ));
         }
-        if setup.kind() == STANDARD
+        let fault = if setup.kind() == STANDARD { self.model.fail_standard(setup) } else { None };
+        if fault == Some(StandardFault::Stall) {
+            return Reply::Stall;
+        }
+        let reply = if setup.kind() == STANDARD
             && let Some(reply) = self.standard(setup, v)
         {
-            return reply;
-        }
-        let reply = self.model.control(setup, data, v);
-        match reply {
-            Reply::Data(d) if setup.is_in() => Reply::Data(truncate(&d, setup.length)),
-            other => other,
+            reply
+        } else {
+            self.model.control(setup, data, v)
+        };
+        match (reply, fault) {
+            (Reply::Data(d), Some(StandardFault::Short(n))) if setup.is_in() => {
+                Reply::Data(d.into_iter().take(n.min(usize::from(setup.length))).collect())
+            }
+            (Reply::Data(d), _) if setup.is_in() => Reply::Data(truncate(&d, setup.length)),
+            (other, _) => other,
         }
     }
 
@@ -383,6 +391,66 @@ mod tests {
         assert!(v.is_empty(), "{v:?}");
         assert_eq!(dev.control(setup(0x00, SET_CONFIGURATION, 7, 0, 0), &[], &mut v), Reply::Stall);
         assert_eq!(v.drain().len(), 1);
+    }
+
+    /// A relay board whose model STALLs string 2 and the configuration,
+    /// and cuts string 0.
+    struct FailingStrings(UsbRelay);
+
+    impl DeviceModel for FailingStrings {
+        fn name(&self) -> &'static str {
+            self.0.name()
+        }
+        fn descriptors(&self) -> &Descriptors {
+            self.0.descriptors()
+        }
+        fn control(&mut self, setup: Setup, data: &[u8], v: &mut Violations) -> Reply {
+            self.0.control(setup, data, v)
+        }
+        fn out(&mut self, ep: u8, data: &[u8], v: &mut Violations) -> Reply {
+            self.0.out(ep, data, v)
+        }
+        fn in_transfer(&mut self, ep: u8, max: usize, v: &mut Violations) -> Reply {
+            self.0.in_transfer(ep, max, v)
+        }
+        fn reset(&mut self) {
+            self.0.reset();
+        }
+        fn fail_standard(&mut self, setup: Setup) -> Option<StandardFault> {
+            match (setup.request, setup.value) {
+                (GET_DESCRIPTOR, 0x0302) | (SET_CONFIGURATION, _) => Some(StandardFault::Stall),
+                (GET_DESCRIPTOR, 0x0300) => Some(StandardFault::Short(2)),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn a_model_can_fail_a_standard_request() {
+        let mut dev = Device::new(Box::new(FailingStrings(UsbRelay::new(2))));
+        let mut v = Violations::default();
+        assert_eq!(
+            dev.control(setup(0x80, GET_DESCRIPTOR, 0x0302, 0x0409, 255), &[], &mut v),
+            Reply::Stall
+        );
+        assert_eq!(
+            dev.control(setup(0x80, GET_DESCRIPTOR, 0x0300, 0, 255), &[], &mut v),
+            Reply::Data(vec![4, 3])
+        );
+        // Not longer than wLength either.
+        assert_eq!(
+            dev.control(setup(0x80, GET_DESCRIPTOR, 0x0300, 0, 1), &[], &mut v),
+            Reply::Data(vec![4])
+        );
+        let Reply::Data(d) = dev.control(setup(0x80, GET_DESCRIPTOR, 0x0100, 0, 64), &[], &mut v)
+        else {
+            panic!()
+        };
+        assert_eq!(d.len(), 18, "the others as ever");
+        // A STALLed request has no effect.
+        assert_eq!(dev.control(setup(0x00, SET_CONFIGURATION, 1, 0, 0), &[], &mut v), Reply::Stall);
+        assert_eq!(dev.configuration(), 0);
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]

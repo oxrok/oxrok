@@ -1,0 +1,40 @@
+gcov chronovu-la (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        84.0%  204 of 243
+  protocol.c   91.1%  164 of 180
+  total        87.0%  368 of 423
+never reached, by function (line ranges hold no reached line):
+  api.c
+    add_device: 93-95, 120-123
+    scan: 185, 192-194, 202-204, 210, 226
+    dev_open: 243-244
+    config_get: 307, 312, 316-317
+    config_set: 343-344
+    config_list: 367, 372, 375-376
+    receive_data: 392-393, 397-398, 402-403
+    dev_acquisition_start: 446-447, 452-453, 457-458, 484-485
+  protocol.c
+    cv_samplerate_to_divcount: 107-108, 112-113
+    cv_write: 138-140, 142-144
+    close_usb_reset_sequencer: 206, 209, 212
+    cv_convert_trigger: 279-280, 289, 293-294
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   30.6%  70 of 229
+  total       30.6%  70 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: 337, 346, 360
+    sr_usb_find: 418-420
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)

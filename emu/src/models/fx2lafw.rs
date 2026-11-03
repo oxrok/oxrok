@@ -95,9 +95,18 @@
 //! each acquisition with no data and `stall_in=N` STALLs the N after
 //! those, both paced like the samples (one per submission), so the
 //! number of transactions stays that of the driver's logic.
+//! `stall_string=I,...` STALLs every read of string descriptor I (0
+//! the language table, 1 to 3 the manufacturer, product and serial
+//! number) and `short_string=I,...` answers it with its first two bytes
+//! alone, a `bLength` the answer does not hold, which libusb takes for
+//! an I/O error: the string reads of `scan()` (`api.c`) fail. They do
+//! not change the descriptors, so turning them on re-attaches nothing
+//! and the kernel keeps the strings it read at the attach.
 
 use crate::descriptor::{self, DeviceDescriptor};
-use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, VENDOR, Violations};
+use crate::model::{
+    Descriptors, DeviceModel, Reply, Setup, Speed, StandardFault, VENDOR, Violations,
+};
 use crate::shells::ezusb::{self, Chip, Loader};
 use crate::{Error, Result};
 
@@ -107,7 +116,8 @@ pub const NAME: &str = "fx2lafw";
 pub const ABOUT: &str = "FX2 logic analyzer with the fx2lafw firmware (EZ-USB, renumerates); \
                          profile=cypress-fx2 (04b4:8613, 16 ch, default), saleae-logic \
                          (0925:3881, 8 ch) or sigrok-fx2-8ch (1d50:608c, 8 ch), flashed=1 starts with the firmware running; \
-                         faults: version=MAJOR.MINOR, stall=version,start,revid, empty=N, stall_in=N";
+                         faults: version=MAJOR.MINOR, stall=version,start,revid, empty=N, stall_in=N, \
+                         stall_string=I,..., short_string=I,...";
 
 /// A board the driver knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,6 +182,10 @@ pub struct Faults {
     /// Bulk IN transfers of each acquisition that STALL before the
     /// samples come.
     pub stall_in: u32,
+    /// String descriptors whose reads STALL.
+    pub stall_string: Vec<u8>,
+    /// String descriptors whose reads answer two bytes alone.
+    pub short_string: Vec<u8>,
 }
 
 impl Faults {
@@ -200,6 +214,19 @@ impl Faults {
             }
             "empty" => self.empty = count(v)?,
             "stall_in" => self.stall_in = count(v)?,
+            "stall_string" | "short_string" => {
+                let mut list = Vec::new();
+                for i in v.split(',').filter(|i| !i.is_empty()) {
+                    list.push(i.parse::<u8>().ok().filter(|i| *i <= 3).ok_or_else(|| {
+                        Error(format!("{k}={i}: a string index, 0 to 3"))
+                    })?);
+                }
+                if k == "stall_string" {
+                    self.stall_string = list;
+                } else {
+                    self.short_string = list;
+                }
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -208,7 +235,8 @@ impl Faults {
 
 /// A board from the `-o` options: `profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch`,
 /// `flashed=0|1`, and the faults (see [`Faults`]): `version=MAJOR.MINOR`,
-/// `stall=version,start,revid`, `empty=N`, `stall_in=N`.
+/// `stall=version,start,revid`, `empty=N`, `stall_in=N`, `stall_string=I,...`,
+/// `short_string=I,...`.
 ///
 /// # Errors
 ///
@@ -555,6 +583,25 @@ impl DeviceModel for Fx2lafw {
     fn take_renumeration(&mut self) -> bool {
         std::mem::take(&mut self.renumerate)
     }
+
+    /// `stall_string` and `short_string`: `GET_DESCRIPTOR` of a string.
+    fn fail_standard(&mut self, setup: Setup) -> Option<StandardFault> {
+        const GET_DESCRIPTOR: u8 = 6;
+        if setup.request_type != 0x80
+            || setup.request != GET_DESCRIPTOR
+            || setup.value >> 8 != u16::from(descriptor::STRING)
+        {
+            return None;
+        }
+        let index = (setup.value & 0xff) as u8;
+        if self.faults.stall_string.contains(&index) {
+            Some(StandardFault::Stall)
+        } else if self.faults.short_string.contains(&index) {
+            Some(StandardFault::Short(2))
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -710,7 +757,29 @@ mod tests {
         dev.in_submitted(2, 512);
         assert_eq!(dev.transfer_in(2, 512, &mut v), Reply::Nak);
         assert!(v.is_empty(), "a fault is the device's, not the host's: {v:?}");
-        for bad in [("version", "2"), ("version", "256.0"), ("stall", "reset"), ("empty", "-1")] {
+        // String reads: the serial number STALLed, the language table
+        // cut short; the rest as ever.
+        let mut dev = faulty(&[("stall_string", "3"), ("short_string", "0")]);
+        let string = |i: u16| Setup {
+            request_type: 0x80,
+            request: 6,
+            value: 0x0300 | i,
+            index: if i == 0 { 0 } else { 0x0409 },
+            length: 255,
+        };
+        assert_eq!(dev.control(string(3), &[], &mut v), Reply::Stall);
+        assert_eq!(dev.control(string(0), &[], &mut v), Reply::Data(vec![4, 3]));
+        let Reply::Data(d) = dev.control(string(1), &[], &mut v) else { panic!() };
+        assert_eq!(d.len(), 2 + 2 * "sigrok".len());
+        assert!(v.is_empty(), "{v:?}");
+        for bad in [
+            ("version", "2"),
+            ("version", "256.0"),
+            ("stall", "reset"),
+            ("empty", "-1"),
+            ("stall_string", "4"),
+            ("short_string", "x"),
+        ] {
             assert!(build(&[(bad.0.into(), bad.1.into())]).is_err(), "{bad:?}");
         }
     }

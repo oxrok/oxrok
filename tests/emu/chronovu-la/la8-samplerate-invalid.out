@@ -1,0 +1,2 @@
+sr: chronovu-la: Invalid samplerate (3000000Hz).
+Failed to set device option 'samplerate': generic/unspecified error.
