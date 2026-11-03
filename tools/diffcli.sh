@@ -46,7 +46,10 @@
 # cases is full gets no session at all. A case of a driver EMU_FULL
 # lists that oxrok -L lacks fails as in a normal run, and so does a run
 # where no case ran. Session-only helpers in a scenario (the *_hold
-# claims) return at once while the cases are counted. Events, --record and the
+# claims) return at once while the cases are counted. Before each of
+# oxrok's runs, the kernel drivers bound to the device's vendor-specific
+# interfaces are unbound (emu_unbind), as libftdi's detach in
+# sigrok-cli's run would have left them. Events, --record and the
 # violation checks are as in a normal run; the software cases, --hw,
 # --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #
@@ -565,6 +568,33 @@ if [ $emu = 1 ]; then
     # The transaction lines of a section of the log, comments dropped.
     # The name goes through the environment: awk -v would turn its
     # backslashes into escapes.
+    # --no-oracle: oxrok runs where sigrok-cli would have run before it,
+    # and some of libsigrok's libraries detach a kernel driver from the
+    # interface and leave it detached (libftdi: ftdi_sio). Each kernel
+    # driver still bound to a vendor-specific interface (class ff) of
+    # the device, whichever driver and interface, is unbound through
+    # sysfs, as root, so that oxrok meets the device as in a normal run.
+    # A class interface (HID, CDC, USBTMC) keeps its driver: both tools
+    # reach it through the driver's node (hidraw, tty, usbtmc), which
+    # the unbind would remove. A claim a process holds (usbfs, the
+    # *_hold helpers of the scenarios) is left alone. (A future model
+    # that both tools use through the tty of a vendor serial chip,
+    # ftdi_sio or cp210x, would need its driver kept: none does yet.)
+    # Each unbind is a section of the
+    # session log of its own, so that whatever traffic it causes is in
+    # no case's transactions.
+    emu_unbind() {
+        [ -n "$EMU_BUSID" ] || return 0
+        for intf in /sys/bus/usb/devices/"$EMU_BUSID":*; do
+            [ -e "$intf/driver" ] || continue
+            drv=$(basename "$(readlink "$intf/driver")")
+            [ "$drv" != usbfs ] || continue
+            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = ff ] || continue
+            intf=$(basename "$intf")
+            emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
+            printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null || return 1
+        done
+    }
     emu_tx() {
         EMU_SECTION="# section $1" awk '$0 == ENVIRON["EMU_SECTION"] { on = 1; next }
             /^# section / { on = 0 } on && !/^#/' "$EMULOG/$EMU_MODEL.log"
@@ -773,7 +803,15 @@ flush()
         fi
         for t in $tools; do
             if [ $t = a ]; then tool=$SIGROK_CLI; else tool=$OXROK; fi
-            if ! { emu_cmd reset && emu_cmd "section $t $name"; } >/dev/null; then
+            if ! emu_cmd reset >/dev/null; then
+                emu_fail "$name: the emulator did not answer"; return
+            fi
+            # After the reset: a reset that applies new options
+            # renumerates the device, and its drivers bind again.
+            if [ $no_oracle = 1 ] && ! emu_unbind "$name"; then
+                emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
+            fi
+            if ! emu_cmd "section $t $name" >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
             if [ -n "$event" ] && ! emu_cmd "arm $event" >/dev/null; then
