@@ -1,0 +1,36 @@
+gcov hantek-4032l (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        91.8%  268 of 292
+  protocol.c   89.2%  239 of 268
+  total        90.5%  507 of 560
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 226
+    dev_open: 294-295, 305-311
+    dev_close: 331
+    config_get: 352, 354, 375, 381-382
+    config_set: 426, 428, 445-446
+    dev_acquisition_start: 529-530, 581-583
+  protocol.c
+    h4032l_data_transfer_callback: 171-172
+    h4032l_usb_callback: 225-226, 235-237, 298-299, 327
+    h4032l_voltage2pwm: 350
+    h4032l_start_data_transfers: 376, 394-399
+    h4032l_start: 441-444
+    h4032l_dev_open: 473-475, 489, 493, 502-508
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   68.1%  156 of 229
+  total       68.1%  156 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 208, 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)
