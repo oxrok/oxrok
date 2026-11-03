@@ -233,6 +233,10 @@ each with where it belongs:
   display) wait for the CDC-ACM shell (9f); they hold most of
   serial-dmm's unreached lines.
 - The emulator tier has no CI yet (row 9).
+- A LogicPort model on the FTDI shell (row 9a), once the sigrok
+  drivers are converted: oxrok alone has the driver, so its cases are
+  held to goldens taken from the bench's recordings rather than to
+  sigrok-cli. It brings the LogicPort into CI without the hardware.
 - Large transaction goldens: chronovu-la (2.9 MB) and asix-sigma
   (2.6 MB) are mostly one hash line per bulk IN of a full memory
   readout. A `.tx` option that folds a run of same-shape transfers into
