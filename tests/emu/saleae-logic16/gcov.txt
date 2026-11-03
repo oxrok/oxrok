@@ -1,0 +1,43 @@
+gcov saleae-logic16 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        85.8%  296 of 345
+  protocol.c   96.9%  404 of 417
+  total        91.9%  700 of 762
+never reached, by function (line ranges hold no reached line):
+  api.c
+    check_conf_profile: 118, 124, 128, 130
+    scan: 195
+    logic16_dev_open: 255-257, 272, 276, 300-302, 304-307
+    dev_open: 365-366
+    dev_close: 394
+    config_get: 417, 427, 433, 439, 443, 447-449
+    config_set: 480-481
+    config_list: 503-504
+    dev_acquisition_start: 643-644, 658, 671-672, 677-679, 692-699, 706-711
+  protocol.c
+    do_ep1_command: 202
+    upload_led_table: 260
+    write_fpga_registers: 317
+    upload_fpga_bitstream: 486-488, 495, 508-509
+    resubmit_transfer: 800-803
+    convert_sample_data: 832-833
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/ezusb.c   82.6%  38 of 46
+  src/usb.c     64.6%  148 of 229
+  total         67.6%  186 of 275
+never reached, by function (line ranges hold no reached line):
+  src/ezusb.c
+    ezusb_install_firmware: 69
+    ezusb_upload_firmware: 108-109, 118-121, 127-129
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: never called (199-221)
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: 553
+    usb_match_manuf_prod: never called (565-599)

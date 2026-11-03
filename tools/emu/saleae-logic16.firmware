@@ -1,0 +1,9 @@
+# Firmware stand-ins for the saleae-logic16 model (emu/src/models/saleae-logic16.rs):
+# the FX2 firmware and the two FPGA bitstreams the driver uploads. The
+# sizes are the model's (a unit test checks them), not the vendor
+# files', which the model does not need: it checks the stand-ins byte
+# for byte. The bitstreams' sizes leave a short last chunk of 62 bytes
+# (25 and 1 bytes).
+saleae-logic16-fx2.fw 5340
+saleae-logic16-fpga-18.bitstream 3001
+saleae-logic16-fpga-33.bitstream 3101

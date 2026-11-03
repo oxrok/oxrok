@@ -1,0 +1,4 @@
+sr: saleae-logic16: Invalid response for abort acquisition command: 0x55 != 0xaa.
+sr: saleae-logic16: Failed to init device.
+sr: saleae-logic16: Unable to open device.
+Failed to open device.
