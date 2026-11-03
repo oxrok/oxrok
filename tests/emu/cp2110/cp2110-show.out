@@ -1,0 +1,10 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+uni-t-ut61e-ser - UNI-T UT61E (UT-D02 cable) with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
