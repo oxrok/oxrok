@@ -77,6 +77,7 @@ pub mod usb;
 
 /// The device drivers, one module per family.
 pub mod drivers {
+    pub mod asix_sigma;
     pub mod dcttech_usbrelay;
     pub mod demo;
     pub mod ftdi_la;
@@ -103,4 +104,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
+    registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
 }

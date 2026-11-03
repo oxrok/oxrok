@@ -1,5 +1,3 @@
 sr: asix-sigma: Unexpected scratch read-back (55).
 sr: asix-sigma: Hardware response after firmware upload failed.
-sr: session: Could not start asix-sigma device BUS.ADDR acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+start refused

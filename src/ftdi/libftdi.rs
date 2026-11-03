@@ -54,7 +54,8 @@ const INDEX_A: u16 = 1;
 const IN_EP: u8 = 0x81;
 /// `ftdi_init`'s `readbuffer_chunksize`.
 const READ_CHUNK: usize = 4096;
-/// The bulk OUT endpoint of port A.
+/// The bulk OUT endpoint of port A (libftdi's `in_ep`, named from the
+/// chip's side).
 const OUT_EP: u8 = 0x02;
 /// `ftdi_init`'s `writebuffer_chunksize`.
 const WRITE_CHUNK: usize = 4096;
@@ -422,6 +423,36 @@ impl Context {
         }
         Ok(offset)
     }
+
+    /// `ftdi_write_data`: bulk OUT transfers of at most 4096 bytes
+    /// (`writebuffer_chunksize`) to port A's OUT endpoint, each going on
+    /// from what the last one took, until all of `buf` is sent. Returns
+    /// the bytes sent.
+    ///
+    /// # Errors
+    ///
+    /// A failed transfer: `-1`, "usb bulk write failed", whatever
+    /// libusb said (libftdi passes no libusb code on here); what earlier
+    /// transfers sent is not reported. A transfer that takes nothing
+    /// fails the same way: libftdi would send it again for ever.
+    pub fn write_data(&mut self, buf: &[u8]) -> std::result::Result<usize, FtdiError> {
+        let mut offset = 0;
+        while offset < buf.len() {
+            let end = (offset + WRITE_CHUNK).min(buf.len());
+            match self.t.bulk_out(OUT_EP, &buf[offset..end], TIMEOUT) {
+                Ok(0) => {
+                    log::debug!("bulk write: the transfer took nothing");
+                    return Err(FtdiError::new(-1, "usb bulk write failed"));
+                }
+                Ok(n) => offset += n,
+                Err(e) => {
+                    log::debug!("bulk write: {e}");
+                    return Err(FtdiError::new(-1, "usb bulk write failed"));
+                }
+            }
+        }
+        Ok(offset)
+    }
 }
 
 /// The calls a sync FIFO driver adds (`ikalogic-scanaplus`): the
@@ -473,26 +504,6 @@ impl Context {
             return Err(bad());
         }
         Ok(u16::from_le_bytes([d[0], d[1]]))
-    }
-
-    /// `ftdi_write_data`: `data` to port A in bulk transfers of 4096
-    /// bytes at most. Returns the bytes written.
-    ///
-    /// # Errors
-    ///
-    /// `-1`, "usb bulk write failed", when a transfer fails or times
-    /// out (libusb's error, even with part of it sent).
-    pub fn write_data(&mut self, data: &[u8]) -> std::result::Result<usize, FtdiError> {
-        for chunk in data.chunks(WRITE_CHUNK) {
-            match self.t.bulk_out(OUT_EP, chunk, TIMEOUT) {
-                Ok(n) if n == chunk.len() => {}
-                r => {
-                    log::debug!("bulk write: {r:?}");
-                    return Err(FtdiError::new(-1, "usb bulk write failed"));
-                }
-            }
-        }
-        Ok(data.len())
     }
 
     /// `ftdi_usb_close`: releases port A and closes the device.
@@ -635,6 +646,29 @@ mod tests {
         // The rest, then a stall: the read fails and loses it.
         let e = ctx.read_data(&mut buf).unwrap_err();
         assert_eq!(e, FtdiError::new(-9, "usb bulk read failed"));
+    }
+
+    #[test]
+    fn writes_as_ftdi_write_data() {
+        // 5000 bytes: 4096, then 904.
+        let (a, b) = ("55".repeat(4096), "55".repeat(904));
+        let steps = format!(
+            "{OPEN}bulk_out 02 {a} -> 4096\nbulk_out 02 {b} -> 904\n\
+             bulk_out 02 01 -> err device \"endpoint stalled\"\n"
+        );
+        let mut ctx = Context::open(replay(&steps)).unwrap();
+        assert_eq!(ctx.write_data(&[0x55; 5000]), Ok(5000));
+        assert_eq!(ctx.write_data(&[1]), Err(FtdiError::new(-1, "usb bulk write failed")));
+    }
+
+    #[test]
+    fn a_short_write_goes_on_and_an_empty_one_fails() {
+        let steps = format!(
+            "{OPEN}bulk_out 02 010203 -> 2\nbulk_out 02 03 -> 1\nbulk_out 02 04 -> 0\n"
+        );
+        let mut ctx = Context::open(replay(&steps)).unwrap();
+        assert_eq!(ctx.write_data(&[1, 2, 3]), Ok(3));
+        assert_eq!(ctx.write_data(&[4]), Err(FtdiError::new(-1, "usb bulk write failed")));
     }
 
     #[test]

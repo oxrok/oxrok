@@ -1,6 +1,4 @@
 sr: asix-sigma: USB data read failed: usb bulk read failed
 sr: asix-sigma: Could not receive LA start response.
 sr: asix-sigma: Hardware response after firmware upload failed.
-sr: session: Could not start asix-sigma device BUS.ADDR acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+start refused
