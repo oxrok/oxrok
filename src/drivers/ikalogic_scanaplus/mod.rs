@@ -223,7 +223,7 @@ fn configure(link: &mut Link) -> Result<()> {
         log::error!("Failed to set FTDI latency timer ({}): {}.", e.code, e.message);
         link.failed(e)
     })?;
-    link.ctx.set_read_chunksize(protocol::COMPRESSED_BUF_SIZE);
+    link.ctx.read_data_set_chunksize(protocol::COMPRESSED_BUF_SIZE);
     // scanaplus_get_device_id()
     let mut words = [0u16; 2];
     for (i, addr) in [16u16, 17].into_iter().enumerate() {
