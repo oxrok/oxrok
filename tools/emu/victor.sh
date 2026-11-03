@@ -13,6 +13,7 @@ EMU_GCOV=serial-dmm
 EMU_FULL=victor-dmm
 
 emu_cases() {
+    SEARCH_BUG="libsigrok 0bc24877 converts a searched path twice (serial_hid.c ser_hid_chip_search)"
     V=victor-dmm:conn=hid/victor/raw=$EMU_HIDRAW
     emu_case "victor scan" --keep-header -- -d $V --scan
     emu_case "victor show" --keep-header -- -d $V --show
@@ -20,4 +21,8 @@ emu_cases() {
     emu_case "victor samples 2" -- -d $V --samples 2
     emu_case "victor samples 3" -- -d $V --samples 3
     emu_case "victor no chip" -- -d victor-dmm:conn=hid/raw=$EMU_HIDRAW --samples 1
+    # The forms users type, which sigrok-cli cannot open (see above):
+    # oxrok alone, against the goldens.
+    emu_case "victor search hid" --oracle-bug "$SEARCH_BUG" -- -d victor-dmm:conn=hid --samples 1
+    emu_case "victor default conn" --oracle-bug "$SEARCH_BUG" -- -d victor-dmm --samples 1
 }

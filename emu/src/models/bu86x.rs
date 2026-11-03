@@ -25,6 +25,11 @@
 //! turn, 1 to 64 bytes each, sent in 8 byte reports padded with zeros
 //! as the Pico does; the default is the `diffcli.sh --hw` packet, a
 //! BM867s showing 1.2345 V AC with 50.0 Hz on the second display.
+//! Option `drop=N`: the meter leaves every Nth request unanswered, as
+//! one the infrared link lost (0, the default, answers all), so that the
+//! driver's re-request after 500 ms without an answer
+//! (`req_packet`'s timeout) has a case. A request is counted from the
+//! start of the model, which the harness builds anew for every case.
 //!
 //! The pedantic checks: an output report is exactly `00 86 66` (the
 //! Pico answers any `00 xx 66` of 3 bytes or more, the C driver sends
@@ -43,7 +48,8 @@ use crate::shells::hidcable::{Packets, Reports};
 pub const NAME: &str = "bu86x";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Brymen BU-86X cable of a BM86x meter (HID, 0820:0001), the Pico emulator's \
-                         role; packet=HEX[,HEX...] (the meter's 24 byte answers, in turn)";
+                         role; packet=HEX[,HEX...] (the meter's 24 byte answers, in turn), drop=N \
+                         (every Nth request unanswered)";
 
 /// The USB vendor id.
 pub const VENDOR_ID: u16 = 0x0820;
@@ -63,13 +69,17 @@ pub const DEFAULT_PACKET: &str = "000001a0dbf8e47c01007cbebf00040086868686000000
 /// On an unknown option or a malformed packet.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut packets = cable::parse_packets(DEFAULT_PACKET, 1, 64)?;
+    let mut drop = 0;
     for (k, v) in options {
         match k.as_str() {
             "packet" => packets = cable::parse_packets(v, 1, 64)?,
+            "drop" => drop = cable::parse_number(k, v, 0..=1000)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Bu86x::new(packets)))
+    let mut cable = Bu86x::new(packets);
+    cable.meter.drop = drop;
+    Ok(Box::new(cable))
 }
 
 /// The meter behind the cable.
@@ -78,6 +88,9 @@ pub struct Meter {
     packets: Packets,
     reports: Reports,
     feature: Vec<u8>,
+    /// Every `drop`th request goes unanswered; 0 answers all.
+    drop: u32,
+    requests: u32,
 }
 
 impl Meter {
@@ -105,7 +118,10 @@ impl Meter {
                     self.reports.len()
                 ));
             }
-            self.answer();
+            self.requests += 1;
+            if self.drop == 0 || !self.requests.is_multiple_of(self.drop) {
+                self.answer();
+            }
         }
     }
 }
@@ -167,6 +183,8 @@ impl Bu86x {
                 packets: Packets::new(packets),
                 reports: Reports::default(),
                 feature: Vec::new(),
+                drop: 0,
+                requests: 0,
             },
         }
     }
@@ -286,5 +304,23 @@ mod tests {
         assert_eq!(v.drain().len(), 1);
         assert!(build(&[("packet".into(), "0".into())]).is_err());
         assert!(build(&[("period".into(), "1".into())]).is_err());
+        assert!(build(&[("drop".into(), "x".into())]).is_err());
+    }
+
+    #[test]
+    fn drops_every_nth_request() {
+        let mut dev = cable();
+        dev.meter.drop = 2;
+        let mut v = Violations::default();
+        let (s, d) = output(&REQUEST);
+        dev.control(s, &d, &mut v);
+        for _ in 0..3 {
+            assert!(matches!(dev.in_transfer(1, 64, &mut v), Reply::Data(_)));
+        }
+        dev.control(s, &d, &mut v);
+        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak, "the second is lost");
+        dev.control(s, &d, &mut v);
+        assert!(matches!(dev.in_transfer(1, 64, &mut v), Reply::Data(_)), "the re-request is not");
+        assert!(v.is_empty(), "{v:?}");
     }
 }
