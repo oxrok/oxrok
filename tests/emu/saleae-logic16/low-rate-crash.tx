@@ -91,3 +91,11 @@ bulk_in 81 64 -> ca
 bulk_out 01 701df4df79836f2e292d33d9cbaddd5cdf47bd535aad04ef1e9928db32f5bc77b601a0 -> 35
 bulk_out 01 70fd349f6e49b8cbc2e58c278671b073bacde48ffe3988fb92159c17962180238afd34 -> 35
 bulk_out 01 53fc2273426a -> 6
+bulk_out 01 d8 -> 1
+bulk_out 01 5a32f9c7 -> 4
+bulk_out 01 55e0bf -> 3
+bulk_in 81 64 -> e2
+bulk_out 01 55e01c -> 3
+bulk_in 81 64 -> da
+bulk_out 01 55e017 -> 3
+bulk_in 81 64 -> da
