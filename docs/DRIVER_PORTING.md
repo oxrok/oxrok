@@ -259,6 +259,43 @@ would have cost a user a long afternoon.
   flow control with libserialport's numbering. Do the sane
   thing, document the difference in `docs/CLI.md`, and exclude or
   filter the case in `tools/diffcli.sh`.
+- The C drivers' arithmetic and error paths are where a port must not
+  follow the C line for line. The EZ-USB models found each kind:
+  - integer widths: kingst-la2016 truncates its clock divider to 16
+    bits (3051 Hz becomes 12.5 MHz), dslogic computes a 90 % bound in
+    32 bits and gets about 10 % on the large boards;
+  - an error read as data: kingst-la2016 returns a failed register
+    read as 0xfff5, whose idle bit starts a download;
+  - arithmetic before validation: saleae-logic16 divides 0 by 0 for a
+    rate it would refuse a few lines later;
+  - uninitialised bytes on the wire: dslogic sends a struct field it
+    never set; a port sends a defined value (0) and says so;
+  - transfers freed in flight or left dangling: kingst-la2016's error
+    exit frees queued transfers and libusb aborts, dslogic frees a
+    trigger transfer it still counts as submitted; in Rust the stream
+    owns its transfers and dropping it cancels them;
+  - errors retried for ever: hantek-dso, hantek-6xxx after its flush,
+    and the PICkit2 on a vanished device never end a capture; a port
+    ends it on a disconnect (`Error::Disconnected`) and after a bounded
+    number of failures, as fx2lafw's `MAX_EMPTY_TRANSFERS` does;
+  - readbacks that do not match the setting: dslogic's `clock_edge`
+    is always "rising", hantek-6xxx's `coupling=DC` reads back AC on a
+    DC-only board; a port answers what was set.
+  `docs/DEVICES.md` lists, per device, what its model found; read it
+  before porting that driver.
+- sigrok-cli's own parsing limits what a comparison can show: sizes
+  with a fraction lose their suffix (`12.5M` is 12 Hz), floats are
+  parsed in single precision (20000001 is 2e7), voltages only as whole
+  V or mV, and it has no SIGINT handler, so a Ctrl-C case can only
+  check oxrok (`--oracle-bug`).
+- A claim that libsigrok has a bug needs the C lines quoted and, where
+  a case can show it, the case. The reviewers of the second batch
+  corrected the stated cause of about a third of the claims (a
+  use-after-free taken for a hang, a divisor named wrong).
+- Do not run a repository script with guessed arguments: an older
+  `tools/attribution.py` took `--help` as its source directory and
+  rewrote every header. It now needs `--only FILE` or `--all` and has
+  `--check`.
 - The user's `-l 4` log is the first debugging tool: keep the debug
   messages at the protocol steps (resync, image probe, readout window,
   transfer plan), and filter library noise out of it.
