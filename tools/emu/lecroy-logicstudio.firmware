@@ -1,0 +1,10 @@
+# Firmware stand-ins for the lecroy-logicstudio model
+# (emu/src/models/lecroy-logicstudio.rs): the FX2 firmware the scan
+# uploads and the two FPGA bitstreams. The FX2 size is the model's; the
+# bitstreams are FPGA_FIRMWARE_SIZE (protocol.c), the only size the
+# driver accepts. A unit test checks the list against the model; the
+# real files (extracted from LeCroy's software) are not available here,
+# and the model checks the stand-ins byte for byte.
+lecroy-logicstudio16-fx2lp.fw 6214
+lecroy-logicstudio16-8.bitstream 464196
+lecroy-logicstudio16-16.bitstream 464196

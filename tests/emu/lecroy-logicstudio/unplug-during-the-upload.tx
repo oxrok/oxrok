@@ -1,0 +1,4 @@
+ctl_out 00 09 0000 0000 - -> ok
+ctl_out 40 a0 e600 0000 01 -> ok
+ctl_out 40 a0 0000 0000 @4096:9283d44e5b642836a89cd5e325d7761967d4f7c888ecd7396da8a70f96ba1de4 -> ok
+unplug
