@@ -229,6 +229,12 @@ emu_cases() {
     emu_case "fault trigger stall" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
     dslogic_options profile=plus flashed=1 trigger=short
     emu_case "fault trigger short" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
+    # A trigger that never matches (bit 3 rises on even counts only): the
+    # transfer waits. Interrupted after the start (the fifth control write:
+    # 0xb3, 0xb8, stop, 0xb4, start), oxrok sends the stop command and ends;
+    # sigrok-cli has no SIGINT handler and dies.
+    dslogic_options profile=plus flashed=1
+    emu_case "interrupt waiting for the trigger" --interrupt out=0:5 --oracle-bug "sigrok-cli has no SIGINT handler, so nothing stops the session" --no-output -- -d $D -C $C4 --samples 16 -t 0=1,3=r -O hex
     # Sample transfers that complete empty, or STALL, count as empty
     # ones; one more than MAX_EMPTY_TRANSFERS (64) in a row and the
     # acquisition ends with no samples.

@@ -1031,6 +1031,58 @@ mod tests {
         assert_eq!(s.empty, 0);
     }
 
+    /// Runs an acquisition of 64 samples of one channel on `steps`,
+    /// with the stop flag as given: the packets, and all steps played.
+    fn run(steps: &str, stopped: bool) -> Vec<Packet> {
+        let text = format!("# oxrok usb fixture 1\ndevice vid=2a0e pid=0020\n{steps}");
+        let r = crate::usb::record::Replay::from_text(&text).unwrap();
+        let check = r.clone();
+        let mut link = Link::new(Box::new(r));
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        let mut a = acquisition(64);
+        a.depth = 2;
+        a.run(&mut link, &sink, &AtomicBool::new(stopped));
+        check.finish().unwrap();
+        collect(&rx)
+    }
+
+    const STOP: &str = "ctl_out 40 b2 0000 0000 800000 -> ok\n";
+
+    #[test]
+    fn the_trigger_packet_comes_before_the_samples() {
+        // real_pos 8, in the packet's second word.
+        let steps = format!(
+            "bulk_in 86 512 -> 000000000800000000{{504}}\nbulk_in 86 512 -> {}\n",
+            "ff".repeat(8)
+        );
+        let all = bits(u64::MAX, 64);
+        let packets = run(&steps, false);
+        assert!(matches!(packets[0], Packet::Header { .. }));
+        assert_eq!(
+            packets[1..],
+            [
+                Packet::logic(2, all[..16].to_vec()),
+                Packet::Trigger,
+                Packet::logic(2, all[16..].to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_bad_trigger_packet_ends_the_capture_with_the_device_stopped() {
+        // libsigrok's capture never ends on these (protocol.c:1010-1026).
+        let stall = format!("bulk_in 86 512 -> err device \"endpoint stalled\"\n{STOP}");
+        assert_eq!(run(&stall, false), []);
+        let short = format!("bulk_in 86 512 -> 00{{24}}\n{STOP}");
+        assert_eq!(run(&short, false), []);
+    }
+
+    #[test]
+    fn a_stop_while_waiting_for_the_trigger_sends_the_stop_command() {
+        assert_eq!(run(STOP, true), []);
+    }
+
     fn device(pid: u16) -> DslogicDevice {
         let usb = UsbDeviceInfo { vendor_id: VID, product_id: pid, ..UsbDeviceInfo::default() };
         DslogicDevice::new(usb, Profile::of(pid).unwrap(), String::new(), None)
