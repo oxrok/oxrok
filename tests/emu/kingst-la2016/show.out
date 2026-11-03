@@ -1,0 +1,33 @@
+Driver functions:
+    Logic analyzer
+    Signal generator
+Scan options:
+    conn
+    probe_names
+kingst-la2016:conn=BUS.ADDR - Kingst LA2016 with 18 channels: CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15 PWM1 PWM2
+Channel groups:
+    Logic: channels CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15
+    PWM1: channel PWM1
+    PWM2: channel PWM2
+Supported configuration options across all channel groups:
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      20 kHz
+      50 kHz
+      100 kHz
+      200 kHz
+      500 kHz
+      1 MHz
+      2 MHz
+      5 MHz
+      10 MHz
+      20 MHz
+      50 MHz
+      100 MHz
+      200 MHz (current)
+    Maximum number of samples: 10000000000
+    limit_time: 0 (current)
+    voltage_threshold: 0.4-0.4, 0.6-0.6, 0.9-0.9, 1.2-1.2, 1.4-1.4 (current), 2.0-2.0, 2.5-2.5, 4.0-4.0
+    Supported triggers: 0 1 r f 
+    captureratio: 50 (current)
+    continuous: on, off (current)

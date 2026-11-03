@@ -1,0 +1,15 @@
+Driver functions:
+    Logic analyzer
+    Signal generator
+Scan options:
+    conn
+    probe_names
+kingst-la2016:conn=BUS.ADDR - Kingst LA2016 with 18 channels: CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15 PWM1 PWM2
+Channel groups:
+    Logic: channels CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15
+    PWM1: channel PWM1
+    PWM2: channel PWM2
+Supported configuration options on channel group PWM1:
+    enabled: on, off (current)
+    output_frequency: 1000.000000 (current)
+    output_duty_cycle: 50.000000 (current)

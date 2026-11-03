@@ -1,0 +1,3 @@
+Cannot read 8 bytes from USB: LIBUSB_ERROR_PIPE.
+Cannot read EEPROM device identifier bytes.
+Unknown or unsupported device type.

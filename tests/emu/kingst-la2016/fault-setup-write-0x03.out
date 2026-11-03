@@ -1,0 +1,2 @@
+Cannot write 1 bytes to USB: LIBUSB_ERROR_PIPE.
+Cannot send command to stop sampling.

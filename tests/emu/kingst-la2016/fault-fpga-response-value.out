@@ -1,0 +1,3 @@
+Unexpected FPGA bitstream upload response, got 0x05, want 0.
+Cannot enable FPGA bitstream after upload.
+Unknown or unsupported device type.

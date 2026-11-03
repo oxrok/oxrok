@@ -1,0 +1,4 @@
+Cannot read 1 bytes from USB: LIBUSB_ERROR_PIPE.
+Cannot read response after FPGA bitstream upload.
+Cannot enable FPGA bitstream after upload.
+Unknown or unsupported device type.
