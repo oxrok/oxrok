@@ -21,6 +21,7 @@ hantek_options() {
 # device must not be re-attached meanwhile. A claim is no transfer, so
 # the model sees nothing of it. (As fx2lafw_hold in tools/emu/fx2lafw.sh.)
 hantek_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]

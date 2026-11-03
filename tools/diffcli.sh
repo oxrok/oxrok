@@ -43,7 +43,10 @@
 # goldens sigrok-cli wrote (.out and .tx, for --oracle-bug and
 # --oracle-differs cases too, their .oracle left alone), an
 # oracle-only case is skipped and counted, and a model none of whose
-# cases is full gets no session at all. Events, --record and the
+# cases is full gets no session at all. A case of a driver EMU_FULL
+# lists that oxrok -L lacks fails as in a normal run, and so does a run
+# where no case ran. Session-only helpers in a scenario (the *_hold
+# claims) return at once while the cases are counted. Events, --record and the
 # violation checks are as in a normal run; the software cases, --hw,
 # --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #
@@ -737,7 +740,10 @@ flush()
         emu_slugs="$emu_slugs $slug"
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
         if [ "$EMU_DRY" = 1 ]; then
-            if [ $mode = full ]; then emu_dry_full=$((emu_dry_full + 1)); else emu_dry_oracle=$((emu_dry_oracle + 1)); fi
+            # A case of a driver EMU_FULL lists counts as full even when
+            # oxrok -L lacks it: the model then gets its session, where
+            # the case fails as in a normal run instead of being skipped.
+            case "$mode: $EMU_FULL " in full:* | *" $driver "*) emu_dry_full=$((emu_dry_full + 1)) ;; *) emu_dry_oracle=$((emu_dry_oracle + 1)) ;; esac
             return
         fi
         why=""
@@ -832,6 +838,12 @@ flush()
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
+            # The fold runs before the --hangs cut, so the cut sees folded
+            # lines: a loop that repeats a digested transfer of one shape
+            # folds into a single line whose count is however many rounds
+            # ran before the timeout, and the period the cut looks for is
+            # gone. Do not set EMU_TX_FOLD=1 on a model whose --hangs
+            # cases loop over such a transfer.
             if [ "$EMU_TX_FOLD" = 1 ]; then
                 emu_tx_fold <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
@@ -1162,6 +1174,8 @@ flush()
 fi
 
 if [ $no_oracle = 1 ]; then
+    # Nothing compared is no evidence: a run that skipped every case fails.
+    [ $((pass + fail)) != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
     echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)"
 else
     echo "$pass passed, $fail failed"

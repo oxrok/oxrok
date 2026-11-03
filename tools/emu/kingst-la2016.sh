@@ -25,6 +25,7 @@ kingst_options() {
 # re-attached meanwhile: the cases between keep its descriptors. A claim
 # is no transfer, so the model sees nothing of it.
 kingst_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]

@@ -24,6 +24,7 @@ dslogic_options() {
 # in tools/emu/fx2lafw.sh. A claim is no transfer: the model sees
 # nothing of it.
 dslogic_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]

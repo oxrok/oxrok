@@ -67,6 +67,11 @@ jobs:
   # against the goldens sigrok-cli wrote, through vhci-hcd. When the
   # hosted kernel has no vhci-hcd, the probe says "skipped: no vhci-hcd"
   # and the emulator job shows as skipped, neither failed nor passed.
+  # Two consequences to keep in mind: branch protection counts a skipped
+  # required job as satisfied, so a runner without vhci-hcd lets a PR
+  # merge with no emulator run at all; and the probe turns any failure
+  # of its apt-get (a mirror down, a package renamed) into that same
+  # skip, not into a failure. Check the step summary for the warning.
   emulator-probe:
     name: emulator (vhci-hcd probe)
     runs-on: ubuntu-latest
