@@ -1,0 +1,17 @@
+gcov serial-dmm (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        64.6%  82 of 127
+  protocol.c   72.6%  90 of 124
+  total        68.5%  172 of 251
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 71-73, 77, 82, 86-89, 98-99, 118, 121, 131-136, 139, 155, 159-160, 163, 165-166, 173
+    config_get: 195, 203-207
+    config_set: 219, 228-232
+    config_list: 252-254
+    dev_acquisition_start: 278-281
+  protocol.c
+    log_dmm_packet: 37-39
+    handle_packet: 78-82, 87
+    req_packet: 114, 129-130
+    handle_new_data: 160, 162-163, 176, 182-191, 195-197, 209, 221-222, 232-233
+    receive_data: 247, 250, 262

@@ -1,0 +1,10 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+brymen-bm86x - Brymen BM86x with 2 channels: P1 P2
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
