@@ -1,0 +1,3 @@
+sr: sysclk-lwla: Downloading FPGA bitstream 'sysclk-lwla1016-100-ts.rbf'.
+sr: sysclk-lwla: Failed to send command 3: LIBUSB_ERROR_PIPE.
+sr: sysclk-lwla: Downloading FPGA bitstream 'sysclk-lwla1016-100-ts.rbf'.

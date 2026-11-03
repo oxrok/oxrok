@@ -1,0 +1,7 @@
+sr: sysclk-lwla: Acquisition time limit 300 ms.
+sr: sysclk-lwla: Acquisition started.
+sr: sysclk-lwla: Sampling in progress.
+sr: sysclk-lwla: Sampling in progress.
+sr: sysclk-lwla: Time limit reached, stopping capture.
+sr: sysclk-lwla: 300 words in capture buffer.
+sr: sysclk-lwla: Acquisition stopped.

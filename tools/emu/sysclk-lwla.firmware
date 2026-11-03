@@ -1,0 +1,11 @@
+# Bitstream stand-ins for the sysclk-lwla model (emu/src/models/sysclk-lwla/):
+# the driver sends each .rbf whole, behind a 4-byte big-endian length,
+# in one bulk transfer to endpoint 4. The sizes are the model's (a unit
+# test checks them against BITSTREAMS), not the vendor files'; each
+# differs so that a wrong file shows.
+sysclk-lwla1034-off.rbf 3000
+sysclk-lwla1034-int.rbf 10000
+sysclk-lwla1034-extpos.rbf 10001
+sysclk-lwla1034-extneg.rbf 10002
+sysclk-lwla1016-100.rbf 9000
+sysclk-lwla1016-100-ts.rbf 9001
