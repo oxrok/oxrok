@@ -14,3 +14,72 @@ never reached, by function (line ranges hold no reached line):
     req_packet: 114
     handle_new_data: 160, 162-163, 176, 182-191, 195-197, 209, 221-222, 232-233
     receive_data: 247, 250
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/serial.c             31.8%  128 of 402
+  src/serial_hid.c         66.2%  382 of 577
+  src/serial_hid_bu86x.c   84.6%  11 of 13
+  total                    52.5%  521 of 992
+never reached, by function (line ranges hold no reached line):
+  src/serial.c
+    dev_is_supported: 62
+    serial_open: 87-88, 100-105, 107, 122, 128-130, 142
+    serial_close: 162-163, 169
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 290
+    sr_ser_has_queued_data: 306
+    sr_ser_queue_rx_data: 325, 328
+    sr_ser_unqueue_rx_data: 350
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_blocking: never called (430-433)
+    _serial_read: 461-462, 466
+    serial_read_blocking: never called (490-493)
+    serial_set_params: never called (534-563)
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: never called (620-719)
+    serial_readline: never called (739-786)
+    serial_stream_detect: 839-840, 866-869, 876-895, 911-912
+    sr_serial_extract_options: never called (952-981)
+    serial_source_add: 992-993, 997-998, 1002
+    serial_source_remove: 1013-1014, 1018
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    sr_serial_find_usb: never called (1119-1137)
+    serial_timeout: 1148-1150, 1162-1163
+  src/serial_hid.c
+    ser_hid_mask_databits: 66-69
+    get_hidapi_path_copy: 107-109, 116-141
+    extract_hidapi_path: 161, 164-166, 174-177
+    ser_hid_hidapi_list: never called (189-250)
+    ser_hid_hidapi_find_usb: 277, 280
+    ser_hid_hidapi_get_serno: 300, 307-318
+    ser_hid_hidapi_get_vid_pid: 369
+    ser_hid_hidapi_open_dev: 389
+    ser_hid_hidapi_setup_source_add: 502-503
+    ser_hid_hidapi_get_report: never called (525-534)
+    ser_hid_hidapi_set_report: never called (537-550)
+    ser_hid_hidapi_get_data: 565
+    get_hid_chip_funcs: 603, 608
+    ser_hid_setup_funcs: 617, 622
+    ser_hid_chip_find_enum: 640, 643, 649, 651, 657
+    ser_hid_chip_find_name_vid_pid: 672, 675
+    ser_hid_parse_conn_spec: 761, 766, 779, 781-785, 787-791, 795, 809-810, 815-816
+    check_serno: 849
+    append_find: 857
+    ser_hid_chip_search: 920, 923, 949-950, 954, 956, 961, 964, 967, 974, 982-983, 987-989, 995, 1010-1016, 1028, 1034-1044
+    ser_name_is_hid: 1066, 1068, 1072, 1076
+    ser_hid_open: 1090-1091, 1097, 1116-1117, 1122
+    ser_hid_set_params: never called (1148-1157)
+    ser_hid_list: never called (1176-1178)
+    ser_hid_find_usb: never called (1181-1184)
+    ser_hid_flush: 1192
+    ser_hid_drain: never called (1195-1200)
+    ser_hid_write: 1211, 1213, 1220, 1227-1229
+    ser_hid_read: 1257, 1259, 1275-1276, 1298-1300, 1304, 1314-1315, 1335-1339
+  src/serial_hid_bu86x.c
+    bu86x_read_bytes: 70, 72

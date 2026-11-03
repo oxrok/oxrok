@@ -16,10 +16,10 @@ never reached, by function (line ranges hold no reached line):
     handle_new_data: 142, 160, 162-163, 182-191, 210-216, 232-233
     receive_data: 247, 250, 262
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/serial.c              43.5%  175 of 402
+  src/serial.c              45.3%  182 of 402
   src/serial_hid.c          63.3%  365 of 577
   src/serial_hid_ch9325.c   58.3%  28 of 48
-  total                     55.3%  568 of 1027
+  total                     56.0%  575 of 1027
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
@@ -42,7 +42,7 @@ never reached, by function (line ranges hold no reached line):
     serial_set_handshake: never called (578-594)
     serial_set_paramstr: 648-653, 665-666, 674, 678-679, 684-699, 715-716
     serial_readline: never called (739-786)
-    serial_stream_detect: 839-840, 866-869, 876-895, 911-912, 917-919, 924-927
+    serial_stream_detect: 839-840, 866-869, 876-895
     sr_serial_extract_options: never called (952-981)
     serial_source_add: 992-993, 997-998, 1002
     serial_source_remove: 1013-1014, 1018
