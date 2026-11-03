@@ -19,6 +19,13 @@
 //! `api.c` and `protocol.c` step by step, so that the device sees the
 //! same transactions as under sigrok-cli (checked with the emulator,
 //! `tools/emu/fx2lafw.sh`).
+//!
+//! The `USBee AX` has an analog input, `A0`: an ADC clocked by the CTL2
+//! pulses the firmware makes when the start flags ask for them. With
+//! `A0` enabled the samples are 16 bit (so 12 MS/s at most), the logic
+//! byte then the ADC's, and the driver sends a logic packet of the
+//! first and an analog one of the second in volts, `(code - 128) /
+//! 12.8`, as `mso_send_data_proc()` does.
 
 #![forbid(unsafe_code)]
 
