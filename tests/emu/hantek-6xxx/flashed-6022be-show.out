@@ -1,0 +1,24 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+hantek-6xxx:conn=BUS.ADDR - Hantek 6022BE with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options across all channel groups:
+    conn: BUS.ADDR (current)
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    samplerate - supported samplerates:
+      48 MHz
+      30 MHz
+      24 MHz
+      16 MHz
+      8 MHz (current)
+      4 MHz
+      1 MHz
+      500 kHz
+      200 kHz
+      100 kHz
+    num_vdiv
