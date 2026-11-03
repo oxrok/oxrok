@@ -1,6 +1,12 @@
 # oxrok hid fixture 1
 # emu victor: victor samples 2
-# args: -d victor-dmm:conn=hid/victor/raw=/dev/hidrawN --samples 2
-device vid=1244 pid=d237 manufacturer="Victor" product="Victor cable emulator" serial="HIDCABLE1"
+# arg: -d
+# arg: victor-dmm:conn=hid/victor/raw=/dev/hidrawN
+# arg: --samples
+# arg: 2
+device vid=1244 pid=d237 manufacturer="Victor" product="Victor cable emulator" serial="HIDCABLE1" path="/dev/hidrawN"
+read 64 -> 764364b16e04a1726a2ff7c86911
+# oxrok hid fixture 1
+device vid=1244 pid=d237 manufacturer="Victor" product="Victor cable emulator" serial="HIDCABLE1" path="/dev/hidrawN"
 read 64 -> 762364716e84c1726b8f77c86911
 read 64 -> 764364b16e04a1726a2ff7c86911

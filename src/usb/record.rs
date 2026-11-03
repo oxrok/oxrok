@@ -167,11 +167,17 @@ pub struct Step {
 pub struct Fixture {
     /// The device as enumeration described it.
     pub device: UsbDeviceInfo,
+    /// The string descriptor indexes (manufacturer, product, serial),
+    /// when the driver asked for them: the OS answers from its cache, so
+    /// they are part of the `device` line (`strings=1,2,3`), not a step.
+    pub strings: Option<[u8; 3]>,
     /// The calls, in order.
     pub steps: Vec<Step>,
 }
 
-const MAGIC: &str = "# oxrok usb fixture 1";
+/// The first line of a USB fixture, and of each session in a file of
+/// several.
+pub const MAGIC: &str = "# oxrok usb fixture 1";
 
 impl Fixture {
     /// Formats the fixture as text.
@@ -201,6 +207,9 @@ impl Fixture {
                 })
                 .collect();
             let _ = write!(s, " interfaces={}", list.join(","));
+        }
+        if let Some([m, p, n]) = self.strings {
+            let _ = write!(s, " strings={m},{p},{n}");
         }
         s.push('\n');
         for step in &self.steps {
@@ -287,7 +296,7 @@ impl Fixture {
             }
             let bad = |what: &str| Error::Arg(format!("fixture line {}: {what}", n + 1));
             if let Some(rest) = line.strip_prefix("device ") {
-                fixture.device = parse_device(rest).map_err(|e| bad(&e))?;
+                (fixture.device, fixture.strings) = parse_device(rest).map_err(|e| bad(&e))?;
                 have_device = true;
                 continue;
             }
@@ -336,8 +345,11 @@ pub(crate) fn unquote(s: &str) -> std::result::Result<(String, &str), String> {
     Err("unterminated string".into())
 }
 
-fn parse_device(s: &str) -> std::result::Result<UsbDeviceInfo, String> {
+type DeviceLine = (UsbDeviceInfo, Option<[u8; 3]>);
+
+fn parse_device(s: &str) -> std::result::Result<DeviceLine, String> {
     let mut d = UsbDeviceInfo::default();
+    let mut strings = None;
     let mut rest = s.trim();
     while !rest.is_empty() {
         let (key, after) = rest.split_once('=').ok_or("expected key=value")?;
@@ -358,6 +370,13 @@ fn parse_device(s: &str) -> std::result::Result<UsbDeviceInfo, String> {
             "manufacturer" => d.manufacturer = Some(value),
             "product" => d.product = Some(value),
             "serial" => d.serial = Some(value),
+            "strings" => {
+                let f: Vec<u8> = value
+                    .split(',')
+                    .map(|v| v.parse().map_err(|_| "bad strings field"))
+                    .collect::<std::result::Result<_, _>>()?;
+                strings = Some(<[u8; 3]>::try_from(f).map_err(|_| "bad strings field")?);
+            }
             "interfaces" => {
                 for item in value.split(',') {
                     let f: Vec<&str> = item.split(':').collect();
@@ -375,7 +394,7 @@ fn parse_device(s: &str) -> std::result::Result<UsbDeviceInfo, String> {
             other => return Err(format!("unknown device field {other}")),
         }
     }
-    Ok(d)
+    Ok((d, strings))
 }
 
 /// Encodes interface descriptors for a fixture: per interface its
@@ -571,7 +590,7 @@ impl Drop for Recorder {
     fn drop(&mut self) {
         if let Some(path) = &self.file {
             let text = self.fixture().to_text();
-            match std::fs::write(path, text) {
+            match crate::core::sessions::write_session(path, &text) {
                 Ok(()) => log::info!("USB session recorded to {path}"),
                 Err(e) => log::error!("cannot write the USB recording {path}: {e}"),
             }
@@ -597,12 +616,13 @@ impl Recorder {
         let device = inner.info().clone();
         Recorder {
             inner,
-            fixture: Arc::new(Mutex::new(Fixture { device, steps: Vec::new() })),
+            fixture: Arc::new(Mutex::new(Fixture { device, strings: None, steps: Vec::new() })),
             file: None,
         }
     }
 
-    /// Wraps `inner` and writes the fixture to `path` when dropped.
+    /// Wraps `inner` and writes the fixture to `path` when dropped; a
+    /// later session of the same process is appended to it.
     pub fn to_file(inner: Box<dyn Transport>, path: impl Into<String>) -> Self {
         let mut r = Self::new(inner);
         r.file = Some(path.into());
@@ -652,9 +672,14 @@ impl Transport for Recorder {
         self.log(Call::SetConfiguration(configuration), r, |()| Outcome::Ok)
     }
 
-    /// Not recorded: the OS answers it from its cache.
+    /// Not a step: the OS answers it from its cache. Kept in the
+    /// `device` line.
     fn string_indexes(&mut self) -> Result<[u8; 3]> {
-        self.inner.string_indexes()
+        let r = self.inner.string_indexes();
+        if let Ok(i) = &r {
+            self.fixture.lock().expect("recording lock").strings = Some(*i);
+        }
+        r
     }
 
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
@@ -1026,6 +1051,14 @@ impl Transport for Replay {
         &self.device
     }
 
+    /// From the `strings=` of the `device` line.
+    fn string_indexes(&mut self) -> Result<[u8; 3]> {
+        self.state()
+            .fixture
+            .strings
+            .ok_or_else(|| Error::not_supported("string descriptor indexes (not recorded)"))
+    }
+
     fn set_configuration(&mut self, configuration: u8) -> Result<()> {
         self.state().unit(&Call::SetConfiguration(configuration))
     }
@@ -1143,6 +1176,18 @@ mod tests {
         assert_eq!(f.steps[4].call, Call::BulkOut(2, vec![0, 0, 0, 0, 0, 0xaa].into()));
         assert_eq!(f.to_text(), TEXT);
         assert_eq!(Fixture::parse(&f.to_text()).unwrap(), f);
+    }
+
+    #[test]
+    fn string_indexes_come_from_the_device_line() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=0925 pid=3881 version=0001 bus=0 addr=0 strings=1,2,0\n";
+        let f = Fixture::parse(text).unwrap();
+        assert_eq!(f.strings, Some([1, 2, 0]));
+        assert_eq!(f.to_text(), text);
+        assert_eq!(Replay::new(f).string_indexes().unwrap(), [1, 2, 0]);
+        let mut r = Replay::from_text(TEXT).unwrap();
+        assert!(r.string_indexes().is_err());
     }
 
     #[test]

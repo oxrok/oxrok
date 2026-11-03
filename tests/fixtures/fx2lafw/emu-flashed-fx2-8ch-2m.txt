@@ -1,6 +1,29 @@
 # oxrok usb fixture 1
 # emu fx2lafw: flashed fx2 8ch 2M
-# args: -d fx2lafw -C D0,D1,D2,D3,D4,D5,D6,D7 -c samplerate=2M --samples 128 -O hex
+# arg: -d
+# arg: fx2lafw
+# arg: -C
+# arg: D0,D1,D2,D3,D4,D5,D6,D7
+# arg: -c
+# arg: samplerate=2M
+# arg: --samples
+# arg: 128
+# arg: -O
+# arg: hex
+device vid=04b4 pid=8613 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Cypress FX2" interfaces=0:ff:ff:ff strings=1,2,3
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0301 0409 255 -> 0e0373006900670072006f006b00
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 10036600780032006c00610066007700
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0303 0409 255 -> 180343007900700072006500730073002000460058003200
+# oxrok usb fixture 1
+device vid=04b4 pid=8613 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Cypress FX2" interfaces=0:ff:ff:ff strings=1,2,3
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0301 0409 255 -> 0e0373006900670072006f006b00
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 10036600780032006c00610066007700
+# oxrok usb fixture 1
 device vid=04b4 pid=8613 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Cypress FX2" interfaces=0:ff:ff:ff
 config 1 -> ok
 ctl_in 40 b0 0000 0000 2 -> 0104

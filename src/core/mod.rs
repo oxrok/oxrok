@@ -27,6 +27,7 @@ pub mod key;
 pub mod option;
 pub mod packet;
 pub mod session;
+pub mod sessions;
 pub mod softtrig;
 pub mod trigger;
 pub mod trigger_syntax;

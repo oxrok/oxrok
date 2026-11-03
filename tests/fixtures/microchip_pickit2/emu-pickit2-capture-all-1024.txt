@@ -1,6 +1,11 @@
 # oxrok usb fixture 1
 # emu pickit2: pickit2 capture all 1024
-# args: -d microchip-pickit2 --samples 1024 -O hex
+# arg: -d
+# arg: microchip-pickit2
+# arg: --samples
+# arg: 1024
+# arg: -O
+# arg: hex
 device vid=04d8 pid=0033 version=0002 manufacturer="Microchip Technology Inc." product="PICkit 2 Microcontroller Programmer" serial="PIC18F2550" interfaces=0:03:00:00
 claim 0 -> ok
 int_out 01 b80100{7}ad{55} -> 64

@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! # oxrok hid fixture 1
-//! device vid=16c0 pid=05df manufacturer="www.dcttech.com" product="USBRelay2"
+//! device vid=16c0 pid=05df manufacturer="www.dcttech.com" product="USBRelay2" path="/dev/hidraw3"
 //! get_feature 01 9 -> 0141424344450000
 //! set_feature 00ff01000000000000 -> ok
 //! write 0001 -> ok
@@ -34,7 +34,9 @@ use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-const MAGIC: &str = "# oxrok hid fixture 1";
+/// The first line of a HID fixture, and of each session in a file of
+/// several.
+pub const MAGIC: &str = "# oxrok hid fixture 1";
 
 /// The device a fixture was recorded from, as listing reported it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -49,6 +51,9 @@ pub struct DeviceLine {
     pub product: Option<String>,
     /// Serial number.
     pub serial: Option<String>,
+    /// The device node (`/dev/hidrawN` on Linux), which a `conn=` may
+    /// name; on replay only compared as text.
+    pub path: Option<String>,
 }
 
 /// One recorded call.
@@ -90,9 +95,12 @@ impl Fixture {
         s.push('\n');
         let d = &self.device;
         let _ = write!(s, "device vid={:04x} pid={:04x}", d.vendor_id, d.product_id);
-        for (key, v) in
-            [("manufacturer", &d.manufacturer), ("product", &d.product), ("serial", &d.serial)]
-        {
+        for (key, v) in [
+            ("manufacturer", &d.manufacturer),
+            ("product", &d.product),
+            ("serial", &d.serial),
+            ("path", &d.path),
+        ] {
             if let Some(v) = v {
                 let _ = write!(s, " {key}={}", quote(v));
             }
@@ -179,6 +187,7 @@ fn parse_device(s: &str) -> std::result::Result<DeviceLine, String> {
             "manufacturer" => d.manufacturer = Some(value),
             "product" => d.product = Some(value),
             "serial" => d.serial = Some(value),
+            "path" => d.path = Some(value),
             other => return Err(format!("unknown device field {other}")),
         }
     }
@@ -251,7 +260,7 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         if let Some(file) = &self.file {
-            match std::fs::write(file, self.fixture().to_text()) {
+            match crate::core::sessions::write_session(file, &self.fixture().to_text()) {
                 Ok(()) => log::info!("HID session recorded to {file}"),
                 Err(e) => log::error!("cannot write the HID recording {file}: {e}"),
             }
@@ -363,6 +372,44 @@ impl Replay {
     }
 }
 
+/// A [`Replay`] shared with whoever checks it was played to its end.
+#[derive(Clone)]
+pub struct SharedReplay(pub Arc<Mutex<Replay>>);
+
+impl SharedReplay {
+    /// Shares `replay`.
+    pub fn new(replay: Replay) -> SharedReplay {
+        SharedReplay(Arc::new(Mutex::new(replay)))
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Replay> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// As [`Replay::finish`].
+    pub fn finish(&self) -> Result<()> {
+        self.lock().finish()
+    }
+}
+
+impl HidDevice for SharedReplay {
+    fn read_report(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        self.lock().read_report(buf, timeout)
+    }
+
+    fn write_report(&mut self, data: &[u8]) -> Result<()> {
+        self.lock().write_report(data)
+    }
+
+    fn get_feature(&mut self, buf: &mut [u8]) -> Result<usize> {
+        self.lock().get_feature(buf)
+    }
+
+    fn set_feature(&mut self, data: &[u8]) -> Result<()> {
+        self.lock().set_feature(data)
+    }
+}
+
 fn is_timeout(step: &Step) -> bool {
     matches!(step.call, Call::Read(_)) && step.outcome == Outcome::Data(Vec::new())
 }
@@ -413,7 +460,7 @@ mod tests {
     use crate::hid::SharedFake;
 
     const TEXT: &str = "# oxrok hid fixture 1
-device vid=16c0 pid=05df manufacturer=\"www.dcttech.com\" product=\"USBRelay2\"
+device vid=16c0 pid=05df manufacturer=\"www.dcttech.com\" product=\"USBRelay2\" path=\"/dev/hidraw3\"
 get_feature 01 9 -> 0141424344450000
 set_feature 00ff01 -> ok
 read 64 -> -
@@ -427,6 +474,7 @@ write 0001 -> err device \"stalled\"
         let f = Fixture::parse(TEXT).unwrap();
         assert_eq!(f.to_text(), TEXT);
         assert_eq!(f.device.product.as_deref(), Some("USBRelay2"));
+        assert_eq!(f.device.path.as_deref(), Some("/dev/hidraw3"));
         assert_eq!(f.steps.len(), 6);
     }
 

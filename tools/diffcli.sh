@@ -549,10 +549,11 @@ if [ $emu = 1 ]; then
     #   --timeout stops each tool after S seconds rather than
     #   EMU_CASE_TIMEOUT; a sigrok-cli under --oracle-bug that has to be
     #   stopped so fails as the case wants. --record records oxrok's
-    #   run of a full case with OXROK_USB_RECORD, OXROK_HID_RECORD and
-    #   OXROK_SERIAL_RECORD (the lowest layer that wrote one is kept)
-    #   as the replay fixture tests/fixtures/DRIVER/emu-SLUG.txt, its
-    #   output as emu-SLUG.out (DRIVER with - made _); like the goldens,
+    #   run of a full case with OXROK_USB_RECORD and OXROK_HID_RECORD
+    #   (the USB one kept when both wrote) as the replay fixture
+    #   tests/fixtures/DRIVER/emu-SLUG.txt, its stdout as emu-SLUG.out
+    #   (DRIVER with - made _), which tests/emu_replay.rs replays through
+    #   oxrok with OXROK_USB_REPLAY or OXROK_HID_REPLAY; like the goldens,
     #   EMU_BLESS=1 writes them and otherwise the recording must match
     #   them, so a recording that is not deterministic fails. The name
     #   neither starts nor ends with white space and holds no tab or
@@ -622,9 +623,8 @@ if [ $emu = 1 ]; then
                 *) set -- "$tool" "$@" ;;
             esac
             if [ $record = 1 ] && [ $t = b ]; then
-                rm -f "$TMP/rec.usb" "$TMP/rec.hid" "$TMP/rec.serial"
-                set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" \
-                    OXROK_SERIAL_RECORD="$TMP/rec.serial" "$@"
+                rm -f "$TMP/rec.usb" "$TMP/rec.hid"
+                set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
             fi
             timeout -k 5 "$case_timeout" "$@" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
             TOOLPID=$!
@@ -718,42 +718,43 @@ if [ $emu = 1 ]; then
         fi
     }
 
-    # emu_case --record: oxrok's recording of the case, the attach's
-    # node names made generic, the bus and address dropped from a USB
-    # device line and the timed out reads from a HID recording (their
-    # number depends on the pace of the run; a HID replay answers a
-    # timeout wherever the recording has no read next), with the case
-    # and its arguments in comments, and its output; written under
-    # EMU_BLESS=1, else compared.
+    # emu_case --record: oxrok's recording of the case (each session it
+    # opened, in order), the attach's node names made generic, the bus
+    # and address dropped from a USB device line and the timed out reads
+    # from a HID recording (their number depends on the pace of the run;
+    # a HID replay answers a timeout wherever the recording has no read
+    # next), with the case name and one `# arg:` line per argument; and
+    # oxrok's stdout, node names made generic and the version line
+    # dropped (tests/emu_replay.rs drops it from the replay's alike).
+    # Written under EMU_BLESS=1, else compared.
     emu_record() {
-        if [ $mode != full ] || [ -n "$event" ] || [ -n "$filter_expr" ] || [ $names = 1 ] ||
-            [ $which != stdout ] || [ $expect = 1 ]; then
-            why="$why; --record takes a full case that succeeds, without events, --filter, --names or --stderr"
+        if [ $mode != full ] || [ -n "$event" ] || [ $which != stdout ] || [ $expect = 1 ]; then
+            why="$why; --record takes a full case that succeeds, without events or --stderr"
             return
         fi
         rec=""
-        for k in usb hid serial; do
+        for k in usb hid; do
             if [ -s "$TMP/rec.$k" ]; then rec=$TMP/rec.$k; break; fi
         done
-        if [ -z "$rec" ]; then why="$why; oxrok recorded nothing"; return; fi
+        if [ -z "$rec" ]; then why="$why; oxrok recorded no USB or HID session"; return; fi
         {
             sed -n 1p "$rec"
             echo "# emu $EMU_MODEL: $name"
-            printf '# args:'; printf ' %s' "$@" | sed -E -f "$TMP/emu.sed"; echo
-            [ $strip = 1 ] || echo "# header: kept"
+            for a in "$@"; do printf '# arg: %s\n' "$a"; done | sed -E -f "$TMP/emu.sed"
             sed -E -f "$TMP/emu.sed" "$rec" | sed -E '1d; /^device /s/ bus=[0-9]+ addr=[0-9]+//' |
                 if [ "$rec" = "$TMP/rec.hid" ]; then sed -E '/^read [0-9]+ -> -$/d'; else cat; fi
         } >"$TMP/rec.txt"
+        sed -E '1{/^oxrok /d;}' "$TMP/b.out" >"$TMP/rec.out"
         fix=$EMU_FIXTURES/$(echo "$driver" | tr - _)/emu-$slug
         if [ "$EMU_BLESS" = 1 ]; then
             mkdir -p "$(dirname "$fix")"
-            cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/b.cmp" "$fix.out"
+            cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/rec.out" "$fix.out"
         elif [ -f "$fix.txt" ] && [ -f "$fix.out" ]; then
             if ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
                 why="$why; the recording differs from $(basename "$fix").txt"
                 diff "$fix.txt" "$TMP/rec.txt" | head -${DIFF_LINES:-6}
             fi
-            cmp -s "$fix.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $(basename "$fix").out"
+            cmp -s "$fix.out" "$TMP/rec.out" || why="$why; oxrok output differs from $(basename "$fix").out"
         else
             why="$why; no fixture $fix.txt/.out (EMU_BLESS=1 records it)"
         fi

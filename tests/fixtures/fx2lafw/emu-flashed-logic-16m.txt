@@ -1,6 +1,29 @@
 # oxrok usb fixture 1
 # emu fx2lafw: flashed logic 16M
-# args: -d fx2lafw -c samplerate=16M --samples 50 -t D2=r -O bits
+# arg: -d
+# arg: fx2lafw
+# arg: -c
+# arg: samplerate=16M
+# arg: --samples
+# arg: 50
+# arg: -t
+# arg: D2=r
+# arg: -O
+# arg: bits
+device vid=0925 pid=3881 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Saleae Logic" interfaces=0:ff:ff:ff strings=1,2,3
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0301 0409 255 -> 0e0373006900670072006f006b00
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 10036600780032006c00610066007700
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0303 0409 255 -> 1a03530061006c0065006100650020004c006f00670069006300
+# oxrok usb fixture 1
+device vid=0925 pid=3881 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Saleae Logic" interfaces=0:ff:ff:ff strings=1,2,3
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0301 0409 255 -> 0e0373006900670072006f006b00
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 10036600780032006c00610066007700
+# oxrok usb fixture 1
 device vid=0925 pid=3881 version=0001 manufacturer="sigrok" product="fx2lafw" serial="Saleae Logic" interfaces=0:ff:ff:ff
 config 1 -> ok
 ctl_in 40 b0 0000 0000 2 -> 0104

@@ -1,4 +1,8 @@
+FRAME-BEGIN
+oxrok 0.1.0-alpha.1
 Acquisition with 8/16 channels at 2 MHz
+FRAME-END
+FRAME-BEGIN
 D0:55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 
 D1:33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 
 D2:0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 

@@ -1,7 +1,16 @@
 # oxrok hid fixture 1
 # emu bu86x: bm86x samples 3
-# args: -d brymen-bm86x:conn=hid/bu86x/raw=/dev/hidrawN --samples 3
-device vid=0820 pid=0001 manufacturer="Brymen" product="BU-86X emulator" serial="HIDCABLE1"
+# arg: -d
+# arg: brymen-bm86x:conn=hid/bu86x/raw=/dev/hidrawN
+# arg: --samples
+# arg: 3
+device vid=0820 pid=0001 manufacturer="Brymen" product="BU-86X emulator" serial="HIDCABLE1" path="/dev/hidrawN"
+write 00008666 -> ok
+read 64 -> 000001a0dbf8e47c
+read 64 -> 01007cbebf000400
+read 64 -> 86{4}00{4}
+# oxrok hid fixture 1
+device vid=0820 pid=0001 manufacturer="Brymen" product="BU-86X emulator" serial="HIDCABLE1" path="/dev/hidrawN"
 write 00008666 -> ok
 read 64 -> 000001a0dbbee47c
 read 64 -> 01007cbebf000400
