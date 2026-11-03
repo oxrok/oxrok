@@ -1,0 +1,3 @@
+sr: ikalogic-scanaplus: Failed to read EEPROM index 16 (-1): reading eeprom failed.
+sr: ikalogic-scanaplus: Failed to get ScanaPLUS device ID: -1.
+Failed to open device.
