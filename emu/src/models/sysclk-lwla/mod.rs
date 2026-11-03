@@ -179,6 +179,28 @@
 //! the external clock's and TRG input's rates; zeros where the memory
 //! was not written and in long registers 0 to 4, 6 and 8.
 //!
+//! **Not reached by the cases** (`tests/emu/sysclk-lwla/gcov.txt`):
+//!
+//! - Cancelling (`dev_acquisition_stop()` with a capture running,
+//!   `protocol.c:293,354,360,366,419,425`): sigrok-cli stops a session
+//!   only on a failed decoder, and a failed start leaves nothing to
+//!   cancel; it has no signal handler for an interrupt case.
+//! - A capture with no words (`protocol.c:178-179`): the model's fill
+//!   grows with the time since the trigger, which is what ends a capture,
+//!   and no fault was invented for it.
+//! - A failing submission of the start (`protocol.c:567-568`): only an
+//!   unplug causes it, and whether the submission or its completion fails
+//!   depends on timing.
+//! - The second interface claim (`api.c:248-251`): another program's
+//!   claim fails at `api.c:238` first.
+//! - A partly taken OUT (`lwla.c:106-108,136-138`): a bulk OUT that does
+//!   not finish ends in an error, which is checked first.
+//! - sigrok-cli checks first: `api.c:327,344,404,518,531-532,594`, one
+//!   trigger stage (`api.c:505-506`), re-enabling a channel (`api.c:477`).
+//! - Cannot happen: argument and "BUG" checks, allocation failures,
+//!   libusb's list and descriptor calls, a file that shrinks while read
+//!   (`lwla.c:67-69`), a second start or commit during a capture.
+//!
 //! **What the model shows about the driver** (C line numbers of
 //! libsigrok 0bc24877):
 //!
