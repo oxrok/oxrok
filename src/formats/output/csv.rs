@@ -109,6 +109,8 @@ struct Column {
 struct Csv {
     value: String,
     record: String,
+    /// Written at each frame begin, before the rows still pending.
+    frame: String,
     comment: String,
     header: bool,
     label: Label,
@@ -158,6 +160,7 @@ impl Csv {
         let mut csv = Csv {
             value: get("value", ","),
             record: get("record", "\n"),
+            frame: get("frame", "\n"),
             comment: get("comment", ";"),
             header: flag("header", true),
             label,
@@ -381,7 +384,13 @@ impl Output for Csv {
                     self.seen_analog += 1;
                 }
             }
+            // csv.c's receive(): SR_DF_FRAME_BEGIN outputs the frame
+            // separator (header or not, the first frame too), then falls
+            // through to SR_DF_END, which dumps the rows still pending.
             Packet::FrameBegin | Packet::End => {
+                if matches!(packet, Packet::FrameBegin) {
+                    out.extend_from_slice(self.frame.as_bytes());
+                }
                 if self.seen_logic || self.seen_analog > 0 {
                     self.dump(out);
                 }
@@ -421,6 +430,42 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "microseconds,logic,logic,Trigger\n0,1,0,1\n5,0,1,0\n10,1,1,0\n"
         );
+    }
+
+    #[test]
+    fn every_frame_begin_writes_the_frame_separator() {
+        let chans = [Channel::logic(0)];
+        let mut opts = Options::new();
+        opts.insert("header".into(), "false".into());
+        opts.insert("label".into(), "off".into());
+        let run = |opts: &Options| {
+            let mut c = Csv::new(&ctx(&chans), opts);
+            let mut out = Vec::new();
+            for p in [
+                Packet::header(),
+                Packet::FrameBegin,
+                Packet::logic(1, vec![1, 0]),
+                Packet::FrameEnd,
+                Packet::FrameBegin,
+                Packet::logic(1, vec![1]),
+                Packet::FrameEnd,
+                Packet::End,
+            ] {
+                c.receive(&p, &mut out).unwrap();
+            }
+            String::from_utf8(out).unwrap()
+        };
+        // The first frame too, and nothing at a frame's end.
+        assert_eq!(run(&opts), "\n1\n0\n\n1\n");
+        opts.insert("frame".into(), "--\n".into());
+        assert_eq!(run(&opts), "--\n1\n0\n--\n1\n");
+        // Rows still waiting for an analog column come after it.
+        let chans = [Channel::logic(0), Channel::new(1, ChannelKind::Analog, "A0")];
+        let mut c = Csv::new(&ctx(&chans), &opts);
+        let mut out = Vec::new();
+        c.receive(&Packet::logic(1, vec![1]), &mut out).unwrap();
+        c.receive(&Packet::FrameBegin, &mut out).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "--\n1,0\n");
     }
 
     #[test]

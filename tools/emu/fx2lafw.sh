@@ -126,6 +126,68 @@ emu_cases() {
     fx2lafw_options profile=sigrok-fx2-8ch flashed=1
     emu_case "flashed fx2grok by ids" --filter "$C" -- -d $F:conn=1d50.608c --samples 8 -O hex
 
+    # The CWAV USBee AX: 8 channels and the analog input A0
+    # (DEV_CAPS_AX_ANALOG). With A0 enabled the samples are 16 bit, the
+    # logic byte then the ADC's, the start sets the CTL2 clock, and the
+    # driver refuses rates above 12 MHz; without it, an 8 channel board.
+    # The model's ADC ramp reads n / 12.8 V at sample n (to 127).
+    fx2lafw_options profile=usbee-ax
+    emu_case "ax scan" --keep-header -- -d $F --scan
+    emu_case "ax a0 1M" -- -d $F -C A0 -c samplerate=1M --samples 200 -O analog
+    emu_case "ax 8ch 24M" -- -d $F -C $D8 -c samplerate=24M --samples 1024 -O hex
+    fx2lafw_options profile=usbee-ax flashed=1
+    emu_case "flashed ax scan" --keep-header --filter "$C" -- -d $F --scan
+    emu_case "flashed ax show" --keep-header --filter "$C" -- -d $F --show
+    emu_case "ax probe names" --keep-header --filter "$C" -- -d $F:probe_names=CLK,DATA --scan
+    emu_case "ax by ids" -- -d $F:conn=08a9.0014 -C A0 --samples 8 -O analog
+    emu_case "ax logic and a0 2M" --record -- -d $F -c samplerate=2M --samples 64 -O bits
+    emu_case "ax d0 d1 a0 1M" -- -d $F -C D0,D1,A0 -c samplerate=1M --samples 40 -O bits
+    # A0 alone in CSV: the rows, then the frame separator (a blank line)
+    # of the frame the driver begins after the limit. The first line of
+    # oxrok's output, the separator of the first frame, goes: libsigrok's
+    # fx2lafw begins that frame before it sends the header
+    # (protocol.c:658, then 709), and sigrok-cli sets up its output
+    # module at the header, so that frame begin never reaches csv; oxrok
+    # sends the header first.
+    emu_case "ax a0 csv" --filter '1{/^$/d;}' -- -d $F -C A0 -c samplerate=500k --samples 300 -O csv:header=false
+    # Three transfers of 256 samples at 20 kHz, each block of the ramp
+    # one step above the last; every 50th line kept, all of it digested.
+    emu_case "ax a0 20k transfers" --digest --filter '1~50!d' -- -d $F -C A0 -c samplerate=20k --samples 700 -O analog
+    emu_case "ax a0 12M" --digest --filter '1~997!d' -- -d $F -c samplerate=12M --samples 30000 -O analog
+    emu_case "ax a0 frames" -- -d $F -C A0 -c samplerate=1M:limit_frames=2 --samples 3 -O analog
+    emu_case "ax trigger without a0" -- -d $F -C $D8 -c samplerate=1M --samples 16 -t D3=r -O bits
+    # 16 bit samples go to 12 MHz: A0 refuses the faster rates,
+    # command_start_acquisition() after the transfers were submitted.
+    for r in 16M 24M 48M; do
+        emu_case "ax a0 at $r" --expect-fail --stderr --filter '/Unable to sample/!d; s/.*/refused/' -- -d $F -C A0 -c samplerate=$r --samples 8 -O analog
+    done
+    emu_case "ax no channel a1" --expect-fail --stderr --filter '/unknown channel/!d; s/.*/refused/' -- -d $F -C A1 --samples 8 -O analog
+    # config_list() answers SR_ERR_NA for any channel group.
+    emu_case "ax a0 group get" --expect-fail --stderr --filter '/samplerate/!d; s/.*/refused/' -- -d $F -g A0 --get samplerate
+    # probe_names with a leading '-': sr_parse_probe_names() does not pad
+    # the names to the logic channel count (strutil.c:1686 "if
+    # (pad_from_dflt) do {"), but scan() names all 8 from them
+    # (api.c:353-356 "for (j = 0; j < num_logic_channels; j++) {
+    # channel_name = devc->channel_names[j]; ..."), so D2 to D7 get NULL
+    # names and sigrok-cli crashes. oxrok has CLK, DATA and A0 (index 8).
+    emu_case "ax probe names minus" --oracle-bug "api.c:353-356 names all 8 logic channels from sr_parse_probe_names(), which does not pad a '-' spec (strutil.c:1686): D2 to D7 get NULL names" -- -d $F:probe_names=-CLK,DATA -c samplerate=1M --samples 8 -O bits
+    # Where sigrok-cli exits 0 but is wrong: oxrok pinned, sigrok-cli's
+    # output kept in SLUG.oracle. With A0 enabled libsigrok's soft
+    # trigger takes one byte per sample (soft-trigger.c:53, the logic
+    # channels) on a stream of two (protocol.c:439): it matches the
+    # ADC's bytes as logic samples and starts the data at about twice
+    # the offset (soft-trigger.c:216, protocol.c:485-496).
+    emu_case "ax trigger with a0" --oracle-differs "soft-trigger.c:53 takes 1 byte per sample on the 2 byte stream of protocol.c:439" -- -d $F -c samplerate=1M --samples 16 -t D3=r -O bits
+    # A trigger on A0: libsigrok takes the analog channel for logic bit 8
+    # (soft-trigger.c:149 "bit = *(sample + match->channel->index / 8)"),
+    # the next byte on 1 byte samples; oxrok refuses it.
+    emu_case "ax trigger on a0" --oracle-differs "soft-trigger.c:149 reads A0 as logic bit 8" --expect-fail --stderr --filter 's/^.*(A0: fx2lafw triggers on logic channels only).*$/\1/' -- -d $F -c samplerate=1M --samples 16 -t A0=r -O bits
+    # Logic and A0 in CSV: output/csv.c:491 "value =
+    # ctx->analog_samples[i * ctx->num_analog_channels + j];" indexes the
+    # analog samples by the column over all channels, so A0's column
+    # shows the next sample's value and reads one past the buffer last.
+    emu_case "ax mixed csv" --oracle-differs "output/csv.c:491 indexes the analog samples by the column over all channels" -- -d $F -C D0,A0 -c samplerate=500k --samples 20 -O csv:header=false
+
     # Faults, on the flashed board: after an upload the C driver retries
     # a failing open for 3 s, as many times as fit, which would make the
     # transactions depend on wall time. The last line of stderr is the
