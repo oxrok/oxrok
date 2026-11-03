@@ -1,0 +1,47 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+hantek-4032l:conn=BUS.ADDR - Hantek 4032L with 32 channels: A0 B0 A1 B1 A2 B2 A3 B3 A4 B4 A5 B5 A6 B6 A7 B7 A8 B8 A9 B9 A10 B10 A11 B11 A12 B12 A13 B13 A14 B14 A15 B15
+Channel groups:
+    A: channels A0 A1 A2 A3 A4 A5 A6 A7 A8 A9 A10 A11 A12 A13 A14 A15
+    B: channels B0 B1 B2 B3 B4 B5 B6 B7 B8 B9 B10 B11 B12 B13 B14 B15
+Supported configuration options across all channel groups:
+    samplerate - supported samplerates:
+      1 kHz
+      2 kHz
+      4 kHz
+      8 kHz
+      16 kHz
+      31.25 kHz
+      62.5 kHz
+      125 kHz
+      250 kHz
+      500 kHz
+      625 kHz
+      781.25 kHz
+      1 MHz
+      1.25 MHz
+      1.5625 MHz
+      2 MHz
+      2.5 MHz
+      3.125 MHz
+      4 MHz
+      5 MHz
+      6.25 MHz
+      10 MHz
+      12.5 MHz
+      20 MHz
+      25 MHz
+      40 MHz
+      50 MHz
+      80 MHz
+      100 MHz (current)
+      160 MHz
+      200 MHz
+      320 MHz
+      400 MHz
+    captureratio: 5 (current)
+    Maximum number of samples: 67108864
+    Supported triggers: 0 1 r f e 
+    conn: BUS.ADDR (current)
