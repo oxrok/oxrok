@@ -140,15 +140,16 @@
 //! board whose metadata has no memory key (0x21) makes `max_samples`
 //! 0, so the read and delay counts go out as 0xffffffff and the driver
 //! sends a logic packet of length 0 that sigrok-cli's output dies on
-//! (case `no memory capture`). Pending the harness's `--hangs` (not on
-//! main yet), not cases so far: a 4-stage trigger (`3=1010`) gets no
-//! start bit (`set_trigger` sets it on stage `num_stages`, 4, which
-//! does not exist), so the capture never starts and the driver polls
-//! for ever; a 200 MHz capture with the default 32 channels takes each
-//! demux word for one sample and waits for ever for the rest;
+//! (case `no memory capture`). The driver never ends (cases with
+//! `--hangs`): a 4-stage trigger (`3=1010`) gets no start bit
+//! (`set_trigger` sets it on stage `num_stages`, 4, which does not
+//! exist), so the capture never starts (`four stages hangs`); a 200 MHz
+//! capture with the default 32 channels takes each demux word for one
+//! sample and waits for the rest (`200 MHz 32 channels hangs`);
 //! `captureratio=100` with a trigger sends a delay count of 0xffffffff
 //! (`api.c` 523, 562-565), which the device takes as 2^34 words to
-//! capture. sigrok-cli cannot capture without a sample limit
+//! capture, so at 10 Hz the driver polls for ever (`ratio 100 hangs`).
+//! sigrok-cli cannot capture without a sample limit
 //! (`main.c` 321 needs one, `--time` becomes one), so the driver's
 //! read count of 0xffffffff and `g_try_malloc(0)` for a missing limit
 //! are out of its reach.

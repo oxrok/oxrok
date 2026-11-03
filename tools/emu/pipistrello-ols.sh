@@ -74,6 +74,14 @@ emu_cases() {
     # samples for 32. The filter masks those two as xx, so heap bytes
     # cannot make the case flaky; the count of columns still shows.
     emu_case "ratio 0 two stages" --filter 's/^([0-9]+:)../\1xx/' -- -d $D -C 0-7 --samples 32 --triggers 3=10 -O bits
+    # Four stages: set_trigger puts the start bit on stage num_stages,
+    # 4, which does not exist, so the capture never starts and the
+    # driver polls for ever (--hangs).
+    emu_case "four stages hangs" --hangs --timeout 5 --no-output -- -d $D -C 0-7 --samples 64 --triggers 3=1010 -O bits
+    # captureratio=100: the delay count goes out as 0xffffffff, so the
+    # board captures 2^34 words after the trigger; at 10 Hz the driver
+    # polls for ever.
+    emu_case "ratio 100 hangs" --hangs --timeout 5 --no-output -- -d $D -C 0-7 -c samplerate=10:captureratio=100 --samples 64 --triggers 3=1 -O bits
     emu_case "five stages" --stderr --expect-fail -- -d $D --samples 64 --triggers 3=10101
 
     # RLE: a run is a word and a count word (top bit set), counts of
@@ -92,6 +100,9 @@ emu_cases() {
     emu_case "150 MHz" -- -d $D -c samplerate=150m -C 0-7 --samples 64 -O hex
     emu_case "200 MHz rle" -- -d $D -c samplerate=200m:rle=on -C 8-15 --samples 1000 -O hex
     emu_case "200 MHz rle two groups" -- -d $D -c samplerate=200m:rle=on -C 0-15 --samples 64 -O hex
+    # All 32 channels at 200 MHz: the driver takes each demux word for
+    # one sample, gets half the samples it counts on and polls for ever.
+    emu_case "200 MHz 32 channels hangs" --hangs --timeout 5 --no-output -- -d $D -c samplerate=200m --samples 64 -O hex
     emu_case "200 MHz trigger" -- -d $D -c samplerate=200m:captureratio=50 -C 0-7 --samples 64 --triggers 5=r -O bits
 
     # The flags the model accepts and does not emulate: the same samples.
