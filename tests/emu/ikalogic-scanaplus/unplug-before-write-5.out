@@ -1,4 +1,2 @@
-sr: ikalogic-scanaplus: Failed to write FTDI data (-1): usb bulk write failed.
-sr: session: Could not start ikalogic-scanaplus device (null) acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+Failed to write FTDI data (-1): usb bulk write failed.
+start refused

@@ -43,6 +43,11 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
         let group = parsed.scope.or_else(|| args.channel_group.clone());
         for (name, _) in parsed.items {
             let key = parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
+            // sigrok-cli's maybe_config_get() (main.c:81-84) asks the
+            // driver only for a key it lists as GET: SR_ERR_NA otherwise.
+            if device.option(&key, group.as_deref()).is_some_and(|o| !o.access.get) {
+                return Err(Error::Arg(format!("Failed to get '{name}': not applicable")));
+            }
             let value = device
                 .get(&key, group.as_deref())
                 .map_err(|e| Error::Arg(format!("Failed to get '{name}': {e}")))?;
