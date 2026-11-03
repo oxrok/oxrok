@@ -96,7 +96,14 @@
 //! - Everything is paced by the host's polls and transfers; nothing by
 //!   time. The channel data come as one transfer per bulk IN the host
 //!   submits, the frame's bytes in order, the transfer size the
-//!   endpoint's packet size.
+//!   endpoint's packet size. A known source of flakes, not of the
+//!   model's making: `dso_get_channeldata()` submits all of a frame's
+//!   transfers at once with a timeout of 40 ms each (protocol.c:925-927),
+//!   so up to 320 USB/IP round trips (a full speed frame; 128 for the
+//!   large 2090 frame) must finish within 40 ms of the submission; a
+//!   transfer that times out completes empty, which leaves the frame
+//!   unfinished and sigrok-cli waiting for ever (a case then times out).
+//!   No run here has hit it.
 //!
 //! The pedantic checks: the upload byte for byte as `ezusb.c` sends it;
 //! the begin command before every bulk command, and its 10 bytes; each
@@ -120,7 +127,11 @@
 //! it (a failed poll is polled again, an empty or missing data transfer
 //! leaves the frame unfinished), so a vanished device or a DSO-5200's
 //! state 7 keeps sigrok-cli running for ever; the 2250's voltage header
-//! `0x08` shares bit 3 with CH2's range code.
+//! `0x08` shares bit 3 with CH2's range code (see `voltage()`: the model
+//! reads CH2 at 5 V, 500 mV or 50 mV on a 2250 as 1 V, 100 mV or 10 mV,
+//! so the driver's CH2 volts come out five times too large there); a
+//! trigger offset of 0 makes the driver send an empty analog packet at
+//! the frame's end, on which `output/analog.c` frees its buffer twice.
 //!
 //! Faults, all off by default: `stall=WHAT[@N],...` STALLs the request
 //! WHAT (`load` the boot loader, `eeprom`, `begin`, `offset`, `relays`,
@@ -922,11 +933,20 @@ impl HantekDso {
     }
 
     fn voltage(&mut self, data: &[u8], v: &mut Violations) {
-        let (h1, h2) = if self.profile.family == Family::Dso2250 { (0x00, 0x08) } else { (0x0f, 0x30) };
-        // The 2250's header 0x08 is bit 3, CH2's high range bit; the
-        // model reads the bits as the 2090 layout, the header included.
-        let bits = [data[2] & 3, (data[2] >> 2) & 3];
-        if data[1] != h1 || data[2] & 0xf0 != h2 & 0xf0 || data[3..].iter().any(|b| *b != 0) {
+        let is_2250 = self.profile.family == Family::Dso2250;
+        let (h1, h2) = if is_2250 { (0x00, 0x08) } else { (0x0f, 0x30) };
+        // The 2250's header 0x08 is bit 3, which is also CH2's high range
+        // bit in the 2090 layout the driver ORs in (protocol.c:580-626),
+        // probably a driver bug: CH2's code 2 (5 V, 500 mV, 50 mV) cannot
+        // be told from 0 (1 V, 100 mV, 10 mV). The model takes bit 3 as
+        // the header and CH2's code from bit 2 alone, so it reads CH2's
+        // code 2 as 0: what a 2250 that decodes the header so would set.
+        let bits = if is_2250 {
+            [data[2] & 3, (data[2] >> 2) & 1]
+        } else {
+            [data[2] & 3, (data[2] >> 2) & 3]
+        };
+        if data[1] != h1 || data[2] & (0xf0 | h2) != h2 || data[3..].iter().any(|b| *b != 0) {
             v.report(format!("voltage {data:02x?}: 07 {h1:02x} {h2:02x}|ranges, then zeros"));
         }
         if bits.iter().any(|b| *b > 2) {
@@ -974,6 +994,11 @@ impl HantekDso {
             }
         };
         s.slope_negative = b3 & 0x08 != 0;
+        if b3 & 0x04 != 0 {
+            // The fast rate channel, set only below TIME_10us, the first
+            // timebase (protocol.c:481-482).
+            v.report("trigger and sample rate byte 3 bit 2 (fast rates), which the driver never sets");
+        }
         if b3 & 0xf0 != 0 {
             v.report(format!("trigger and sample rate byte 3 {b3:#04x}: bits 4 to 7 unused"));
         }
@@ -1558,10 +1583,10 @@ mod tests {
         bulk(&mut dev, &cmd, &mut v);
         assert_eq!(v.drain().len(), 1, "10 us with the large frame");
         cmd = trigger_default();
-        cmd[3] = 3 | 0x10;
+        cmd[3] = 3 | 0x10 | 0x04;
         cmd[10] = 0x08;
         bulk(&mut dev, &cmd, &mut v);
-        assert_eq!(v.drain().len(), 3, "channels 3, an unused bit, a position beyond");
+        assert_eq!(v.drain().len(), 4, "channels 3, fast rates, an unused bit, a position beyond");
         let mut relays = [0u8; 17];
         relays[..8].copy_from_slice(&[0x00, 0x04, 0xf7, 0x05, 0x20, 0x40, 0x10, 0x01]);
         relays[9] = 1;
@@ -1602,6 +1627,14 @@ mod tests {
         assert!(v.is_empty(), "{v:?}");
         bulk(&mut dev, &[1; 12], &mut v);
         assert_eq!(v.drain().len(), 1, "the 2090's command");
+        // Voltage: the header 0x08, CH1 500 mV (2), CH2 2 V (1 << 2).
+        bulk(&mut dev, &[7, 0, 0x08 | 2 | 4, 0, 0, 0, 0, 0], &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // CH2 at 5 V: 0x08 | 0x08, read as code 0.
+        bulk(&mut dev, &[7, 0, 0x08 | 2 | 8, 0, 0, 0, 0, 0], &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        bulk(&mut dev, &[7, 0, 0x02, 0, 0, 0, 0, 0], &mut v);
+        assert_eq!(v.drain().len(), 1, "no header");
         let d = (!3u16).to_le_bytes();
         bulk(&mut dev, &[0x0e, 0, 2, 0, d[0], d[1], 0, 0], &mut v);
         assert!(v.drain().is_empty(), "20 MHz, 100 / 5, is in the list");

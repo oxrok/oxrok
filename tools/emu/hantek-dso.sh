@@ -14,10 +14,23 @@ hantek_options() {
     emu_cmd "$*" >/dev/null || emu_fail "hantek-dso: the emulator refused '$*'"
 }
 
-# What a frame case can be held to, in few lines: every 64th sample
-# line (the analog output has one line per sample and channel).
-# The transactions hold every byte.
-HD_FRAME='1~64!d'
+# What a frame case is held to, in few lines (the analog output has one
+# line per sample and channel, 20480 a frame): every 64th line, and a
+# last line with the SHA-256 of the whole output, so the filter loses
+# nothing. GNU sed writes each line to a file (w) and at the end runs
+# sha256sum on it (e); a w file is block buffered, so the end first
+# writes 64 KiB of '#', which flushes every line before it, and the
+# digest is taken of the lines before the first '#' (no output line
+# starts with one). Set in emu_cases, where $TMP is the session's.
+hantek_frame_filter() {
+    pad=$(head -c 65536 /dev/zero | tr '\0' '#')
+    all=$TMP/hantek-dso-output
+    HD_FRAME="w $all
+\$!{1~64!d}
+\${h;s/.*/$pad/;w $all
+g;1~64p;s,.*,sed -n '/^#/q;p' $all | sha256sum,;e
+}"
+}
 
 # Claims interface 0 of the attached device through usbfs, as another
 # program would, until hantek_release (as fx2lafw.sh does).
@@ -58,6 +71,7 @@ hantek_addr() {
 
 emu_cases() {
     H=hantek-dso
+    hantek_frame_filter
     # A device that renumerated has an address the READY line did not
     # report.
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
@@ -168,6 +182,13 @@ emu_cases() {
     emu_case "2250 one frame" --filter "$HD_FRAME" -- -d $H --frames 1
     emu_case "2250 trigger CH2 1M" --filter "$HD_FRAME" -- -d $H -C CH2 -c triggersource=CH2:triggerslope=f:samplerate=1M:captureratio=30 --frames 1
     emu_case "2250 trigger CH1 100M" --filter "$HD_FRAME" -- -d $H -C CH1 -c triggersource=CH1:samplerate=100M --frames 1
+    # CH2's range on the 2250: the driver's header 0x08 is CH2's bit 3
+    # (see the model's voltage()); the 5 V, 500 mV and 50 mV codes read
+    # as those of 1 V, 100 mV and 10 mV, so CH2 comes out five times
+    # too large there. One case per range relay group and code.
+    for vd in 10mV 20mV 50mV 200mV 1V 5V; do
+        emu_case "2250 CH2 $vd" --filter "$HD_FRAME" -- -d $H -g CH2 -c vdiv=$vd --frames 1
+    done
     emu_case "2250 125M" --expect-fail --stderr --filter "$E" -- -d $H -c samplerate=125M --frames 1
     hantek_options profile=dso-2250 ext=1
     emu_case "2250 trigger EXT" --filter "$HD_FRAME" -- -d $H -c triggersource=EXT --frames 1
