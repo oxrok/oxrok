@@ -44,10 +44,40 @@ impl Device {
 
     /// Puts a fresh model behind the same bus state (configuration,
     /// halts), so a second run starts from the device's initial state
-    /// while the host still sees the device it enumerated.
+    /// while the host still sees the device it enumerated. When the
+    /// fresh model's descriptors differ from those the host enumerated
+    /// (a device that renumerated during the run), the caller must
+    /// re-attach it, see [`Device::needs_reenumeration`]; the
+    /// descriptors are taken over at the next [`Device::reset`].
     pub fn replace_model(&mut self, model: Box<dyn DeviceModel>) {
-        debug_assert_eq!(model.descriptors(), &self.descriptors);
         self.model = model;
+    }
+
+    /// Whether the model's descriptors differ from those the host
+    /// enumerated, so the device has to be attached again.
+    pub fn needs_reenumeration(&self) -> bool {
+        self.model.descriptors() != &self.descriptors
+    }
+
+    /// The model's descriptors, which after a renumeration are not yet
+    /// those the host enumerated ([`Device::descriptors`]).
+    pub fn model_descriptors(&self) -> &Descriptors {
+        self.model.descriptors()
+    }
+
+    /// See [`DeviceModel::take_renumeration`].
+    pub fn take_renumeration(&mut self) -> bool {
+        self.model.take_renumeration()
+    }
+
+    /// See [`DeviceModel::log_digest_above`].
+    pub fn log_digest_above(&self) -> Option<usize> {
+        self.model.log_digest_above()
+    }
+
+    /// See [`DeviceModel::in_submitted`].
+    pub fn in_submitted(&mut self, ep: u8, max: usize) {
+        self.model.in_submitted(ep & 0x0f, max);
     }
 
     /// The descriptors.
@@ -74,11 +104,14 @@ impl Device {
         Descriptors::endpoints(config).into_iter().find(|e| e.address == address)
     }
 
-    /// A bus reset: unconfigured, halts cleared, the model reset.
+    /// A bus reset or a new attach: unconfigured, halts cleared, the
+    /// model reset, and its descriptors taken over (they change when a
+    /// device renumerates).
     pub fn reset(&mut self) {
         self.config = 0;
         self.halted.clear();
         self.model.reset();
+        self.descriptors = self.model.descriptors().clone();
     }
 
     /// A control transfer on endpoint 0.

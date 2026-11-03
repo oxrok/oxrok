@@ -251,6 +251,33 @@ pub trait DeviceModel: Send {
     /// An IN transfer from endpoint number `ep`, up to `max` bytes.
     fn in_transfer(&mut self, ep: u8, max: usize, v: &mut Violations) -> Reply;
 
-    /// A bus reset, or a new attach.
+    /// A bus reset, or a new attach (also the one after a
+    /// renumeration, so a model keeps what it was asked to become).
     fn reset(&mut self);
+
+    /// A new IN transfer was submitted on endpoint number `ep`, asking
+    /// for up to `max` bytes; called once per transfer, before
+    /// [`DeviceModel::in_transfer`] first offers it. A streaming model
+    /// can pace itself by the host's submissions instead of the
+    /// clock, so that what completes does not depend on timing.
+    fn in_submitted(&mut self, ep: u8, max: usize) {
+        let _ = (ep, max);
+    }
+
+    /// Data longer than this is logged as `@LEN:SHA256` rather than in
+    /// hex (`crate::txlog::HASH_ABOVE` is the usual value); `None`, the
+    /// default, logs every byte.
+    fn log_digest_above(&self) -> Option<usize> {
+        None
+    }
+
+    /// Whether the model wants to leave the bus and come back with
+    /// what [`DeviceModel::descriptors`] says now, as an EZ-USB device
+    /// does once its new firmware runs. Asked after every transfer; a
+    /// model answers `true` once per renumeration. The server then has
+    /// the harness detach the device, import it again and re-attach
+    /// it (`docs/USB.md`, "Emulation over USB/IP").
+    fn take_renumeration(&mut self) -> bool {
+        false
+    }
 }
