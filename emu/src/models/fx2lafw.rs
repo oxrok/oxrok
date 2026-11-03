@@ -115,11 +115,14 @@
 //! logic channels) on a stream of two, so the trigger looks at the
 //! ADC's bytes as logic samples too, starts the data at twice the
 //! offset, and sends the pre-trigger samples as logic packets of the
-//! interleaved bytes; sigrok-cli exits 0 all the same, so no case
-//! compares it. A trigger on `A0` itself is taken for bit 8 of the
-//! logic stream (`soft_trigger_logic_check()` reads
-//! `buf[i + idx / 8]`), which on one byte samples is the next byte; oxrok
-//! refuses it.
+//! interleaved bytes. A trigger on `A0` itself is taken for bit 8 of
+//! the logic stream (`logic_check_match()` reads
+//! `*(sample + index / 8)`), which on one byte samples is the next
+//! byte; oxrok refuses it. sigrok-cli exits 0 in both, so the cases
+//! are `--oracle-differs` ones: oxrok pinned, sigrok-cli's output kept.
+//! With `probe_names` starting with `-`, `scan()` names all 8 logic
+//! channels from a list that holds only the names given, and
+//! sigrok-cli crashes (an `--oracle-bug` case).
 //!
 //! The pedantic checks follow `protocol.c` and the firmware: the
 //! upload byte for byte as `ezusb.c` sends it, of the profile's

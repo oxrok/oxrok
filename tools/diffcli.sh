@@ -21,7 +21,12 @@
 # (sigrok-cli alone, checked against the goldens in tests/emu/MODEL);
 # a driver the scenario lists in EMU_FULL must be oxrok's. Either way
 # no pedantic violation may be logged, every tool must print something
-# (unless --no-output), and existing goldens are compared. EMU_BLESS=1 writes the goldens instead. --emu-model
+# (unless --no-output), and existing goldens are compared. A full case
+# where libsigrok is wrong is oxrok's alone against the goldens, with
+# sigrok-cli kept in SLUG.oracle: emu_case --oracle-bug when sigrok-cli
+# fails (its stderr kept), --oracle-differs when it exits 0 with other
+# output or transactions (its stdout kept); either fails once
+# sigrok-cli is fixed. EMU_BLESS=1 writes the goldens instead. --emu-model
 # runs only the named models (and no other cases); --gcov
 # zeroes the coverage counters of the model's libsigrok driver before
 # its session and writes tests/emu/MODEL/gcov.txt after it. Sessions
@@ -578,8 +583,8 @@ if [ $emu = 1 ]; then
 
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
-    #          [--oracle-bug WHY] [--unplug WHEN] [--interrupt WHEN]
-    #          [--timeout S] [--hangs] [--record] -- ARGS...
+    #          [--oracle-bug WHY] [--oracle-differs WHY] [--unplug WHEN]
+    #          [--interrupt WHEN] [--timeout S] [--hangs] [--record] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -594,6 +599,14 @@ if [ $emu = 1 ]; then
     #   and oxrok alone is held to the .out and .tx goldens (runs of a
     #   repeated stderr line count once there, as a driver that loops
     #   on an error repeats its message as often as the time lets it).
+    #   --oracle-differs, a full case where sigrok-cli exits 0 but is
+    #   wrong because of the libsigrok bug WHY: sigrok-cli must exit 0
+    #   and its output or transactions must differ from oxrok's; its
+    #   stdout, prepared as the case says (never its stderr), is kept in
+    #   the golden SLUG.oracle, oxrok is held to the .out and .tx
+    #   goldens, and a sigrok-cli that matches oxrok fails the case
+    #   ("oracle fixed?"). --expect-fail and --stderr then apply to
+    #   oxrok alone (an oxrok that refuses what sigrok-cli runs).
     #   --unplug and --interrupt arm the emulator's event at WHEN
     #   (in=EP:N, out=EP:N or model; docs/USB.md) for each tool's run,
     #   which must fire it: the device leaves the bus and comes back
@@ -621,7 +634,7 @@ if [ $emu = 1 ]; then
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -634,6 +647,7 @@ if [ $emu = 1 ]; then
                 --no-output) no_output=1 ;;
                 --driver) driver=$2; shift ;;
                 --oracle-bug) bug=$2; shift ;;
+                --oracle-differs) differs=$2; shift ;;
                 --unplug) event="unplug $2"; shift ;;
                 --interrupt) event="interrupt $2"; shift ;;
                 --timeout) case_timeout=$2; shift ;;
@@ -668,6 +682,12 @@ if [ $emu = 1 ]; then
         # case is an --oracle-bug one.
         if [ $hangs = 1 ] && { [ $mode = full ] || [ -n "$bug" ]; }; then
             why="$why; --hangs takes an oracle case (a full case whose sigrok-cli hangs is an --oracle-bug one)"
+        fi
+        if [ -n "$differs" ]; then
+            [ $mode = full ] || why="$why; --oracle-differs needs oxrok's $driver"
+            if [ -n "$bug" ] || [ $hangs = 1 ] || [ $record = 1 ]; then
+                why="$why; --oracle-differs takes neither --oracle-bug, --hangs nor --record"
+            fi
         fi
         for t in $tools; do
             if [ $t = a ]; then tool=$SIGROK_CLI; else tool=$OXROK; fi
@@ -711,6 +731,8 @@ if [ $emu = 1 ]; then
             fi
             if [ -n "$bug" ] && [ $t = a ]; then
                 [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
+            elif [ -n "$differs" ] && [ $t = a ]; then
+                [ $st = 0 ] || why="$why; sigrok-cli exited $st, where --oracle-differs says it exits 0"
             elif [ $hangs = 1 ]; then
                 # 137: timeout's KILL, 5 s after a TERM that did not end it.
                 case $st in
@@ -742,7 +764,13 @@ if [ $emu = 1 ]; then
             for f in out err; do
                 sed -E -f "$TMP/emu.sed" "$TMP/$t.$f" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.$f"
             done
-            to_cmp $t
+            # Under --oracle-differs sigrok-cli exits 0: its stdout is
+            # what it got wrong, whatever --stderr says for oxrok.
+            if [ -n "$differs" ] && [ $t = a ]; then
+                which_case=$which; which=stdout; to_cmp $t; which=$which_case
+            else
+                to_cmp $t
+            fi
             # The version line goes even with --keep-header, so goldens
             # do not change with the tools' versions.
             sed -E '1{/^(libsigrok|sigrok-cli|oxrok) /d;}' "$TMP/$t.cmp" >"$TMP/$t.n"
@@ -762,6 +790,10 @@ if [ $emu = 1 ]; then
             emu_oracle_bug "$@"
             return
         fi
+        if [ -n "$differs" ]; then
+            emu_oracle_differs "$@"
+            return
+        fi
         [ $record = 1 ] && emu_record "$@"
         if [ $mode = full ]; then
             cmp -s "$TMP/a.cmp" "$TMP/b.cmp" || why="$why; outputs differ"
@@ -771,7 +803,7 @@ if [ $emu = 1 ]; then
         blessed=""
         if [ "$EMU_BLESS" = 1 ]; then
             mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
-            cp "$TMP/a.cmp" "$golden.out"; cp "$TMP/a.tx" "$golden.tx"
+            cp "$TMP/a.cmp" "$golden.out"; cp "$TMP/a.tx" "$golden.tx"; rm -f "$golden.oracle"
             blessed=" (golden written)"
         elif [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
             for t in $tools; do
@@ -871,6 +903,39 @@ if [ $emu = 1 ]; then
         fi
     }
 
+    # The end of an emu_case --oracle-differs: oxrok against the .out and
+    # .tx goldens, sigrok-cli's output against the .oracle golden, and
+    # the two tools must still differ.
+    emu_oracle_differs() {
+        if cmp -s "$TMP/a.cmp" "$TMP/b.cmp" && cmp -s "$TMP/a.tx" "$TMP/b.tx"; then
+            why="$why; sigrok-cli now matches oxrok (oracle fixed? $differs): make it an ordinary case"
+        fi
+        golden=$EMU_GOLDEN/$EMU_MODEL/$slug
+        blessed=""
+        if [ "$EMU_BLESS" = 1 ]; then
+            mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
+            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"; cp "$TMP/a.cmp" "$golden.oracle"
+            blessed=" (golden written)"
+        elif [ -f "$golden.out" ] && [ -f "$golden.tx" ] && [ -f "$golden.oracle" ]; then
+            cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
+            cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
+            cmp -s "$golden.oracle" "$TMP/a.cmp" || why="$why; sigrok-cli output differs from $slug.oracle"
+        else
+            why="$why; no golden $golden.out/.tx/.oracle (EMU_BLESS=1 writes it)"
+        fi
+        if [ -z "$why" ]; then
+            pass=$((pass + 1))
+            echo "PASS $name (oxrok pinned, sigrok-cli differs: $differs; $(wc -l <"$TMP/b.tx" | tr -d ' ') transactions)$blessed"
+        else
+            emu_fail "$name (oracle differs):${why#;} [$*]"
+            if [ -f "$golden.oracle" ] && ! cmp -s "$golden.oracle" "$TMP/a.cmp"; then
+                diff "$golden.oracle" "$TMP/a.cmp" | head -${DIFF_LINES:-6}
+            elif [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
+                diff "$golden.out" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
+            fi
+        fi
+    }
+
     # One model: lock, clean up, attach, cases, detach, unlock.
     emu_session() {
         [ -e "$EMU_LOCK" ] || (umask 0; : >>"$EMU_LOCK")
@@ -928,7 +993,7 @@ if [ $emu = 1 ]; then
                 slug=$(basename "$g" .out)
                 case " $emu_slugs " in *" $slug "*) continue ;; esac
                 if [ "$EMU_BLESS" = 1 ]; then
-                    rm -f "$g" "${g%.out}.tx"; echo "removed golden $slug of $EMU_MODEL: no case has it"
+                    rm -f "$g" "${g%.out}.tx" "${g%.out}.oracle"; echo "removed golden $slug of $EMU_MODEL: no case has it"
                 else
                     echo "note: golden $slug of $EMU_MODEL belongs to no case (EMU_BLESS=1 removes it)"
                 fi
