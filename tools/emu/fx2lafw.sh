@@ -186,7 +186,9 @@ emu_cases() {
     # ctx->analog_samples[i * ctx->num_analog_channels + j];" indexes the
     # analog samples by the column over all channels, so A0's column
     # shows the next sample's value and reads one past the buffer last.
-    emu_case "ax mixed csv" --oracle-differs "output/csv.c:491 indexes the analog samples by the column over all channels" -- -d $F -C D0,A0 -c samplerate=500k --samples 20 -O csv:header=false
+    # That last value is whatever lies past the buffer, so the last row's
+    # A0 is masked for both tools.
+    emu_case "ax mixed csv" --oracle-differs "output/csv.c:491 indexes the analog samples by the column over all channels" --filter ':a;N;$!ba;s/,[^,\n]*\n$/,xx\n/' -- -d $F -C D0,A0 -c samplerate=500k --samples 20 -O csv:header=false
 
     # Faults, on the flashed board: after an upload the C driver retries
     # a failing open for 3 s, as many times as fit, which would make the
