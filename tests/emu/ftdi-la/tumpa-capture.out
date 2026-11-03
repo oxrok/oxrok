@@ -1,0 +1,9 @@
+Acquisition with 8/8 channels at 100 kHz
+TCK:55 55 55 55 55 55 55 55 55 55 55 55 50 
+TDI:33 33 33 33 33 33 33 33 33 33 33 33 30 
+TDO:0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 00 
+TMS:00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 
+RST:00 00 ff ff 00 00 ff ff 00 00 ff ff 00 
+nTRST:00 00 00 00 ff ff ff ff 00 00 00 00 f0 
+DBGRQ:00 00 00 00 00 00 00 00 ff ff ff ff f0 
+RTCK:00 00 00 00 00 00 00 00 00 00 00 00 00 
