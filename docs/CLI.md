@@ -72,7 +72,26 @@ Deliberate, and kept small:
 - `fx2lafw` sends frame packets only when `limit_frames` is not 1.
   libsigrok wraps every capture in a frame and re-arms once more before
   stopping, so its `bits` output ends with `FRAME-END` and
-  `FRAME-BEGIN` lines.
+  `FRAME-BEGIN` lines. oxrok's fx2lafw sends the header before the
+  first frame begins, so csv output from it starts with the frame
+  separator (an empty line by default); libsigrok's begins that frame
+  before the header, which sigrok-cli does not pass to its output.
+- On the USBee AX with A0 enabled, triggers match the logic byte of
+  each 16 bit sample. libsigrok's soft trigger takes one byte per
+  sample (the logic channels, `soft-trigger.c:53`) on a stream of two
+  (`protocol.c:439`): it matches the ADC's bytes as logic samples,
+  starts the data at about twice the trigger offset, and sends the
+  pre-trigger samples as logic packets of interleaved bytes, with no
+  analog values.
+- A trigger on an analog channel (`-t A0=r` on the USBee AX) is
+  refused. sigrok-cli accepts it, and its soft trigger reads A0 as
+  logic bit 8 (`soft-trigger.c:149`), on one-byte samples the next
+  byte of the stream.
+- The csv output writes logic and analog columns side by side
+  correctly. libsigrok's csv indexes the analog samples by the column
+  number over all channels (`output/csv.c:491`), so with logic columns
+  first an analog column shows another sample's value and reads past
+  its buffer.
 - The demo device's default logic pattern is `oxrok`, a bitmap of that
   word. The other pattern names are the same. Disabled channels read low
   individually; sigrok's demo masks by the number of enabled channels.

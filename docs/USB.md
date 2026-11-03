@@ -451,6 +451,18 @@ full case or oracle case. What else is checked depends on oxrok:
   fails (WHY fixed?)"), so an upstream fix shows. In an `.oracle`
   golden a repeated stderr line counts once, since a driver looping on
   an error repeats it as often as time allows.
+- `--oracle-differs WHY` marks a full case where sigrok-cli exits 0 but
+  is wrong because of a libsigrok bug. sigrok-cli must exit 0 and its
+  output or transactions must differ from oxrok's; its stdout, prepared
+  as the case says (never its stderr), is the golden `SLUG.oracle`, and
+  oxrok alone is held to the `.out` and `.tx` goldens. A sigrok-cli
+  that comes to match oxrok fails the case ("oracle fixed?"), so an
+  upstream fix shows. `--expect-fail` and `--stderr` then apply to
+  oxrok alone, for an oxrok that refuses what sigrok-cli runs. It does
+  not combine with `--oracle-bug`, `--hangs` or `--record`. A blessed
+  full run removes `.oracle` goldens no case wrote, and a case that
+  becomes ordinary drops its `.oracle` when blessed. Bytes libsigrok
+  reads past a buffer are masked by the case's `--filter`.
 - `--digest` ends the compared output with the SHA-256 of the whole
   output before `--filter`, so a filter that thins a long output (the
   hantek-dso frames keep every 64th line) still compares every byte.

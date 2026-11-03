@@ -498,7 +498,11 @@ it to renumerate, finding it again by its port path. Open sets
 configuration 1 if it is not active (macOS needs it right after
 renumeration), reads the firmware version and REVID, and then claims.
 
-Analog channels (USBee AX) are not supported.
+The USBee AX's analog input is supported: channel A0, in its own
+channel group, read as volts, (code - 128) / 12.8, so -10 V to
++9.92 V. With A0 enabled the samples are 16 bit (the logic byte, then
+the ADC's, clocked by the firmware's CTL2 pulses), so the rate is
+limited to 12 MHz. A trigger cannot be set on A0.
 
 Verified 2026-10-22 on a Saleae Logic clone (`0925:3881`, firmware 1.4):
 the cold path after a power cycle (upload, renumeration in about 2 s,
@@ -510,7 +514,8 @@ the scan-time upload and the open order of 2026-11-03 are checked on
 the emulator only and want a second run on the clone.
 
 Emulated (2026-11-03): model `fx2lafw` of `oxrok-emu`, options
-`profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch` and `flashed=0|1`.
+`profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch|usbee-ax` and
+`flashed=0|1`.
 Without `flashed=1` it is an FX2 without firmware that takes the
 upload through its boot loader and renumerates; it checks the upload
 byte for byte against the stand-in files (`tools/emu/fx2lafw.firmware`)
@@ -550,10 +555,31 @@ the REVID read's `SR_OK`). Six more full cases: `stall_string=I` and
 `short_string=I` fail the scan's string descriptor reads (the model's
 `fail_standard` hook; a short answer is the 2 byte header, which libusb
 reads as an I/O error), and an unplug mid capture ends both tools'
-acquisition after 3 transfers. gcov: 85.3% of the driver; `usb.c` and
-`ezusb.c` 63.3%. Not emulated: the USBee AX analog channel, a
-`libusb_open` that fails at the scan, upload failures, and allocation
-failures.
+acquisition after 3 transfers. The `usbee-ax` profile (08a9:0014,
+string 3 "CWAV USBee AX", from the firmware's `hw/cwav-usbeeax`)
+streams, with CTL2 and 16-bit samples, the counter's low byte and an
+ADC ramp that reads n/12.8 V at sample n (each 256-sample block one
+step higher, so a misplaced transfer shows). It flags CTL2 without
+16-bit samples, CTL2 with a low delay byte of 0 (the firmware's
+`gpif-acquisition.c` says it never is), and 16-bit samples without
+CTL2. Twenty-three AX cases: scan with upload and flashed, show, probe
+names, conn by ids, A0 alone in analog and csv, logic plus A0, 20 kHz
+over three transfers, 12 MHz, frames, a logic-only trigger, the
+refused 16, 24 and 48 MHz, an unknown A1 and a channel-group get, all
+full cases with identical output and transactions, one recorded as a
+replay fixture; and four that pin oxrok where libsigrok is wrong. Two
+`--oracle-differs` cases cover libsigrok's soft trigger with A0 (a
+trigger with A0 enabled, and one on A0, which oxrok refuses), a third
+mixed logic and A0 csv, and an `--oracle-bug` case a `probe_names`
+spec starting with `-`, which crashes sigrok-cli (`api.c:353-356`
+names 8 channels from a list `sr_parse_probe_names()` does not pad).
+78 cases in all. gcov: 91.2% of the driver (`api.c` 88.6%,
+`protocol.c` 93.1%), `mso_send_data_proc` and the analog setup
+included; `usb.c` and `ezusb.c` 63.3%. Not emulated: a `libusb_open`
+that fails at the scan, profiles matched by USB strings, upload
+failures, a device that never renumerates, claim failures other than
+a busy interface, transfer submit and resubmit failures, and
+allocation failures.
 
 What the model changed in oxrok's port, which now follows `api.c` and
 `protocol.c`: the upload moved into the scan; open finds the device by
