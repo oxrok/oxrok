@@ -1,0 +1,2 @@
+sr: ikalogic-scanaplus: Failed to put FTDI chip into sync FIFO mode (-1): unable to configure bitbang mode. Perhaps not a BM/2232C type chip?.
+Failed to open device.

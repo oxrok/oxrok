@@ -1,0 +1,35 @@
+gcov ikalogic-scanaplus (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        88.8%  119 of 134
+  protocol.c   97.7%  169 of 173
+  total        93.8%  288 of 307
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 71-72, 77-78, 82-83
+    dev_open: 131-133, 173-175
+    config_get: 214-215
+    config_set: 244-245
+    dev_acquisition_start: 275
+  protocol.c
+    scanaplus_write: 68
+    scanaplus_receive_data: 308, 311, 314
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c    0.0%  0 of 229
+  total        0.0%  0 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: never called (316-379)
+    sr_usb_find: never called (393-441)
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)
