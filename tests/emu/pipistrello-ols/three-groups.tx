@@ -1,0 +1,43 @@
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 2203500069007000690073007400720065006c006c006f0020004c00580034003500
+ctl_out 40 00 0000 0002 - -> ok
+ctl_out 40 03 04e2 0202 - -> ok
+ctl_out 40 00 0001 0002 - -> ok
+ctl_out 40 00 0002 0002 - -> ok
+ctl_out 40 0b 00ff 0002 - -> ok
+ctl_out 40 09 0010 0002 - -> ok
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 02 -> 1
+bulk_in 83 16384 -> 016031414c53
+bulk_out 04 04 -> 1
+bulk_in 83 16384 -> 01600150697069737472656c6c6f204f4c530002332e30370020000000202100100000230bebc200410200
+bulk_in 83 16384 -> 0160
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 2203500069007000690073007400720065006c006c006f0020004c00580034003500
+ctl_out 40 00 0000 0002 - -> ok
+ctl_out 40 03 04e2 0202 - -> ok
+ctl_out 40 00 0001 0002 - -> ok
+ctl_out 40 00 0002 0002 - -> ok
+ctl_out 40 0b 00ff 0002 - -> ok
+ctl_out 40 09 0010 0002 - -> ok
+bulk_out 04 c000000000 -> 5
+bulk_out 04 c100000000 -> 5
+bulk_out 04 c200000008 -> 5
+bulk_out 04 c300000000 -> 5
+bulk_out 04 8000000000 -> 5
+bulk_out 04 840f000000 -> 5
+bulk_out 04 830f000000 -> 5
+bulk_out 04 820a000000 -> 5
+bulk_out 04 01 -> 1
+bulk_in 83 16384 -> 01603fc0ff3ec1ff3dc2ff3cc3ff3bc4ff3ac5ff39c6ff38c7ff37c8ff36c9ff35caff34cbff33ccff32cdff31ceff30cfff2fd0ff2ed1ff2dd2ff2cd3ff2bd4ff2ad5ff29d6ff28d7ff27d8ff26d9ff25daff24dbff23dcff22ddff21deff20dfff1fe0ff1ee1ff1de2ff1ce3ff1be4ff1ae5ff19e6ff18e7ff17e8ff16e9ff15eaff14ebff13ecff12edff11eeff10efff0ff0ff0ef1ff0df2ff0cf3ff0bf4ff0af5ff09f6ff08f7ff07f8ff06f9ff05faff04fbff03fcff02fdff01feff00ffff
+bulk_in 83 16384 -> 0160
+bulk_in 83 16384 -> 0160
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1

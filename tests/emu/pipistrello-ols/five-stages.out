@@ -1,0 +1,5 @@
+sr: pipistrello-ols: This device only supports 4 trigger stages.
+sr: pipistrello-ols: Failed to configure channels.
+sr: session: Could not start p-ols device (null) acquisition.
+sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
+Failed to start session.
