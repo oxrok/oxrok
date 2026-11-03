@@ -61,8 +61,12 @@
 //! of 2 to 1024 bytes on endpoint 1, byte 0 a flag byte (0x00, or 0x20
 //! for the reseed) and byte 1 the command, scrambled with `encrypt()`;
 //! every command but the reseed is answered by one bulk IN on endpoint
-//! 1 of the answer's exact length, scrambled, which the host undoes
-//! with `decrypt()`. Both XOR the bytes with the 32-bit LFSR state
+//! 1, scrambled, which the host undoes with `decrypt()`. The driver
+//! reads the answer's exact length, but the model sees that length
+//! rounded up to whole 512 byte packets (the emulator hands a bulk IN
+//! over as the device sees it on the bus, `docs/USB.md`), so it flags
+//! only a read shorter than the answer; a longer answer than the
+//! host's transfer is a babble, which the emulator reports itself. Both XOR the bytes with the 32-bit LFSR state
 //! (byte `i` with bits `8 * (i % 4)` up), except bits 0x28 of a
 //! command's byte 0, which go plain (so the device can see the reseed
 //! flag whatever the state), and each call steps the LFSR
@@ -185,7 +189,7 @@
 //! before the reseed, of the wrong length, with a wrong flag byte,
 //! cookie, count, I2C address or length, an unknown command (what a
 //! wrongly scrambled one decodes to), a command sent before the last
-//! answer was read, an answer read with another length; the bitstream
+//! answer was read, an answer read with fewer bytes than it has; the bitstream
 //! byte for byte and its chunking; the crypto chip's packets (word
 //! address, count, CRC, opcode, mode, parameters, a command before the
 //! wake, a Sign without a Nonce, a read of another length than the
@@ -1400,7 +1404,10 @@ impl LogicPro {
             // No answer due: the FX3 has nothing to send.
             return Reply::Nak;
         };
-        if max != a.plain.len() {
+        // A longer read is the rounding to whole packets; an answer
+        // longer than the host's own transfer the emulator reports as a
+        // babble.
+        if max < a.plain.len() {
             v.report(format!(
                 "answer to {:#04x} read with {max} bytes; it has {}",
                 a.command,
@@ -1883,8 +1890,10 @@ mod tests {
         assert_eq!(v.drain().len(), 1, "flag byte");
         host.transact(&mut dev, &[0, 0x55], 1, &mut v);
         assert_eq!(v.drain().len(), 1, "unknown command");
-        host.data(&mut dev, &[0, CMD_READ_TEMP], 2, &mut v);
-        assert_eq!(v.drain().len(), 1, "answer read with the wrong length");
+        host.data(&mut dev, &[0, CMD_READ_TEMP], 512, &mut v);
+        assert!(v.is_empty(), "a read rounded up to a packet: {v:?}");
+        host.data(&mut dev, &[0, CMD_READ_FW_VER], 64, &mut v);
+        assert_eq!(v.drain().len(), 1, "answer read with fewer bytes than it has");
         dev.transfer_out(1, &encrypt(0, &[0, CMD_READ_TEMP]), &mut v);
         dev.transfer_out(1, &encrypt(0, &[0, CMD_READ_TEMP]), &mut v);
         assert_eq!(v.drain().len(), 1, "the answer was not read");
