@@ -8,6 +8,13 @@ EMU_OPTIONS="-o chip=ft2232h"
 EMU_DRIVER=ftdi-la
 EMU_GCOV_SHARED="src/usb.c"
 # oxrok has the driver (src/drivers/ftdi_la): every case runs both tools.
+# sigrok-cli runs first in each, and libftdi detaches the kernel's
+# ftdi_sio from port A without attaching it again, so oxrok always
+# finds the port free. Run alone on a fresh attach, oxrok detaches
+# ftdi_sio, and gives the port back when it closes: ftdi_sio binds
+# again and probes port A (ctl_in 40 0a 0000 0001, its latency timer,
+# and ctl_out 40 09 0010 0001, 16 ms), which sigrok-cli never causes.
+# No case shows it: the harness has no way to run oxrok first.
 EMU_FULL=ftdi-la
 
 # The model's options for the cases that follow: every case's reset
@@ -30,8 +37,13 @@ emu_cases() {
     # sigrok-cli writes with the conn config_get() gives (show.c:313),
     # lacks it. oxrok answers the device's bus.address.
     CONN_BUG="api.c:390-394 reads sdi->conn, which scan_device() (api.c:195-202) never sets"
-    # oxrok's device line and --show then print the bus.address, which
-    # changes with every attach (a variant's descriptors re-attach it).
+    # oxrok's device line and --show then print the bus.address. On the
+    # first attach it is EMU_USB, which the harness's own conn=EMU_USB
+    # rule makes generic and the rules below pin for --show and --get;
+    # a variant whose descriptors changed is attached again at another
+    # address, which C makes generic.
+    U=$(echo "$EMU_USB" | sed 's/[.]/\\./g')
+    A="s/^(    conn: )$U( |\$)/\\1BUS.ADDR\\2/"
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     # oxrok's log lines and error texts as sigrok-cli words them: its
     # log prefix, and the sr_strerror() text for its errors, whose
@@ -41,11 +53,11 @@ s/^oxrok: warn: oxrok::cli::pipeline: //
 s/^(Failed to open device): .*/\1./
 s/^(Failed to set device option .samplerate.): invalid argument: (invalid samplerate)\.$/\1: \2./
 s/^(Failed to set device option .samplerate.): device error: .*/\1: generic\/unspecified error./'
-    emu_case "ftdi-la scan" --keep-header --oracle-differs "$CONN_BUG" --filter "$C" -- -d $D --scan
-    emu_case "ftdi-la show" --keep-header --oracle-differs "$CONN_BUG" --filter "$C" -- -d $D --show
+    emu_case "ftdi-la scan" --keep-header --oracle-differs "$CONN_BUG" -- -d $D --scan
+    emu_case "ftdi-la show" --keep-header --oracle-differs "$CONN_BUG" --filter "$A" -- -d $D --show
     emu_case "ftdi-la get samplerate" -- -d $D --get samplerate
     # The driver never sets sdi->conn: SR_ERR_ARG.
-    emu_case "ftdi-la get conn" --oracle-bug "$CONN_BUG" --filter "s/^'[0-9]+\\.[0-9]+'\$/'BUS.ADDR'/" -- -d $D --get conn
+    emu_case "ftdi-la get conn" --oracle-bug "$CONN_BUG" --filter "s/^'$U'\$/'BUS.ADDR'/" -- -d $D --get conn
     emu_case "ftdi-la set samplerate" --no-output -- -d $D --set -c samplerate=2m
     # No samplerate set: the 9600 Bd of libftdi's open stays.
     emu_case "ftdi-la 100 samples" -- -d $D --samples 100 -O hex
@@ -60,11 +72,11 @@ s/^(Failed to set device option .samplerate.): device error: .*/\1: generic\/uns
     # libftdi's divisor reaches within 5 %, and no trigger support.
     emu_case "ftdi-la samplerate too low" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=1k --samples 10
     emu_case "ftdi-la samplerate too high" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=100m --samples 10
-    # dev_context.cur_samplerate is a uint32_t (protocol.h:52), which
+    # dev_context.cur_samplerate is a uint32_t (protocol.h:44), which
     # config_set() (api.c:426) gives the 64 bit value: 2^32 + 1 MHz is
     # sampled at 1 MHz. oxrok keeps 64 bits, and libftdi refuses the
     # baud rate.
-    emu_case "ftdi-la samplerate beyond 32 bits" --oracle-differs "protocol.h:52 keeps the samplerate in a uint32_t, which api.c:426 truncates" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=4295967296 --samples 100 -O hex
+    emu_case "ftdi-la samplerate beyond 32 bits" --oracle-differs "protocol.h:44 keeps the samplerate in a uint32_t, which api.c:426 truncates" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=4295967296 --samples 100 -O hex
     emu_case "ftdi-la trigger" --stderr --expect-fail -- -d $D --samples 10 --triggers ADBUS0=1
 
     # The variants. EMU_USB is the first attach's address: a device

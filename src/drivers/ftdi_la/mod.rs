@@ -28,12 +28,21 @@
 //! is set, as a baud rate ([`protocol`]); the acquisition sets bit-bang
 //! mode again and reads. The device sees the same requests as under
 //! sigrok-cli, through [`crate::ftdi::libftdi`], checked with the
-//! emulator (`tools/emu/ftdi-la.sh`).
+//! emulator (`tools/emu/ftdi-la.sh`), with one exception: libftdi
+//! detaches the kernel's `ftdi_sio` from port A and never attaches it
+//! again, while oxrok gives the port back when it closes the device.
+//! `ftdi_sio` then binds port A again and probes it (reads its latency
+//! timer and sets it to 16 ms), so after oxrok the serial port is
+//! back, and the next open detaches it again. The emulator's cases do
+//! not show it: sigrok-cli runs first in each, and oxrok finds the
+//! port already free.
 //!
 //! Unlike libsigrok's driver, `conn` can be read (the C driver
 //! advertises it but never sets the `sdi->conn` it reads, so it always
-//! fails), and the sample rate is kept in 64 bits (the C driver's
-//! `uint32_t` turns 4295967296 Hz into 1 MHz).
+//! fails), the sample rate is kept in 64 bits (the C driver's
+//! `uint32_t` turns 4295967296 Hz into 1 MHz), and a sample rate set
+//! during an acquisition is refused (the C driver sends it between two
+//! reads; here the acquisition thread owns the chip).
 
 #![forbid(unsafe_code)]
 
@@ -375,10 +384,19 @@ impl Device for FtdiLaDevice {
                     return Err(Error::arg("invalid samplerate"));
                 }
                 // Sent at once when open, else when opened; kept only
-                // when the chip took it.
-                if let Some(ctx) = self.ctx.lock().expect("ftdi-la lock").as_mut() {
-                    Self::send_samplerate(ctx, self.chip, rate)?;
+                // when the chip took it. During an acquisition the
+                // thread holds the chip: refused, not kept unsent.
+                let mut slot = self.ctx.lock().expect("ftdi-la lock");
+                match slot.as_mut() {
+                    Some(ctx) => Self::send_samplerate(ctx, self.chip, rate)?,
+                    None if self.worker.is_some() => {
+                        return Err(Error::NotSupported(
+                            "changing the samplerate during an acquisition".into(),
+                        ));
+                    }
+                    None => {}
                 }
+                drop(slot);
                 self.samplerate = rate;
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -429,12 +447,10 @@ impl Device for FtdiLaDevice {
         let Some(mut ctx) = self.ctx.lock().expect("ftdi-la lock").take() else {
             return Err(Error::device("device is not open"));
         };
-        // dev_acquisition_start() ignores a failure here and reads
-        // anyway; the acquisition does not start.
+        // dev_acquisition_start() (api.c:461) ignores what this
+        // returns and reads anyway.
         if let Err(e) = ctx.set_bitmode(0, BitMode::BitBang as u8) {
-            log::error!("Failed to put FTDI chip into bitbang mode {e}.");
-            *self.ctx.lock().expect("ftdi-la lock") = Some(ctx);
-            return Err(e.into());
+            log::debug!("Setting bit-bang mode again failed {e}; reading anyway.");
         }
         let limit = self.limit_samples;
         let slot = Arc::clone(&self.ctx);
@@ -463,6 +479,69 @@ impl Device for FtdiLaDevice {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Packet;
+    use crate::usb::record::Replay;
+    use std::sync::mpsc::sync_channel;
+
+    /// An FT2232H without strings through `dev_open`: libftdi's open
+    /// (claim, reset, 9600 Bd), the purge, the bit mode reset,
+    /// bit-bang.
+    const OPENED: &str = "# oxrok usb fixture 1\n\
+        device vid=0403 pid=6010 version=0700 bus=0 addr=0 strings=0,0,0\n\
+        claim 0 -> ok\nmps 81 -> 512\n\
+        ctl_out 40 00 0000 0001 - -> ok\nctl_out 40 03 04e2 0201 - -> ok\n\
+        ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n\
+        ctl_out 40 0b 0000 0001 - -> ok\nctl_out 40 0b 0100 0001 - -> ok\n";
+
+    fn device(steps: &str) -> FtdiLaDevice {
+        let text = format!("{OPENED}{steps}");
+        FtdiLaDevice::from_transport(Box::new(Replay::from_text(&text).unwrap())).unwrap()
+    }
+
+    #[test]
+    fn a_failed_bit_bang_at_the_start_still_reads() {
+        // dev_acquisition_start() ignores ftdi_set_bitmode()'s result.
+        let mut dev = device(
+            "ctl_out 40 0b 0100 0001 - -> err device \"endpoint stalled\"\n\
+             bulk_in 81 4096 -> 01600001020304050607080900\n",
+        );
+        dev.open().unwrap();
+        dev.set(&Key::LimitSamples, &Value::U64(10), None).unwrap();
+        let (tx, rx) = sync_channel(16);
+        dev.start(PacketSink::new(tx, 0)).unwrap();
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        assert!(matches!(packets.first(), Some(Packet::Header { .. })));
+        assert!(
+            matches!(&packets[1], Packet::Logic(l) if l.data == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            "{packets:?}"
+        );
+        assert!(matches!(packets.last(), Some(Packet::End)));
+        dev.close().unwrap();
+    }
+
+    #[test]
+    fn a_samplerate_during_an_acquisition_is_refused() {
+        let mut dev = device(
+            "ctl_out 40 0b 0100 0001 - -> ok\n\
+             bulk_in 81 4096 -> 01600001020304050607080900\n\
+             ctl_out 40 03 003c 0201 - -> ok\n",
+        );
+        dev.open().unwrap();
+        dev.set(&Key::LimitSamples, &Value::U64(10), None).unwrap();
+        // No room in the channel: the thread waits on its header,
+        // holding the chip.
+        let (tx, rx) = sync_channel(0);
+        dev.start(PacketSink::new(tx, 0)).unwrap();
+        let e = dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap_err();
+        assert!(matches!(e, Error::NotSupported(_)), "{e:?}");
+        assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(0), "not kept");
+        assert_eq!(rx.iter().count(), 3, "header, samples, end");
+        dev.stop().unwrap();
+        // The chip is back: sent at once (1 MHz / 20, times 4).
+        dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+        assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(1_000_000));
+        dev.close().unwrap();
+    }
 
     #[test]
     fn chips_and_names() {

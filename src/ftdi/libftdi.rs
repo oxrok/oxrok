@@ -1,7 +1,8 @@
 // Counterpart in sigrok:
 //   libftdi1 (ftdi.c), by Intra2net AG and the libftdi developers.
 // This file is written for oxrok to send what libftdi 1.5 sends;
-//   ftdi_to_clkbits and ftdi_convert_baudrate are ported (LGPL-2.1-only,
+//   ftdi_to_clkbits, ftdi_to_clkbits_AM and ftdi_convert_baudrate are
+//   ported (LGPL-2.1-only,
 //   taken under its section 3 as GPL-3.0-or-later).
 
 //! An FTDI port driven the way libftdi 1.5 drives it, for ports of
@@ -15,10 +16,12 @@
 //!
 //! - every vendor request carries libftdi's port index, 1 for port A,
 //!   also on single port chips (where the chip ignores it);
-//! - the baud rate divisor is libftdi's (`ftdi_to_clkbits`): the H
-//!   chips use the 120 MHz clock from 733 Bd up, a rate more than 5 %
-//!   from what the divisor gives is refused, and in a bit mode the rate
-//!   is multiplied by 4 first, as `ftdi_set_baudrate` does;
+//! - the baud rate divisor is libftdi's (`ftdi_to_clkbits`, and
+//!   `ftdi_to_clkbits_AM` on the AM chips, which lack the eighths 3, 5,
+//!   6 and 7): the H chips use the 120 MHz clock from 733 Bd up, a rate
+//!   more than 5 % from what the divisor gives is refused, and in a bit
+//!   mode the rate is multiplied by 4 first, as `ftdi_set_baudrate`
+//!   does;
 //! - `SET_BAUD_RATE`'s `wIndex` is the divisor's bits 16 and up on the
 //!   chips before the H ones, and on the H chips those bits in the high
 //!   byte and the port index in the low one;
@@ -31,6 +34,14 @@
 //! reset it, take the chip type from `bcdDevice`, the packet size from
 //! the endpoint, then 9600 Bd. Closing is dropping it: libftdi sends
 //! nothing either.
+//!
+//! One difference the device sees: libftdi detaches the kernel's
+//! `ftdi_sio` from port A and never attaches it again, while oxrok's
+//! USB layer gives the port back to the kernel when it lets go of it.
+//! `ftdi_sio` then binds port A again and probes it (it reads the
+//! latency timer, `GET_LATENCY_TIMER`, and sets it to 16 ms), requests
+//! a run under sigrok-cli never causes; and the next open, by either
+//! tool, detaches it again. The user gets the serial port back.
 
 use super::{ChipType, req, strip_status};
 use crate::core::{Error, Result};
@@ -123,6 +134,52 @@ fn clkbits(baud: u64, clk: u64, div: u64) -> (u32, u64) {
     }
 }
 
+/// `ftdi_to_clkbits_AM`: the divisor code (17 bits) for `baud` on an
+/// AM chip, and the rate it gives, rounded to the nearest. The AM's
+/// divisor of its 3 MHz base takes only the eighths 0, 1/8, 1/4 and
+/// 1/2, no value from 1.125 to 1.875, and at most 0x3fff. libftdi
+/// tries the divisor 24 MHz / `baud` gives, rounded down to an eighth
+/// the AM has, and the one above it rounded up to one, and keeps the
+/// closer.
+fn clkbits_am(baud: u64) -> (u32, u64) {
+    const FRAC_CODE: [u32; 8] = [0, 3, 2, 4, 1, 5, 6, 7];
+    const ADJUST_UP: [u64; 8] = [0, 0, 0, 1, 0, 3, 2, 1];
+    const ADJUST_DN: [u64; 8] = [0, 0, 0, 1, 0, 1, 2, 3];
+    let mut divisor = 24_000_000 / baud;
+    divisor -= ADJUST_DN[(divisor & 7) as usize];
+    let (mut best_divisor, mut best_baud, mut best_diff) = (0, 0, 0);
+    for i in 0..2 {
+        let mut try_divisor = divisor + i;
+        if try_divisor <= 8 {
+            try_divisor = 8;
+        } else if divisor < 16 {
+            // libftdi tests divisor here, not try_divisor.
+            try_divisor = 16;
+        } else {
+            try_divisor += ADJUST_UP[(try_divisor & 7) as usize];
+            if try_divisor > 0x1fff8 {
+                try_divisor = 0x1fff8;
+            }
+        }
+        let estimate = (24_000_000 + try_divisor / 2) / try_divisor;
+        let diff = estimate.abs_diff(baud);
+        if i == 0 || diff < best_diff {
+            (best_divisor, best_baud, best_diff) = (try_divisor, estimate, diff);
+            if diff == 0 {
+                break;
+            }
+        }
+    }
+    let mut encoded = ((best_divisor >> 3) as u32) | (FRAC_CODE[(best_divisor & 7) as usize] << 14);
+    // 3 MBd and 2 MBd have codes of their own.
+    if encoded == 1 {
+        encoded = 0;
+    } else if encoded == 0x4001 {
+        encoded = 1;
+    }
+    (encoded, best_baud)
+}
+
 /// `ftdi_convert_baudrate` and the tolerance check of
 /// `ftdi_set_baudrate`, for a rate already multiplied by 4 in a bit
 /// mode: `wValue`, the divisor bits of `wIndex` (bits 16 and up of the
@@ -130,9 +187,8 @@ fn clkbits(baud: u64, clk: u64, div: u64) -> (u32, u64) {
 ///
 /// # Errors
 ///
-/// libftdi's: a rate of 0, a rate more than 5 % from what the divisor
-/// gives, and the AM chips, whose divisor (`ftdi_to_clkbits_AM`) is not
-/// ported: they have no bit-bang mode either.
+/// libftdi's: a rate of 0, or a rate more than 5 % from what the
+/// divisor gives.
 pub fn divisor(chip: ChipType, baud: u64) -> std::result::Result<(u16, u16, u64), FtdiError> {
     const H_CLK: u64 = 120_000_000;
     const C_CLK: u64 = 48_000_000;
@@ -148,9 +204,7 @@ pub fn divisor(chip: ChipType, baud: u64) -> std::result::Result<(u16, u16, u64)
                 clkbits(baud, C_CLK, 16)
             }
         }
-        ChipType::Am => {
-            return Err(FtdiError::new(-1, "the AM chips' baud rate divisor is not supported"));
-        }
+        ChipType::Am => clkbits_am(baud),
         _ => clkbits(baud, C_CLK, 16),
     };
     if best == 0 {
@@ -381,7 +435,45 @@ mod tests {
         // the 12 MBd the clock gives.
         assert_eq!(divisor(ChipType::Ft2232h, 20_000_000).unwrap_err().code, -1);
         assert!(divisor(ChipType::R, 0).is_err());
-        assert!(divisor(ChipType::Am, 9600).is_err());
+    }
+
+    #[test]
+    fn am_divisors_as_libftdi_computes_them() {
+        // (baud, value, bits, best), from ftdi_to_clkbits_AM: 9600 Bd
+        // is what libftdi's open sends an AM (ctl 40 03 4138 0000).
+        let cases = [
+            (9_600, 0x4138, 0, 9_600),
+            (115_200, 0x001a, 0, 115_385),
+            (3_000_000, 0, 0, 3_000_000),
+            // 24 MHz / 1.6 MBd is 15: no divisor from 9 to 15, so 16.
+            (1_600_000, 2, 0, 1_500_000),
+            // 24 MHz / 57600 is 416.67 (in eighths of 3 MHz): 416
+            // (52) gives 57692, 417 (52 1/8) 57554, the closer.
+            (57_600, 0xc034, 0, 57_554),
+            // 24 MHz / 38400 = 625 = 78 1/8: the eighth an AM has.
+            (38_400, 0xc04e, 0, 38_400),
+            // 24 MHz / 13000 = 1846 = 230 6/8, which the AM lacks: down
+            // to 230 4/8 (13015 Bd), or 1847 up to 231 (12987 Bd),
+            // the closer.
+            (13_000, 0x00e7, 0, 12_987),
+            // 300 Bd: 80000 = 10000.0.
+            (300, 0x2710, 0, 300),
+            // Below 183.1 Bd the divisor stops at 0x1fff8: 0x3fff.
+            (150, 0x3fff, 0, 183),
+        ];
+        for (baud, value, bits, best) in cases {
+            let got = clkbits_am(baud);
+            assert_eq!(
+                ((got.0 & 0xffff) as u16, (got.0 >> 16) as u16, got.1),
+                (value, bits, best),
+                "{baud}"
+            );
+            // No eighths code beyond the AM's 0 to 3.
+            assert!(got.0 >> 14 <= 3, "{baud}: {:#x}", got.0);
+        }
+        assert_eq!(divisor(ChipType::Am, 9_600), Ok((0x4138, 0, 9_600)));
+        // 150 Bd gives 183 Bd, beyond 5 %: refused as libftdi does.
+        assert_eq!(divisor(ChipType::Am, 150).unwrap_err().code, -1);
     }
 
     #[test]
