@@ -139,6 +139,10 @@
 //! only the Nth since the model was built (a one-shot STALL is an
 //! emulation artifact: a real halt lasts until cleared);
 //! `state=V@N,...` answers the Nth capture state poll with V instead;
+//! `empty=N,...` completes the Nth channel data transfer since the
+//! model was built with no data, the frame's bytes left for the next
+//! (the driver, which submitted a transfer per packet of the frame,
+//! then waits for a last one it never submits);
 //! `endpoints=bad` puts the firmware's IN endpoint at 2, `swapped`
 //! lists IN 6 before OUT 2, `one` leaves out IN 6 (firmwares the driver
 //! does not know, which `dso_getmps()` refuses).
@@ -154,7 +158,8 @@ pub const NAME: &str = "hantek-dso";
 pub const ABOUT: &str = "Hantek DSO-2090 USB scope (EZ-USB, renumerates 04b4 -> 04b5); \
                          profile=dso-2090 (default), dso-2150, dso-2250, dso-5200, dso-5200a, \
                          flashed=1, speed=full, ext=1, fill=N, wrap=N; faults: \
-                         stall=load|eeprom|begin|offset|relays|out|state[@N], state=V@N, endpoints=bad|swapped|one";
+                         stall=load|eeprom|begin|offset|relays|out|state[@N], state=V@N, empty=N, \
+                         endpoints=bad|swapped|one";
 
 /// The command family a board speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -350,6 +355,8 @@ pub struct Faults {
     stall: Vec<(What, Option<u32>)>,
     /// The Nth capture state answer reports this state instead.
     states: Vec<(u32, u8)>,
+    /// The Nth channel data transfers complete empty.
+    empty: Vec<u32>,
     /// The firmware's endpoints, when not the driver's.
     endpoints: Endpoints,
 }
@@ -403,6 +410,12 @@ impl Faults {
                         .parse::<u8>()
                         .map_err(|_| Error(format!("state={item}: V from 0 to 255")))?;
                     self.states.push((nth(n)?, state));
+                }
+            }
+            "empty" => {
+                self.empty.clear();
+                for item in v.split(',').filter(|i| !i.is_empty()) {
+                    self.empty.push(nth(item)?);
                 }
             }
             "endpoints" => {
@@ -633,6 +646,8 @@ pub struct HantekDso {
     /// Requests seen per kind, for the faults' Nth.
     seen: Vec<(What, u32)>,
     state_polls: u32,
+    /// Channel data transfers completed, for `empty=N`.
+    data_transfers: u32,
     eeprom: [u8; 256],
     eeprom_read: bool,
     begun: bool,
@@ -661,6 +676,7 @@ impl HantekDso {
             faults,
             seen: Vec::new(),
             state_polls: 0,
+            data_transfers: 0,
             eeprom_read: false,
             begun: false,
             settings: Settings::default(),
@@ -1314,6 +1330,12 @@ impl DeviceModel for HantekDso {
                 Reply::Data(self.state())
             }
             Pending::Data { bytes, at } => {
+                self.data_transfers += 1;
+                if self.faults.empty.contains(&self.data_transfers) {
+                    // A transfer the firmware ends with a zero length
+                    // packet: the frame does not move on.
+                    return Reply::Data(Vec::new());
+                }
                 let take = max.min(bytes.len() - *at);
                 let chunk = bytes[*at..*at + take].to_vec();
                 *at += take;
@@ -1659,6 +1681,24 @@ mod tests {
         let Reply::Data(a) = dev.transfer_in(6, 512, &mut v) else { panic!() };
         assert_eq!(a[0], 127);
         assert!(v.is_empty(), "a fault is the device's, not the host's: {v:?}");
+        // The second data transfer empty: the frame goes on with the third.
+        let mut dev = running(&[("empty", "2")]);
+        init(&mut dev, &mut v);
+        bulk(&mut dev, &[3, 0], &mut v);
+        bulk(&mut dev, &[2, 0], &mut v);
+        poll(&mut dev, &mut v);
+        assert_eq!(poll(&mut dev, &mut v).0, 2);
+        bulk(&mut dev, &[5, 0], &mut v);
+        let lens: Vec<usize> = (0..42)
+            .map(|_| match dev.transfer_in(6, 512, &mut v) {
+                Reply::Data(d) => d.len(),
+                _ => usize::MAX,
+            })
+            .collect();
+        assert_eq!(&lens[..3], &[512, 0, 512]);
+        assert_eq!(lens[40], 512, "the frame's last packet comes 41st");
+        assert_eq!(lens[41], usize::MAX, "then nothing");
+        assert!(v.is_empty(), "{v:?}");
         let mut dev = running(&[("stall", "eeprom")]);
         assert_eq!(dev.control(vendor(0xc0, 0xa2, 8, 72), &[], &mut v), Reply::Stall);
         let dev = running(&[("endpoints", "bad"), ("speed", "full")]);

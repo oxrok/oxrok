@@ -205,15 +205,13 @@ emu_cases() {
     hantek_options profile=6022be flashed=1 stall=trigger/0
     emu_case "fault stop stall" -- -d $H -c samplerate=100k --samples 50 -O analog
     # The flush transfer empty or STALLed: the driver ignores what it
-    # holds anyway. A second one would end the capture for good: the
-    # driver neither resubmits nor stops. That is read in
-    # receive_transfer(), not run: sigrok-cli hangs and the harness fails
-    # an oracle case that ends by timeout.
-    # TODO: enable once an oracle --expect-fail case may end by --timeout.
-    # hantek_options profile=6022be flashed=1 empty=2
-    # emu_case "fault empty after the flush hangs" --expect-fail --timeout 10 -- -d $H -c samplerate=100k --samples 50 -O analog
-    # hantek_options profile=6022be flashed=1 stall_in=2
-    # emu_case "fault stalled after the flush hangs" --expect-fail --timeout 10 -- -d $H -c samplerate=100k --samples 50 -O analog
+    # holds anyway. A second one ends the capture for good: the driver
+    # (receive_transfer()) neither resubmits nor stops, and sigrok-cli
+    # waits until the harness stops it, with no transfer after.
+    hantek_options profile=6022be flashed=1 empty=2
+    emu_case "fault empty after the flush hangs" --hangs --timeout 5 --stderr --no-output -- -d $H -c samplerate=100k --samples 50 -O analog
+    hantek_options profile=6022be flashed=1 stall_in=2
+    emu_case "fault stalled after the flush hangs" --hangs --timeout 5 --stderr --no-output -- -d $H -c samplerate=100k --samples 50 -O analog
     hantek_options profile=6022be flashed=1 empty=1
     emu_case "fault empty flush" -- -d $H -c samplerate=100k --samples 50 -O analog
     hantek_options profile=6022be flashed=1 stall_in=1

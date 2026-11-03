@@ -226,6 +226,28 @@ emu_cases() {
         hantek_options profile=dso-2090 flashed=1 $f
         emu_case "fault capture $f" --digest --filter "$HD_FRAME" -- -d $H --frames 1
     done
+    # Faults no capture recovers from: the driver ends on none of them,
+    # and sigrok-cli runs until the harness stops it (--hangs). A
+    # channel data transfer that completes empty leaves the frame one
+    # packet short, and the driver waits for the transfer it never
+    # submitted; no transfer after.
+    hantek_options profile=dso-2090 flashed=1 empty=3
+    emu_case "fault empty data transfer hangs" --hangs --timeout 5 --stderr --no-output -- -d $H --frames 1
+    # Unplugged in the middle of the frame (the 20th IN of endpoint 6:
+    # six state polls, then the data): the rest of the transfers fail
+    # empty, as above. Unplugged while it polls (the 3rd): every poll
+    # fails from then on and is tried again each millisecond.
+    hantek_options profile=dso-2090 flashed=1
+    emu_case "unplug mid frame hangs" --hangs --timeout 5 --stderr --no-output --unplug in=6:20 -- -d $H --frames 1
+    emu_case "unplug while polling hangs" --hangs --timeout 5 --stderr --unplug in=6:3 -- -d $H --frames 1
+    # A trigger that never fires (EXT with nothing on it): the driver
+    # polls, restarts the capture without a force every third empty
+    # state, and polls on. The transactions are cut after one period.
+    emu_case "trigger never fires hangs" --hangs --timeout 5 --stderr --no-output -- -d $H -c triggersource=EXT --frames 1
+    # A DSO-5200's ready frame (state 7, 9 bit samples): "Not yet
+    # supported." at each poll, for ever.
+    hantek_options profile=dso-5200 flashed=1
+    emu_case "5200 capture hangs" --hangs --timeout 5 --stderr -- -d $H --frames 1
     # The begin or a command of a capture restart refused: the next poll
     # finds the device still empty, three times, and restarts again.
     # (The begins: 1 to 5 dso_init() and the start, 6 to 9 the polls,

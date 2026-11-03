@@ -272,12 +272,14 @@ fn read_strings(info: &UsbDeviceInfo) -> Option<[String; 3]> {
     };
     let indexes = t.string_indexes().ok()?;
     let mut out: [String; 3] = Default::default();
-    for (o, i) in out.iter_mut().zip(indexes) {
+    for ((o, i), what) in
+        out.iter_mut().zip(indexes).zip(["manufacturer", "product", "serial number"])
+    {
         if i != 0 {
             match crate::usb::read_string_ascii(t.as_mut(), i) {
                 Ok(v) => *o = v,
                 Err(e) => {
-                    log::warn!("Failed to get a string descriptor: {e}.");
+                    log::warn!("Failed to get {what} string descriptor: {e}.");
                     return None;
                 }
             }
