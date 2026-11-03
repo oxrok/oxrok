@@ -48,10 +48,12 @@
 //! (`0403:6015`, which libftdi lists and the driver rejects).
 //! `manufacturer=`, `product=` and `serial=` replace the strings; an
 //! empty value removes the string, as an unprogrammed EEPROM does.
+//! The shell's faults ([`Faults`]) apply: `stall=`, `in-stall=`,
+//! `idle=`.
 
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Violations};
 use crate::shells::ftdi::{
-    self, Chip, Event, Fill, Ftdi, FtdiConfig, FtdiPorts, PortState, bitmode,
+    self, Chip, Event, Faults, Fill, Ftdi, FtdiConfig, FtdiPorts, PortState, bitmode,
 };
 use crate::{Error, Result};
 
@@ -60,7 +62,7 @@ pub const NAME: &str = "ftdi-la";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "FTDI chip in asynchronous bit-bang mode as sigrok's ftdi-la uses it; \
      chip=ft2232h|ft4232h|ft232h|ft232r|tumpa|ft245bm|ft230x, manufacturer=, product=, serial= \
-     (empty: no string)";
+     (empty: no string); the FTDI shell's faults: stall=REQUEST[/WVALUE], in-stall=N, idle=N";
 
 /// The variants, by `chip=` name: chip, product id, manufacturer,
 /// product, serial number.
@@ -82,11 +84,16 @@ const VARIANTS: &[(&str, Chip, u16, &str, &str, &str)] = &[
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut config = config("ft2232h")?;
     let mut strings: Vec<(&str, &str)> = Vec::new();
+    let mut faults = Faults::default();
     for (k, v) in options {
         match k.as_str() {
             "chip" => config = self::config(v)?,
             "manufacturer" | "product" | "serial" => strings.push((k, v)),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => {
+                if !faults.option(other, v)? {
+                    return Err(Error(format!("{NAME} has no option {other}")));
+                }
+            }
         }
     }
     for (k, v) in strings {
@@ -97,7 +104,9 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             _ => config.serial = s,
         }
     }
-    Ok(Box::new(FtdiLa::new(config)))
+    let mut model = FtdiLa::new(config);
+    model.chip.set_faults(faults);
+    Ok(Box::new(model))
 }
 
 /// The configuration of a `chip=` variant.

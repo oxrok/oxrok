@@ -1,0 +1,2 @@
+sr: ftdi-la: Failed to read FTDI data (-9): usb bulk read failed.
+Device only sent 16384 samples.

@@ -87,5 +87,29 @@ emu_cases() {
     emu_case "ft4232h no product" --keep-header -- -d $D --scan
     ftdi_la_options chip=tumpa product=
     emu_case "tumpa no product" --keep-header -- -d $D:conn=0403.8a98 --scan
+
+    # The FTDI shell's faults (emu/src/shells/ftdi.rs), on an FT2232H.
+    # A chip with nothing sampled yet answers its two status bytes
+    # alone, which libftdi strips: reads of 0 bytes, then the samples.
+    ftdi_la_options idle=3
+    emu_case "idle reads" -- -d $D -c samplerate=1m --samples 100 -O hex
+    # Port A's bulk IN endpoint halts after so many transfers: the read
+    # fails and the acquisition stops with what it had.
+    ftdi_la_options in-stall=6
+    emu_case "read error" --filter "$LONG" -- -d $D -c samplerate=1m --samples 100000 -O hex
+    emu_case "read error message" --stderr -- -d $D -c samplerate=1m --samples 100000 -O hex
+    ftdi_la_options in-stall=0
+    emu_case "first read error" --stderr -- -d $D -c samplerate=1m --samples 100 -O hex
+    # The requests of the driver's open, each STALLed in turn: libftdi's
+    # own reset in ftdi_usb_open (-6), the purge, the reset of the bit
+    # mode, bit-bang.
+    ftdi_la_options stall=reset/0
+    emu_case "open reset stalls" --stderr --expect-fail -- -d $D --samples 10
+    ftdi_la_options stall=reset/1
+    emu_case "purge stalls" --stderr --expect-fail -- -d $D --samples 10
+    ftdi_la_options stall=bitmode/0
+    emu_case "bit mode reset stalls" --stderr --expect-fail -- -d $D --samples 10
+    ftdi_la_options stall=bitmode/0x0100
+    emu_case "bit-bang stalls" --stderr --expect-fail -- -d $D --samples 10
     ftdi_la_options
 }
