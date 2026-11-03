@@ -1,0 +1,2 @@
+sr: ftdi-la: Failed to set baudrate (100000000): Unsupported baudrate. Note: bitbang baudrates are automatically multiplied by 4.
+Failed to set device option 'samplerate': generic/unspecified error.

@@ -1,0 +1,10 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+ftdi-la - FTDI Dual RS232-HS with 8 channels: ADBUS0 ADBUS1 ADBUS2 ADBUS3 ADBUS4 ADBUS5 ADBUS6 ADBUS7
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 
+    samplerate (3.6 kHz - 10 MHz in steps of 1 Hz)
+    conn: 
