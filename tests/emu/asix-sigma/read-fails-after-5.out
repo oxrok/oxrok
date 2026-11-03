@@ -1,0 +1,2 @@
+sr: asix-sigma: USB data read failed: usb bulk read failed
+sr: asix-sigma: Could not poll for post-trigger state.

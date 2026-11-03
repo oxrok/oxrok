@@ -42,7 +42,7 @@ emu_cases() {
     for c in nonsense 300.1 1.200 0.0; do
         emu_case "bad conn $c" --stderr --filter "$A" -- -d $D:conn=$c --scan
     done
-    emu_case "show" --keep-header -- -d $D --show
+    emu_case "show" --keep-header --filter 's/conn: [0-9]+[.][0-9]+/conn: BUS.ADDR/' -- -d $D --show
     emu_case "probe names" --keep-header -- -d $D:probe_names=a,b,c --scan
     for k in samplerate captureratio external_clock external_clock_source clock_edge \
         limit_samples limit_time; do
@@ -99,8 +99,8 @@ emu_cases() {
     # The trigger 28 events before the hardware's position lies in the
     # previous row: the rewind crosses a row boundary.
     emu_case "trigger in row 1" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 6=1,7=1,8=1 -O bits
-    # A trigger on a disabled channel is ignored, but still a trigger.
-    emu_case "trigger on a disabled channel" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 -C 1,2 --samples 40 -t 5=r -O bits
+    # sigrok-cli refuses a trigger on a disabled channel itself.
+    emu_case "trigger on a disabled channel" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m:captureratio=100 -C 1,2 --samples 40 -t 5=r -O bits
     emu_case "trigger two edges" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m --samples 40 -t 1=r,2=f
     # No limit with captureratio=100: the device stops on its own.
     emu_case "trigger ratio 100" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 5=1 -O bits
@@ -126,10 +126,9 @@ emu_cases() {
 
     # The variants.
     asix_sigma_options variant=sigma2
-    emu_case "sigma2 scan" --keep-header -- -d $D --scan
+    # Attached again (other strings): an address the READY line did not report.
+    emu_case "sigma2 scan" --keep-header --filter 's/conn=[0-9]+[.][0-9]+/conn=BUS.ADDR/' -- -d $D --scan
     emu_case "sigma2 capture" -- -d $D -c samplerate=50m --samples 20 -O hex
-    asix_sigma_options product=0xa001
-    emu_case "other product" --stderr -- -d $D --scan
     asix_sigma_options variant=omega
     emu_case "omega scan" --stderr --filter "$A" -- -d $D --scan
     asix_sigma_options serial=
@@ -182,19 +181,31 @@ emu_cases() {
         emu_case "read fails after $n" --stderr --filter "$A" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     asix_sigma_options
-    # Unplugged after the Nth bulk OUT transfer: the write that follows
-    # fails. 1 the suicide sequence, 4 the PROG pulse, 6 the bitstream,
-    # 13 the netlist's first commands, 14 trigger programming, 15 and 16
-    # the first table word and strobe, 47 the trigger parameters, 48
-    # the trigger options, 49 leaving programming, 50 the clock, 51
-    # the post trigger, 52 the start, 53 the first poll, 54 the mode
-    # read of the readout, 55 the forced stop, 57 the read enable, 59
-    # the memory row, 60 the row fetches.
-    for n in 1 4 6 13 14 15 16 47 48 49 50 51 52 53 54 55 57 59 60; do
+    # Unplugged after the Nth bulk OUT transfer: the bulk write that
+    # follows fails. 1 a suicide burst, 4 before the PROG pulse, 6 the
+    # second bitstream chunk, 15 trigger programming entered, before the
+    # first table word, 16 before its strobe, 47 before the trigger
+    # parameters, 48 the trigger options, 49 leaving programming, 50
+    # the clock, 51 the post trigger, 52 the start; those fail the
+    # start. 53 the first poll's commands, 60 the row fetches of the
+    # readout: the acquisition ends with an error.
+    for n in 1 4 6 15 16 47 48 49 50 51 52; do
+        emu_case "unplug after write $n" --unplug out=2:$n --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m --samples 20 -O hex
+    done
+    for n in 53 60; do
         emu_case "unplug after write $n" --unplug out=2:$n --stderr --filter "$A" -- -d $D -c samplerate=50m --samples 20 -O hex
+    done
+    # Unplugged after the Nth bulk IN transfer, where a write follows a
+    # read: 3 the netlist's answer (trigger programming fails), 4 the
+    # first poll (the mode read's command), 5 the mode read of the
+    # readout (the forced stop), 6 the stop poll (read enable), 7 the
+    # positions (the memory row).
+    emu_case "unplug after read 3" --unplug in=1:3 --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m --samples 20 -O hex
+    for n in 4 5 6 7; do
+        emu_case "unplug after read $n" --unplug in=1:$n --stderr --filter "$A" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     # At 100 MHz (one more bitstream transfer): the 0x81 after entering
     # trigger programming.
-    emu_case "unplug 100 MHz after write 16" --unplug out=2:16 --stderr --filter "$A" -- -d $D -c samplerate=100m --samples 20 -O hex
+    emu_case "unplug 100 MHz after write 16" --unplug out=2:16 --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=100m --samples 20 -O hex
     emu_case "unplug at the first poll" --unplug model --stderr -- -d $D -c samplerate=50m --samples 20 -O hex
 }

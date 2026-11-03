@@ -1,0 +1,2 @@
+sr: asix-sigma: Cannot open device (-6): ftdi_usb_reset failed.
+Failed to open device.

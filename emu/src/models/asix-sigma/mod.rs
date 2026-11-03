@@ -70,8 +70,7 @@
 //! bitstream that matches a netlist.
 //!
 //! Options: `variant=sigma|sigma2|omega`, `serial=` (empty: no serial
-//! number string), `product=N` (another product id, which the driver
-//! does not take), `step=N` (samples per count of the pattern, see
+//! number string), `step=N` (samples per count of the pattern, see
 //! [`fpga`]); faults, all off by default: `init-busy=N` (above),
 //! `config=fail` (the FPGA rejects the bitstream, as on a CRC error,
 //! and stays unconfigured), `id=N` (what `READ_ID` answers, 0xa6),
@@ -95,7 +94,7 @@ pub use fpga::{Fpga, FpgaFaults, Netlist};
 pub const NAME: &str = "asix-sigma";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "ASIX SIGMA/SIGMA2 (FT245BM and an FPGA configured over bit-bang); \
-     variant=sigma|sigma2|omega, serial= (empty: none), product=N, step=N; faults: \
+     variant=sigma|sigma2|omega, serial= (empty: none), step=N; faults: \
      init-busy=N, config=fail, id=N, scratch=stuck|bit0, stop-polls=N, the FTDI shell's stall=, in-stall=, idle=";
 
 /// ASIX's vendor id.
@@ -151,7 +150,6 @@ pub fn netlist_bits(name: &str, size: usize) -> Vec<u8> {
 /// On an unknown option or a bad value.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut variant = VARIANTS[0];
-    let mut product = None;
     let mut serial: Option<Option<String>> = None;
     let mut step = 2;
     let mut faults = Faults::default();
@@ -189,10 +187,6 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "scratch" | "config" => {
                 return Err(Error(format!("{k}={v}: scratch=stuck|bit0 or config=fail")));
             }
-            "product" => {
-                product = Some(u16::try_from(number(k, v)?)
-                    .map_err(|_| Error(format!("product={v}: 16 bits")))?);
-            }
             other => {
                 if !faults.option(other, v)? {
                     return Err(Error(format!("{NAME} has no option {other}")));
@@ -200,8 +194,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             }
         }
     }
-    let (_, variant_product, chip, description, default_serial) = variant;
-    let product = product.unwrap_or(variant_product);
+    let (_, product, chip, description, default_serial) = variant;
     let mut config = FtdiConfig::new(chip);
     config.vendor = VENDOR;
     config.product = product;

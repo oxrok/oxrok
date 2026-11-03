@@ -1,0 +1,26 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    probe_names
+asix-sigma:conn=BUS.ADDR - ASIX SIGMA [S/N: A6010A3C] with 16 channels: 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+Supported configuration options:
+    limit_time: 0 (current)
+    limit_samples: 0 (current)
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      200 kHz (current)
+      500 kHz
+      1 MHz
+      2 MHz
+      5 MHz
+      10 MHz
+      25 MHz
+      50 MHz
+      100 MHz
+      200 MHz
+    external_clock: on, off (current)
+    external_clock_source: 1 (current), 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16
+    clock_edge: rising (current), falling, either
+    Supported triggers: 0 1 r f 
+    captureratio: 50 (current)
