@@ -417,18 +417,22 @@ the chip-to-host buffer. Options: `chip=` `ft2232h` (default),
 `conn=`), `ft245bm` (the driver takes it for an FT232R) or `ft230x`
 (0403:6015, which the driver rejects); `manufacturer=`, `product=` and
 `serial=` replace a string, or remove it when empty, as an unprogrammed
-EEPROM does. `tools/emu/ftdi-la.sh` runs 15 oracle cases on the
-FT2232H: scan, show, get and set samplerate, get conn, captures at
+EEPROM does. `tools/emu/ftdi-la.sh` runs 36 oracle cases: 15 on the
+FT2232H (scan, show, get and set samplerate, get conn, captures at
 3.6 kHz, 1 MHz and 10 MHz, a `--time` capture, `-C`, `conn=`, and the
-error answers (samplerate below 3600, a samplerate beyond libftdi's 5 %
-tolerance, triggers). No violation under sigrok-cli. The other chips
-and the missing strings were served by hand, also with no violation;
-they become cases once a scenario can switch options. gcov: 69.3 %
-(178 of 257). Not emulated: failures of libftdi calls (string reads,
-`find_all`, open, purge, bit mode, reads), `config_get` conn (the
-driver never sets `sdi->conn`, so `--get conn` always fails with
-"invalid argument") and `LIMIT_MSEC` (not advertised; sigrok-cli turns
-`--time` into a sample count).
+error answers: samplerate below 3600, a samplerate beyond libftdi's
+5 % tolerance, triggers), then, through the emulator's `options`
+command, the FT232R (samplerate / 30 on the 3 MHz clock, 64 byte
+packets), FT232H, FT4232H, the TIAO adapter (found only by `conn=`), a
+BM (taken for an FT232R), an FT230X (rejected), and boards whose
+EEPROM lacks the manufacturer, product or serial string ("Generic",
+the chip's name, no S/N). No violation under sigrok-cli. gcov: 79.0 %
+(203 of 257). Not emulated: failures of libftdi calls (string reads,
+`find_all`, open, purge, bit mode, reads), the model name "Unknown"
+(unreachable: only ids in the driver's table get there), `config_get`
+conn (the driver never sets `sdi->conn`, so `--get conn` always fails
+with "invalid argument") and `LIMIT_MSEC` (not advertised; sigrok-cli
+turns `--time` into a sample count).
 
 What the model taught about the driver: `dev_open` goes reset, 9600 Bd
 (libftdi's open), purge both buffers, bit mode reset, bit-bang with
