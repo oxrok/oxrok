@@ -33,4 +33,46 @@ emu_cases() {
     emu_case "bm86x search chip" --oracle-bug "$SEARCH_BUG" -- -d brymen-bm86x:conn=hid/bu86x --samples 1
     emu_case "bm86x search sn" --oracle-bug "$SEARCH_BUG" -- -d brymen-bm86x:conn=hid/bu86x/sn=HIDCABLE1 --samples 1
     emu_case "bm86x default conn" --oracle-bug "$SEARCH_BUG" -- -d brymen-bm86x --samples 1
+
+    # The meter misbehaving, through the emulator's options (the two
+    # packets, without drop=4, plus the fault). A meter that never
+    # answers: the scan gives up after its 3 s.
+    P=packet=000001a0dbf8e47c01007cbebf0004008686868600000000,000001a0dbbee47c01007cbebf0004008686868600000000
+    bu86x_options $P drop=1
+    emu_case "bm86x never answers" --keep-header --no-output -- -d $B --scan
+    # Two answers lost in a row: the driver asks again 500 ms after
+    # each, and the third request of the acquisition is answered.
+    bu86x_options $P lose=2,3
+    emu_case "bm86x two lost in a row" -- -d $B --samples 2
+    # The cable STALLs the acquisition's first request: hid_write fails,
+    # sr_brymen_bm86x_packet_request ignores it, and the driver asks
+    # again after 500 ms.
+    bu86x_options $P stall=2
+    emu_case "bm86x request stalled" -- -d $B --samples 2
+    # The scan's request STALLed: no answer, no device, no error.
+    bu86x_options $P stall=1
+    emu_case "bm86x scan request stalled" --keep-header --no-output -- -d $B --scan
+
+    # A BM52x behind the cable (meter=bm52x: 12.34 V DC, 50.00 Hz),
+    # whose request, unlike the BM86x's, fails when its write does.
+    B52=brymen-bm52x:conn=hid/bu86x/raw=$EMU_HIDRAW
+    bu86x_options meter=bm52x
+    emu_case "bm52x scan" --keep-header -- -d $B52 --scan
+    emu_case "bm52x samples 2" -- -d $B52 --samples 2
+    # The scan's request STALLed: "Failed to request packet", no device.
+    bu86x_options meter=bm52x stall=1
+    emu_case "bm52x scan request stalled" --keep-header --no-output -- -d $B52 --scan
+    # The acquisition's second request STALLed: receive_data's timeout
+    # branch fails, its source goes, and the session ends after the
+    # first sample.
+    bu86x_options meter=bm52x stall=3
+    emu_case "bm52x request stalled" -- -d $B52 --samples 3
+    bu86x_options
+}
+
+# The model's options for the cases that follow (see
+# tools/emu/ftdi-la.sh); none restores EMU_OPTIONS.
+bu86x_options() {
+    set -- options "$@"
+    emu_cmd "$*" >/dev/null || emu_fail "bu86x: the emulator refused '$*'"
 }

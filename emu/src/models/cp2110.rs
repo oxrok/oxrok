@@ -48,6 +48,13 @@
 //! a host that opens and closes again at once (`--show` after its
 //! scan) sees no packet, and a purge empties the FIFO.
 //!
+//! Option `burst=N`: at most N packets after each Set UART Enable (each
+//! open), then silence until the next (default: no limit). It makes a
+//! scan that finds nothing deterministic: such a scan listens for 3 s
+//! of wall time, in which an unlimited stream sends a varying number of
+//! packets, while a burst is sent well inside them. `burst=0` is a
+//! meter that never sends.
+//!
 //! The meter plays eight readings (DC volts, negative DC volts with
 //! hold, AC volts, ohms, DC milliamps, capacitance, frequency, an
 //! overload) and then ten packets of noise (`?` bytes, no CR LF), which
@@ -117,7 +124,8 @@ use std::collections::VecDeque;
 pub const NAME: &str = "cp2110";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Silicon Labs CP2110 HID-to-UART bridge (10c4:ea80) with a UNI-T UT61E stream; \
-     period=N polls per packet (5 to 1000, default 25), serial=TEXT (default 0001A5F8)";
+     period=N polls per packet (5 to 1000, default 25), serial=TEXT (default 0001A5F8), \
+     burst=N (packets per open)";
 
 /// A cable from the `-o` options.
 ///
@@ -126,10 +134,12 @@ pub const ABOUT: &str = "Silicon Labs CP2110 HID-to-UART bridge (10c4:ea80) with
 /// On an unknown option or a value out of range.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut period = 25;
+    let mut burst = None;
     let mut serial = DEFAULT_SERIAL.to_owned();
     for (k, v) in options {
         match k.as_str() {
             "period" => period = crate::shells::hidcable::parse_number(k, v, 5..=1000)?,
+            "burst" => burst = crate::shells::hidcable::parse_burst(v)?,
             "serial" => {
                 if v.is_empty() || v.len() > 30 {
                     return Err(Error(format!("serial={v}: 1 to 30 characters")));
@@ -139,7 +149,9 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Cp2110::new(period, &serial)))
+    let mut cable = Cp2110::new(period, &serial);
+    cable.chip = Chip::new(period, burst);
+    Ok(Box::new(cable))
 }
 
 /// The USB vendor id.
@@ -323,20 +335,23 @@ pub struct Chip {
     rest: Vec<u8>,
     rest_in: u32,
     period: u32,
+    /// Packets per Set UART Enable; `None` for no limit.
+    burst: Option<u32>,
 }
 
 impl Chip {
-    fn new(period: u32) -> Chip {
+    fn new(period: u32, burst: Option<u32>) -> Chip {
         Chip {
             enabled: false,
             config: Config::DEFAULT,
             errors: 0,
             fifo: VecDeque::new(),
             next_packet: 0,
-            stream: Stream::new(period, false),
+            stream: Stream::new(period, false).with_burst(burst),
             rest: Vec::new(),
             rest_in: 0,
             period,
+            burst,
         }
     }
 
@@ -371,7 +386,7 @@ impl Chip {
         if on {
             self.stream.restart();
         } else {
-            self.stream = Stream::new(self.period, false);
+            self.stream = Stream::new(self.period, false).with_burst(self.burst);
         }
     }
 
@@ -625,7 +640,7 @@ impl Cp2110 {
                 ],
             },
             hid,
-            chip: Chip::new(period),
+            chip: Chip::new(period, None),
         }
     }
 
@@ -675,7 +690,7 @@ impl DeviceModel for Cp2110 {
     fn reset(&mut self) {
         // A bus reset restarts the chip with its power-on settings, and
         // the meter with its first packet.
-        self.chip = Chip::new(self.chip.period);
+        self.chip = Chip::new(self.chip.period, self.chip.burst);
         self.hid.reset();
     }
 }

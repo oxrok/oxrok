@@ -164,7 +164,8 @@ impl Driver for SerialDmmDriver {
         }
         let conn = port.name().to_owned();
         log::info!("Probing serial port {conn}.");
-        let found = detect(port.as_mut(), &self.0.protocol, DETECT_TIMEOUT)?;
+        let found =
+            detect(port.as_mut(), &self.0.protocol, self.0.request_unchecked, DETECT_TIMEOUT)?;
         if !found {
             log::info!("No {} packets on {conn}.", self.0.id);
             return Ok(Vec::new());
@@ -191,29 +192,45 @@ impl Model {
     }
 }
 
-/// Reads from `port` until a valid packet of `protocol` appears or
-/// `timeout` passes. Returns whether one did; leftover bytes are
-/// dropped.
-pub fn detect(port: &mut dyn Port, protocol: &Protocol, timeout: Duration) -> Result<bool> {
-    if let Some(req) = protocol.request {
-        port.write(req)?;
+/// Reads from `port` until a valid packet of `protocol` appears, as
+/// `serial_stream_detect` does: it gives up when `timeout` passes or
+/// when its [`BUF_SIZE`] bytes are full without one. Returns whether
+/// one appeared; leftover bytes are dropped. A meter that must be
+/// asked is asked first; when that write fails the scan finds nothing
+/// (api.c's "Failed to request packet"), unless the meter's request
+/// ignores the write's result (`unchecked`).
+pub fn detect(
+    port: &mut dyn Port,
+    protocol: &Protocol,
+    unchecked: bool,
+    timeout: Duration,
+) -> Result<bool> {
+    if let Some(req) = protocol.request
+        && let Err(e) = port.write(req)
+    {
+        if !unchecked {
+            log::error!("Failed to request packet: {e}.");
+            return Ok(false);
+        }
+        log::debug!("Packet request not sent: {e}.");
     }
     let start = Instant::now();
     let mut buf = Vec::with_capacity(BUF_SIZE);
     let mut byte = [0u8; 1];
-    while start.elapsed() < timeout {
+    while start.elapsed() < timeout && buf.len() < BUF_SIZE {
         let n = port.read(&mut byte, READ_TIMEOUT)?;
         if n == 0 {
             continue;
         }
         buf.push(byte[0]);
-        if protocol.find_packet(&buf).is_some() {
+        if let Some((_, len)) = protocol.find_packet(&buf) {
+            if buf.len() - protocol.packet_size > 2 * len {
+                log::warn!("Packet search dropped a lot of data.");
+            }
             return Ok(true);
         }
-        if buf.len() >= BUF_SIZE {
-            buf.drain(..BUF_SIZE / 2);
-        }
     }
+    log::info!("Didn't find a valid packet (read {} bytes).", buf.len());
     Ok(false)
 }
 
@@ -421,6 +438,50 @@ struct Acquisition {
 }
 
 impl Acquisition {
+    /// Sends the meter's request as `receive_data`'s timeout branch
+    /// does (the first one too): false when the write failed and the
+    /// acquisition ends, as there `req_packet`'s error removes the
+    /// source and so ends the session. A meter whose request ignores
+    /// the write's result goes on and asks again after its timeout.
+    fn request(&self, port: &mut dyn Port, req: &[u8]) -> bool {
+        match port.write(req) {
+            Ok(()) => true,
+            Err(e) if self.model.request_unchecked => {
+                log::debug!("Packet request not sent: {e}.");
+                true
+            }
+            Err(e) => {
+                log::error!("Failed to request packet: {e}.");
+                false
+            }
+        }
+    }
+
+    /// Sends a packet's readings on the enabled channels: whether one
+    /// went (a sample), or `None` when the sink is gone.
+    fn send(&self, packet: &[u8], sink: &PacketSink) -> Option<bool> {
+        log::debug!("DMM packet: {}", hex(packet));
+        let mut sent = false;
+        for r in (self.model.protocol.parse)(packet) {
+            if !self.enabled.get(r.channel).copied().unwrap_or(false) {
+                continue;
+            }
+            let data = AnalogData {
+                channels: vec![r.channel],
+                samples: vec![r.value],
+                mq: r.mq,
+                flags: r.flags,
+                unit: r.unit,
+                digits: r.digits,
+            };
+            if !sink.send(Packet::Analog(data)) {
+                return None;
+            }
+            sent = true;
+        }
+        Some(sent)
+    }
+
     fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let p = &self.model.protocol;
         let request_timeout = if self.model.request_timeout_ms > 0 {
@@ -436,7 +497,9 @@ impl Acquisition {
         let mut chunk = [0u8; DMM_BUFSIZE];
         let mut last_request = None;
         if let Some(req) = p.request {
-            port.write(req)?;
+            if !self.request(port, req) {
+                return Ok(());
+            }
             last_request = Some(Instant::now());
         }
         loop {
@@ -452,7 +515,9 @@ impl Acquisition {
                 if let (Some(req), Some(at)) = (p.request, last_request)
                     && at.elapsed() >= request_timeout
                 {
-                    port.write(req)?;
+                    if !self.request(port, req) {
+                        return Ok(());
+                    }
                     last_request = Some(Instant::now());
                 }
                 continue;
@@ -475,28 +540,10 @@ impl Acquisition {
                     }
                     Validity::Valid(n) => n,
                 };
-                let packet = &buf[pos..pos + len];
-                log::debug!("DMM packet: {}", hex(packet));
-                let mut sent = false;
-                for r in (p.parse)(packet) {
-                    if !self.enabled.get(r.channel).copied().unwrap_or(false) {
-                        continue;
-                    }
-                    let data = AnalogData {
-                        channels: vec![r.channel],
-                        samples: vec![r.value],
-                        mq: r.mq,
-                        flags: r.flags,
-                        unit: r.unit,
-                        digits: r.digits,
-                    };
-                    if !sink.send(Packet::Analog(data)) {
-                        return Ok(());
-                    }
-                    sent = true;
-                }
-                if sent {
-                    samples += 1;
+                match self.send(&buf[pos..pos + len], sink) {
+                    None => return Ok(()),
+                    Some(true) => samples += 1,
+                    Some(false) => {}
                 }
                 pos += len;
                 // As req_packet: without a delay the next request goes
@@ -505,7 +552,10 @@ impl Acquisition {
                 // the run.
                 if let Some(req) = p.request {
                     if request_delay.is_zero() {
-                        port.write(req)?;
+                        // handle_new_data ignores req_packet's result.
+                        if let Err(e) = port.write(req) {
+                            log::error!("Failed to request packet: {e}.");
+                        }
                         last_request = Some(Instant::now());
                     } else {
                         deferred = true;
@@ -521,7 +571,9 @@ impl Acquisition {
             }
             if let (Some(req), true) = (p.request, deferred) {
                 std::thread::sleep(request_delay);
-                port.write(req)?;
+                if !self.request(port, req) {
+                    return Ok(());
+                }
                 last_request = Some(Instant::now());
             }
             if buf.len() == DMM_BUFSIZE {
@@ -579,6 +631,122 @@ mod tests {
             s.1 += 1;
             Ok(())
         }
+    }
+
+    /// A cable that plays `input` and whose writes fail while
+    /// `failing_writes` lasts; it counts the writes.
+    struct Scripted {
+        input: std::collections::VecDeque<u8>,
+        failing_writes: usize,
+        writes: Arc<std::sync::Mutex<usize>>,
+    }
+
+    impl Scripted {
+        fn new(input: &[u8], failing_writes: usize) -> (Self, Arc<std::sync::Mutex<usize>>) {
+            let writes = Arc::new(std::sync::Mutex::new(0));
+            let port = Scripted {
+                input: input.iter().copied().collect(),
+                failing_writes,
+                writes: Arc::clone(&writes),
+            };
+            (port, writes)
+        }
+    }
+
+    impl Port for Scripted {
+        fn name(&self) -> &'static str {
+            "hid/bu86x/raw=/dev/hidraw0"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+            let n = buf.len().min(self.input.len());
+            for b in &mut buf[..n] {
+                *b = self.input.pop_front().expect("counted");
+            }
+            Ok(n)
+        }
+        fn write(&mut self, _: &[u8]) -> Result<()> {
+            *self.writes.lock().unwrap() += 1;
+            if self.failing_writes > 0 {
+                self.failing_writes -= 1;
+                return Err(Error::device("Broken pipe"));
+            }
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The `diffcli.sh --hw` packets of the Victor cable and the `BM86x`.
+    const FS9922_PACKET: &[u8] = b"+1234 10\x00\x00\x80\x00\r\n";
+    const BM86X_PACKET: [u8; 24] = [
+        0x00, 0x00, 0x01, 0xa0, 0xdb, 0xf8, 0xe4, 0x7c, 0x01, 0x00, 0x7c, 0xbe, 0xbf, 0x00, 0x04,
+        0x00, 0x86, 0x86, 0x86, 0x86, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn the_scan_gives_up_when_its_buffer_is_full() {
+        // As serial_stream_detect: 128 bytes and no packet in them is
+        // no device, even though one follows.
+        let p = &models::find("victor-dmm").unwrap().protocol;
+        let mut input = vec![b'?'; 115];
+        input.extend_from_slice(FS9922_PACKET);
+        let (mut port, _) = Scripted::new(&input, 0);
+        assert!(!detect(&mut port, p, false, Duration::from_secs(1)).unwrap());
+        // A packet that ends within the 128 bytes is found.
+        let mut input = vec![b'?'; 114];
+        input.extend_from_slice(FS9922_PACKET);
+        let (mut port, _) = Scripted::new(&input, 0);
+        assert!(detect(&mut port, p, false, Duration::from_secs(1)).unwrap());
+    }
+
+    #[test]
+    fn a_failed_request_ends_the_scan_unless_the_meter_ignores_it() {
+        let bm86x = models::find("brymen-bm86x").unwrap();
+        assert!(bm86x.request_unchecked);
+        let (mut port, writes) = Scripted::new(&BM86X_PACKET, 1);
+        assert!(detect(&mut port, &bm86x.protocol, true, Duration::from_secs(1)).unwrap());
+        assert_eq!(*writes.lock().unwrap(), 1);
+        // A BM52x's request checks the write: no device, nothing read.
+        let bm52x = models::find("brymen-bm52x").unwrap();
+        assert!(!bm52x.request_unchecked);
+        let (mut port, _) = Scripted::new(&BM86X_PACKET, 1);
+        assert!(!detect(&mut port, &bm52x.protocol, false, Duration::from_secs(1)).unwrap());
+        assert_eq!(port.input.len(), BM86X_PACKET.len());
+    }
+
+    fn acquire(model: &'static Model, port: &mut Scripted) -> Vec<Packet> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let acq = Acquisition {
+            model,
+            enabled: vec![true; model.protocol.channels],
+            limit_samples: 1,
+            limit_msec: 2000,
+        };
+        acq.run(port, &PacketSink::new(tx, 0), &AtomicBool::new(false)).unwrap();
+        rx.try_iter().map(|(_, p)| p).collect()
+    }
+
+    #[test]
+    fn a_failed_request_ends_the_acquisition_unless_the_meter_ignores_it() {
+        // The BM86x asks again after its 500 ms and gets its sample.
+        let bm86x = models::find("brymen-bm86x").unwrap();
+        let (mut port, writes) = Scripted::new(&BM86X_PACKET, 1);
+        let got = acquire(bm86x, &mut port);
+        assert!(got.iter().any(|p| matches!(p, Packet::Analog(_))), "{got:?}");
+        assert_eq!(*writes.lock().unwrap(), 1);
+        // The BM52x's failed first request ends it: the header alone.
+        let bm52x = models::find("brymen-bm52x").unwrap();
+        let (mut port, writes) = Scripted::new(&[], 1);
+        let got = acquire(bm52x, &mut port);
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(*writes.lock().unwrap(), 1);
     }
 
     #[test]

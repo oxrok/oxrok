@@ -48,7 +48,11 @@
 //! 64 bytes each; default the `diffcli.sh --hw` UT61E packet);
 //! `period=N`, polls per packet (2 to 1000, default 50, about a second);
 //! `baud=N` and `bits=N`, the meter's line (default 19200 and 7), which
-//! the host's feature report must set.
+//! the host's feature report must set; `burst=N`, at most N packets
+//! after each line setting (each open), then silence until the next
+//! (default: no limit). `burst=0` is a meter that never sends: the scan
+//! gives up after its 3 s, and, the count being per open, a scan that
+//! finds nothing in a burst sends the same reports whatever the time.
 //!
 //! The pedantic checks: the feature report is the five bytes above
 //! with the meter's rate and data bits; an output report (the UART
@@ -68,7 +72,7 @@ pub const NAME: &str = "ch9325";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "WCH CH9325 cable of a UNI-T UT61E (HID, 1a86:e008), the Pico emulator's \
                          role; packet=HEX[,HEX...], period=N (polls per packet, default 50), \
-                         baud=N (19200), bits=N (7)";
+                         baud=N (19200), bits=N (7), burst=N (packets per open)";
 
 /// The USB vendor id.
 pub const VENDOR_ID: u16 = 0x1a86;
@@ -93,16 +97,20 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut period = 50;
     let mut baud = 19200;
     let mut bits = 7;
+    let mut burst = None;
     for (k, v) in options {
         match k.as_str() {
             "packet" => packets = cable::parse_packets(v, 1, 64)?,
             "period" => period = cable::parse_number(k, v, 2..=1000)?,
             "baud" => baud = cable::parse_number(k, v, 1..=0xffff)?,
             "bits" => bits = cable::parse_number(k, v, 5..=8)?,
+            "burst" => burst = cable::parse_burst(v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Ch9325::new(packets, period, baud as u16, bits as u8)))
+    let mut cable = Ch9325::new(packets, period, baud as u16, bits as u8);
+    cable.bridge.stream = Stream::new(period, false).with_burst(burst);
+    Ok(Box::new(cable))
 }
 
 /// The chip and the meter behind it.
