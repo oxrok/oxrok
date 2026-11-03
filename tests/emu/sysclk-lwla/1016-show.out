@@ -1,0 +1,30 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+sysclk-lwla - Sysclk LWLA1016 with 16 channels: CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15 CH16
+Supported configuration options:
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    samplerate - supported samplerates:
+      100 MHz (current)
+      50 MHz
+      20 MHz
+      10 MHz
+      5 MHz
+      2 MHz
+      1 MHz
+      500 kHz
+      200 kHz
+      100 kHz
+      50 kHz
+      20 kHz
+      10 kHz
+      5 kHz
+      2 kHz
+      1 kHz
+      500 Hz
+      200 Hz
+      100 Hz
+    Supported triggers: 0 1 r f 
+    rle: on (current), off

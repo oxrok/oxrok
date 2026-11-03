@@ -1,0 +1,6 @@
+ctl_out 00 09 0001 0000 - -> ok
+bulk_out 04 @10004:22c46376e51158caccf545d8bc1385651e78d07ad8182d281beb30a1ad04d2c3 -> err stall
+ctl_out 00 09 0001 0000 - -> ok
+bulk_out 04 @10004:22c46376e51158caccf545d8bc1385651e78d07ad8182d281beb30a1ad04d2c3 -> err stall
+ctl_out 00 09 0001 0000 - -> ok
+bulk_out 04 @10004:22c46376e51158caccf545d8bc1385651e78d07ad8182d281beb30a1ad04d2c3 -> err stall

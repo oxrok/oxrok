@@ -1,0 +1,57 @@
+gcov sysclk-lwla (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        87.0%  287 of 330
+  lwla.c       85.2%  75 of 88
+  lwla1016.c   96.7%  175 of 181
+  lwla1034.c   97.4%  226 of 232
+  protocol.c   86.4%  260 of 301
+  total        90.4%  1023 of 1132
+never reached, by function (line ranges hold no reached line):
+  api.c
+    dev_inst_new_matching: 109-111
+    scan: 165-169
+    dev_open: 248-251
+    dev_close: 296-299
+    has_devopt: 327
+    config_get: 339, 344, 366, 372, 378, 381-383
+    config_set: 399, 404, 448-450
+    config_channel_set: 463, 468-469, 477
+    prepare_trigger_masks: 505-506, 518, 524-525, 531-532
+    config_commit: 558-559, 564
+    config_list: 592, 594, 610-612
+    dev_acquisition_stop: 634-635
+  lwla.c
+    load_bitstream: 54-56, 67-69
+    lwla_send_bitstream: 87, 106-108
+    lwla_send_command: 124, 136-138
+    lwla_receive_reply: 150
+  lwla1016.c
+    prepare_request: 383-385
+    handle_response: 424-426
+  lwla1034.c
+    prepare_request: 486-488
+    handle_response: 541-543
+  protocol.c
+    submit_request: 107-108
+    handle_length_response: 167-168
+    transfer_event: 279, 287-288, 293
+    transfer_out_completed: 354, 360, 366, 371-374
+    transfer_in_completed: 396-399, 419, 425, 432-435
+    init_acquisition_state: 450-451, 454-455, 460, 464-465, 469-471
+    lwla_start_acquisition: 538-539, 546, 558-559, 567-568
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   74.2%  170 of 229
+  total       74.2%  170 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 208, 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: 453-455, 461-463
+    usb_source_add: 504
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)

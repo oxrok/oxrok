@@ -1,0 +1,2 @@
+sr: sysclk-lwla: Failed to transfer bitstream: LIBUSB_ERROR_PIPE.
+sr: sysclk-lwla: Unable to shut down device.
