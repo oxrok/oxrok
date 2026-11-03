@@ -1,0 +1,48 @@
+gcov zeroplus-logic-cube (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  analyzer.c   77.9%  180 of 231
+  api.c        92.5%  260 of 281
+  gl_usb.c     92.3%  48 of 52
+  protocol.c   96.9%  62 of 64
+  total        87.6%  550 of 628
+never reached, by function (line ranges hold no reached line):
+  analyzer.c
+    analyzer_add_triggers: 528, 546-548
+    analyzer_add_filter: never called (556-584)
+    analyzer_read_id: never called (634-636)
+    analyzer_wait_button: never called (667-670)
+    analyzer_decompress: never called (677-708)
+  api.c
+    scan: 224, 241
+    dev_open: 297, 308-310
+    dev_close: 354
+    config_get: 375, 396-397
+    config_set: 436-437
+    config_list: 458-460, 471
+    dev_acquisition_start: 511-512
+    dev_acquisition_stop: never called (659-669)
+  gl_usb.c
+    gl_reg_read_buf: 148-151
+  protocol.c
+    get_memory_size: 31
+    clz: 38
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   10.0%  23 of 229
+  total       10.0%  23 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: never called (316-379)
+    sr_usb_find: never called (393-441)
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)

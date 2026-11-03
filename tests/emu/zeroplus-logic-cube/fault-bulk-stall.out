@@ -1,0 +1,2 @@
+gl_read_bulk: libusb_bulk_transfer: LIBUSB_ERROR_PIPE.
+Tried to read 2048 bytes, actually read 0.
