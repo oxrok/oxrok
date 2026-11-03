@@ -62,3 +62,56 @@ jobs:
       - run: cargo clippy -p oxrok --features python --all-targets
       - run: cargo nextest run -p oxrok --features rustpython --no-fail-fast
       - run: cargo clippy -p oxrok --features rustpython --all-targets
+
+  # The emulator tier (docs/USB.md, "Emulation over USB/IP"): oxrok
+  # against the goldens sigrok-cli wrote, through vhci-hcd. When the
+  # hosted kernel has no vhci-hcd, the probe says "skipped: no vhci-hcd"
+  # and the emulator job shows as skipped, neither failed nor passed.
+  emulator-probe:
+    name: emulator (vhci-hcd probe)
+    runs-on: ubuntu-latest
+    outputs:
+      vhci: ${{ steps.vhci.outputs.vhci }}
+    steps:
+      - id: vhci
+        name: Load vhci-hcd
+        run: |
+          load() {
+            [ -d /sys/devices/platform/vhci_hcd.0 ] && return 0
+            sudo modprobe vhci-hcd 2>/dev/null && return 0
+            sudo apt-get update -q && sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" \
+              && sudo modprobe vhci-hcd
+          }
+          if load && [ -d /sys/devices/platform/vhci_hcd.0 ]; then
+            echo "vhci-hcd loaded on kernel $(uname -r)"
+            echo "vhci=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::warning title=emulator tier skipped::skipped: no vhci-hcd on kernel $(uname -r)"
+            echo "skipped: no vhci-hcd on kernel $(uname -r); the emulator tier did not run" >>"$GITHUB_STEP_SUMMARY"
+            echo "vhci=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  emulator:
+    name: emulator (oxrok against the goldens)
+    needs: emulator-probe
+    if: needs.emulator-probe.outputs.vhci == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The probe loaded it on the same image: here a failure is an error.
+      - name: Load vhci-hcd
+        run: |
+          if [ ! -d /sys/devices/platform/vhci_hcd.0 ] && ! sudo modprobe vhci-hcd; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe vhci-hcd
+          fi
+          test -d /sys/devices/platform/vhci_hcd.0
+      - run: cargo build -p oxrok -p oxrok-emu
+      # No sigrok-cli: full cases run oxrok alone against the committed
+      # .out and .tx goldens, oracle-only cases are skipped and counted.
+      # The harness runs oxrok-emu under sudo -n.
+      - run: sh tools/diffcli.sh --no-oracle
