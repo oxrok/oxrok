@@ -40,7 +40,11 @@ a replay answers a stream from those steps.
 result. `record::Replay` answers from such a log and fails on the first
 call that differs from the recording: a different request, different
 data, or a call past the end. Every driver ships at least one recorded
-session so its logic runs in CI without hardware.
+session so its logic runs in CI without hardware. A `claim` or
+`release` floats among the control transfers around it, up to the next
+bulk or interrupt step, so a recording stays valid when a driver moves
+its claim past a control transfer; `err disconnected` records a device
+that went away (`Error::Disconnected`).
 
 A fixture is a text file, one call per line, hand editable:
 
@@ -150,9 +154,17 @@ is how a driver is verified against sigrok-cli without the hardware
   packet of an IN transfer starts with the two status bytes, and an
   idle chip answers them alone. A model implements `FtdiPorts`: notice
   of changes (`Event`), host writes, the bytes for the host
-  (`Fill::Data`, `Idle`, or `Wait` to NAK) and `READ_PINS`. The shell
-  has no notion of time yet: `Idle` is answered at once, with no
-  latency timer pacing, so a model whose driver polls counts reads.
+  (`Fill::Data`, `Idle`, or `Wait` to NAK) and `READ_PINS`. Time in
+  the shell is counted in the host's transfers, never the clock:
+  `Countdown` ("busy for N polls after an event") is what a model uses
+  for anything its driver polls. Every FTDI model takes the shell's
+  fault options, all off by default: `stall=REQUEST[/WVALUE]` STALLs a
+  vendor request (named, `reset`, `baud`, `bitmode`, `latency`,
+  `read-eeprom`, ..., or a number; repeatable; a STALLed request has
+  no effect), `in-stall=N` halts each port's bulk IN after N completed
+  transfers until a bus reset, and `idle=N` sends only the two status
+  bytes for the first N bulk IN transfers after each bit mode change,
+  which libftdi turns into reads of 0 bytes.
   What the first FTDI model taught: the kernel's ftdi_sio binds every
   port at attach, reads and sets the latency timer of each, and reads
   the EEPROM of R, FT232H and FT-X chips for its CBUS GPIOs; libftdi
@@ -190,7 +202,38 @@ is how a driver is verified against sigrok-cli without the hardware
   (`DeviceModel::log_digest_above`; fx2lafw does, for its firmware
   chunks and transfers of up to 240 KiB); by default every byte is
   logged. What fx2lafw taught: a driver that stops after a transfer
-  must not have resubmitted it first, or one more completes.
+  must not have resubmitted it first, or one more completes; libsigrok
+  counts any failed bulk IN transfer, not only an empty one, toward
+  `MAX_EMPTY_TRANSFERS`; a model's faults are paced like its data (one
+  per submission), so a run's transactions stay the driver's own; and
+  a claim held by another program can be staged without a transfer by
+  a usbfs helper that claims through `/sys/bus/usb/devices/$EMU_BUSID`
+  between cases whose descriptors do not change.
+- Mid-run events. The stdin command `arm EVENT WHEN` arms `unplug` or
+  `interrupt` for the run that follows (a `reset` disarms it): `WHEN`
+  is `in=EP:N` (the Nth IN transfer on endpoint EP completed; a STALL
+  counts, a NAK does not; endpoint 0 counts control reads),
+  `out=EP:N`, or `model`, the point the model marks through
+  `DeviceModel::take_event_point`. When it fires the log gets an
+  `unplug` or `interrupt` line right after the transfer that fired it,
+  and `EVENT unplug|interrupt` is printed. An unplug drops whatever the
+  host submits from then on, detaches the port and keeps the device
+  off the bus until `replug` or the next `reset`, which attach it again
+  on the same port when free, its enumeration in a `replug` section,
+  and print `REPLUGGED port=...` with the new nodes. An interrupt is
+  the harness's to deliver; how many transfers the tool makes before
+  the signal lands depends on timing, so an interrupt case waits on
+  NAKed polls, not on data.
+- Faults that make a model misbehave as firmware can (STALL a request,
+  a short or empty packet, a silent meter, an unanswered request) are
+  model options, off by default, so the goldens of the plain cases do
+  not change. A model's one-shot STALL (`stall-in=N` and the like) is
+  an emulation artifact: a real STALL halts the endpoint until
+  CLEAR_FEATURE. What the emulator cannot show: a STALLed interrupt IN
+  never reaches a hidraw reader, since usbhid clears the halt and
+  resubmits, and a read error on hidraw is only an unplug, which cannot
+  be timed against libsigrok's reads, so `serial_hid*.c` read errors
+  stay unreached.
 - CDC-ACM and USBTMC come next.
 - Models live in `emu/src/models`, one file `NAME.rs` or one directory
   `NAME/mod.rs` each, and nothing else names them: `emu/build.rs` finds
@@ -329,7 +372,20 @@ full case or oracle case. What else is checked depends on oxrok:
   a libsigrok bug: sigrok-cli must fail (its stderr is the golden
   `SLUG.oracle`), oxrok alone is held to the `.out` and `.tx` goldens,
   and a sigrok-cli that starts succeeding fails the case ("no longer
-  fails (WHY fixed?)"), so an upstream fix shows.
+  fails (WHY fixed?)"), so an upstream fix shows. In an `.oracle`
+  golden a repeated stderr line counts once, since a driver looping on
+  an error repeats it as often as time allows.
+- `--unplug WHEN` and `--interrupt WHEN` arm the event for each tool's
+  run, which must fire it. After an unplug the harness replugs and
+  takes over the new nodes and address, so a case that names the
+  device by address or node uses the attach before the unplug. An
+  interrupt sends SIGINT to the tool, which runs under `env
+  --default-signal=INT` (a background job starts with SIGINT ignored).
+  `--timeout S` stops each tool after S seconds; a sigrok-cli under
+  `--oracle-bug` stopped so fails as the case wants. sigrok-cli has no
+  SIGINT handler (it dies, where oxrok ends the capture), so interrupt
+  cases are `--oracle-bug` cases, and a run killed by a signal writes
+  no gcov counts.
 - Either way the output and the transactions are compared with the
   goldens `tests/emu/MODEL/SLUG.out` and `SLUG.tx` (`SLUG` is the case
   name in lower case, runs of other characters made `-`), the
@@ -346,6 +402,12 @@ and writes `tests/emu/MODEL/gcov.txt` after it
 (`tools/emu-gcov.sh DRIVER report`): per source file the share of
 executable lines the cases reached, the total, and the lines never
 reached, as ranges per function, a function never called said so.
+`EMU_GCOV_SHARED` names the libsigrok sources outside `src/hardware`
+the driver goes through (`src/usb.c src/ezusb.c`, `src/serial.c
+src/serial_hid.c src/serial_hid_cp2110.c`); `tools/emu-gcov.sh --shared
+zero|report SRC...` zeroes them with the driver and reports them after
+it in the same form. Every driver goes through them, so their figure
+is what that model's cases reached, not what the driver can.
 With `-k` the report is printed, not kept, since a subset of the cases
 says nothing about the whole. A failing `emu-gcov.sh` (a directory in
 `EMU_GCOV` that does not exist: driver ids and directory names differ,

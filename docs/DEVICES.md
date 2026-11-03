@@ -179,14 +179,33 @@ BM86x request and a misaligned UT61E packet. 8 are oxrok only
 driver's default `conn`), which the unpatched libsigrok 0bc24877 cannot
 open, since it converts a found cable's path twice
 (`raw=hid/CHIP/raw=...`) and hands that to `hid_open_path`; only
-`hid[/CHIP]/raw=PATH` works there. gcov of serial-dmm: 68.9% (bu86x),
-61.4% (ch9325), 59.0% (victor). Not emulated: `limit_time`, the BM52x
-hooks, transport errors. The models taught that sigrok holds the node
+`hid[/CHIP]/raw=PATH` works there. Fault options, off by default:
+`burst=N` caps how much a meter sends (ch9325: packets per open;
+victor: in all), so a scan that finds nothing sends the same reports
+whatever the time, and `burst=0` is a silent meter; bu86x takes
+`lose=N[,N]` (requests unanswered), `stall=N[,N]` (the request's
+SET_REPORT STALLed, so `hid_write` fails) and `meter=bm52x` (a BM52x
+behind the cable). Their cases cover a scan that gives up, a scan that
+warns it dropped a lot of data, a scan whose 128 byte buffer fills
+with noise, two answers lost in a row, and a stalled request, which
+the BM86x ignores and the BM52x does not. gcov of serial-dmm: 76.5%
+(bu86x), 62.2% (ch9325), 59.8% (victor); `gcov.txt` also reports the
+shared `serial.c`, `serial_hid.c` and the cable's file. Not emulated:
+`limit_time`, transport errors (a STALLed interrupt IN never reaches
+hidraw, usbhid clears it), and the buffer-full drop of
+`handle_new_data`, which no meter can reach: its 256 bytes always hold
+less than a packet once searched. The models taught that sigrok holds the node
 about 100 ms before it sets the line parameters (`try_open_path` opens
 it once just to check), and that oxrok kept the probed HID port open
 into the capture, skipping the second parameter report and reading
 stale packets; it now reopens the cable, and flushes a kept UART, as
-sigrok's `serial_open` does.
+sigrok's `serial_open` does. The fault cases found two more: oxrok's
+scan dropped half its buffer and searched on for the full three
+seconds, where `serial_stream_detect` gives up once 128 bytes hold no
+packet, so oxrok found meters libsigrok does not; and a failed request
+write failed oxrok's scan, where libsigrok's BM86x ignores the write
+and the other meters end the scan with no device, or end the
+acquisition only when the request goes from the timeout branch.
 
 The CP2110 (`hid/cp2110`, 10c4:ea80) has no Pico emulation; the
 `oxrok-emu` model `cp2110` (2026-11-03) is its first independent check.
@@ -202,12 +221,14 @@ flow 0 or 1, data bits code 0 to 3, stop bits 0 or 1, and no data
 before the UART is enabled. `tools/emu/cp2110.sh` holds 17 cases for
 `uni-t-ut61e-ser`: 14 full (scan, show, 1, 2, 4 and 9 samples, csv,
 analog, `raw=` without a chip, 7o1, 7e1, 7o2, baud rates out of range)
-and 3 `--oracle-bug` search forms. gcov: serial-dmm 62.5% (157 of
-251), `serial_hid_cp2110.c` 47.4%. Not emulated: transport errors,
+and 3 `--oracle-bug` search forms, then, with `burst=N` packets per
+UART enable, 7n1, 8n1, 9600 baud and a silent meter, deterministic
+whatever the scan's three seconds hold. gcov: serial-dmm 62.9% (158 of
+251); the shared sources (`serial.c`, `serial_hid.c`,
+`serial_hid_cp2110.c`) 56.7%. Not emulated: transport errors,
 `write_bytes` (the UT61E takes no data), `drain` (serial-dmm never
 calls it), the codes `serialcomm` cannot express, and the flow
-branches; 8n1 and a wrong baud rate have unit tests only, since the
-scan's three seconds of wall time make their packet count vary.
+branches.
 
 What the model showed in libsigrok 0bc24877: `cp2110_set_params` reads
 `serialcomm`'s flow (1 RTS/CTS, 2 XON/XOFF) with libserialport's
@@ -286,18 +307,25 @@ ratio) give identical output and identical transactions under
 sigrok-cli and oxrok, with zero pedantic violations under either; the
 model also flags IN reads with no answer to come. The goldens are in
 `tests/emu/pickit2`. The gcov report of the C driver over those cases
-(`tests/emu/pickit2/gcov.txt`) is 83.2% of the executable lines (317 of
-381; `api.c` 79.5%, `protocol.c` 86.9%). Not reached, and not emulated
-on purpose: the kernel driver detach and reattach in `dev_open` and
-`dev_close` (no driver is bound to a PICkit2 on Linux), USB transfer
-errors and short transfers, stopping a capture by software while it
-waits for the trigger, the `SR_ERR_ARG` and `SR_ERR_NA` defaults
+(`tests/emu/pickit2/gcov.txt`) is 84.0% of the executable lines (320 of
+381). Fault options, off by default: `button=0` (no cancel), and
+`stall-in=N`, `short-in=N`, `stall-out=N` for the Nth transfer; the
+fault cases add a stalled and a short status and read, a stalled
+SETUP, an interrupt while waiting for a trigger and an unplug during
+the read-out (the last three oxrok only: sigrok-cli has no SIGINT
+handler, and libsigrok reads an unplugged PICkit2 for ever). Not
+reached, and not emulated on purpose: the kernel driver detach and
+reattach in `dev_open` and `dev_close` (no driver is bound to a
+PICkit2 on Linux), a short send (a 64 byte interrupt packet is taken
+whole or STALLed), stopping a capture by software while it waits for
+the trigger (sigrok-cli never asks), the `SR_ERR_ARG` and `SR_ERR_NA` defaults
 sigrok-cli never asks for, multi-stage triggers, and the error returns
 of the read-out. The model showed three oxrok bugs, all fixed: the
 driver found no PICkit2 on Linux; nusb's claim reattached kernel
 drivers on release, so usbhid read the serial number again; and
 `--get` did not print values the way sigrok-cli's `g_variant_print`
-does. Like the C driver, oxrok ignores a failed send and reads a short
+does. Like the C driver, oxrok ignores a failed send, reads again after
+a failed read (ending the capture only on a disconnect), and reads a short
 packet again; a hard read error still ends oxrok's capture, where
 libsigrok would poll a vanished device forever.
 
@@ -313,13 +341,17 @@ Linux `conn` is the hidraw node, as under libsigrok, and
 `conn=/dev/hidrawN`, `conn=VID.PID` and `conn=sn=SERIAL` all select a
 board. The cases are `tools/emu/usbrelay.sh`, their goldens
 `tests/emu/usbrelay`. The gcov report of the C driver over those cases
-(`tests/emu/usbrelay/gcov.txt`, 2026-11-02) is 78.1% of the executable
-lines (211 of 270; `api.c` 77.5%, `protocol.c` 80.8%). Not reached, and
-not emulated on purpose: the error returns when hidapi cannot open,
-read or write the device or reports a short or failed transfer, HID
-devices whose strings are missing or name another vendor or product
-(the emulator is the only one on the bus), a non-printable serial
-number, a `conn=sn=` that matches no board, the
+(`tests/emu/usbrelay/gcov.txt`, 2026-11-03) is 82.2% of the executable
+lines (222 of 270). Options `serial=TEXT|0xHEX`, `stall-get=N`,
+`short-get=N` and `stall-set=N` give the cases of a non-printable
+serial number, a `conn=sn=` that matches no board, a stalled or short
+report at the scan, a stalled state read and a stalled switch. They
+found two oxrok differences, now fixed: open failed when the state read
+failed, which libsigrok ignores, and a failed switch reported a hidraw
+message instead of "input/output error". Not reached, and not
+emulated on purpose: hidapi failing to open the device, HID devices
+whose strings are missing or name another vendor or product (the
+emulator is the only one on the bus), the
 `SR_ERR_NA` defaults of `config_get`, `config_set` and `config_list`
 for keys sigrok-cli never asks, `dev_open` on a device already open,
 and the hex dumps at log level 5. Of the emulator-verified criteria of
@@ -426,9 +458,14 @@ command, the FT232R (samplerate / 30 on the 3 MHz clock, 64 byte
 packets), FT232H, FT4232H, the TIAO adapter (found only by `conn=`), a
 BM (taken for an FT232R), an FT230X (rejected), and boards whose
 EEPROM lacks the manufacturer, product or serial string ("Generic",
-the chip's name, no S/N). No violation under sigrok-cli. gcov: 79.0 %
-(203 of 257). Not emulated: failures of libftdi calls (string reads,
-`find_all`, open, purge, bit mode, reads), the model name "Unknown"
+the chip's name, no S/N), then 8 fault cases with the FTDI shell's
+options: idle reads, a halted bulk IN mid capture and at the first
+read, and each request of `dev_open` STALLed (libftdi's reset in its
+open, the purge, the bit mode reset, bit-bang). No violation under
+sigrok-cli. gcov: 86.4 % (222 of 257). Not emulated: the scan's
+`libusb_open` failure (a STALLed string gives libftdi's "missing
+string" codes, which the no-strings cases reach), `find_all` and
+init failures, the model name "Unknown"
 (unreachable: only ids in the driver's table get there), `config_get`
 conn (the driver never sets `sdi->conn`, so `--get conn` always fails
 with "invalid argument") and `LIMIT_MSEC` (not advertised; sigrok-cli
@@ -458,8 +495,8 @@ device's USB id when the device does not report the firmware in its
 strings (the scan line then has no `conn=`, which stays unknown until
 the device is back), and open waits 300 ms and retries until 3 s for
 it to renumerate, finding it again by its port path. Open sets
-configuration 1 if it is not active and claims, which macOS needs
-right after renumeration, then checks the firmware version and REVID.
+configuration 1 if it is not active (macOS needs it right after
+renumeration), reads the firmware version and REVID, and then claims.
 
 Analog channels (USBee AX) are not supported.
 
@@ -485,7 +522,15 @@ counter from endpoint 2. Unlike the real device, which fills its
 queued transfers as fast as it samples, the model completes one
 transfer per transfer the host submits after the previous one
 completed, so a run's transactions do not depend on timing; that is
-an emulation artifact. The 40 cases of `tools/emu/fx2lafw.sh` (scan,
+an emulation artifact. Faults, off by default: `version=MAJOR.MINOR`,
+`stall=version,start,revid` (STALL those vendor requests), `empty=N`
+and `stall_in=N` (the first bulk IN transfers of each acquisition
+complete empty, then STALL, one per submission). The model's facts are
+checked against the firmware source (sigrok-firmware-fx2lafw):
+bcdDevice 0x0001 (`.dw` is big endian), strings `sigrok`, `fx2lafw`
+and the board name ("sigrok FX2 8ch" for 1d50:608c), the vendor
+commands' answer lengths, and a STALL for any other request. The 49
+cases of `tools/emu/fx2lafw.sh` (scan,
 show, conn by ids, probe names, 20 kHz to 48 MHz on 8 channels, 50 kHz
 to 12 MHz on 16, up to six transfers, triggers with capture ratio, in
 later transfers and with frames, frames across transfers, a time
@@ -495,16 +540,27 @@ under either tool. One is oxrok only (`--oracle-bug`): a frame without
 trigger that ends exactly at the end of a transfer, where libsigrok's
 `receive_transfer()` hands its NULL soft trigger to
 `soft_trigger_logic_check()` and crashes (`protocol.c:484`); oxrok
-begins the next frame with the next transfer. gcov: 78.9% of the
-driver (`api.c` 81.2%, `protocol.c` 77.3%). Not emulated: the USBee AX
-analog channel, open, string, claim and upload failures, empty or
-failed transfers, and allocation failures.
+begins the next frame with the next transfer. Nine fault cases on the
+flashed Saleae Logic: each vendor request STALLed, 64 and 65 empty
+transfers, stalled bulk IN transfers, and the interface claimed by
+another program (a usbfs helper in the scenario holds it). A second is
+oxrok only: a firmware of another major version, which
+`fx2lafw_dev_open()` reports but opens anyway (its `ret` still holds
+the REVID read's `SR_OK`). gcov: 83.6% of the driver (`api.c` 84.1%,
+`protocol.c` 83.3%); `usb.c` and `ezusb.c` 63.3%. Not emulated: the
+USBee AX analog channel, string read failures, unplugging mid-capture,
+upload failures, and allocation failures.
 
 What the model changed in oxrok's port, which now follows `api.c` and
 `protocol.c`: the upload moved into the scan; open finds the device by
 port path and fails on a failed REVID read; transfers count one byte
 per sample even at 16 bits (16 bit captures used twice the size);
-frames continue in the stream instead of restarting the device; the
+frames continue in the stream instead of restarting the device; a
+failed bulk IN transfer counts as an empty one rather than ending the
+capture; a refused start command fails the session's start; open
+reads the version and REVID before it judges the version and claims
+the interface after both, on every OS (on Windows the nusb backend
+claims for the first control transfer); the
 soft trigger is a line by line port of `soft_trigger_logic`; 48 MHz is
 accepted on 8 channels; and nusb's bulk stream resubmits a transfer
 when the next is asked for, as a libusb callback does, so no extra

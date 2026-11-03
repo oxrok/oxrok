@@ -12,10 +12,8 @@ EMU_MODEL=cp2110
 EMU_OPTIONS=""
 EMU_DRIVER=uni-t-ut61e-ser
 EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_cp2110.c"
-# Coverage of the serial-dmm driver. serial_hid_cp2110.c is outside
-# src/hardware, which tools/emu-gcov.sh does not cover: delete
-# libsigrok's src/.libs/serial_hid_cp2110.gcda before the session and
-# run 'gcov -t -o src/.libs src/serial_hid_cp2110.c' in libsigrok after.
+# Coverage of the serial-dmm driver, then of the shared serial sources
+# above (serial_hid_cp2110.c among them) in gcov.txt's shared section.
 EMU_GCOV=serial-dmm
 # oxrok has the driver and the cable: its cases must run full.
 EMU_FULL=uni-t-ut61e-ser
