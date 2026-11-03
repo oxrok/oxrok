@@ -131,22 +131,21 @@
 //! this driver: it runs a session only with `--samples`, `--time`,
 //! `--frames` or `--continuous` (`main.c`), and the driver offers none of
 //! the keys they need (`api.c` `devopts`), so each fails before the
-//! acquisition. The oracle cases (`tools/emu/lecroy-logicstudio.sh`)
+//! acquisition. The CLI oracle cases (`tools/emu/lecroy-logicstudio.sh`)
 //! therefore reach the scan, the FX2 upload, the renumeration, the open
-//! and the options only. The capture side was checked once, ad hoc,
-//! against the C driver through the library (a small C program that
-//! runs `sr_session_start()` with a trigger, under the emulator; not
-//! kept in the tree): 45 runs at every rate class, both channel modes,
-//! both groups, ratios 0 to 100, one and two stages, levels and edges,
-//! a memory that wraps, and each fault, logged no violation, the
-//! samples came out as the inputs' counter without a break and the
+//! and the options only. The capture side is library-verified, not
+//! CLI-verified: the `lib ...` cases run `tools/libsigrok-run.c`, which
+//! starts the session through libsigrok with sigrok-cli's arguments and
+//! no limit (`emu_case --libsigrok`), at every rate class, both channel
+//! modes, both groups, ratios 0 to 100, one and two stages, levels and
+//! edges, a memory that wraps, and each fault. They log no violation,
+//! the samples come out as the inputs' counter without a break and the
 //! trigger at the capture ratio (10004 of 20000 at 50 % with 16
 //! channels, 20000 of 40000 with 8; after the last sample at 100 %);
 //! the runs that never end (no trigger, a trigger that never fires, a
 //! stalled fetch, a short status packet, a halted sample endpoint, an
-//! unplug while waiting or fetching) were stopped after 3 s. Those runs
-//! reached 94.6 % of `protocol.c` (453 of 479 lines). The unit tests
-//! drive the model the same way.
+//! unplug while waiting or fetching) are stopped after 3 s. The unit
+//! tests drive the model the same way.
 //!
 //! **Emulation artifacts**: each status packet answers one interrupt IN
 //! transfer, the state advancing one step per transfer once armed; with
@@ -202,6 +201,11 @@
 //!   and the acquisition waits for ever. `configure_trigger()` ignores
 //!   matches on disabled channels (`protocol.c:674`), so a trigger only
 //!   on disabled channels does the same.
+//! - `send_samples()` sends what is left after its 4096 sample chunks
+//!   even when nothing is (`protocol.c:980-989`): with 8 channels, a
+//!   stretch of a whole number of chunks ends in a logic packet of 0
+//!   bytes, on which libsigrok's bits and hex outputs die (`lib 8ch
+//!   upper wraps bits crash`).
 //! - 1 GHz is in `lls_set_samplerate()`'s table but not in the list
 //!   `config_list()` gives: `samplerate=1G` is taken, and never shown.
 //! - The driver lists no scan options (`config_list()` answers
