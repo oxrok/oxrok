@@ -22,3 +22,25 @@ never reached, by function (line ranges hold no reached line):
     configure_channels: 555-558
     start_transfers: 655, 669-670, 677-678, 686-691, 703
     fx2lafw_start_acquisition: 731-732, 742-744
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/ezusb.c   67.4%  31 of 46
+  src/usb.c     62.4%  143 of 229
+  total         63.3%  174 of 275
+never reached, by function (line ranges hold no reached line):
+  src/ezusb.c
+    ezusb_reset: 49
+    ezusb_install_firmware: 69, 83-86
+    ezusb_upload_firmware: 108-109, 118-121, 127-129, 133, 136, 139
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: never called (199-221)
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 352-373
+    sr_usb_find: 405-406, 409-410, 418-420, 429
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: 580, 586, 590, 592
