@@ -74,6 +74,19 @@ emu_cases() {
     emu_case "first read error" --stderr -- -d $D --samples 100 -O hex
     scanaplus_options in-stall=7
     emu_case "read error after the dropped read" --stderr -- -d $D --samples 1000000 -O hex
+    # Latency flushes (the model's short=N:M): transfer N of the stream
+    # carries M bytes, 0 the status bytes alone, which ends libftdi's
+    # read. A first read of 100 bytes is dropped as if it were 64 KiB:
+    # the samples start at stream byte 100, pair 50, not 65536 as in
+    # "100 samples".
+    scanaplus_options short=1:100,2:0
+    emu_case "short first read" -- -d $D --samples 100 -O hex
+    # The first read ends after 4 full transfers (65280 bytes, dropped),
+    # the second holds 3 bytes: the driver decodes 2 pairs, the second
+    # with byte 3 of the buffer, left over from the first read, and
+    # from the third read on every pair is split across its bytes.
+    scanaplus_options short=5:0,6:3,7:0
+    emu_case "odd read" -- -d $D --samples 300 -O hex
     # The requests of the scan and of dev_open, each STALLed in turn:
     # libftdi's reset in ftdi_usb_open_desc (the scan logs it), the
     # purge, the bit mode reset, sync FIFO mode, the latency timer, the
@@ -99,9 +112,13 @@ emu_cases() {
     # Control reads: 2 string reads by the scan's open, 2 by dev_open's,
     # then EEPROM words 16 and 17.
     emu_case "unplug before EEPROM word 17" --unplug in=0:5 --stderr --expect-fail -- -d $D --samples 10
+    # The first write of scanaplus_init() has no bulk OUT before it to
+    # count: the unplug follows the 6th control read, EEPROM word 17,
+    # the last transfer of dev_open.
     emu_case "unplug before write 1" --unplug in=0:6 --stderr --expect-fail -- -d $D --samples 10
-    # Each write of scanaplus_init() and scanaplus_start_acquisition()
-    # with its own error return: write N fails after N-1 bulk OUTs.
+    # Each other write of scanaplus_init() and
+    # scanaplus_start_acquisition() with its own error return: write N
+    # fails after N-1 bulk OUTs (out=2:N-1).
     # 2 to 5 the init's head, 6 and 7 the first 0x8d pulse, 120 to 122
     # the init's id, 123 its last, 124 and 125 the start's thresholds
     # and configuration, 126 to 128 the cleared id, 129 the id again.

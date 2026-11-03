@@ -68,9 +68,16 @@
 //! Out of sync FIFO mode, or before the stream starts, the chip has
 //! nothing: two status bytes alone. The driver sends no stop: the
 //! stream runs on after a capture, until a bus reset or `0x88` bit 0.
-//! Emulation artifacts: the full FIFO at every submission (a real
-//! FT232H's transfers may end short, on its latency timer, when the
-//! FPGA's compressed stream is slower than USB) and the start point.
+//! Emulation artifacts: the full FIFO at every submission and the
+//! start point. A real FT232H also hands over a partial FIFO when its
+//! latency timer runs out (the stream slower than USB for a moment):
+//! `short=N:M` makes the `N`th bulk IN transfer the FPGA fills (1 is
+//! the first after the start) carry only `M` bytes of stream, any `M`
+//! including odd ones and 0 (the two status bytes alone), the stream
+//! going on from there. libftdi's `ftdi_read_data()` keeps reading
+//! after a short transfer and returns early only on one of the status
+//! bytes alone, so a short read takes a short transfer then an empty
+//! one (`short=1:100,2:0`).
 //!
 //! What the driver does with it (`protocol.c`
 //! `scanaplus_receive_data()`): libftdi reads in transfers of 16 KiB
@@ -78,7 +85,13 @@
 //! first `ftdi_read_data()` of 64 KiB is dropped whatever its length,
 //! and each later one is decoded whole. With both limits set the sample
 //! limit is tested first, so a read that passes both ends on the sample
-//! limit even when the time limit is the smaller.
+//! limit even when the time limit is the smaller (cases "time 1 ms,
+//! 300000 samples" and "time 1 ms, 700000 samples"). A short first read
+//! is dropped as if it were 64 KiB, so the samples start 100 bytes into
+//! the stream rather than 65536 (case "short first read"); a read of an
+//! odd length is decoded with one byte past its end, left over in the
+//! buffer from the read before, and every later pair is split (case
+//! "odd read", the TODO at `protocol.c` 352).
 //!
 //! **The checks** on top of the FTDI shell's: writes outside sync FIFO
 //! mode, of an odd length, to a register not listed above or of a value
@@ -90,7 +103,8 @@
 //! Options: `devid=XXXXXX` (the EEPROM's three id bytes, hex), `product=`
 //! (the product string; anything but `SCANAPLUS` is a plain FT232H the
 //! driver does not find), and the shell's faults ([`Faults`]):
-//! `stall=REQUEST[/WVALUE]`, `in-stall=N`, `idle=N`.
+//! `stall=REQUEST[/WVALUE]`, `in-stall=N`, `idle=N`; and the latency
+//! flushes `short=N:M[,N:M...]` above, all off by default.
 
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Violations};
 use crate::shells::ftdi::{
@@ -147,10 +161,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut devid = DEFAULT_DEVID;
     let mut product = PRODUCT.to_owned();
     let mut faults = Faults::default();
+    let mut short = Vec::new();
     for (k, v) in options {
         match k.as_str() {
             "devid" => devid = parse_devid(v)?,
             "product" => product.clone_from(v),
+            "short" => short.extend(parse_short(v)?),
             other => {
                 if !faults.option(other, v)? {
                     return Err(Error(format!("{NAME} has no option {other}")));
@@ -160,7 +176,24 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     }
     let mut model = ScanaPlus::new(devid, &product);
     model.chip.set_faults(faults);
+    model.fpga.short = short;
     Ok(Box::new(model))
+}
+
+/// `N:M[,N:M...]`: transfer `N` (from 1) carries `M` bytes.
+fn parse_short(s: &str) -> Result<Vec<(u64, usize)>> {
+    s.split(',')
+        .map(|p| {
+            let bad = || Error(format!("short={s}: N:M[,N:M...], transfer N (from 1) of M bytes"));
+            let (n, m) = p.split_once(':').ok_or_else(bad)?;
+            let n: u64 = n.parse().map_err(|_| bad())?;
+            let m: usize = m.parse().map_err(|_| bad())?;
+            if n == 0 {
+                return Err(bad());
+            }
+            Ok((n, m))
+        })
+        .collect()
 }
 
 fn parse_devid(s: &str) -> Result<[u8; 3]> {
@@ -207,6 +240,10 @@ pub struct Fpga {
     streaming: bool,
     /// Stream bytes sent.
     sent: u64,
+    /// Transfers filled since the start.
+    filled: u64,
+    /// The latency flushes: transfer number (from 1), bytes.
+    short: Vec<(u64, usize)>,
 }
 
 impl Fpga {
@@ -219,6 +256,8 @@ impl Fpga {
             cleared: false,
             streaming: false,
             sent: 0,
+            filled: 0,
+            short: Vec::new(),
         }
     }
 
@@ -320,6 +359,7 @@ impl Fpga {
         if self.cleared && self.id_regs == self.id {
             if self.configured() {
                 self.streaming = true;
+                self.filled = 0;
             } else {
                 v.report(
                     "acquisition started (id cleared and sent again) before the init's 0x8d \
@@ -374,8 +414,13 @@ impl FtdiPorts for Fpga {
         if state.bitmode != bitmode::SYNCFF || !self.streaming {
             return Fill::Idle;
         }
+        self.filled += 1;
+        let n = self.short.iter().find(|s| s.0 == self.filled).map_or(max, |s| s.1.min(max));
+        if n == 0 {
+            return Fill::Idle;
+        }
         let start = self.sent;
-        self.sent += max as u64;
+        self.sent += n as u64;
         Fill::Data((start..self.sent).map(stream_byte).collect())
     }
 
@@ -522,6 +567,15 @@ mod tests {
         assert_eq!(stream_byte(512), (COUNTS[256 % 7] << 1) | 1);
         assert_eq!(&d[512..515], &[0x01, 0x60, stream_byte(510)]);
         assert!(v.is_empty(), "{v:?}");
+        // A latency flush of an odd length, then an empty one; the first
+        // transfer took 128 packets of 510 bytes.
+        dev.fpga.short = vec![(2, 3), (3, 0)];
+        let Reply::Data(d) = dev.in_transfer(1, 16384, &mut v) else { panic!() };
+        let at = 128 * 510;
+        assert_eq!(&d[2..], &[stream_byte(at), stream_byte(at + 1), stream_byte(at + 2)]);
+        assert_eq!(dev.in_transfer(1, 16384, &mut v), Reply::Data(vec![0x01, 0x60]));
+        let Reply::Data(d) = dev.in_transfer(1, 512, &mut v) else { panic!() };
+        assert_eq!(d[2], stream_byte(at + 3));
         // A new init stops the stream until the next start.
         dev.out(2, &[0x88, 0x41], &mut v);
         assert_eq!(dev.in_transfer(1, 512, &mut v), Reply::Data(vec![0x01, 0x60]));
@@ -592,6 +646,9 @@ mod tests {
             .unwrap();
         assert_eq!(m.descriptors().strings[1], "Single RS232-HS");
         assert_eq!(parse_devid("1ca357").unwrap(), DEFAULT_DEVID);
+        assert!(build(&[o("short", "0:5")]).is_err());
+        assert!(build(&[o("short", "1")]).is_err());
+        assert_eq!(parse_short("1:101,2:0").unwrap(), [(1, 101), (2, 0)]);
         // An id of zeros starts the stream too.
         let mut dev = ScanaPlus::new([0x80, 0, 0], PRODUCT);
         let mut v = Violations::default();
