@@ -87,6 +87,10 @@ pub struct UsbDeviceInfo {
     pub bus: u8,
     /// Address on the bus. On Windows always 0.
     pub address: u8,
+    /// The hub ports from the root to the device, which stay the same
+    /// when it renumerates (libsigrok's `usb_get_port_path()`); empty
+    /// when the backend does not know them.
+    pub ports: Vec<u8>,
     /// Manufacturer string, if the OS cached it or it could be read.
     pub manufacturer: Option<String>,
     /// Product string.
@@ -189,6 +193,20 @@ pub trait Transport: Send {
     /// enumerated device unconfigured until a driver claims it.
     fn set_configuration(&mut self, configuration: u8) -> Result<()>;
 
+    /// Sends `SET_CONFIGURATION` even when `configuration` is the
+    /// active one, as `libusb_set_configuration()` does on Linux; for
+    /// drivers whose transactions follow a libsigrok driver's.
+    fn force_configuration(&mut self, configuration: u8) -> Result<()> {
+        self.set_configuration(configuration)
+    }
+
+    /// The string descriptor indexes of the device descriptor
+    /// (manufacturer, product, serial number; 0 for none), from what
+    /// the OS cached at enumeration, without a transfer.
+    fn string_indexes(&mut self) -> Result<[u8; 3]> {
+        Err(Error::not_supported("string descriptor indexes"))
+    }
+
     /// Claims an interface. On Linux a kernel driver bound to it is
     /// detached first.
     fn claim_interface(&mut self, interface: u8) -> Result<()>;
@@ -241,6 +259,36 @@ pub trait Transport: Send {
         transfer_size: usize,
         depth: usize,
     ) -> Result<Box<dyn BulkStream>>;
+}
+
+/// Reads string descriptor `index` as `libusb_get_string_descriptor_ascii()`
+/// does: the language table (4 bytes) first, then the string in its
+/// first language (up to 255 bytes), each character outside ASCII
+/// made `?`. Index 0 is refused without a transfer, as libusb does.
+pub fn read_string_ascii(t: &mut dyn Transport, index: u8) -> Result<String> {
+    const GET_DESCRIPTOR: u8 = 6;
+    const STRING: u16 = 3 << 8;
+    const TIMEOUT: Duration = Duration::from_millis(1000);
+    if index == 0 {
+        return Err(Error::arg("string descriptor index 0"));
+    }
+    let std_in =
+        |value, index| ControlRequest { request_type: 0, request: GET_DESCRIPTOR, value, index };
+    let langs = t.control_in(std_in(STRING, 0), 4, TIMEOUT)?;
+    if langs.len() < 4 {
+        return Err(Error::device("short string descriptor language table"));
+    }
+    let lang = u16::from_le_bytes([langs[2], langs[3]]);
+    let d = t.control_in(std_in(STRING | u16::from(index), lang), 255, TIMEOUT)?;
+    if d.len() < 2 || d[1] != 3 || usize::from(d[0]) > d.len() {
+        return Err(Error::device("bad string descriptor"));
+    }
+    Ok(d[2..usize::from(d[0])]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[lo, hi]| if hi == 0 && lo < 0x80 { char::from(lo) } else { '?' })
+        .collect())
 }
 
 /// A queue of bulk IN transfers, see [`Transport::bulk_in_stream`].
@@ -348,6 +396,19 @@ mod tests {
         assert!(!d.matches_conn("garbage"));
         assert_eq!(d.conn(), "2.7");
         assert_eq!(d.id().to_string(), "0403:dc48");
+    }
+
+    #[test]
+    fn strings_read_as_libusb_does() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=0925 pid=3881\n\
+            ctl_in 00 06 0300 0000 4 -> 04030904\n\
+            ctl_in 00 06 0301 0409 255 -> 0a03730069006700e900\n";
+        let mut r = record::Replay::from_text(text).unwrap();
+        // Non-ASCII made '?', index 0 refused without a transfer.
+        assert_eq!(read_string_ascii(&mut r, 1).unwrap(), "sig?");
+        assert!(read_string_ascii(&mut r, 0).is_err());
+        r.finish().unwrap();
     }
 
     #[test]

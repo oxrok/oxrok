@@ -222,6 +222,142 @@ impl PreTriggerBuffer {
     }
 }
 
+/// libsigrok's `soft_trigger_logic`, line by line, for drivers whose
+/// output must match their C counterpart's sample for sample (fx2lafw):
+/// one sample after another against the current stage's matches, a
+/// stage that fails after an earlier one matched starts over at
+/// stage 0 from the sample after the first match, edges against the
+/// previous sample (zero before the first), and a ring of
+/// `pre_trigger_samples` samples sent ahead of the trigger. Only level
+/// and edge matches; [`SoftTrigger`] is the general matcher.
+#[derive(Clone, Debug)]
+pub struct SoftTriggerLogic {
+    /// Per stage, the matches on enabled channels.
+    stages: Vec<Vec<(usize, TriggerMatch)>>,
+    unit_size: usize,
+    /// The stage being matched.
+    pub cur_stage: usize,
+    /// Matches evaluated so far (`stl->count`): the very first edge
+    /// match evaluated never fires.
+    count: u64,
+    prev: Vec<u8>,
+    ring: Vec<u8>,
+    head: usize,
+    fill: usize,
+}
+
+impl SoftTriggerLogic {
+    /// `soft_trigger_logic_new()`: `stages` holds each stage's matches
+    /// on enabled channels (`soft_trigger_logic_check()` skips the
+    /// others), over samples of `unit_size` bytes.
+    pub fn new(
+        stages: Vec<Vec<(usize, TriggerMatch)>>,
+        unit_size: usize,
+        pre_trigger_samples: usize,
+    ) -> Self {
+        SoftTriggerLogic {
+            stages,
+            unit_size,
+            cur_stage: 0,
+            count: 0,
+            prev: vec![0; unit_size],
+            ring: vec![0; unit_size * pre_trigger_samples],
+            head: 0,
+            fill: 0,
+        }
+    }
+
+    fn append(&mut self, mut buf: &[u8]) {
+        let size = self.ring.len();
+        if buf.len() > size {
+            buf = &buf[buf.len() - size..];
+        }
+        self.fill = (self.fill + buf.len()).min(size);
+        while !buf.is_empty() {
+            let n = (size - self.head).min(buf.len());
+            self.ring[self.head..self.head + n].copy_from_slice(&buf[..n]);
+            self.head += n;
+            if self.head >= size {
+                self.head = 0;
+            }
+            buf = &buf[n..];
+        }
+    }
+
+    /// `pre_trigger_send()`: the ring's samples, oldest first, as the
+    /// packets the C code sends (two when the ring wrapped).
+    fn take_pre(&mut self) -> Vec<Vec<u8>> {
+        let size = self.ring.len();
+        let mut out = Vec::new();
+        if self.fill < size {
+            self.head = 0;
+        }
+        while self.fill > 0 {
+            let n = (size - self.head).min(self.fill);
+            out.push(self.ring[self.head..self.head + n].to_vec());
+            self.head = 0;
+            self.fill -= n;
+        }
+        out
+    }
+
+    fn check_match(&mut self, sample: &[u8], ch: usize, m: TriggerMatch) -> bool {
+        self.count += 1;
+        let bit = |s: &[u8]| s.get(ch / 8).is_some_and(|b| b & (1 << (ch % 8)) != 0);
+        let now = bit(sample);
+        match m {
+            TriggerMatch::Zero => !now,
+            TriggerMatch::One => now,
+            _ if self.count == 1 => false,
+            TriggerMatch::Rising => !bit(&self.prev) && now,
+            TriggerMatch::Falling => bit(&self.prev) && !now,
+            TriggerMatch::Edge => bit(&self.prev) != now,
+            TriggerMatch::Over | TriggerMatch::Under => false,
+        }
+    }
+
+    /// `soft_trigger_logic_check()` on `buf`: the offset in samples of
+    /// the trigger point and the pre-trigger packets to send before it,
+    /// or `None` (the samples go into the pre-trigger ring).
+    pub fn check(&mut self, buf: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+        let unit = self.unit_size as isize;
+        let len = buf.len() as isize;
+        let mut i: isize = 0;
+        while i < len {
+            let at = i as usize;
+            let sample = buf.get(at..at + self.unit_size).unwrap_or(&buf[at..]).to_vec();
+            let matches = self.stages.get(self.cur_stage).cloned().unwrap_or_default();
+            let mut found = true;
+            for (ch, m) in matches {
+                if !self.check_match(&sample, ch, m) {
+                    found = false;
+                    break;
+                }
+            }
+            let n = sample.len().min(self.unit_size);
+            self.prev[..n].copy_from_slice(&sample[..n]);
+            if found {
+                if self.cur_stage + 1 < self.stages.len() {
+                    self.cur_stage += 1;
+                } else {
+                    self.append(&buf[..at]);
+                    let pre = self.take_pre();
+                    return Some((at / self.unit_size, pre));
+                }
+            } else if self.cur_stage > 0 {
+                i -= self.cur_stage as isize * unit;
+                if i < -1 {
+                    i = -1;
+                }
+                self.cur_stage = 0;
+            }
+            i += unit;
+        }
+        self.append(buf);
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +453,37 @@ mod tests {
         assert_eq!(b.take(), [2, 2, 3, 3, 4, 4]);
         b.push(&[0; 20]);
         assert_eq!(b.take().len(), 6);
+    }
+
+    #[test]
+    fn the_c_soft_trigger() {
+        // D5 rising in a counter: the trigger at 0x20,
+        // six samples of pre-trigger sent first, in two pieces since the
+        // ring wrapped.
+        let data: Vec<u8> = (0..64).collect();
+        let mut s = SoftTriggerLogic::new(vec![vec![(5, TriggerMatch::Rising)]], 1, 6);
+        assert!(s.check(&data[..3]).is_none());
+        let (at, pre) = s.check(&data[3..]).unwrap();
+        assert_eq!(at, 29);
+        assert_eq!(pre.concat(), (26..32).collect::<Vec<u8>>());
+        assert_eq!(pre.len(), 2);
+        // A two stage trigger that fails on the second stage starts over
+        // one sample after the first stage matched.
+        let mut s = SoftTriggerLogic::new(
+            vec![vec![(0, TriggerMatch::One)], vec![(1, TriggerMatch::One)]],
+            1,
+            0,
+        );
+        assert_eq!(s.check(&[0, 1, 0, 1, 2]).map(|r| r.0), Some(4));
+        // The very first edge match evaluated never fires; the previous
+        // sample starts as zero.
+        let mut s = SoftTriggerLogic::new(vec![vec![(0, TriggerMatch::Rising)]], 1, 0);
+        assert_eq!(s.check(&[1, 0, 1]).map(|r| r.0), Some(2));
+        let mut s = SoftTriggerLogic::new(
+            vec![vec![(1, TriggerMatch::Zero), (0, TriggerMatch::Rising)]],
+            1,
+            0,
+        );
+        assert_eq!(s.check(&[1]).map(|r| r.0), Some(0));
     }
 }

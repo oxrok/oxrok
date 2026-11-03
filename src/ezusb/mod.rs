@@ -14,8 +14,8 @@
 #![forbid(unsafe_code)]
 
 use crate::core::{Error, Result};
-use crate::usb::{ControlRequest, Transport, UsbDeviceInfo, UsbId};
-use std::time::{Duration, Instant};
+use crate::usb::{ControlRequest, Transport};
+use std::time::Duration;
 
 const REQ_FIRMWARE_LOAD: u8 = 0xa0;
 const CPUCS: u16 = 0xe600;
@@ -102,7 +102,7 @@ pub fn set_cpu_reset(t: &mut dyn Transport, reset: bool) -> Result<()> {
 }
 
 /// Uploads a firmware image and starts it. The device renumerates
-/// afterwards; see [`wait_for_renumeration`].
+/// afterwards; the driver looks for it again.
 pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     let blocks = parse_image(image)?;
     set_cpu_reset(t, true)?;
@@ -115,34 +115,6 @@ pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     }
     log::info!("Uploaded {total} bytes of firmware.");
     set_cpu_reset(t, false)
-}
-
-/// Waits up to `timeout` for a device with one of `ids` that is not
-/// `old` (by bus and address, or by its strings) and `accept`s.
-pub fn wait_for_renumeration(
-    ids: &[UsbId],
-    old: &UsbDeviceInfo,
-    timeout: Duration,
-    accept: impl Fn(&UsbDeviceInfo) -> bool,
-) -> Result<UsbDeviceInfo> {
-    let start = Instant::now();
-    loop {
-        std::thread::sleep(Duration::from_millis(100));
-        if let Ok(devices) = crate::usb::find_devices(ids) {
-            // After renumeration the bus and address may be the same;
-            // the strings tell the new firmware from the old one.
-            if let Some(d) = devices.into_iter().find(|d| {
-                accept(d)
-                    && (d.bus != old.bus || d.address != old.address || d.product != old.product)
-            }) {
-                log::debug!("Device renumerated after {} ms.", start.elapsed().as_millis());
-                return Ok(d);
-            }
-        }
-        if start.elapsed() > timeout {
-            return Err(Error::device("device did not renumerate after the firmware upload"));
-        }
-    }
 }
 
 #[cfg(test)]

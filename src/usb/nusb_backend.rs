@@ -47,6 +47,10 @@ fn info(d: &nusb::DeviceInfo) -> UsbDeviceInfo {
         device_version: d.device_version(),
         bus,
         address,
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        ports: d.port_chain().to_vec(),
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        ports: Vec::new(),
         manufacturer: d.manufacturer_string().map(str::to_owned),
         product: d.product_string().map(str::to_owned),
         serial: d.serial_number().map(str::to_owned),
@@ -251,6 +255,26 @@ impl Transport for Nusb {
         self.reopen()
     }
 
+    fn force_configuration(&mut self, configuration: u8) -> Result<()> {
+        self.drop_endpoints();
+        self.interfaces.clear();
+        self.device
+            .set_configuration(configuration)
+            .wait()
+            .map_err(|e| map(&e, &format!("set configuration {configuration}")))?;
+        self.reopen()
+    }
+
+    fn string_indexes(&mut self) -> Result<[u8; 3]> {
+        let d = self.device.device_descriptor();
+        let i = |x: Option<std::num::NonZeroU8>| x.map_or(0, std::num::NonZeroU8::get);
+        Ok([
+            i(d.manufacturer_string_index()),
+            i(d.product_string_index()),
+            i(d.serial_number_string_index()),
+        ])
+    }
+
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
         if self.interfaces.contains_key(&interface) {
             return Ok(());
@@ -414,7 +438,7 @@ impl Transport for Nusb {
         for _ in 0..depth.max(1) {
             ep.submit(ep.allocate(size));
         }
-        Ok(Box::new(NusbStream { ep, size }))
+        Ok(Box::new(NusbStream { ep, size, owed: false }))
     }
 
     fn bulk_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
@@ -460,15 +484,23 @@ impl Transport for Nusb {
 struct NusbStream {
     ep: nusb::Endpoint<Bulk, In>,
     size: usize,
+    /// A transfer returned by the last `next`, not yet resubmitted.
+    owed: bool,
 }
 
 impl BulkStream for NusbStream {
     fn next(&mut self, timeout: Duration) -> Result<Vec<u8>> {
+        // The transfer handed out last goes back into the queue once
+        // the caller has dealt with it and asks for more, as libusb
+        // drivers resubmit at the end of their callback: one that stops
+        // after a transfer leaves no new transfer behind it.
+        if std::mem::take(&mut self.owed) {
+            self.ep.submit(self.ep.allocate(self.size));
+        }
         let Some(c) = self.ep.wait_next_complete(timeout) else {
             return Err(Error::Timeout);
         };
-        // Keep the queue full before looking at the result.
-        self.ep.submit(self.ep.allocate(self.size));
+        self.owed = true;
         match c.status {
             Ok(()) => Ok(c.buffer.into_vec()),
             Err(e) if c.actual_len > 0 => {
