@@ -76,6 +76,10 @@ emu_cases() {
     emu_case "trigger ratio" -- -d $F -C $D4 -c samplerate=2M:captureratio=50 --samples 40 -t 2=f -O bits
     emu_case "trigger two" -- -d $F -C 0,1,9 -c samplerate=4M --samples 24 -t 0=0,9=r -O bits
     emu_case "trigger late" --filter '1,/^4:/!d' -- -d $F -C 0,1,2,3,4 -c samplerate=500k --samples 40 -t 4=e -O bits
+    # Rates off the list the driver takes all the same: 100 MHz / 250
+    # and 160 MHz / 250.
+    emu_case "400k unlisted" -- -d $F -C 0,1 -c samplerate=400k --samples 40 -O bits
+    emu_case "640k unlisted" -- -d $F -C 0,1 -c samplerate=640k --samples 40 -O bits
     emu_case "time limit" -- -d $F -C 0 -c samplerate=1M --time 1 -O hex
     emu_case "bad rate" --expect-fail --stderr --filter '/Unable to sample/!d' -- -d $F -C 0 -c samplerate=3M --samples 8 -O hex
     # A rate at which the channels carry less than 8000 bytes a second:
@@ -147,20 +151,22 @@ emu_cases() {
     emu_case "fault stall stop write" -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 stall_reply=abort-sync
     emu_case "fault stall reply" --expect-fail --stderr -- -d $F -C 0 --samples 8 -O hex
-    logic16_options flashed=1 short=abort-sync
-    emu_case "fault short command" --expect-fail --stderr -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 short_reply=read-eeprom
     emu_case "fault short reply" --expect-fail --stderr -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 abort_reply=0x55
     emu_case "fault abort reply" --expect-fail --stderr -- -d $F -C 0 --samples 8 -O hex
+    # The driver's warnings and debug lines that show each fault took
+    # effect (it carries on after all of them).
+    # -l 4 lines carry a timestamp, which goes.
+    W='/Unsupported FPGA|Invalid state|FIFO overflow/!d; s/ \[[0-9:.]+\]//'
     logic16_options flashed=1 fpga_version=0x22
-    emu_case "fault fpga version" -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault fpga version" --stderr --filter "$W" -- -l 4 -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 status_xor=0x08
-    emu_case "fault status bits" -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault status bits" --stderr --filter "$W" -- -l 4 -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 mode_xor=0x01
-    emu_case "fault mode bits" -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault mode bits" --stderr --filter "$W" -- -l 4 -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 overflow=1
-    emu_case "fault overflow" -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault overflow" --stderr --filter "$W" -- -l 4 -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 empty=64
     emu_case "fault 64 empty transfers" -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 empty=65

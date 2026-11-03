@@ -1,7 +1,7 @@
 gcov saleae-logic16 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        85.8%  296 of 345
-  protocol.c   96.9%  404 of 417
-  total        91.9%  700 of 762
+  protocol.c   96.4%  402 of 417
+  total        91.6%  698 of 762
 never reached, by function (line ranges hold no reached line):
   api.c
     check_conf_profile: 118, 124, 128, 130
@@ -14,7 +14,7 @@ never reached, by function (line ranges hold no reached line):
     config_list: 503-504
     dev_acquisition_start: 643-644, 658, 671-672, 677-679, 692-699, 706-711
   protocol.c
-    do_ep1_command: 202
+    do_ep1_command: 202, 213-215
     upload_led_table: 260
     write_fpga_registers: 317
     upload_fpga_bitstream: 486-488, 495, 508-509

@@ -1,2 +1,1 @@
-Acquisition with 1/16 channels at 500 kHz
-0:55 
+sr: saleae-logic16: Invalid state at acquisition setup register 10: 0x01 != 0x00. Proceeding anyway.

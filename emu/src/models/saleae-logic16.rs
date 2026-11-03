@@ -32,8 +32,10 @@
 //! and product `Logic S/16` (`check_conf_profile()`), no serial number
 //! (the driver reads none; assumed), high speed, interface 0 with bulk
 //! endpoints 1 OUT and 1 IN for commands (`do_ep1_command()`) and 2 IN
-//! for the samples (`dev_acquisition_start()`), all of 512 bytes, the
-//! only bulk packet size USB 2.0 allows at high speed; 100 mA
+//! for the samples (`dev_acquisition_start()`). Endpoint 1 has 64 byte
+//! packets, the FX2's EP1 buffer (as in the shell's bare descriptors;
+//! `do_ep1_command()` refuses more than 64 bytes); endpoint 2 has 512
+//! (assumed, the FX2's large endpoints at high speed). 100 mA
 //! (assumed). No vendor control request is the firmware's.
 //!
 //! **Commands** go to bulk endpoint 1, one per transfer of at most 64
@@ -69,8 +71,9 @@
 //!
 //! **The FPGA** comes up blank. A register read of a blank FPGA answers
 //! 0 (assumed; the driver reads register 0 once, before the upload, to
-//! tell an mcupro clone). `0x7e` starts an upload, `0x7f` chunks follow
-//! (`upload_fpga_bitstream()`: 62 bytes each, the last shorter), and the
+//! tell an mcupro clone; any other read of a blank FPGA is flagged).
+//! `0x7e` starts an upload, `0x7f` chunks follow
+//! (`upload_fpga_bitstream()`: 62 bytes each, only the last shorter), and the
 //! next other command ends it: the bytes must be one of the two
 //! bitstream stand-ins, `saleae-logic16-fpga-18.bitstream` (1.8 V and
 //! 3.3 V logic) or `-33` (5 V logic, the driver's name for it). The
@@ -84,10 +87,16 @@
 //! register 0 and takes no upload; it uses the old map.
 //!
 //! The FPGA must be primed before it samples (the model's reading of
-//! `prime_fpga()`): for each of the 16 EEPROM bytes from address 16,
-//! `PRIMER_DATA2` the byte and `PRIMER_DATA1` its `map_eeprom_data()`,
-//! latched by a pulse of `PRIMER_CONTROL`. A pair that does not match,
-//! or a capture set up before the 16 pairs, is flagged.
+//! `prime_fpga()`, held to its exact sequence): with `x` the mode
+//! register without its `UNKNOWN2` bit, `MODE` `x` then `x|UNKNOWN1`
+//! once; then for each of the 16 EEPROM bytes from address 16,
+//! `PRIMER_DATA2` the byte, `MODE` `x|UNKNOWN1|UNKNOWN2` then
+//! `x|UNKNOWN1`, `PRIMER_DATA1` its `map_eeprom_data()`, and
+//! `PRIMER_CONTROL` 1 then 0 (the pulse that latches the pair); then
+//! `MODE` `x` again. Any other order or value, or a capture set up
+//! before the sequence is complete, is flagged. The LED table must be
+//! `make_heartbeat()`'s in two chunks of 32 bytes, and the LED mode
+//! `configure_led()`'s (animate 1, T2 reload 6250, divider 0, repeat 1).
 //!
 //! The status/control register reads back the control bits written
 //! (`RUNNING`, `UNKNOWN2`), `UNKNOWN1` always (the driver expects it in
@@ -97,7 +106,9 @@
 //! (divisor + 1)) and the channel selection. Command `0x01` arms the
 //! capture and writing `RUNNING` starts it; `0x02` or clearing
 //! `RUNNING` ends it. The rate may be at most 100 MHz, and rate times
-//! channels at most 300 MHz (`MAX_SAMPLE_RATE`, `MAX_SAMPLE_RATE_X_CH`).
+//! channels at most 300 MHz (`MAX_SAMPLE_RATE`, `MAX_SAMPLE_RATE_X_CH`);
+//! so any 100 MHz / n or 160 MHz / n with n up to 256, the driver's list
+//! or not, down to 390.625 kHz.
 //!
 //! **Samples** come on endpoint 2 as little endian 16 bit words, each
 //! holding 16 consecutive samples of one channel, the first sample in
@@ -126,11 +137,12 @@
 //!
 //! **Faults**, all off by default: `stall=NAME[:N]` STALLs the command
 //! (each one, or only its Nth since the model's reset), `stall_reply=`
-//! STALLs its answer, `short=` takes one byte fewer of it, `short_reply=`
-//! answers one byte short, with `NAME` one of `abort-sync`, `read-eeprom`,
-//! `fpga-read`, `fpga-write`, `upload-init`, `upload-data`, `led-table`,
-//! `led-mode`, `start`, `abort` (comma lists; a command stalled or cut short
-//! has no effect; a STALL is one-shot, an emulation artifact);
+//! STALLs its answer, `short_reply=` answers one byte short, with `NAME`
+//! one of `abort-sync`, `read-eeprom`, `fpga-read`, `fpga-write`,
+//! `upload-init`, `upload-data`, `led-table`, `led-mode`, `start`,
+//! `abort` (comma lists; a stalled command has no effect; a STALL is
+//! one-shot, an emulation artifact). A command fits one packet, which
+//! the FX2 takes whole or not at all, so there is no short command;
 //! `abort_reply=0xNN` answers the synchronous abort with that byte;
 //! `fpga_version=0xNN` answers the version register with it;
 //! `status_xor=0xNN` and `mode_xor=0xNN` flip those bits of every status
@@ -153,7 +165,7 @@ pub const NAME: &str = "saleae-logic16";
 pub const ABOUT: &str = "Saleae Logic16 (21a9:1001, EZ-USB, renumerates, FPGA bitstream over \
                          scrambled EP1 commands); flashed=1 starts with the FX2 firmware running, \
                          bitstream=old|new, variant=original|mcupro; faults: stall=, stall_reply=, \
-                         short=, short_reply=NAME[:N], abort_reply=, fpga_version=, status_xor=, \
+                         short_reply=NAME[:N], abort_reply=, fpga_version=, status_xor=, \
                          mode_xor=, overflow=1, empty=N, stall_in=N, short_in=N";
 
 /// Vendor and product id, before and after the upload (`api.c`).
@@ -234,6 +246,18 @@ pub fn map_eeprom_data(v: u8) -> u8 {
     ((v ^ 0x80).wrapping_add(0x44) ^ 0xd5).wrapping_add(0x69)
 }
 
+/// `make_heartbeat()` of `protocol.c` for 64 bytes: a half sine of 8
+/// steps, twice, then zeros.
+pub fn heartbeat() -> [u8; 64] {
+    let mut t = [0u8; 64];
+    for i in 0..2 {
+        for j in 0..8 {
+            t[i * 8 + j] = (((j as f64) * std::f64::consts::PI / 8.0).sin() * 255.0) as u8;
+        }
+    }
+    t
+}
+
 /// An FPGA register map with its status and mode bits (`protocol.c`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RegisterMap {
@@ -253,6 +277,8 @@ pub struct RegisterMap {
     overflow: u8,
     unknown2: u8,
     clock: u8,
+    mode_u1: u8,
+    mode_u2: u8,
 }
 
 /// `fpga_register_map_old` and its bit maps.
@@ -273,6 +299,8 @@ pub const MAP_OLD: RegisterMap = RegisterMap {
     overflow: 0x20,
     unknown2: 0x40,
     clock: 0x01,
+    mode_u1: 0x40,
+    mode_u2: 0x80,
 };
 
 /// `fpga_register_map_new` and its bit maps.
@@ -293,6 +321,8 @@ pub const MAP_NEW: RegisterMap = RegisterMap {
     overflow: 0x01,
     unknown2: 0x04,
     clock: 0x04,
+    mode_u1: 0x80,
+    mode_u2: 0x01,
 };
 
 impl RegisterMap {
@@ -356,7 +386,6 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
 pub struct Faults {
     stall: Vec<Shot>,
     stall_reply: Vec<Shot>,
-    short: Vec<Shot>,
     short_reply: Vec<Shot>,
     abort_reply: Option<u8>,
     fpga_version: Option<u8>,
@@ -405,7 +434,6 @@ impl Faults {
         match k {
             "stall" => self.stall = shots(k, v)?,
             "stall_reply" => self.stall_reply = shots(k, v)?,
-            "short" => self.short = shots(k, v)?,
             "short_reply" => self.short_reply = shots(k, v)?,
             "abort_reply" => self.abort_reply = Some(byte(k, v)?),
             "fpga_version" => self.fpga_version = Some(byte(k, v)?),
@@ -467,8 +495,8 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 pub fn firmware_descriptors() -> Descriptors {
     let mut body = Vec::new();
     body.extend_from_slice(&descriptor::interface(0, 0, 3, [0xff, 0xff, 0xff], 0));
-    for address in [0x01, 0x81, 0x82] {
-        body.extend_from_slice(&descriptor::endpoint(address, crate::model::BULK, 512, 0));
+    for (address, size) in [(0x01, 64), (0x81, 64), (0x82, 512)] {
+        body.extend_from_slice(&descriptor::endpoint(address, crate::model::BULK, size, 0));
     }
     let config = descriptor::configuration(1, 0, 0x80, 100, &body);
     let dev = DeviceDescriptor {
@@ -554,6 +582,22 @@ impl Stream {
     }
 }
 
+/// Where `prime_fpga()`'s sequence stands.
+#[derive(Clone, Debug, Default)]
+struct Primer {
+    /// The last writes to `MODE`, `PRIMER_DATA1`, `PRIMER_DATA2`
+    /// since the last pulse ended (at most 8).
+    log: Vec<(u8, u8)>,
+    /// Pairs latched in this sequence.
+    pairs: usize,
+    /// The mode register's value `x` of this sequence.
+    base: u8,
+    /// `PRIMER_CONTROL` is 1; the next primer write must clear it.
+    pulse: bool,
+    /// All 16 pairs and the mode restored.
+    done: bool,
+}
+
 /// The FPGA and what the FX2 knows of it.
 #[derive(Clone, Debug)]
 struct Fpga {
@@ -562,8 +606,9 @@ struct Fpga {
     upload: Option<Vec<u8>>,
     map: RegisterMap,
     regs: [u8; 16],
-    /// Pairs primed so far.
-    primed: u32,
+    primer: Primer,
+    /// The upload had a chunk shorter than 62 bytes.
+    short_chunk: bool,
     /// The control bits of the status register.
     control: u8,
     overflow: bool,
@@ -594,6 +639,10 @@ pub struct Logic16 {
     fpga: Fpga,
     /// The scrambled answer waiting for its bulk IN, and its command.
     reply: Option<(u8, Vec<u8>)>,
+    /// The LED table as written.
+    led: [u8; 64],
+    /// Register 0 of the blank FPGA was read (the mcupro probe).
+    probed: bool,
     /// Commands seen per command byte, for the faults' Nth.
     counts: [u32; 256],
     faults: Faults,
@@ -618,7 +667,8 @@ impl Logic16 {
                 upload: None,
                 map: MAP_OLD,
                 regs: [0; 16],
-                primed: 0,
+                primer: Primer::default(),
+                short_chunk: false,
                 control: 0,
                 overflow: false,
                 config: None,
@@ -626,6 +676,8 @@ impl Logic16 {
                 stream: None,
             },
             reply: None,
+            led: [0; 64],
+            probed: false,
             counts: [0; 256],
             faults: Faults::default(),
         }
@@ -677,7 +729,7 @@ impl Logic16 {
         self.fpga.design = Some(Design::Bitstream(five));
         self.fpga.map = if self.new_map { MAP_NEW } else { MAP_OLD };
         self.fpga.regs = [0; 16];
-        self.fpga.primed = 0;
+        self.fpga.primer = Primer::default();
         self.fpga.control = 0;
         self.fpga.overflow = false;
         self.fpga.config = None;
@@ -701,9 +753,13 @@ impl Logic16 {
     fn read_register(&mut self, address: u8, v: &mut Violations) -> u8 {
         let m = self.fpga.map;
         if self.fpga.design.is_none() {
-            if address != 0 {
-                v.report(format!("read of FPGA register {address} with no bitstream loaded"));
+            if address != 0 || self.probed {
+                v.report(format!(
+                    "read of FPGA register {address} with no bitstream loaded (only the first \
+                     read of register 0 is the driver's)"
+                ));
             }
+            self.probed = true;
             return 0;
         }
         let old = m == MAP_OLD;
@@ -745,22 +801,81 @@ impl Logic16 {
             return;
         }
         self.fpga.regs[usize::from(address)] = value;
-        if address == m.primer_control && value == 1 {
-            let n = (self.fpga.primed % 16) as usize;
-            let d2 = self.fpga.regs[usize::from(m.primer_data2)];
-            let d1 = self.fpga.regs[usize::from(m.primer_data1)];
-            let want = self.eeprom[16 + n];
-            if d2 != want || d1 != map_eeprom_data(want) {
-                v.report(format!(
-                    "FPGA primer pair {n}: data2 {d2:#04x} data1 {d1:#04x}, the EEPROM's byte {} \
-                     is {want:#04x}, mapped {:#04x}",
-                    16 + n,
-                    map_eeprom_data(want)
-                ));
-            } else {
-                self.fpga.primed += 1;
-            }
+        if [m.mode, m.primer_data1, m.primer_data2, m.primer_control].contains(&address) {
+            self.primer_write(address, value, v);
         }
+    }
+
+    /// One write of `prime_fpga()`'s sequence (see the module's doc).
+    fn primer_write(&mut self, address: u8, value: u8, v: &mut Violations) {
+        let m = self.fpga.map;
+        let primer = &mut self.fpga.primer;
+        if primer.pulse {
+            primer.pulse = false;
+            primer.log.clear();
+            if (address, value) == (m.primer_control, 0) {
+                return;
+            }
+            v.report(format!(
+                "FPGA register {address} written while PRIMER_CONTROL is 1; the pulse ends with 0"
+            ));
+        }
+        if primer.pairs == 16 && !primer.done {
+            if (address, value) == (m.mode, primer.base) {
+                primer.done = true;
+            } else {
+                v.report(format!(
+                    "FPGA register {address} = {value:#04x} after the 16 primer pairs; the mode \
+                     register goes back to {:#04x} first",
+                    primer.base
+                ));
+                primer.pairs = 0;
+            }
+            return;
+        }
+        if address != m.primer_control {
+            primer.log.push((address, value));
+            if primer.log.len() > 8 {
+                primer.log.remove(0);
+            }
+            return;
+        }
+        if value != 1 {
+            v.report(format!("PRIMER_CONTROL {value:#04x} with no pulse to end"));
+            return;
+        }
+        if primer.done {
+            // A new sequence, as after a second upload_fpga_bitstream().
+            primer.pairs = 0;
+            primer.done = false;
+        }
+        primer.pulse = true;
+        let n = primer.pairs;
+        let byte = self.eeprom[16 + n];
+        let (u1, u2) = (m.mode_u1, m.mode_u2);
+        let take = if n == 0 { 6 } else { 4 };
+        let got = &primer.log[primer.log.len().saturating_sub(take)..];
+        let base = if n == 0 { got.first().map_or(0, |w| w.1) } else { primer.base };
+        let mut want = Vec::new();
+        if n == 0 {
+            want.extend([(m.mode, base), (m.mode, base | u1)]);
+        }
+        want.extend([
+            (m.primer_data2, byte),
+            (m.mode, base | u1 | u2),
+            (m.mode, base | u1),
+            (m.primer_data1, map_eeprom_data(byte)),
+        ]);
+        if got != want || base & u2 != 0 || (n > 0 && primer.log.len() != 4) {
+            v.report(format!(
+                "FPGA primer pair {n}: the writes (register, value) {got:02x?} before the pulse; \
+                 prime_fpga() sends {want:02x?} (EEPROM byte {} is {byte:#04x})",
+                16 + n
+            ));
+            return;
+        }
+        primer.base = base;
+        primer.pairs += 1;
     }
 
     fn write_status(&mut self, value: u8, v: &mut Violations) {
@@ -780,10 +895,10 @@ impl Logic16 {
                 self.fpga.regs[usize::from(m.channel_low)],
                 self.fpga.regs[usize::from(m.channel_high)],
             ]);
-            if self.fpga.primed < 16 {
+            if !self.fpga.primer.done {
                 v.report(format!(
-                    "capture set up with the FPGA primed with {} of 16 pairs",
-                    self.fpga.primed
+                    "capture set up before the FPGA primer sequence ended ({} of 16 pairs)",
+                    self.fpga.primer.pairs
                 ));
             }
             if channels == 0 {
@@ -906,6 +1021,7 @@ impl Logic16 {
                 self.stop();
                 self.fpga.design = None;
                 self.fpga.upload = Some(Vec::new());
+                self.fpga.short_chunk = false;
             }
             CMD_UPLOAD_DATA => {
                 let n = arg(1);
@@ -916,18 +1032,39 @@ impl Logic16 {
                         Some(bytes) => bytes.extend_from_slice(&cmd[2..]),
                         None => v.report("FPGA upload data without the upload init (0x7e)"),
                     }
+                    if self.fpga.short_chunk {
+                        v.report("FPGA upload chunk after a short one; only the last is short");
+                    }
+                    self.fpga.short_chunk |= n < 62;
                 }
             }
             CMD_LED_TABLE => {
                 let (offset, n) = (arg(1), arg(2));
-                if n == 0 || offset + n > 64 {
-                    v.report(format!("LED table of {n} bytes at {offset}; 1 or more within 64"));
-                } else {
-                    length_is(cmd, n + 3, v);
+                if n == 0 || n > 32 || offset + n > 64 {
+                    v.report(format!(
+                        "LED table of {n} bytes at {offset}; upload_led_table() sends 1 to 32 \
+                         within 64"
+                    ));
+                } else if length_is(cmd, n + 3, v) {
+                    self.led[offset..offset + n].copy_from_slice(&cmd[3..]);
                 }
             }
             CMD_LED_MODE => {
-                length_is(cmd, 6, v);
+                if length_is(cmd, 6, v) && cmd[1..] != [1, 0x6a, 0x18, 0, 1] {
+                    v.report(format!(
+                        "LED mode {:02x?}; configure_led() sends animate 1, T2 reload 6250, \
+                         divider 0, repeat 1",
+                        &cmd[1..]
+                    ));
+                }
+                if self.led != heartbeat() {
+                    v.report(format!(
+                        "LED mode set with the table {:02x?}; configure_led() uploads \
+                         make_heartbeat()'s {:02x?}",
+                        self.led,
+                        heartbeat()
+                    ));
+                }
             }
             CMD_START => {
                 length_is(cmd, 1, v);
@@ -965,9 +1102,6 @@ impl Logic16 {
         let count = self.counts[usize::from(c)];
         if hit(&self.faults.stall, c, count) {
             return Reply::Stall;
-        }
-        if hit(&self.faults.short, c, count) {
-            return Reply::Data(data[..data.len() - 1].to_vec());
         }
         if let Some(answer) = self.command(&cmd, v) {
             self.reply = Some((c, encrypt(&answer)));
@@ -1160,21 +1294,35 @@ mod tests {
     fn prime(dev: &mut Device, m: RegisterMap, v: &mut Violations) {
         let e = ep1(dev, &[CMD_READ_EEPROM, 0x33, 0x81, 16, 16], 16, v).unwrap();
         assert_eq!(e, eeprom()[16..32]);
-        let old = read(dev, m.mode, v);
+        let old = read(dev, m.mode, v) & !m.mode_u2;
+        let (u1, u2) = (m.mode_u1, m.mode_u2);
         for (i, b) in e.iter().enumerate() {
-            let pairs = [
+            let mut regs = Vec::new();
+            if i == 0 {
+                regs.extend([(m.mode, old), (m.mode, old | u1)]);
+            }
+            regs.extend([
                 (m.primer_data2, *b),
-                (m.mode, old | 0xc0),
-                (m.mode, old | 0x40),
+                (m.mode, old | u1 | u2),
+                (m.mode, old | u1),
                 (m.primer_data1, map_eeprom_data(*b)),
                 (m.primer_control, 1),
                 (m.primer_control, 0),
-            ];
-            if i == 0 {
-                write(dev, &[(m.mode, old), (m.mode, old | 0x40)], v);
-            }
-            write(dev, &pairs, v);
+            ]);
+            write(dev, &regs, v);
         }
+        write(dev, &[(m.mode, old)], v);
+    }
+
+    /// `configure_led()`.
+    fn led(dev: &mut Device, v: &mut Violations) {
+        let t = heartbeat();
+        for offset in [0u8, 32] {
+            let mut cmd = vec![CMD_LED_TABLE, offset, 32];
+            cmd.extend_from_slice(&t[usize::from(offset)..usize::from(offset) + 32]);
+            ep1(dev, &cmd, 0, v);
+        }
+        ep1(dev, &[CMD_LED_MODE, 1, 0x6a, 0x18, 0, 1], 0, v);
     }
 
     /// `logic16_setup_acquisition()` and the start, 1 MHz on `channels`.
@@ -1200,6 +1348,9 @@ mod tests {
         let t = ((0x7du8 ^ 0x54 ^ 0x2b).wrapping_sub(5) ^ 0x35).wrapping_sub(0x39);
         let t = ((t ^ 0x9b ^ 0x5a).wrapping_sub(0xb0) ^ 0x38).wrapping_sub(0x45);
         assert_eq!(encrypt(&[0x7d])[0], t);
+        // make_heartbeat(): (uint8_t)(sin(j * G_PI / 8) * 255).
+        assert_eq!(heartbeat()[..17], [0, 97, 180, 235, 255, 235, 180, 97, 0, 97, 180, 235, 255, 235, 180, 97, 0]);
+        assert_eq!(heartbeat()[16..], [0; 48]);
         let plain: Vec<u8> = (0..=255).collect();
         assert_eq!(decrypt(&encrypt(&plain)), plain);
         assert_ne!(encrypt(&plain), plain);
@@ -1245,8 +1396,7 @@ mod tests {
         assert_eq!(read(&mut dev, 0, &mut v), 0, "a blank FPGA");
         bring_up(&mut dev, false, &mut v);
         assert_eq!(read(&mut dev, 0, &mut v), 0x10, "old bitstream version");
-        ep1(&mut dev, &[CMD_LED_TABLE, 0, 32].iter().copied().chain([0; 32]).collect::<Vec<_>>(), 0, &mut v);
-        ep1(&mut dev, &[CMD_LED_MODE, 1, 0x6a, 0x18, 0, 1], 0, &mut v);
+        led(&mut dev, &mut v);
         assert!(v.is_empty(), "{v:?}");
         // Channels 0 and 9: words alternate, 16 samples each.
         capture(&mut dev, 0x0201, &mut v);
@@ -1321,6 +1471,10 @@ mod tests {
         ep1(&mut dev, &[CMD_ABORT_SYNC, 0x55], 0, &mut v);
         dev.transfer_in(1, 64, &mut v);
         assert_eq!(v.drain().len(), 1, "answer read with the wrong length");
+        read(&mut dev, 0, &mut v);
+        assert!(v.is_empty(), "the mcupro probe");
+        read(&mut dev, 0, &mut v);
+        assert_eq!(v.drain().len(), 1, "register 0 of a blank FPGA a second time");
         read(&mut dev, 3, &mut v);
         assert_eq!(v.drain().len(), 1, "register 3 of a blank FPGA");
         write(&mut dev, &[(1, 0)], &mut v);
@@ -1333,10 +1487,18 @@ mod tests {
         assert_eq!(v.drain().len(), 1, "chunk length mismatch");
         ep1(&mut dev, &[CMD_UPLOAD_INIT], 0, &mut v);
         ep1(&mut dev, &[CMD_UPLOAD_DATA, 2, 1, 2], 0, &mut v);
-        ep1(&mut dev, &[CMD_LED_MODE, 1, 0, 0, 0, 1], 0, &mut v);
+        ep1(&mut dev, &[CMD_ABORT_ASYNC], 0, &mut v);
         assert_eq!(v.drain().len(), 1, "a bitstream that is no stand-in");
+        ep1(&mut dev, &[CMD_UPLOAD_INIT], 0, &mut v);
+        ep1(&mut dev, &[CMD_UPLOAD_DATA, 2, 1, 2], 0, &mut v);
+        ep1(&mut dev, &[CMD_UPLOAD_DATA, 2, 1, 2], 0, &mut v);
+        assert_eq!(v.drain().len(), 1, "a chunk after a short one");
         ep1(&mut dev, &[CMD_LED_TABLE, 40, 32, 0], 0, &mut v);
-        assert_eq!(v.drain().len(), 1, "LED table beyond 64");
+        assert_eq!(v.drain().len(), 2, "LED table beyond 64; the upload was no stand-in");
+        ep1(&mut dev, &[CMD_LED_TABLE, 0, 33].iter().copied().chain([0; 33]).collect::<Vec<_>>(), 0, &mut v);
+        assert_eq!(v.drain().len(), 1, "LED table chunk over 32");
+        ep1(&mut dev, &[CMD_LED_MODE, 1, 0x6a, 0x18, 0, 2], 0, &mut v);
+        assert_eq!(v.drain().len(), 2, "LED mode arguments, and no heartbeat table");
         ep1(&mut dev, &[CMD_REVID], 0, &mut v);
         assert_eq!(v.drain().len(), 1, "a command the driver never sends");
         assert_eq!(dev.control(Setup { request_type: 0xc0, ..load(0, 1) }, &[], &mut v), Reply::ack());
@@ -1359,7 +1521,8 @@ mod tests {
         // A pair with the raw byte twice.
         let b = eeprom()[16];
         write(&mut dev, &[(m.primer_data2, b), (m.primer_data1, b), (m.primer_control, 1)], &mut v);
-        assert_eq!(v.drain().len(), 1, "data1 not mapped");
+        assert_eq!(v.drain().len(), 1, "data1 not mapped, no MODE bracket");
+        write(&mut dev, &[(m.primer_control, 0)], &mut v);
         write(&mut dev, &[(m.version, 1)], &mut v);
         assert_eq!(v.drain().len(), 1, "the version register");
         write(&mut dev, &[(9, 1)], &mut v);
@@ -1379,6 +1542,66 @@ mod tests {
     }
 
     #[test]
+    fn the_primer_is_held_to_prime_fpga_s_sequence() {
+        let m = MAP_OLD;
+        let e = eeprom();
+        let pair = |i: usize| {
+            [
+                (m.primer_data2, e[16 + i]),
+                (m.mode, 0xc0),
+                (m.mode, 0x40),
+                (m.primer_data1, map_eeprom_data(e[16 + i])),
+                (m.primer_control, 1),
+                (m.primer_control, 0),
+            ]
+        };
+        let fresh = |v: &mut Violations| {
+            let mut dev = flashed(&[]);
+            ep1(&mut dev, &[CMD_UPLOAD_INIT], 0, v);
+            for c in ezusb::standin(BITSTREAM_18.0, BITSTREAM_18.1).chunks(62) {
+                let mut cmd = vec![CMD_UPLOAD_DATA, c.len() as u8];
+                cmd.extend_from_slice(c);
+                ep1(&mut dev, &cmd, 0, v);
+            }
+            dev
+        };
+        let mut v = Violations::default();
+        // The first pair without the opening MODE writes.
+        let mut dev = fresh(&mut v);
+        write(&mut dev, &pair(0), &mut v);
+        assert_eq!(v.drain().len(), 1, "no MODE x, x|UNKNOWN1 before the first pair");
+        // UNKNOWN2 not raised between the data writes.
+        let mut dev = fresh(&mut v);
+        let mut regs = vec![(m.mode, 0), (m.mode, 0x40)];
+        regs.extend(pair(0));
+        regs[3].1 = 0x40;
+        write(&mut dev, &regs, &mut v);
+        assert_eq!(v.drain().len(), 1, "MODE without UNKNOWN2 in the pulse");
+        // PRIMER_CONTROL left at 1.
+        let mut dev = fresh(&mut v);
+        let mut regs = vec![(m.mode, 0), (m.mode, 0x40)];
+        regs.extend(&pair(0)[..5]);
+        write(&mut dev, &regs, &mut v);
+        write(&mut dev, &pair(1)[..1], &mut v);
+        assert_eq!(v.drain().len(), 1, "PRIMER_CONTROL not back to 0");
+        // All 16 pairs, but no MODE restore before the capture's UPDATE.
+        let mut dev = fresh(&mut v);
+        let mut regs = vec![(m.mode, 0), (m.mode, 0x40)];
+        regs.extend(pair(0));
+        write(&mut dev, &regs, &mut v);
+        for i in 1..16 {
+            write(&mut dev, &pair(i), &mut v);
+        }
+        assert!(v.is_empty(), "{v:?}");
+        write(&mut dev, &[(m.divisor, 99)], &mut v);
+        assert_eq!(v.drain().len(), 0, "the divisor is no primer register");
+        write(&mut dev, &[(m.mode, 0x40)], &mut v);
+        assert_eq!(v.drain().len(), 1, "the mode not restored");
+        write(&mut dev, &[(m.channel_low, 1), (m.status, m.update)], &mut v);
+        assert_eq!(v.drain().len(), 1, "capture set up before the sequence ended");
+    }
+
+    #[test]
     fn a_full_bring_up_is_clean_and_faults_answer_wrong() {
         let mut v = Violations::default();
         let mut dev = flashed(&[]);
@@ -1389,7 +1612,6 @@ mod tests {
             ("stall", "fpga-read:2"),
             ("stall_reply", "read-eeprom:1"),
             ("short_reply", "abort-sync"),
-            ("short", "led-mode"),
             ("fpga_version", "0x22"),
         ]);
         assert_eq!(dev.transfer_out(1, &encrypt(&[CMD_ABORT_SYNC, 0x55]), &mut v), Reply::ack());
@@ -1400,8 +1622,6 @@ mod tests {
         let second = encrypt(&[CMD_FPGA_READ, 1, 0]);
         assert_eq!(dev.transfer_out(1, &second, &mut v), Reply::Stall, "the second read");
         assert_eq!(dev.transfer_in(1, 1, &mut v), Reply::Nak, "a STALLed command has no answer");
-        let mode = encrypt(&[CMD_LED_MODE, 1, 0, 0, 0, 1]);
-        assert_eq!(dev.transfer_out(1, &mode, &mut v), Reply::Data(mode[..5].to_vec()));
         bring_up(&mut dev, false, &mut v);
         assert_eq!(read(&mut dev, 0, &mut v), 0x22);
         assert!(v.is_empty(), "a fault is the device's, not the host's: {v:?}");
