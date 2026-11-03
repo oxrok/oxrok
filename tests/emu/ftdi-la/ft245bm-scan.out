@@ -1,2 +1,2 @@
 The following devices were found:
-ftdi-la - FTDI USB FIFO [S/N: FTB4ZQ7K] with 8 channels: TXD RXD RTS# CTS# DTR# DSR# DCD# RI#
+ftdi-la:conn=BUS.ADDR - FTDI USB FIFO [S/N: FTB4ZQ7K] with 8 channels: TXD RXD RTS# CTS# DTR# DSR# DCD# RI#

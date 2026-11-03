@@ -22,6 +22,13 @@
 //! reads 16 KiB at a time in bulk transfers of 4 KiB until it has its
 //! samples.
 //!
+//! oxrok's port sends the same requests, except around the kernel's
+//! `ftdi_sio`: libftdi detaches it from port A and never attaches it
+//! again, while oxrok gives the port back on close, so `ftdi_sio` binds
+//! again and probes port A (`GET_LATENCY_TIMER`, then
+//! `SET_LATENCY_TIMER` to 16 ms). The scenario cannot show it: sigrok-cli
+//! runs first in every case and leaves the port free for oxrok.
+//!
 //! The pins carry a deterministic pattern: sample `n` is `n` modulo 256,
 //! so `ADBUS0` toggles every sample and `ADBUS7` every 128. The count
 //! starts over whenever the port enters a bit mode and when the host

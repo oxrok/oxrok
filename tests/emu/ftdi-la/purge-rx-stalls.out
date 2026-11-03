@@ -1,0 +1,2 @@
+sr: ftdi-la: Failed to purge FTDI RX/TX buffers (-2): FTDI purge of RX buffer failed.
+Failed to open device.

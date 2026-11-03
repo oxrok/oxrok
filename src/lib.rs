@@ -79,6 +79,7 @@ pub mod usb;
 pub mod drivers {
     pub mod dcttech_usbrelay;
     pub mod demo;
+    pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod logicport;
     pub mod microchip_pickit2;
@@ -99,4 +100,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::microchip_pickit2::Pickit2Driver));
     registry.register(Box::new(drivers::fx2lafw::Fx2lafwDriver));
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
+    registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
 }

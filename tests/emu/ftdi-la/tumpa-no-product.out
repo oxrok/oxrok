@@ -1,2 +1,2 @@
 The following devices were found:
-ftdi-la - TIAO FT2232H-TUMPA with 8 channels: TCK TDI TDO TMS RST nTRST DBGRQ RTCK
+ftdi-la:conn=BUS.ADDR - TIAO FT2232H-TUMPA with 8 channels: TCK TDI TDO TMS RST nTRST DBGRQ RTCK
