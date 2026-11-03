@@ -1,0 +1,54 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+hantek-dso - Hantek DSO-2090 with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options across all channel groups:
+    continuous: on, off
+    conn: BUS.ADDR (current)
+    limit_frames: 0 (current)
+    timebase - supported values:
+      10 us
+      20 us
+      40 us
+      100 us (current)
+      200 us
+      400 us
+      1 ms
+      2 ms
+      4 ms
+      10 ms
+      20 ms
+      40 ms
+      100 ms
+      200 ms
+      400 ms
+    num_hdiv
+    captureratio: 100 (current)
+    triggersource: CH1, CH2, EXT
+    triggerslope: r (current)
+    buffersize:  - supported values:
+      10240 (current)
+      32768
+    samplerate - supported samplerates:
+      20 kHz
+      25 kHz
+      50 kHz
+      100 kHz
+      200 kHz
+      250 kHz
+      500 kHz
+      1 MHz
+      2 MHz
+      5 MHz
+      10 MHz
+      20 MHz
+      25 MHz
+      50 MHz
+      100 MHz
+      125 MHz
+    num_vdiv
+    triggerlevel: 0.500000 (current)

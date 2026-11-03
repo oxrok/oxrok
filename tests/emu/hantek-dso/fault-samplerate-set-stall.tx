@@ -1,0 +1,2 @@
+ctl_out 40 b3 0000 0000 0f03030368acfe000100 -> ok
+bulk_out 02 01006602ffffffff00000700 -> err stall
