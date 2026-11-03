@@ -240,6 +240,12 @@ is how a driver is verified against sigrok-cli without the hardware
   whose device a `cleanup` had removed would, when it ended, remove
   the next server's device from the same port. Such a server says that
   its device was detached by someone else and exits with status 1.
+  A running session's port carries the same `devid`, so `cleanup`
+  takes the session lock (`--lock PATH`, default `/tmp/oxrok-emu.lock`)
+  and refuses while another session holds it. A cleanup inside a
+  session (`diffcli.sh`'s, or a script run under `flock`) passes
+  `--locked`; `--force` detaches regardless. An ad hoc cleanup run
+  outside the lock used to kill sessions midway.
 - The transaction log is the fixture dialect above, one line per
   completed transfer: `ctl_in 21 01 0300 0000 8 -> 4142434445000000`,
   `ctl_out 21 09 0300 0000 ff02000000000000 -> ok`, `int_in`,
@@ -419,7 +425,8 @@ of a sigrok driver `DRIVER`:
    serves the model by hand. Take the lock, as that line does, whenever
    other agents may be running sessions: a device served beside a
    session's device makes the session's cases see two, and a session's
-   `cleanup` would detach the hand-served one.
+   `cleanup` would detach the hand-served one. A script that cleans up
+   inside its `flock` passes `cleanup --locked`.
 6. Bless the goldens, `EMU_BLESS=1 sh tools/diffcli.sh --emu-model NAME`,
    read them (they are the reference from now on), and run again
    without `EMU_BLESS` to see them pass. Commit them.

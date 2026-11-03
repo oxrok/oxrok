@@ -484,7 +484,7 @@ if [ $emu = 1 ]; then
         fi
         [ "$EMU_DEAD" = 0 ] || [ $emu_status != 0 ] || emu_status=1
         EMUPID=""
-        sudo -n "$EMU" cleanup >&2
+        sudo -n "$EMU" cleanup --locked >&2
         return $emu_status
     }
     # The transaction lines of a section of the log, comments dropped.
@@ -677,7 +677,7 @@ if [ $emu = 1 ]; then
             fi
         fi
         # A run that crashed may have left its device attached.
-        sudo -n "$EMU" cleanup || echo "emulator cleanup failed; carrying on with a free port"
+        sudo -n "$EMU" cleanup --locked || echo "emulator cleanup failed; carrying on with a free port"
         if [ $gcov = 1 ]; then
             emu_gcov zero || emu_fail "$EMU_MODEL: emu-gcov.sh zero failed"
         fi

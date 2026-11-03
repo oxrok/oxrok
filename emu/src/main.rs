@@ -19,7 +19,11 @@
 //!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
-//! with `--all` every attached port.
+//! with `--all` every attached port. A running session's port carries
+//! that `devid` too, so `cleanup` takes the session lock
+//! (`/tmp/oxrok-emu.lock`, `--lock PATH`) and refuses while another
+//! session holds it; a session cleaning up under its own lock says so
+//! with `--locked`, and `--force` cleans up regardless.
 //!
 //! Each server announces a device number no attached oxrok-emu port
 //! has, so its `devid` names its own port: on the way out it detaches
@@ -62,6 +66,15 @@ enum Command {
         /// Every attached port, whoever attached it.
         #[arg(long)]
         all: bool,
+        /// The session lock that `tools/diffcli.sh` holds for a session.
+        #[arg(long, default_value = DEFAULT_LOCK)]
+        lock: PathBuf,
+        /// The caller holds the lock already (a session cleaning up).
+        #[arg(long)]
+        locked: bool,
+        /// Detach even while another session holds the lock.
+        #[arg(long, conflicts_with = "locked")]
+        force: bool,
     },
 }
 
@@ -118,13 +131,15 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Command::Cleanup { all } => match cleanup(all) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("oxrok-emu: {e}");
-                ExitCode::FAILURE
+        Command::Cleanup { all, lock, locked, force } => {
+            match locked_cleanup(all, &lock, locked || force) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("oxrok-emu: {e}");
+                    ExitCode::FAILURE
+                }
             }
-        },
+        }
         Command::Serve(args) => match serve(&args) {
             Ok(violations) => {
                 if violations == 0 {
@@ -180,6 +195,36 @@ impl Attached {
         let n = self.log.lock().expect("log lock").violations();
         println!("violations: {n}");
         n
+    }
+}
+
+/// The session lock `tools/diffcli.sh` takes (`EMU_LOCK`).
+const DEFAULT_LOCK: &str = "/tmp/oxrok-emu.lock";
+
+/// Runs [`cleanup`] under the session lock, unless `unlocked` says the
+/// caller holds it or wants it ignored. A running session's port looks
+/// like a stale one, so a cleanup that ignored a held lock would detach
+/// it, and its server would exit 1 in the middle of the session's cases.
+fn locked_cleanup(all: bool, lock: &std::path::Path, unlocked: bool) -> Result<()> {
+    if unlocked {
+        return cleanup(all);
+    }
+    // Opened for reading, as the harness opens it: root may not create
+    // or open for writing another user's file in sticky /tmp
+    // (fs.protected_regular), and flock needs neither.
+    let file = match std::fs::File::open(lock) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return cleanup(all),
+        Err(e) => return Err(format!("{}: {e}", lock.display()).into()),
+    };
+    match file.try_lock_shared() {
+        Ok(()) => cleanup(all),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "an emulator session holds {}; its port is not stale (--force detaches it anyway)",
+            lock.display()
+        )
+        .into()),
+        Err(std::fs::TryLockError::Error(e)) => Err(format!("{}: {e}", lock.display()).into()),
     }
 }
 
