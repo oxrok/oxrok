@@ -1,0 +1,4 @@
+ctl_out 00 09 0001 0000 - -> ok
+ctl_out 40 a0 e600 0000 01 -> ok
+ctl_out 40 a0 0000 0000 @4096:020f6611a38e1cf10be76a5eb37b46914cece273daf2a6ef4787b963de2ad643 -> err stall
+ctl_in 40 b0 0000 0000 2 -> err stall

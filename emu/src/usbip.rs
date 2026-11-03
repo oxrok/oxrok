@@ -540,7 +540,19 @@ impl Server {
             let kind =
                 self.device().endpoint(address).map_or(0xff, crate::model::Endpoint::transfer_type);
             let above = self.device().log_digest_above();
-            transfer_line(kind, address, urb.length, &urb.data, &reply, above)
+            let masked = if urb.direction == DIR_IN {
+                None
+            } else {
+                self.device().log_out(urb.ep, &urb.data)
+            };
+            transfer_line(
+                kind,
+                address,
+                urb.length,
+                masked.as_ref().unwrap_or(&urb.data),
+                &reply,
+                above,
+            )
         };
         for message in v.drain() {
             log.violation(&message);

@@ -1,0 +1,33 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+dreamsourcelab-dslogic - DreamSourceLab DSLogic with 16 channels: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Channel groups:
+    Logic: channels 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Supported configuration options across all channel groups:
+    continuous: on, off (current)
+    limit_samples: 0 (current)
+    voltage_threshold: 0.7-1.4, 1.4-3.6 (current)
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      10 kHz (current)
+      20 kHz
+      50 kHz
+      100 kHz
+      200 kHz
+      500 kHz
+      1 MHz
+      2 MHz
+      5 MHz
+      10 MHz
+      20 MHz
+      25 MHz
+      50 MHz
+      100 MHz
+      200 MHz
+      400 MHz
+    Supported triggers: 0 1 r f e 
+    captureratio: 0 (current)
+    external_clock: on, off (current)
+    clock_edge: rising (current), falling

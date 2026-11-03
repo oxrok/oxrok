@@ -1,0 +1,19 @@
+# Firmware stand-ins for the dreamsourcelab-dslogic model
+# (emu/src/models/dreamsourcelab-dslogic.rs): the FX2 firmware and the
+# FPGA bitstreams the driver uploads to the five emulated profiles. The
+# sizes are the model's PROFILES, which a unit test checks; they are not
+# those of DreamSourceLab's files, which the model does not need (it
+# checks the stand-ins byte for byte). The bitstreams stay below the
+# driver's FW_BUFSIZE (1 MiB), so each goes in one bulk transfer, as the
+# real ones do.
+dreamsourcelab-dslogic-plus-fx2.fw 8404
+dreamsourcelab-dslogic-basic-fx2.fw 8412
+dreamsourcelab-dslogic-pro-fx2.fw 8396
+dreamsourcelab-dslogic-fx2.fw 8388
+dreamsourcelab-dscope-fx2.fw 8420
+dreamsourcelab-dslogic-plus-fpga.fw 341212
+dreamsourcelab-dslogic-basic-fpga.fw 341220
+dreamsourcelab-dslogic-pro-fpga.fw 583340
+dreamsourcelab-dslogic-fpga-3v3.fw 340604
+dreamsourcelab-dslogic-fpga-5v.fw 340612
+dreamsourcelab-dscope-fpga.fw 583348

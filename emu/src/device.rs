@@ -97,6 +97,11 @@ impl Device {
         self.model.log_digest_above()
     }
 
+    /// See [`DeviceModel::log_out`].
+    pub fn log_out(&self, ep: u8, data: &[u8]) -> Option<Vec<u8>> {
+        self.model.log_out(ep & 0x0f, data)
+    }
+
     /// See [`DeviceModel::in_submitted`].
     pub fn in_submitted(&mut self, ep: u8, max: usize) {
         self.model.in_submitted(ep & 0x0f, max);

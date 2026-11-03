@@ -271,6 +271,17 @@ pub trait DeviceModel: Send {
         None
     }
 
+    /// What the log shows of an OUT transfer of `data` to endpoint
+    /// number `ep` (not 0), when the model replaces bytes the host
+    /// leaves undefined, such as a C driver's uninitialised struct
+    /// field, which would make the log differ from one run to the next.
+    /// The model documents each such byte; `None`, the default, logs
+    /// what the host sent.
+    fn log_out(&self, ep: u8, data: &[u8]) -> Option<Vec<u8>> {
+        let _ = (ep, data);
+        None
+    }
+
     /// Whether the model wants to leave the bus and come back with
     /// what [`DeviceModel::descriptors`] says now, as an EZ-USB device
     /// does once its new firmware runs. Asked after every transfer; a
