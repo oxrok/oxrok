@@ -133,7 +133,11 @@ oxrok -d uni-t-ut61e-ser:conn=hid/ch9325 --samples 5    # a serial meter on a HI
 ```
 
 `hid` takes any cable with a known USB id, `hid/CHIP` one of `bu86x`,
-`ch9325`, `cp2110`, `victor`, and `sn=` picks one by serial number. On
+`ch9325`, `cp2110`, `victor`, `sn=` picks one by serial number and
+`raw=PATH` names the node (`hid/ch9325/raw=/dev/hidraw3`; without a
+chip, the chip comes from the node's USB id). `usb=` and `iokit=`, the
+other path forms sigrok prints, are parsed but match no device yet:
+oxrok's HID backend names devices by node only. On
 Linux the user needs read and write access to the `/dev/hidraw*` node
 (a udev rule for the cable's USB id). Meters that come with a HID cable
 scan without `conn=`; an unplugged default cable is simply not found.
@@ -149,6 +153,40 @@ the three cases. The CP2110 has no emulation yet. sigrok-cli needed two
 small fixes in libsigrok's `serial_hid.c` to work on this macOS at all
 (the `DevSrvsID:` paths of current hidapi, and a double conversion of
 found paths); they are applied in the local build only.
+
+Emulated (2026-11-03): the three cables are also `oxrok-emu` models,
+`bu86x`, `ch9325` and `victor`, after the Pico firmware and libsigrok's
+`serial_hid_bu86x.c`, `serial_hid_ch9325.c` and `serial_hid_victor.c`,
+sharing `emu/src/shells/hidcable.rs`:
+
+- `bu86x`: 0820:0001, 8 byte reports. The BM86x answers the output
+  report `00 86 66` with its 24 byte packet in three input reports.
+  `packet=HEX[,HEX...]` gives the packets, played in turn; `drop=N`
+  leaves every Nth request unanswered.
+- `ch9325`: 1a86:e008, up to 7 UART bytes per report behind
+  `0xf0|count`. The line parameters come as a 5 byte feature report
+  (rate LE, 0, 0, bits - 5), checked against `baud=` (19200) and
+  `bits=` (7). One packet per `period=N` polls of the interrupt
+  transfer (50, about a second), restarted by each line setting.
+- `victor`: 1244:d237, FS9922 packets scrambled into 14 byte reports,
+  one per `period=N` polls (50).
+
+`tools/emu/{bu86x,ch9325,victor}.sh` hold 27 cases with no violation
+under either tool. 19 are full: scan, `--show`, sample limits 1 to 4, a
+channel selection, csv, the chip taken from the node's USB id, a lost
+BM86x request and a misaligned UT61E packet. 8 are oxrok only
+(`--oracle-bug`): the names users type (`hid`, `hid/CHIP`, `sn=`, the
+driver's default `conn`), which the unpatched libsigrok 0bc24877 cannot
+open, since it converts a found cable's path twice
+(`raw=hid/CHIP/raw=...`) and hands that to `hid_open_path`; only
+`hid[/CHIP]/raw=PATH` works there. gcov of serial-dmm: 68.9% (bu86x),
+61.4% (ch9325), 59.0% (victor). Not emulated: `limit_time`, the BM52x
+hooks, transport errors. The models taught that sigrok holds the node
+about 100 ms before it sets the line parameters (`try_open_path` opens
+it once just to check), and that oxrok kept the probed HID port open
+into the capture, skipping the second parameter report and reading
+stale packets; it now reopens the cable, and flushes a kept UART, as
+sigrok's `serial_open` does.
 
 ### UNI-T meters on the UT-D04 cable, and the UT32x
 
@@ -185,12 +223,47 @@ oxrok -d microchip-pickit2 -c samplerate=1M --samples 1024 -O bits
 oxrok -d microchip-pickit2 -c samplerate=250k:captureratio=2 -t pin5=r --samples 1024 -O csv
 ```
 
-libsigrok reaches the PICkit2 with raw USB transfers, which macOS does
-not allow on a HID; oxrok speaks HID reports instead, so it works on
-every platform. Both drivers were verified against the Pico emulator
-(`MODE usbrelay`, `MODE pickit2`, which plays a counter on the three
-pins; firmware in `hil/pico-hidcable`). A real PICkit2 has not been
-tried yet.
+libsigrok reaches the PICkit2 with raw USB interrupt transfers on
+interface 0. On Linux oxrok does the same: the kernel keeps usbhid off
+the PICkit2 (it is on the HID ignore list), so there is no hidraw node
+to use. macOS does not let a program claim a HID interface and Windows
+binds its HID driver, so there oxrok speaks HID reports instead. On
+Linux `conn` is the device's bus.address, as under libsigrok, and
+`conn=04d8.0033` or `conn=BUS.ADDR` selects the device. Both drivers
+were verified on macOS against the Pico emulator (`MODE usbrelay`,
+`MODE pickit2`, which plays a counter on the three pins; firmware in
+`hil/pico-hidcable`). A real PICkit2 has not been tried yet.
+
+The PICkit2 is also a host model of the USB/IP emulator: `sudo
+oxrok-emu serve pickit2 --attach --open-devices` puts a 04d8:0033
+PICkit2 on the bus. It plays the Pico firmware's counter (pin4 toggles
+every sample, pin5 every two, pin6 every four), and its status comes
+15 IN offers (300 ms) after SETUP; `-o delay=N` changes that. A trigger
+the counter can never meet (rising edges on pin4 and pin5 together) is
+answered with the cancel status 0x4004 that a press of the button
+gives. Emulated status, 2026-11-03: the 41 cases of
+`tools/emu/pickit2.sh` (scan, show, selection by ids and by address,
+probe names, get and set, captures at all eight rates, 1 to 5000
+samples, two channels, triggers on levels and edges, a cancelled
+capture, the `captureratio` presets 0 to 6, no trigger, and an ignored
+ratio) give identical output and identical transactions under
+sigrok-cli and oxrok, with zero pedantic violations under either; the
+model also flags IN reads with no answer to come. The goldens are in
+`tests/emu/pickit2`. The gcov report of the C driver over those cases
+(`tests/emu/pickit2/gcov.txt`) is 83.2% of the executable lines (317 of
+381; `api.c` 79.5%, `protocol.c` 86.9%). Not reached, and not emulated
+on purpose: the kernel driver detach and reattach in `dev_open` and
+`dev_close` (no driver is bound to a PICkit2 on Linux), USB transfer
+errors and short transfers, stopping a capture by software while it
+waits for the trigger, the `SR_ERR_ARG` and `SR_ERR_NA` defaults
+sigrok-cli never asks for, multi-stage triggers, and the error returns
+of the read-out. The model showed three oxrok bugs, all fixed: the
+driver found no PICkit2 on Linux; nusb's claim reattached kernel
+drivers on release, so usbhid read the serial number again; and
+`--get` did not print values the way sigrok-cli's `g_variant_print`
+does. Like the C driver, oxrok ignores a failed send and reads a short
+packet again; a hard read error still ends oxrok's capture, where
+libsigrok would poll a vanished device forever.
 
 The relay board is also the first host model of the USB/IP emulator
 (`docs/USB.md`): `sudo oxrok-emu serve usbrelay --attach
@@ -292,6 +365,44 @@ and reports an `ALTERNATION` slope outside edge trigger mode, where
 both tools decline the `triggerslope` query. Still open: the other
 series, for which `OXROK_SCPI_RECORD=FILE` captures a fixture from any
 run.
+
+## FTDI logic analyzers (ftdi-la)
+
+oxrok has no `ftdi-la` driver yet; the emulator checks libsigrok's
+driver alone, so its cases are oracle cases that become full ones once
+the driver is ported.
+
+Emulated (2026-11-03): model `ftdi-la` (`emu/src/models/ftdi-la.rs`,
+on the FTDI shell `emu/src/shells/ftdi.rs`), an FTDI chip with port A
+in asynchronous bit-bang mode, all pins inputs. Sample n is n modulo
+256, and the count restarts at every SET_BITMODE and at every purge of
+the chip-to-host buffer. Options: `chip=` `ft2232h` (default),
+`ft4232h`, `ft232h`, `ft232r`, `tumpa` (0403:8a98, found only with
+`conn=`), `ft245bm` (the driver takes it for an FT232R) or `ft230x`
+(0403:6015, which the driver rejects); `manufacturer=`, `product=` and
+`serial=` replace a string, or remove it when empty, as an unprogrammed
+EEPROM does. `tools/emu/ftdi-la.sh` runs 15 oracle cases on the
+FT2232H: scan, show, get and set samplerate, get conn, captures at
+3.6 kHz, 1 MHz and 10 MHz, a `--time` capture, `-C`, `conn=`, and the
+error answers (samplerate below 3600, a samplerate beyond libftdi's 5 %
+tolerance, triggers). No violation under sigrok-cli. The other chips
+and the missing strings were served by hand, also with no violation;
+they become cases once a scenario can switch options. gcov: 69.3 %
+(178 of 257). Not emulated: failures of libftdi calls (string reads,
+`find_all`, open, purge, bit mode, reads), `config_get` conn (the
+driver never sets `sdi->conn`, so `--get conn` always fails with
+"invalid argument") and `LIMIT_MSEC` (not advertised; sigrok-cli turns
+`--time` into a sample count).
+
+What the model taught about the driver: `dev_open` goes reset, 9600 Bd
+(libftdi's open), purge both buffers, bit mode reset, bit-bang with
+mask 0, and acquisition sets bit-bang again. The samplerate is sent as
+a baud rate of samplerate / 20 (H chips) or / 30 (FT232R, FT232H),
+which libftdi multiplies by 4 in bit-bang mode; with no samplerate set
+the 9600 Bd of the open stays. Every read asks libftdi for 16 KiB in
+4 KiB bulk transfers, so even a 100 sample capture reads about 20 KB.
+The FT230X is listed by libftdi's scan but has no entry in the
+driver's table.
 
 ## fx2lafw devices
 

@@ -106,9 +106,13 @@ trait (read with a timeout, write, parameters, RTS and DTR), the
 `serialcomm` syntax in `Params::parse`, and `Recorder`/`Replay` with a
 text fixture like the USB one. A driver takes `conn=` and an optional
 `serialcomm=`, opens the port with `serial::open` (which records
-when `OXROK_SERIAL_RECORD` is set) and keeps the port it probed with:
-reopening toggles the handshake lines, and adapters such as the CP2102
-on the ESP32 reset their board on that. Packet based protocols are
+when `OXROK_SERIAL_RECORD` is set) and keeps a UART it probed with
+(sigrok closes it after the scan and opens it again; reopening toggles
+the handshake lines, and adapters such as the CP2102 on the ESP32 reset
+their board on that), flushing its input when the device takes it
+over, as sigrok's `serial_open` does on every open. A serial over HID
+cable has no handshake lines and is closed after the probe and
+reopened, as in sigrok, which sends its line parameters again. Packet based protocols are
 pure parsers in `dmm` (`valid` and `parse` on a byte slice), so
 each one tests against packets written from its layout without a
 meter. A validity check should demand a recognised function, not only

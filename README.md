@@ -42,9 +42,9 @@ unchanged libsigrokdecode decoders run too. See `docs/ROADMAP.md`.
 | `rigol-ds` | a Rigol DS1102E | `--show`, frames and settings identical to sigrok-cli; also on a Pico emulating the scope over USBTMC |
 | `raspberrypi-pico` | a Pico running the sigrok-pico firmware | digital, analog and mixed captures identical to sigrok-cli |
 | `serial-dmm` (UT61E, UT60A) | meter streams replayed by an ESP32 | readings identical to sigrok-cli; no real meter yet |
-| HID cables (BU-86X, CH9325, Victor), UT-D04 meters, UT32x | a Pico emulating the cable | readings identical to sigrok-cli; CP2110 unverified |
+| HID cables (BU-86X, CH9325, Victor), UT-D04 meters, UT32x | a Pico emulating the cable, and the host emulator (`oxrok-emu`) | readings and USB transactions identical to sigrok-cli; CP2110 unverified |
 | `dcttech-usbrelay` | the host emulator over USB/IP (`oxrok-emu`), and a Pico emulating the board | output and USB transactions identical to sigrok-cli; no real board yet |
-| `microchip-pickit2` | a Pico emulating the device | identical to sigrok-cli; no real programmer yet |
+| `microchip-pickit2` | the host emulator (`oxrok-emu`), and a Pico emulating the device | output and USB transactions identical to sigrok-cli; no real programmer yet |
 | `uart`, `i2c`, `spi` decoders | captures from an ESP32 | annotations identical to libsigrokdecode |
 
 The other 67 multimeters, the other Rigol and Agilent scope series and

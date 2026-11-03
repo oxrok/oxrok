@@ -130,8 +130,34 @@ is how a driver is verified against sigrok-cli without the hardware
   kind shares, and a model fills in what its own protocol means.
   `shells/hid.rs` is the first: the HID class descriptor, the report
   descriptor fetch, `GET_REPORT`, `SET_REPORT`, idle and protocol, with
-  the model answering the reports through `HidReports`. FTDI and
-  EZ-USB come next, then CDC-ACM and USBTMC.
+  the model answering the reports through `HidReports`.
+  `shells/hidcable.rs` is what the serial over HID cable models share:
+  the Pico emulator's descriptors, the packets they play, a stream
+  paced by polls of the held interrupt transfer rather than wall time.
+- `shells/ftdi.rs` is the FTDI shell. Per chip (AM, BM, FT2232C, R,
+  FT2232H, FT4232H, FT232H, FT-X): the bcdDevice libftdi and ftdi_sio
+  take the type from (0x0200 for a BM without a serial, as on the
+  chip), speed, ports with bulk IN 0x81+2n and OUT 0x02+2n of 64 or 512
+  bytes, and the bit modes of each port; an AM has no latency timer,
+  bit modes or pins. Vendor requests take the port in the low byte of
+  wIndex (1 for A; a single-port chip also takes 0, which the kernel
+  sends). SET_BAUD_RATE is decoded per AN_120 and checked per chip
+  (`libftdi_divisor` is a port of libftdi's); libftdi 1.5 puts the port
+  in wIndex on the H chips only, and on the FT2232C the chip reads
+  libftdi's bare divisor bits as the kernel's port form, which is
+  documented, not flagged. EEPROM reads come from an image with its
+  checksum; libftdi reads 128 words, and a 64-word EEPROM wraps. Every
+  packet of an IN transfer starts with the two status bytes, and an
+  idle chip answers them alone. A model implements `FtdiPorts`: notice
+  of changes (`Event`), host writes, the bytes for the host
+  (`Fill::Data`, `Idle`, or `Wait` to NAK) and `READ_PINS`. The shell
+  has no notion of time yet: `Idle` is answered at once, with no
+  latency timer pacing, so a model whose driver polls counts reads.
+  What the first FTDI model taught: the kernel's ftdi_sio binds every
+  port at attach, reads and sets the latency timer of each, and reads
+  the EEPROM of R, FT232H and FT-X chips for its CBUS GPIOs; libftdi
+  detaches it from the interface it claims and does not reattach it.
+- EZ-USB comes next, then CDC-ACM and USBTMC.
 - Models live in `emu/src/models`, one file `NAME.rs` or one directory
   `NAME/mod.rs` each, and nothing else names them: `emu/build.rs` finds
   them and generates the module declarations, the table
@@ -259,6 +285,11 @@ full case or oracle case. What else is checked depends on oxrok:
 - Otherwise it is an oracle case, the state of a model written before
   its driver is ported: sigrok-cli alone, which must exit as expected
   and log no violation.
+- `--oracle-bug WHY` marks a full case sigrok-cli cannot run because of
+  a libsigrok bug: sigrok-cli must fail (its stderr is the golden
+  `SLUG.oracle`), oxrok alone is held to the `.out` and `.tx` goldens,
+  and a sigrok-cli that starts succeeding fails the case ("no longer
+  fails (WHY fixed?)"), so an upstream fix shows.
 - Either way the output and the transactions are compared with the
   goldens `tests/emu/MODEL/SLUG.out` and `SLUG.tx` (`SLUG` is the case
   name in lower case, runs of other characters made `-`), the
