@@ -623,6 +623,31 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_resets_the_sequencer_and_ends() {
+        // Stopped before the first read: the sequencer reset, purge,
+        // reset and close, no read and no "Trigger timed out".
+        let steps = "bulk_out 02 00ff0000 -> 4\n\
+            bulk_out 02 0101010101010101 -> 8\n\
+            ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n\
+            ctl_out 40 00 0000 0001 - -> ok\nrelease 0 -> ok\n";
+        let mut dev = device(steps);
+        dev.open().unwrap();
+        let mut ftdi = dev.lock().take().unwrap();
+        assert_eq!(ftdi.write(&[0, 0xff, 0, 0]), Some(4));
+        let cap = Capture {
+            prof: dev.prof,
+            divcount: 0,
+            trigger: protocol::TriggerMasks::default(),
+            limit: 0,
+        };
+        let (tx, rx) = sync_channel(4);
+        let stop = AtomicBool::new(true);
+        assert!(protocol::run(ftdi, cap, &PacketSink::new(tx, 0), &stop).is_none());
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
+    }
+
+    #[test]
     fn invalid_samplerates_are_refused() {
         let mut dev = device("");
         assert!(dev.set(&Key::Samplerate, &Value::U64(3_000_000), None).is_err());

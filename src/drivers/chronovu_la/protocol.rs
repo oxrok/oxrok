@@ -477,6 +477,12 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
                 got = ftdi.read(&mut buf);
                 polls += 1;
             }
+            if got == 0 && stop.load(Ordering::SeqCst) {
+                log::debug!("Stopped while waiting for the trigger.");
+                close_usb_reset_sequencer(ftdi);
+                sink.send(Packet::End);
+                return None;
+            }
         }
         if got != BS as i64 {
             log::error!("Trigger timed out. Bytes read: {got}.");
