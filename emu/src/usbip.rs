@@ -9,7 +9,16 @@
 //! A transfer the model answers with NAK stays pending here, as a URB
 //! does in a host controller, and is offered to the model again after
 //! every other transfer and every 20 ms, until it completes or the
-//! client unlinks it.
+//! client unlinks it. Transfers on one endpoint complete in the order
+//! they were submitted: one submitted behind a held one waits behind
+//! it, as a host controller's queue for the endpoint would.
+//!
+//! When the model asks to renumerate
+//! ([`crate::model::DeviceModel::take_renumeration`]), the server tells
+//! whoever drives the run through the channel given to
+//! [`Server::on_renumeration`]; that side detaches the device and
+//! imports it again, and the new import resets the device, which takes
+//! over the model's new descriptors.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -205,6 +214,7 @@ pub struct Server {
     busid: String,
     busnum: u32,
     devnum: u32,
+    renumeration: Option<mpsc::Sender<String>>,
 }
 
 impl Server {
@@ -218,7 +228,16 @@ impl Server {
         busnum: u32,
         devnum: u32,
     ) -> Server {
-        Server { device, log, busid: busid.to_owned(), busnum, devnum }
+        Server { device, log, busid: busid.to_owned(), busnum, devnum, renumeration: None }
+    }
+
+    /// Where a renumeration request of the model is sent: one message
+    /// per request, after the transfer that caused it was answered,
+    /// naming the log section to go on in once the device is back.
+    #[must_use]
+    pub fn on_renumeration(mut self, tx: mpsc::Sender<String>) -> Server {
+        self.renumeration = Some(tx);
+        self
     }
 
     fn device(&self) -> std::sync::MutexGuard<'_, Device> {
@@ -320,8 +339,25 @@ impl Server {
             }
             match rx.recv_timeout(TICK) {
                 Ok(Pdu::Submit(urb)) => {
-                    let (reply, v) = self.perform(&urb);
-                    self.finish(&mut out, urb, reply, v, &mut held, true)?;
+                    if urb.ep != 0 && urb.direction == DIR_IN {
+                        self.device().in_submitted(urb.ep, urb.length);
+                    }
+                    let queued = urb.ep != 0
+                        && held.iter().any(|u| u.ep == urb.ep && u.direction == urb.direction);
+                    if queued {
+                        // Behind a held transfer of the same endpoint.
+                        self.event(&format!(
+                            "seq {}: ep {:#04x} {} queued behind a held transfer",
+                            urb.seqnum,
+                            urb.ep,
+                            dir_word(urb.direction)
+                        ));
+                        held.push(urb);
+                    } else {
+                        let (reply, v) = self.perform(&urb);
+                        self.finish(&mut out, urb, reply, v, &mut held, true)?;
+                        self.check_renumeration();
+                    }
                 }
                 Ok(Pdu::Unlink { seqnum, target }) => {
                     let found = held.iter().position(|u| u.seqnum == target);
@@ -345,11 +381,53 @@ impl Server {
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
             }
             let pending = std::mem::take(&mut held);
+            // Endpoints whose oldest transfer is still held this round:
+            // the transfers behind it wait.
+            let mut blocked: Vec<(u8, u32)> = Vec::new();
             for urb in pending {
+                let key = (urb.ep, urb.direction);
+                if urb.ep != 0 && blocked.contains(&key) {
+                    held.push(urb);
+                    continue;
+                }
                 let (reply, v) = self.perform(&urb);
+                if reply == Reply::Nak {
+                    blocked.push(key);
+                }
                 self.finish(&mut out, urb, reply, v, &mut held, false)?;
+                self.check_renumeration();
             }
         }
+    }
+
+    /// Passes a renumeration request of the model on. The log gets
+    /// `disconnect` and `connect VID:PID` at once, in the section of
+    /// the run that caused it (a tool that ends right after the
+    /// transfer would otherwise see them or not depending on timing);
+    /// what the host sends until the detach follows in that section.
+    /// The channel gets the section to go back to after the kernel's
+    /// enumeration of the new device.
+    fn check_renumeration(&mut self) {
+        if !self.device().take_renumeration() {
+            return;
+        }
+        let Some(tx) = &self.renumeration else {
+            self.event("the model asks to renumerate; nobody to do it, the device stays as it is");
+            return;
+        };
+        let (vendor, product) = {
+            let d = self.device();
+            let m = d.model_descriptors();
+            (m.vendor_id(), m.product_id())
+        };
+        let resume = {
+            let mut log = self.log.lock().expect("log lock");
+            log.event("the model asks to renumerate");
+            log.transfer("disconnect");
+            log.transfer(&format!("connect {vendor:04x}:{product:04x}"));
+            log.current_section().to_owned()
+        };
+        let _ = tx.send(resume);
     }
 
     /// Offers a URB to the device.
@@ -390,12 +468,14 @@ impl Server {
     ) -> io::Result<()> {
         let mut log = self.log.lock().expect("log lock");
         let line = if urb.ep == 0 {
-            control_line(Setup::from_bytes(&urb.setup), &urb.data, &reply)
+            let above = self.device().log_digest_above();
+            control_line(Setup::from_bytes(&urb.setup), &urb.data, &reply, above)
         } else {
             let address = if urb.direction == DIR_IN { 0x80 | urb.ep } else { urb.ep };
             let kind =
                 self.device().endpoint(address).map_or(0xff, crate::model::Endpoint::transfer_type);
-            transfer_line(kind, address, urb.length, &urb.data, &reply)
+            let above = self.device().log_digest_above();
+            transfer_line(kind, address, urb.length, &urb.data, &reply, above)
         };
         for message in v.drain() {
             log.violation(&message);

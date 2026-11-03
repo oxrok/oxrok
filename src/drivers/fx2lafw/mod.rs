@@ -9,24 +9,28 @@
 //! endpoint at up to 24 MS/s (8 channels) or 12 MS/s (16 channels);
 //! triggers run on the host.
 //!
-//! Written from the firmware's public command set: `0xb0` firmware
-//! version, `0xb1` start acquisition with a flags byte and a sample
-//! delay, `0xb2` chip revision. Devices without the firmware in EEPROM
-//! enumerate as the bare chip or the vendor's product; the firmware is
-//! uploaded over [`crate::ezusb`] and the device renumerates.
+//! The firmware's commands: `0xb0` firmware version, `0xb1` start
+//! acquisition with a flags byte and a sample delay, `0xb2` chip
+//! revision. Devices without the firmware in EEPROM enumerate as the
+//! bare chip or the vendor's product; as in libsigrok, the scan reads
+//! each device's strings and uploads the firmware over [`crate::ezusb`]
+//! to those that lack it, and opening waits for the device to come
+//! back. Scan, open, transfer sizes, frames and the soft trigger follow
+//! `api.c` and `protocol.c` step by step, so that the device sees the
+//! same transactions as under sigrok-cli (checked with the emulator,
+//! `tools/emu/fx2lafw.sh`).
 
 #![forbid(unsafe_code)]
 
 use crate::core::{
     Access, Channel, ChannelGroup, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, PreTriggerBuffer, Result, SoftTrigger, Trigger, TriggerMatch, Value,
-    ValueList,
+    Packet, PacketSink, Result, SoftTriggerLogic, Trigger, TriggerMatch, Value, ValueList,
 };
 use crate::usb::{ControlRequest, Transport, UsbDeviceInfo, UsbId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const CMD_GET_FW_VERSION: u8 = 0xb0;
 const CMD_START: u8 = 0xb1;
@@ -35,7 +39,6 @@ const FLAG_WIDE: u8 = 1 << 5;
 const FLAG_CLK_48MHZ: u8 = 1 << 6;
 const REQUIRED_MAJOR: u8 = 1;
 const MAX_SAMPLE_DELAY: u64 = 6 * 256;
-const MAX_8BIT_RATE: u64 = 24_000_000;
 const MAX_16BIT_RATE: u64 = 12_000_000;
 const CONFIGURATION: u8 = 1;
 const INTERFACE: u8 = 0;
@@ -106,8 +109,7 @@ fn find_profile(id: UsbId) -> Option<&'static Profile> {
 
 /// True when the device's strings say the firmware is running.
 pub fn has_firmware(info: &UsbDeviceInfo) -> bool {
-    info.manufacturer.as_deref() == Some("sigrok")
-        && info.product.as_deref().is_some_and(|p| p.starts_with("fx2lafw"))
+    info.manufacturer.as_deref() == Some("sigrok") && info.product.as_deref() == Some("fx2lafw")
 }
 
 /// The `0xb1` command for `samplerate`: flags byte and the GPIF sample
@@ -136,15 +138,19 @@ pub fn start_command(samplerate: u64, wide: bool) -> Result<[u8; 3]> {
     Ok([flags, (delay >> 8) as u8, (delay & 0xff) as u8])
 }
 
-/// Transfer size (10 ms of data, a multiple of 512), queue depth
-/// (about 500 ms in flight, at most 32) and the timeout of one
-/// transfer for a rate and sample width.
-pub fn transfer_plan(samplerate: u64, unit_size: usize) -> (usize, usize, Duration) {
-    let bytes_per_ms = ((samplerate / 1000).max(1) as usize) * unit_size;
-    let size = (10 * bytes_per_ms).div_ceil(512).max(1) * 512;
-    let depth = (500 * bytes_per_ms / size).clamp(1, MAX_TRANSFERS);
-    let total_ms = (size * depth / bytes_per_ms) as u64;
-    (size, depth, Duration::from_millis(total_ms + total_ms / 4 + 100))
+/// Transfer size, queue depth and the timeout of one transfer for a
+/// rate, as `get_buffer_size()`, `get_number_of_transfers()` and
+/// `get_timeout()` compute them: 10 ms of data rounded up to a multiple
+/// of 512, about 500 ms in flight but at most 32 transfers, and the
+/// time those take plus a quarter. Like the C code they count one byte
+/// per sample whatever the sample width.
+pub fn transfer_plan(samplerate: u64) -> (usize, usize, Duration) {
+    let bytes_per_ms = (samplerate / 1000) as usize;
+    let size = (10 * bytes_per_ms + 511) & !511;
+    let depth = (500 * bytes_per_ms / size.max(1)).min(MAX_TRANSFERS);
+    let total = size * depth / bytes_per_ms.max(1);
+    let ms = total + total / 4;
+    (size, depth, Duration::from_millis(ms as u64))
 }
 
 /// The driver.
@@ -161,6 +167,16 @@ static DEV_OPTIONS: [OptionDesc; 7] = [
     OptionDesc::new(Key::TriggerMatch, Access::LIST),
     OptionDesc::new(Key::CaptureRatio, Access::GET_SET),
 ];
+/// libsigrok's soft trigger: stages of level and edge matches only.
+const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatures {
+    count: false,
+    consecutive: false,
+    duration: false,
+    range: false,
+    or: false,
+    and: false,
+    max_stages: 0,
+};
 static TRIGGER_MATCHES: [TriggerMatch; 5] = [
     TriggerMatch::Zero,
     TriggerMatch::One,
@@ -198,12 +214,38 @@ impl Driver for Fx2lafwDriver {
         }
         let ids: Vec<UsbId> = PROFILES.iter().map(|p| p.id).collect();
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
-        for info in crate::usb::find_devices(&ids)? {
+        for mut info in crate::usb::find_devices(&ids)? {
             if conn.as_deref().is_some_and(|c| !info.matches_conn(c)) {
                 continue;
             }
             let profile = find_profile(info.id()).expect("found by id");
+            // As scan() in api.c: the strings read from the device, the
+            // firmware recognised by them, else uploaded right away.
+            let Some(strings) = read_strings(&info) else { continue };
+            info.serial = Some(strings[2].clone());
+            let has_firmware = match_manuf_prod(&info);
+            let mut fw_updated = None;
+            if has_firmware {
+                log::debug!("Found an fx2lafw device.");
+            } else {
+                match upload(&info, profile) {
+                    // Stored only when the upload worked, as api.c does;
+                    // otherwise open tries the device once right away.
+                    Ok(()) => fw_updated = Some(Instant::now()),
+                    Err(e) => log::error!(
+                        "Firmware upload failed for device {}, name {}: {e}",
+                        info.conn(),
+                        profile.firmware
+                    ),
+                }
+            }
             let mut dev = Fx2lafwDevice::new(info, profile, None);
+            if !has_firmware {
+                // The address it will have after the upload is not
+                // known (address 0xff in the C driver).
+                dev.info.conn = None;
+            }
+            dev.fw_updated = fw_updated;
             if let Some(spec) = &probe_names {
                 dev.name_channels(spec);
             }
@@ -211,6 +253,60 @@ impl Driver for Fx2lafwDriver {
         }
         Ok(devices)
     }
+}
+
+/// The manufacturer, product and serial number strings, read from the
+/// device as `scan()` does (an empty string for index 0), or `None`
+/// when the device cannot be opened or a read fails.
+fn read_strings(info: &UsbDeviceInfo) -> Option<[String; 3]> {
+    let mut t = match crate::usb::open(info) {
+        Ok(t) => t,
+        Err(e) => {
+            log::warn!(
+                "Failed to open potential device with VID:PID {:04x}:{:04x}: {e}.",
+                info.vendor_id,
+                info.product_id
+            );
+            return None;
+        }
+    };
+    let indexes = t.string_indexes().ok()?;
+    let mut out: [String; 3] = Default::default();
+    for (o, i) in out.iter_mut().zip(indexes) {
+        if i != 0 {
+            match crate::usb::read_string_ascii(t.as_mut(), i) {
+                Ok(v) => *o = v,
+                Err(e) => {
+                    log::warn!("Failed to get a string descriptor: {e}.");
+                    return None;
+                }
+            }
+        }
+    }
+    Some(out)
+}
+
+/// `usb_match_manuf_prod(dev, "sigrok", "fx2lafw")`: the device is opened
+/// again and its manufacturer and product strings read again (none
+/// when an index is 0, which libusb refuses without a transfer).
+fn match_manuf_prod(info: &UsbDeviceInfo) -> bool {
+    let Ok(mut t) = crate::usb::open(info) else { return false };
+    let Ok([m, p, _]) = t.string_indexes() else { return false };
+    crate::usb::read_string_ascii(t.as_mut(), m).is_ok_and(|s| s == "sigrok")
+        && crate::usb::read_string_ascii(t.as_mut(), p).is_ok_and(|s| s == "fx2lafw")
+}
+
+/// `ezusb_upload_firmware()`: open, `SET_CONFIGURATION` 1, the image
+/// in chunks of 4096 bytes with the 8051 held in reset, release.
+fn upload(info: &UsbDeviceInfo, profile: &Profile) -> Result<()> {
+    let image = crate::core::firmware::read(
+        profile.firmware,
+        "install the sigrok fx2lafw firmware, see docs/DEVICES.md",
+    )?;
+    log::info!("Uploading firmware {} to device on {}.", profile.firmware, info.conn());
+    let mut t = crate::usb::open(info)?;
+    t.force_configuration(CONFIGURATION)?;
+    crate::ezusb::upload_firmware(t.as_mut(), &image)
 }
 
 /// Settings kept between acquisitions.
@@ -234,6 +330,9 @@ pub struct Fx2lafwDevice {
     pending: Option<Box<dyn Transport>>,
     transport: Arc<Mutex<Option<Box<dyn Transport>>>>,
     worker: Option<Worker>,
+    /// When the scan uploaded the firmware: the device renumerates and
+    /// is looked for again on open.
+    fw_updated: Option<Instant>,
 }
 
 struct Worker {
@@ -273,6 +372,7 @@ impl Fx2lafwDevice {
             pending: transport,
             transport: Arc::new(Mutex::new(None)),
             worker: None,
+            fw_updated: None,
         }
     }
 
@@ -306,25 +406,42 @@ impl Fx2lafwDevice {
     }
 }
 
-/// Opens the device and claims its interface, retrying for a while:
-/// right after renumeration the OS may not have set the configuration
-/// yet, and the interface is not there to claim.
-fn reopen_when_ready(usb: &UsbDeviceInfo) -> Result<Box<dyn Transport>> {
-    let mut last = Error::device("device not ready");
-    for _ in 0..30 {
-        match crate::usb::open(usb) {
-            Ok(mut t) => {
-                match t.set_configuration(CONFIGURATION).and_then(|()| t.claim_interface(INTERFACE))
-                {
-                    Ok(()) => return Ok(t),
-                    Err(e) => last = e,
-                }
-            }
-            Err(e) => last = e,
-        }
-        std::thread::sleep(Duration::from_millis(100));
+/// Whether `d` is the device scanned as `usb`: by its hub ports, which
+/// stay the same when it renumerates, as `fx2lafw_dev_open()` compares
+/// `usb_get_port_path()` with the connection id. A backend that knows
+/// no ports falls back to the address, or after an upload to a device
+/// on the same bus whose strings say fx2lafw.
+fn same_device(d: &UsbDeviceInfo, usb: &UsbDeviceInfo, after_upload: bool) -> bool {
+    if d.bus != usb.bus {
+        return false;
     }
-    Err(last)
+    if !usb.ports.is_empty() && !d.ports.is_empty() {
+        return d.ports == usb.ports;
+    }
+    if after_upload { has_firmware(d) } else { d.address == usb.address }
+}
+
+/// `fx2lafw_dev_open()`: finds the device of the profile's id at the
+/// scanned device's port, opens it, claims its interface and checks
+/// the firmware version and REVID. The claim comes before the checks
+/// here, after `set_configuration(1)`, which sends nothing when the
+/// configuration is active (always on Linux) but is needed on macOS,
+/// which can leave a device unconfigured right after renumeration;
+/// neither the claim nor that check is a transfer, so the device sees
+/// what it sees under the C driver.
+fn try_open(
+    usb: &UsbDeviceInfo,
+    after_upload: bool,
+) -> Result<(UsbDeviceInfo, Box<dyn Transport>)> {
+    let found = crate::usb::find_devices(&[usb.id()])?
+        .into_iter()
+        .find(|d| same_device(d, usb, after_upload));
+    let info = found.ok_or_else(|| Error::device("device not found"))?;
+    let mut t = crate::usb::open(&info)?;
+    t.set_configuration(CONFIGURATION)?;
+    t.claim_interface(INTERFACE)?;
+    check_firmware(t.as_mut())?;
+    Ok((info, t))
 }
 
 /// Reads the firmware version and chip revision; fails on a version
@@ -340,16 +457,16 @@ fn check_firmware(t: &mut dyn Transport) -> Result<(u8, u8)> {
             v[0], v[1]
         )));
     }
-    match t.control_in(ControlRequest::vendor(CMD_GET_REVID_VERSION, 0, 0), 1, CONTROL_TIMEOUT) {
-        Ok(r) if !r.is_empty() => log::debug!(
-            "Firmware {}.{}, REVID {}: a Cypress CY7C68013{}.",
-            v[0],
-            v[1],
-            r[0],
-            if r[0] == 1 { "A (FX2LP)" } else { " (FX2)" }
-        ),
-        _ => log::debug!("Firmware {}.{}, REVID unknown.", v[0], v[1]),
-    }
+    // A failed REVID read fails the open, as in protocol.c.
+    let r =
+        t.control_in(ControlRequest::vendor(CMD_GET_REVID_VERSION, 0, 0), 1, CONTROL_TIMEOUT)?;
+    let revid = r.first().ok_or_else(|| Error::device("Failed to get REVID."))?;
+    log::debug!(
+        "Firmware {}.{}, REVID {revid}: a Cypress CY7C68013{}.",
+        v[0],
+        v[1],
+        if *revid == 1 { "A (FX2LP)" } else { " (FX2)" }
+    );
     Ok((v[0], v[1]))
 }
 
@@ -395,7 +512,11 @@ impl Device for Fx2lafwDevice {
             return Err(Error::ChannelGroup(g.to_owned()));
         }
         Ok(match key {
-            Key::Conn => Value::Str(self.usb.conn()),
+            // Unknown until the device came back after the upload.
+            Key::Conn => match &self.info.conn {
+                Some(c) => Value::Str(c.clone()),
+                None => return Err(Error::device("the device has not renumerated yet")),
+            },
             Key::Samplerate => Value::U64(self.settings.samplerate),
             Key::LimitSamples => Value::U64(self.settings.limit_samples),
             Key::LimitFrames => Value::U64(self.settings.limit_frames),
@@ -446,41 +567,42 @@ impl Device for Fx2lafwDevice {
         if self.transport.lock().expect("transport lock").is_some() {
             return Ok(());
         }
-        // (transport, already configured and claimed)
-        let (mut t, claimed) = if let Some(t) = self.pending.take() {
-            (t, false)
-        } else {
-            let mut t = crate::usb::open(&self.usb)?;
-            if has_firmware(&self.usb) {
-                (t, false)
-            } else {
-                let image = crate::core::firmware::read(
-                    self.profile.firmware,
-                    "install the sigrok fx2lafw firmware, see docs/DEVICES.md",
-                )?;
-                log::info!("Uploading firmware {}.", self.profile.firmware);
-                crate::ezusb::upload_firmware(t.as_mut(), &image)?;
-                drop(t);
-                let ids: Vec<UsbId> = PROFILES.iter().map(|p| p.id).collect();
-                let new = crate::ezusb::wait_for_renumeration(
-                    &ids,
-                    &self.usb,
-                    RENUM_TIMEOUT,
-                    has_firmware,
-                )?;
-                self.info.conn = Some(new.conn());
-                self.usb = new;
-                // The OS may still be configuring the new device; this
-                // retries and returns the transport claimed.
-                (reopen_when_ready(&self.usb)?, true)
-            }
-        };
-        if !claimed {
+        let t = if let Some(mut t) = self.pending.take() {
             t.set_configuration(CONFIGURATION)?;
             t.claim_interface(INTERFACE)?;
-        }
-        let (major, minor) = check_firmware(t.as_mut())?;
-        self.info.version = format!("{major}.{minor}");
+            check_firmware(t.as_mut())?;
+            t
+        } else if let Some(uploaded) = self.fw_updated {
+            // dev_open(): wait for the FX2 to renumerate, trying every
+            // 100 ms until 3 s after the upload. The retries also cover
+            // a claim that fails while the OS still configures the new
+            // device.
+            log::info!("Waiting for device to reset.");
+            std::thread::sleep(Duration::from_millis(300));
+            let (info, t) = loop {
+                match try_open(&self.usb, true) {
+                    Ok(found) => break found,
+                    Err(e) => {
+                        std::thread::sleep(Duration::from_millis(100));
+                        if uploaded.elapsed() >= RENUM_TIMEOUT {
+                            log::debug!("Last attempt: {e}.");
+                            return Err(Error::device("Device failed to renumerate."));
+                        }
+                    }
+                }
+            };
+            log::info!("Device came back after {} ms.", uploaded.elapsed().as_millis());
+            self.fw_updated = None;
+            self.info.conn = Some(info.conn());
+            self.usb = info;
+            t
+        } else {
+            log::info!("Firmware upload was not needed.");
+            let (info, t) = try_open(&self.usb, false)?;
+            self.info.conn = Some(info.conn());
+            self.usb = info;
+            t
+        };
         *self.transport.lock().expect("transport lock") = Some(t);
         Ok(())
     }
@@ -492,12 +614,12 @@ impl Device for Fx2lafwDevice {
     }
 
     fn trigger_features(&self) -> crate::core::TriggerFeatures {
-        SoftTrigger::FEATURES
+        TRIGGER_FEATURES
     }
 
     fn set_trigger(&mut self, trigger: Option<Trigger>) -> Result<()> {
         if let Some(t) = &trigger {
-            SoftTrigger::check(t)?;
+            t.check(&TRIGGER_FEATURES)?;
         }
         self.trigger = trigger;
         Ok(())
@@ -509,26 +631,41 @@ impl Device for Fx2lafwDevice {
         }
         let wide = self.wide();
         let rate = self.settings.samplerate;
-        let max = if wide { MAX_16BIT_RATE } else { MAX_8BIT_RATE };
-        if rate > max {
+        // command_start_acquisition() refuses it after the transfers
+        // were submitted; they are cancelled before any completes, so
+        // refusing it first sends the device the same.
+        if wide && rate > MAX_16BIT_RATE {
             return Err(Error::Arg(format!(
-                "The maximum sample rate with {} channels is {} MHz.",
-                if wide { 16 } else { 8 },
-                max / 1_000_000
+                "Unable to sample at {rate}Hz when collecting 16-bit samples."
             )));
         }
         let command = start_command(rate, wide)?;
         let unit_size = if wide { 2 } else { 1 };
-        let soft = self.trigger.as_ref().and_then(|t| SoftTrigger::new(t, unit_size));
+        // soft_trigger_logic_check() skips matches on disabled channels.
+        let stl = self.trigger.as_ref().map(|t| {
+            let stages = t
+                .stages
+                .iter()
+                .map(|st| {
+                    st.conditions
+                        .iter()
+                        .filter(|c| {
+                            self.channels.iter().any(|ch| ch.index == c.channel && ch.enabled)
+                        })
+                        .map(|c| (c.channel, c.matches))
+                        .collect()
+                })
+                .collect();
+            let pre = self.settings.capture_ratio * self.settings.limit_samples / 100;
+            SoftTriggerLogic::new(stages, unit_size, pre as usize)
+        });
         let acq = Acquisition {
             command,
             samplerate: rate,
             unit_size,
             limit_samples: self.settings.limit_samples,
             limit_frames: self.settings.limit_frames,
-            pre_trigger: self.settings.limit_samples * self.settings.capture_ratio / 100,
-            soft,
-            trigger: self.trigger.clone(),
+            stl,
         };
         let transport = self.transport.lock().expect("transport lock").take();
         let Some(transport) = transport else {
@@ -561,72 +698,35 @@ impl Device for Fx2lafwDevice {
     }
 }
 
-/// One acquisition, on its own thread.
+/// One acquisition, on its own thread: `start_transfers()` and
+/// `receive_transfer()` of `protocol.c`.
 struct Acquisition {
     command: [u8; 3],
     samplerate: u64,
     unit_size: usize,
     limit_samples: u64,
-    /// Captures of `limit_samples` each; 0 means until stopped. Frame
-    /// packets are sent only for more than one.
     limit_frames: u64,
-    pre_trigger: u64,
-    soft: Option<SoftTrigger>,
-    trigger: Option<Trigger>,
+    stl: Option<SoftTriggerLogic>,
 }
 
 impl Acquisition {
     fn run(mut self, t: &mut dyn Transport, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
-        let frames = self.limit_frames != 1 && self.limit_samples > 0;
-        let mut done = 0u64;
-        let mut first = true;
-        loop {
-            if frames {
-                sink.send(Packet::FrameBegin);
-            }
-            if let Some(trigger) = &self.trigger {
-                self.soft = SoftTrigger::new(trigger, self.unit_size);
-            }
-            self.capture(t, sink, stop, first)?;
-            first = false;
-            if frames {
-                sink.send(Packet::FrameEnd);
-            }
-            done += 1;
-            if !frames
-                || stop.load(Ordering::SeqCst)
-                || (self.limit_frames > 0 && done >= self.limit_frames)
-            {
-                return Ok(());
-            }
-        }
-    }
-
-    /// One capture of `limit_samples` samples (or until stopped).
-    fn capture(
-        &mut self,
-        t: &mut dyn Transport,
-        sink: &PacketSink,
-        stop: &AtomicBool,
-        header: bool,
-    ) -> Result<()> {
-        let (size, depth, timeout) = transfer_plan(self.samplerate, self.unit_size);
+        let (size, depth, timeout) = transfer_plan(self.samplerate);
+        let u = self.unit_size;
+        let limit = self.limit_samples;
+        let mut trigger_fired = self.stl.is_none();
         let mut stream = t.bulk_in_stream(ENDPOINT_IN, size, depth)?;
-        t.control_out(ControlRequest::vendor(CMD_START, 0, 0), &self.command, CONTROL_TIMEOUT)?;
-        log::debug!(
-            "Acquisition started: flags 0x{:02x}, delay {}, {size} byte transfers, {depth} in flight.",
-            self.command[0],
-            u16::from_be_bytes([self.command[1], self.command[2]])
-        );
-        if header {
-            sink.send(Packet::header());
+        sink.send(Packet::header());
+        if trigger_fired {
+            sink.send(Packet::FrameBegin);
         }
-        let mut pre = PreTriggerBuffer::new(self.unit_size, self.pre_trigger as usize);
+        t.control_out(ControlRequest::vendor(CMD_START, 0, 0), &self.command, CONTROL_TIMEOUT)?;
+        log::debug!("Acquisition started: {:02x?}, {depth} transfers of {size}.", self.command);
         let mut sent = 0u64;
+        let mut frames = 0u64;
         let mut empty = 0usize;
-        let mut carry: Vec<u8> = Vec::new();
         while !stop.load(Ordering::SeqCst) {
-            let mut data = match stream.next(timeout) {
+            let data = match stream.next(timeout) {
                 Ok(d) => d,
                 Err(Error::Timeout) => Vec::new(),
                 Err(e) => return Err(e),
@@ -634,66 +734,87 @@ impl Acquisition {
             if data.is_empty() {
                 empty += 1;
                 if empty > MAX_EMPTY_TRANSFERS {
+                    // The FX2 gave up.
                     log::warn!("Device stopped sending data.");
-                    break;
+                    return Ok(());
                 }
                 continue;
             }
             empty = 0;
-            // Keep whole samples; a transfer may split one.
-            if !carry.is_empty() {
-                carry.extend_from_slice(&data);
-                data = std::mem::take(&mut carry);
-            }
-            let rem = data.len() % self.unit_size;
-            if rem != 0 {
-                carry = data.split_off(data.len() - rem);
-            }
-            if let Some(soft) = self.soft.as_mut() {
-                match soft.feed(&data) {
-                    None => {
-                        pre.push(&data);
-                        continue;
-                    }
-                    Some(i) => {
-                        let at = i * self.unit_size;
-                        // The pre-trigger window: the buffered samples
-                        // and this transfer's head, cut to the window.
-                        let mut before = pre.take();
-                        before.extend_from_slice(&data[..at]);
-                        let keep = self.pre_trigger as usize * self.unit_size;
-                        if before.len() > keep {
-                            before.drain(..before.len() - keep);
+            let cur = (data.len() / u) as u64;
+            let mut processed = 0u64;
+            let mut frame_ended;
+            let mut final_frame;
+            loop {
+                if !trigger_fired && self.stl.is_none() {
+                    // A frame without trigger ended exactly at the end
+                    // of the previous transfer: the next one begins
+                    // here. The C code passes its NULL soft trigger to
+                    // soft_trigger_logic_check() instead and crashes.
+                    sink.send(Packet::FrameBegin);
+                    trigger_fired = true;
+                }
+                if trigger_fired {
+                    if limit == 0 || sent < limit {
+                        let mut n = cur - processed;
+                        if limit > 0 && sent + n > limit {
+                            n = limit - sent;
                         }
-                        sent += self.emit(sink, before, sent);
+                        let at = (processed as usize) * u;
+                        sink.send(Packet::logic(u, data[at..at + n as usize * u].to_vec()));
+                        sent += n;
+                        processed += n;
+                    }
+                } else if let Some(stl) = self.stl.as_mut() {
+                    let at = processed as usize * u;
+                    if let Some((offset, pre)) = stl.check(&data[at..]) {
+                        let mut pre_samples = 0u64;
+                        for p in pre {
+                            pre_samples += (p.len() / u) as u64;
+                            sink.send(Packet::logic(u, p));
+                        }
                         sink.send(Packet::Trigger);
-                        data.drain(..at);
-                        self.soft = None;
+                        sink.send(Packet::FrameBegin);
+                        sent += pre_samples;
+                        let offset = offset as u64;
+                        let mut n = cur - processed - offset;
+                        if limit > 0 && sent + n > limit {
+                            n = limit - sent;
+                        }
+                        let from = (processed + offset) as usize * u;
+                        sink.send(Packet::logic(u, data[from..from + n as usize * u].to_vec()));
+                        sent += n;
+                        processed += offset + n;
+                        trigger_fired = true;
                     }
                 }
-            }
-            sent += self.emit(sink, data, sent);
-            if self.limit_samples > 0 && sent >= self.limit_samples {
+                frame_ended = limit > 0 && sent >= limit;
+                final_frame = self.limit_frames > 0 && frames + 1 >= self.limit_frames;
+                if frame_ended {
+                    frames += 1;
+                    sent = 0;
+                    trigger_fired = false;
+                    sink.send(Packet::FrameEnd);
+                    // Another trigger may be in the rest of the data.
+                    if processed < cur {
+                        if let Some(stl) = self.stl.as_mut() {
+                            stl.cur_stage = 0;
+                        } else {
+                            sink.send(Packet::FrameBegin);
+                            trigger_fired = true;
+                        }
+                        if !final_frame {
+                            continue;
+                        }
+                    }
+                }
                 break;
             }
+            if frame_ended && final_frame {
+                return Ok(());
+            }
         }
-        log::debug!("Sent {sent} samples.");
         Ok(())
-    }
-
-    /// Sends `data`, cut at the sample limit. Returns the samples sent.
-    fn emit(&self, sink: &PacketSink, mut data: Vec<u8>, sent: u64) -> u64 {
-        if self.limit_samples > 0 {
-            let room =
-                (self.limit_samples - sent.min(self.limit_samples)) as usize * self.unit_size;
-            data.truncate(room);
-        }
-        if data.is_empty() {
-            return 0;
-        }
-        let n = (data.len() / self.unit_size) as u64;
-        sink.send(Packet::logic(self.unit_size, data));
-        n
     }
 }
 
@@ -717,13 +838,11 @@ mod tests {
 
     #[test]
     fn transfer_plans() {
-        assert_eq!(transfer_plan(24_000_000, 1).0, 240_128);
-        assert_eq!(transfer_plan(24_000_000, 1).1, 32);
-        assert_eq!(transfer_plan(20_000, 1), (512, 19, Duration::from_millis(486 + 121 + 100)));
-        assert_eq!(
-            transfer_plan(1_000_000, 2),
-            (20_480, 32, Duration::from_millis(327 + 81 + 100))
-        );
+        assert_eq!(transfer_plan(24_000_000).0, 240_128);
+        assert_eq!(transfer_plan(24_000_000).1, 32);
+        assert_eq!(transfer_plan(20_000), (512, 19, Duration::from_millis(486 + 121)));
+        // 16 bit samples take the same: the C code counts bytes as samples.
+        assert_eq!(transfer_plan(1_000_000), (10_240, 32, Duration::from_millis(327 + 81)));
     }
 
     #[test]

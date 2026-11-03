@@ -59,6 +59,7 @@ pub(crate) fn list() -> Result<Vec<UsbDeviceInfo>> {
                 | u16::from(v.sub_minor()),
             bus: d.bus_number(),
             address: d.address(),
+            ports: d.port_numbers().unwrap_or_default(),
             manufacturer,
             product,
             serial,
@@ -101,6 +102,20 @@ impl Transport for Rusb {
         }
         self.claimed.clear();
         self.handle.set_active_configuration(configuration).map_err(map)
+    }
+
+    fn force_configuration(&mut self, configuration: u8) -> Result<()> {
+        self.claimed.clear();
+        self.handle.set_active_configuration(configuration).map_err(map)
+    }
+
+    fn string_indexes(&mut self) -> Result<[u8; 3]> {
+        let d = self.device.device_descriptor().map_err(map)?;
+        Ok([
+            d.manufacturer_string_index().unwrap_or(0),
+            d.product_string_index().unwrap_or(0),
+            d.serial_number_string_index().unwrap_or(0),
+        ])
     }
 
     fn claim_interface(&mut self, interface: u8) -> Result<()> {

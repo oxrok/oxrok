@@ -41,7 +41,7 @@ pub use key::Key;
 pub use option::{Access, OptionDesc, ValueList, resolve_key};
 pub use packet::{AnalogData, LogicData, Packet};
 pub use session::Session;
-pub use softtrig::{PreTriggerBuffer, SoftTrigger};
+pub use softtrig::{PreTriggerBuffer, SoftTrigger, SoftTriggerLogic};
 pub use trigger::{
     Trigger, TriggerCombine, TriggerCount, TriggerDuration, TriggerFeatures, TriggerMatch,
     TriggerRange, TriggerStage,

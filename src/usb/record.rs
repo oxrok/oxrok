@@ -638,6 +638,16 @@ impl Transport for Recorder {
         self.log(Call::SetConfiguration(configuration), r, |()| Outcome::Ok)
     }
 
+    fn force_configuration(&mut self, configuration: u8) -> Result<()> {
+        let r = self.inner.force_configuration(configuration);
+        self.log(Call::SetConfiguration(configuration), r, |()| Outcome::Ok)
+    }
+
+    /// Not recorded: the OS answers it from its cache.
+    fn string_indexes(&mut self) -> Result<[u8; 3]> {
+        self.inner.string_indexes()
+    }
+
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
         let r = self.inner.claim_interface(interface);
         self.log(Call::Claim(interface), r, |()| Outcome::Ok)

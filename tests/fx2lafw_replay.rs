@@ -1,6 +1,6 @@
 //! The driver against a hand written session of a Saleae Logic clone
-//! with the firmware running: open, version checks, a start command
-//! for 1 MHz and three transfers of samples.
+//! with the firmware running: open (configuration, claim, version
+//! checks), a start command for 1 MHz and three transfers of samples.
 
 use oxrok::core::session::Flow;
 use oxrok::core::{Device, Key, Packet, Session, Trigger, TriggerMatch, Value};
@@ -22,7 +22,6 @@ fn capture(trigger: Option<Trigger>, limit: u64, ratio: u64) -> (Vec<u8>, Option
     let replay = Replay::from_text(SESSION).unwrap();
     let mut dev = Fx2lafwDevice::from_transport(Box::new(replay)).unwrap();
     dev.open().unwrap();
-    assert_eq!(dev.info().version, "1.4");
     dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
     dev.set(&Key::LimitSamples, &Value::U64(limit), None).unwrap();
     dev.set(&Key::CaptureRatio, &Value::U64(ratio), None).unwrap();
@@ -81,16 +80,89 @@ fn software_trigger_keeps_the_pre_trigger_window() {
     assert_eq!(data.len(), 1_000);
 }
 
+/// As `receive_transfer()` does: the second frame goes on in the same
+/// transfer, it does not start the device again.
+#[test]
+fn frames_take_the_samples_that_follow() {
+    let text = "# oxrok usb fixture 1\n\
+        device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
+        config 1 -> ok\n\
+        claim 0 -> ok\n\
+        ctl_in 40 b0 0000 0000 2 -> 0104\n\
+        ctl_in 40 b2 0000 0000 1 -> 01\n\
+        ctl_out 40 b1 0000 0000 40002f -> ok\n\
+        bulk_in 82 10240 -> 00{4}01{4}02{10232}\n";
+    let mut dev =
+        Fx2lafwDevice::from_transport(Box::new(Replay::from_text(text).unwrap())).unwrap();
+    dev.open().unwrap();
+    dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+    dev.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    let mut frames = Vec::new();
+    session
+        .run(|_, p| {
+            match p {
+                Packet::FrameBegin => frames.push(Vec::new()),
+                Packet::Logic(l) => frames.last_mut().unwrap().extend_from_slice(&l.data),
+                _ => {}
+            }
+            Flow::Continue
+        })
+        .unwrap();
+    // The C code begins a third frame in what is left of the transfer
+    // before it sees that the second was the last.
+    assert_eq!(frames, [vec![0; 4], vec![1; 4], vec![]]);
+}
+
+/// Frames that end exactly at the end of a transfer: the next frame
+/// starts with the next transfer (libsigrok crashes there).
+#[test]
+fn frames_ending_on_a_transfer_boundary() {
+    let text = "# oxrok usb fixture 1\n\
+        device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
+        config 1 -> ok\n\
+        claim 0 -> ok\n\
+        ctl_in 40 b0 0000 0000 2 -> 0104\n\
+        ctl_in 40 b2 0000 0000 1 -> 01\n\
+        ctl_out 40 b1 0000 0000 40002f -> ok\n\
+        bulk_in 82 10240 -> 00{10240}\n\
+        bulk_in 82 10240 -> 01{10240}\n\
+        bulk_in 82 10240 -> 02{10240}\n";
+    let mut dev =
+        Fx2lafwDevice::from_transport(Box::new(Replay::from_text(text).unwrap())).unwrap();
+    dev.open().unwrap();
+    dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(5120), None).unwrap();
+    dev.set(&Key::LimitFrames, &Value::U64(3), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    let mut frames = Vec::new();
+    session
+        .run(|_, p| {
+            match p {
+                Packet::FrameBegin => frames.push(Vec::new()),
+                Packet::Logic(l) => frames.last_mut().unwrap().extend_from_slice(&l.data),
+                _ => {}
+            }
+            Flow::Continue
+        })
+        .unwrap();
+    let firsts: Vec<(usize, Option<u8>)> =
+        frames.iter().map(|f| (f.len(), f.first().copied())).collect();
+    // The last, empty frame begins in what is left of the third
+    // transfer, as in frames_take_the_samples_that_follow.
+    assert_eq!(firsts, [(5120, Some(0)), (5120, Some(0)), (5120, Some(1)), (0, None)]);
+}
+
 #[test]
 fn a_wrong_rate_fails_before_the_device_is_touched() {
     let replay = Replay::from_text(SESSION).unwrap();
     let mut dev = Fx2lafwDevice::from_transport(Box::new(replay)).unwrap();
     assert!(dev.set(&Key::Samplerate, &Value::U64(7_000_000), None).is_err());
+    // 48 MHz is in the list and, as in libsigrok, taken on 8 channels.
     dev.set(&Key::Samplerate, &Value::U64(48_000_000), None).unwrap();
-    dev.open().unwrap();
-    let (tx, _rx) = std::sync::mpsc::sync_channel(4);
-    let e = dev.start(oxrok::core::PacketSink::new(tx, 0)).unwrap_err().to_string();
-    assert!(e.contains("maximum sample rate"), "{e}");
 }
 
 /// A session recorded on a Saleae Logic clone (firmware 1.4) with

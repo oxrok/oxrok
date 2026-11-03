@@ -9,10 +9,13 @@
 //! - [`hidcable`]: what the serial over HID cable models (`bu86x`,
 //!   `ch9325`, `victor`) share: the Pico emulator's descriptors, the
 //!   meter packets they play, a poll counted stream.
+//! - [`ezusb`]: the Cypress FX2 without firmware, its boot loader
+//!   (request `0xa0`, the 8051 reset in `CPUCS`) and the checks on an
+//!   upload; the model renumerates as the firmware's device.
 //!
-//! The EZ-USB shell (firmware upload to RAM, renumeration) comes next;
-//! CDC-ACM and USBTMC after it (`docs/ROADMAP.md`, "Emulation plan").
+//! CDC-ACM and USBTMC come next (`docs/ROADMAP.md`, "Emulation plan").
 
+pub mod ezusb;
 pub mod ftdi;
 pub mod hid;
 pub mod hidcable;
