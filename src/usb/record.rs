@@ -21,7 +21,14 @@
 //! device that is longer than [`HASH_ABOVE`] bytes is recorded as
 //! `@LEN:SHA256` and compared by digest on replay. Results are `ok`, a
 //! number, hex data, or `err <kind> ["message"]` with kind `timeout`,
-//! `busy`, `device`, `io` or `unsupported`.
+//! `busy`, `disconnected`, `device`, `io` or `unsupported`.
+//!
+//! On replay a `claim` or `release` floats among the control transfers
+//! around it: a claim is no transfer, and drivers differ in when they
+//! claim relative to their control requests. It is consumed wherever
+//! the replay makes it, as long as only control transfers lie between
+//! there and where it was recorded, so before the first bulk or
+//! interrupt step that follows.
 
 use crate::core::Error;
 use crate::usb::{BulkStream, ControlRequest, Result, Transport, UsbDeviceInfo};
@@ -123,6 +130,7 @@ impl Outcome {
         let (kind, msg) = match e {
             Error::Timeout => ("timeout", String::new()),
             Error::Busy => ("busy", String::new()),
+            Error::Disconnected => ("disconnected", String::new()),
             Error::Io(e) => ("io", e.to_string()),
             Error::NotSupported(m) => ("unsupported", m.clone()),
             other => ("device", other.to_string()),
@@ -135,6 +143,7 @@ impl Outcome {
             Outcome::Err(kind, msg) => match kind.as_str() {
                 "timeout" => Error::Timeout,
                 "busy" => Error::Busy,
+                "disconnected" => Error::Disconnected,
                 "io" => Error::Io(std::io::Error::other(msg.clone())),
                 "unsupported" => Error::NotSupported(msg.clone()),
                 _ => Error::Device(msg.clone()),
@@ -726,6 +735,16 @@ impl Transport for Recorder {
     }
 }
 
+/// A claim or release, which floats among control transfers on replay.
+fn is_claim(call: &Call) -> bool {
+    matches!(call, Call::Claim(_) | Call::Release(_))
+}
+
+/// A control transfer, among which claims float.
+fn is_control(call: &Call) -> bool {
+    matches!(call, Call::ControlIn(..) | Call::ControlOut(..))
+}
+
 fn is_read(call: &Call) -> bool {
     matches!(call, Call::ControlIn(..) | Call::BulkIn(..) | Call::IntIn(..))
 }
@@ -774,6 +793,7 @@ impl Replay {
             shared: Arc::new(Mutex::new(ReplayState {
                 fixture,
                 pos: 0,
+                taken: Vec::new(),
                 last_cmd: None,
                 repeat: None,
             })),
@@ -807,6 +827,9 @@ impl Replay {
 struct ReplayState {
     fixture: Fixture,
     pos: usize,
+    /// Steps after `pos` already answered out of order (a floating
+    /// claim or release, or a control transfer replayed before one).
+    taken: Vec<usize>,
     /// The last answered command (a non-read step).
     last_cmd: Option<usize>,
     /// While a command is repeated: the next recorded response.
@@ -816,7 +839,52 @@ struct ReplayState {
 impl ReplayState {
     /// The number of recorded steps not yet replayed.
     pub fn remaining(&self) -> usize {
-        self.fixture.steps.len() - self.pos
+        self.fixture.steps.len() - self.pos - self.taken.len()
+    }
+
+    /// Moves `pos` past the steps already answered out of order.
+    fn skip_taken(&mut self) {
+        while let Some(i) = self.taken.iter().position(|&t| t == self.pos) {
+            self.taken.swap_remove(i);
+            self.pos += 1;
+        }
+    }
+
+    /// A claim or release recorded later than the replay makes it
+    /// (after control transfers), or a control transfer the replay
+    /// makes before a claim or release recorded ahead of it: answered
+    /// out of order, `pos` stays.
+    fn floating(&mut self, call: &Call) -> Option<Outcome> {
+        let steps = &self.fixture.steps;
+        let free = |j: usize| !self.taken.contains(&j);
+        let mut j = self.pos;
+        if is_claim(call) {
+            while j < steps.len() && (is_control(&steps[j].call) || is_claim(&steps[j].call)) {
+                if free(j) && steps[j].call == *call {
+                    break;
+                }
+                j += 1;
+            }
+        } else if is_control(call) {
+            while j < steps.len() && (is_claim(&steps[j].call) || !free(j)) {
+                j += 1;
+            }
+            if j == self.pos {
+                return None;
+            }
+        } else {
+            return None;
+        }
+        if j >= steps.len() || steps[j].call != *call || !free(j) {
+            return None;
+        }
+        if is_command(call) {
+            self.last_cmd = Some(j);
+        }
+        let outcome = steps[j].outcome.clone();
+        self.taken.push(j);
+        self.skip_taken();
+        Some(outcome)
     }
 
     /// Fails when steps remain, for the end of a test. Leftover
@@ -829,7 +897,7 @@ impl ReplayState {
         let mut i = self.pos;
         while i < steps.len() {
             let c = &steps[i].call;
-            if is_read(c) && Some(c) == last {
+            if self.taken.contains(&i) || (is_read(c) && Some(c) == last) {
                 i += 1;
             } else if Some(c) == cmd {
                 i += 1;
@@ -866,17 +934,24 @@ impl ReplayState {
             self.repeat = None;
         }
         loop {
+            self.skip_taken();
             let steps = &self.fixture.steps;
-            let last = self.pos.checked_sub(1).map(|i| &steps[i]);
             if let Some(step) = steps.get(self.pos)
                 && step.call == *call
             {
                 if is_command(call) {
                     self.last_cmd = Some(self.pos);
                 }
+                let outcome = step.outcome.clone();
                 self.pos += 1;
-                return Ok(step.outcome.clone());
+                self.skip_taken();
+                return Ok(outcome);
             }
+            if let Some(outcome) = self.floating(call) {
+                return Ok(outcome);
+            }
+            let steps = &self.fixture.steps;
+            let last = self.pos.checked_sub(1).map(|i| &steps[i]);
             if let Some(l) = last
                 && is_read(call)
                 && l.call == *call
@@ -1065,6 +1140,64 @@ mod tests {
         assert_eq!(f.steps[4].call, Call::BulkOut(2, vec![0, 0, 0, 0, 0, 0xaa].into()));
         assert_eq!(f.to_text(), TEXT);
         assert_eq!(Fixture::parse(&f.to_text()).unwrap(), f);
+    }
+
+    #[test]
+    fn claims_float_among_control_transfers() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=0925 pid=3881 version=0001 bus=1 addr=4\n\
+            config 1 -> ok\n\
+            claim 0 -> ok\n\
+            ctl_in 40 b0 0000 0000 2 -> 0104\n\
+            ctl_out 40 b1 0000 0000 01 -> ok\n\
+            release 0 -> ok\n\
+            bulk_in 82 4 -> 01020304\n\
+            claim 1 -> err busy\n";
+        let t = Duration::from_millis(10);
+        let v = |r| ControlRequest::vendor(r, 0, 0);
+        let o = v;
+        // As recorded.
+        let mut r = Replay::from_text(text).unwrap();
+        r.set_configuration(1).unwrap();
+        r.claim_interface(0).unwrap();
+        assert_eq!(r.control_in(v(0xb0), 2, t).unwrap(), [1, 4]);
+        r.control_out(o(0xb1), &[1], t).unwrap();
+        r.release_interface(0).unwrap();
+        assert_eq!(r.bulk_in(0x82, 4, t).unwrap(), [1, 2, 3, 4]);
+        assert!(matches!(r.claim_interface(1), Err(Error::Busy)));
+        r.finish().unwrap();
+        // The claim after the control transfers, the release before.
+        let mut r = Replay::from_text(text).unwrap();
+        r.set_configuration(1).unwrap();
+        assert_eq!(r.control_in(v(0xb0), 2, t).unwrap(), [1, 4]);
+        r.claim_interface(0).unwrap();
+        r.release_interface(0).unwrap();
+        r.control_out(o(0xb1), &[1], t).unwrap();
+        assert_eq!(r.remaining(), 2);
+        assert_eq!(r.bulk_in(0x82, 4, t).unwrap(), [1, 2, 3, 4]);
+        r.claim_interface(1).unwrap_err();
+        r.finish().unwrap();
+        // Not past a bulk step: the claim of interface 1 comes after it.
+        let mut r = Replay::from_text(text).unwrap();
+        r.set_configuration(1).unwrap();
+        assert!(r.claim_interface(1).is_err_and(|e| e.to_string().contains("expected")));
+        // A claim that was never made is still owed at the end.
+        let mut r = Replay::from_text(text).unwrap();
+        r.set_configuration(1).unwrap();
+        r.control_in(v(0xb0), 2, t).unwrap();
+        r.control_out(o(0xb1), &[1], t).unwrap();
+        assert!(r.bulk_in(0x82, 4, t).is_err(), "the claim and release are owed first");
+    }
+
+    #[test]
+    fn disconnects_round_trip() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=0925 pid=3881 version=0001 bus=1 addr=4\n\
+            bulk_in 82 4 -> err disconnected\n";
+        let f = Fixture::parse(text).unwrap();
+        assert_eq!(f.to_text(), text);
+        let mut r = Replay::new(f);
+        assert!(matches!(r.bulk_in(0x82, 4, Duration::ZERO), Err(Error::Disconnected)));
     }
 
     #[test]

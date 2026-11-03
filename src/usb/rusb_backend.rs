@@ -15,7 +15,7 @@ fn map(e: rusb::Error) -> Error {
             std::io::ErrorKind::PermissionDenied,
             "access denied (permission denied)",
         )),
-        rusb::Error::NoDevice => Error::device("device disconnected"),
+        rusb::Error::NoDevice => Error::Disconnected,
         rusb::Error::Pipe => Error::device("endpoint stalled"),
         other => Error::Device(other.to_string()),
     }

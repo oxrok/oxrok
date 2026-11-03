@@ -166,7 +166,9 @@ fn a_wrong_rate_fails_before_the_device_is_touched() {
 }
 
 /// A session recorded on a Saleae Logic clone (firmware 1.4) with
-/// `OXROK_USB_RECORD`, 2026-10-22, inputs floating high.
+/// `OXROK_USB_RECORD`, 2026-10-22, inputs floating high. The driver
+/// now claims after the version reads, as the C driver does; the
+/// replay lets a claim float among control transfers.
 #[test]
 fn recorded_capture_replays() {
     let replay = Replay::from_text(include_str!("fixtures/fx2lafw/capture-1m.txt")).unwrap();
@@ -206,4 +208,78 @@ fn probe_names_rename_and_trim_channels() {
     dev.name_channels("-i2c");
     assert_eq!(dev.channels().len(), 2);
     assert_eq!(dev.channel_groups()[0].channels, [0, 1]);
+}
+
+const OPEN: &str = "# oxrok usb fixture 1\n\
+    device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
+    config 1 -> ok\n";
+
+/// A capture of `limit` samples at 1 MHz on a replay of `OPEN` plus
+/// `steps`: the samples, or the error the open or the session fails
+/// with.
+fn run_steps(steps: &str, limit: u64) -> Result<Vec<u8>, String> {
+    let replay = Replay::from_text(&format!("{OPEN}{steps}")).unwrap();
+    let mut dev = Fx2lafwDevice::from_transport(Box::new(replay)).unwrap();
+    dev.open().map_err(|e| e.to_string())?;
+    dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(limit), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    let mut data = Vec::new();
+    session
+        .run(|_, p| {
+            if let Packet::Logic(l) = p {
+                data.extend_from_slice(&l.data);
+            }
+            Flow::Continue
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(data)
+}
+
+const CHECKS: &str = "ctl_in 40 b0 0000 0000 2 -> 0104\n\
+    ctl_in 40 b2 0000 0000 1 -> 01\n\
+    claim 0 -> ok\n";
+
+/// As `receive_transfer()`: a failed transfer (a STALL) counts as an
+/// empty one and the acquisition goes on; 65 in a row and the FX2
+/// "gave up", the acquisition ends without samples.
+#[test]
+fn stalled_and_empty_transfers_count_alike() {
+    let start = "ctl_out 40 b1 0000 0000 40002f -> ok\n";
+    let stall = "bulk_in 82 10240 -> err device \"endpoint stalled\"\n";
+    let empty = "bulk_in 82 10240 -> -\n";
+    let data = "bulk_in 82 10240 -> 07{10240}\n";
+    let steps = format!("{CHECKS}{start}{stall}{empty}{stall}{data}");
+    assert_eq!(run_steps(&steps, 16).unwrap(), [7; 16]);
+    let steps = format!("{CHECKS}{start}{}{}{data}", stall.repeat(30), empty.repeat(35));
+    assert_eq!(run_steps(&steps, 16).unwrap(), Vec::<u8>::new());
+    // 64 in a row are not enough.
+    let steps = format!("{CHECKS}{start}{}{}{data}", stall.repeat(30), empty.repeat(34));
+    assert_eq!(run_steps(&steps, 16).unwrap(), [7; 16]);
+}
+
+/// A refused start command fails the session's start, as in
+/// `fx2lafw_start_acquisition()`.
+#[test]
+fn a_refused_start_fails_the_session() {
+    let steps = format!("{CHECKS}ctl_out 40 b1 0000 0000 40002f -> err device \"refused\"\n");
+    assert!(run_steps(&steps, 16).unwrap_err().contains("refused"));
+}
+
+/// The version and the REVID are read before the version is judged
+/// and before the claim, as in `fx2lafw_dev_open()` and `dev_open()`.
+#[test]
+fn open_reads_both_versions_then_claims() {
+    // A REVID that fails shows it is read before the version counts.
+    let steps = "ctl_in 40 b0 0000 0000 2 -> 0200\n\
+        ctl_in 40 b2 0000 0000 1 -> err device \"no revid\"\n";
+    assert!(run_steps(steps, 16).unwrap_err().contains("no revid"));
+    let steps = "ctl_in 40 b0 0000 0000 2 -> 0200\n\
+        ctl_in 40 b2 0000 0000 1 -> 01\n";
+    assert!(run_steps(steps, 16).unwrap_err().contains("expected firmware version 1.x, got 2.0"));
+    let steps = "ctl_in 40 b0 0000 0000 2 -> 0104\n\
+        ctl_in 40 b2 0000 0000 1 -> 01\n\
+        claim 0 -> err busy\n";
+    assert!(run_steps(steps, 16).unwrap_err().contains("Another program or driver"));
 }

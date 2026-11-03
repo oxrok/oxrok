@@ -20,6 +20,39 @@ fx2lafw_options() {
     emu_cmd "$*" >/dev/null || emu_fail "fx2lafw: the emulator refused '$*'"
 }
 
+# Claims interface 0 of the attached device through usbfs, as another
+# program would, and holds it until fx2lafw_release (at most 120 s, so
+# an interrupted run leaves nothing behind). The device must not be
+# re-attached meanwhile: the cases between keep its descriptors. A claim
+# is no transfer, so the model sees nothing of it.
+fx2lafw_hold() {
+    timeout 120 python3 -I -c '
+import fcntl, os, signal, struct, sys
+d = "/sys/bus/usb/devices/" + sys.argv[1]
+bus, dev = (int(open(d + f).read()) for f in ("/busnum", "/devnum"))
+fd = os.open("/dev/bus/usb/%03d/%03d" % (bus, dev), os.O_RDWR)
+fcntl.ioctl(fd, 0x8004550f, struct.pack("I", 0))  # USBDEVFS_CLAIMINTERFACE
+print("held", flush=True)
+signal.pause()
+' "$EMU_BUSID" >"$TMP/fx2lafw-hold" 2>&1 &
+    HOLDPID=$!
+    i=0
+    until grep -q '^held$' "$TMP/fx2lafw-hold"; do
+        i=$((i + 1))
+        if [ $i -gt 100 ] || ! kill -0 $HOLDPID 2>/dev/null; then
+            emu_fail "fx2lafw: could not claim the interface: $(cat "$TMP/fx2lafw-hold")"
+            return 1
+        fi
+        sleep 0.1
+    done
+}
+
+fx2lafw_release() {
+    kill $HOLDPID 2>/dev/null
+    wait $HOLDPID 2>/dev/null
+    HOLDPID=""
+}
+
 emu_cases() {
     F=fx2lafw
     D8=D0,D1,D2,D3,D4,D5,D6,D7
@@ -92,5 +125,41 @@ emu_cases() {
     emu_case "logic frame on a transfer boundary" --oracle-bug "receive_transfer() crashes when a frame without trigger ends at the end of a transfer" -- -d $F -c samplerate=20k:limit_frames=2 --samples 512 -O hex
     fx2lafw_options profile=sigrok-fx2-8ch flashed=1
     emu_case "flashed fx2grok by ids" --filter "$C" -- -d $F:conn=1d50.608c --samples 8 -O hex
+
+    # Faults, on the flashed board: after an upload the C driver retries
+    # a failing open for 3 s, as many times as fit, which would make the
+    # transactions depend on wall time. The last line of stderr is the
+    # tool's own (sigrok-cli and oxrok word the rest differently).
+    O='/^Failed to open device/!d; s/.*/refused/'
+    fx2lafw_options profile=saleae-logic flashed=1 stall=version
+    emu_case "fault version stall" --expect-fail --stderr --filter "$O" -- -d $F --samples 8 -O hex
+    fx2lafw_options profile=saleae-logic flashed=1 stall=revid
+    emu_case "fault revid stall" --expect-fail --stderr --filter "$O" -- -d $F --samples 8 -O hex
+    fx2lafw_options profile=saleae-logic flashed=1 stall=start
+    emu_case "fault start stall" --expect-fail --stderr --filter '$!d; s/.*/refused/' -- -d $F --samples 8 -O hex
+    # A firmware of another major version, which knows no start command
+    # of this one: libsigrok logs the mismatch but opens the device all
+    # the same, then fails at the start.
+    fx2lafw_options profile=saleae-logic flashed=1 version=2.0 stall=start
+    emu_case "fault firmware 2.0" --expect-fail --stderr --filter "$O" --oracle-bug "fx2lafw_dev_open() logs a firmware major version mismatch but returns SR_OK (ret holds the REVID read's)" -- -d $F --samples 8 -O hex
+    # Transfers that complete empty, or STALL, count as empty ones; one
+    # more than MAX_EMPTY_TRANSFERS (64) in a row and the FX2 "gave up":
+    # the acquisition ends with no samples.
+    fx2lafw_options profile=saleae-logic flashed=1 empty=64
+    emu_case "fault 64 empty transfers" -- -d $F -c samplerate=1M --samples 16 -O hex
+    fx2lafw_options profile=saleae-logic flashed=1 empty=65
+    emu_case "fault 65 empty transfers" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
+    fx2lafw_options profile=saleae-logic flashed=1 stall_in=3
+    emu_case "fault bulk in stall" -- -d $F -c samplerate=1M --samples 16 -O hex
+    fx2lafw_options profile=saleae-logic flashed=1 empty=30 stall_in=35
+    emu_case "fault 65 empty or stalled" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
+    # Another program holds the interface: both tools read the version
+    # and REVID, then fail to claim it (LIBUSB_ERROR_BUSY). The same
+    # descriptors as above, so the device is not re-attached.
+    fx2lafw_options profile=saleae-logic flashed=1
+    if fx2lafw_hold; then
+        emu_case "interface claimed by another program" --expect-fail --stderr --filter "$O" -- -d $F --samples 8 -O hex
+        fx2lafw_release
+    fi
     fx2lafw_options
 }
