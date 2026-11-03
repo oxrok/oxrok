@@ -149,7 +149,7 @@ its USB serial port, `PACKET hex`, `PERIOD ms`, `SAVE`; `cable.sh`
 sends the commands) and plays a meter packet. `brymen-bm86x` on the
 BU-86X, `uni-t-ut61e-ser:conn=hid/ch9325` and `victor-dmm` give the same
 readings through oxrok and sigrok-cli; `tools/diffcli.sh --hw` runs
-the three cases. The CP2110 has no emulation yet. sigrok-cli needed two
+the three cases. sigrok-cli needed two
 small fixes in libsigrok's `serial_hid.c` to work on this macOS at all
 (the `DevSrvsID:` paths of current hidapi, and a double conversion of
 found paths); they are applied in the local build only.
@@ -187,6 +187,42 @@ it once just to check), and that oxrok kept the probed HID port open
 into the capture, skipping the second parameter report and reading
 stale packets; it now reopens the cable, and flushes a kept UART, as
 sigrok's `serial_open` does.
+
+The CP2110 (`hid/cp2110`, 10c4:ea80) has no Pico emulation; the
+`oxrok-emu` model `cp2110` (2026-11-03) is its first independent check.
+It plays a CP2110 after `serial_hid_cp2110.c` and AN434 rev 0.4 with a
+UNI-T UT61E on its UART: while the UART is enabled the meter sends one
+14 byte packet per `period=N` polls (25, about half a second), in two
+parts three polls apart, eight readings then ten packets of noise.
+Another baud rate gives garbled bytes, 8 data bits put the parity bit
+in bit 7, a parity mismatch sets the error bit, more than 480 bytes in
+the FIFO the overrun bit, and Get Receive Data answers from the FIFO.
+It checks report ids and lengths, baud 300 to 1000000, parity 0 to 4,
+flow 0 or 1, data bits code 0 to 3, stop bits 0 or 1, and no data
+before the UART is enabled. `tools/emu/cp2110.sh` holds 17 cases for
+`uni-t-ut61e-ser`: 14 full (scan, show, 1, 2, 4 and 9 samples, csv,
+analog, `raw=` without a chip, 7o1, 7e1, 7o2, baud rates out of range)
+and 3 `--oracle-bug` search forms. gcov: serial-dmm 62.5% (157 of
+251), `serial_hid_cp2110.c` 47.4%. Not emulated: transport errors,
+`write_bytes` (the UT61E takes no data), `drain` (serial-dmm never
+calls it), the codes `serialcomm` cannot express, and the flow
+branches; 8n1 and a wrong baud rate have unit tests only, since the
+scan's three seconds of wall time make their packet count vary.
+
+What the model showed in libsigrok 0bc24877: `cp2110_set_params` reads
+`serialcomm`'s flow (1 RTS/CTS, 2 XON/XOFF) with libserialport's
+numbering (1 XON/XOFF, 2 RTS/CTS), so it refuses `flow=1` and turns
+RTS/CTS on for `flow=2`; it sends parity with AN434 rev 0.4's codes (1
+even, 2 odd) but data bits as 0 to 3 where rev 0.4 has 0x05 to 0x08
+(pyserial sends 1 odd, 2 even; which a real chip follows is not
+verified); and the analog output of an overload (`inf`) rests on an
+undefined float to int conversion, so the goldens are x86-64's (INT_MIN)
+and aarch64 would print another prefix. In oxrok it found: the purge
+missing on open, a burst of reports that is one read in C, the sample
+limit checked per packet instead of per read, a receive buffer that
+dropped a good packet after noise (now `handle_new_data`'s rules,
+`DMM_BUFSIZE` 256), a request sent where C defers it by the meter's
+delay, and a panic on an overload reading.
 
 ### UNI-T meters on the UT-D04 cable, and the UT32x
 
