@@ -1,7 +1,7 @@
 gcov hantek-6xxx (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        92.6%  326 of 352
+  api.c        92.9%  327 of 352
   protocol.c   84.8%  89 of 105
-  total        90.8%  415 of 457
+  total        91.0%  416 of 457
 never reached, by function (line ranges hold no reached line):
   api.c
     config_get: 375, 398, 415
@@ -9,7 +9,7 @@ never reached, by function (line ranges hold no reached line):
     config_list: 497-498, 507, 512, 515-516
     data_amount: 536
     send_chunk: 575-577
-    receive_transfer: 637, 649, 664-668
+    receive_transfer: 637, 664-668
     dev_acquisition_start: 738-739, 743
   protocol.c
     hantek_6xxx_open: 50, 54

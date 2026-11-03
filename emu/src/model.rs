@@ -301,6 +301,30 @@ pub trait DeviceModel: Send {
     fn take_event_point(&mut self) -> bool {
         false
     }
+
+    /// A standard request (`bmRequestType` type 0), before the device
+    /// ([`crate::device::Device`]) or the model answers it: a fault
+    /// option's way to make one fail as firmware can, such as a string
+    /// descriptor read. [`StandardFault::Stall`] STALLs it and the
+    /// request has no effect; [`StandardFault::Short`] cuts the answer
+    /// of an IN request to that many bytes. `None`, the default, leaves
+    /// it alone. The host's enumeration goes through here too, so a
+    /// fault that should spare it is one whose options do not change
+    /// the descriptors (no re-attach), or one the model counts.
+    fn fail_standard(&mut self, setup: Setup) -> Option<StandardFault> {
+        let _ = setup;
+        None
+    }
+}
+
+/// How a model fails a standard request, see
+/// [`DeviceModel::fail_standard`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StandardFault {
+    /// A STALL, the request without effect.
+    Stall,
+    /// The answer cut to this many bytes.
+    Short(usize),
 }
 
 /// What happens mid-run when an armed point is reached (the emulator's

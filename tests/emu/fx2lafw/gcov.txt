@@ -1,10 +1,10 @@
 gcov fx2lafw (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        84.1%  206 of 245
-  protocol.c   83.3%  290 of 348
-  total        83.6%  496 of 593
+  api.c        86.5%  212 of 245
+  protocol.c   84.5%  294 of 348
+  total        85.3%  506 of 593
 never reached, by function (line ranges hold no reached line):
   api.c
-    scan: 255-258, 266-268, 276-278, 286-288, 294, 301, 303, 310, 328, 331, 361-367, 388
+    scan: 255-258, 294, 301, 303, 310, 328, 331, 361-367, 388
     dev_open: 446-447, 467-473
     dev_close: 494
     config_get: 514, 521, 541-542
@@ -16,7 +16,6 @@ never reached, by function (line ranges hold no reached line):
     finish_acquisition: 298-299
     resubmit_transfer: 340-341
     mso_send_data_proc: never called (345-395)
-    receive_transfer: 444-447
     configure_channels: 555-558
     start_transfers: 655, 669-670, 677-678, 686-691, 703
     fx2lafw_start_acquisition: 731-732, 742-744
