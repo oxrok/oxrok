@@ -126,6 +126,47 @@ emu_cases() {
     fx2lafw_options profile=sigrok-fx2-8ch flashed=1
     emu_case "flashed fx2grok by ids" --filter "$C" -- -d $F:conn=1d50.608c --samples 8 -O hex
 
+    # The CWAV USBee AX: 8 channels and the analog input A0
+    # (DEV_CAPS_AX_ANALOG). With A0 enabled the samples are 16 bit, the
+    # logic byte then the ADC's, the start sets the CTL2 clock, and the
+    # driver refuses rates above 12 MHz; without it, an 8 channel board.
+    # The model's ADC ramp reads n / 12.8 V at sample n (to 127).
+    # libsigrok's soft trigger is not compared with A0 enabled: it takes
+    # one byte per sample (the logic channels) on a stream of two, so it
+    # matches the ADC's bytes too and starts the data at twice the
+    # offset, and sigrok-cli still exits 0, which --oracle-bug cannot
+    # take (see the model's comments).
+    fx2lafw_options profile=usbee-ax
+    emu_case "ax scan" --keep-header -- -d $F --scan
+    emu_case "ax a0 1M" -- -d $F -C A0 -c samplerate=1M --samples 200 -O analog
+    emu_case "ax 8ch 24M" -- -d $F -C $D8 -c samplerate=24M --samples 1024 -O hex
+    fx2lafw_options profile=usbee-ax flashed=1
+    emu_case "flashed ax scan" --keep-header --filter "$C" -- -d $F --scan
+    emu_case "flashed ax show" --keep-header --filter "$C" -- -d $F --show
+    emu_case "ax probe names" --keep-header --filter "$C" -- -d $F:probe_names=CLK,DATA --scan
+    emu_case "ax by ids" -- -d $F:conn=08a9.0014 -C A0 --samples 8 -O analog
+    emu_case "ax logic and a0 2M" --record -- -d $F -c samplerate=2M --samples 64 -O bits
+    emu_case "ax d0 d1 a0 1M" -- -d $F -C D0,D1,A0 -c samplerate=1M --samples 40 -O bits
+    # A0 alone in CSV. sigrok-cli also feeds the packets the csv output
+    # answers nothing for to an analog output (docs/CLI.md): its
+    # FRAME-END and the blank line of the frame that begins after the
+    # limit go.
+    emu_case "ax a0 csv" --filter '/^FRAME-END$/d; /^$/d' -- -d $F -C A0 -c samplerate=500k --samples 300 -O csv:header=false
+    # Three transfers of 256 samples at 20 kHz, each block of the ramp
+    # one step above the last; every 50th line kept, all of it digested.
+    emu_case "ax a0 20k transfers" --digest --filter '1~50!d' -- -d $F -C A0 -c samplerate=20k --samples 700 -O analog
+    emu_case "ax a0 12M" --digest --filter '1~997!d' -- -d $F -c samplerate=12M --samples 30000 -O analog
+    emu_case "ax a0 frames" -- -d $F -C A0 -c samplerate=1M:limit_frames=2 --samples 3 -O analog
+    emu_case "ax trigger without a0" -- -d $F -C $D8 -c samplerate=1M --samples 16 -t D3=r -O bits
+    # 16 bit samples go to 12 MHz: A0 refuses the faster rates,
+    # command_start_acquisition() after the transfers were submitted.
+    for r in 16M 24M 48M; do
+        emu_case "ax a0 at $r" --expect-fail --stderr --filter '/Unable to sample/!d; s/.*/refused/' -- -d $F -C A0 -c samplerate=$r --samples 8 -O analog
+    done
+    emu_case "ax no channel a1" --expect-fail --stderr --filter '/unknown channel/!d; s/.*/refused/' -- -d $F -C A1 --samples 8 -O analog
+    # config_list() answers SR_ERR_NA for any channel group.
+    emu_case "ax a0 group get" --expect-fail --stderr --filter '/samplerate/!d; s/.*/refused/' -- -d $F -g A0 --get samplerate
+
     # Faults, on the flashed board: after an upload the C driver retries
     # a failing open for 3 s, as many times as fit, which would make the
     # transactions depend on wall time. The last line of stderr is the

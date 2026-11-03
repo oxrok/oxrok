@@ -1,24 +1,21 @@
 gcov fx2lafw (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        86.5%  212 of 245
-  protocol.c   84.5%  294 of 348
-  total        85.3%  506 of 593
+  api.c        88.6%  217 of 245
+  protocol.c   93.1%  324 of 348
+  total        91.2%  541 of 593
 never reached, by function (line ranges hold no reached line):
   api.c
-    scan: 255-258, 294, 301, 303, 310, 328, 331, 361-367, 388
+    scan: 255-258, 294, 301, 303, 310, 328, 331, 388
     dev_open: 446-447, 467-473
     dev_close: 494
     config_get: 514, 521, 541-542
     config_set: 557, 576-577
-    config_list: 594, 598, 604-605
+    config_list: 598, 604-605
   protocol.c
     command_start_acquisition: 116-117
     fx2lafw_dev_open: 160-162, 178, 182, 201-205
-    finish_acquisition: 298-299
     resubmit_transfer: 340-341
-    mso_send_data_proc: never called (345-395)
-    configure_channels: 555-558
-    start_transfers: 655, 669-670, 677-678, 686-691, 703
-    fx2lafw_start_acquisition: 731-732, 742-744
+    start_transfers: 655, 669-670, 677-678, 686-691
+    fx2lafw_start_acquisition: 731-732
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/ezusb.c   67.4%  31 of 46
   src/usb.c     62.4%  143 of 229

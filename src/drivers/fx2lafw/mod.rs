@@ -23,8 +23,9 @@
 #![forbid(unsafe_code)]
 
 use crate::core::{
-    Access, Channel, ChannelGroup, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, SoftTriggerLogic, Trigger, TriggerMatch, Value, ValueList,
+    Access, AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo,
+    Driver, Error, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, Result, SoftTriggerLogic,
+    Trigger, TriggerMatch, Unit, Value, ValueList,
 };
 use crate::usb::{BulkStream, ControlRequest, Transport, UsbDeviceInfo, UsbId};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +36,9 @@ use std::time::{Duration, Instant};
 const CMD_GET_FW_VERSION: u8 = 0xb0;
 const CMD_START: u8 = 0xb1;
 const CMD_GET_REVID_VERSION: u8 = 0xb2;
+/// `CMD_START_FLAGS_CLK_CTL2`: the firmware pulses CTL1/CTL2 once per
+/// sample, the clock of the `USBee AX`'s ADC.
+const FLAG_CLK_CTL2: u8 = 1 << 4;
 const FLAG_WIDE: u8 = 1 << 5;
 const FLAG_CLK_48MHZ: u8 = 1 << 6;
 const REQUIRED_MAJOR: u8 = 1;
@@ -56,6 +60,11 @@ pub const SAMPLERATES: [u64; 17] = [
     4_000_000, 6_000_000, 8_000_000, 12_000_000, 16_000_000, 24_000_000, 48_000_000,
 ];
 
+/// `channel_names_analog` of `api.c`; the `USBee AX` has the first.
+const ANALOG_NAMES: [&str; 4] = ["A0", "A1", "A2", "A3"];
+/// The decimal digits of the analog packets, `sr_analog_init(..., 2)`.
+const ANALOG_DIGITS: i32 = 2;
+
 /// A known device: its USB id, names, firmware file and channel count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile {
@@ -69,6 +78,8 @@ pub struct Profile {
     pub firmware: &'static str,
     /// 16 channels instead of 8.
     pub wide: bool,
+    /// One analog channel, `A0` (`DEV_CAPS_AX_ANALOG`, the `USBee AX`).
+    pub analog: bool,
 }
 
 const fn profile(
@@ -79,12 +90,22 @@ const fn profile(
     firmware: &'static str,
     wide: bool,
 ) -> Profile {
-    Profile { id: UsbId { vendor: vendor_id, product: product_id }, vendor, model, firmware, wide }
+    Profile {
+        id: UsbId { vendor: vendor_id, product: product_id },
+        vendor,
+        model,
+        firmware,
+        wide,
+        analog: false,
+    }
 }
 
 /// The devices this driver serves.
 pub static PROFILES: [Profile; 10] = [
-    profile(0x08a9, 0x0014, "CWAV", "USBee AX", "fx2lafw-cwav-usbeeax.fw", false),
+    Profile {
+        analog: true,
+        ..profile(0x08a9, 0x0014, "CWAV", "USBee AX", "fx2lafw-cwav-usbeeax.fw", false)
+    },
     profile(0x08a9, 0x0015, "CWAV", "USBee DX", "fx2lafw-cwav-usbeedx.fw", true),
     profile(0x08a9, 0x0009, "CWAV", "USBee SX", "fx2lafw-cwav-usbeesx.fw", false),
     profile(0x08a9, 0x0005, "CWAV", "USBee ZX", "fx2lafw-cwav-usbeezx.fw", false),
@@ -113,8 +134,9 @@ pub fn has_firmware(info: &UsbDeviceInfo) -> bool {
 }
 
 /// The `0xb1` command for `samplerate`: flags byte and the GPIF sample
-/// delay, or an error for a rate the clocks cannot divide to.
-pub fn start_command(samplerate: u64, wide: bool) -> Result<[u8; 3]> {
+/// delay, or an error for a rate the clocks cannot divide to. `wide`
+/// asks for 16 bit samples, `analog` for the CTL2 clock of the ADC.
+pub fn start_command(samplerate: u64, wide: bool, analog: bool) -> Result<[u8; 3]> {
     let mut flags = 0u8;
     let mut delay = 0u64;
     if samplerate > 0 && 48_000_000 % samplerate == 0 {
@@ -135,7 +157,24 @@ pub fn start_command(samplerate: u64, wide: bool) -> Result<[u8; 3]> {
     if wide {
         flags |= FLAG_WIDE;
     }
+    if analog {
+        flags |= FLAG_CLK_CTL2;
+    }
     Ok([flags, (delay >> 8) as u8, (delay & 0xff) as u8])
+}
+
+/// An ADC code of the `USBee AX` in volts, as `mso_send_data_proc()`
+/// rescales it: 0 to 255 is -10 V to +9.92 V, 128 is 0 V.
+pub fn adc_volts(code: u8) -> f32 {
+    (f32::from(code) - 128.0) / 12.8
+}
+
+/// The 16 bit samples of a `USBee AX` with its analog channel enabled,
+/// split as `mso_send_data_proc()` does: the low byte of each is the
+/// logic sample (D0 to D7), the high byte the ADC's, in volts. A last
+/// odd byte is dropped.
+pub fn deinterleave(data: &[u8]) -> (Vec<u8>, Vec<f32>) {
+    data.as_chunks::<2>().0.iter().map(|[logic, adc]| (*logic, adc_volts(*adc))).unzip()
 }
 
 /// Transfer size, queue depth and the timeout of one transfer for a
@@ -349,9 +388,7 @@ impl Fx2lafwDevice {
         transport: Option<Box<dyn Transport>>,
     ) -> Self {
         let count = if profile.wide { 16 } else { 8 };
-        let channels = (0..count).map(Channel::logic).collect();
-        let groups = vec![ChannelGroup::new("Logic", (0..count).collect())];
-        Fx2lafwDevice {
+        let mut dev = Fx2lafwDevice {
             info: DeviceInfo {
                 driver: "fx2lafw",
                 vendor: profile.vendor.into(),
@@ -362,8 +399,8 @@ impl Fx2lafwDevice {
             },
             usb,
             profile,
-            channels,
-            groups,
+            channels: (0..count).map(Channel::logic).collect(),
+            groups: Vec::new(),
             settings: Settings {
                 samplerate: SAMPLERATES[0],
                 limit_samples: 0,
@@ -375,6 +412,24 @@ impl Fx2lafwDevice {
             transport: Arc::new(Mutex::new(None)),
             worker: None,
             fw_updated: None,
+        };
+        dev.add_analog_and_groups();
+        dev
+    }
+
+    /// After the logic channels: the analog one of a `USBee AX`, numbered
+    /// after the 8 logic channels the profile has (whatever `probe_names`
+    /// left), as `scan()` does; then the groups, `Logic` and one per
+    /// analog channel, named as the channel.
+    fn add_analog_and_groups(&mut self) {
+        let logic = self.channels.len();
+        if self.profile.analog {
+            let index = if self.profile.wide { 16 } else { 8 };
+            self.channels.push(Channel::new(index, ChannelKind::Analog, ANALOG_NAMES[0]));
+        }
+        self.groups = vec![ChannelGroup::new("Logic", (0..logic).collect())];
+        for pos in logic..self.channels.len() {
+            self.groups.push(ChannelGroup::new(self.channels[pos].name.clone(), vec![pos]));
         }
     }
 
@@ -391,20 +446,38 @@ impl Fx2lafwDevice {
     /// Applies a `probe_names` spec (see
     /// `crate::core::util::parse_probe_names`); a spec starting with `-`
     /// leaves only the named channels.
+    /// Only the logic channels take the names, as in `scan()`, which
+    /// leaves the analog channel `A0`.
     pub fn name_channels(&mut self, spec: &str) {
+        self.channels.retain(|c| c.kind == ChannelKind::Logic);
         let defaults: Vec<&str> = self.channels.iter().map(|c| c.name.as_str()).collect();
         let names = crate::core::util::parse_probe_names(spec, &defaults);
         self.channels.truncate(names.len());
         for (c, n) in self.channels.iter_mut().zip(names) {
             c.name = n;
         }
-        let count = self.channels.len();
-        self.groups = vec![ChannelGroup::new("Logic", (0..count).collect())];
+        self.add_analog_and_groups();
     }
 
-    /// True when a channel above D7 is enabled on a 16 channel device.
+    /// The indexes of the enabled analog channels.
+    fn enabled_analog(&self) -> Vec<usize> {
+        self.channels
+            .iter()
+            .filter(|c| c.enabled && c.kind == ChannelKind::Analog)
+            .map(|c| c.index)
+            .collect()
+    }
+
+    /// 16 bit samples, as `configure_channels()` decides: a channel
+    /// above D7 enabled on a 16 channel device, or an analog channel
+    /// enabled (its ADC is the high byte).
     fn wide(&self) -> bool {
-        self.profile.wide && self.channels.iter().any(|c| c.enabled && c.index >= 8)
+        let high_logic = self.profile.wide
+            && self
+                .channels
+                .iter()
+                .any(|c| c.enabled && c.kind == ChannelKind::Logic && c.index >= 8);
+        high_logic || !self.enabled_analog().is_empty()
     }
 }
 
@@ -520,7 +593,10 @@ impl Device for Fx2lafwDevice {
     fn options(&self, group: Option<&str>) -> Result<Vec<OptionDesc>> {
         match group {
             None => Ok(DEV_OPTIONS.to_vec()),
-            Some(g) if g.eq_ignore_ascii_case("Logic") => Ok(Vec::new()),
+            // config_list() answers SR_ERR_NA for any channel group.
+            Some(g) if self.groups.iter().any(|cg| cg.name.eq_ignore_ascii_case(g)) => {
+                Ok(Vec::new())
+            }
             Some(g) => Err(Error::ChannelGroup(g.to_owned())),
         }
     }
@@ -636,6 +712,21 @@ impl Device for Fx2lafwDevice {
     fn set_trigger(&mut self, trigger: Option<Trigger>) -> Result<()> {
         if let Some(t) = &trigger {
             t.check(&TRIGGER_FEATURES)?;
+            // The soft trigger matches logic bits. libsigrok's takes an
+            // analog channel's index for a bit as well (bit 0 of the
+            // ADC's byte on the USBee AX); there is no analog trigger.
+            for c in t.stages.iter().flat_map(|s| &s.conditions) {
+                if let Some(ch) = self
+                    .channels
+                    .iter()
+                    .find(|ch| ch.index == c.channel && ch.kind == ChannelKind::Analog)
+                {
+                    return Err(Error::Arg(format!(
+                        "{}: fx2lafw triggers on logic channels only",
+                        ch.name
+                    )));
+                }
+            }
         }
         self.trigger = trigger;
         Ok(())
@@ -646,6 +737,7 @@ impl Device for Fx2lafwDevice {
             return Err(Error::Busy);
         }
         let wide = self.wide();
+        let analog = self.enabled_analog();
         let rate = self.settings.samplerate;
         // command_start_acquisition() refuses it after the transfers
         // were submitted; they are cancelled before any completes, so
@@ -655,9 +747,11 @@ impl Device for Fx2lafwDevice {
                 "Unable to sample at {rate}Hz when collecting 16-bit samples."
             )));
         }
-        let command = start_command(rate, wide)?;
+        let command = start_command(rate, wide, !analog.is_empty())?;
         let unit_size = if wide { 2 } else { 1 };
         // soft_trigger_logic_check() skips matches on disabled channels.
+        // The trigger runs on the stream's samples, two bytes with the
+        // ADC's high byte; the logic channels are the low byte.
         let stl = self.trigger.as_ref().map(|t| {
             let stages = t
                 .stages
@@ -679,6 +773,7 @@ impl Device for Fx2lafwDevice {
             command,
             samplerate: rate,
             unit_size,
+            analog,
             limit_samples: self.settings.limit_samples,
             limit_frames: self.settings.limit_frames,
             stl,
@@ -729,12 +824,34 @@ struct Acquisition {
     command: [u8; 3],
     samplerate: u64,
     unit_size: usize,
+    /// The enabled analog channels: their samples are the high byte.
+    analog: Vec<usize>,
     limit_samples: u64,
     limit_frames: u64,
     stl: Option<SoftTriggerLogic>,
 }
 
 impl Acquisition {
+    /// Samples of the stream to the session: `la_send_data_proc()` as
+    /// they are, or with an analog channel `mso_send_data_proc()`, a
+    /// logic packet of the low bytes and an analog one of the ADC's.
+    fn send(&self, sink: &PacketSink, data: Vec<u8>) {
+        if self.analog.is_empty() {
+            sink.send(Packet::logic(self.unit_size, data));
+            return;
+        }
+        let (logic, volts) = deinterleave(&data);
+        sink.send(Packet::logic(1, logic));
+        sink.send(Packet::Analog(AnalogData {
+            channels: self.analog.clone(),
+            samples: volts,
+            mq: Mq::Voltage,
+            flags: MqFlags::default(),
+            unit: Unit::Volt,
+            digits: ANALOG_DIGITS,
+        }));
+    }
+
     /// `start_transfers()` and `command_start_acquisition()`: the
     /// transfers queued, then the start command. On a failure the
     /// queued transfers are cancelled as the stream drops.
@@ -807,7 +924,7 @@ impl Acquisition {
                             n = limit - sent;
                         }
                         let at = (processed as usize) * u;
-                        sink.send(Packet::logic(u, data[at..at + n as usize * u].to_vec()));
+                        self.send(sink, data[at..at + n as usize * u].to_vec());
                         sent += n;
                         processed += n;
                     }
@@ -817,7 +934,7 @@ impl Acquisition {
                         let mut pre_samples = 0u64;
                         for p in pre {
                             pre_samples += (p.len() / u) as u64;
-                            sink.send(Packet::logic(u, p));
+                            self.send(sink, p);
                         }
                         sink.send(Packet::Trigger);
                         sink.send(Packet::FrameBegin);
@@ -828,7 +945,7 @@ impl Acquisition {
                             n = limit - sent;
                         }
                         let from = (processed + offset) as usize * u;
-                        sink.send(Packet::logic(u, data[from..from + n as usize * u].to_vec()));
+                        self.send(sink, data[from..from + n as usize * u].to_vec());
                         sent += n;
                         processed += offset + n;
                         trigger_fired = true;
@@ -870,16 +987,174 @@ mod tests {
 
     #[test]
     fn start_commands_match_the_firmware_clocks() {
-        assert_eq!(start_command(24_000_000, false).unwrap(), [FLAG_CLK_48MHZ, 0, 1]);
-        assert_eq!(start_command(48_000_000, false).unwrap(), [FLAG_CLK_48MHZ, 0, 0]);
-        assert_eq!(start_command(12_000_000, true).unwrap(), [FLAG_CLK_48MHZ | FLAG_WIDE, 0, 3]);
-        assert_eq!(start_command(3_000_000, false).unwrap(), [FLAG_CLK_48MHZ, 0, 15]);
+        assert_eq!(start_command(24_000_000, false, false).unwrap(), [FLAG_CLK_48MHZ, 0, 1]);
+        assert_eq!(start_command(48_000_000, false, false).unwrap(), [FLAG_CLK_48MHZ, 0, 0]);
+        assert_eq!(
+            start_command(12_000_000, true, false).unwrap(),
+            [FLAG_CLK_48MHZ | FLAG_WIDE, 0, 3]
+        );
+        assert_eq!(start_command(3_000_000, false, false).unwrap(), [FLAG_CLK_48MHZ, 0, 15]);
         // 48 MHz / 20 kHz exceeds the delay range; 30 MHz / 20 kHz fits.
-        assert_eq!(start_command(20_000, false).unwrap(), [0, 0x05, 0xdb]);
-        assert_eq!(start_command(25_000, false).unwrap(), [0, 0x04, 0xaf]);
-        assert_eq!(start_command(50_000, false).unwrap(), [FLAG_CLK_48MHZ, 0x03, 0xbf]);
-        assert!(start_command(7_000_000, false).is_err());
-        assert!(start_command(0, false).is_err());
+        assert_eq!(start_command(20_000, false, false).unwrap(), [0, 0x05, 0xdb]);
+        assert_eq!(start_command(25_000, false, false).unwrap(), [0, 0x04, 0xaf]);
+        assert_eq!(start_command(50_000, false, false).unwrap(), [FLAG_CLK_48MHZ, 0x03, 0xbf]);
+        assert!(start_command(7_000_000, false, false).is_err());
+        assert!(start_command(0, false, false).is_err());
+        // The USBee AX with A0: 16 bit samples and the CTL2 clock.
+        assert_eq!(
+            start_command(1_000_000, true, true).unwrap(),
+            [FLAG_CLK_48MHZ | FLAG_WIDE | FLAG_CLK_CTL2, 0, 47]
+        );
+        assert_eq!(start_command(20_000, true, true).unwrap(), [0x30, 0x05, 0xdb]);
+    }
+
+    #[test]
+    fn adc_codes_scale_to_plus_minus_ten_volts() {
+        // (code - 128.0f) / 12.8f in single precision, as protocol.c.
+        assert_eq!(adc_volts(0), -10.0);
+        assert_eq!(adc_volts(128), 0.0);
+        assert_eq!(adc_volts(192), 5.0);
+        assert_eq!(adc_volts(64), -5.0);
+        assert_eq!(adc_volts(255), 9.921_875);
+        assert_eq!(adc_volts(129), 0.078_125);
+        for c in 0..=255u8 {
+            let v = adc_volts(c);
+            assert!((-10.0..10.0).contains(&v), "{c}: {v}");
+            assert!((v * 12.8 + 128.0 - f32::from(c)).abs() < 1e-3, "{c}: {v}");
+        }
+    }
+
+    #[test]
+    fn deinterleave_takes_the_low_byte_as_logic_and_the_high_as_the_adc() {
+        let (logic, volts) = deinterleave(&[0x01, 128, 0xfe, 192, 0x80, 0, 0x55]);
+        assert_eq!(logic, [0x01, 0xfe, 0x80], "the odd last byte is dropped");
+        assert_eq!(volts, [0.0, 5.0, -10.0]);
+        assert_eq!(deinterleave(&[]), (vec![], vec![]));
+    }
+
+    fn device(model: &str) -> Fx2lafwDevice {
+        let p = PROFILES.iter().find(|p| p.model == model).unwrap();
+        Fx2lafwDevice::new(UsbDeviceInfo::default(), p, None)
+    }
+
+    #[test]
+    fn the_usbee_ax_lists_a0_in_its_own_group() {
+        let mut d = device("USBee AX");
+        let names: Vec<&str> = d.channels.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7", "A0"]);
+        assert_eq!(d.channels[8], Channel::new(8, ChannelKind::Analog, "A0"));
+        assert_eq!(
+            d.groups,
+            [ChannelGroup::new("Logic", (0..8).collect()), ChannelGroup::new("A0", vec![8])]
+        );
+        assert_eq!(d.options(Some("A0")).unwrap(), []);
+        assert!(d.options(Some("A1")).is_err());
+        // A0 makes the samples wide; the logic channels alone do not.
+        assert!(d.wide());
+        assert_eq!(d.enabled_analog(), [8]);
+        d.enable_channel(8, false).unwrap();
+        assert!(!d.wide());
+        assert_eq!(d.enabled_analog(), [] as [usize; 0]);
+        // probe_names renames the logic channels and leaves A0.
+        d.name_channels("-CLK,DATA");
+        let names: Vec<&str> = d.channels.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["CLK", "DATA", "A0"]);
+        assert_eq!(d.channels[2].index, 8);
+        assert_eq!(d.groups[1], ChannelGroup::new("A0", vec![2]));
+        // No trigger on A0; on D0 as ever.
+        let mut d = device("USBee AX");
+        let t = crate::core::trigger_syntax::parse(&d, "A0=r").unwrap();
+        assert!(d.set_trigger(Some(t)).unwrap_err().to_string().contains("A0"));
+        let t = crate::core::trigger_syntax::parse(&d, "D0=r").unwrap();
+        d.set_trigger(Some(t)).unwrap();
+        // Other boards have no analog channel.
+        let d = device("Logic");
+        assert_eq!(d.channels.len(), 8);
+        assert_eq!(d.groups.len(), 1);
+    }
+
+    /// The transfers of a test, then the stop flag.
+    struct Transfers(Vec<Vec<u8>>, Arc<AtomicBool>);
+
+    impl BulkStream for Transfers {
+        fn next(&mut self, _timeout: Duration) -> Result<Vec<u8>> {
+            if self.0.is_empty() {
+                self.1.store(true, Ordering::SeqCst);
+                return Err(Error::Timeout);
+            }
+            Ok(self.0.remove(0))
+        }
+    }
+
+    fn run(acq: Acquisition, transfers: Vec<Vec<u8>>) -> Vec<Packet> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stream = Box::new(Transfers(transfers, Arc::clone(&stop)));
+        acq.run(stream, &PacketSink::new(tx, 0), &stop).unwrap();
+        rx.try_iter().map(|(_, p)| p).filter(|p| !matches!(p, Packet::Header { .. })).collect()
+    }
+
+    fn ax_acquisition(limit: u64, stl: Option<SoftTriggerLogic>) -> Acquisition {
+        Acquisition {
+            command: [0x70, 0, 47],
+            samplerate: 1_000_000,
+            unit_size: 2,
+            analog: vec![8],
+            limit_samples: limit,
+            limit_frames: 1,
+            stl,
+        }
+    }
+
+    fn analog(samples: Vec<f32>) -> Packet {
+        Packet::Analog(AnalogData {
+            channels: vec![8],
+            samples,
+            mq: Mq::Voltage,
+            flags: MqFlags::default(),
+            unit: Unit::Volt,
+            digits: 2,
+        })
+    }
+
+    #[test]
+    fn an_analog_capture_sends_logic_then_volts_per_transfer() {
+        let packets = run(ax_acquisition(3, None), vec![vec![1, 128, 2, 192], vec![3, 0, 4, 255]]);
+        assert_eq!(
+            packets,
+            [
+                Packet::FrameBegin,
+                Packet::logic(1, vec![1, 2]),
+                analog(vec![0.0, 5.0]),
+                Packet::logic(1, vec![3]),
+                analog(vec![-10.0]),
+                Packet::FrameEnd,
+                // The rest of the transfer: a frame begins, as in protocol.c.
+                Packet::FrameBegin,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_trigger_with_a0_matches_the_logic_byte_and_splits_the_pre_trigger_samples() {
+        // D1 rising, one sample before it: the trigger looks at the low
+        // byte of each 16 bit sample only, whatever the ADC reads.
+        let trigger = vec![vec![(1, TriggerMatch::Rising)]];
+        let stl = SoftTriggerLogic::new(trigger, 2, 1);
+        let data = vec![0x00, 0xff, 0x01, 0xff, 0x02, 128, 0x03, 192, 0x04, 0];
+        let packets = run(ax_acquisition(3, Some(stl)), vec![data]);
+        assert_eq!(
+            packets,
+            [
+                Packet::logic(1, vec![0x01]),
+                analog(vec![adc_volts(0xff)]),
+                Packet::Trigger,
+                Packet::FrameBegin,
+                Packet::logic(1, vec![0x02, 0x03]),
+                analog(vec![0.0, 5.0]),
+                Packet::FrameEnd,
+            ]
+        );
     }
 
     #[test]
