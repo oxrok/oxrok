@@ -168,7 +168,9 @@
 //! sigrok-cli captures only with `--continuous`, which it ends at the
 //! first key on standard input (`anykey.c`), at once when that is
 //! `/dev/null`, as for the emulator's cases; the driver itself stops
-//! only after 1 s without a USB event (`dev_acquisition_handle()`). A
+//! only after 1 s without a USB event (`dev_acquisition_handle()`,
+//! `api.c:391`), which the cases never reach only because the harness
+//! gives sigrok-cli `/dev/null` on standard input. A
 //! real board streams until it is stopped, so how much a capture reads
 //! would depend on when the stop lands. As an emulation artifact the
 //! FPGA therefore stops sending after `transfers=N` transfers (2 by
