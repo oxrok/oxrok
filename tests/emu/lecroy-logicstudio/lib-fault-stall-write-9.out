@@ -1,0 +1,4 @@
+sr: lecroy-logicstudio: write_registers_sync(18/5444) failed.
+sr: lecroy-logicstudio: Failed to upload trigger config.
+sr: session: Failed to commit lecroy-logicstudio device usb/PORT settings before starting acquisition.
+Failed to start session.

@@ -1,0 +1,4 @@
+sr: lecroy-logicstudio: Failed to initiate firmware upload: LIBUSB_ERROR_IO.
+sr: lecroy-logicstudio: Firmware not accepted by device.
+sr: session: Failed to commit lecroy-logicstudio device usb/PORT settings before starting acquisition.
+Failed to start session.

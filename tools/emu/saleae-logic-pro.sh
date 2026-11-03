@@ -73,15 +73,6 @@ signal.pause()
     done
 }
 
-# The board's address now, from sysfs: $EMU_USB is the address of the
-# session's first attach and is not updated when the board re-attaches
-# (a renumeration, or a case's reset that changes its descriptors), so
-# after the first upload it names no device.
-logicpro_addr() {
-    d=/sys/bus/usb/devices/$EMU_BUSID
-    echo "$(cat $d/busnum).$(cat $d/devnum)"
-}
-
 logicpro_release() {
     kill $HOLDPID 2>/dev/null
     wait $HOLDPID 2>/dev/null
@@ -106,6 +97,9 @@ emu_cases() {
     B4='1,/^3:/!d'
     B16='1,/^15:/!d'
     D4=0,1,2,3
+    # The address of the session's first attach, the board without its
+    # firmware: the uploads below move it elsewhere (EMU_USB follows).
+    A0=$EMU_USB
 
     # Without firmware: every run uploads it in the scan, sleeps 500 ms
     # and lists the renumerated device (scan(), api.c:213-218): the
@@ -119,7 +113,7 @@ emu_cases() {
     # the upload.
     logicpro_options
     L='/saleae-logic-pro:/!d; s/ \[[0-9:.]+\]//'
-    emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$EMU_USB --scan
+    emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
     emu_case "scan" --keep-header --filter "$C" -- -d $F --scan
     # sr_usb_find() refuses the spec, and the driver lists the board all
     # the same (the stdout case below shows it).
@@ -143,16 +137,16 @@ emu_cases() {
     emu_case "conn matching nothing" --keep-header --filter "$C" -- -d $F:conn=9.99 --scan
     emu_case "conn bus out of range" --keep-header --filter "$C" -- -d $F:conn=300.1 --scan
     emu_case "conn address out of range" --keep-header --filter "$C" -- -d $F:conn=1.200 --scan
-    # A conn= that names no device any more: $EMU_USB is the address of
-    # the session's first attach, which the uploads above moved the board
+    # A conn= that names no device any more: A0 is the address of the
+    # session's first attach, which the uploads above moved the board
     # away from, so sr_usb_find() matches nothing and the board is
     # captured only because such a conn selects every Logic Pro.
-    emu_case "stale address captures all the same" --digest --filter "$B4" -- -d $F:conn=$EMU_USB -C $D4 --continuous -O bits
-    # Selected by its real address: the previous case left the board
-    # with these descriptors, so the next case's reset does not
-    # re-attach it and the address read now still holds. libsigrok's
-    # debug line shows sr_usb_find() matching it.
-    A=$(logicpro_addr)
+    emu_case "stale address captures all the same" --digest --filter "$B4" -- -d $F:conn=$A0 -C $D4 --continuous -O bits
+    # Selected by its real address (EMU_USB, the board as it is now):
+    # the previous case left the board with these descriptors, so the
+    # next case's reset does not re-attach it and the address still
+    # holds. libsigrok's debug line shows sr_usb_find() matching it.
+    A=$EMU_USB
     emu_case "by address" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$A --scan
     emu_case "by address capture" --digest --filter "$B4" -- -d $F:conn=$A -C $D4 --continuous -O bits
     emu_case "get conn" --filter "s/'[0-9]+[.][0-9]+'/'BUS.ADDR'/" -- -d $F --get conn

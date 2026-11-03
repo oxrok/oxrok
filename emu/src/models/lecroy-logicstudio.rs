@@ -177,7 +177,8 @@
 //! trigger since the upload, or with counts no capture ratio gives; a
 //! group other than 0 with 16 channels; a fetch with no capture
 //! complete or another start; bulk IN transfers of other lengths than
-//! the driver's (17 KiB, then what is left, 16 KiB at most); a firmware
+//! the driver's (17 KiB, then what is left, 16 KiB at most, rounded up
+//! to whole packets as on the bus); a firmware
 //! upload to the running firmware.
 //!
 //! **The driver's bugs** (libsigrok `0bc24877`), which the model shows
@@ -1438,14 +1439,18 @@ impl LogicStudio {
             return Reply::Nak;
         }
         // handle_fetch_samples_done() asks for 17 KiB, then
-        // recv_bulk_transfer() for what is left, 16 KiB at most.
+        // recv_bulk_transfer() for what is left, 16 KiB at most; the
+        // model sees that rounded up to whole 512 byte packets, as the
+        // device does on the bus (docs/USB.md), which matters only when
+        // a short transfer left a remainder that is not one.
         let want =
             if self.fpga.fetch_transfers == 0 { 17 << 10 } else { (16 << 10).min(MEMORY - at) };
-        if max != want {
+        if max != want.next_multiple_of(512) {
             v.report(format!(
                 "bulk IN transfer {} of the fetch of {max} bytes, with {at} of {MEMORY} sent; the \
-                 driver asks for {want}",
-                self.fpga.fetch_transfers + 1
+                 driver asks for {want} ({} on the bus)",
+                self.fpga.fetch_transfers + 1,
+                want.next_multiple_of(512)
             ));
         }
         self.fpga.fetch_transfers += 1;
@@ -2084,8 +2089,10 @@ mod tests {
         let (earliest, _) = driver_view(&packet, 2, rate, offset);
         sync(&mut dev, &fetch_regs(earliest % 20_480 * 2 / 8), &mut v);
         let mut got = 0;
+        // The driver's last transfer is 7192 bytes, which the model
+        // sees as 15 packets.
         for (ask, len) in
-            [(17 << 10, 1000), (16 << 10, 16 << 10), (16 << 10, 16 << 10), (7192, 7192)]
+            [(17 << 10, 1000), (16 << 10, 16 << 10), (16 << 10, 16 << 10), (7680, 7192)]
         {
             dev.in_submitted(2, ask);
             let Reply::Data(d) = dev.transfer_in(2, ask, &mut v) else { panic!("no samples") };

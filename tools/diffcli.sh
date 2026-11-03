@@ -53,6 +53,15 @@
 # violation checks are as in a normal run; the software cases, --hw,
 # --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #
+# emu_case --libsigrok makes a case library-verified rather than
+# CLI-verified: tools/libsigrok-run.c, built here with cc against the
+# oracle's libsigrok (the pkg-config of the prefix sigrok-cli runs from,
+# LIBSIGROK_PREFIX to override; the libsigrok.so it loads must be the
+# one sigrok-cli loads, so that --gcov counts its runs alike), takes
+# sigrok-cli's place, for drivers sigrok-cli cannot drive (no limit it
+# can set). It is always an oracle case, held to goldens of its own,
+# and --no-oracle skips it.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -485,7 +494,23 @@ if [ $emu = 1 ]; then
         [ "$EMU_DEAD" = 0 ] || { echo "emulator: not answering, so no '$1'" >&2; return 1; }
         lines=$(wc -l <"$TMP/emu.out")
         printf '%s\n' "$1" >&7 || return 1
-        emu_wait "$lines" -F -x "OK $1"
+        emu_wait "$lines" -F -x "OK $1" || return 1
+        emu_track
+    }
+    # Takes over the nodes and address of each attach the server
+    # reported since the last call (READY, REPLUGGED, and RENUMERATED
+    # after a renumeration or a reset that re-attached the device), in
+    # order, so that EMU_USB and the rest name the device as it is now
+    # and the outputs name every attach of the session generically. The
+    # server prints such a line before the OK of any command it takes
+    # in after the attach.
+    emu_track() {
+        total=$(wc -l <"$TMP/emu.out")
+        [ "$total" -gt "$EMU_SEEN" ] || return 0
+        tail -n +$((EMU_SEEN + 1)) "$TMP/emu.out" | head -n $((total - EMU_SEEN)) \
+            | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
+        EMU_SEEN=$total
+        while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
     }
     emu_start() {
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
@@ -500,10 +525,11 @@ if [ $emu = 1 ]; then
         exec 7<>"$TMP/emu.ctl"
         emu_wait 0 '^READY ' || return 1
         : >"$TMP/emu.sed"
-        emu_fields "$(grep -m1 '^READY ' "$TMP/emu.out")"
+        EMU_SEEN=0
+        emu_track
     }
-    # emu_fields LINE: the EMU_* values from a READY (or REPLUGGED)
-    # line, and the rules that make its node names and address generic
+    # emu_fields LINE: the EMU_* values from a READY, REPLUGGED or
+    # RENUMERATED line, and the rules that make its node names and address generic
     # in the outputs, added to those of the attaches before.
     emu_fields() {
         EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
@@ -660,10 +686,7 @@ flush()
     # Puts a device an armed unplug took off the bus back on it, and
     # takes over the new attach's nodes and address.
     emu_replug() {
-        lines=$(wc -l <"$TMP/emu.out")
-        emu_cmd replug >/dev/null || return 1
-        r=$(tail -n +$((lines + 1)) "$TMP/emu.out" | grep -m1 '^REPLUGGED ' || true)
-        [ -z "$r" ] || emu_fields "$r"
+        emu_cmd replug >/dev/null
     }
     # emu_interrupt SKIP PID: once the emulator prints EVENT interrupt
     # after line SKIP of its output, sends SIGINT to the children of PID
@@ -678,10 +701,49 @@ flush()
         done
     }
 
+    # Builds tools/libsigrok-run.c once per run against the oracle's
+    # libsigrok: the pkg-config of the prefix sigrok-cli runs from
+    # (LIBSIGROK_PREFIX overrides it), and the libsigrok.so sigrok-cli
+    # loads, which the check after the build holds it to (the
+    # --coverage build then counts the runner's runs in the same .gcda
+    # files). Sets EMU_LIBSIGROK_RUN, or EMU_LIBSIGROK_ERR on failure.
+    EMU_LIBSIGROK_RUN=""
+    EMU_LIBSIGROK_ERR=""
+    emu_libsigrok_run() {
+        [ -z "$EMU_LIBSIGROK_RUN" ] || return 0
+        [ -z "$EMU_LIBSIGROK_ERR" ] || return 1
+        cli=$(command -v "$SIGROK_CLI") || { EMU_LIBSIGROK_ERR="no $SIGROK_CLI on PATH"; return 1; }
+        prefix=${LIBSIGROK_PREFIX:-$(dirname "$(dirname "$cli")")}
+        pc=$prefix/lib/pkgconfig
+        [ -f "$pc/libsigrok.pc" ] || pc=$prefix/lib64/pkgconfig
+        if ! flags=$(PKG_CONFIG_PATH=$pc pkg-config --cflags --libs libsigrok 2>"$TMP/lsr.err"); then
+            EMU_LIBSIGROK_ERR="pkg-config libsigrok in $pc: $(head -1 "$TMP/lsr.err")"; return 1
+        fi
+        libdir=$(PKG_CONFIG_PATH=$pc pkg-config --variable=libdir libsigrok)
+        # shellcheck disable=SC2086
+        if ! cc -std=gnu11 -O1 -o "$TMP/libsigrok-run" "$TOOLS/libsigrok-run.c" $flags \
+                -Wl,-rpath,"$libdir" 2>"$TMP/lsr.err"; then
+            EMU_LIBSIGROK_ERR="cc failed: $(head -3 "$TMP/lsr.err" | tr '\n' ' ')"; return 1
+        fi
+        a=$(ldd "$cli" | sed -n 's/^[[:space:]]*libsigrok\.so[^ ]* => \([^ ]*\).*/\1/p')
+        b=$(ldd "$TMP/libsigrok-run" | sed -n 's/^[[:space:]]*libsigrok\.so[^ ]* => \([^ ]*\).*/\1/p')
+        if [ -z "$a" ] || [ "$(readlink -f "$a")" != "$(readlink -f "$b")" ]; then
+            EMU_LIBSIGROK_ERR="the runner loads libsigrok '$b', sigrok-cli '$a'"; return 1
+        fi
+        EMU_LIBSIGROK_RUN=$TMP/libsigrok-run
+    }
+    # The name of tool T (a or b) of the case running, for messages.
+    emu_tname() {
+        if [ "$1" = b ]; then echo oxrok
+        elif [ "$libsig" = 1 ]; then echo libsigrok-run
+        else echo sigrok-cli; fi
+    }
+
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY] [--oracle-differs WHY] [--unplug WHEN]
-    #          [--interrupt WHEN] [--timeout S] [--hangs] [--record] -- ARGS...
+    #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
+    #          [--libsigrok] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -717,6 +779,13 @@ flush()
     #   transactions cut where they start repeating (emu_hang_cut), runs
     #   of a repeated output line counted once; sigrok-cli's stdout is
     #   lost with it, so such a case compares --stderr or --no-output.
+    #   --libsigrok, a library-verified oracle case: libsigrok-run
+    #   (tools/libsigrok-run.c, sigrok-cli's syntax, no limit needed,
+    #   --stop-after N its own sample count) runs in sigrok-cli's place
+    #   and alone, whatever oxrok has, held to the case's goldens like
+    #   any oracle case; it takes --hangs, --timeout, --expect-fail,
+    #   events and --gcov, not --oracle-bug, --oracle-differs or
+    #   --record, and --no-oracle skips it.
     #   --record records oxrok's
     #   run of a full case with OXROK_USB_RECORD and OXROK_HID_RECORD
     #   (the USB one kept when both wrote) as the replay fixture
@@ -731,7 +800,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -750,6 +819,7 @@ flush()
                 --timeout) case_timeout=$2; shift ;;
                 --record) record=1 ;;
                 --hangs) hangs=1 ;;
+                --libsigrok) libsig=1 ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -769,17 +839,20 @@ flush()
         esac
         emu_slugs="$emu_slugs $slug"
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
+        # A library case is the runner's alone, whatever oxrok has.
+        label=$mode
+        if [ $libsig = 1 ]; then mode=oracle; tools=a; label=library; fi
         if [ "$EMU_DRY" = 1 ]; then
             # A case of a driver EMU_FULL lists counts as full even when
             # oxrok -L lacks it: the model then gets its session, where
             # the case fails as in a normal run instead of being skipped.
-            case "$mode: $EMU_FULL " in full:* | *" $driver "*) emu_dry_full=$((emu_dry_full + 1)) ;; *) emu_dry_oracle=$((emu_dry_oracle + 1)) ;; esac
+            case "$mode:$libsig: $EMU_FULL " in full:* | *:0:*" $driver "*) emu_dry_full=$((emu_dry_full + 1)) ;; *) emu_dry_oracle=$((emu_dry_oracle + 1)) ;; esac
             return
         fi
         why=""
         # A driver the scenario says oxrok has must not quietly fall
         # back to an oracle case.
-        if [ $mode = oracle ]; then
+        if [ $mode = oracle ] && [ $libsig = 0 ]; then
             case " $EMU_FULL " in *" $driver "*) why="; oxrok -L lacks $driver, which EMU_FULL lists" ;; esac
         fi
         # --no-oracle: oxrok alone, and no case without it.
@@ -789,6 +862,14 @@ flush()
                 return
             fi
             tools=b
+        fi
+        if [ $libsig = 1 ]; then
+            if [ -n "$bug" ] || [ -n "$differs" ] || [ $record = 1 ]; then
+                emu_fail "$name (library): --libsigrok takes neither --oracle-bug, --oracle-differs nor --record"; return
+            fi
+            if ! emu_libsigrok_run; then
+                emu_fail "$name (library): no libsigrok runner: $EMU_LIBSIGROK_ERR [$*]"; return
+            fi
         fi
         # oxrok's port must end where the C driver hangs: such a full
         # case is an --oracle-bug one.
@@ -802,7 +883,7 @@ flush()
             fi
         fi
         for t in $tools; do
-            if [ $t = a ]; then tool=$SIGROK_CLI; else tool=$OXROK; fi
+            if [ $t = b ]; then tool=$OXROK; elif [ $libsig = 1 ]; then tool=$EMU_LIBSIGROK_RUN; else tool=$SIGROK_CLI; fi
             if ! emu_cmd reset >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
@@ -863,6 +944,13 @@ flush()
                 if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
                 if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
             fi
+            # Once the run's status is checked (emu_cmd sets st): a
+            # renumeration the run caused is reported by the OK, so the
+            # outputs name its address generically and the next case
+            # line reads it in EMU_USB.
+            if ! emu_cmd sync >/dev/null; then
+                emu_fail "$name: the emulator did not answer"; return
+            fi
             case "$event" in
                 unplug*)
                     if ! emu_replug; then emu_fail "$name: the emulator did not replug the device"; return; fi ;;
@@ -872,7 +960,7 @@ flush()
             fi
         done
         for t in $tools; do
-            tname=$([ $t = a ] && echo sigrok-cli || echo oxrok)
+            tname=$(emu_tname $t)
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
@@ -941,17 +1029,17 @@ flush()
             blessed=" (golden written)"
         elif [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
             for t in $tools; do
-                cmp -s "$golden.out" "$TMP/$t.cmp" || why="$why; $([ $t = a ] && echo sigrok-cli || echo oxrok) output differs from $slug.out"
-                cmp -s "$golden.tx" "$TMP/$t.tx" || why="$why; $([ $t = a ] && echo sigrok-cli || echo oxrok) transactions differ from $slug.tx"
+                cmp -s "$golden.out" "$TMP/$t.cmp" || why="$why; $(emu_tname $t) output differs from $slug.out"
+                cmp -s "$golden.tx" "$TMP/$t.tx" || why="$why; $(emu_tname $t) transactions differ from $slug.tx"
             done
         elif [ $mode = oracle ]; then
             why="$why; no golden $golden.out/.tx (EMU_BLESS=1 writes it)"
         fi
         if [ -z "$why" ]; then
             pass=$((pass + 1))
-            echo "PASS $name ($mode, $(wc -l <"$TMP/a.tx" | tr -d ' ') transactions)$blessed"
+            echo "PASS $name ($label, $(wc -l <"$TMP/a.tx" | tr -d ' ') transactions)$blessed"
         else
-            emu_fail "$name ($mode):${why#;} [$*]"
+            emu_fail "$name ($label):${why#;} [$*]"
             if [ $mode = full ] && ! cmp -s "$TMP/a.cmp" "$TMP/b.cmp"; then
                 diff "$TMP/a.cmp" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
             elif [ $mode = full ] && ! cmp -s "$TMP/a.tx" "$TMP/b.tx"; then
