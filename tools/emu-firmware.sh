@@ -10,9 +10,10 @@
 # lists the files a model's driver loads, one 'NAME SIZE' per line
 # (SIZE in bytes, decimal or 0x hex; '#' starts a comment). Every file
 # is written to DIR (default ~/work/sigrok/firmware-standin, or
-# $EMU_FIRMWARE_DIR) as the SHA-256 digest of its name repeated up to
-# its size, so the content is the same on every machine and differs
-# between files. A file already holding those bytes is left alone, and
+# $EMU_FIRMWARE_DIR) as SHA-256(NAME:0), SHA-256(NAME:1), ... up to
+# its size, so the content is the same on every machine, differs
+# between files, and differs between any two 32 byte blocks of a file
+# (a driver that sent one chunk twice, or out of order, is caught). A file already holding those bytes is left alone, and
 # the same name listed twice with different sizes is an error.
 # tools/diffcli.sh --emu runs this and exports SIGROK_FIRMWARE_DIR=DIR,
 # which libsigrok and oxrok both search first (src/core/firmware.rs).
@@ -47,8 +48,8 @@ for path in lists:
             want[name] = (size, path)
 written = 0
 for name, (size, _) in sorted(want.items()):
-    digest = hashlib.sha256(name.encode()).digest()
-    data = (digest * (size // len(digest) + 1))[:size]
+    data = b"".join(hashlib.sha256(f"{name}:{i}".encode()).digest()
+                    for i in range((size + 31) // 32))[:size]
     dest = os.path.join(out, name)
     try:
         with open(dest, "rb") as f:

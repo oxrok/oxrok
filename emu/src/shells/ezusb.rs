@@ -32,8 +32,8 @@
 //! held, the image from address 0 in chunks of 4096 bytes (`FW_CHUNKSIZE`)
 //! with only the last one shorter, reset released.
 //!
-//! The firmware files are stand-ins (`tools/emu-firmware.sh`): the
-//! SHA-256 digest of the file name repeated to the file's size, which
+//! The firmware files are stand-ins (`tools/emu-firmware.sh`):
+//! SHA-256(`NAME:0`), SHA-256(`NAME:1`), ... cut to the file's size, which
 //! [`standin`] rebuilds, so a model knows the exact bytes both tools
 //! must upload.
 
@@ -264,11 +264,19 @@ impl Loader {
     }
 }
 
-/// The bytes `tools/emu-firmware.sh` writes for a stand-in: the SHA-256
-/// digest of `name` repeated to `size` bytes.
+/// The bytes `tools/emu-firmware.sh` writes for a stand-in:
+/// SHA-256(`name:0`), SHA-256(`name:1`), ... cut to `size` bytes, so no
+/// two 32 byte blocks of a file are alike and an upload that repeats or
+/// reorders a chunk does not match.
 pub fn standin(name: &str, size: usize) -> Vec<u8> {
-    let digest = Sha256::digest(name.as_bytes());
-    digest.iter().copied().cycle().take(size).collect()
+    let mut out = Vec::with_capacity(size + 32);
+    let mut i = 0usize;
+    while out.len() < size {
+        out.extend_from_slice(&Sha256::digest(format!("{name}:{i}").as_bytes()));
+        i += 1;
+    }
+    out.truncate(size);
+    out
 }
 
 #[cfg(test)]
@@ -280,11 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn standins_are_the_digest_of_the_name_repeated() {
-        let d = Sha256::digest(b"x.fw");
+    fn standins_differ_block_by_block() {
         let s = standin("x.fw", 40);
-        assert_eq!(&s[..32], &d[..]);
-        assert_eq!(&s[32..], &d[..8]);
+        assert_eq!(&s[..32], &Sha256::digest(b"x.fw:0")[..]);
+        assert_eq!(&s[32..], &Sha256::digest(b"x.fw:1")[..8]);
+        let big = standin("x.fw", 8192);
+        assert_ne!(&big[..4096], &big[4096..], "two 4 KiB chunks must differ");
     }
 
     #[test]

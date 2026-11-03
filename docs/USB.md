@@ -425,8 +425,10 @@ zero counts to this driver's files.
 Drivers that upload firmware get stand-ins: `tools/emu/MODEL.firmware`
 lists `NAME SIZE` lines (`#` comments), and `tools/emu-firmware.sh`,
 which `--emu` runs first, writes each file into
-`~/work/sigrok/firmware-standin` (`EMU_FIRMWARE_DIR`) as the SHA-256
-digest of its name repeated to its size, rewriting only files whose
+`~/work/sigrok/firmware-standin` (`EMU_FIRMWARE_DIR`) as
+SHA-256(`NAME:0`), SHA-256(`NAME:1`), ... cut to its size (no two 32
+byte blocks alike, so a repeated or reordered chunk shows), rewriting
+only files whose
 bytes changed. The directory is exported as `SIGROK_FIRMWARE_DIR`,
 which libsigrok's `resource.c` searches first and oxrok searches right
 after its own `OXROK_FIRMWARE_DIR` (`src/core/firmware.rs`), which the
