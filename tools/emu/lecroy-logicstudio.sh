@@ -30,6 +30,7 @@ ls_options() {
 # Claims interface 0 through usbfs as another program would, until
 # ls_release (as fx2lafw_hold in fx2lafw.sh).
 ls_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]
@@ -52,6 +53,7 @@ signal.pause()
 }
 
 ls_release() {
+    [ "$EMU_DRY" = 0 ] || return 0
     kill $HOLDPID 2>/dev/null
     wait $HOLDPID 2>/dev/null
     HOLDPID=""

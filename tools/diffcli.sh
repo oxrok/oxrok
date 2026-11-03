@@ -62,6 +62,15 @@
 # can set). It is always an oracle case, held to goldens of its own,
 # and --no-oracle skips it.
 #
+# EMU_USB, EMU_USBFS and the node variables follow the device: each
+# READY, REPLUGGED and RENUMERATED line replaces them (emu_track), and
+# after each tool's run a `sync` makes sure a renumeration it caused
+# was reported. A scenario expands them when the case line is read, and
+# the case's reset comes after that: a reset that re-attaches the device
+# (it renumerated in the case before, or the options changed its
+# descriptors) moves it once more, so conn=$EMU_USB holds only on a board
+# whose descriptors stay.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
