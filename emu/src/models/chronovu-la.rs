@@ -91,9 +91,10 @@
 //!
 //! Faults, off by default: `no-trigger=1` (the inputs never meet the
 //! trigger condition, as with nothing connected: a capture with a
-//! trigger never ends; the driver gives up after 10 s of wall time, so
-//! how many status-only reads it makes first depends on the machine and
-//! no scenario case uses it), `gap=N` (the FIFO runs dry once, for one
+//! trigger never ends, status-only reads for ever; the scenario's `no
+//! trigger` case stops sigrok-cli after 3 s, before the driver's own
+//! 10 s deadline, whose path stays without a case because the number of
+//! reads before it depends on the machine), `gap=N` (the FIFO runs dry once, for one
 //! latency period, at the `N`th readout transfer, counted from 0: a
 //! status-only packet), and the FTDI shell's `stall=REQUEST[/WVALUE]`,
 //! `in-stall=N` and `idle=N` (inert here: the driver sets no bit mode).

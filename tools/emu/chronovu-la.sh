@@ -124,9 +124,15 @@ emu_cases() {
     chronovu_options product=
     emu_case "no product" --stderr --expect-fail -- -d $D --samples 10
 
-    # Faults. no-trigger=1 has no case: the driver waits for 10 s of
-    # wall time, and how many status-only reads that is depends on the
-    # machine.
+    # Faults. The inputs never meet the trigger: the device answers
+    # status-only reads for ever and the driver's block 0 loop keeps
+    # reading. The harness stops sigrok-cli after 3 s (--hangs), before
+    # the driver's own 10 s deadline, so this shows the device never
+    # triggering, not the driver's timeout path; the transactions are
+    # cut where the status-only reads start repeating.
+    chronovu_options no-trigger=1
+    emu_case "no trigger" --hangs --timeout 3 --stderr --no-output -- -d $D --triggers 0=1 --samples 10
+    chronovu_options
     # The FIFO runs dry for one read in the middle of block 0, then of
     # block 2: libftdi returns what it has, the driver takes it for a
     # trigger timeout and resets the device.
