@@ -464,7 +464,9 @@ of a sigrok driver `DRIVER`:
    samples, `NAME`, `ABOUT` and `build`. Start the file with the
    "Counterpart in sigrok" header naming the C files it follows, and
    add `tools/attribution.d/NAME.py` with its `MAP` entry (the format
-   is in `tools/attribution.d/usbrelay.py`). Unit tests drive the
+   is in `tools/attribution.d/usbrelay.py`); generate the header with
+   `tools/attribution.py --only emu/src/models/NAME.rs`, which touches
+   no other file. Unit tests drive the
    model the way the driver does and check one violation of each kind.
 3. Make the pedantic checks bite: report through `Violations` every
    request the driver is not supposed to send, every length, index,

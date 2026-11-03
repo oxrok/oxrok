@@ -6,12 +6,20 @@ that source, the copyright holders from its header, and everyone else
 who committed to it according to the git history, so that the credit
 covers the people whose work defined the behaviour oxrok reproduces.
 
-    tools/attribution.py [--ascii] [SIGROK_SRC]
+    tools/attribution.py [--ascii] [--check] (--only FILE... | --all) [SIGROK_SRC]
 
-SIGROK_SRC holds the libsigrok and sigrok-cli checkouts (default: the
-sibling sigrok-intronix-driver directory). --ascii transliterates names
-to ASCII; by default they are kept as written in the git history.
+SIGROK_SRC holds the libsigrok and sigrok-cli checkouts (default:
+$SIGROK_SRC, else ~/work/sigrok, else the sibling sigrok-intronix-driver
+directory); it must contain libsigrok/. --only rewrites the header of
+the named Rust files (repo-relative paths, as in MAP), --all rewrites
+every file in MAP; one of them is required, so that regenerating one
+model's header cannot rewrite the others. --check writes nothing: it
+lists the files whose header would change and exits 1 if there is one.
+A counterpart that names a file under SIGROK_SRC must exist there, or
+the run stops instead of dropping its credits. --ascii transliterates
+names to ASCII; by default they are kept as written in the git history.
 """
+import argparse
 import os
 import re
 import subprocess
@@ -138,13 +146,40 @@ def wrap(prefix, items, sep, width=78):
     return lines
 
 
+def default_src():
+    env = os.environ.get("SIGROK_SRC")
+    if env:
+        return env
+    work = os.path.expanduser("~/work/sigrok")
+    if os.path.isdir(os.path.join(work, "libsigrok")):
+        return work
+    return os.path.join(os.path.dirname(ROOT), "sigrok-intronix-driver")
+
+
 def main():
-    args = sys.argv[1:]
-    to_ascii = "--ascii" in args
-    args = [a for a in args if a != "--ascii"]
-    src = args[0] if args else os.path.join(os.path.dirname(ROOT), "sigrok-intronix-driver")
+    ap = argparse.ArgumentParser(
+        description="Regenerate the 'Counterpart in sigrok' headers.",
+        epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("src", nargs="?", default=None, metavar="SIGROK_SRC")
+    ap.add_argument("--ascii", action="store_true")
+    ap.add_argument("--check", action="store_true",
+                    help="write nothing; list the headers that would change")
+    which = ap.add_mutually_exclusive_group(required=True)
+    which.add_argument("--only", nargs="+", metavar="FILE")
+    which.add_argument("--all", action="store_true")
+    a = ap.parse_args()
+    src = a.src or default_src()
+    if not os.path.isdir(os.path.join(src, "libsigrok")):
+        sys.exit(f"attribution.py: {src} holds no libsigrok checkout")
+    targets = MAP if a.all else {}
+    for f in a.only or []:
+        f = os.path.relpath(os.path.abspath(f), ROOT) if os.path.exists(f) else f
+        if f not in MAP:
+            sys.exit(f"attribution.py: {f} has no entry in MAP or tools/attribution.d")
+        targets[f] = MAP[f]
     versions = {}
-    for rust, (parts, relation) in MAP.items():
+    changed = []
+    for rust, (parts, relation) in targets.items():
         lines = ["// Counterpart in sigrok:"]
         all_holders, all_committers = [], []
         for part in parts:
@@ -152,6 +187,9 @@ def main():
             full = os.path.join(src, path)
             lines.append("//   " + part + ("," if part != parts[-1] else ","))
             if not os.path.isfile(full):
+                top = path.split("/")[0]
+                if "/" in path and os.path.isdir(os.path.join(src, top)):
+                    sys.exit(f"attribution.py: {rust}: {full} does not exist")
                 continue
             repo = os.path.join(src, path.split("/")[0])
             versions[path.split("/")[0]] = describe(repo)
@@ -163,7 +201,7 @@ def main():
                     all_committers.append(c)
         names_in_holders = [re.sub(r".*\d{4}(?:-\d{4})?\s+([^<]+?)\s*<.*", r"\1", h) for h in all_holders]
         extra = [c for c in all_committers if c not in names_in_holders]
-        if to_ascii:
+        if a.ascii:
             all_holders = [ascii(h) for h in all_holders]
             extra = [ascii(e) for e in extra]
         for h in all_holders:
@@ -181,12 +219,21 @@ def main():
         lines[-1] += "."
         block = "\n".join(lines) + "\n\n"
         full_rust = os.path.join(ROOT, rust)
-        text = open(full_rust, encoding="utf-8").read()
+        orig = open(full_rust, encoding="utf-8").read()
+        text = orig
         if text.startswith("// Counterpart in sigrok"):
             end = text.index("\n\n") + 2
             text = text[end:]
-        open(full_rust, "w", encoding="utf-8").write(block + text)
-    print(f"{len(MAP)} files updated")
+        if block + text != orig:
+            changed.append(rust)
+            if not a.check:
+                open(full_rust, "w", encoding="utf-8").write(block + text)
+    verb = "would change" if a.check else "updated"
+    for c in changed:
+        print(f"{verb}: {c}")
+    print(f"{len(changed)} of {len(targets)} headers {verb}")
+    if a.check and changed:
+        sys.exit(1)
 
 
 main()

@@ -37,4 +37,10 @@ reference for scope (the FTDI layer).
 
 `tools/attribution.py` generates these comments from the checkouts, so
 they can be refreshed when the counterparts change. Names are kept as
-the git history spells them; `--ascii` transliterates them.
+the git history spells them; `--ascii` transliterates them. It
+rewrites only what it is told to: `--only FILE...` for named files
+(a new model's header) or `--all`, and `--check` lists the headers
+that would change without writing. A counterpart missing from the
+checkouts stops the run rather than dropping its credits (the
+LogicPort's sources are only in the fork, so `--all` needs that
+checkout).
