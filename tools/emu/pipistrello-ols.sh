@@ -196,6 +196,13 @@ emu_cases() {
     emu_case "unplug at the run" --unplug out=4:15 --stderr --expect-fail --filter "$U" -- -d $D --samples 16
     emu_case "unplug at a trigger stage" --unplug out=4:9 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
     emu_case "unplug at a disabled stage" --unplug out=4:16 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
+    emu_case "unplug at a stage edge" --unplug out=4:10 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
+    emu_case "unplug at a disabled mask" --unplug out=4:15 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
+    emu_case "unplug at a disabled config" --unplug out=4:17 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
+    emu_case "unplug at a disabled edge" --unplug out=4:18 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
+    # After the open's last control request (each open sends 6): the
+    # start's first write, stage 0's mask, fails.
+    emu_case "unplug after the open" --unplug out=0:12 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
     # Unplugged after the capture's second transfer: the next read and
     # the resets of the stop fail.
     emu_case "unplug mid capture" --unplug in=3:5 --stderr -- -d $D --samples 20000 -O hex
