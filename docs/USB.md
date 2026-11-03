@@ -375,6 +375,9 @@ full case or oracle case. What else is checked depends on oxrok:
   fails (WHY fixed?)"), so an upstream fix shows. In an `.oracle`
   golden a repeated stderr line counts once, since a driver looping on
   an error repeats it as often as time allows.
+- `--digest` ends the compared output with the SHA-256 of the whole
+  output before `--filter`, so a filter that thins a long output (the
+  hantek-dso frames keep every 64th line) still compares every byte.
 - `--unplug WHEN` and `--interrupt WHEN` arm the event for each tool's
   run, which must fire it. After an unplug the harness replugs and
   takes over the new nodes and address, so a case that names the

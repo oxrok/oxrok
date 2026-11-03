@@ -88,7 +88,10 @@ strip_header() {
 }
 
 # Turns tool T's output into $TMP/T.cmp, as the case's flags say:
-# the stream (which), the header (strip), the --filter script, --names.
+# the stream (which), the header (strip), the --filter script, --names,
+# and with --digest a last line holding the SHA-256 of the output as it
+# was before the filter, so a filter that thins a long output loses
+# nothing.
 to_cmp() {
     if [ "$which" = stderr ]; then
         cp "$TMP/$1.err" "$TMP/$1.cmp"
@@ -97,9 +100,12 @@ to_cmp() {
     else
         cp "$TMP/$1.out" "$TMP/$1.cmp"
     fi
+    sum=""
+    [ "${digest:-0}" = 1 ] && sum=$(sha256sum <"$TMP/$1.cmp")
     if [ -n "$filter_expr" ]; then
         sed -E "$filter_expr" "$TMP/$1.cmp" >"$TMP/$1.f"; mv "$TMP/$1.f" "$TMP/$1.cmp"
     fi
+    [ -z "$sum" ] || echo "$sum" >>"$TMP/$1.cmp"
     if [ $names = 1 ]; then
         if [ "$1" = a ]; then
             sed -E 's/^([^:]*):.*/\1/' "$TMP/a.cmp" | grep -v -E '^  (gnuplot|scale)$' >"$TMP/a.n"
@@ -526,10 +532,13 @@ if [ $emu = 1 ]; then
     }
 
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
-    #          [--expect-fail] [--no-output] [--driver ID]
+    #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY] [--unplug WHEN] [--interrupt WHEN]
     #          [--timeout S] -- ARGS...
-    #   The flags of case_, plus: --expect-fail, the tools must exit
+    #   The flags of case_, plus: --digest, the compared output ends
+    #   with the SHA-256 of the whole output before --filter (a filter
+    #   that keeps every 64th line of a frame still compares every
+    #   byte); --expect-fail, the tools must exit
     #   with a failure; --no-output, the compared output must be empty
     #   (a --set prints nothing) rather than not empty; --driver, the
     #   driver the case uses when the model has several in EMU_DRIVER
@@ -553,7 +562,7 @@ if [ $emu = 1 ]; then
     #   command line it acknowledges and logs as the section name.
     emu_case() {
         name=$1; shift
-        strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""
+        strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
         event=""; case_timeout=$EMU_CASE_TIMEOUT
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
@@ -562,6 +571,7 @@ if [ $emu = 1 ]; then
                 --stderr) which=stderr ;;
                 --names) names=1 ;;
                 --filter) filter_expr=$2; shift ;;
+                --digest) digest=1 ;;
                 --expect-fail) expect=1 ;;
                 --no-output) no_output=1 ;;
                 --driver) driver=$2; shift ;;
