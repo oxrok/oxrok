@@ -3,10 +3,12 @@
 //!
 //! - [`hid`]: the HID class descriptor, the report descriptor fetch and
 //!   the class requests (`GET_REPORT`, `SET_REPORT`, idle, protocol).
+//! - [`ftdi`]: the FTDI chips' descriptors, vendor requests (reset,
+//!   purge, baud rate, line, flow and modem control, latency timer, bit
+//!   modes, pins, EEPROM) and the two status bytes of every IN packet.
 //!
-//! The FTDI shell (vendor requests, latency timer, the two modem
-//! status bytes per packet) and the EZ-USB shell (firmware upload to
-//! RAM, renumeration) come next; CDC-ACM and USBTMC after them
-//! (`docs/ROADMAP.md`, "Emulation plan").
+//! The EZ-USB shell (firmware upload to RAM, renumeration) comes next;
+//! CDC-ACM and USBTMC after it (`docs/ROADMAP.md`, "Emulation plan").
 
+pub mod ftdi;
 pub mod hid;
