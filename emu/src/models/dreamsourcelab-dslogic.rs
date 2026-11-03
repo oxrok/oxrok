@@ -1,12 +1,11 @@
 // Counterpart in sigrok:
 //   libsigrok/src/hardware/dreamsourcelab-dslogic/api.c (the profiles, the scan, the open),
-//   libsigrok/src/hardware/dreamsourcelab-dslogic/protocol.c (the commands, the FPGA
-//   setting packet, the trigger packet and the sample transfers),
+//   libsigrok/src/hardware/dreamsourcelab-dslogic/protocol.c (the commands, the FPGA setting packet, the trigger packet and the sample transfers),
 //   libsigrok/src/hardware/dreamsourcelab-dslogic/protocol.h,
 //   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
 //   Copyright (C) 2012 Joel Holdsworth <joel@airwebreathe.org.uk>,
-//   with commits by Uwe Hermann, Joel Holdsworth, Gerhard Sittig,
-//   Romain Tartière, Joerg Alpers
+//   with commits by Uwe Hermann, Gerhard Sittig, Romain Tartière,
+//   Joerg Alpers
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
@@ -80,33 +79,46 @@
 //!
 //! Emulation artifacts: the trigger packet completes right after the
 //! start; the log shows the global trigger word of a setting packet
-//! without a trigger as 0, as the driver leaves it uninitialised and it
-//! changes from run to run ([`DeviceModel::log_out`]); the samples
-//! ignore the rate, the external clock and its edge and the threshold
-//! (the model takes a threshold register write on every profile; whether
-//! the first DSLogic, whose threshold is its bitstream, has that
-//! register is not known); a trigger that never matches (`0=1,3=r`: bit
-//! 3 rises on even counts only) is never answered, as on a device, and
-//! the driver waits for ever; RLE (set by the driver for captures deeper than
-//! 16 Msamples per 100 MHz) changes nothing in the data; a buffered
-//! capture's depth (the count) does not end the data, the model streams
-//! until the host stops; and one bulk IN transfer completes per
-//! transfer the host submits after the previous one completed (the
-//! trigger packet first, then the first of the batch the driver
-//! submits at once, then one per resubmission), where the real device
-//! fills every queued transfer as fast as the bus goes: the
+//! without a trigger as `xxxx`, as the driver leaves it uninitialised
+//! and it changes from run to run ([`DeviceModel::log_undefined`]); the
+//! samples ignore the rate, the external clock and its edge and the
+//! threshold (the model takes a threshold register write on every
+//! profile; whether the first DSLogic, whose threshold is its
+//! bitstream, has that register is not known); a trigger that never
+//! matches (`0=1,3=r`: bit 3 rises on even counts only) is never
+//! answered, as on a device, and the driver waits for ever (the
+//! trigger transfer has no timeout); RLE (set by the driver for
+//! captures deeper than 16 Msamples per 100 MHz) changes nothing in the
+//! data; a buffered capture's depth (the count) does not end the data,
+//! the model streams until the host stops; and one bulk IN transfer
+//! completes per transfer the host submits after the previous one
+//! completed (the trigger packet first, then the first of the batch the
+//! driver submits at once, then one per resubmission), where the real
+//! device fills every queued transfer as fast as the bus goes: the
 //! transactions of a run do not depend on timing.
+//!
+//! Open questions, with no DSView or FPGA source here: whether the FPGA
+//! ignores the global trigger word when the trigger enable bit is clear
+//! (the model does; if the FPGA reads it, the uninitialised word is a
+//! libsigrok bug that changes the capture); and how a buffered capture
+//! ends: `fpga_configure()` sends the count as `limit_samples / 16`,
+//! truncated, so an FPGA that stops at `count * 16` samples would leave
+//! the driver short of its limit (`--samples 65` asks for 65 and
+//! captures 64) and waiting for data that never comes.
 //!
 //! What the model taught about the C driver, see the scenario
 //! (`tools/emu/dreamsourcelab-dslogic.sh`): `fpga_configure()` sends the
-//! global trigger word uninitialised when there is no trigger (the
-//! model ignores it then); `config_get(CLOCK_EDGE)` always answers
-//! `rising`; the first DSLogic is opened with the 3.3 V bitstream and
-//! then reports, and writes to the threshold register, the 1.4-3.6 V
-//! range of the 5 V one; the 90 % bound of the trigger position
-//! overflows 32 bits for the 256 Mibit boards (it comes out at 10 %);
-//! and a trigger packet that STALLs, or comes short, leaves the
-//! acquisition waiting for ever (the transfer has no timeout).
+//! global trigger word uninitialised when there is no trigger;
+//! `config_get(CLOCK_EDGE)` always answers `rising`; the first DSLogic
+//! is opened with the 3.3 V bitstream and then reports, and writes to
+//! the threshold register, the 1.4-3.6 V range of the 5 V one; the 90 %
+//! bound of the trigger position overflows 32 bits for the 256 Mibit
+//! boards (it comes out at 10 %); and a trigger packet that STALLs, or
+//! comes short, completes into `trigger_receive()`, which has no branch
+//! for it: it frees the transfer, leaks the packet buffer and leaves
+//! `devc->transfers[0]` pointing at the freed transfer with one
+//! transfer still counted, so the acquisition never ends and a later
+//! `abort_acquisition()` cancels freed memory (a use after free).
 //!
 //! The pedantic checks: the FX2 upload byte for byte as `ezusb.c` sends
 //! it, of the profile's file; the bitstream byte for byte, one of the
@@ -563,6 +575,9 @@ impl Setting {
         if s.ch_en == 0 {
             v.report("setting packet: no channel enabled");
         }
+        // set_trigger() puts the stage count less one in the low nibble;
+        // sigrok-cli makes one stage only, so a trigger of several stages
+        // (whose word would be off here) never comes from it.
         if mode & MODE_TRIG_EN != 0 {
             let glb = u16_at(28);
             let want = (s.ch_en.count_ones() as u16) << 4;
@@ -574,16 +589,48 @@ impl Setting {
                 ));
             }
         }
-        check_stages([&mask0, &mask1, &value0, &value1, &edge0, &edge1, &logic0, &logic1], &counts, v);
+        check_stages(
+            [&mask0, &mask1, &value0, &value1, &edge0, &edge1, &logic0, &logic1],
+            &counts,
+            (mode & MODE_TRIG_EN != 0, s.ch_en),
+            v,
+        );
         s
     }
 }
 
 /// The trigger block's arrays as `set_trigger()` leaves them: both
-/// copies alike, stage 0 the trigger, the others at their defaults
-/// (mask 0xffff, value and edge 0), logic 2 and count 0 everywhere.
-fn check_stages(a: [&[u16; STAGES]; 8], counts: &[u32; STAGES], v: &mut Violations) {
+/// copies alike, stage 0 the trigger (at its defaults too without the
+/// trigger enable bit; a value bit only where the mask bit is clear; no
+/// bit on a channel `ch_en` lacks, as the driver skips disabled
+/// channels), the others at their defaults (mask 0xffff, value and
+/// edge 0), logic 2 and count 0 everywhere.
+fn check_stages(
+    a: [&[u16; STAGES]; 8],
+    counts: &[u32; STAGES],
+    (trig_en, ch_en): (bool, u16),
+    v: &mut Violations,
+) {
     let [mask0, mask1, value0, value1, edge0, edge1, logic0, logic1] = a;
+    let (mask, value, edge) = (mask0[0], value0[0], edge0[0]);
+    if !trig_en && (mask, value, edge) != (0xffff, 0, 0) {
+        v.report(format!(
+            "setting packet: trigger stage 0 (mask {mask:#06x}, value {value:#06x}, edge \
+             {edge:#06x}) without the trigger enable bit"
+        ));
+    }
+    if value & mask != 0 {
+        v.report(format!(
+            "setting packet: trigger value bits {:#06x} where the mask leaves the channel out",
+            value & mask
+        ));
+    }
+    if (!mask | value | edge) & !ch_en != 0 {
+        v.report(format!(
+            "setting packet: trigger on channels {:#06x}, which are not enabled ({ch_en:#06x})",
+            (!mask | value | edge) & !ch_en
+        ));
+    }
     if mask0 != mask1 || value0 != value1 || edge0 != edge1 || logic0 != logic1 {
         v.report("setting packet: the two copies of the trigger stages differ");
     }
@@ -1087,15 +1134,17 @@ impl DeviceModel for Dslogic {
 
     /// Without a trigger, `fpga_configure()` leaves the global trigger
     /// word of the setting packet uninitialised (`set_trigger()` returns
-    /// before it sets it): the log shows it as 0.
-    fn log_out(&self, ep: u8, data: &[u8]) -> Option<Vec<u8>> {
-        let setting = ep == 2 && data.len() == SETTING_LEN && data[..4] == 0xf5a5_f5a5u32.to_le_bytes();
-        if !setting || u16::from_le_bytes([data[6], data[7]]) & MODE_TRIG_EN != 0 {
-            return None;
+    /// before it sets it): the log shows it as `xxxx`.
+    fn log_undefined(&self, ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
+        let setting =
+            ep == 2 && data.len() == SETTING_LEN && data[..4] == 0xf5a5_f5a5u32.to_le_bytes();
+        if setting && u16::from_le_bytes([data[6], data[7]]) & MODE_TRIG_EN == 0 {
+            // trig_glb, bytes 28 and 29.
+            let trig_glb = 28..30;
+            vec![trig_glb]
+        } else {
+            Vec::new()
         }
-        let mut shown = data.to_vec();
-        shown[28..30].fill(0);
-        Some(shown)
     }
 
     fn take_renumeration(&mut self) -> bool {
@@ -1327,6 +1376,12 @@ mod tests {
         p[28] = 0x31;
         check(p, 1, "a global trigger word with two stages");
         let mut p = setting(100, 1000, 3, None, 0);
+        p[36] = 0xfe; // stage 0's mask, both copies, without TRIG_EN
+        p[68] = 0xfe;
+        check(p, 1, "stage 0 set without the trigger enable bit");
+        check(setting(100, 1000, 3, Some([0xffff, 1, 0]), 0), 1, "a value where the mask is set");
+        check(setting(100, 1000, 3, Some([!4, 4, 0]), 0), 1, "a trigger on channel 2, not enabled");
+        let mut p = setting(100, 1000, 3, None, 0);
         p[22] = 65;
         check(p, 1, "a trigger position off the grid");
         let mut p = setting(100, 1000, 3, None, 0);
@@ -1408,17 +1463,15 @@ mod tests {
     }
 
     #[test]
-    fn the_log_shows_the_uninitialised_global_trigger_word_as_0() {
+    fn the_uninitialised_global_trigger_word_is_logged_as_undefined() {
         let model = Dslogic::new(PROFILES[0], true);
         let mut p = setting(100, 1000, 3, None, 0);
         assert_eq!(&p[28..30], &[0xad, 0xde]);
-        let shown = model.log_out(2, &p).unwrap();
-        assert_eq!(&shown[28..30], &[0, 0]);
-        assert_eq!(shown[..28], p[..28]);
-        assert_eq!(shown[30..], p[30..]);
+        let trig_glb = 28..30;
+        assert_eq!(model.log_undefined(2, &p), [trig_glb]);
         p = setting(100, 1000, 3, Some([!1, 1, 0]), 0);
-        assert_eq!(model.log_out(2, &p), None, "set with a trigger");
-        assert_eq!(model.log_out(2, &[0; 360]), None, "not a setting packet");
+        assert!(model.log_undefined(2, &p).is_empty(), "set with a trigger");
+        assert!(model.log_undefined(2, &[0; 360]).is_empty(), "not a setting packet");
     }
 
     #[test]

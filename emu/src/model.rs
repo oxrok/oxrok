@@ -271,15 +271,15 @@ pub trait DeviceModel: Send {
         None
     }
 
-    /// What the log shows of an OUT transfer of `data` to endpoint
-    /// number `ep` (not 0), when the model replaces bytes the host
-    /// leaves undefined, such as a C driver's uninitialised struct
-    /// field, which would make the log differ from one run to the next.
-    /// The model documents each such byte; `None`, the default, logs
-    /// what the host sent.
-    fn log_out(&self, ep: u8, data: &[u8]) -> Option<Vec<u8>> {
+    /// The bytes of an OUT transfer of `data` to endpoint number `ep`
+    /// (not 0) that the host leaves undefined, such as a C driver's
+    /// uninitialised struct field, which would make the log differ from
+    /// one run to the next. The log shows them as `xx`
+    /// ([`crate::txlog::data_undefined`]); the model documents each.
+    /// None, the default.
+    fn log_undefined(&self, ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
         let _ = (ep, data);
-        None
+        Vec::new()
     }
 
     /// Whether the model wants to leave the bus and come back with

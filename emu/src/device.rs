@@ -97,9 +97,9 @@ impl Device {
         self.model.log_digest_above()
     }
 
-    /// See [`DeviceModel::log_out`].
-    pub fn log_out(&self, ep: u8, data: &[u8]) -> Option<Vec<u8>> {
-        self.model.log_out(ep & 0x0f, data)
+    /// See [`DeviceModel::log_undefined`].
+    pub fn log_undefined(&self, ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
+        self.model.log_undefined(ep & 0x0f, data)
     }
 
     /// See [`DeviceModel::in_submitted`].

@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use crate::device::Device;
 use crate::model::{Descriptors, Event, Reply, Setup, Violations};
-use crate::txlog::{TxLog, control_line, transfer_line};
+use crate::txlog::{TxLog, control_line, transfer_line_undefined};
 use crate::{Error, Result};
 
 /// The protocol version.
@@ -540,19 +540,12 @@ impl Server {
             let kind =
                 self.device().endpoint(address).map_or(0xff, crate::model::Endpoint::transfer_type);
             let above = self.device().log_digest_above();
-            let masked = if urb.direction == DIR_IN {
-                None
+            let undefined = if urb.direction == DIR_IN {
+                Vec::new()
             } else {
-                self.device().log_out(urb.ep, &urb.data)
+                self.device().log_undefined(urb.ep, &urb.data)
             };
-            transfer_line(
-                kind,
-                address,
-                urb.length,
-                masked.as_ref().unwrap_or(&urb.data),
-                &reply,
-                above,
-            )
+            transfer_line_undefined(kind, address, urb.length, &urb.data, &undefined, &reply, above)
         };
         for message in v.drain() {
             log.violation(&message);
