@@ -1,0 +1,29 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+saleae-logic16 - Saleae Logic16 with 16 channels: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      500 kHz (current)
+      1 MHz
+      2 MHz
+      4 MHz
+      5 MHz
+      8 MHz
+      10 MHz
+      12.5 MHz
+      16 MHz
+      20 MHz
+      25 MHz
+      32 MHz
+      40 MHz
+      50 MHz
+      80 MHz
+      100 MHz
+    voltage_threshold: 0.7-1.4 (current), 1.4-3.6
+    Supported triggers: 0 1 r f e 
+    captureratio: 0 (current)

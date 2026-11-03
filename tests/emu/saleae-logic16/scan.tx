@@ -1,0 +1,7 @@
+ctl_out 00 09 0001 0000 - -> ok
+ctl_out 40 a0 e600 0000 01 -> ok
+ctl_out 40 a0 0000 0000 @4096:7ce1abf377e2fc6f4b40d1923ffa81ba28ee175629c4a4849b32bdb0408efd9f -> ok
+ctl_out 40 a0 1000 0000 @1244:c101c160587b2d45b6330dc9081fb3f90263c947bfd4d4a3ee97ebd8e4184acb -> ok
+ctl_out 40 a0 e600 0000 00 -> ok
+disconnect
+connect 21a9:1001
