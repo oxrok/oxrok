@@ -1,9 +1,8 @@
 // Counterpart in sigrok:
 //   libftdi1 (ftdi.c), by Intra2net AG and the libftdi developers.
 // This file is written for oxrok to send what libftdi 1.5 sends;
-//   ftdi_to_clkbits, ftdi_to_clkbits_AM and ftdi_convert_baudrate are
-//   ported (LGPL-2.1-only,
-//   taken under its section 3 as GPL-3.0-or-later).
+//   ftdi_to_clkbits, ftdi_to_clkbits_AM and ftdi_convert_baudrate are ported
+//   (LGPL-2.1-only, taken under its section 3 as GPL-3.0-or-later).
 
 //! An FTDI port driven the way libftdi 1.5 drives it, for ports of
 //! libsigrok drivers that use libftdi (`ftdi-la`, and the other FTDI
