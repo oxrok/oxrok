@@ -1,10 +1,10 @@
 gcov ftdi-la (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        66.8%  141 of 211
+  api.c        78.7%  166 of 211
   protocol.c   80.4%  37 of 46
-  total        69.3%  178 of 257
+  total        79.0%  203 of 257
 never reached, by function (line ranges hold no reached line):
   api.c
-    scan_device: 129, 136, 154-181, 189-191, 211-216
+    scan_device: 179-181, 189-191, 211-216
     scan_all: 232-234
     scan: 272-273
     dev_open: 317, 322-325, 330-332, 337-339, 344-346, 351-357
