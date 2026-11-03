@@ -418,7 +418,7 @@ fn recv(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<[u8; PACKET]>> {
 
 /// Whether a transport error says the device has left the bus.
 fn gone(e: &Error) -> bool {
-    matches!(e, Error::Device(m) if m.ends_with("device disconnected"))
+    matches!(e, Error::Disconnected)
 }
 
 /// Reads the 512 raw sample bytes: two banks, two halves each, two
@@ -827,8 +827,7 @@ mod tests {
             send_fails: Vec::new(),
             sent: 0,
             answers: std::collections::VecDeque::new(),
-            errors: [Error::device("endpoint stalled"), Error::device("device disconnected")]
-                .into(),
+            errors: [Error::device("endpoint stalled"), Error::Disconnected].into(),
         };
         let (tx, _rx) = std::sync::mpsc::sync_channel(8);
         let sink = PacketSink::new(tx, 0);
