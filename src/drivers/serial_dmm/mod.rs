@@ -86,6 +86,19 @@ fn hid_conn(conn: &str) -> String {
     conn.to_owned()
 }
 
+/// Whether the port probed on keeps serving the device. A UART stays
+/// open: reopening it would toggle the handshake lines again, which
+/// resets some adapters. A serial over HID cable has no handshake
+/// lines and is closed after the probe and opened again for the
+/// device, as sigrok's scan does (`serial_close` at its end, then
+/// `serial_open` in `dev_open`): the open sets the cable's line
+/// parameters anew (a CH9325 or CP2110 feature report), and the
+/// reports a streaming meter sent in between are not read as the
+/// first samples of the capture.
+fn keep_probed(conn: &str) -> bool {
+    crate::serial::hid::Spec::parse(conn).is_none()
+}
+
 impl Driver for SerialDmmDriver {
     fn id(&self) -> &'static str {
         self.0.id
@@ -146,9 +159,8 @@ impl Driver for SerialDmmDriver {
             return Ok(Vec::new());
         }
         log::info!("Found device on port {conn}.");
-        // The port stays open for the device: reopening it would toggle
-        // the handshake lines again, which resets some adapters.
-        Ok(vec![Box::new(DmmDevice::new(self.0, conn, params, Some(port)))])
+        let port = keep_probed(&conn).then_some(port);
+        Ok(vec![Box::new(DmmDevice::new(self.0, conn, params, port))])
     }
 }
 
@@ -478,4 +490,19 @@ impl Acquisition {
 
 pub(crate) fn hex(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hid_cables_are_reopened_uarts_kept() {
+        assert!(keep_probed("/dev/ttyUSB0"));
+        assert!(keep_probed("COM3"));
+        assert!(!keep_probed("hid/ch9325/raw=/dev/hidraw0"));
+        assert!(!keep_probed("hid/cp2110/sn=0001"));
+        assert!(!keep_probed("hid"));
+        assert_eq!(hid_conn("1a86.e008"), "hid/ch9325");
+    }
 }
