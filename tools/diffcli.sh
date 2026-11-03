@@ -499,17 +499,23 @@ if [ $emu = 1 ]; then
     }
 
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
-    #          [--expect-fail] [--no-output] [--driver ID] -- ARGS...
+    #          [--expect-fail] [--no-output] [--driver ID]
+    #          [--oracle-bug WHY] -- ARGS...
     #   The flags of case_, plus: --expect-fail, the tools must exit
     #   with a failure; --no-output, the compared output must be empty
     #   (a --set prints nothing) rather than not empty; --driver, the
     #   driver the case uses when the model has several in EMU_DRIVER
-    #   (default: the first). The name neither starts nor ends with
-    #   white space and holds no tab or newline: the emulator trims the
+    #   (default: the first); --oracle-bug, a full case that sigrok-cli
+    #   cannot run because of the libsigrok bug WHY: sigrok-cli must
+    #   fail (so a fix upstream shows up as a failing case, to be made
+    #   an ordinary one), its stderr is kept in the golden SLUG.oracle,
+    #   and oxrok alone is held to the .out and .tx goldens. The name
+    #   neither starts nor ends with white space and holds no tab or
+    #   newline: the emulator trims the
     #   command line it acknowledges and logs as the section name.
     emu_case() {
         name=$1; shift
-        strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0
+        strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -520,6 +526,7 @@ if [ $emu = 1 ]; then
                 --expect-fail) expect=1 ;;
                 --no-output) no_output=1 ;;
                 --driver) driver=$2; shift ;;
+                --oracle-bug) bug=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -558,8 +565,12 @@ if [ $emu = 1 ]; then
             st=$?
             TOOLPID=""
             [ $st = 124 ] && why="$why; $(basename "$tool") timed out after $EMU_CASE_TIMEOUT s"
-            if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
-            if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
+            if [ -n "$bug" ] && [ $t = a ]; then
+                [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
+            else
+                if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
+                if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
+            fi
         done
         for t in $tools; do
             tname=$([ $t = a ] && echo sigrok-cli || echo oxrok)
@@ -581,9 +592,14 @@ if [ $emu = 1 ]; then
             fi
             # Full or oracle, an empty output is a case that never got to
             # the device, unless --no-output asks for it.
+            if [ -n "$bug" ] && [ $t = a ]; then continue; fi
             if [ $no_output = 0 ] && ! [ -s "$TMP/$t.cmp" ]; then why="$why; no output from $tname"; fi
             if [ $no_output = 1 ] && [ -s "$TMP/$t.cmp" ]; then why="$why; output from $tname where none was expected"; fi
         done
+        if [ -n "$bug" ]; then
+            emu_oracle_bug "$@"
+            return
+        fi
         if [ $mode = full ]; then
             cmp -s "$TMP/a.cmp" "$TMP/b.cmp" || why="$why; outputs differ"
             cmp -s "$TMP/a.tx" "$TMP/b.tx" || why="$why; transactions differ"
@@ -615,6 +631,36 @@ if [ $emu = 1 ]; then
                 diff "$golden.out" "$TMP/a.cmp" | head -${DIFF_LINES:-6}
             elif [ -f "$golden.tx" ] && ! cmp -s "$golden.tx" "$TMP/a.tx"; then
                 diff "$golden.tx" "$TMP/a.tx" | head -${DIFF_LINES:-6}
+            fi
+        fi
+    }
+
+    # The end of an emu_case --oracle-bug: oxrok against the .out and .tx
+    # goldens, sigrok-cli's failure against the .oracle golden.
+    emu_oracle_bug() {
+        [ $mode = full ] || why="$why; --oracle-bug needs oxrok's $driver"
+        golden=$EMU_GOLDEN/$EMU_MODEL/$slug
+        blessed=""
+        if [ "$EMU_BLESS" = 1 ]; then
+            mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
+            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"; cp "$TMP/a.err" "$golden.oracle"
+            blessed=" (golden written)"
+        elif [ -f "$golden.out" ] && [ -f "$golden.tx" ] && [ -f "$golden.oracle" ]; then
+            cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
+            cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
+            cmp -s "$golden.oracle" "$TMP/a.err" || why="$why; sigrok-cli fails otherwise than $slug.oracle"
+        else
+            why="$why; no golden $golden.out/.tx/.oracle (EMU_BLESS=1 writes it)"
+        fi
+        if [ -z "$why" ]; then
+            pass=$((pass + 1))
+            echo "PASS $name (oxrok only, sigrok-cli fails: $bug; $(wc -l <"$TMP/b.tx" | tr -d ' ') transactions)$blessed"
+        else
+            emu_fail "$name (oracle bug):${why#;} [$*]"
+            if [ -f "$golden.oracle" ] && ! cmp -s "$golden.oracle" "$TMP/a.err"; then
+                diff "$golden.oracle" "$TMP/a.err" | head -${DIFF_LINES:-6}
+            elif [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
+                diff "$golden.out" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
             fi
         fi
     }
