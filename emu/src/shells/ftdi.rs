@@ -50,11 +50,26 @@
 //! baud rate libftdi sets on port B lands on port A. Neither can be
 //! told from the kernel's own requests, so neither is flagged.
 //!
+//! Faults ([`Faults`], off by default) make the chip misbehave as a
+//! real one can, so that a driver's error paths run: control requests
+//! answered with STALL, bulk IN endpoints that STALL after so many
+//! transfers, and status-only packets for so many reads after each bit
+//! mode change. A model takes them from its options with
+//! [`Faults::option`] and hands them to [`Ftdi::set_faults`]; the shell
+//! applies them before the model sees the transfer, and reports no
+//! violation for them.
+//!
+//! The shell's notion of time is the host's transfers, never the
+//! clock: "busy for N polls after an event" is a [`Countdown`] the
+//! model arms at the event and asks at each poll, so that what the
+//! host sees does not depend on how fast it asks.
+//!
 //! A model implements [`FtdiPorts`]: notice of what the host changed
 //! ([`Event`]), the bytes the host writes, the bytes the chip has for
 //! the host, and the pin levels. The shell keeps each port's settings
 //! in a [`PortState`] the model reads.
 
+use crate::Error;
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{BULK, Descriptors, RECIPIENT_DEVICE, Reply, Setup, Speed, VENDOR, Violations};
 
@@ -500,6 +515,120 @@ pub enum Fill {
     Wait,
 }
 
+/// Busy for so many polls after an event: the shell's notion of time,
+/// counted in the host's transfers rather than read off a clock, so
+/// that a case's result does not depend on how fast the host polls. A
+/// model arms it when the event happens (a bit mode change, a
+/// configuration started) and asks [`Countdown::busy`] at each poll.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Countdown {
+    polls: u32,
+    left: u32,
+}
+
+impl Countdown {
+    /// Busy for `polls` polls after each [`Countdown::arm`]; 0 never is.
+    pub fn new(polls: u32) -> Countdown {
+        Countdown { polls, left: 0 }
+    }
+
+    /// The event: the next `polls` polls are busy.
+    pub fn arm(&mut self) {
+        self.left = self.polls;
+    }
+
+    /// One poll: whether it is still busy.
+    pub fn busy(&mut self) -> bool {
+        let busy = self.left > 0;
+        self.left = self.left.saturating_sub(1);
+        busy
+    }
+}
+
+/// The vendor requests by the names `stall=` takes.
+const REQUEST_NAMES: &[(&str, u8)] = &[
+    ("reset", request::RESET),
+    ("modem-ctrl", request::MODEM_CTRL),
+    ("flow-ctrl", request::SET_FLOW_CTRL),
+    ("baud", request::SET_BAUD_RATE),
+    ("data", request::SET_DATA),
+    ("poll-modem-status", request::POLL_MODEM_STATUS),
+    ("event-char", request::SET_EVENT_CHAR),
+    ("error-char", request::SET_ERROR_CHAR),
+    ("latency", request::SET_LATENCY_TIMER),
+    ("get-latency", request::GET_LATENCY_TIMER),
+    ("bitmode", request::SET_BITMODE),
+    ("read-pins", request::READ_PINS),
+    ("read-eeprom", request::READ_EEPROM),
+    ("write-eeprom", request::WRITE_EEPROM),
+    ("erase-eeprom", request::ERASE_EEPROM),
+];
+
+/// What a real chip can do wrong, every one off by default. See the
+/// module documentation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Faults {
+    /// Vendor requests answered with STALL, and left without effect:
+    /// `bRequest`, and the `wValue` it must have, if any.
+    pub stall: Vec<(u8, Option<u16>)>,
+    /// Each port's bulk IN endpoint STALLs once it has completed this
+    /// many transfers since the last bus reset (a halted endpoint).
+    pub in_stall_after: Option<u32>,
+    /// The first this many bulk IN transfers after each bit mode change
+    /// on a port answer the two status bytes alone, as a chip that has
+    /// sampled nothing yet does.
+    pub idle_reads: u32,
+}
+
+impl Faults {
+    /// Takes option `key=value` if it is a fault: `Ok(false)` when the
+    /// key is not one.
+    ///
+    /// # Errors
+    ///
+    /// On a fault option with a bad value.
+    pub fn option(&mut self, key: &str, value: &str) -> crate::Result<bool> {
+        let number = |s: &str| -> crate::Result<u32> {
+            let n = match s.strip_prefix("0x") {
+                Some(h) => u32::from_str_radix(h, 16),
+                None => s.parse(),
+            };
+            n.map_err(|_| Error(format!("{key}={value}: {s} is not a number")))
+        };
+        match key {
+            "stall" => {
+                let (name, v) = match value.split_once('/') {
+                    Some((n, v)) => (n, Some(v)),
+                    None => (value, None),
+                };
+                let request = match REQUEST_NAMES.iter().find(|r| r.0 == name) {
+                    Some(r) => r.1,
+                    None => u8::try_from(number(name)?).map_err(|_| {
+                        let names: Vec<&str> = REQUEST_NAMES.iter().map(|r| r.0).collect();
+                        Error(format!("stall={value}: a request number or {}", names.join(", ")))
+                    })?,
+                };
+                let v = v
+                    .map(|v| {
+                        u16::try_from(number(v)?)
+                            .map_err(|_| Error(format!("stall={value}: wValue is 16 bits")))
+                    })
+                    .transpose()?;
+                self.stall.push((request, v));
+            }
+            "in-stall" => self.in_stall_after = Some(number(value)?),
+            "idle" => self.idle_reads = number(value)?,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Whether a request is one to STALL.
+    pub fn stalls(&self, setup: Setup) -> bool {
+        self.stall.iter().any(|&(r, v)| r == setup.request && v.is_none_or(|v| v == setup.value))
+    }
+}
+
 /// What a model makes of the ports.
 pub trait FtdiPorts {
     /// A request changed port `port` (0 based); `state` is after it.
@@ -524,6 +653,11 @@ pub struct Ftdi {
     descriptors: Descriptors,
     ports: Vec<PortState>,
     eeprom: Vec<u16>,
+    faults: Faults,
+    /// Per port: bulk IN transfers completed since the last bus reset.
+    in_done: Vec<u32>,
+    /// Per port: the status-only reads after a bit mode change.
+    idle: Vec<Countdown>,
 }
 
 impl Ftdi {
@@ -532,8 +666,22 @@ impl Ftdi {
     pub fn new(config: FtdiConfig) -> Ftdi {
         let descriptors = build_descriptors(&config);
         let eeprom = build_eeprom(&config);
-        let ports = vec![PortState::default(); usize::from(config.chip.ports())];
-        Ftdi { config, descriptors, ports, eeprom }
+        let n = usize::from(config.chip.ports());
+        Ftdi {
+            config,
+            descriptors,
+            ports: vec![PortState::default(); n],
+            eeprom,
+            faults: Faults::default(),
+            in_done: vec![0; n],
+            idle: vec![Countdown::default(); n],
+        }
+    }
+
+    /// Makes the chip misbehave so (none at power on).
+    pub fn set_faults(&mut self, faults: Faults) {
+        self.idle.fill(Countdown::new(faults.idle_reads));
+        self.faults = faults;
     }
 
     /// The configuration.
@@ -578,6 +726,9 @@ impl Ftdi {
             let (m, l) = (p.modem_status, p.line_status);
             *p = PortState { modem_status: m, line_status: l, ..PortState::default() };
         }
+        // A bus reset clears an endpoint's halt.
+        self.in_done.fill(0);
+        self.idle.fill(Countdown::new(self.faults.idle_reads));
     }
 
     /// Whether `SET_BAUD_RATE`'s `wIndex` is all divisor bits, with no
@@ -669,6 +820,9 @@ impl Ftdi {
             ));
         }
         let _ = data;
+        if self.faults.stalls(setup) {
+            return Reply::Stall;
+        }
         match setup.request {
             r::READ_EEPROM => return self.read_eeprom(setup, v),
             r::WRITE_EEPROM | r::ERASE_EEPROM => return self.write_eeprom(setup, v),
@@ -843,6 +997,7 @@ impl Ftdi {
                 }
                 state.bitmode = mode;
                 state.mask = mask;
+                self.idle[port].arm();
                 Event::Bitmode
             }
             _ => unreachable!("request {:#04x} classified above", setup.request),
@@ -937,9 +1092,14 @@ impl Ftdi {
         let payload = packet - 2;
         let rest = max % packet;
         let budget = max / packet * payload + rest.saturating_sub(2);
+        if self.faults.in_stall_after.is_some_and(|n| self.in_done[port] >= n) {
+            return Reply::Stall;
+        }
         let state = &self.ports[port];
         let status = state.status();
-        let data = match ports.read(port, budget, state, v) {
+        let fill =
+            if self.idle[port].busy() { Fill::Idle } else { ports.read(port, budget, state, v) };
+        let data = match fill {
             Fill::Wait => return Reply::Nak,
             Fill::Idle => Vec::new(),
             Fill::Data(d) => d,
@@ -967,6 +1127,7 @@ impl Ftdi {
         if data.len() % payload == 0 && out.len() + 2 <= max {
             out.extend_from_slice(&status);
         }
+        self.in_done[port] += 1;
         Reply::Data(out)
     }
 }
@@ -1129,6 +1290,62 @@ mod tests {
 
     fn inp(request: u8, value: u16, index: u16, length: u16) -> Setup {
         Setup { request_type: 0xc0, request, value, index, length }
+    }
+
+    #[test]
+    fn faults_misbehave_as_asked() {
+        let mut faults = Faults::default();
+        for (k, v) in
+            [("stall", "reset/1"), ("stall", "0x0b/0x0100"), ("in-stall", "3"), ("idle", "2")]
+        {
+            assert!(faults.option(k, v).unwrap(), "{k}={v}");
+        }
+        assert!(!faults.option("chip", "ft232r").unwrap());
+        for bad in ["nosuch", "reset/x", "0x100", "reset/0x10000"] {
+            assert!(faults.option("stall", bad).is_err(), "{bad}");
+        }
+        assert!(faults.option("idle", "-1").is_err());
+        let mut chip = Ftdi::new(FtdiConfig::new(Chip::Ft2232h));
+        chip.set_faults(faults);
+        let mut c = Counter::default();
+        let mut v = Violations::default();
+        // reset/1 and bit-bang STALL, without effect; reset/0, reset/2
+        // and the reset of the bit mode do not.
+        assert_eq!(chip.control(&mut c, out(0, 1, 1), &[], &mut v), Reply::Stall);
+        assert_eq!(chip.control(&mut c, out(0, 2, 1), &[], &mut v), Reply::ack());
+        assert_eq!(chip.control(&mut c, out(0x0b, 0x0100, 1), &[], &mut v), Reply::Stall);
+        assert_eq!(chip.port(0).bitmode, bitmode::RESET);
+        assert_eq!(chip.control(&mut c, out(0x0b, 0x0200, 1), &[], &mut v), Reply::ack());
+        assert_eq!(c.events, [(0, Event::FlushToHost), (0, Event::Bitmode)]);
+        // Two status-only reads after the bit mode change, then data;
+        // three transfers done, the endpoint STALLs; port B is apart.
+        assert_eq!(chip.in_transfer(&mut c, 1, 512, &mut v), Reply::Data(vec![0x01, 0x60]));
+        assert_eq!(chip.in_transfer(&mut c, 1, 512, &mut v), Reply::Data(vec![0x01, 0x60]));
+        let Reply::Data(d) = chip.in_transfer(&mut c, 1, 512, &mut v) else { panic!() };
+        assert_eq!(&d[..3], &[0x01, 0x60, 1]);
+        assert_eq!(chip.in_transfer(&mut c, 1, 512, &mut v), Reply::Stall);
+        let Reply::Data(d) = chip.in_transfer(&mut c, 3, 512, &mut v) else { panic!() };
+        assert!(d.len() > 2);
+        // A bus reset clears the halt; the countdown waits for the
+        // next bit mode change.
+        chip.reset();
+        let Reply::Data(d) = chip.in_transfer(&mut c, 1, 512, &mut v) else { panic!() };
+        assert!(d.len() > 2);
+        assert!(v.is_empty(), "{v:?}");
+        // Off by default.
+        let mut plain = Ftdi::new(FtdiConfig::new(Chip::Ft2232h));
+        assert_eq!(plain.control(&mut c, out(0, 1, 1), &[], &mut v), Reply::ack());
+    }
+
+    #[test]
+    fn countdown_counts_polls() {
+        let mut c = Countdown::new(2);
+        assert!(!c.busy());
+        c.arm();
+        assert_eq!([c.busy(), c.busy(), c.busy()], [true, true, false]);
+        let mut never = Countdown::new(0);
+        never.arm();
+        assert!(!never.busy());
     }
 
     #[test]
