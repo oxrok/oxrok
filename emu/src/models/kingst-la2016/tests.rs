@@ -143,9 +143,10 @@ fn uploads_identifies_captures_and_downloads_as_the_driver_does() {
     identify_and_init(&mut dev, &bitstream, &mut v);
     assert!(v.is_empty(), "{v:?}");
 
-    // 1000 samples at 1 MHz (200 MHz / 200), rising D0, ratio 10 %.
-    let mem = 1024 * 1024 * 1024 / 8 * 10 / 100;
-    setup(&mut dev, 0, &trigger(0xffff, 1, 0, 0), &sampling(1000, 100, mem, 200), &mut v);
+    // 3000 samples at 20 kHz (200 MHz / 10000, 1000 samples a poll),
+    // rising D0, ratio 90 %.
+    let mem = 1024 * 1024 * 1024 / 8 * 90 / 100;
+    setup(&mut dev, 0, &trigger(0xffff, 1, 0, 0), &sampling(3000, 2700, mem, 10000), &mut v);
     spi_write(&mut dev, REG_RUN, &[3], &mut v);
     assert!(v.is_empty(), "{v:?}");
     let states: Vec<u16> = (0..4)
@@ -154,7 +155,8 @@ fn uploads_identifies_captures_and_downloads_as_the_driver_does() {
             u16::from_le_bytes([b[0], b[1]])
         })
         .collect();
-    assert_eq!(states, [RUN_PRE, RUN_WAIT, RUN_POST, RUN_DONE]);
+    // 2700 samples before the trigger point; D0 rises next at 3004.
+    assert_eq!(states, [RUN_PRE, RUN_PRE, RUN_WAIT, RUN_DONE]);
     let info = spi_read(&mut dev, REG_SAMPLING, 16, &mut v);
     let w = |i: usize| u32::from_le_bytes([info[i], info[i + 1], info[i + 2], info[i + 3]]);
     let (packets, before, write_pos) = (w(0), w(4), w(8));
@@ -172,9 +174,9 @@ fn uploads_identifies_captures_and_downloads_as_the_driver_does() {
     dev.control(wr(CMD_BULK_START, 0, 0), &[], &mut v);
     let d = data(dev.transfer_in(6, 512 * 1024, &mut v));
     assert_eq!(d.len(), n as usize);
-    // D0 rises at sample 100 (24 to 25), the first at or after the 100
-    // pre-trigger samples: the capture starts at sample 0.
-    assert_eq!(&d[..3], &[0, 0, 4], "value 0, four samples");
+    // The window starts 2700 samples before 3004: at 304, value 76,
+    // which lasts until 307.
+    assert_eq!(&d[..3], &[76, 0, 4], "value 76, four samples");
     assert_eq!(dev.transfer_in(6, 512 * 1024, &mut v), Reply::Nak, "nothing left");
     spi_write(&mut dev, REG_RUN, &[0], &mut v);
     assert!(v.is_empty(), "{v:?}");
@@ -253,7 +255,7 @@ fn flags_what_the_driver_never_sends() {
         dev.transfer_out(2, c, &mut v);
     }
     assert_eq!(data(dev.control(rd(CMD_FPGA_INIT, 0, 1), &[], &mut v)), [1]);
-    assert_eq!(v.drain().len(), 2, "no padding, and a byte that differs");
+    assert_eq!(v.drain().len(), 3, "no padding (size, chunks), and a byte that differs");
     dev.transfer_out(2, &[0; 64], &mut v);
     assert_eq!(v.drain().len(), 1, "the failed upload left the FPGA blank");
     dev.control(wr(CMD_FPGA_INIT, 0, 4), &(bitstream.len() as u32).to_le_bytes(), &mut v);
@@ -282,8 +284,10 @@ fn flags_bad_configurations() {
     let t = trigger(0xffff, 1, 0, 0);
     let mem = 1024 * 1024 * 1024 / 8 * 50 / 100;
     spi_write(&mut dev, REG_TRIGGER, &t, &mut v);
-    spi_write(&mut dev, REG_SAMPLING, &sampling(100, 50, mem, 201), &mut v);
-    assert_eq!(v.drain().len(), 1, "a divider of no listed rate");
+    spi_write(&mut dev, REG_SAMPLING, &sampling(100, 50, mem, 0), &mut v);
+    assert_eq!(v.drain().len(), 1, "a divider of 0");
+    spi_write(&mut dev, REG_SAMPLING, &sampling(100, 50, mem, 66), &mut v);
+    assert!(v.is_empty(), "3 MHz is no rate of the list, but the driver sends it: {v:?}");
     spi_write(&mut dev, REG_SAMPLING, &sampling(100, 20, mem, 200), &mut v);
     assert_eq!(v.drain().len(), 1, "samples and memory of different ratios");
     spi_write(&mut dev, REG_TRIGGER, &trigger(0xffff, 0, 0, 0), &mut v);
@@ -379,11 +383,11 @@ fn faults_stall_requests_and_change_answers() {
     set_config(&mut dev, &mut v);
     let bitstream = Kingst::new(PROFILES[0], true, false, Faults::default()).bitstream();
     dev.control(wr(CMD_FPGA_INIT, 0, 4), &size, &mut v);
-    let mut padded = bitstream.clone();
-    padded.resize(bitstream.len().div_ceil(4096) * 4096, 0);
-    for c in padded.chunks(4096) {
+    for c in bitstream.chunks(4096) {
         dev.transfer_out(2, c, &mut v);
     }
+    let tail = bitstream.len().div_ceil(4096) * 4096 - bitstream.len();
+    dev.transfer_out(2, &vec![0; tail], &mut v);
     assert_eq!(data(dev.control(rd(CMD_FPGA_INIT, 0, 1), &[], &mut v)), [5]);
     assert!(v.is_empty(), "{v:?}");
     for bad in [
@@ -453,19 +457,13 @@ fn faults_of_the_loader_the_states_and_the_download() {
     assert!(dev.take_renumeration());
     dev.reset();
     assert_eq!(dev.descriptors().device[15], 0, "still the bare FX2");
-    // Each state for two polls; three samples more; four bytes more.
-    let mut dev = device(&[
-        ("mcu", "1"),
-        ("fpga", "1"),
-        ("hold-states", "2"),
-        ("more-samples", "3"),
-        ("extra-bytes", "4"),
-    ]);
+    // Three samples more; four bytes more.
+    let mut dev =
+        device(&[("mcu", "1"), ("fpga", "1"), ("more-samples", "3"), ("extra-bytes", "4")]);
     set_config(&mut dev, &mut v);
     setup(&mut dev, 0, &trigger(0xffff, 0, 0, 0), &sampling(2, 0, 0x100, 200), &mut v);
     spi_write(&mut dev, REG_RUN, &[3], &mut v);
-    let states: Vec<u8> = (0..3).map(|_| spi_read(&mut dev, REG_RUN, 2, &mut v)[0]).collect();
-    assert_eq!(states, [0xe2, 0xe2, 0xed]);
+    assert_eq!(spi_read(&mut dev, REG_RUN, 2, &mut v)[0], 0xed, "done in one poll");
     let info = spi_read(&mut dev, REG_SAMPLING, 16, &mut v);
     let write_pos = u32::from_le_bytes([info[8], info[9], info[10], info[11]]);
     let mut window = (write_pos - 16).to_le_bytes().to_vec();
@@ -476,7 +474,67 @@ fn faults_of_the_loader_the_states_and_the_download() {
     assert_eq!(d.len(), 20);
     assert_eq!(&d[..3], &[0, 0, 4], "five samples, not two");
     assert!(v.is_empty(), "{v:?}");
-    for bad in [("fw-dead", "2"), ("hold-states", "0"), ("stall", "loader@0x")] {
+    for bad in [("fw-dead", "2"), ("stall", "loader@0x")] {
         assert!(build(&[(bad.0.into(), bad.1.into())]).is_err(), "{bad:?}");
     }
+}
+
+#[test]
+fn a_capture_samples_on_by_the_polls_and_a_halt_keeps_what_it_has() {
+    let mut v = Violations::default();
+    let info = |dev: &mut Device, v: &mut Violations| {
+        let b = spi_read(dev, REG_SAMPLING, 16, v);
+        let w = |i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+        (w(0), w(4))
+    };
+    // 1 M samples at 20 kHz, halted after two polls: 2000 samples.
+    let mut dev = device(&[("mcu", "1"), ("fpga", "1")]);
+    set_config(&mut dev, &mut v);
+    setup(&mut dev, 0, &trigger(0xffff, 0, 0, 0), &sampling(1_000_000, 0, 0x100, 10000), &mut v);
+    spi_write(&mut dev, REG_RUN, &[3], &mut v);
+    assert_eq!(spi_read(&mut dev, REG_RUN, 2, &mut v), RUN_POST.to_le_bytes(), "no pre-trigger");
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    spi_write(&mut dev, REG_RUN, &[0], &mut v);
+    assert_eq!(spi_read(&mut dev, REG_RUN, 2, &mut v), RUN_DONE.to_le_bytes());
+    let want = capture::capture(0, 2000, None, Layout { wide: false });
+    assert_eq!(info(&mut dev, &mut v), (want.packets, 0));
+    // A trigger on CH15 does not fire for 128000 samples: halted while
+    // waiting, the memory holds the last 100 samples, all before it.
+    setup(
+        &mut dev,
+        0,
+        &trigger(0xffff, 0x8000, 0x8000, 0x8000),
+        &sampling(100, 50, 1024 * 1024 * 1024 / 8 / 2, 10000),
+        &mut v,
+    );
+    spi_write(&mut dev, REG_RUN, &[3], &mut v);
+    assert_eq!(spi_read(&mut dev, REG_RUN, 2, &mut v), RUN_WAIT.to_le_bytes());
+    spi_write(&mut dev, REG_RUN, &[0], &mut v);
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    let want = capture::capture(900, 100, Some(100), Layout { wide: false });
+    assert_eq!(info(&mut dev, &mut v), (want.packets, want.before_trigger));
+    assert_eq!(want.before_trigger, 1, "one run of 0x5a, before the padding");
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn flags_bitstream_chunks_and_early_register_reads() {
+    let mut v = Violations::default();
+    let model = Kingst::new(PROFILES[0], true, false, Faults::default());
+    let bitstream = model.bitstream();
+    let mut dev = Device::new(Box::new(model));
+    set_config(&mut dev, &mut v);
+    spi_read(&mut dev, REG_RUN, 0x80, &mut v);
+    assert!(v.is_empty(), "the dump of the spew level is the driver's habit");
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    assert_eq!(v.drain().len(), 1, "a register read before the FPGA is enabled");
+    // The right bytes, in chunks of 2048.
+    let mut padded = bitstream.clone();
+    padded.resize(bitstream.len().div_ceil(4096) * 4096, 0);
+    dev.control(wr(CMD_FPGA_INIT, 0, 4), &(bitstream.len() as u32).to_le_bytes(), &mut v);
+    for c in padded.chunks(2048) {
+        dev.transfer_out(2, c, &mut v);
+    }
+    assert_eq!(data(dev.control(rd(CMD_FPGA_INIT, 0, 1), &[], &mut v)), [1]);
+    assert_eq!(v.drain().len(), 1, "chunks of 2048");
 }

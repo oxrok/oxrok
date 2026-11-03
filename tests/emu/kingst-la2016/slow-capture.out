@@ -1,17 +1,56 @@
-Acquisition with 16/18 channels at 1 MHz
-CH0:11110000 11110000 11110000 11110000 11110000 
-CH1:11110000 00001111 11110000 00001111 11110000 
-CH2:00001111 11111111 11110000 00000000 00001111 
-CH3:00000000 00000000 00001111 11111111 11111111 
-CH4:00000000 00000000 00000000 00000000 00000000 
-CH5:00000000 00000000 00000000 00000000 00000000 
-CH6:00000000 00000000 00000000 00000000 00000000 
-CH7:00000000 00000000 00000000 00000000 00000000 
-CH8:00000000 00000000 00000000 00000000 00000000 
-CH9:00000000 00000000 00000000 00000000 00000000 
-CH10:00000000 00000000 00000000 00000000 00000000 
-CH11:00000000 00000000 00000000 00000000 00000000 
-CH12:00000000 00000000 00000000 00000000 00000000 
-CH13:00000000 00000000 00000000 00000000 00000000 
-CH14:00000000 00000000 00000000 00000000 00000000 
-CH15:00000000 00000000 00000000 00000000 00000000 
+Acquisition with 2/18 channels at 20 kHz
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff f0 0f f0 0f f0 0f f0 0f f0 0f 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 00 00 00 00 00 00 00 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 f0 f0 f0 f0 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff f0 0f f0 0f f0 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 00 00 
+CH1:0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f 
+T: ^ 4
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f 
+CH0:f0 f0 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:f0 0f ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:ff ff ff ff ff f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:0f f0 0f f0 0f f0 0f ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+CH1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 00 00 00 00 00 00 00 00 00 00 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:ff ff ff ff ff ff ff ff ff ff f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f 
+CH0:f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 f0 00 00 00 00 00 00 00 00 00 00 00 
+CH1:f0 0f f0 0f f0 0f f0 0f f0 0f f0 0f ff ff ff ff ff ff ff ff ff ff ff ff 
+CH0:00 
+CH1:ff 

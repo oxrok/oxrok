@@ -103,6 +103,7 @@ emu_cases() {
     emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
+    emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0
 
     # Captures to the sample memory, at a few rates and sizes.
     emu_case "capture 20k" -- -d $K -c samplerate=20k --samples 64 -O hex
@@ -112,7 +113,19 @@ emu_cases() {
     emu_case "capture five samples" -- -d $K --samples 5 -O bits
     emu_case "capture long runs" -- -d $K -C CH0,CH8 -c samplerate=10M --samples 3000 -O bits:width=0
     emu_case "capture two channels" -- -d $K -C CH1,CH9 --samples 64 -O bits
+    # A time limit: sigrok-cli passes it as is, the driver sends "no
+    # sample limit" (10 G) and halts the capture at the first poll that
+    # sees the time passed. The model samples 50 ms per poll (1000
+    # samples at 20 kHz), so the 5 ms are over at the first poll.
     emu_case "capture time" -- -d $K -c samplerate=20k --time 5 -O hex
+    # The same while a trigger on CH15 waits (it fires after 128000
+    # samples): the memory holds what came before the trigger point.
+    emu_case "capture time waiting for the trigger" -- -d $K -c samplerate=20k --time 5 -t CH15=1 -O hex
+    # Rates off the list are the driver's too: it sends clock / rate.
+    emu_case "capture 3M" -- -d $K -c samplerate=3M --samples 40 -O hex
+    # The lowest rate the driver takes, clock / 65536 = 3051 Hz: its
+    # divider, 65552, is truncated to 16 bits (16, 12.5 MHz).
+    emu_case "capture lowest rate" --stderr --filter '/Set sample config/!d; s/^.*kingst-la2016: //' -- -l 5 -d $K -c samplerate=3051 --samples 8 -O hex
     # Two bulk IN transfers of 512 KiB: about 1.6 M samples each.
     emu_case "capture two transfers" --filter '1,/^CH15/!d' -- -d $K -c samplerate=100M --samples 2000000 -O hex
     emu_case "capture too fast" --expect-fail --stderr --filter "$E" -- -d $K -c samplerate=500M --samples 8 -O hex
@@ -160,6 +173,11 @@ emu_cases() {
     # bare FX2, and after 3 s the driver gives up.
     kingst_options mcu=0 fw-dead=1
     emu_case "fault firmware dead" --stderr --filter "$E" -- -d $K --scan
+    # The first EEPROM read after the renumeration is refused: the
+    # identification there is quiet (show_message FALSE) and tries
+    # again 200 ms later, which reads it.
+    kingst_options mcu=0 stall=eeprom@1
+    emu_case "fault eeprom after the upload" --keep-header --filter "$C" -- -d $K --scan
 
     # The other models: their rates, memory, base clock, channels.
     kingst_options mcu=1 model=la2016
@@ -291,9 +309,10 @@ emu_cases() {
     emu_case "fault empty and stalled transfers" -- -d $K --samples 30 -O hex
     kingst_options mcu=1 empty=2 stall-in=1
     emu_case "fault stream empty and stalled" -- -d $K -c continuous=on --samples 30 -O hex
-    # A capture whose run states last two polls each.
-    kingst_options mcu=1 hold-states=2
-    emu_case "slow capture" -- -d $K -c samplerate=1M --samples 40 -t CH1=f -O bits
+    # A capture of several polls (1000 samples each at 20 kHz): the run
+    # state is pre-trigger twice, waiting, then post-trigger twice.
+    kingst_options mcu=1
+    emu_case "slow capture" -- -d $K -C CH0,CH1 -c samplerate=20k --samples 5000 -t CH1=f -O hex
     # The device sends more than the window, or holds more samples than
     # asked: the driver stops at the window, or at the sample limit
     # after the transfer that reaches it, whose samples it passes on

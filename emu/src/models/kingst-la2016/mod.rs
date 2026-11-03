@@ -53,22 +53,26 @@
 //! outside the registers the driver reads (0), where a capture starts
 //! in the sample memory ([`CAPTURE_BASE`]), the sequence byte (the
 //! unit's index), the padding of the last unit with packets of count
-//! 0, and that a capture's run state goes pre-trigger (when samples
-//! come before the trigger point), waiting (with a trigger),
-//! post-trigger, then idle, one state per poll. The firmware and
+//! 0, which run state a capture shows when (pre-trigger only while
+//! samples before the trigger point are still to come, as the driver's
+//! comment has it for a capture ratio above 0 %, waiting until the
+//! trigger fires, post-trigger after it or at once without a trigger,
+//! then `0x85ed`), and what a halted capture holds (what it sampled so
+//! far; before its trigger fired, the last samples, all before the
+//! trigger point). The firmware and
 //! bitstream files are stand-ins (`tools/emu/kingst-la2016.firmware`),
 //! checked byte for byte; their sizes are not those of the vendor's
 //! files.
 //!
 //! Emulation artifacts. Time is counted in the host's polls and
-//! submissions, never the clock: a capture advances one run state per
-//! read of `REG_RUN`, the download completes one bulk IN transfer per
+//! submissions, never the clock: a capture takes, per read of
+//! `REG_RUN`, the samples of the 50 ms the driver waits between two
+//! polls at the rate its divider gives, the download completes one bulk IN transfer per
 //! transfer the host submits (with everything left, up to its size;
 //! the firmware's packet and short packet habits are not known), and a
 //! stream sends [`STREAM_BYTES`] per submitted transfer, where the real
-//! device fills them as fast as it samples. A halt while capturing
-//! ends the capture with every sample it was asked for. A capture
-//! keeps at most [`capture::MAX_SAMPLES`] samples.
+//! device fills them as fast as it samples. A capture keeps at most
+//! [`capture::MAX_SAMPLES`] samples.
 //!
 //! What the model taught about the C driver: when
 //! `la2016_receive_data()` fails after the bulk transfers were
@@ -80,9 +84,12 @@
 //! set: one failed poll makes the driver download a capture that has
 //! not finished. The driver passes on every sample of the transfer in
 //! which the sample limit falls, so a device holding more samples than
-//! asked yields more. Neither the date nor the magic check makes the
-//! driver refuse a device (a bad date is a warning; the magic falls
-//! back to its backup copy and to two byte checks).
+//! asked yields more. A bad date is only a warning, and the magic falls
+//! back from the primary copy to the backup and to two byte checks; a
+//! device is refused when all four checks fail (magic 0, no model). At
+//! the lowest rate it accepts, `clock / 65536` (3051 Hz on the
+//! LA2016), `set_sample_config()` computes a divider of 65552, which
+//! its `uint16_t` truncates to 16: the device samples at 12.5 MHz.
 //!
 //! The pedantic checks: the upload of the MCU firmware as `ezusb.c`
 //! sends it; requests other than the firmware's, or with other types,
@@ -96,8 +103,8 @@
 //! encoding of one of the driver's eight voltages; the capture mode 0
 //! or 1 (1 on a device without memory); a trigger with no channel, a
 //! level or polarity outside its channels, two edges, any trigger in
-//! streaming mode; a sample config whose divider gives no rate of the
-//! model's list, whose pre-trigger samples and memory disagree with
+//! streaming mode; a sample config whose divider gives a rate above
+//! the model's highest, whose pre-trigger samples and memory disagree with
 //! one capture ratio, with pre-trigger samples without a trigger, or
 //! written before the trigger config; a run without both configs
 //! written since the last; a download window other than the one the
@@ -113,8 +120,7 @@
 //! (the boot loader's `0xa0`), `read:REG` and `write:REG` (an FPGA
 //! register, `REG` in hex, such as `read:0x00`); `fw-dead=1` makes the
 //! uploaded firmware never run, so the device comes back as the bare
-//! FX2; `hold-states=N` shows each run state of a capture to N polls;
-//! `extra-bytes=N` sends N bytes (of zeros) more than the download
+//! FX2; `extra-bytes=N` sends N bytes (of zeros) more than the download
 //! window; `more-samples=N` stores N samples more than asked;
 //! `fpga-init=N` answers N to FPGA init after an upload;
 //! `run-state=HEX` is the idle run state; `pwm=MASK` starts with PWM
@@ -141,7 +147,7 @@ pub const ABOUT: &str = "Kingst LA series logic analyzer (77a1:01a2, EZ-USB, ren
                          mcu=1 starts with the firmware running, fpga=1 with the bitstream loaded; \
                          faults: stall=WHAT[@N], fpga-init=N, run-state=HEX, pwm=MASK, eeprom-id=HEX, \
                          date=HEX, extra-packets=N, short-bitstream=1, empty=N, stall-in=N, fw-dead=1, \
-                         hold-states=N, extra-bytes=N, more-samples=N";
+                         extra-bytes=N, more-samples=N";
 
 /// The vendor id, `protocol.h`.
 pub const VID: u16 = 0x77a1;
@@ -194,23 +200,6 @@ const NUM_SAMPLES_MAX: u64 = 10_000_000_000;
 /// The thresholds of `api.c`.
 const THRESHOLDS: [f64; 8] = [0.4, 0.6, 0.9, 1.2, 1.4, 2.0, 2.5, 4.0];
 
-const RATES_500MHZ: &[u64] = &[
-    20_000,
-    50_000,
-    100_000,
-    200_000,
-    500_000,
-    1_000_000,
-    2_000_000,
-    5_000_000,
-    10_000_000,
-    20_000_000,
-    50_000_000,
-    100_000_000,
-    200_000_000,
-    500_000_000,
-];
-
 /// A model of the driver's table, `models[]` in `protocol.c`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Profile {
@@ -238,11 +227,6 @@ impl Profile {
 
     fn clock(&self) -> u64 {
         if self.baseclock == 0 { self.rate } else { self.baseclock }
-    }
-
-    fn rates(&self) -> &'static [u64] {
-        let n = RATES_500MHZ.iter().position(|&r| r == self.rate).map_or(0, |i| i + 1);
-        &RATES_500MHZ[..n]
     }
 
     fn memory_bytes(&self) -> u64 {
@@ -392,7 +376,6 @@ pub struct Faults {
     empty: u32,
     stall_in: u32,
     fw_dead: bool,
-    hold_states: usize,
     extra_bytes: u32,
     more_samples: u64,
 }
@@ -461,13 +444,6 @@ impl Faults {
                     "1" => true,
                     _ => return Err(Error(format!("fw-dead={v}: 0 or 1"))),
                 }
-            }
-            "hold-states" => {
-                self.hold_states = v
-                    .parse()
-                    .ok()
-                    .filter(|n| *n >= 1)
-                    .ok_or_else(|| Error(format!("hold-states={v}: polls per run state, 1 or more")))?;
             }
             "extra-bytes" => self.extra_bytes = count(v)?,
             "more-samples" => self.more_samples = u64::from(count(v)?),
@@ -548,8 +524,9 @@ pub fn firmware_descriptors() -> Descriptors {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Fpga {
     Blank,
-    /// An upload of `size` bytes announced; what came so far.
-    Loading { size: u32, got: Vec<u8> },
+    /// An upload of `size` bytes announced; what came so far, and the
+    /// size of each chunk.
+    Loading { size: u32, got: Vec<u8>, chunks: Vec<usize> },
     Loaded,
 }
 
@@ -558,19 +535,82 @@ enum Fpga {
 struct Config {
     mode: Option<u8>,
     trigger: Option<Trigger>,
-    /// Samples, pre-trigger samples.
-    sampling: Option<(u64, u64)>,
+    /// Samples, pre-trigger samples, clock divider.
+    sampling: Option<(u64, u64, u16)>,
 }
 
 /// What the capture engine does.
 #[derive(Clone, Debug)]
 enum Run {
     Idle,
-    /// A capture into the sample memory, showing `states` to the polls.
-    Capturing { states: Vec<u16>, polls: usize, capture: Box<Capture> },
-    /// Waiting for a trigger that never comes.
-    Waiting,
+    Capturing(Box<Running>),
     Streaming(Stream),
+}
+
+/// A capture into the sample memory, which samples on as the host
+/// polls: each read of `REG_RUN` stands for the 50 ms the driver waits
+/// between two (`usb_source_add()`'s timeout), at the rate the divider
+/// gives.
+#[derive(Clone, Debug)]
+struct Running {
+    /// The trigger, when one is involved.
+    trigger: Option<Trigger>,
+    /// The sample the trigger fires at; `None` when it never does.
+    at: Option<u64>,
+    pre: u64,
+    limit: u64,
+    per_poll: u64,
+    sampled: u64,
+    layout: Layout,
+}
+
+impl Running {
+    /// The sample after the last one the capture keeps.
+    fn end(&self) -> Option<u64> {
+        match self.trigger {
+            None => Some(self.limit),
+            Some(_) => self.at.map(|a| a - self.pre + self.limit),
+        }
+    }
+
+    fn done(&self) -> bool {
+        self.end().is_some_and(|e| self.sampled >= e)
+    }
+
+    /// The run state: pre-trigger while the samples before the trigger
+    /// point are not all taken, then waiting for the trigger, then
+    /// post-trigger; a capture without trigger is post-trigger at once.
+    fn state(&self) -> u16 {
+        if self.done() {
+            RUN_DONE
+        } else if self.trigger.is_none() {
+            RUN_POST
+        } else if self.sampled < self.pre {
+            RUN_PRE
+        } else if self.at.is_none_or(|a| self.sampled <= a) {
+            RUN_WAIT
+        } else {
+            RUN_POST
+        }
+    }
+
+    /// What the memory holds: the whole window once done; after a halt
+    /// what was sampled, the last `limit` samples before the trigger
+    /// when it did not fire (all of them marked before the trigger).
+    fn capture(&self) -> Capture {
+        let n = self.sampled;
+        match (self.trigger, self.at) {
+            (None, _) => capture::capture(0, self.limit.min(n), None, self.layout),
+            (Some(_), Some(a)) if n > a => {
+                let start = a - self.pre;
+                capture::capture(start, (n - start).min(self.limit), Some(self.pre), self.layout)
+            }
+            (Some(_), _) => {
+                let len = n.min(self.limit);
+                capture::capture(n - len, len, Some(len), self.layout)
+            }
+        }
+    }
 }
 
 /// The bulk IN side.
@@ -830,7 +870,7 @@ impl Kingst {
             v.report("bitstream upload while a capture runs");
         }
         // A new configuration clears the FPGA and its registers.
-        self.fpga = Fpga::Loading { size, got: Vec::new() };
+        self.fpga = Fpga::Loading { size, got: Vec::new(), chunks: Vec::new() };
         self.enabled = false;
         self.pwm_en = 0;
         self.run = Run::Idle;
@@ -845,10 +885,27 @@ impl Kingst {
                 self.fpga = Fpga::Loaded;
                 0
             }
-            Fpga::Loading { size, got } => {
+            Fpga::Loading { size, got, chunks } => {
                 let image = self.bitstream();
                 let padded = image.len().div_ceil(EP2_PADDING) * EP2_PADDING;
                 let mut ok = true;
+                // upload_fpga_bitstream(): the file in reads of 4096,
+                // then zeros up to the padding, in chunks of 4096.
+                let mut want: Vec<usize> = image.chunks(EP2_PADDING).map(<[u8]>::len).collect();
+                let mut pad = padded - image.len();
+                while pad > 0 {
+                    want.push(pad.min(EP2_PADDING));
+                    pad -= pad.min(EP2_PADDING);
+                }
+                if chunks != want {
+                    v.report(format!(
+                        "bitstream in {} chunks where the driver sends {} (4096 each, the \
+                         file's remainder, then the padding)",
+                        chunks.len(),
+                        want.len()
+                    ));
+                    ok = false;
+                }
                 if got.len() != padded {
                     v.report(format!(
                         "bitstream upload of {} bytes; {size} announced, so {padded} with the \
@@ -912,36 +969,33 @@ impl Kingst {
                  1 at 0x02, 16 at 0x10, or all 128"
             ));
         }
+        // The dump of the spew level reads all registers before the
+        // bitstream check, whatever the FPGA holds: a habit of the
+        // driver, not flagged.
+        if !self.enabled && len != REG_SPACE {
+            v.report(format!("FPGA register {reg:#04x} read before the FPGA was enabled"));
+        }
         self.registers(reg, len)
-    }
-
-    /// Each run state repeated for the polls it lasts.
-    fn held(&self, states: Vec<u16>) -> Vec<u16> {
-        let n = self.faults.hold_states.max(1);
-        states.into_iter().flat_map(|s| std::iter::repeat_n(s, n)).collect()
     }
 
     /// The run state without a poll's effect.
     fn peek_state(&self) -> u16 {
         match &self.run {
             Run::Idle => self.idle_state(),
-            Run::Capturing { states, polls, .. } => states.get(*polls).copied().unwrap_or(RUN_DONE),
-            Run::Waiting => RUN_WAIT,
+            Run::Capturing(r) => r.state(),
             Run::Streaming(_) => RUN_PRE,
         }
     }
 
-    /// A read of `REG_RUN`: a capture moves on by one state per poll.
+    /// A read of `REG_RUN`: a capture samples on by a poll's worth.
     fn poll(&mut self) -> u16 {
-        if let Run::Capturing { states, polls, .. } = &mut self.run {
-            if *polls < states.len() {
-                *polls += 1;
-                return states[*polls - 1];
+        if let Run::Capturing(r) = &mut self.run {
+            r.sampled += r.per_poll;
+            if r.done() {
+                let capture = Box::new(r.capture());
+                self.run = Run::Idle;
+                self.captured = Some(capture);
             }
-            let Run::Capturing { capture, .. } = std::mem::replace(&mut self.run, Run::Idle) else {
-                unreachable!()
-            };
-            self.captured = Some(capture);
         }
         self.peek_state()
     }
@@ -1065,12 +1119,14 @@ impl Kingst {
         if limit == 0 || limit > NUM_SAMPLES_MAX {
             v.report(format!("sample limit {limit}: 1 to 10 G"));
         }
+        // set_sample_config() takes any rate up to the model's highest
+        // and down to the clock / 65536, and sends clock / rate.
         let clock = self.profile.clock();
-        let ok_rate = self.profile.rates().iter().any(|r| (clock / r) as u16 == divider);
-        if divider == 0 || !ok_rate {
+        let least = (clock / self.profile.rate).max(1);
+        if u64::from(divider) < least {
             v.report(format!(
-                "clock divider {divider}: {clock} Hz / {divider} is none of the {} rates",
-                self.profile.key
+                "clock divider {divider}: {clock} Hz / {divider} is above the {} Hz of the {}",
+                self.profile.rate, self.profile.key
             ));
         }
         let Some(trigger) = self.config.trigger else {
@@ -1096,7 +1152,7 @@ impl Kingst {
                 u64::from(mem) << 8
             ));
         }
-        self.config.sampling = Some((limit, pre));
+        self.config.sampling = Some((limit, pre, divider));
     }
 
     fn run_mode(&mut self, mode: u8, v: &mut Violations) {
@@ -1107,7 +1163,7 @@ impl Kingst {
                     return;
                 }
                 let config = std::mem::take(&mut self.config);
-                let (Some(trigger), Some((limit, pre)), Some(mode)) =
+                let (Some(trigger), Some((limit, pre, divider)), Some(mode)) =
                     (config.trigger, config.sampling, config.mode)
                 else {
                     v.report("run without capture mode, trigger and sample config written since the last");
@@ -1120,33 +1176,29 @@ impl Kingst {
                     self.run = Run::Streaming(Stream::new(trigger.channels, layout.wide));
                     return;
                 }
-                if !trigger.involved() {
-                    let limit = limit + self.faults.more_samples;
-                    let capture = Box::new(capture::capture(0, limit, None, layout));
-                    let states = self.held(vec![RUN_PRE]);
-                    self.run = Run::Capturing { states, polls: 0, capture };
-                    return;
-                }
-                let pre = pre.min(capture::MAX_SAMPLES);
-                let from = if trigger.edge() != 0 { pre.max(1) } else { pre };
-                let Some(at) = capture::find_trigger(&trigger, from, layout.wide) else {
-                    self.run = Run::Waiting;
-                    return;
+                let rate = (self.profile.clock() / u64::from(divider.max(1))).min(self.profile.rate);
+                let mut running = Running {
+                    trigger: None,
+                    at: None,
+                    pre: 0,
+                    limit: limit + self.faults.more_samples,
+                    per_poll: (rate / 20).max(1),
+                    sampled: 0,
+                    layout,
                 };
-                let limit = limit + self.faults.more_samples;
-                let capture = Box::new(capture::capture(at - pre, limit, Some(pre), layout));
-                let mut states = Vec::new();
-                if pre > 0 {
-                    states.push(RUN_PRE);
+                if trigger.involved() {
+                    let pre = pre.min(capture::MAX_SAMPLES);
+                    let from = if trigger.edge() != 0 { pre.max(1) } else { pre };
+                    running.trigger = Some(trigger);
+                    running.at = capture::find_trigger(&trigger, from, layout.wide);
+                    running.pre = pre;
                 }
-                states.extend([RUN_WAIT, RUN_POST]);
-                let states = self.held(states);
-                self.run = Run::Capturing { states, polls: 0, capture };
+                self.run = Run::Capturing(Box::new(running));
             }
             0 => {
-                // A halt: a capture ends with what it was asked for.
-                if let Run::Capturing { capture, .. } = std::mem::replace(&mut self.run, Run::Idle) {
-                    self.captured = Some(capture);
+                // A halt: a capture keeps what it sampled so far.
+                if let Run::Capturing(r) = std::mem::replace(&mut self.run, Run::Idle) {
+                    self.captured = Some(Box::new(r.capture()));
                 }
                 self.bulk.started = false;
             }
@@ -1201,7 +1253,7 @@ impl Kingst {
     }
 
     fn bitstream_chunk(&mut self, data: &[u8], v: &mut Violations) -> Reply {
-        let Fpga::Loading { got, .. } = &mut self.fpga else {
+        let Fpga::Loading { got, chunks, .. } = &mut self.fpga else {
             v.report("bulk OUT to endpoint 2 with no bitstream upload announced");
             return Reply::Stall;
         };
@@ -1210,6 +1262,7 @@ impl Kingst {
         }
         let take = if self.faults.short_bitstream && got.is_empty() { data.len() / 2 } else { data.len() };
         got.extend_from_slice(&data[..take]);
+        chunks.push(take);
         if self.stalled(Req::Bitstream) {
             return Reply::Stall;
         }
