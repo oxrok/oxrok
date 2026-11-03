@@ -1,0 +1,4 @@
+sr: fx2lafw: Expected firmware version 1.x, got 2.0.
+sr: fx2lafw: Unable to send start command: LIBUSB_ERROR_PIPE.
+sr: session: Could not start fx2lafw device usb/1-1 acquisition.
+Failed to start session.

@@ -26,7 +26,7 @@ use crate::core::{
     Access, Channel, ChannelGroup, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
     Packet, PacketSink, Result, SoftTriggerLogic, Trigger, TriggerMatch, Value, ValueList,
 };
-use crate::usb::{ControlRequest, Transport, UsbDeviceInfo, UsbId};
+use crate::usb::{BulkStream, ControlRequest, Transport, UsbDeviceInfo, UsbId};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -422,13 +422,7 @@ fn same_device(d: &UsbDeviceInfo, usb: &UsbDeviceInfo, after_upload: bool) -> bo
 }
 
 /// `fx2lafw_dev_open()`: finds the device of the profile's id at the
-/// scanned device's port, opens it, claims its interface and checks
-/// the firmware version and REVID. The claim comes before the checks
-/// here, after `set_configuration(1)`, which sends nothing when the
-/// configuration is active (always on Linux) but is needed on macOS,
-/// which can leave a device unconfigured right after renumeration;
-/// neither the claim nor that check is a transfer, so the device sees
-/// what it sees under the C driver.
+/// scanned device's port, opens it and sets it up ([`set_up`]).
 fn try_open(
     usb: &UsbDeviceInfo,
     after_upload: bool,
@@ -438,10 +432,30 @@ fn try_open(
         .find(|d| same_device(d, usb, after_upload));
     let info = found.ok_or_else(|| Error::device("device not found"))?;
     let mut t = crate::usb::open(&info)?;
-    t.set_configuration(CONFIGURATION)?;
-    t.claim_interface(INTERFACE)?;
-    check_firmware(t.as_mut())?;
+    set_up(t.as_mut())?;
     Ok((info, t))
+}
+
+/// The checks of `fx2lafw_dev_open()`, then the claim of `dev_open()`:
+/// the firmware version and REVID are read before the interface is
+/// claimed, so a device another program holds sees the two reads, as
+/// under the C driver. `set_configuration(1)` comes first; it sends
+/// nothing when the configuration is active (always on Linux) but is
+/// needed on macOS, which can leave a device unconfigured right after
+/// renumeration. On Windows (`WinUSB`) no control transfer goes
+/// without a claimed interface, so the claim comes first there.
+fn set_up(t: &mut dyn Transport) -> Result<()> {
+    t.set_configuration(CONFIGURATION)?;
+    if cfg!(windows) {
+        t.claim_interface(INTERFACE)?;
+    }
+    check_firmware(t)?;
+    t.claim_interface(INTERFACE).map_err(|e| match e {
+        Error::Busy => Error::device(
+            "Unable to claim USB interface. Another program or driver has already claimed it",
+        ),
+        e => e,
+    })
 }
 
 /// Reads the firmware version and chip revision; fails on a version
@@ -451,16 +465,20 @@ fn check_firmware(t: &mut dyn Transport) -> Result<(u8, u8)> {
     if v.len() < 2 {
         return Err(Error::device("short firmware version"));
     }
+    // A failed REVID read fails the open, as in protocol.c, which reads
+    // it before it looks at the version.
+    let r =
+        t.control_in(ControlRequest::vendor(CMD_GET_REVID_VERSION, 0, 0), 1, CONTROL_TIMEOUT)?;
+    let revid = r.first().ok_or_else(|| Error::device("Failed to get REVID."))?;
     if v[0] != REQUIRED_MAJOR {
+        // protocol.c logs this and means to bail out, but its ret
+        // still holds the REVID read's SR_OK, so libsigrok opens the
+        // device anyway.
         return Err(Error::device(format!(
             "expected firmware version {REQUIRED_MAJOR}.x, got {}.{}",
             v[0], v[1]
         )));
     }
-    // A failed REVID read fails the open, as in protocol.c.
-    let r =
-        t.control_in(ControlRequest::vendor(CMD_GET_REVID_VERSION, 0, 0), 1, CONTROL_TIMEOUT)?;
-    let revid = r.first().ok_or_else(|| Error::device("Failed to get REVID."))?;
     log::debug!(
         "Firmware {}.{}, REVID {revid}: a Cypress CY7C68013{}.",
         v[0],
@@ -568,9 +586,7 @@ impl Device for Fx2lafwDevice {
             return Ok(());
         }
         let t = if let Some(mut t) = self.pending.take() {
-            t.set_configuration(CONFIGURATION)?;
-            t.claim_interface(INTERFACE)?;
-            check_firmware(t.as_mut())?;
+            set_up(t.as_mut())?;
             t
         } else if let Some(uploaded) = self.fw_updated {
             // dev_open(): wait for the FX2 to renumerate, trying every
@@ -668,8 +684,18 @@ impl Device for Fx2lafwDevice {
             stl,
         };
         let transport = self.transport.lock().expect("transport lock").take();
-        let Some(transport) = transport else {
+        let Some(mut transport) = transport else {
             return Err(Error::device("device is not open"));
+        };
+        // The transfers and the start command before start() returns,
+        // as fx2lafw_start_acquisition(): a device that refuses the
+        // start fails the session's start.
+        let stream = match acq.begin(transport.as_mut()) {
+            Ok(stream) => stream,
+            Err(e) => {
+                *self.transport.lock().expect("transport lock") = Some(transport);
+                return Err(e);
+            }
         };
         let slot = Arc::clone(&self.transport);
         let stop = Arc::new(AtomicBool::new(false));
@@ -677,12 +703,11 @@ impl Device for Fx2lafwDevice {
         let handle = std::thread::Builder::new()
             .name("fx2lafw acquisition".into())
             .spawn(move || {
-                let mut t = transport;
-                if let Err(e) = acq.run(t.as_mut(), &sink, &stop2) {
+                if let Err(e) = acq.run(stream, &sink, &stop2) {
                     log::error!("Acquisition failed: {e}.");
                 }
                 sink.send(Packet::End);
-                *slot.lock().expect("transport lock") = Some(t);
+                *slot.lock().expect("transport lock") = Some(transport);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -698,6 +723,12 @@ impl Device for Fx2lafwDevice {
     }
 }
 
+/// Whether a transfer failed because the device is gone (libusb's
+/// `LIBUSB_TRANSFER_NO_DEVICE`), as both USB backends word it.
+fn is_disconnect(e: &Error) -> bool {
+    matches!(e, Error::Device(m) if m.ends_with("device disconnected"))
+}
+
 /// One acquisition, on its own thread: `start_transfers()` and
 /// `receive_transfer()` of `protocol.c`.
 struct Acquisition {
@@ -710,26 +741,47 @@ struct Acquisition {
 }
 
 impl Acquisition {
-    fn run(mut self, t: &mut dyn Transport, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
-        let (size, depth, timeout) = transfer_plan(self.samplerate);
+    /// `start_transfers()` and `command_start_acquisition()`: the
+    /// transfers queued, then the start command. On a failure the
+    /// queued transfers are cancelled as the stream drops.
+    fn begin(&self, t: &mut dyn Transport) -> Result<Box<dyn BulkStream>> {
+        let (size, depth, _) = transfer_plan(self.samplerate);
+        let stream = t.bulk_in_stream(ENDPOINT_IN, size, depth)?;
+        t.control_out(ControlRequest::vendor(CMD_START, 0, 0), &self.command, CONTROL_TIMEOUT)
+            .inspect_err(|e| log::error!("Unable to send start command: {e}."))?;
+        log::debug!("Acquisition started: {:02x?}, {depth} transfers of {size}.", self.command);
+        Ok(stream)
+    }
+
+    fn run(
+        mut self,
+        mut stream: Box<dyn BulkStream>,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        let (_, _, timeout) = transfer_plan(self.samplerate);
         let u = self.unit_size;
         let limit = self.limit_samples;
         let mut trigger_fired = self.stl.is_none();
-        let mut stream = t.bulk_in_stream(ENDPOINT_IN, size, depth)?;
         sink.send(Packet::header());
         if trigger_fired {
             sink.send(Packet::FrameBegin);
         }
-        t.control_out(ControlRequest::vendor(CMD_START, 0, 0), &self.command, CONTROL_TIMEOUT)?;
-        log::debug!("Acquisition started: {:02x?}, {depth} transfers of {size}.", self.command);
         let mut sent = 0u64;
         let mut frames = 0u64;
         let mut empty = 0usize;
         while !stop.load(Ordering::SeqCst) {
+            // receive_transfer(): a transfer that failed (a STALL, an
+            // error) counts as an empty one and is resubmitted; only a
+            // device that is gone ends the acquisition at once.
             let data = match stream.next(timeout) {
                 Ok(d) => d,
                 Err(Error::Timeout) => Vec::new(),
-                Err(e) => return Err(e),
+                Err(e) if is_disconnect(&e) => return Err(e),
+                Err(e) => {
+                    log::debug!("Transfer failed: {e}.");
+                    Vec::new()
+                }
             };
             if data.is_empty() {
                 empty += 1;

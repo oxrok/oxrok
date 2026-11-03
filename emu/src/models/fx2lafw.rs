@@ -30,11 +30,14 @@
 //! firmware already, as after an earlier upload.
 //!
 //! Once running, the firmware's descriptors are those of `dscr.inc`:
-//! the same ids, `bcdDevice` 0x0001, strings `sigrok`, `fx2lafw` and the
-//! board's name as string 3 (`Cypress FX2`, `Saleae Logic`), which the
-//! driver takes for the serial number; interface 0 with one bulk IN
-//! endpoint 2 of 512 bytes, at high speed. Its vendor requests are
-//! those of `fx2lafw.c`:
+//! the same ids, `bcdDevice` 0x0001 (`.dw 0x0100`, and `.dw` is big
+//! endian there, as the swapped `VID` and `PID` of `hw/*/dscr.a51`
+//! show), strings `sigrok`, `fx2lafw` and the board's name as string 3
+//! (`hw/<board>/dscr.a51`: `Cypress FX2`, `Saleae Logic`, `sigrok FX2
+//! 8ch`), which the driver takes for the serial number; interface 0
+//! with one bulk IN endpoint 2 of 512 bytes, at high speed, 100 mA.
+//! Its vendor requests are those of `fx2lafw.c` (checked against
+//! sigrok-firmware-fx2lafw 0.1.7):
 //!
 //! | request | data | answer |
 //! |---|---|---|
@@ -44,7 +47,15 @@
 //!
 //! The start flags are bit 4 CTL2 clock (analog boards only), bit 5
 //! 16 bit samples, bit 6 the 48 MHz clock (30 MHz without); the GPIF
-//! takes a sample every `delay + 1` clocks. The samples are a counter
+//! takes a sample every `delay + 1` clocks (`gpif_acquisition_prepare()`:
+//! `delay >> 8` states of 256 clocks, one of `delay & 0xff`, and the
+//! decision point; the low byte is never 0 for a rate of the list but
+//! 48 MHz, which has no delay at all). A start of another length is
+//! dropped, a high byte of 6 or more refused, and the GPIF starts at
+//! the first bulk IN after the start (`ibn_isr()`). Any other vendor
+//! request makes `handle_vendorcommand()` return FALSE: a STALL. The
+//! firmware itself looks at neither `wValue`, `wIndex` nor `wLength`;
+//! the model holds them to what the driver sends. The samples are a counter
 //! from 0 at each start, one byte per sample (two, little endian, with
 //! 16 bit samples), so channel `Dn` toggles every 2^n samples.
 //!
@@ -76,6 +87,14 @@
 //! rate the driver's list lacks or encoded with the 30 MHz clock where
 //! the driver would take 48 MHz; bulk IN transfers that are not a
 //! multiple of 512 bytes; a firmware upload to the running firmware.
+//!
+//! Faults, all off by default, make the board misbehave as a real one
+//! can, to reach the driver's error paths: `version=MAJOR.MINOR`
+//! answers another firmware version, `stall=version,start,revid` STALLs
+//! those requests, `empty=N` completes the first N bulk IN transfers of
+//! each acquisition with no data and `stall_in=N` STALLs the N after
+//! those, both paced like the samples (one per submission), so the
+//! number of transactions stays that of the driver's logic.
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, VENDOR, Violations};
@@ -87,7 +106,8 @@ pub const NAME: &str = "fx2lafw";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "FX2 logic analyzer with the fx2lafw firmware (EZ-USB, renumerates); \
                          profile=cypress-fx2 (04b4:8613, 16 ch, default), saleae-logic \
-                         (0925:3881, 8 ch) or sigrok-fx2-8ch (1d50:608c, 8 ch), flashed=1 starts with the firmware running";
+                         (0925:3881, 8 ch) or sigrok-fx2-8ch (1d50:608c, 8 ch), flashed=1 starts with the firmware running; \
+                         faults: version=MAJOR.MINOR, stall=version,start,revid, empty=N, stall_in=N";
 
 /// A board the driver knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,13 +154,61 @@ pub const PROFILES: [Profile; 3] = [
         product: 0x608c,
         firmware: "fx2lafw-sigrok-fx2-8ch.fw",
         firmware_size: 7570,
-        board: "fx2grok-flat",
+        board: "sigrok FX2 8ch",
         wide: false,
     },
 ];
 
-/// A board from the `-o` options: `profile=cypress-fx2|saleae-logic`,
-/// `flashed=0|1`.
+/// Ways the board can misbehave, as a real one can; none by default.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Faults {
+    /// The firmware version `0xb0` answers, when not [`VERSION`].
+    pub version: Option<[u8; 2]>,
+    /// Vendor requests the firmware STALLs: `0xb0`, `0xb1`, `0xb2`.
+    pub stall: Vec<u8>,
+    /// Bulk IN transfers of each acquisition that complete with no
+    /// data before the samples come.
+    pub empty: u32,
+    /// Bulk IN transfers of each acquisition that STALL before the
+    /// samples come.
+    pub stall_in: u32,
+}
+
+impl Faults {
+    /// Takes the option `k=v` when it is a fault; false when `k` is no
+    /// fault option.
+    fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        match k {
+            "version" => {
+                let bad = || Error(format!("version={v}: MAJOR.MINOR, each 0 to 255"));
+                let (major, minor) = v.split_once('.').ok_or_else(bad)?;
+                let major = major.parse().map_err(|_| bad())?;
+                let minor = minor.parse().map_err(|_| bad())?;
+                self.version = Some([major, minor]);
+            }
+            "stall" => {
+                self.stall.clear();
+                for name in v.split(',').filter(|n| !n.is_empty()) {
+                    self.stall.push(match name {
+                        "version" => CMD_GET_FW_VERSION,
+                        "start" => CMD_START,
+                        "revid" => CMD_GET_REVID_VERSION,
+                        _ => return Err(Error(format!("stall={name}: version, start or revid"))),
+                    });
+                }
+            }
+            "empty" => self.empty = count(v)?,
+            "stall_in" => self.stall_in = count(v)?,
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+}
+
+/// A board from the `-o` options: `profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch`,
+/// `flashed=0|1`, and the faults (see [`Faults`]): `version=MAJOR.MINOR`,
+/// `stall=version,start,revid`, `empty=N`, `stall_in=N`.
 ///
 /// # Errors
 ///
@@ -148,7 +216,11 @@ pub const PROFILES: [Profile; 3] = [
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut profile = PROFILES[0];
     let mut flashed = false;
+    let mut faults = Faults::default();
     for (k, v) in options {
+        if faults.parse(k, v)? {
+            continue;
+        }
         match k.as_str() {
             "profile" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
@@ -166,7 +238,9 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Fx2lafw::new(profile, flashed)))
+    let mut model = Fx2lafw::new(profile, flashed);
+    model.faults = faults;
+    Ok(Box::new(model))
 }
 
 const CMD_GET_FW_VERSION: u8 = 0xb0;
@@ -224,6 +298,9 @@ struct Acquisition {
     sample: u64,
     /// Whether the next bulk IN transfer may complete.
     ready: bool,
+    /// Faulty transfers still to come: empty ones, then stalled ones.
+    empty: u32,
+    stall_in: u32,
 }
 
 /// What the firmware is doing.
@@ -242,6 +319,7 @@ pub struct Fx2lafw {
     firmware: Descriptors,
     stage: Stage,
     renumerate: bool,
+    faults: Faults,
 }
 
 impl Fx2lafw {
@@ -255,6 +333,7 @@ impl Fx2lafw {
             profile,
             stage,
             renumerate: false,
+            faults: Faults::default(),
         }
     }
 
@@ -332,7 +411,13 @@ impl Fx2lafw {
         if wide && rate > 12_000_000 {
             v.report(format!("16 bit samples at {rate} Hz; the driver allows 12 MHz at most"));
         }
-        Some(Acquisition { wide, sample: 0, ready: true })
+        Some(Acquisition {
+            wide,
+            sample: 0,
+            ready: true,
+            empty: self.faults.empty,
+            stall_in: self.faults.stall_in,
+        })
     }
 
     fn firmware_control(&mut self, setup: Setup, data: &[u8], v: &mut Violations) -> Reply {
@@ -368,8 +453,12 @@ impl Fx2lafw {
                 setup.request, setup.length
             ));
         }
+        if self.faults.stall.contains(&setup.request) {
+            // As handle_vendorcommand() returning FALSE: fx2lib STALLs.
+            return Reply::Stall;
+        }
         match setup.request {
-            CMD_GET_FW_VERSION => Reply::Data(VERSION.to_vec()),
+            CMD_GET_FW_VERSION => Reply::Data(self.faults.version.unwrap_or(VERSION).to_vec()),
             CMD_GET_REVID_VERSION => Reply::Data(vec![REVID]),
             _ => {
                 let acq = self.start(data, v);
@@ -420,6 +509,17 @@ impl DeviceModel for Fx2lafw {
             v.report(format!(
                 "bulk IN transfer of {max} bytes; the driver asks for multiples of {PACKET}"
             ));
+        }
+        // The faults, paced like the samples: one per submission.
+        if acq.empty > 0 {
+            acq.empty -= 1;
+            acq.ready = false;
+            return Reply::Data(Vec::new());
+        }
+        if acq.stall_in > 0 {
+            acq.stall_in -= 1;
+            acq.ready = false;
+            return Reply::Stall;
         }
         let unit = if acq.wide { 2 } else { 1 };
         let mut data = Vec::with_capacity(max);
@@ -585,5 +685,53 @@ mod tests {
         assert_eq!(v.drain().len(), 1, "16 bit samples on the 8 channel board");
         assert!(build(&[("profile".into(), "nope".into())]).is_err());
         assert!(build(&[("flashed".into(), "2".into())]).is_err());
+    }
+
+    fn faulty(options: &[(&str, &str)]) -> Device {
+        let mut o: Vec<(String, String)> = vec![("flashed".into(), "1".into())];
+        o.extend(options.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+        let mut dev = Device::new(build(&o).unwrap());
+        let set_config = Setup { request_type: 0, request: 9, value: 1, index: 0, length: 0 };
+        dev.control(set_config, &[], &mut Violations::default());
+        dev
+    }
+
+    #[test]
+    fn faults_stall_requests_and_answer_another_version() {
+        let mut v = Violations::default();
+        let mut dev = faulty(&[("stall", "version,revid"), ("version", "2.7")]);
+        assert_eq!(dev.control(vendor(0xc0, 0xb0, 0, 2), &[], &mut v), Reply::Stall);
+        assert_eq!(dev.control(vendor(0xc0, 0xb2, 0, 1), &[], &mut v), Reply::Stall);
+        assert_eq!(dev.control(vendor(0x40, 0xb1, 0, 3), &[0x40, 0, 47], &mut v), Reply::ack());
+        let mut dev = faulty(&[("version", "2.7"), ("stall", "start")]);
+        assert_eq!(dev.control(vendor(0xc0, 0xb0, 0, 2), &[], &mut v), Reply::Data(vec![2, 7]));
+        assert_eq!(dev.control(vendor(0x40, 0xb1, 0, 3), &[0x40, 0, 47], &mut v), Reply::Stall);
+        // A refused start starts nothing.
+        dev.in_submitted(2, 512);
+        assert_eq!(dev.transfer_in(2, 512, &mut v), Reply::Nak);
+        assert!(v.is_empty(), "a fault is the device's, not the host's: {v:?}");
+        for bad in [("version", "2"), ("version", "256.0"), ("stall", "reset"), ("empty", "-1")] {
+            assert!(build(&[(bad.0.into(), bad.1.into())]).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn faults_empty_then_stalled_transfers_paced_by_submissions() {
+        let mut v = Violations::default();
+        let mut dev = faulty(&[("profile", "saleae-logic"), ("empty", "2"), ("stall_in", "1")]);
+        dev.control(vendor(0x40, 0xb1, 0, 3), &[0x40, 0, 47], &mut v);
+        let mut got = Vec::new();
+        for _ in 0..4 {
+            got.push(dev.transfer_in(2, 512, &mut v));
+            assert_eq!(dev.transfer_in(2, 512, &mut v), Reply::Nak, "one per submission");
+            dev.in_submitted(2, 512);
+        }
+        assert_eq!(got[..3], [Reply::Data(vec![]), Reply::Data(vec![]), Reply::Stall]);
+        let Reply::Data(d) = &got[3] else { panic!("{:?}", got[3]) };
+        assert_eq!(&d[..3], &[0, 1, 2], "the samples start at 0 after the faults");
+        assert!(v.is_empty(), "{v:?}");
+        // Each acquisition has them again.
+        dev.control(vendor(0x40, 0xb1, 0, 3), &[0x40, 0, 47], &mut v);
+        assert_eq!(dev.transfer_in(2, 512, &mut v), Reply::Data(vec![]));
     }
 }

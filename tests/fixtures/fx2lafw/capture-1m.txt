@@ -1,8 +1,8 @@
 # oxrok usb fixture 1
 device vid=0925 pid=3881 version=0001 bus=1 addr=1 manufacturer="sigrok" product="fx2lafw" serial="Saleae Logic"
 config 1 -> ok
-claim 0 -> ok
 ctl_in 40 b0 0000 0000 2 -> 0104
 ctl_in 40 b2 0000 0000 1 -> 01
+claim 0 -> ok
 ctl_out 40 b1 0000 0000 40002f -> ok
 bulk_in 82 10240 -> ff{10240}
