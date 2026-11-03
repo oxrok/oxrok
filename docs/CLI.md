@@ -99,6 +99,21 @@ Deliberate, and kept small:
   and finished at the end of the capture, in one pass. sigrok-cli reopens
   the archive for every chunk.
 
+- `ftdi-la` reports `conn`: the device line reads `ftdi-la:conn=1.5`
+  and `--get conn` answers the bus.address. libsigrok's driver never
+  sets the conn it advertises, so sigrok-cli prints no `conn=` and
+  `--get conn` fails with "invalid argument".
+- `ftdi-la` keeps the samplerate in 64 bits: `samplerate=4295967296`
+  fails with libftdi's "Unsupported baudrate", where libsigrok's
+  `uint32_t` turns it into 1 MHz.
+- `ftdi-la` gives the FTDI chip's port A back to the kernel's serial
+  driver when it closes, so `/dev/ttyUSBn` comes back after a capture;
+  sigrok-cli (through libftdi) leaves it detached.
+- `saleae-logic16` refuses a sample rate whose data stays under 8000
+  bytes a second (`-C 0 -c samplerate=1k`) with "Unable to sample at
+  1000Hz.". libsigrok computes its transfer plan before it checks the
+  rate, divides by zero (`api.c:544`), and sigrok-cli dies of SIGFPE.
+
 ## Not available yet
 
 - `--protocol-decoder-jsontrace`. Python decoders need the `python`

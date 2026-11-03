@@ -436,50 +436,63 @@ run.
 
 ## FTDI logic analyzers (ftdi-la)
 
-oxrok has no `ftdi-la` driver yet; the emulator checks libsigrok's
-driver alone, so its cases are oracle cases that become full ones once
-the driver is ported.
+Ported (2026-11-03): `src/drivers/ftdi_la` (api.c, protocol.c) over
+`src/ftdi/libftdi.rs`, an FTDI port that sends what libftdi 1.5 sends:
+`ftdi_usb_open_dev` (claim port A, reset, 9600 Bd), `ftdi_tcioflush`
+(-1 and -2), `ftdi_set_bitmode`, `ftdi_set_baudrate` (libftdi's divisor,
+the AM's `ftdi_to_clkbits_AM` included, x4 in bit-bang, refused beyond
+5 %) and `ftdi_read_data` (4 KiB bulk transfers, the rest of the last
+one kept for the next read), with libftdi's error codes and messages.
+The FT2232H, FT4232H, FT232H, FT232R (and a BM at 0403:6001) and the
+TIAO adapter (0403:8a98, only with `conn=`) sample port A's eight pins
+in asynchronous bit-bang mode, 3.6 kHz up to about 10 MHz; no trigger.
 
-Emulated (2026-11-03): model `ftdi-la` (`emu/src/models/ftdi-la.rs`,
-on the FTDI shell `emu/src/shells/ftdi.rs`), an FTDI chip with port A
-in asynchronous bit-bang mode, all pins inputs. Sample n is n modulo
-256, and the count restarts at every SET_BITMODE and at every purge of
-the chip-to-host buffer. Options: `chip=` `ft2232h` (default),
-`ft4232h`, `ft232h`, `ft232r`, `tumpa` (0403:8a98, found only with
-`conn=`), `ft245bm` (the driver takes it for an FT232R) or `ft230x`
-(0403:6015, which the driver rejects); `manufacturer=`, `product=` and
-`serial=` replace a string, or remove it when empty, as an unprogrammed
-EEPROM does. `tools/emu/ftdi-la.sh` runs 36 oracle cases: 15 on the
-FT2232H (scan, show, get and set samplerate, get conn, captures at
-3.6 kHz, 1 MHz and 10 MHz, a `--time` capture, `-C`, `conn=`, and the
-error answers: samplerate below 3600, a samplerate beyond libftdi's
-5 % tolerance, triggers), then, through the emulator's `options`
-command, the FT232R (samplerate / 30 on the 3 MHz clock, 64 byte
-packets), FT232H, FT4232H, the TIAO adapter (found only by `conn=`), a
-BM (taken for an FT232R), an FT230X (rejected), and boards whose
-EEPROM lacks the manufacturer, product or serial string ("Generic",
-the chip's name, no S/N), then 8 fault cases with the FTDI shell's
-options: idle reads, a halted bulk IN mid capture and at the first
-read, and each request of `dev_open` STALLed (libftdi's reset in its
-open, the purge, the bit mode reset, bit-bang). No violation under
-sigrok-cli. gcov: 86.4 % (222 of 257). Not emulated: the scan's
-`libusb_open` failure (a STALLed string gives libftdi's "missing
-string" codes, which the no-strings cases reach), `find_all` and
-init failures, the model name "Unknown"
-(unreachable: only ids in the driver's table get there), `config_get`
-conn (the driver never sets `sdi->conn`, so `--get conn` always fails
-with "invalid argument") and `LIMIT_MSEC` (not advertised; sigrok-cli
-turns `--time` into a sample count).
+Where oxrok differs from libsigrok:
+- `conn` is readable and the device line carries it
+  (`ftdi-la:conn=BUS.ADDR`). The C driver advertises conn but never sets
+  the `sdi->conn` that `config_get()` reads (api.c:390-394,
+  scan_device() api.c:195-202): sigrok-cli prints no `conn=`, an empty
+  `conn:` under `--show`, and `--get conn` fails with "invalid
+  argument".
+- The samplerate is kept in 64 bits. The C driver keeps it in a
+  `uint32_t` (protocol.h:44), so `samplerate=4295967296` silently
+  samples at 1 MHz; oxrok asks libftdi's divisor for it, which refuses.
+- A samplerate set during an acquisition is refused; the C driver
+  sends it between two reads.
+- After closing, oxrok gives port A back to the kernel: `ftdi_sio` binds
+  again and probes it (`GET_LATENCY_TIMER`, `SET_LATENCY_TIMER` 16 ms),
+  so the serial port comes back. libftdi detaches `ftdi_sio` and leaves
+  it detached. The next open by either tool detaches it again.
+
+Emulated (2026-11-03): model `ftdi-la` (`emu/src/models/ftdi-la.rs`, on
+the FTDI shell `emu/src/shells/ftdi.rs`), an FTDI chip with port A in
+asynchronous bit-bang mode, all pins inputs. Sample n is n modulo 256,
+and the count restarts at every SET_BITMODE and at every purge of the
+chip-to-host buffer. Options: `chip=` `ft2232h` (default), `ft4232h`,
+`ft232h`, `ft232r`, `tumpa`, `ft245bm` or `ft230x`; `manufacturer=`,
+`product=` and `serial=` replace a string, or remove it when empty.
+`tools/emu/ftdi-la.sh` runs 46 cases, all full (both tools): 16 on the
+FT2232H (scan, show, the get and set cases, captures, the error answers,
+among them a samplerate beyond 32 bits), the variants through the
+emulator's `options` command, and 9 fault cases (idle reads, a halted
+bulk IN mid capture and at the first read, and each request of
+`dev_open` STALLed: libftdi's reset, both purges, the bit mode reset,
+bit-bang). The 13 scan and show cases are `--oracle-differs` and
+`--get conn` is `--oracle-bug` (the conn bug above); the samplerate
+beyond 32 bits is `--oracle-differs`. "ftdi-la 1 MHz" and "ft232r 1 MHz"
+are recorded to `tests/fixtures/ftdi_la/` and replayed by
+`tests/emu_replay.rs`. No case shows the `ftdi_sio` difference:
+sigrok-cli runs first in each, and leaves port A free for oxrok.
 
 What the model taught about the driver: `dev_open` goes reset, 9600 Bd
-(libftdi's open), purge both buffers, bit mode reset, bit-bang with
-mask 0, and acquisition sets bit-bang again. The samplerate is sent as
-a baud rate of samplerate / 20 (H chips) or / 30 (FT232R, FT232H),
-which libftdi multiplies by 4 in bit-bang mode; with no samplerate set
-the 9600 Bd of the open stays. Every read asks libftdi for 16 KiB in
-4 KiB bulk transfers, so even a 100 sample capture reads about 20 KB.
-The FT230X is listed by libftdi's scan but has no entry in the
-driver's table.
+(libftdi's open), purge both buffers, bit mode reset, bit-bang with mask
+0, and the acquisition sets bit-bang again, ignoring its result
+(api.c:461). The samplerate is sent as a baud rate of samplerate / 20
+(FT2232H, FT4232H) or / 30 (FT232R, FT232H), which libftdi multiplies by
+4 in bit-bang mode; with no samplerate set the 9600 Bd of the open
+stays. Every read asks libftdi for 16 KiB in 4 KiB bulk transfers, so
+even a 100 sample capture reads about 20 KB. The FT230X is listed by
+libftdi's scan but has no entry in the driver's table.
 
 ## fx2lafw devices
 
@@ -609,9 +622,24 @@ configuration.
 across the enabled channels. It needs `saleae-logic16-fx2.fw` and an
 FPGA bitstream, `saleae-logic16-fpga-18.bitstream` for 1.8 V and 3.3 V
 logic or `-33` for 5 V (`voltage_threshold`), which sigrok-util
-extracts from the vendor's application. oxrok has no port yet.
+extracts from the vendor's application.
 
-Emulated (2026-11-03), oracle cases only: model `saleae-logic16`,
+Ported 2026-11-03 (`src/drivers/saleae_logic16`), emulator-verified:
+the 87 cases of `tools/emu/saleae-logic16.sh` run under both tools,
+and 86 match in output and USB transactions with no violation. The
+87th, `-C 0 -c samplerate=1k`, is an `--oracle-bug` case: oxrok refuses
+the rate where libsigrok divides by zero. Two mcupro cases are recorded
+and replayed in `cargo test`; the clone takes no bitstream, so the
+replay needs no firmware file. A failed start sends the abort
+commands, as libsigrok's session stops a device whose start failed.
+The driver reads its EP1 answers with 1, 8 and 16 byte bulk INs, which
+nusb cannot submit (only whole packets): the emulator rounds bulk INs
+to the packet size, which is what the device sees, and still reports
+an answer longer than the URB as a babble. `captureratio` above 100 is
+refused in the driver, where libsigrok's `sr_config_set()` refuses it
+generically (`hwdriver.c:757`).
+
+Emulated (2026-11-03): model `saleae-logic16`,
 options `flashed=0|1`, `bitstream=old|new` (the two FPGA register maps
 of `protocol.c`) and `variant=original|mcupro` (the clone whose FPGA
 holds its design). The FX2 takes its firmware through the boot loader
@@ -999,6 +1027,161 @@ user stage as openbench-logic-sniffer does (its protocol.c 567), with
 the marker placed to match; test for any negative trigger position;
 refuse a board that reports no memory; and stop on the device's own
 sample count.
+
+## LeCroy LogicStudio 16 (lecroy-logicstudio)
+
+`lecroy-logicstudio`: oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `lecroy-logicstudio`
+(emu/src/models/lecroy-logicstudio.rs, EZ-USB shell): an FX2LP that
+enumerates as `05ff:a001`, takes `lecroy-logicstudio16-fx2lp.fw` in the
+scan and renumerates as `05ff:a002`. Behind it is an FPGA that is loaded
+at the first acquisition with one of two 464196 byte bitstreams (8 or 16
+channels, over bulk OUT 6), is programmed with big endian register
+triplets (vendor request 0xb1), reports its state in 32 byte packets on
+interrupt IN 1, and sends its 40960 byte sample memory on bulk IN 2 (17
+KiB, then 16 KiB at most). Everything comes from the C driver; the
+register meanings, the trigger semantics, the 0x1c pipeline delay and
+the trigger latency are assumed. Options: `flashed=1`, `still=1`, and
+the faults `stall=NAME[:N]`, `verify=N`, `settle=N`,
+`stall_bitstream=N`, `stale=N`, `odd_state=0xNN`, `intr_short=N`,
+`bulk_short=N`, `bulk_stall=1`, `renum=0`. 27 oracle cases (2026-11-03):
+scan with and without the FX2 firmware, show, the options, every way of
+asking for a capture, an interface claimed by another program, a
+firmware that never renumerates, and unplugs during the FX2 upload.
+gcov: api.c 84.2 % (154/183), protocol.c 2.1 % (10/479). sigrok-cli
+cannot start a capture with this driver: it runs a session only with
+`--samples`, `--time`, `--frames` or `--continuous`, and the driver
+offers none of their keys (api.c 44-48), so each fails before the
+acquisition. The capture side (bitstream, trigger, status packets,
+fetch) is held by the model's unit tests. It was checked once through
+libsigrok directly, with a small C program not kept in the tree: 45
+runs, no violations, protocol.c 94.6 %.
+
+What the model found:
+- sigrok-cli has no way to capture with this driver (see above); only a
+  libsigrok client that calls `sr_session_start()` itself can.
+- `conn=` cannot select the board: the driver lists no scan options, so
+  `sr_driver_scan()` returns no device (hwdriver.c 512-515, 583-586;
+  case "conn refused").
+- 1 GHz is accepted (protocol.c's rate table) but not listed (api.c's);
+  case "1G off the list".
+- Without a trigger the driver never arms the board, and its interrupt
+  transfer is not resubmitted after a timeout (protocol.c 926-933,
+  1119), so the session never ends. A trigger only on disabled channels
+  does the same.
+- A failed 0xb3 is logged with `libusb_error_name(ret)` instead of `r`
+  (protocol.c 452-454), so a STALL reads "LIBUSB_ERROR_IO".
+- `recv_bulk_transfer()` never checks the transfer status (protocol.c
+  1017-1027): a STALLed or unplugged sample endpoint is resubmitted
+  forever.
+
+## Saleae Logic Pro 16 (saleae-logic-pro)
+
+`saleae-logic-pro` (21a9:1006, the only id the driver knows; it calls
+the device "Logic Pro 16"): 16 digital channels at 1, 2, 2.5, 10, 25 or
+50 MHz. The driver has no analog input and no sample or time limit, so
+sigrok-cli captures only with `--continuous`. It needs
+`saleae-logicpro16-fx3.fw` (Cypress FX3 firmware: a list of parts, each
+with a 7-byte header) and `saleae-logicpro16-fpga.bitstream`. oxrok has
+no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `saleae-logic-pro`,
+options `flashed=0|1`, `fpga=0|1`, `boot_strings=MANUFACTURER/PRODUCT`
+and `transfers=N`. The FX3 boot loader takes the parts through vendor
+request 0xa0 with a 32-bit address in wValue/wIndex, an empty part
+starting the firmware; the model checks them against a stand-in
+container written by `tools/emu/saleae-logic-pro.sh`, then renumerates
+as "Saleae" / "Logic Pro". Commands go to bulk EP1 and answers come back
+on EP1, both XORed with an LFSR that the reseed zeroes (0 is a fixed
+point, so the open runs in plain bytes); each capture's authentication
+then keys the LFSR from a crypto chip on the FX3's I2C bus (wake,
+Random, two Nonces, Sign), whose packets carry a CRC-16 that reproduces
+the driver's three hard-coded CRCs; the key is the last nonce XOR the
+Sign answer's CRC, and the model keeps the same state, so any byte
+scrambled out of turn is refused. The bitstream comes in 1020-byte
+chunks, checked byte for byte; the registers are held to the driver's
+values (the ADC index/LSB/MSB triples, the 16 EEPROM magic bytes written
+back to 0x17, the rate divider and pre-divider, the mux count). Samples
+are 32-bit LE words of 32 samples of one channel, first sample in bit
+31. A real board streams until stopped; as an emulation artifact the
+model stops after `transfers=N` 16 KiB transfers. Faults, off by
+default: any command or its answer STALLed or short, bad status bytes,
+the chip's wake status, an FPGA that does not come up, a capture error,
+a halted or short sample endpoint, a boot loader refusing a part,
+unreadable strings. The 101 cases of `tools/emu/saleae-logic-pro.sh` log
+no violation under sigrok-cli: every rate, 1 to 16 channels, selection
+by the board's real address (read from sysfs, as the session's address
+goes stale after an upload), the unflashed upload, every failing request
+of the open, each authentication step, broken firmware files and a
+missing bitstream, a claimed interface, unplugs during the upload,
+prepare and mid capture. gcov: 97.0% (`api.c` 93.9%, `protocol.c`
+98.4%); `usb.c` 79.9%. Not emulated: argument checks, libusb open
+failures, sigrok-cli-unreachable config branches, and the driver's own 1
+s idle stop (`api.c:391`; unreached only because the harness gives
+sigrok-cli /dev/null on stdin, so its 'any key' stop fires at once).
+Device facts beyond the ids, strings, endpoints and the driver's packets
+are assumed: the boot stage's lack of strings, the firmware version,
+temperature, EEPROM, the chip's random values and signature, the
+stand-in addresses, high speed rather than USB 3.
+
+What the model taught: a `conn=` that matches nothing, or that libsigrok
+refuses, selects every Logic Pro (`api.c:219-236`), and after the upload
+an unflashed board's address changes, so `conn=BUS.ADDR` always falls
+into this; `receive_data()` converts all 16 KiB whatever the transfer's
+length (`protocol.c:906`), so short transfers come out as stale or
+never-written samples; two error messages print the wrong byte
+(`protocol.c:340-341`, `539-540`); `prepare()` ignores a failed
+authentication; `transact()` leaks every scrambled request
+(`protocol.c:107`), and the stop leaves the 512 transfers submitted.
+
+## Hantek 4032L (hantek-4032l)
+
+`hantek-4032l`: the Hantek 4032L, 32 channels in groups A and B. oxrok
+has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `hantek-4032l`
+(`emu/src/models/hantek-4032l.rs`, a plain vendor device with no shell),
+options `fpga=VERSION` (default 0x4303; 0 is the driver's old variant,
+with one data transfer at a time and no external clock) and `fill=N`
+(status answers of 1 before the capture is done, default 1). The model
+follows `protocol.c`: the 0xb3 reset request with its ten bytes, the
+84-byte command packet on bulk OUT 2 (configure, status, get; the
+struct's pack(2) bitfield layout checked against gcc), the 20-byte
+status packet with the FPGA version on bulk IN 6, and the sample stream
+between its start and end words, read as 512 bytes and then 2048-byte
+transfers. The signal is a counter (channel n toggles every 2^n
+samples). Triggers combine levels with one edge, the capture starts
+`pre_trigger_size` samples before the trigger point, and a condition the
+counter never meets keeps the status at 1. Pacing is counted in status
+commands, not time. Faults, off by default: `stall=reset|out|in[@N]`,
+`stale=N` (leftover packets before each answer), `end=HEX` (a garbled
+end word). The 121 cases of `tools/emu/hantek-4032l.sh` log no violation
+under sigrok-cli: every rate code, sizes up to 256k samples, thresholds
+(including the -9 V that sends PWM 4096), external clock sources and
+edges, every trigger kind and position (a capture ratio of 100
+included), every get and refused value, FPGA version 0, a claimed
+interface, the open's and the capture's STALLs, stale packets, an unplug
+while polling and mid data. Three `--hangs` cases (2 s each) cover the
+paths that never end: a refused configure, a refused get, and a trigger
+that never fires. gcov: 90.7% (`usb.c` 68.1%). Not emulated: submissions
+that fail (their timing against an unplug is not deterministic),
+transfers after an abort (only `dev_acquisition_stop()` causes them, and
+sigrok-cli never calls it), a second device, and refusals sigrok-cli
+makes before the driver.
+
+What the model taught: the driver ignores failed transfers (`sr_dbg`
+only), so a refused configure or get keeps sigrok-cli running for ever,
+and a failed status read is judged on the previous answer;
+`limit_samples` of 2^32 and more loses its upper 32 bits (api.c:415); a
+threshold of -8.2 V or below sends PWM 4096, one more than the 12-bit
+maximum the code's comment gives; a capture ratio of 100 makes the
+pre-trigger count equal to the sample count, so the trigger falls just
+past the capture and sigrok-cli shows no marker; the poll transfer that
+read the stream's start is leaked. The end-word check (protocol.c:194)
+would read 4 bytes past the buffer if the last data transfer were full
+of samples, as with a board that sends the start word in a packet of its
+own (not the model's layout).
 
 ## Oracle
 

@@ -359,6 +359,64 @@ would have cost a user a long afternoon.
   and on Windows, where checked out text files would get CRLF without
   the `.gitattributes` rules.
 
+- A driver on libftdi talks to libftdi, not to the chip: port the
+  library's behaviour, not FTDI's application notes. libftdi's divisor
+  rounds differently from AN_232B-05 (the H chips switch to the 120 MHz
+  clock from 733 Bd, the AM has its own `ftdi_to_clkbits_AM`), it
+  multiplies bit-bang rates by 4, refuses rates more than 5 % off, and
+  reads in 4 KiB transfers whose surplus a later read gets.
+  `src/ftdi/libftdi.rs` does this for the libftdi drivers; check its
+  divisor against the libftdi binary across chips and rates.
+- Error output is part of the port: keep libftdi's codes and strings,
+  and log the C driver's own message, so a scenario's `--filter` only
+  has to map oxrok's log prefix and `sr_strerror()` wording.
+- A field the C driver advertises but never sets (ftdi-la's
+  `sdi->conn`) is a bug to fix, not copy: answer it, and mark the cases
+  `--oracle-differs` / `--oracle-bug` with the C lines.
+- Watch C integer widths: a 64 bit config value stored in a `uint32_t`
+  (ftdi-la's `cur_samplerate`) silently wraps; keep 64 bits and pin the
+  case with `--oracle-differs`.
+- A C driver runs everything in one thread; a port whose acquisition
+  thread owns the transport must decide what a set during a capture
+  does (send it through the thread, or refuse). Never store it unsent.
+- The C may ignore a return value (`ftdi_set_bitmode` in
+  dev_acquisition_start); follow it, and log at debug.
+- libusb's detach leaves the kernel driver detached; nusb's
+  detach-and-claim reattaches on release. The device then sees the
+  kernel driver's probe after oxrok, which the harness cannot show
+  because sigrok-cli always runs first. Document it.
+- The bus.address changes when a variant's descriptors re-attach the
+  device: mask it generically there, but on the first attach let the
+  harness's exact `conn=$EMU_USB` rule (and exact filters for `--show`
+  and `--get conn`) pin it.
+- Keep build dirs and TMPDIR off a quota'd /tmp: a debug target of the
+  whole workspace is over 2 GB, and a full `--emu` run on a /tmp out of
+  quota fails other models' oracle cases.
+- nusb submits IN transfers only in whole packets, so a C driver that
+  reads short answers with exact-length URBs (libusb allows it) cannot
+  be matched URB for URB. The emulator rounds a bulk IN to the packet
+  size for the model and the log, because that is what the device sees
+  on the bus. The URB's own length still decides the outcome on the
+  host: an answer longer than the URB is a babble (-EOVERFLOW), and the
+  server reports it so.
+- Before porting a driver-level check of an option, look for a generic
+  check in libsigrok's hwdriver.c (`sr_config_set()`, `check_key()`): it
+  may refuse the value first, and then the driver's bug cannot be
+  reached.
+- libsigrok's session stops the device whose start failed
+  (session.c:831-835). A driver whose stop sends commands shows them
+  after every refused start, so the port sends them as well.
+- A by-address case on a board that renumerates cannot run full: the
+  first tool's upload moves the device, and the second tool cannot reach
+  EMU_USB. Start the session with the firmware running.
+- Stderr cases need the log prefixes normalised ("sr: DRIVER: " against
+  "oxrok: LEVEL: MODULE: "); log the C's message texts verbatim.
+- A driver whose capture sigrok-cli cannot start (lecroy-logicstudio has
+  no limit or continuous key, so every capture flag is refused before
+  acquisition) has only its scan and options under the oracle; its
+  capture side rests on the model's unit tests until the harness can
+  drive libsigrok directly.
+
 ## Porting a decoder
 
 The decoder runtime mirrors libsigrokdecode's Python API, so a native

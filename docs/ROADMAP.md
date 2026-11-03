@@ -22,9 +22,9 @@
 | 9 | USB/IP device server in Rust (`emu`): the protocol, a `DeviceModel` trait, attach and detach through `vhci-hcd`, pedantic checks and a transaction log | done 2026-11-02 on Fedora 44: `oxrok-emu` attaches the relay board; `tools/diffcli.sh --emu` runs 11 cases with identical output, identical transactions and zero violations under both tools, and found the first Linux-only HID bug of the port. Open: running it on CI (`modprobe vhci-hcd` on the hosted runner, else a self-hosted Linux runner for this tier) |
 | 9a | transport shells: vendor bulk and interrupt, FTDI, EZ-USB renumeration, HID, CDC-ACM with modem lines, USBTMC | the six Pico roles, the LogicPort and fx2lafw re-run on the host; `tools/diffcli.sh --emu` needs no hardware. 2026-11-03: HID (relay, PICkit2, the BU-86X, CH9325 and Victor cables, all full cases) and FTDI shells done |
 | 9b | oracle instrumentation: libsigrok built with `--coverage`, a per driver gcov report of the lines the scenarios reach, transaction log diff in `diffcli.sh` | each emulated driver has a coverage figure and a list of C paths not emulated. Harness done 2026-11-02: models found by `emu/build.rs`, one scenario file per model with goldens (oracle-only cases before a port exists), a host-wide session lock, firmware stand-ins, `tools/emu-gcov.sh` and `diffcli.sh --gcov` (`docs/USB.md`). 2026-11-03: the shared sources (`usb.c`, `ezusb.c`, `serial*.c`) reported too, fault options in the shells and models, unplug and interrupt events; drivers at 60% to 86% |
-| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%) until the driver is ported. Batch 3 (2026-11-03): `chronovu-la` (42 cases, gcov 87.0%), `asix-sigma` (104, 89.4%), `ikalogic-scanaplus` (51, 93.8%) and `pipistrello-ols` (100, 97.0%) modelled as oracle cases, ready for their ports; the chips are inferred from the C drivers and marked unverified in each model |
-| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%), ready for their ports; `lecroy-logicstudio` remains |
-| 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified |
+| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%), ported in batch 4 (46 cases, all full) over `src/ftdi/libftdi.rs`, whose divisor matches the libftdi 1.5 binary on every chip type. Batch 3 (2026-11-03): `chronovu-la` (42 cases, gcov 87.0%), `asix-sigma` (104, 89.4%), `ikalogic-scanaplus` (51, 93.8%) and `pipistrello-ols` (100, 97.0%) modelled as oracle cases, ready for their ports; the chips are inferred from the C drivers and marked unverified in each model |
+| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%), ready for their ports. Batch 4: `saleae-logic16` ported (87 cases, all full) and `lecroy-logicstudio` modelled (27 oracle cases; sigrok-cli cannot capture with it, so its capture side waits for a libsigrok runner) |
+| 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified. Batch 4 (2026-11-03): `saleae-logic-pro` (101 oracle cases, gcov 97.0%) and `hantek-4032l` (121, 90.7%) modelled, ready for their ports |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host |
 | 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
 | 9h | the odd transports: GPIB shim, parallel port shim, sysfs root, vendor CLI stub, BLE on the ESP32 | each driver either emulator-verified or listed as hardware-only with the reason |
@@ -232,19 +232,49 @@ each with where it belongs:
   (BM85x) and the multi display ones (EEVblog 121GW, MS2115B, Metex 4
   display) wait for the CDC-ACM shell (9f); they hold most of
   serial-dmm's unreached lines.
-- The emulator tier has no CI yet (row 9).
+- The emulator tier has a CI job (`.github/workflows/ci.yml`,
+  `emulator`): it loads vhci-hcd (installing
+  `linux-modules-extra-$(uname -r)` if needed) and runs
+  `tools/diffcli.sh --no-oracle`, which holds oxrok to the goldens of
+  every model that has oxrok's driver, and skips with "skipped: no
+  vhci-hcd" when the runner's kernel cannot load the module. It is
+  untested until it is pushed: whether hosted runners get vhci-hcd and
+  the HID class drivers, and how long the run takes, are still open. A
+  skipped job counts as satisfied for branch protection.
+- A libsigrok runner for drivers sigrok-cli cannot drive:
+  lecroy-logicstudio offers no limit or continuous key, so sigrok-cli
+  refuses every capture and its oracle cases reach 2.1% of
+  `protocol.c`. A small C program that calls `sr_session_start()`
+  itself reached 94.6% once, outside the tree. Wanted: a generic
+  `tools/libsigrok-run.c` (sigrok-cli's `-d`/`-c`/`-C`/`-t`, output
+  through libsigrok's output modules) and an `emu_case --libsigrok`
+  oracle mode with its own goldens and gcov.
+- The harness takes `EMU_USB`/`EMU_BUSID` only from READY and
+  REPLUGGED, not RENUMERATED, so after an upload the session's address
+  is stale and a `conn=$EMU_USB` case selects nothing (saleae-logic-pro
+  reads the address from sysfs instead). And `emu_case` starts with a
+  reset that re-attaches a board whose descriptors changed, so a claim
+  helper's hold taken before it is on the device that left; the
+  scenarios order their cases around it.
+- Several emulator sessions at once: one vhci controller with 8 ports
+  is enough, but libusb lists every device and most drivers match by
+  VID:PID, so sessions would see each other's devices; cleanup, port
+  choice and the gcov counts are global too. A test of running each
+  tool in a namespace whose `/dev/bus/usb` holds only its own node
+  (bubblewrap, no sysfs) would show whether libusb then sees only its
+  own device.
 - A LogicPort model on the FTDI shell (row 9a), once the sigrok
   drivers are converted: oxrok alone has the driver, so its cases are
   held to goldens taken from the bench's recordings rather than to
   sigrok-cli. It brings the LogicPort into CI without the hardware.
-- Large transaction goldens: chronovu-la (2.9 MB) and asix-sigma
-  (2.6 MB) are mostly one hash line per bulk IN of a full memory
-  readout. A `.tx` option that folds a run of same-shape transfers into
-  one line (count and running hash) would shrink them; the `.out`
-  already has `--digest`.
-- `pickit2 fault unplug during read-out` failed in two full `--emu`
-  runs (once an extra bare `sr: ` line in sigrok-cli's stderr) and
-  passed alone each time; its `.oracle` comparison needs a look.
+- Large transaction goldens: done for chronovu-la (3.1 MB to 55 KB)
+  and asix-sigma (2.1 MB to 0.98 MB) with `EMU_TX_FOLD`. What remains
+  in asix-sigma is inline bulk OUT payloads, which folding does not
+  cover.
+- `pickit2 fault unplug during read-out` failed in four full `--emu`
+  runs (sigrok-cli killed mid-print: an extra bare `sr: ` line in its
+  stderr) and passed alone each time; a timing flake in the case, whose
+  `.oracle` comparison needs to tolerate the cut line.
 - `--show -g GROUP` (fx2lafw's `Logic` and `A0`): sigrok-cli stops
   after the device line when `sr_dev_options` fails for the group,
   oxrok prints the groups and an empty option list

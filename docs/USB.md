@@ -463,6 +463,39 @@ full case or oracle case. What else is checked depends on oxrok:
   full run removes `.oracle` goldens no case wrote, and a case that
   becomes ordinary drops its `.oracle` when blessed. Bytes libsigrok
   reads past a buffer are masked by the case's `--filter`.
+- `tools/diffcli.sh --no-oracle` (implies `--emu`) runs the emulator
+  tier without sigrok-cli, as CI does. A full case runs oxrok alone
+  against the committed `.out` and `.tx` goldens, the ones sigrok-cli
+  wrote; for an `--oracle-bug` or `--oracle-differs` case that is
+  oxrok's pinned `.out`/`.tx`, and its `.oracle` is not checked. An
+  oracle-only case (oxrok has no driver for it) is skipped and counted,
+  and a model with no full case gets no session. Events, `--record`
+  fixtures and the violation checks work as in a normal run. The
+  software cases, `--hw`, `--gcov` and `EMU_BLESS=1` need sigrok-cli, so
+  `--no-oracle` refuses them. The tally reads `P passed, F failed: N
+  ran, S skipped`. A case behind a helper that holds the device is
+  counted too: the helpers do nothing in the dry count. A driver that
+  `EMU_FULL` lists but `oxrok -L` lacks fails its cases, as in a normal
+  run, and a run in which no case ran fails.
+- A scenario that sets `EMU_TX_FOLD=1` folds its transaction log before
+  it is compared or cut at a hang. Each run of two or more consecutive
+  lines that differ only in their one `@LEN:SHA256` payload digest (same
+  direction, endpoint, request and lengths) becomes a single line,
+  `@LEN:fold=COUNT:SHA256`, where COUNT is the number of lines folded
+  and SHA256 is the digest of their text, each line with its newline.
+  Violation lines (`!`) and comments are never folded, and violations
+  are counted before folding. Any change to a folded payload, or to the
+  number of transfers, changes the golden. chronovu-la and asix-sigma
+  use it for their memory readouts. Leave it off for a model whose
+  `--hangs` loop repeats a digested transfer: folding would put the
+  timing-dependent repeat count into the golden before the hang cut
+  could remove it.
+- A bulk IN is handed to the model, and logged, at the URB's length
+  rounded up to whole packets, which is what the device sees on the bus
+  (nusb can submit nothing shorter, libusb can). The URB's own length
+  still decides the outcome on the host: an answer longer than it
+  completes with -EOVERFLOW (a babble), as the Linux host controller
+  reports it, and the log says so.
 - `--digest` ends the compared output with the SHA-256 of the whole
   output before `--filter`, so a filter that thins a long output (the
   hantek-dso frames keep every 64th line) still compares every byte.
