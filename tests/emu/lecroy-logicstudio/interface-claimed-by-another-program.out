@@ -1,0 +1,3 @@
+sr: lecroy-logicstudio: Failed to claim interface: LIBUSB_ERROR_BUSY.
+sr: lecroy-logicstudio: Unable to open device.
+Failed to open device.

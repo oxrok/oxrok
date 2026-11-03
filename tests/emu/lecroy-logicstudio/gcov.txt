@@ -1,0 +1,65 @@
+gcov lecroy-logicstudio (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        84.2%  154 of 183
+  protocol.c    2.1%  10 of 479
+  total        24.8%  164 of 662
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 138, 171-172, 177
+    open_device: 215, 222
+    dev_close: 347
+    config_get: 365, 376-377
+    config_set: 391, 401-402
+    config_commit: never called (427-429)
+    receive_usb_data: never called (432-448)
+    dev_acquisition_start: never called (451-463)
+    dev_acquisition_stop: never called (467-469)
+  protocol.c
+    read_register: never called (142-162)
+    write_registers_sync: never called (165-197)
+    write_registers_async: never called (200-235)
+    prep_regw: never called (238-242)
+    handle_fetch_samples_done: never called (244-264)
+    calc_unk0: never called (266-276)
+    fetch_samples_async: never called (278-313)
+    handle_intr_data: never called (317-416)
+    upload_fpga_bitstream: never called (419-504)
+    upload_trigger: never called (507-531)
+    program_trigger: never called (534-594)
+    transform_trigger: never called (597-640)
+    configure_trigger: never called (643-692)
+    lls_update_channel_mask: never called (696-711)
+    read_0f12: never called (740-765)
+    wait_for_dev_to_settle: never called (768-794)
+    lls_setup_acquisition: never called (797-907)
+    recv_intr_transfer: never called (910-932)
+    send_samples: never called (937-991)
+    sample_to_byte_offset: never called (993-998)
+    recv_bulk_transfer: never called (1001-1088)
+    transform_sample_count: never called (1091-1096)
+    lls_start_acquisition: never called (1099-1161)
+    lls_stop_acquisition: never called (1164-1181)
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/ezusb.c   82.6%  38 of 46
+  src/usb.c      3.1%  7 of 229
+  total         16.4%  45 of 275
+never reached, by function (line ranges hold no reached line):
+  src/ezusb.c
+    ezusb_install_firmware: 69
+    ezusb_upload_firmware: 108-109, 118-121, 127-129
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: never called (316-379)
+    sr_usb_find: never called (393-441)
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)

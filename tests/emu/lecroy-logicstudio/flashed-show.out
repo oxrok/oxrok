@@ -1,0 +1,25 @@
+Driver functions:
+    Logic analyzer
+lecroy-logicstudio - LeCroy LogicStudio16 with 16 channels: D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15
+Supported configuration options:
+    samplerate - supported samplerates:
+      1 kHz
+      2.5 kHz
+      5 kHz
+      10 kHz
+      25 kHz
+      50 kHz
+      100 kHz
+      250 kHz
+      500 kHz
+      1 MHz
+      2.5 MHz
+      5 MHz
+      10 MHz
+      25 MHz
+      50 MHz
+      100 MHz
+      250 MHz
+      500 MHz (current)
+    captureratio: 50 (current)
+    Supported triggers: 0 1 r f e 
