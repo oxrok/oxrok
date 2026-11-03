@@ -24,6 +24,7 @@ const RECORDED: [&str; 12] = [
     "saleae-logic16",
     "ftdi-la",
     "kingst-la2016",
+    "p-ols",
     "microchip-pickit2",
     "dcttech-usbrelay",
     "brymen-bm86x",

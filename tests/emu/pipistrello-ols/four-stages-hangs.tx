@@ -38,12 +38,18 @@ bulk_out 04 ca00000200 -> 5
 bulk_out 04 cb00000000 -> 5
 bulk_out 04 cc08000000 -> 5
 bulk_out 04 cd00000000 -> 5
-bulk_out 04 ce00000300 -> 5
+bulk_out 04 ce00000308 -> 5
 bulk_out 04 cf00000000 -> 5
 bulk_out 04 8000000000 -> 5
 bulk_out 04 840f000000 -> 5
 bulk_out 04 830f000000 -> 5
 bulk_out 04 823a000000 -> 5
 bulk_out 04 01 -> 1
+bulk_in 83 16384 -> 01605f5e5d5c5b5a595857565554535251504f4e4d4c4b4a494847464544434241403f3e3d3c3b3a393837363534333231302f2e2d2c2b2a29282726252423222120
 bulk_in 83 16384 -> 0160
-~ the last 1 lines repeat to the end (3 or more times)
+bulk_in 83 16384 -> 0160
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1

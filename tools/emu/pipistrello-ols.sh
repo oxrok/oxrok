@@ -10,8 +10,8 @@ EMU_GCOV=pipistrello-ols
 # The driver goes through libftdi alone: no libsigrok transport file
 # (usb.c, serial.c) is involved, so EMU_GCOV_SHARED stays empty.
 EMU_GCOV_SHARED=""
-# oxrok has no p-ols driver yet: these are oracle cases.
-EMU_FULL=""
+# oxrok has the driver (src/drivers/pipistrello_ols): every case runs both tools.
+EMU_FULL=p-ols
 
 # The model's options for the cases that follow (see ftdi-la.sh).
 pols_options() {
@@ -24,6 +24,17 @@ emu_cases() {
     # A long output keeps its first 16 and its last lines; --digest
     # still compares every byte.
     LONG='17,$ {$!d}'
+    # The two tools prefix their log lines differently: oxrok's as
+    # sigrok-cli's, the messages are the C driver's.
+    P='s/^oxrok: err: oxrok::drivers::pipistrello_ols: /sr: pipistrello-ols: /'
+    # A capture that fails to start: libsigrok's session lines ("Could
+    # not start p-ols device (null) acquisition.", "Cannot remove
+    # non-existing event source"), which have no counterpart in oxrok,
+    # go, and the tools' last lines (sigrok-cli's "Failed to start
+    # session.", oxrok's the driver's error) are reduced to the fact.
+    F="/^sr: session: /d; $P; \$ { /^sr: pipistrello-ols: /! s/.*/start refused/; }"
+    # sr_strerror()'s wording of oxrok's errors.
+    S="s/^(Failed to set device option .samplerate.): invalid argument: (invalid samplerate)\\.\$/\\1: \\2./"
     emu_case "scan" --keep-header -- -d $D --scan
     emu_case "show" --keep-header -- -d $D --show
     emu_case "get samplerate" -- -d $D --get samplerate
@@ -55,7 +66,7 @@ emu_cases() {
 
     # Triggers: channel k first rises at sample 2^k. The driver adds a
     # stage that starts the capture one sample after the last of its own.
-    emu_case "trigger rising" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 4=r -O bits
+    emu_case "trigger rising" --record -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 4=r -O bits
     emu_case "trigger falling" -- -d $D -C 0-7 --samples 64 -c captureratio=25 --triggers 5=f -O bits
     emu_case "trigger level" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=1,0=0 -O bits
     emu_case "trigger upper channel" -- -d $D -C 16-23 --samples 64 -c captureratio=50 --triggers 20=0 -O bits
@@ -65,44 +76,64 @@ emu_cases() {
     emu_case "trigger after polls" -- -d $D -C 8-15 -c samplerate=10k:captureratio=50 --samples 32 --triggers 10=r -O bits
     # Pre-trigger samples beyond the run: memory never written reads 0.
     emu_case "trigger early" -- -d $D -C 0-7 --samples 64 -c captureratio=90 --triggers 1=r -O bits
-    # Stages: one per character of a match.
-    emu_case "two stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=10 -O bits
-    emu_case "three stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=r1f -O bits
+    # Stages: one per character of a match. The C driver takes
+    # num_stages samples off the trigger position (api.c:524), though
+    # its start stage follows the last match by one sample: its marker
+    # is num_stages - 1 early. oxrok marks the last stage's match.
+    MARK="api.c:524 subtracts num_stages from trigger_at; the start stage follows the last match by one sample"
+    emu_case "two stages" --oracle-differs "$MARK" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=10 -O bits
+    emu_case "three stages" --oracle-differs "$MARK" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=r1f -O bits
     # Two stages at captureratio=0: trigger_at is -2, which the driver
     # only tests against -1, so it sends 2 samples from before its
     # sample buffer (glibc's chunk header, 0x91 then 0 today): 34
     # samples for 32. The filter masks those two as xx, so heap bytes
     # cannot make the case flaky; the count of columns still shows.
-    emu_case "ratio 0 two stages" --filter 's/^([0-9]+:)../\1xx/' -- -d $D -C 0-7 --samples 32 --triggers 3=10 -O bits
+    # oxrok sends the 32 samples, without a marker (the match is before
+    # the first of them).
+    emu_case "ratio 0 two stages" --oracle-differs "api.c:524 makes trigger_at -num_stages, which protocol.c:620 tests only against -1: 625-645 send samples from before the buffer" --filter 's/^([0-9]+:)../\1xx/' -- -d $D -C 0-7 --samples 32 --triggers 3=10 -O bits
     # Four stages: set_trigger puts the start bit on stage num_stages,
     # 4, which does not exist, so the capture never starts and the
-    # driver polls for ever (--hangs).
-    emu_case "four stages hangs" --hangs --timeout 5 --no-output -- -d $D -C 0-7 --samples 64 --triggers 3=1010 -O bits
+    # driver polls for ever. oxrok puts the start bit on the last stage
+    # and marks its match.
+    emu_case "four stages hangs" --oracle-bug "set_trigger() puts TRIGGER_START on stage num_stages (api.c:415-417), which does not exist with 4 stages: the capture never starts" --timeout 5 -- -d $D -C 0-7 --samples 64 --triggers 3=1010 -O bits
     # captureratio=100: the delay count goes out as 0xffffffff, so the
     # board captures 2^34 words after the trigger; at 10 Hz the driver
-    # polls for ever.
-    emu_case "ratio 100 hangs" --hangs --timeout 5 --no-output -- -d $D -C 0-7 -c samplerate=10:captureratio=100 --samples 64 --triggers 3=1 -O bits
-    emu_case "five stages" --stderr --expect-fail -- -d $D --samples 64 --triggers 3=10101
+    # polls for ever. oxrok sends a delay of one unit (4 samples after
+    # the trigger).
+    emu_case "ratio 100 hangs" --oracle-bug "delaycount is 0 at captureratio=100 (api.c:523), sent as 0xffffffff (api.c:562-566): the board never finishes at 10 Hz" --timeout 5 -- -d $D -C 0-7 -c samplerate=10:captureratio=100 --samples 64 --triggers 3=1 -O bits
+    emu_case "five stages" --stderr --expect-fail --filter "$F" -- -d $D --samples 64 --triggers 3=10101
 
     # RLE: a run is a word and a count word (top bit set), counts of
     # 7 bits for one group; the top channel of the enabled groups is lost.
-    emu_case "rle one group" -- -d $D -c rle=on -C 8-15 --samples 1000 -O hex
+    emu_case "rle one group" --record -- -d $D -c rle=on -C 8-15 --samples 1000 -O hex
     emu_case "rle all channels" -- -d $D -c rle=on --samples 64 -O hex
     emu_case "rle two groups" -- -d $D -c rle=on -C 8-23 --samples 300 -O hex
     # A limit that is not a multiple of 4: with RLE the excess comes off
     # a run's count, which is large enough here.
     emu_case "rle 1001 samples" -- -d $D -c rle=on -C 8-15 --samples 1001 -O hex
-    emu_case "rle trigger" -- -d $D -c rle=on:captureratio=50 -C 8-15 --samples 2000 --triggers 10=r -O hex
+    # The C driver's marker comes from the read and delay counts
+    # (api.c:524), which count RLE words, not samples: here the
+    # trigger is long before the 2000 samples kept, and oxrok, which
+    # follows the word count, marks nothing.
+    emu_case "rle trigger" --oracle-differs "api.c:524 computes trigger_at from counts of RLE words as if they were samples" -- -d $D -c rle=on:captureratio=50 -C 8-15 --samples 2000 --triggers 10=r -O hex
 
     # Demux: 200 MHz, two samples of channels 0-15 per word; the driver
     # replicates the enabled groups into the upper half.
     emu_case "200 MHz" -- -d $D -c samplerate=200m -C 0-15 --samples 96 -O hex
     emu_case "150 MHz" -- -d $D -c samplerate=150m -C 0-7 --samples 64 -O hex
     emu_case "200 MHz rle" -- -d $D -c samplerate=200m:rle=on -C 8-15 --samples 1000 -O hex
+    # The pair's top bit, channel 7 of the older sample here, is the
+    # count flag. The C driver clears tmp_sample[num_bytes - 1]
+    # (protocol.c:490, 508), an unused byte for this group, so channel 7
+    # is real in every newer sample and 0 in every older one. oxrok
+    # reads the channel as lost, 0 in both, as with -C 8-15, where the
+    # C's clear lands on it.
+    emu_case "200 MHz rle lower group" --oracle-differs "protocol.c:490 clears a byte the sample does not use, so the lost channel alternates" -- -d $D -c samplerate=200m:rle=on -C 0-7 --samples 400 -O hex
     emu_case "200 MHz rle two groups" -- -d $D -c samplerate=200m:rle=on -C 0-15 --samples 64 -O hex
     # All 32 channels at 200 MHz: the driver takes each demux word for
     # one sample, gets half the samples it counts on and polls for ever.
-    emu_case "200 MHz 32 channels hangs" --hangs --timeout 5 --no-output -- -d $D -c samplerate=200m --samples 64 -O hex
+    # Channels 16-31 are not sampled in demux mode: oxrok refuses them.
+    emu_case "200 MHz 32 channels hangs" --oracle-bug "protocol.c:401-406 counts the channel groups of flag_reg, not the demux word: each word is taken for one sample, and 398 waits for samples that never come" --timeout 5 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=200m --samples 64 -O hex
     emu_case "200 MHz trigger" -- -d $D -c samplerate=200m:captureratio=50 -C 0-7 --samples 64 --triggers 5=r -O bits
 
     # The flags the model accepts and does not emulate: the same samples.
@@ -115,19 +146,20 @@ emu_cases() {
     emu_case "external clock" -- -d $D -c external_clock=on -C 0-7 --samples 64 -O hex
 
     # The driver's refusals.
-    emu_case "samplerate too low" --stderr --expect-fail -- -d $D -c samplerate=5 --samples 10
-    emu_case "samplerate too high" --stderr --expect-fail -- -d $D -c samplerate=300m --samples 10
+    emu_case "samplerate too low" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=5 --samples 10
+    emu_case "samplerate too high" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=300m --samples 10
     emu_case "too few samples" --stderr --expect-fail -- -d $D --samples 2
-    emu_case "pattern unknown" --stderr --expect-fail -- -d $D -c pattern=Other --samples 10
-    emu_case "get conn" --stderr --expect-fail -- -d $D --get conn
+    emu_case "pattern unknown" --stderr --expect-fail --filter "s/^(Failed to set device option .pattern.): invalid argument: .*/\\1: generic\\/unspecified error./" -- -d $D -c pattern=Other --samples 10
+    emu_case "get conn" --stderr --expect-fail --filter "s/^(Failed to get 'conn'): unknown option: conn\$/\\1: not applicable/" -- -d $D --get conn
 
     # More samples than the read count asks for in one buffer: the
     # driver takes the excess off rle_count, 0 without RLE, which wraps
     # to UINT_MAX, and its copy loop runs off the buffer (protocol.c
     # 557-563, 597-600). Any limit that is not a multiple of 4 (8 in
-    # demux) does it.
-    emu_case "101 samples" --stderr --expect-fail -- -d $D --samples 101 -O hex
-    emu_case "200 MHz 100 samples" --stderr --expect-fail -- -d $D -c samplerate=200m -C 0-15 --samples 100 -O hex
+    # demux) does it. oxrok keeps the newest 101 (100) samples.
+    WRAP="protocol.c:557-563 takes the excess off rle_count, 0 without RLE, which wraps; 597-600 then copy beyond the buffer"
+    emu_case "101 samples" --oracle-bug "$WRAP" -- -d $D --samples 101 -O hex
+    emu_case "200 MHz 100 samples" --oracle-bug "$WRAP" -- -d $D -c samplerate=200m -C 0-15 --samples 100 -O hex
 
     # A smaller memory: sigrok-cli refuses a limit beyond the listed
     # maximum; with RLE there is none, and the read count stops at the
@@ -138,13 +170,15 @@ emu_cases() {
     emu_case "memory limit rle" -- -d $D -c rle=on -C 8-15 --samples 5000 -O hex
     # A board whose metadata says 100 MHz at most: no demux.
     pols_options max-rate=100000000
-    emu_case "max rate" --stderr --expect-fail -- -d $D -c samplerate=200m -C 0-15 --samples 10
+    emu_case "max rate" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=200m -C 0-15 --samples 10
     emu_case "max rate 100 MHz" -- -d $D -c samplerate=100m -C 0-7 --samples 16 -O hex
     # Below the driver's default 100 MHz: the scan's samplerate setting
-    # fails, the rate reads 0 and a capture runs with the divider 0.
+    # fails, the rate reads 0 and a capture runs with the divider 0
+    # (100 MHz). oxrok starts at the board's maximum.
+    SLOW="the scan's p_ols_set_samplerate(DEFAULT_SAMPLERATE) (api.c:168) fails on a board below 100 MHz, leaving 0 Hz and divider 0"
     pols_options max-rate=50000000
-    emu_case "max rate 50 MHz" -- -d $D --get samplerate
-    emu_case "max rate 50 MHz capture" -- -d $D -C 0-7 --samples 16 -O hex
+    emu_case "max rate 50 MHz" --oracle-differs "$SLOW" -- -d $D --get samplerate
+    emu_case "max rate 50 MHz capture" --oracle-differs "$SLOW" -- -d $D -C 0-7 --samples 16 -O hex
     pols_options channels=16
     emu_case "16 channels" --keep-header -- -d $D --scan
     emu_case "16 channels capture" -- -d $D --samples 32 -O hex
@@ -163,9 +197,9 @@ emu_cases() {
     emu_case "metadata long" --keep-header -- -d $D --scan
     # No memory key: max_samples is 0, the read and delay counts go out
     # as 0xffffffff and the driver sends an empty logic packet, which
-    # sigrok-cli's output dies on (SIGSEGV).
+    # sigrok-cli's output dies on (SIGSEGV). oxrok refuses the capture.
     pols_options metadata=01414200200000002000
-    emu_case "no memory capture" --stderr --expect-fail -- -d $D -C 0-7 --samples 16 -O hex
+    emu_case "no memory capture" --oracle-bug "max_samples 0 (api.c:491) makes readcount 0, sent minus 1 (api.c:556-560), and protocol.c:651 sends an empty logic packet" --stderr --expect-fail --filter "$F" -- -d $D -C 0-7 --samples 16 -O hex
     # The FPGA answers no metadata: the driver gives up.
     pols_options metadata=none
     emu_case "metadata none" --stderr --expect-fail -- -d $D --samples 10
@@ -184,21 +218,21 @@ emu_cases() {
     # The requests of p_ols_open, each STALLed: libftdi's own reset in
     # ftdi_usb_open, the purge, the bit mode reset, the latency timer.
     pols_options stall=reset/0
-    emu_case "open reset stalls" --stderr -- -d $D --scan
+    emu_case "open reset stalls" --stderr --filter "$P" -- -d $D --scan
     pols_options stall=reset/1
-    emu_case "purge stalls" --stderr -- -d $D --scan
+    emu_case "purge stalls" --stderr --filter "$P" -- -d $D --scan
     pols_options stall=bitmode
-    emu_case "bit mode stalls" --stderr -- -d $D --scan
+    emu_case "bit mode stalls" --stderr --filter "$P" -- -d $D --scan
     pols_options stall=latency
-    emu_case "latency stalls" --stderr -- -d $D --scan
+    emu_case "latency stalls" --stderr --filter "$P" -- -d $D --scan
     # Port B's bulk IN halts: the ID read, the metadata read, the
     # capture's first read.
     pols_options in-stall=0
-    emu_case "id read error" --stderr -- -d $D --scan
+    emu_case "id read error" --stderr --filter "$P" -- -d $D --scan
     pols_options in-stall=1
-    emu_case "metadata read error" --stderr -- -d $D --scan
+    emu_case "metadata read error" --stderr --filter "$P" -- -d $D --scan
     pols_options in-stall=3
-    emu_case "capture read error" --stderr -- -d $D --samples 100 -O hex
+    emu_case "capture read error" --stderr --filter "$P" -- -d $D --samples 100 -O hex
     # Status bytes alone after the bit mode reset: the ID read gets 0 bytes.
     pols_options idle=1
     emu_case "id read empty" --stderr --expect-fail -- -d $D --samples 10
@@ -208,8 +242,12 @@ emu_cases() {
     # trigger (stage 0 at 8-11, divider 12, read count 13, delay count
     # 14, flags 15, run 16) and with one (stages 0-1 at 8-15, the
     # disabled stage 2 at 16).
-    U='/LIBUSB_ERROR_ACCESS/d'
-    emu_case "unplug at the scan" --unplug out=4:1 --stderr --expect-fail --filter "$U" -- -d $D --samples 10
+    U0="/LIBUSB_ERROR_ACCESS/d; $P"
+    # After a refused start sigrok-cli exits without closing the device
+    # (its session.c returns at "Failed to start session."); oxrok
+    # closes it, and the close fails on a device that left.
+    U="/LIBUSB_ERROR_ACCESS/d; /Failed to close FTDI device/d; $F"
+    emu_case "unplug at the scan" --unplug out=4:1 --stderr --expect-fail --filter "$U0" -- -d $D --samples 10
     emu_case "unplug at stage 0" --unplug out=4:8 --stderr --expect-fail --filter "$U" -- -d $D --samples 16
     emu_case "unplug at the divider" --unplug out=4:11 --stderr --expect-fail --filter "$U" -- -d $D --samples 16
     emu_case "unplug at the read count" --unplug out=4:12 --stderr --expect-fail --filter "$U" -- -d $D --samples 16
@@ -227,5 +265,5 @@ emu_cases() {
     emu_case "unplug after the open" --unplug out=0:12 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
     # Unplugged after the capture's second transfer: the next read and
     # the resets of the stop fail.
-    emu_case "unplug mid capture" --unplug in=3:5 --stderr -- -d $D --samples 20000 -O hex
+    emu_case "unplug mid capture" --unplug in=3:5 --stderr --filter "$U0" -- -d $D --samples 20000 -O hex
 }
