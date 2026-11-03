@@ -495,6 +495,26 @@ impl Server {
         let _ = tx.send(resume);
     }
 
+    /// The length of an IN URB as the device sees it. A bulk IN asks
+    /// for whole packets: the host controller takes up to
+    /// `wMaxPacketSize` bytes per IN token whatever the URB's length, so
+    /// a device cannot tell a URB of 1 byte from one of 64 on a 64 byte
+    /// endpoint. libusb passes any length (libsigrok's Logic16 driver
+    /// reads 1 byte answers), nusb only multiples of the packet size;
+    /// the length is rounded up to the packet size for the model and the
+    /// log, so the two read the same. Interrupt and control INs keep
+    /// their length.
+    fn in_length(&self, urb: &Urb) -> usize {
+        let address = 0x80 | urb.ep;
+        match self.device().endpoint(address) {
+            Some(e) if e.transfer_type() == crate::model::BULK && e.max_packet > 0 => {
+                let mps = usize::from(e.max_packet);
+                urb.length.div_ceil(mps).max(1) * mps
+            }
+            _ => urb.length,
+        }
+    }
+
     /// Offers a URB to the device.
     fn perform(&mut self, urb: &Urb) -> (Reply, Violations) {
         let mut v = Violations::default();
@@ -509,11 +529,12 @@ impl Server {
             v.report(format!("isochronous URB with {} packets; not supported", urb.packets));
             return (Reply::Stall, v);
         }
+        let length = if urb.direction == DIR_IN { self.in_length(urb) } else { urb.length };
         let mut device = self.device();
         let reply = if urb.ep == 0 {
             device.control(Setup::from_bytes(&urb.setup), &urb.data, &mut v)
         } else if urb.direction == DIR_IN {
-            device.transfer_in(urb.ep, urb.length, &mut v)
+            device.transfer_in(urb.ep, length, &mut v)
         } else {
             device.transfer_out(urb.ep, &urb.data, &mut v)
         };
@@ -545,7 +566,8 @@ impl Server {
             } else {
                 self.device().log_undefined(urb.ep, &urb.data)
             };
-            transfer_line_undefined(kind, address, urb.length, &urb.data, &undefined, &reply, above)
+            let length = if urb.direction == DIR_IN { self.in_length(&urb) } else { urb.length };
+            transfer_line_undefined(kind, address, length, &urb.data, &undefined, &reply, above)
         };
         for message in v.drain() {
             log.violation(&message);

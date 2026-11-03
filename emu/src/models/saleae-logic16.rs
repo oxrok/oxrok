@@ -40,7 +40,8 @@
 //!
 //! **Commands** go to bulk endpoint 1, one per transfer of at most 64
 //! bytes, scrambled with `encrypt()`; a command with an answer is
-//! followed by a bulk IN on endpoint 1 of exactly the answer's length,
+//! followed by a bulk IN on endpoint 1 (libsigrok asks for exactly the
+//! answer's length; a device sees only that the host takes the packet),
 //! scrambled the same way, which the host undoes with `decrypt()`. Both
 //! restart their state (`0x9b`, `0x54`) for every transfer. The model
 //! unscrambles each command with the inverse of `encrypt()` (which is
@@ -128,7 +129,8 @@
 //! addresses (registers outside the loaded map, other than the ones the
 //! driver reads to tell the variants: 0 and 7, and 8 and 9 of the old
 //! map at a stop); an answer not read before the next command, or read
-//! with another length; register access to a blank FPGA (but the first
+//! by a transfer shorter than the answer (the host would see a babble);
+//! register access to a blank FPGA (but the first
 //! read of register 0); writes to the version register; status bits the
 //! host does not own; the primer; a capture without `UPDATE`, without
 //! `0x01`, without channels, or beyond the rate limits; bulk IN
@@ -1114,7 +1116,11 @@ impl Logic16 {
             // No answer due: the FX2 has nothing to send.
             return Reply::Nak;
         };
-        if max != answer.len() {
+        // The length the host asks for is not on the wire: an IN token
+        // takes up to a packet, so asking for more than the answer is
+        // the same to the FX2 (the emulator rounds bulk INs up to the
+        // packet size). Asking for less is a babble on a real host.
+        if max < answer.len() {
             v.report(format!(
                 "answer to {c:#04x} read with {max} bytes; it has {}",
                 answer.len()
@@ -1470,7 +1476,10 @@ mod tests {
         assert_eq!(v.drain().len(), 2, "answer not read; start before setup");
         ep1(&mut dev, &[CMD_ABORT_SYNC, 0x55], 0, &mut v);
         dev.transfer_in(1, 64, &mut v);
-        assert_eq!(v.drain().len(), 1, "answer read with the wrong length");
+        assert!(v.is_empty(), "a whole packet asked for a 1 byte answer");
+        ep1(&mut dev, &[CMD_READ_EEPROM, 0x33, 0x81, 8, 8], 0, &mut v);
+        dev.transfer_in(1, 4, &mut v);
+        assert_eq!(v.drain().len(), 1, "an answer longer than the transfer");
         read(&mut dev, 0, &mut v);
         assert!(v.is_empty(), "the mcupro probe");
         read(&mut dev, 0, &mut v);
