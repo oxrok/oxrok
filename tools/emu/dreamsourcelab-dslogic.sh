@@ -188,7 +188,8 @@ emu_cases() {
     emu_case "flashed plus show" --keep-header --filter "$C" -- -d $D --show
     # Recorded: replayed in cargo test (tests/emu_replay.rs).
     emu_case "flashed plus 1M" --record -- -d $D -C $C4 -c samplerate=1M --samples 100 -O hex
-    emu_case "flashed plus trigger" --record --filter "$V" -- -d $D -C $C4 -c samplerate=2M:captureratio=40 --samples 300 -t 2=f -O csv:trigger=true
+    # In bits, not csv, whose comments hold the date: the fixture keeps the raw stdout.
+    emu_case "flashed plus trigger" --record -- -d $D -C $C4 -c samplerate=2M:captureratio=40 --samples 300 -t 2=f -O bits
     emu_case "flashed plus by ids" -- -d $D:conn=2a0e.0020 --samples 8 -O hex
 
     # Faults, on the flashed board: after an upload the C driver retries

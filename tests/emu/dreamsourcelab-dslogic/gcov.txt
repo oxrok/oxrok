@@ -22,8 +22,8 @@ never reached, by function (line ranges hold no reached line):
     dslogic_acquisition_start: 1069-1072, 1077-1078
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/ezusb.c   82.6%  38 of 46
-  src/usb.c     69.9%  160 of 229
-  total         72.0%  198 of 275
+  src/usb.c     73.8%  169 of 229
+  total         75.3%  207 of 275
 never reached, by function (line ranges hold no reached line):
   src/ezusb.c
     ezusb_install_firmware: 69
@@ -32,7 +32,7 @@ never reached, by function (line ranges hold no reached line):
     usb_source_prepare: 69, 79-82, 87
     usb_source_dispatch: 138-139, 148
     usb_pollfd_added: 183
-    usb_pollfd_removed: never called (199-221)
+    usb_pollfd_removed: 208, 221
     usb_source_new: 266-267, 278-279
     sr_usb_split_conn: 337, 346, 360, 369
     sr_usb_find: 405-406, 409-410, 418-420
