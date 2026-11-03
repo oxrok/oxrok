@@ -63,7 +63,10 @@
 //!   driver gets no trigger position from the device and searches the
 //!   data for the first match, which on the LA8 then is sample 0. The
 //!   `ChronoVu` file format (`src/input/chronovu_la8.c`) has a trigger
-//!   position field, so the real device may keep samples before it.
+//!   position field, so the real device may keep samples before it:
+//!   `pretrigger=N` keeps N (no more than were taken since the command),
+//!   which runs the driver's pre-trigger split on real data. How many a
+//!   real device keeps, if any, is not known here.
 //! - The inputs carry `t ^ t >> 8 ^ t >> 16` (LA8, 8 bits) or
 //!   `t ^ t >> 16` (LA16, 16 bits) for the `t`-th sample period after
 //!   the command: a count for the first 256 or 65536 samples, so every
@@ -72,7 +75,13 @@
 //!   block shows.
 //! - Filling the memory takes `fill=N` status-only reads (default 2),
 //!   whatever the rate: time counted in the host's polls, not in the
-//!   real `8 Mi * period` (84 ms at 100 MHz, 21 s at 392 kHz).
+//!   real `8 Mi * period` (84 ms at 100 MHz, 21 s at 392 kHz). So every
+//!   capture here completes, where on a real LA8 one at divcount 119 or
+//!   more (below about 833 kHz) cannot: the driver's deadline
+//!   (`api.c:491`) adds at most `255 * 0.8388608` (214 us) to a
+//!   microsecond clock plus 10 s, so its block 0 retry loop
+//!   (`protocol.c:370-383`) ends with "Trigger timed out. Bytes read: 0."
+//!   before the memory is full (8 Mi samples take over 10 s there).
 //!
 //! Checks: the command's length for the model, the 0xff byte, divcount
 //! 0xff, pattern bits outside the masks and channels in both masks
@@ -100,7 +109,7 @@ pub const NAME: &str = "chronovu-la";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "ChronoVu LA8/LA16 (FTDI FIFO, 8 MiB SDRAM) as sigrok's chronovu-la \
      uses it; model=la8|la16, pid=0x8867|0x6001 (any), chip=bm|r, product=, serial= (empty: none), \
-     fill=N (status-only reads before the readout, 2); faults: no-trigger=1, gap=N, the FTDI \
+     fill=N (status-only reads before the readout, 2), pretrigger=N (samples kept before the trigger, 0); faults: no-trigger=1, gap=N, the FTDI \
      shell's stall=REQUEST[/WVALUE], in-stall=N, idle=N";
 
 /// The sample memory, in bytes (`SDRAM_SIZE`).
@@ -216,6 +225,7 @@ pub struct Logic {
     fill: u32,
     no_trigger: bool,
     gap: Option<u32>,
+    pretrigger: u64,
     phase: Phase,
     command: Option<Command>,
     busy: Countdown,
@@ -230,10 +240,19 @@ impl Logic {
             fill,
             no_trigger,
             gap,
+            pretrigger: 0,
             phase: Phase::Idle,
             command: None,
             busy: Countdown::new(fill),
         }
+    }
+
+    /// The same logic keeping `samples` samples before the trigger
+    /// sample (as many as it has taken since the command, at most).
+    #[must_use]
+    pub fn with_pretrigger(mut self, samples: u64) -> Logic {
+        self.pretrigger = samples;
+        self
     }
 
     /// The last command taken.
@@ -333,7 +352,7 @@ impl Logic {
         let start = if self.no_trigger && (c.mask | c.edges) != 0 {
             None
         } else {
-            c.first_match(self.model, 1 << 24)
+            c.first_match(self.model, 1 << 24).map(|t| t.saturating_sub(self.pretrigger))
         };
         self.phase = Phase::Capture { start };
         self.busy = Countdown::new(self.fill);
@@ -411,6 +430,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut fill = 2;
     let mut no_trigger = false;
     let mut gap = None;
+    let mut pretrigger = 0;
     let mut faults = Faults::default();
     let number = |k: &str, v: &str| -> Result<u32> {
         match v.strip_prefix("0x") {
@@ -444,6 +464,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "fill" => fill = number(k, v)?,
             "no-trigger" => no_trigger = number(k, v)? != 0,
             "gap" => gap = Some(number(k, v)?),
+            "pretrigger" => pretrigger = u64::from(number(k, v)?),
             other => {
                 if !faults.option(other, v)? {
                     return Err(Error(format!("{NAME} has no option {other}")));
@@ -457,7 +478,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let description = description.unwrap_or_else(|| model.product().to_owned());
     config.description = (!description.is_empty()).then_some(description);
     config.serial = serial;
-    let mut dev = ChronovuLa::new(config, Logic::new(model, fill, no_trigger, gap));
+    let mut dev = ChronovuLa::new(config, Logic::new(model, fill, no_trigger, gap).with_pretrigger(pretrigger));
     dev.chip.set_faults(faults);
     Ok(Box::new(dev))
 }
@@ -588,6 +609,24 @@ mod tests {
         assert_eq!(c.first_match(Model::La16, 1 << 20), Some(512));
         let c = Command { divcount: 0, pattern: 0, mask: 0, edges: 1 };
         assert_eq!(c.first_match(Model::La16, 1 << 20), Some(2), "falling on channel 0");
+    }
+
+    #[test]
+    fn pretrigger_keeps_samples_before_the_trigger() {
+        // Channel 7 high first at 128: 100 samples before it are kept.
+        let mut dev = analyzer(&[o("pretrigger", "100"), o("fill", "0")]);
+        let mut v = Violations::default();
+        dev.out(2, &[1, 0xff, 0x80, 0x80], &mut v);
+        let (_, raw) = read_all(dev.as_mut(), &mut v);
+        let samples = demangle(Model::La8, 1, &raw);
+        assert_eq!(&samples[..2], &[28, 29]);
+        assert_eq!(samples[100], 0x80);
+        // No more than were taken since the command.
+        let mut dev = analyzer(&[o("pretrigger", "1000"), o("fill", "0")]);
+        dev.out(2, &[1, 0xff, 0x80, 0x80], &mut v);
+        let (_, raw) = read_all(dev.as_mut(), &mut v);
+        assert_eq!(demangle(Model::La8, 1, &raw)[0], 0);
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]

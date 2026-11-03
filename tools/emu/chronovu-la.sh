@@ -50,6 +50,11 @@ emu_cases() {
     # channel 7 high, 128 periods after the command.
     emu_case "la8 trigger" --digest --filter "$HEAD8" -- -d $D -c samplerate=1m --triggers 7=1 --samples 100 -O hex
     # The slowest rate (divcount 0xfe); LIMIT_MSEC is taken and unused.
+    # That this capture completes is an emulation artifact (the memory
+    # fills in polls): on a real LA8, 8 Mi samples take 21 s here, and
+    # the driver's deadline (api.c:491, the capture time added in
+    # seconds to a microsecond clock) is 10 s, so it would report
+    # "Trigger timed out. Bytes read: 0." from divcount 119 on.
     emu_case "la8 slowest" --digest --filter "$HEAD8" -- -d $D -c samplerate=392156 --time 5 -O hex
     # Three channels; a trigger of two (sigrok-cli refuses one on a
     # disabled channel), pattern 0x02, mask 0x03: sample 2.
@@ -66,6 +71,13 @@ emu_cases() {
     emu_case "la8 too many samples" --stderr --expect-fail -- -d $D --samples 9m
     emu_case "la8 edge trigger" --stderr --expect-fail -- -d $D --samples 10 --triggers 0=r
 
+    # With 100 samples kept before the trigger sample (an option: the
+    # sources do not say whether the device keeps any), the driver's
+    # search finds the trigger at sample 100 of block 0 and splits the
+    # block there (protocol.c:482-492).
+    chronovu_options pretrigger=100
+    emu_case "la8 pretrigger" --digest --filter "$HEAD8" -- -d $D -c samplerate=1m --triggers 7=1 --samples 100 -O hex
+
     # The LA16.
     chronovu_options model=la16
     emu_case "la16 scan" --keep-header --filter "$ADDR" -- -d $D --scan
@@ -77,6 +89,10 @@ emu_cases() {
     # is sample 2. The driver's search only sees state bits (mask 0x0001,
     # pattern 0): sample 0's first byte already matches.
     emu_case "la16 rising" --digest --filter "$HEAD16" -- -d $D --triggers 1=r,0=0 --samples 100 -O hex
+    # An edge alone leaves the driver's trigger mask 0, and its search
+    # stops at once (protocol.c:436): no trigger marker, though the
+    # device triggered (the data start at sample 2).
+    emu_case "la16 edge only" --digest --filter "$HEAD16" -- -d $D --triggers 1=r --samples 100 -O hex
     # The driver's trigger search compares single bytes, before its
     # byte swap, with the 16 bit mask and an 8 bit expected value: for
     # channels 8 to 15 both sides are 0, so the first byte matches
