@@ -138,6 +138,9 @@ pub(crate) enum Handle {
     /// Not openable, e.g. a replayed device.
     #[default]
     None,
+    /// A device of the `OXROK_USB_REPLAY` file: opened as its next
+    /// session.
+    Replay,
     #[cfg(feature = "nusb")]
     Nusb(nusb::DeviceId),
     #[cfg(feature = "libusb")]
@@ -343,6 +346,9 @@ impl Backend {
 /// Every USB device the backend can see. String descriptors are those
 /// the OS has cached; opening the device is not needed.
 pub fn list_devices() -> Result<Vec<UsbDeviceInfo>> {
+    if crate::core::sessions::replaying() {
+        return replay_devices();
+    }
     match Backend::current() {
         #[cfg(feature = "nusb")]
         Some(Backend::Nusb) => nusb_backend::list(),
@@ -350,6 +356,27 @@ pub fn list_devices() -> Result<Vec<UsbDeviceInfo>> {
         Some(Backend::Libusb) => rusb_backend::list(),
         _ => Err(Error::not_supported("no USB backend compiled in")),
     }
+}
+
+const REPLAY_VAR: &str = "OXROK_USB_REPLAY";
+
+/// With `OXROK_USB_REPLAY=FILE` (or `OXROK_HID_REPLAY`) set: the device
+/// of the file's first session, which [`open`] serves from the file,
+/// else none.
+fn replay_devices() -> Result<Vec<UsbDeviceInfo>> {
+    let Some(text) = crate::core::sessions::first_session(REPLAY_VAR, record::MAGIC)? else {
+        return Ok(Vec::new());
+    };
+    let mut info = record::Fixture::parse(&text)?.device;
+    info.handle = Handle::Replay;
+    Ok(vec![info])
+}
+
+/// Whether listings show the devices of a replay file (the
+/// `OXROK_USB_REPLAY` or `OXROK_HID_REPLAY` variable) rather than the
+/// machine's.
+pub fn replaying() -> bool {
+    crate::core::sessions::replaying()
 }
 
 /// The devices with one of the given ids.
@@ -360,14 +387,22 @@ pub fn find_devices(ids: &[UsbId]) -> Result<Vec<UsbDeviceInfo>> {
 /// Opens a device found by [`list_devices`].
 ///
 /// With `OXROK_USB_RECORD=FILE` in the environment the session is
-/// recorded and written to `FILE` when the transport is dropped. With
-/// several devices the file name gets `.N` appended from the second one.
+/// recorded and written to `FILE` when the transport is dropped; later
+/// sessions of the same process are appended. A device listed from an
+/// `OXROK_USB_REPLAY` file is served the file's next session.
 pub fn open(info: &UsbDeviceInfo) -> Result<Box<dyn Transport>> {
     let transport = match &info.handle {
         #[cfg(feature = "nusb")]
         Handle::Nusb(_) => nusb_backend::open(info)?,
         #[cfg(feature = "libusb")]
         Handle::Rusb { .. } => rusb_backend::open(info)?,
+        Handle::Replay => {
+            let text = crate::core::sessions::next_session(REPLAY_VAR, record::MAGIC)?;
+            let replay = record::Replay::from_text(&text)?;
+            let check = replay.clone();
+            crate::core::sessions::register(move || check.finish());
+            return Ok(Box::new(replay));
+        }
         Handle::None => return Err(Error::not_supported("this device cannot be opened")),
     };
     if let Ok(path) = std::env::var("OXROK_USB_RECORD") {

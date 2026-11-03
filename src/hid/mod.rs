@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod record;
+
 use crate::core::{Error, Result};
 use async_hid::{AsyncHidFeatureHandle, AsyncHidRead, AsyncHidWrite, HidBackend};
 use futures_lite::future::{block_on, or};
@@ -58,7 +60,8 @@ pub struct HidInfo {
     /// The device node, where the system has one (`/dev/hidrawN` on
     /// Linux); what libsigrok reports as the connection.
     pub path: Option<String>,
-    device: async_hid::Device,
+    /// The backend's device; none for a device of a replay file.
+    device: Option<async_hid::Device>,
 }
 
 /// On Linux the kernel's HID name joins manufacturer and product
@@ -96,14 +99,19 @@ fn map(e: &async_hid::HidError) -> Error {
 }
 
 /// The HID devices the current user can open. A device with several
-/// top level collections is listed once.
+/// top level collections is listed once. With `OXROK_HID_REPLAY=FILE`
+/// (or `OXROK_USB_REPLAY`) set, only the device of the file's first
+/// session, which [`HidInfo::open`] serves from the file.
 pub fn list() -> Result<Vec<HidInfo>> {
+    if crate::core::sessions::replaying() {
+        return replay_devices();
+    }
     block_on(async {
         let backend = HidBackend::default();
         let mut stream = backend.enumerate().await.map_err(|e| map(&e))?;
         let mut out: Vec<HidInfo> = Vec::new();
         while let Some(d) = stream.next().await {
-            if out.iter().any(|o| o.device.id == d.id) {
+            if out.iter().any(|o| o.device.as_ref().is_some_and(|x| x.id == d.id)) {
                 continue;
             }
             let (path, product) = linux_details(&d.id);
@@ -114,20 +122,67 @@ pub fn list() -> Result<Vec<HidInfo>> {
                 manufacturer: d.manufacturer.clone(),
                 serial: d.serial_number.clone(),
                 path,
-                device: d,
+                device: Some(d),
             });
         }
         Ok(out)
     })
 }
 
+const REPLAY_VAR: &str = "OXROK_HID_REPLAY";
+
+fn replay_devices() -> Result<Vec<HidInfo>> {
+    let Some(text) = crate::core::sessions::first_session(REPLAY_VAR, record::MAGIC)? else {
+        return Ok(Vec::new());
+    };
+    let d = record::Fixture::parse(&text)?.device;
+    Ok(vec![HidInfo {
+        vendor_id: d.vendor_id,
+        product_id: d.product_id,
+        product: d.product.unwrap_or_default(),
+        manufacturer: d.manufacturer,
+        serial: d.serial,
+        path: d.path,
+        device: None,
+    }])
+}
+
 impl HidInfo {
-    /// Opens the device for reading and writing.
+    /// Opens the device for reading and writing. With
+    /// `OXROK_HID_RECORD=FILE` in the environment the session is
+    /// recorded and written to `FILE` when the device is closed, later
+    /// sessions of the process appended ([`record`]). A device listed
+    /// from an `OXROK_HID_REPLAY` file is served the file's next
+    /// session.
     pub fn open(&self) -> Result<Box<dyn HidDevice>> {
+        let Some(device) = &self.device else {
+            let text = crate::core::sessions::next_session(REPLAY_VAR, record::MAGIC)?;
+            let replay = record::SharedReplay::new(record::Replay::from_text(&text)?);
+            let check = replay.clone();
+            crate::core::sessions::register(move || check.finish());
+            return Ok(Box::new(replay));
+        };
         block_on(async {
-            let (reader, writer) = self.device.open().await.map_err(|e| map(&e))?;
-            let feature = self.device.open_feature_handle().await.map_err(|e| map(&e))?;
-            Ok(Box::new(Native { reader, writer, feature }) as Box<dyn HidDevice>)
+            let (reader, writer) = device.open().await.map_err(|e| map(&e))?;
+            let feature = device.open_feature_handle().await.map_err(|e| map(&e))?;
+            let native = Box::new(Native { reader, writer, feature }) as Box<dyn HidDevice>;
+            if let Ok(file) = std::env::var("OXROK_HID_RECORD")
+                && !file.is_empty()
+            {
+                log::info!("Recording the HID session to {file}.");
+                let line = record::DeviceLine {
+                    vendor_id: self.vendor_id,
+                    product_id: self.product_id,
+                    manufacturer: self.manufacturer.clone(),
+                    product: Some(self.product.clone()),
+                    serial: self.serial.clone(),
+                    path: self.path.clone(),
+                };
+                return Ok(
+                    Box::new(record::Recorder::to_file(native, line, file)) as Box<dyn HidDevice>
+                );
+            }
+            Ok(native)
         })
     }
 }

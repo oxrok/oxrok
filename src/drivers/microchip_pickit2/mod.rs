@@ -106,7 +106,9 @@ impl Driver for Pickit2Driver {
             }
         }
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
-        if cfg!(target_os = "linux") {
+        // A USB replay file stands in for the device on every system, so
+        // the recording made on Linux replays on the others too.
+        if cfg!(target_os = "linux") || crate::usb::replaying() {
             // As libsigrok: VID.PID in hex or bus.address.
             for info in crate::usb::list_devices()? {
                 if !info.matches_conn(&conn) {

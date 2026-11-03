@@ -111,11 +111,11 @@ emu_cases() {
     fx2lafw_options profile=cypress-fx2 flashed=1
     emu_case "flashed fx2 scan" --keep-header --filter "$C" -- -d $F --scan
     emu_case "flashed fx2 show" --keep-header --filter "$C" -- -d $F --show
-    emu_case "flashed fx2 8ch 2M" -- -d $F -C $D8 -c samplerate=2M --samples 128 -O hex
+    emu_case "flashed fx2 8ch 2M" --record -- -d $F -C $D8 -c samplerate=2M --samples 128 -O hex
     emu_case "flashed fx2 16ch 6M" -- -d $F -c samplerate=6M --samples 100 -O hex
     fx2lafw_options profile=saleae-logic flashed=1
     emu_case "flashed logic scan" --keep-header --filter "$C" -- -d $F --scan
-    emu_case "flashed logic 16M" -- -d $F -c samplerate=16M --samples 50 -t D2=r -O bits
+    emu_case "flashed logic 16M" --record -- -d $F -c samplerate=16M --samples 50 -t D2=r -O bits
     # A frame that ends where a transfer ends: libsigrok's
     # receive_transfer() then hands its NULL soft trigger to
     # soft_trigger_logic_check() (protocol.c:484) and crashes. On the

@@ -82,6 +82,9 @@ pub fn main() -> ExitCode {
         Ok(())
     };
     let result = result.and_then(|()| strict_check(&args));
+    // A replay from OXROK_USB_REPLAY or OXROK_HID_REPLAY that was not
+    // played to its end is a run that went otherwise than recorded.
+    let result = result.and_then(|()| oxrok::core::sessions::finish_replays());
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(oxrok::core::Error::Arg(msg)) => {

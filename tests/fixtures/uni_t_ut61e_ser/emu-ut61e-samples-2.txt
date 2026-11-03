@@ -1,0 +1,18 @@
+# oxrok hid fixture 1
+# emu ch9325: ut61e samples 2
+# arg: -d
+# arg: uni-t-ut61e-ser:conn=hid/ch9325/raw=/dev/hidrawN
+# arg: --samples
+# arg: 2
+device vid=1a86 pid=e008 manufacturer="WCH" product="CH9325 cable emulator" serial="HIDCABLE1" path="/dev/hidrawN"
+set_feature 00004b000002 -> ok
+read 64 -> f73131323334353b
+read 64 -> f73030303a300d0a
+# oxrok hid fixture 1
+device vid=1a86 pid=e008 manufacturer="WCH" product="CH9325 cable emulator" serial="HIDCABLE1" path="/dev/hidrawN"
+set_feature 00004b000002 -> ok
+read 64 -> f73132303435363b
+read 64 -> f73030303a300d0a
+read 64 -> f53f{5}0000
+read 64 -> f73131323334353b
+read 64 -> f73030303a300d0a

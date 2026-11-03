@@ -38,7 +38,7 @@ emu_cases() {
     for r in 5k 10k 25k 50k 100k 250k 500k 1m; do
         emu_case "pickit2 capture $r" -- -d $P -c samplerate=$r --samples 64 -O bits
     done
-    emu_case "pickit2 capture all 1024" -- -d $P --samples 1024 -O hex
+    emu_case "pickit2 capture all 1024" --record -- -d $P --samples 1024 -O hex
     emu_case "pickit2 capture more than memory" -- -d $P --samples 5000 -O hex
     emu_case "pickit2 capture 1 sample" -- -d $P --samples 1 -O bits
     emu_case "pickit2 capture two channels" -- -d $P -C pin4,pin6 --samples 32 -O bits
@@ -48,7 +48,7 @@ emu_cases() {
     # Triggers on levels and edges, one channel and several.
     emu_case "pickit2 trigger pin4 low" -- -d $P --samples 32 -t pin4=0 -O bits
     emu_case "pickit2 trigger pin5 high" -- -d $P --samples 32 -t pin5=1 -O bits
-    emu_case "pickit2 trigger pin4 rising" -- -d $P -c samplerate=500k --samples 32 -t pin4=r -O bits
+    emu_case "pickit2 trigger pin4 rising" --record -- -d $P -c samplerate=500k --samples 32 -t pin4=r -O bits
     emu_case "pickit2 trigger pin6 falling" -- -d $P -c samplerate=100k --samples 32 -t pin6=f -O bits
     emu_case "pickit2 trigger levels" -- -d $P --samples 32 -t pin4=1,pin5=0,pin6=1 -O bits
     emu_case "pickit2 trigger edge and level" -- -d $P --samples 32 -t pin5=r,pin6=0 -O bits

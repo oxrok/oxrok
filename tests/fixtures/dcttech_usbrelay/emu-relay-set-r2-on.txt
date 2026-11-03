@@ -1,0 +1,14 @@
+# oxrok hid fixture 1
+# emu usbrelay: relay set R2 on
+# arg: -d
+# arg: dcttech-usbrelay
+# arg: -g
+# arg: R2
+# arg: --set
+# arg: -c
+# arg: enabled=on
+device vid=16c0 pid=05df manufacturer="www.dcttech.com" product="USBRelay2" serial="HIDCABLE1" path="/dev/hidrawN"
+get_feature 00 9 -> 004142434445000000
+get_feature 00 9 -> 004142434445000000
+set_feature 00ff0200{6} -> ok
+get_feature 00 9 -> 004142434445000002

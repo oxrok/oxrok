@@ -321,6 +321,7 @@ if [ $emu = 1 ]; then
     EMU_LOCK=${EMU_LOCK:-/tmp/oxrok-emu.lock}
     EMU_LOCK_WAIT=${EMU_LOCK_WAIT:-1800}
     EMU_GOLDEN=${EMU_GOLDEN:-$(cd "$TOOLS/.." && pwd)/tests/emu}
+    EMU_FIXTURES=${EMU_FIXTURES:-$(cd "$TOOLS/.." && pwd)/tests/fixtures}
     EMU_BLESS=${EMU_BLESS:-0}
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
     EMULOG=${EMULOG:-$TMP}
@@ -534,7 +535,7 @@ if [ $emu = 1 ]; then
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY] [--unplug WHEN] [--interrupt WHEN]
-    #          [--timeout S] -- ARGS...
+    #          [--timeout S] [--record] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -556,14 +557,21 @@ if [ $emu = 1 ]; then
     #   gets the attach before the unplug), or the tool gets SIGINT.
     #   --timeout stops each tool after S seconds rather than
     #   EMU_CASE_TIMEOUT; a sigrok-cli under --oracle-bug that has to be
-    #   stopped so fails as the case wants. The name
+    #   stopped so fails as the case wants. --record records oxrok's
+    #   run of a full case with OXROK_USB_RECORD and OXROK_HID_RECORD
+    #   (the USB one kept when both wrote) as the replay fixture
+    #   tests/fixtures/DRIVER/emu-SLUG.txt, its stdout as emu-SLUG.out
+    #   (DRIVER with - made _), which tests/emu_replay.rs replays through
+    #   oxrok with OXROK_USB_REPLAY or OXROK_HID_REPLAY; like the goldens,
+    #   EMU_BLESS=1 writes them and otherwise the recording must match
+    #   them, so a recording that is not deterministic fails. The name
     #   neither starts nor ends with white space and holds no tab or
     #   newline: the emulator trims the
     #   command line it acknowledges and logs as the section name.
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -579,6 +587,7 @@ if [ $emu = 1 ]; then
                 --unplug) event="unplug $2"; shift ;;
                 --interrupt) event="interrupt $2"; shift ;;
                 --timeout) case_timeout=$2; shift ;;
+                --record) record=1 ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -623,6 +632,10 @@ if [ $emu = 1 ]; then
                 interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
                 *) set -- "$tool" "$@" ;;
             esac
+            if [ $record = 1 ] && [ $t = b ]; then
+                rm -f "$TMP/rec.usb" "$TMP/rec.hid"
+                set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
+            fi
             timeout -k 5 "$case_timeout" "$@" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
             TOOLPID=$!
             shift $(($# - nargs))
@@ -679,6 +692,7 @@ if [ $emu = 1 ]; then
             emu_oracle_bug "$@"
             return
         fi
+        [ $record = 1 ] && emu_record "$@"
         if [ $mode = full ]; then
             cmp -s "$TMP/a.cmp" "$TMP/b.cmp" || why="$why; outputs differ"
             cmp -s "$TMP/a.tx" "$TMP/b.tx" || why="$why; transactions differ"
@@ -711,6 +725,48 @@ if [ $emu = 1 ]; then
             elif [ -f "$golden.tx" ] && ! cmp -s "$golden.tx" "$TMP/a.tx"; then
                 diff "$golden.tx" "$TMP/a.tx" | head -${DIFF_LINES:-6}
             fi
+        fi
+    }
+
+    # emu_case --record: oxrok's recording of the case (each session it
+    # opened, in order), the attach's node names made generic, the bus
+    # and address dropped from a USB device line and the timed out reads
+    # from a HID recording (their number depends on the pace of the run;
+    # a HID replay answers a timeout wherever the recording has no read
+    # next), with the case name and one `# arg:` line per argument; and
+    # oxrok's stdout, node names made generic and the version line
+    # dropped (tests/emu_replay.rs drops it from the replay's alike).
+    # Written under EMU_BLESS=1, else compared.
+    emu_record() {
+        if [ $mode != full ] || [ -n "$event" ] || [ $which != stdout ] || [ $expect = 1 ]; then
+            why="$why; --record takes a full case that succeeds, without events or --stderr"
+            return
+        fi
+        rec=""
+        for k in usb hid; do
+            if [ -s "$TMP/rec.$k" ]; then rec=$TMP/rec.$k; break; fi
+        done
+        if [ -z "$rec" ]; then why="$why; oxrok recorded no USB or HID session"; return; fi
+        {
+            sed -n 1p "$rec"
+            echo "# emu $EMU_MODEL: $name"
+            for a in "$@"; do printf '# arg: %s\n' "$a"; done | sed -E -f "$TMP/emu.sed"
+            sed -E -f "$TMP/emu.sed" "$rec" | sed -E '1d; /^device /s/ bus=[0-9]+ addr=[0-9]+//' |
+                if [ "$rec" = "$TMP/rec.hid" ]; then sed -E '/^read [0-9]+ -> -$/d'; else cat; fi
+        } >"$TMP/rec.txt"
+        sed -E '1{/^oxrok /d;}' "$TMP/b.out" >"$TMP/rec.out"
+        fix=$EMU_FIXTURES/$(echo "$driver" | tr - _)/emu-$slug
+        if [ "$EMU_BLESS" = 1 ]; then
+            mkdir -p "$(dirname "$fix")"
+            cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/rec.out" "$fix.out"
+        elif [ -f "$fix.txt" ] && [ -f "$fix.out" ]; then
+            if ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
+                why="$why; the recording differs from $(basename "$fix").txt"
+                diff "$fix.txt" "$TMP/rec.txt" | head -${DIFF_LINES:-6}
+            fi
+            cmp -s "$fix.out" "$TMP/rec.out" || why="$why; oxrok output differs from $(basename "$fix").out"
+        else
+            why="$why; no fixture $fix.txt/.out (EMU_BLESS=1 records it)"
         fi
     }
 
