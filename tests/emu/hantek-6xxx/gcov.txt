@@ -1,11 +1,9 @@
 gcov hantek-6xxx (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        91.2%  321 of 352
+  api.c        92.6%  326 of 352
   protocol.c   84.8%  89 of 105
-  total        89.7%  410 of 457
+  total        90.8%  415 of 457
 never reached, by function (line ranges hold no reached line):
   api.c
-    scan: 278
-    dev_open: 345-346, 351-353
     config_get: 375, 398, 415
     config_set: 450-451, 459, 474-475
     config_list: 497-498, 507, 512, 515-516
@@ -20,14 +18,13 @@ never reached, by function (line ranges hold no reached line):
     voltage_to_reg: 158-159
     hantek_6xxx_update_channels: never called (229-235)
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/ezusb.c   67.4%  31 of 46
+  src/ezusb.c   82.6%  38 of 46
   src/usb.c     63.8%  146 of 229
-  total         64.4%  177 of 275
+  total         66.9%  184 of 275
 never reached, by function (line ranges hold no reached line):
   src/ezusb.c
-    ezusb_reset: 49
-    ezusb_install_firmware: 69, 83-86
-    ezusb_upload_firmware: 108-109, 118-121, 127-129, 133, 136, 139
+    ezusb_install_firmware: 69
+    ezusb_upload_firmware: 108-109, 118-121, 127-129
   src/usb.c
     usb_source_prepare: 69, 79-82, 87
     usb_source_dispatch: 138-139, 148
