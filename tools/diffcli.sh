@@ -427,8 +427,15 @@ if [ $emu = 1 ]; then
         # the end of input that detaches the device.
         exec 7<>"$TMP/emu.ctl"
         emu_wait 0 '^READY ' || return 1
+        : >"$TMP/emu.sed"
+        emu_fields "$(grep -m1 '^READY ' "$TMP/emu.out")"
+    }
+    # emu_fields LINE: the EMU_* values from a READY (or REPLUGGED)
+    # line, and the rules that make its node names and address generic
+    # in the outputs, added to those of the attaches before.
+    emu_fields() {
         EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
-        for kv in $(grep -m1 '^READY ' "$TMP/emu.out"); do
+        for kv in $1; do
             case "$kv" in
                 port=*) EMU_PORT=${kv#port=} ;;
                 busid=*) EMU_BUSID=${kv#busid=} ;;
@@ -444,7 +451,6 @@ if [ $emu = 1 ]; then
         export EMU_PORT EMU_BUSID EMU_USB EMU_USBFS EMU_NODES EMU_HIDRAW EMU_TTY EMU_USBTMC
         # The node numbers and the device address change from one attach
         # to the next; the outputs name them generically.
-        : >"$TMP/emu.sed"
         for n in $(echo "$EMU_NODES" | tr ',' ' ') $EMU_USBFS; do
             gen=$(echo "$n" | sed -E 's#^/dev/bus/usb/[0-9]+/[0-9]+$#/dev/bus/usb/BBB/DDD#; s#[0-9]+$#N#')
             printf 's#%s([^0-9]|$)#%s\\1#g\n' "$(echo "$n" | sed 's/[.]/\\./g')" "$gen" >>"$TMP/emu.sed"
@@ -498,9 +504,31 @@ if [ $emu = 1 ]; then
         echo "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//'
     }
 
+    # Puts a device an armed unplug took off the bus back on it, and
+    # takes over the new attach's nodes and address.
+    emu_replug() {
+        lines=$(wc -l <"$TMP/emu.out")
+        emu_cmd replug >/dev/null || return 1
+        r=$(tail -n +$((lines + 1)) "$TMP/emu.out" | grep -m1 '^REPLUGGED ' || true)
+        [ -z "$r" ] || emu_fields "$r"
+    }
+    # emu_interrupt SKIP PID: once the emulator prints EVENT interrupt
+    # after line SKIP of its output, sends SIGINT to the children of PID
+    # (timeout's tool); gives up when PID has ended.
+    emu_interrupt() {
+        while kill -0 "$2" 2>/dev/null; do
+            if tail -n +$(($1 + 1)) "$TMP/emu.out" | grep -q -x 'EVENT interrupt'; then
+                pkill -INT -P "$2"
+                return 0
+            fi
+            sleep 0.02
+        done
+    }
+
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--expect-fail] [--no-output] [--driver ID]
-    #          [--oracle-bug WHY] -- ARGS...
+    #          [--oracle-bug WHY] [--unplug WHEN] [--interrupt WHEN]
+    #          [--timeout S] -- ARGS...
     #   The flags of case_, plus: --expect-fail, the tools must exit
     #   with a failure; --no-output, the compared output must be empty
     #   (a --set prints nothing) rather than not empty; --driver, the
@@ -509,13 +537,24 @@ if [ $emu = 1 ]; then
     #   cannot run because of the libsigrok bug WHY: sigrok-cli must
     #   fail (so a fix upstream shows up as a failing case, to be made
     #   an ordinary one), its stderr is kept in the golden SLUG.oracle,
-    #   and oxrok alone is held to the .out and .tx goldens. The name
+    #   and oxrok alone is held to the .out and .tx goldens (runs of a
+    #   repeated stderr line count once there, as a driver that loops
+    #   on an error repeats its message as often as the time lets it).
+    #   --unplug and --interrupt arm the emulator's event at WHEN
+    #   (in=EP:N, out=EP:N or model; docs/USB.md) for each tool's run,
+    #   which must fire it: the device leaves the bus and comes back
+    #   after the run (a case that names the device by address or node
+    #   gets the attach before the unplug), or the tool gets SIGINT.
+    #   --timeout stops each tool after S seconds rather than
+    #   EMU_CASE_TIMEOUT; a sigrok-cli under --oracle-bug that has to be
+    #   stopped so fails as the case wants. The name
     #   neither starts nor ends with white space and holds no tab or
     #   newline: the emulator trims the
     #   command line it acknowledges and logs as the section name.
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -527,11 +566,15 @@ if [ $emu = 1 ]; then
                 --no-output) no_output=1 ;;
                 --driver) driver=$2; shift ;;
                 --oracle-bug) bug=$2; shift ;;
+                --unplug) event="unplug $2"; shift ;;
+                --interrupt) event="interrupt $2"; shift ;;
+                --timeout) case_timeout=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
         done
         [ $# -gt 0 ] && shift
+        nargs=$#
         case "$name" in
             "" | [[:space:]]* | *[[:space:]] | *"$(printf '\t')"* | *"
 "*)
@@ -556,20 +599,46 @@ if [ $emu = 1 ]; then
             if ! { emu_cmd reset && emu_cmd "section $t $name"; } >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
+            if [ -n "$event" ] && ! emu_cmd "arm $event" >/dev/null; then
+                emu_fail "$name: the emulator refused 'arm $event'"; return
+            fi
+            evskip=$(wc -l <"$TMP/emu.out")
             # A tool that hangs on the model must not hold the lock for
             # ever; 124 is timeout's status. It runs in the background so
             # that a signal's trap runs at once, not when the tool ends.
-            timeout -k 5 "$EMU_CASE_TIMEOUT" "$tool" "$@" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
+            # A command run in the background starts with SIGINT ignored;
+            # an interrupt case gives the tool the default that a
+            # terminal's Ctrl-C meets.
+            case "$event" in
+                interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
+                *) set -- "$tool" "$@" ;;
+            esac
+            timeout -k 5 "$case_timeout" "$@" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
             TOOLPID=$!
+            shift $(($# - nargs))
+            WATCHPID=""
+            case "$event" in
+                interrupt*) emu_interrupt "$evskip" "$TOOLPID" 7>&- 8<&- & WATCHPID=$! ;;
+            esac
             wait "$TOOLPID"
             st=$?
             TOOLPID=""
-            [ $st = 124 ] && why="$why; $(basename "$tool") timed out after $EMU_CASE_TIMEOUT s"
+            if [ -n "$WATCHPID" ]; then kill "$WATCHPID" 2>/dev/null; wait "$WATCHPID" 2>/dev/null; fi
+            if [ $st = 124 ] && { [ -z "$bug" ] || [ $t = b ]; }; then
+                why="$why; $(basename "$tool") timed out after $case_timeout s"
+            fi
             if [ -n "$bug" ] && [ $t = a ]; then
                 [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
             else
                 if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
                 if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
+            fi
+            case "$event" in
+                unplug*)
+                    if ! emu_replug; then emu_fail "$name: the emulator did not replug the device"; return; fi ;;
+            esac
+            if [ -n "$event" ] && ! tail -n +$((evskip + 1)) "$TMP/emu.out" | grep -q -x "EVENT ${event%% *}"; then
+                why="$why; the armed ${event%% *} never fired under $(basename "$tool")"
             fi
         done
         for t in $tools; do
@@ -643,12 +712,13 @@ if [ $emu = 1 ]; then
         blessed=""
         if [ "$EMU_BLESS" = 1 ]; then
             mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
-            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"; cp "$TMP/a.err" "$golden.oracle"
+            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"; uniq "$TMP/a.err" >"$golden.oracle"
             blessed=" (golden written)"
         elif [ -f "$golden.out" ] && [ -f "$golden.tx" ] && [ -f "$golden.oracle" ]; then
             cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
             cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
-            cmp -s "$golden.oracle" "$TMP/a.err" || why="$why; sigrok-cli fails otherwise than $slug.oracle"
+            uniq "$TMP/a.err" >"$TMP/a.uniq"
+            cmp -s "$golden.oracle" "$TMP/a.uniq" || why="$why; sigrok-cli fails otherwise than $slug.oracle"
         else
             why="$why; no golden $golden.out/.tx/.oracle (EMU_BLESS=1 writes it)"
         fi
@@ -657,8 +727,8 @@ if [ $emu = 1 ]; then
             echo "PASS $name (oxrok only, sigrok-cli fails: $bug; $(wc -l <"$TMP/b.tx" | tr -d ' ') transactions)$blessed"
         else
             emu_fail "$name (oracle bug):${why#;} [$*]"
-            if [ -f "$golden.oracle" ] && ! cmp -s "$golden.oracle" "$TMP/a.err"; then
-                diff "$golden.oracle" "$TMP/a.err" | head -${DIFF_LINES:-6}
+            if [ -f "$golden.oracle" ] && ! cmp -s "$golden.oracle" "$TMP/a.uniq"; then
+                diff "$golden.oracle" "$TMP/a.uniq" | head -${DIFF_LINES:-6}
             elif [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
                 diff "$golden.out" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
             fi

@@ -393,19 +393,32 @@ fn recv(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<[u8; PACKET]>> {
         if stop.load(Ordering::SeqCst) {
             return Ok(None);
         }
-        let n = dev.recv(&mut buf, TIMEOUT)?;
+        let n = match dev.recv(&mut buf, TIMEOUT) {
+            Ok(n) => n,
+            // libsigrok logs a failed read (a STALL, say) and reads
+            // again; a vanished device ends the capture here, where
+            // libsigrok would poll it for ever.
+            Err(e) if !gone(&e) => {
+                log::error!("USB receive error: {e}.");
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
         if n == PACKET {
             let mut p = [0u8; PACKET];
             p.copy_from_slice(&buf[..PACKET]);
             return Ok(Some(p));
         }
-        // libsigrok logs a short packet and keeps reading. A transport
-        // error ends the capture here, where libsigrok would poll a
-        // vanished device for ever.
+        // libsigrok logs a short packet and keeps reading.
         if n > 0 {
             log::error!("USB short recv: {n}/{PACKET} bytes.");
         }
     }
+}
+
+/// Whether a transport error says the device has left the bus.
+fn gone(e: &Error) -> bool {
+    matches!(e, Error::Device(m) if m.ends_with("device disconnected"))
 }
 
 /// Reads the 512 raw sample bytes: two banks, two halves each, two
@@ -750,6 +763,8 @@ mod tests {
         send_fails: Vec<bool>,
         sent: usize,
         answers: std::collections::VecDeque<Vec<u8>>,
+        /// Reads that fail before the answers, with these errors.
+        errors: std::collections::VecDeque<Error>,
     }
 
     impl Link for FlakyLink {
@@ -760,6 +775,9 @@ mod tests {
         }
 
         fn recv(&mut self, buf: &mut [u8], _timeout: Duration) -> Result<usize> {
+            if let Some(e) = self.errors.pop_front() {
+                return Err(e);
+            }
             let a = self.answers.pop_front().unwrap_or_default();
             buf[..a.len()].copy_from_slice(&a);
             Ok(a.len())
@@ -767,7 +785,8 @@ mod tests {
     }
 
     /// As in libsigrok, failed sends (here the SETUP and a READ) are
-    /// logged and ignored, and a short packet is read past: the capture
+    /// logged and ignored, a failed read is read again, and a short
+    /// packet is read past: the capture
     /// goes on with the answers that come.
     #[test]
     fn send_errors_and_short_reads_do_not_end_a_capture() {
@@ -777,7 +796,12 @@ mod tests {
         for _ in 0..8 {
             answers.push_back(vec![0x44u8; PACKET]);
         }
-        let mut link = FlakyLink { send_fails: vec![true, false, true], sent: 0, answers };
+        let mut link = FlakyLink {
+            send_fails: vec![true, false, true],
+            sent: 0,
+            answers,
+            errors: [Error::device("endpoint stalled")].into(),
+        };
         let (tx, rx) = std::sync::mpsc::sync_channel(8);
         let sink = PacketSink::new(tx, 0);
         let setup = setup_packet([0, 0, 0], 0, 1_000_000);
@@ -793,6 +817,25 @@ mod tests {
             .collect();
         assert_eq!(samples, [1, 1]);
         assert_eq!(link.sent, 1 + 4 * 3);
+    }
+
+    /// A device that left the bus ends the capture, where libsigrok
+    /// reads it for ever.
+    #[test]
+    fn a_vanished_device_ends_a_capture() {
+        let mut link = FlakyLink {
+            send_fails: Vec::new(),
+            sent: 0,
+            answers: std::collections::VecDeque::new(),
+            errors: [Error::device("endpoint stalled"), Error::device("device disconnected")]
+                .into(),
+        };
+        let (tx, _rx) = std::sync::mpsc::sync_channel(8);
+        let sink = PacketSink::new(tx, 0);
+        let setup = setup_packet([0, 0, 0], 0, 1_000_000);
+        let e = run(&mut link, &sink, &AtomicBool::new(false), &setup, 2).unwrap_err();
+        assert!(gone(&e), "{e}");
+        assert!(link.errors.is_empty());
     }
 
     #[test]

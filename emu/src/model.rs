@@ -280,4 +280,133 @@ pub trait DeviceModel: Send {
     fn take_renumeration(&mut self) -> bool {
         false
     }
+
+    /// Whether the model has reached the point in its protocol that it
+    /// marks for an event armed with `arm EVENT model` (see [`Arm`]),
+    /// such as a capture waiting for a trigger that never comes. Asked
+    /// after every offer of a transfer, one answered NAK too; a model answers
+    /// `true` once per point. What the point is, and the options that
+    /// make a model mark it, are the model's to document.
+    fn take_event_point(&mut self) -> bool {
+        false
+    }
+}
+
+/// What happens mid-run when an armed point is reached (the emulator's
+/// `arm` command, `docs/USB.md`, "Emulation over USB/IP").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// The device leaves the bus, as a pulled cable does, until the
+    /// next `replug` or `reset`.
+    Unplug,
+    /// The harness sends SIGINT to the tool that runs.
+    Interrupt,
+}
+
+impl Event {
+    /// The word of the `arm` command and of the log line.
+    pub fn word(self) -> &'static str {
+        match self {
+            Event::Unplug => "unplug",
+            Event::Interrupt => "interrupt",
+        }
+    }
+}
+
+/// The point at which an armed [`Event`] fires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum When {
+    /// Once the `n`th IN transfer on endpoint number `ep` has completed
+    /// with data (a STALL counts as completed, a NAK does not; endpoint
+    /// 0 counts the control reads).
+    In {
+        /// The endpoint number.
+        ep: u8,
+        /// The count, from 1.
+        n: u32,
+    },
+    /// Once the `n`th OUT transfer to endpoint number `ep` was taken
+    /// (endpoint 0 counts the control writes).
+    Out {
+        /// The endpoint number.
+        ep: u8,
+        /// The count, from 1.
+        n: u32,
+    },
+    /// When the model marks its point ([`DeviceModel::take_event_point`]).
+    Model,
+}
+
+/// An armed event: `EVENT WHEN`, as the `arm` command takes it, with
+/// `WHEN` one of `in=EP:N`, `out=EP:N` or `model`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Arm {
+    /// What happens.
+    pub event: Event,
+    /// When.
+    pub when: When,
+    /// Transfers counted so far.
+    seen: u32,
+}
+
+impl Arm {
+    /// An event armed for a point.
+    pub fn new(event: Event, when: When) -> Arm {
+        Arm { event, when, seen: 0 }
+    }
+
+    /// Parses `EVENT WHEN`.
+    ///
+    /// # Errors
+    ///
+    /// On an unknown event or point, or a count of 0.
+    pub fn parse(text: &str) -> crate::Result<Arm> {
+        let words: Vec<&str> = text.split_whitespace().collect();
+        let [event, when] = words[..] else {
+            return Err(
+                "arm takes EVENT WHEN: unplug or interrupt, in=EP:N, out=EP:N or model".into()
+            );
+        };
+        let event = match event {
+            "unplug" => Event::Unplug,
+            "interrupt" => Event::Interrupt,
+            other => return Err(format!("no event {other}: unplug or interrupt").into()),
+        };
+        let count = |spec: &str| -> crate::Result<(u8, u32)> {
+            let (ep, n) = spec.split_once(':').ok_or_else(|| format!("{spec}: EP:N"))?;
+            let ep: u8 =
+                ep.parse().ok().filter(|e| *e < 16).ok_or_else(|| format!("{spec}: EP 0 to 15"))?;
+            let n: u32 =
+                n.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("{spec}: N from 1"))?;
+            Ok((ep, n))
+        };
+        let when = if when == "model" {
+            When::Model
+        } else if let Some(spec) = when.strip_prefix("in=") {
+            let (ep, n) = count(spec)?;
+            When::In { ep, n }
+        } else if let Some(spec) = when.strip_prefix("out=") {
+            let (ep, n) = count(spec)?;
+            When::Out { ep, n }
+        } else {
+            return Err(format!("no point {when}: in=EP:N, out=EP:N or model").into());
+        };
+        Ok(Arm::new(event, when))
+    }
+
+    /// Counts a transfer offered to the model (`ep` without the
+    /// direction bit, `reply` its answer) and whether the model marked
+    /// its point; whether the event fires now.
+    pub fn fires(&mut self, ep: u8, is_in: bool, reply: &Reply, model_point: bool) -> bool {
+        let (want_ep, want_in, n) = match self.when {
+            When::Model => return model_point,
+            When::In { ep, n } => (ep, true, n),
+            When::Out { ep, n } => (ep, false, n),
+        };
+        if ep != want_ep || is_in != want_in || *reply == Reply::Nak {
+            return false;
+        }
+        self.seen += 1;
+        self.seen == n
+    }
 }

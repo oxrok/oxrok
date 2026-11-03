@@ -4,7 +4,7 @@
 
 use crate::descriptor::{self, truncate};
 use crate::model::{
-    CONTROL, Descriptors, DeviceModel, Endpoint, RECIPIENT_DEVICE, RECIPIENT_ENDPOINT,
+    Arm, CONTROL, Descriptors, DeviceModel, Endpoint, Event, RECIPIENT_DEVICE, RECIPIENT_ENDPOINT,
     RECIPIENT_INTERFACE, Reply, STANDARD, Setup, Violations,
 };
 
@@ -28,13 +28,14 @@ pub struct Device {
     descriptors: Descriptors,
     config: u8,
     halted: Vec<u8>,
+    armed: Option<Arm>,
 }
 
 impl Device {
     /// Wraps a model; the device starts unconfigured.
     pub fn new(model: Box<dyn DeviceModel>) -> Device {
         let descriptors = model.descriptors().clone();
-        Device { model, descriptors, config: 0, halted: Vec::new() }
+        Device { model, descriptors, config: 0, halted: Vec::new(), armed: None }
     }
 
     /// The model's name.
@@ -51,6 +52,27 @@ impl Device {
     /// descriptors are taken over at the next [`Device::reset`].
     pub fn replace_model(&mut self, model: Box<dyn DeviceModel>) {
         self.model = model;
+        self.armed = None;
+    }
+
+    /// Arms an event for the run that follows; one at a time, and a
+    /// fresh model ([`Device::replace_model`]) disarms it.
+    pub fn arm(&mut self, arm: Arm) {
+        self.armed = Some(arm);
+    }
+
+    /// After every offer of a transfer to the model: counts it for the
+    /// armed event, asks the model for its point, and returns the event
+    /// when it fires (once; it is disarmed then).
+    pub fn fired(&mut self, ep: u8, is_in: bool, reply: &Reply) -> Option<Event> {
+        let point = self.model.take_event_point();
+        let arm = self.armed.as_mut()?;
+        if arm.fires(ep & 0x0f, is_in, reply, point) {
+            let event = arm.event;
+            self.armed = None;
+            return Some(event);
+        }
+        None
     }
 
     /// Whether the model's descriptors differ from those the host
@@ -356,5 +378,36 @@ mod tests {
         assert!(v.is_empty(), "{v:?}");
         assert_eq!(dev.control(setup(0x00, SET_CONFIGURATION, 7, 0, 0), &[], &mut v), Reply::Stall);
         assert_eq!(v.drain().len(), 1);
+    }
+
+    #[test]
+    fn armed_events_fire_once_at_their_point() {
+        use crate::model::{Arm, Event, When};
+        assert_eq!(
+            Arm::parse("unplug in=1:3").unwrap(),
+            Arm::new(Event::Unplug, When::In { ep: 1, n: 3 })
+        );
+        assert_eq!(Arm::parse("interrupt model").unwrap(), Arm::new(Event::Interrupt, When::Model));
+        assert_eq!(
+            Arm::parse("unplug out=2:1").unwrap(),
+            Arm::new(Event::Unplug, When::Out { ep: 2, n: 1 })
+        );
+        for bad in ["", "unplug", "explode model", "unplug in=1:0", "unplug in=16:1", "unplug at=1"]
+        {
+            assert!(Arm::parse(bad).is_err(), "{bad}");
+        }
+        let mut dev = Device::new(Box::new(UsbRelay::new(2)));
+        let data = Reply::Data(vec![1]);
+        dev.arm(Arm::parse("unplug in=1:2").unwrap());
+        assert_eq!(dev.fired(0x81, true, &Reply::Nak), None, "a NAK does not count");
+        assert_eq!(dev.fired(0x01, false, &Reply::ack()), None, "nor does an OUT");
+        assert_eq!(dev.fired(0x82, true, &data), None, "nor another endpoint");
+        assert_eq!(dev.fired(0x81, true, &data), None);
+        assert_eq!(dev.fired(0x81, true, &Reply::Stall), Some(Event::Unplug));
+        assert_eq!(dev.fired(0x81, true, &data), None, "once");
+        // A fresh model disarms.
+        dev.arm(Arm::parse("interrupt out=0:1").unwrap());
+        dev.replace_model(Box::new(UsbRelay::new(2)));
+        assert_eq!(dev.fired(0, false, &Reply::ack()), None);
     }
 }

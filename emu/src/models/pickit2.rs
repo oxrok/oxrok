@@ -69,6 +69,24 @@
 //! `SET_REPORT`) are not how either driver talks to the device and are
 //! flagged.
 //!
+//! Faults, all off by default, make the device misbehave as firmware
+//! can, so that the drivers' error paths run: `button=0`, nobody
+//! presses the button, so a trigger the counter never satisfies keeps
+//! the capture waiting for ever (the status polls are NAKed); the
+//! model marks that wait as its event point (`arm EVENT model`) at the
+//! first poll past the delay. `stall-in=N` STALLs the IN transfer that
+//! would carry the Nth answer (a status or a READ answer) once, and
+//! `short-in=N` sends only its first 32 bytes, a short packet, once;
+//! either way the answer itself comes with the next IN transfer, as
+//! firmware that re-arms its endpoint sends it again. `stall-out=N`
+//! STALLs the Nth OUT packet, which the device then has not taken; the
+//! C driver ignores the error, so a stalled SETUP leaves it waiting for
+//! a status that never comes: the polls are NAKed with no violation and
+//! the wait is the event point, as with `button=0`. A stalled SETPOS or
+//! READ throws the read-out out of step, which the checks flag. A short
+//! OUT is not one: a 64 byte interrupt packet is taken whole or not at
+//! all.
+//!
 //! The descriptors are those of a PICkit2 (vendor and product strings,
 //! the serial number `PIC18F2550` an unnamed unit reports, endpoint 0
 //! of 8 bytes, the 1 ms interrupt endpoints) with the report
@@ -87,16 +105,22 @@ use crate::{Error, Result};
 pub const NAME: &str = "pickit2";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Microchip PICkit2 logic analyzer (HID, 04d8:0033), the Pico emulator's \
-     role; delay=N (IN offers before the status, default 15)";
+     role; delay=N (IN offers before the status, default 15), faults: button=0, stall-in=N, \
+     short-in=N, stall-out=N";
 
 /// A device from the `-o` options: `delay=N`, the IN transfers the
-/// status waits for, 0 to 1000, default 15.
+/// status waits for, 0 to 1000, default 15; the faults `button=0|1`
+/// (default 1), `stall-in=N`, `short-in=N`, `stall-out=N` (N from 1).
 ///
 /// # Errors
 ///
-/// On an unknown option or a delay out of range.
+/// On an unknown option or a value out of range.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut delay = DEFAULT_DELAY;
+    let mut faults = Faults::default();
+    let nth = |k: &str, v: &str| -> Result<Option<u32>> {
+        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+    };
     for (k, v) in options {
         match k.as_str() {
             "delay" => {
@@ -106,10 +130,36 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .filter(|n| *n <= 1000)
                     .ok_or_else(|| Error(format!("delay={v}: 0 to 1000")))?;
             }
+            "button" => {
+                faults.no_button = match v.as_str() {
+                    "0" => true,
+                    "1" => false,
+                    _ => return Err(Error(format!("button={v}: 0 or 1"))),
+                };
+            }
+            "stall-in" => faults.stall_in = nth(k, v)?,
+            "short-in" => faults.short_in = nth(k, v)?,
+            "stall-out" => faults.stall_out = nth(k, v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Pickit2::new(delay)))
+    let mut dev = Pickit2::new(delay);
+    dev.faults = faults;
+    dev.analyzer.no_button = faults.no_button;
+    Ok(Box::new(dev))
+}
+
+/// The faults of the `-o` options; none by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Faults {
+    /// Nobody presses the button: a trigger that never fires waits.
+    pub no_button: bool,
+    /// The IN transfer of this answer (from 1) is STALLed once.
+    pub stall_in: Option<u32>,
+    /// The IN transfer of this answer is a short packet once.
+    pub short_in: Option<u32>,
+    /// This OUT packet (from 1) is STALLed and not taken.
+    pub stall_out: Option<u32>,
 }
 
 /// The USB vendor id.
@@ -214,6 +264,10 @@ enum State {
     Reading { step: usize, reads: u8 },
     /// The status said cancel; nothing to read.
     Cancelled,
+    /// The host waits for a status that never comes: a trigger that
+    /// never fires with nobody at the button, or a SETUP the device
+    /// STALLed. `marked` once the event point was taken.
+    Stuck { marked: bool },
 }
 
 /// The analyzer behind the endpoints.
@@ -230,6 +284,10 @@ pub struct Analyzer {
     answer: Option<[u8; PACKET]>,
     /// SETUP packets taken.
     pub captures: usize,
+    /// Nobody presses the button (`button=0`).
+    pub no_button: bool,
+    /// The event point was reached and not yet taken.
+    point: bool,
 }
 
 impl Analyzer {
@@ -243,7 +301,19 @@ impl Analyzer {
             reads: 0,
             answer: None,
             captures: 0,
+            no_button: false,
+            point: false,
         }
+    }
+
+    /// A SETUP the device STALLed: the host waits for its status.
+    pub fn setup_lost(&mut self) {
+        self.state = State::Stuck { marked: false };
+    }
+
+    /// Whether the event point was reached since last asked.
+    pub fn take_point(&mut self) -> bool {
+        std::mem::take(&mut self.point)
     }
 
     /// Checks the padding behind `used` command bytes.
@@ -279,7 +349,7 @@ impl Analyzer {
         Self::check_padding("SETUP", p, 9, v);
         let b = |i: usize| p.get(i).copied().unwrap_or(CMD_PAD);
         match self.state {
-            State::Idle | State::Cancelled => {}
+            State::Idle | State::Cancelled | State::Stuck { .. } => {}
             State::Armed { .. } => v.report("SETUP while a capture runs"),
             State::Reading { step, reads } => v.report(format!(
                 "SETUP before the previous capture was read: SETPOS {step} of 4, {reads} READs"
@@ -328,6 +398,7 @@ impl Analyzer {
             State::Idle => v.report("SETPOS with no capture to read"),
             State::Armed { .. } => v.report("SETPOS before the capture's status was read"),
             State::Cancelled => v.report("SETPOS after a cancelled capture"),
+            State::Stuck { .. } => v.report("SETPOS while the status never came"),
             State::Reading { step, reads } => {
                 if step > 0 && reads != 2 {
                     v.report(format!("SETPOS after {reads} READs; the driver reads two"));
@@ -368,6 +439,7 @@ impl Analyzer {
             State::Idle => v.report("READ with no capture to read"),
             State::Armed { .. } => v.report("READ before the capture's status was read"),
             State::Cancelled => v.report("READ after a cancelled capture"),
+            State::Stuck { .. } => v.report("READ while the status never came"),
         }
         if self.answer.is_some() {
             v.report("READ while the previous answer is unread");
@@ -390,6 +462,7 @@ impl Analyzer {
             State::Reading { reads: 0, .. } => "after SETUP's status or a SETPOS",
             State::Reading { .. } => "after a READ was answered",
             State::Cancelled => "after a cancelled capture",
+            State::Stuck { .. } => "waiting for a status that never comes",
         }
     }
 
@@ -398,9 +471,21 @@ impl Analyzer {
         if max != PACKET {
             v.report(format!("IN transfer of {max} bytes, the device sends {PACKET}"));
         }
+        if let State::Stuck { marked } = self.state {
+            if !marked {
+                self.point = true;
+                self.state = State::Stuck { marked: true };
+            }
+            return Reply::Nak;
+        }
         if let State::Armed { offers, cancel } = self.state {
             if offers > 0 {
                 self.state = State::Armed { offers: offers - 1, cancel };
+                return Reply::Nak;
+            }
+            if cancel && self.no_button {
+                self.state = State::Stuck { marked: true };
+                self.point = true;
                 return Reply::Nak;
             }
             let mut status = [0u8; PACKET];
@@ -449,6 +534,12 @@ pub struct Pickit2 {
     descriptors: Descriptors,
     hid: HidInterface,
     analyzer: Analyzer,
+    faults: Faults,
+    /// Answers (IN data) and OUT packets so far, for the faults.
+    answers: u32,
+    outs: u32,
+    /// An answer the faulted IN transfer did not carry, for the next.
+    again: Option<Vec<u8>>,
 }
 
 impl Pickit2 {
@@ -484,6 +575,10 @@ impl Pickit2 {
             },
             hid,
             analyzer: Analyzer::new(delay),
+            faults: Faults::default(),
+            answers: 0,
+            outs: 0,
+            again: None,
         }
     }
 }
@@ -513,6 +608,13 @@ impl DeviceModel for Pickit2 {
             v.report(format!("OUT transfer to endpoint {ep}; commands go to endpoint 1"));
             return Reply::Stall;
         }
+        self.outs += 1;
+        if self.faults.stall_out == Some(self.outs) {
+            if data.first() == Some(&CMD_SETUP) {
+                self.analyzer.setup_lost();
+            }
+            return Reply::Stall;
+        }
         self.analyzer.command(data, v);
         Reply::ack()
     }
@@ -522,14 +624,40 @@ impl DeviceModel for Pickit2 {
             v.report(format!("IN transfer from endpoint {ep}; answers come on endpoint 1"));
             return Reply::Stall;
         }
-        self.analyzer.poll(max, v)
+        if let Some(d) = self.again.take() {
+            return Reply::Data(d);
+        }
+        let reply = self.analyzer.poll(max, v);
+        let Reply::Data(d) = reply else {
+            return reply;
+        };
+        self.answers += 1;
+        if self.faults.stall_in == Some(self.answers) {
+            self.again = Some(d);
+            return Reply::Stall;
+        }
+        if self.faults.short_in == Some(self.answers) {
+            let short = d[..PACKET / 2].to_vec();
+            self.again = Some(d);
+            return Reply::Data(short);
+        }
+        Reply::Data(d)
     }
 
     fn reset(&mut self) {
         // A reset ends whatever capture was armed or half read; the
-        // counter in memory stays the same.
+        // counter in memory stays the same, and so do the faults.
         self.hid.reset();
+        let no_button = self.analyzer.no_button;
         self.analyzer = Analyzer::new(self.analyzer.delay);
+        self.analyzer.no_button = no_button;
+        self.answers = 0;
+        self.outs = 0;
+        self.again = None;
+    }
+
+    fn take_event_point(&mut self) -> bool {
+        self.analyzer.take_point()
     }
 }
 
@@ -719,5 +847,56 @@ mod tests {
         dev.in_transfer(1, PACKET, &mut v);
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
         assert_eq!(v.drain().len(), 1, "IN after a cancel");
+    }
+
+    fn faulty(options: &[(&str, &str)]) -> Box<dyn DeviceModel> {
+        let o: Vec<(String, String)> =
+            options.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        build(&o).unwrap()
+    }
+
+    #[test]
+    fn faults_are_off_by_default_and_parsed() {
+        for bad in [("button", "2"), ("stall-in", "0"), ("short-in", "x"), ("stall-out", "")] {
+            let o = vec![(bad.0.to_owned(), bad.1.to_owned())];
+            assert!(build(&o).is_err(), "{bad:?}");
+        }
+        let mut dev = faulty(&[]);
+        assert!(!dev.take_event_point());
+    }
+
+    #[test]
+    fn stalls_and_short_packets_come_once_before_the_answer() {
+        let mut v = Violations::default();
+        let setup = packet(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]);
+        for (k, first) in [("stall-in", Reply::Stall), ("short-in", Reply::Data(vec![0; 32]))] {
+            let mut dev = faulty(&[("delay", "0"), (k, "1")]);
+            dev.out(1, &setup, &mut v);
+            assert_eq!(dev.in_transfer(1, PACKET, &mut v), first, "{k}");
+            assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Data(vec![0; PACKET]), "{k}");
+            assert!(v.is_empty(), "{k}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn a_wait_for_ever_is_the_event_point() {
+        let mut v = Violations::default();
+        // Nobody at the button.
+        let mut dev = faulty(&[("delay", "1"), ("button", "0")]);
+        dev.out(1, &packet(&[CMD_SETUP, 1, 0x0c, 0x0c, 0x0c, 1, 0, 0, 0]), &mut v);
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert!(!dev.take_event_point(), "the delay first");
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert!(dev.take_event_point());
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert!(!dev.take_event_point(), "once");
+        assert!(v.is_empty(), "{v:?}");
+        // A stalled SETUP.
+        let mut dev = faulty(&[("stall-out", "1")]);
+        let setup = packet(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(dev.out(1, &setup, &mut v), Reply::Stall);
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert!(dev.take_event_point());
+        assert!(v.is_empty(), "{v:?}");
     }
 }

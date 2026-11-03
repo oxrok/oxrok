@@ -17,6 +17,19 @@
 //! the kernel has configured the device. The exit status is 2 when any
 //! violation was logged.
 //!
+//! `arm EVENT WHEN` arms a mid-run event for the run that follows (the
+//! next `reset` disarms it): `EVENT` is `unplug` or `interrupt`, `WHEN`
+//! is `in=EP:N` (the Nth IN transfer on endpoint EP completed),
+//! `out=EP:N` or `model` (the point the model marks,
+//! `DeviceModel::take_event_point`). When it fires, the log gets an
+//! `unplug` or `interrupt` line right after the transfer that fired it,
+//! and an `EVENT unplug` or `EVENT interrupt` line is printed; for an
+//! unplug, once the device is off the bus. An interrupt is the
+//! harness's to deliver (SIGINT to the tool). An unplugged device comes
+//! back with `replug`, or with the next `reset`, which prints
+//! `REPLUGGED port=...` with the new nodes, its enumeration in a
+//! `replug` section of the log.
+//!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
 //! with `--all` every attached port. A running session's port carries
@@ -44,6 +57,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use oxrok_emu::device::Device;
+use oxrok_emu::model::{Arm, Event};
 use oxrok_emu::txlog::TxLog;
 use oxrok_emu::usbip::Server;
 use oxrok_emu::{Result, models, usbip, vhci};
@@ -286,6 +300,7 @@ enum Input {
     Line(String),
     End,
     Renumerate(String),
+    Event(Event),
 }
 
 /// Parses `KEY=VALUE` options.
@@ -310,6 +325,10 @@ struct Attachment<'a> {
     log: &'a Mutex<TxLog>,
     device: &'a Mutex<Device>,
     socket: Option<std::net::TcpStream>,
+    /// An armed unplug took the device off the bus, from this port,
+    /// which a replug wants back.
+    unplugged: bool,
+    unplugged_port: Option<u8>,
 }
 
 impl Attachment<'_> {
@@ -358,6 +377,9 @@ impl Attachment<'_> {
     /// the section of the run before, whose transactions a case
     /// compares.
     fn reset(&mut self, model: &str, options: &[(String, String)], attach: bool) -> Result<()> {
+        if let Some(fields) = self.replug()? {
+            println!("REPLUGGED {fields}");
+        }
         let fresh = models::build(model, options)?;
         let again = {
             let mut d = self.device.lock().expect("device lock");
@@ -383,7 +405,6 @@ impl Attachment<'_> {
     /// again (the server logged the two lines already when it passes
     /// `resume`).
     fn reattach(&mut self, why: &str, resume: Option<String>) -> Result<String> {
-        let port = self.state.port.lock().expect("port lock").take();
         let ids = {
             let d = self.device.lock().expect("device lock");
             let m = d.model_descriptors();
@@ -391,7 +412,7 @@ impl Attachment<'_> {
         };
         let section = {
             let mut log = self.log.lock().expect("log lock");
-            log.event(&format!("{why}: detaching port {port:?}"));
+            log.event(&format!("{why}: detaching"));
             let r = if let Some(r) = resume {
                 r
             } else {
@@ -403,6 +424,15 @@ impl Attachment<'_> {
             log.section("renumeration");
             r
         };
+        let port = self.detach()?;
+        self.log.lock().expect("log lock").event(&format!("{why}: attaching again"));
+        self.attach(port, Some(&section))
+    }
+
+    /// Takes the device off the bus: detaches its port, drops the
+    /// connection and waits for the port to be free. Returns the port.
+    fn detach(&mut self) -> Result<Option<u8>> {
+        let port = self.state.port.lock().expect("port lock").take();
         if let Some(p) = port {
             let ours =
                 vhci::attached_ports(Some(self.devid)).map(|ps| ps.iter().any(|s| s.port == p))?;
@@ -425,8 +455,32 @@ impl Attachment<'_> {
             }
             thread::sleep(Duration::from_millis(20));
         }
-        self.log.lock().expect("log lock").event(&format!("{why}: attaching again"));
-        self.attach(port, Some(&section))
+        Ok(port)
+    }
+
+    /// An armed event fired (its log line is written already): an
+    /// unplug takes the device off the bus, when attached, until
+    /// [`Attachment::replug`]; then `EVENT WORD` says so.
+    fn fired(&mut self, event: Event, attach: bool) -> Result<()> {
+        if event == Event::Unplug && attach {
+            self.log.lock().expect("log lock").event("unplug: detaching");
+            self.unplugged_port = self.detach()?;
+            self.unplugged = true;
+        }
+        println!("EVENT {}", event.word());
+        Ok(())
+    }
+
+    /// Puts an unplugged device back on the bus, on its port when that
+    /// is free, the kernel's enumeration in a `replug` section; returns
+    /// the `READY` fields, or `None` when the device is not unplugged.
+    fn replug(&mut self) -> Result<Option<String>> {
+        if !std::mem::take(&mut self.unplugged) {
+            return Ok(None);
+        }
+        self.log.lock().expect("log lock").section("replug");
+        let port = self.unplugged_port.take();
+        self.attach(port, None).map(Some)
     }
 }
 
@@ -437,6 +491,20 @@ fn forward_renumerations(inputs: mpsc::Sender<Input>) -> mpsc::Sender<String> {
     thread::spawn(move || {
         while let Ok(resume) = recv.recv() {
             if inputs.send(Input::Renumerate(resume)).is_err() {
+                break;
+            }
+        }
+    });
+    send
+}
+
+/// A channel for the server's armed events that fired, passed on to the
+/// main loop's inputs.
+fn forward_events(inputs: mpsc::Sender<Input>) -> mpsc::Sender<Event> {
+    let (send, recv) = mpsc::channel::<Event>();
+    thread::spawn(move || {
+        while let Ok(event) = recv.recv() {
+            if inputs.send(Input::Event(event)).is_err() {
                 break;
             }
         }
@@ -488,6 +556,7 @@ fn exit_on_signal(state: Arc<Attached>) -> Result<()> {
     .map_err(|e| format!("signal handler: {e}").into())
 }
 
+#[allow(clippy::too_many_lines)]
 fn serve(args: &Serve) -> Result<usize> {
     let initial_options = parse_options(&args.options)?;
     let mut options = initial_options.clone();
@@ -497,8 +566,10 @@ fn serve(args: &Serve) -> Result<usize> {
     let device = Arc::new(Mutex::new(Device::new(model)));
     let (tx, rx) = mpsc::channel();
     let renum_send = forward_renumerations(tx.clone());
+    let event_send = forward_events(tx.clone());
     let server = Server::new(Arc::clone(&device), Arc::clone(&log), BUSID, BUSNUM, pick_devnum())
-        .on_renumeration(renum_send);
+        .on_renumeration(renum_send)
+        .on_event(event_send);
     let devid = server.devid();
     let listener = TcpListener::bind(&args.listen)?;
     let addr = listener.local_addr()?;
@@ -523,6 +594,8 @@ fn serve(args: &Serve) -> Result<usize> {
         log: &log,
         device: &device,
         socket: None,
+        unplugged: false,
+        unplugged_port: None,
     };
     if args.attach {
         if !vhci::available() {
@@ -544,6 +617,12 @@ fn serve(args: &Serve) -> Result<usize> {
                         Ok(fields) => println!("RENUMERATED {fields}"),
                         Err(e) => break Err(e),
                     }
+                }
+                continue;
+            }
+            Input::Event(event) => {
+                if let Err(e) = att.fired(event, args.attach) {
+                    break Err(e);
                 }
                 continue;
             }
@@ -579,6 +658,22 @@ fn serve(args: &Serve) -> Result<usize> {
                 }
                 println!("OK {line}");
             }
+            "arm" => match Arm::parse(rest) {
+                Ok(arm) => {
+                    device.lock().expect("device lock").arm(arm);
+                    println!("OK {line}");
+                }
+                Err(e) => println!("ERR {line}: {e}"),
+            },
+            "replug" => match att.replug() {
+                Ok(fields) => {
+                    if let Some(fields) = fields {
+                        println!("REPLUGGED {fields}");
+                    }
+                    println!("OK {line}");
+                }
+                Err(e) => break Err(e),
+            },
             "detach" | "quit" => {
                 println!("OK {line}");
                 break Ok(());
