@@ -11,6 +11,8 @@
 //! bulk_out 02 04 -> 1
 //! bulk_in 81 64 -> 3160
 //! bulk_in 81 64 -> err timeout
+//! int_out 01 b9 -> 1
+//! int_in 81 64 -> 00
 //! ```
 //!
 //! Control requests are `bmRequestType bRequest wValue wIndex` in hex,
@@ -97,6 +99,10 @@ pub enum Call {
     BulkOut(u8, Payload),
     /// `bulk_in` with the requested length.
     BulkIn(u8, usize),
+    /// `interrupt_out`.
+    IntOut(u8, Payload),
+    /// `interrupt_in` with the requested length.
+    IntIn(u8, usize),
 }
 
 /// What a call returned.
@@ -227,6 +233,12 @@ impl Fixture {
                 }
                 Call::BulkIn(ep, len) => {
                     let _ = write!(s, "bulk_in {ep:02x} {len}");
+                }
+                Call::IntOut(ep, data) => {
+                    let _ = write!(s, "int_out {ep:02x} {}", payload(data));
+                }
+                Call::IntIn(ep, len) => {
+                    let _ = write!(s, "int_in {ep:02x} {len}");
                 }
             }
             s.push_str(" -> ");
@@ -515,6 +527,8 @@ fn parse_call(s: &str) -> std::result::Result<Call, String> {
         "ctl_in" => Call::ControlIn(request()?, num(5)?),
         "bulk_out" => Call::BulkOut(h8(1)?, parse_payload(field(2)?)?),
         "bulk_in" => Call::BulkIn(h8(1)?, num(2)?),
+        "int_out" => Call::IntOut(h8(1)?, parse_payload(field(2)?)?),
+        "int_in" => Call::IntIn(h8(1)?, num(2)?),
         other => return Err(format!("unknown call {other}")),
     })
 }
@@ -530,7 +544,9 @@ fn parse_outcome(s: &str, call: &Call) -> std::result::Result<Outcome, String> {
         return Ok(Outcome::Err(kind.to_owned(), msg));
     }
     Ok(match call {
-        Call::ControlIn(..) | Call::BulkIn(..) | Call::Interfaces => Outcome::Data(unhex(s)?),
+        Call::ControlIn(..) | Call::BulkIn(..) | Call::IntIn(..) | Call::Interfaces => {
+            Outcome::Data(unhex(s)?)
+        }
         _ => Outcome::Count(s.parse().map_err(|_| format!("bad count {s}"))?),
     })
 }
@@ -672,6 +688,16 @@ impl Transport for Recorder {
         self.log(Call::BulkIn(endpoint, len), r, |d| Outcome::Data(d.clone()))
     }
 
+    fn interrupt_out(&mut self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
+        let r = self.inner.interrupt_out(endpoint, data, timeout);
+        self.log(Call::IntOut(endpoint, Payload::of(data)), r, |n| Outcome::Count(*n))
+    }
+
+    fn interrupt_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        let r = self.inner.interrupt_in(endpoint, len, timeout);
+        self.log(Call::IntIn(endpoint, len), r, |d| Outcome::Data(d.clone()))
+    }
+
     /// Each completed transfer is recorded as a `bulk_in` of the
     /// transfer size, so a stream replays through the same steps.
     fn bulk_in_stream(
@@ -691,12 +717,12 @@ impl Transport for Recorder {
 }
 
 fn is_read(call: &Call) -> bool {
-    matches!(call, Call::ControlIn(..) | Call::BulkIn(..))
+    matches!(call, Call::ControlIn(..) | Call::BulkIn(..) | Call::IntIn(..))
 }
 
 /// A command a device answers through reads; claims and resets are not.
 fn is_command(call: &Call) -> bool {
-    matches!(call, Call::ControlOut(..) | Call::BulkOut(..))
+    matches!(call, Call::ControlOut(..) | Call::BulkOut(..) | Call::IntOut(..))
 }
 
 struct RecordedStream {
@@ -957,6 +983,14 @@ impl Transport for Replay {
         self.state().data(&Call::BulkIn(endpoint, len))
     }
 
+    fn interrupt_out(&mut self, endpoint: u8, data: &[u8], _timeout: Duration) -> Result<usize> {
+        self.state().count(&Call::IntOut(endpoint, data.to_vec().into()))
+    }
+
+    fn interrupt_in(&mut self, endpoint: u8, len: usize, _timeout: Duration) -> Result<Vec<u8>> {
+        self.state().data(&Call::IntIn(endpoint, len))
+    }
+
     /// The stream shares the recording cursor: its reads are the
     /// `bulk_in` steps of the transfer size that follow.
     fn bulk_in_stream(
@@ -1040,6 +1074,37 @@ mod tests {
         assert_eq!(e, "device error: device disconnected");
         r.finish().unwrap();
         assert!(r.reset().unwrap_err().to_string().contains("past the end"));
+    }
+
+    #[test]
+    fn interrupt_transfers_round_trip_and_replay() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=04d8 pid=0033 version=0000 bus=0 addr=0\n\
+            claim 0 -> ok\n\
+            int_out 01 b9ad -> 2\n\
+            int_in 81 64 -> 0102\n\
+            int_in 81 64 -> err timeout\n\
+            release 0 -> ok\n";
+        let f = Fixture::parse(text).unwrap();
+        assert_eq!(f.steps[1].call, Call::IntOut(1, vec![0xb9, 0xad].into()));
+        assert_eq!(f.steps[2].call, Call::IntIn(0x81, 64));
+        assert_eq!(f.to_text(), text);
+        let t = Duration::from_millis(10);
+        let mut r = Replay::from_text(text).unwrap();
+        r.claim_interface(0).unwrap();
+        assert_eq!(r.interrupt_out(1, &[0xb9, 0xad], t).unwrap(), 2);
+        assert_eq!(r.interrupt_in(0x81, 64, t).unwrap(), [1, 2]);
+        assert!(matches!(r.interrupt_in(0x81, 64, t), Err(Error::Timeout)));
+        r.release_interface(0).unwrap();
+        r.finish().unwrap();
+        // A recording of the replay writes the same fixture.
+        let mut rec = Recorder::new(Box::new(Replay::from_text(text).unwrap()));
+        rec.claim_interface(0).unwrap();
+        rec.interrupt_out(1, &[0xb9, 0xad], t).unwrap();
+        rec.interrupt_in(0x81, 64, t).unwrap();
+        let _ = rec.interrupt_in(0x81, 64, t);
+        rec.release_interface(0).unwrap();
+        assert_eq!(rec.finish().steps, f.steps);
     }
 
     #[test]

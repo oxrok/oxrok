@@ -46,10 +46,130 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
             let value = device
                 .get(&key, group.as_deref())
                 .map_err(|e| Error::Arg(format!("Failed to get '{name}': {e}")))?;
-            println!("{value}");
+            println!("{}", get_text(&value));
         }
     }
     device.close()
+}
+
+/// A `--get` value as sigrok-cli prints it: `g_variant_print` of the
+/// value's `GVariant` without type annotations, except for a measured
+/// quantity, which it writes as `mq/flag/...` (our `Display`). So a
+/// string is a quoted literal (`'1.5'`), a double has 17 significant
+/// digits and always a point or exponent (`2.0`,
+/// `0.10000000000000001`), a rational or a range is a tuple (`(1,
+/// 1000)`, `(1.0, 2.5)`) and a key/value pair a one entry dictionary
+/// (`{'k': 'v'}`). Strings escape what `g_unichar_isprint` rejects
+/// except unassigned code points, which would need the Unicode tables
+/// `GLib` was built with.
+fn get_text(value: &Value) -> String {
+    match value {
+        Value::Str(s) => glib_string(s),
+        Value::F64(v) => glib_double(*v),
+        Value::Rational(p, q) | Value::RangeU64(p, q) => format!("({p}, {q})"),
+        Value::RangeF64(a, b) => format!("({}, {})", glib_double(*a), glib_double(*b)),
+        Value::KeyValue(k, v) => format!("{{{}: {}}}", glib_string(k), glib_string(v)),
+        Value::Bool(_) | Value::U64(_) | Value::I32(_) | Value::Mq(..) => value.to_string(),
+    }
+}
+
+/// A double as `g_variant_print` writes it: `g_ascii_dtostr` (C's
+/// `%.17g`), with `.0` added when that has no point, exponent or
+/// `inf`/`nan`.
+fn glib_double(v: f64) -> String {
+    if v.is_nan() {
+        return "nan".to_owned();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "inf" } else { "-inf" }.to_owned();
+    }
+    let trim = |t: &str| -> String {
+        if t.contains('.') {
+            t.trim_end_matches('0').trim_end_matches('.').to_owned()
+        } else {
+            t.to_owned()
+        }
+    };
+    // %.17g: the exponent of the value rounded to 17 digits picks the
+    // style, then trailing zeros go.
+    let sci = format!("{v:.16e}");
+    let (mantissa, exp) = sci.split_once('e').expect("{:e} has an exponent");
+    let exp: i32 = exp.parse().expect("{:e} exponent");
+    let mut out = if (-4..17).contains(&exp) {
+        let precision = usize::try_from(16 - exp).expect("0 to 20");
+        trim(&format!("{v:.precision$}"))
+    } else {
+        let sign = if exp < 0 { '-' } else { '+' };
+        format!("{}e{sign}{:02}", trim(mantissa), exp.unsigned_abs())
+    };
+    if !out.contains(['.', 'e']) {
+        out.push_str(".0");
+    }
+    out
+}
+
+/// A string literal as `g_variant_print` writes it: in single quotes,
+/// or double ones when it holds a single quote; `\`, the quote and
+/// what does not print escaped.
+fn glib_string(s: &str) -> String {
+    use std::fmt::Write as _;
+    let quote = if s.contains('\'') { '"' } else { '\'' };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        if c == quote || c == '\\' {
+            out.push('\\');
+        }
+        if glib_isprint(c) {
+            out.push(c);
+            continue;
+        }
+        let _ = match c {
+            '\u{07}' => out.write_str("\\a"),
+            '\u{08}' => out.write_str("\\b"),
+            '\u{0c}' => out.write_str("\\f"),
+            '\n' => out.write_str("\\n"),
+            '\r' => out.write_str("\\r"),
+            '\t' => out.write_str("\\t"),
+            '\u{0b}' => out.write_str("\\v"),
+            c if u32::from(c) < 0x1_0000 => write!(out, "\\u{:04x}", u32::from(c)),
+            c => write!(out, "\\U{:08x}", u32::from(c)),
+        };
+    }
+    out.push(quote);
+    out
+}
+
+/// `g_unichar_isprint`: everything but control (Cc), format (Cf),
+/// surrogate (not a `char`) and unassigned characters; the last are
+/// taken as printable here.
+fn glib_isprint(c: char) -> bool {
+    // The format characters (general category Cf) of Unicode 15.1.
+    const FORMAT: [(u32, u32); 21] = [
+        (0x00ad, 0x00ad),
+        (0x0600, 0x0605),
+        (0x061c, 0x061c),
+        (0x06dd, 0x06dd),
+        (0x070f, 0x070f),
+        (0x0890, 0x0891),
+        (0x08e2, 0x08e2),
+        (0x180e, 0x180e),
+        (0x200b, 0x200f),
+        (0x202a, 0x202e),
+        (0x2060, 0x2064),
+        (0x2066, 0x206f),
+        (0xfeff, 0xfeff),
+        (0xfff9, 0xfffb),
+        (0x110bd, 0x110bd),
+        (0x110cd, 0x110cd),
+        (0x13430, 0x1343f),
+        (0x1bca0, 0x1bca3),
+        (0x1d173, 0x1d17a),
+        (0xe0001, 0xe0001),
+        (0xe0020, 0xe007f),
+    ];
+    let u = u32::from(c);
+    !c.is_control() && !FORMAT.iter().any(|&(lo, hi)| (lo..=hi).contains(&u))
 }
 
 /// `--set`.
@@ -157,4 +277,60 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     result?;
     pipeline.check_limit(limit_samples);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every expectation below is what `g_variant_print` printed for
+    /// the same value (`GLib` 2.88, a small C program).
+    #[test]
+    fn get_prints_strings_as_glib_does() {
+        let s = |t: &str| get_text(&Value::Str(t.into()));
+        assert_eq!(s("1.5"), "'1.5'");
+        assert_eq!(s("it's"), "\"it's\"");
+        // Double quotes for any single quote, the double quote escaped.
+        assert_eq!(s("a'\"b\\\n"), "\"a'\\\"b\\\\\\n\"");
+        assert_eq!(s("a\"b"), "'a\"b'");
+        assert_eq!(s("\u{e9}x\u{7f}"), "'\u{e9}x\\u007f'");
+        assert_eq!(s("\u{1}"), "'\\u0001'");
+        assert_eq!(s("\u{7}\u{8}\u{b}\u{c}\u{1b}"), "'\\a\\b\\v\\f\\u001b'");
+        // Format characters do not print; private use and emoji do.
+        assert_eq!(s("a\u{200b}b"), "'a\\u200bb'");
+        assert_eq!(s("\u{feff}x"), "'\\ufeffx'");
+        assert_eq!(s("\u{85}"), "'\\u0085'");
+        assert_eq!(s("\u{ad}"), "'\\u00ad'");
+        assert_eq!(s("\u{e0001}"), "'\\U000e0001'");
+        assert_eq!(s("\u{e000}\u{1f600}"), "'\u{e000}\u{1f600}'");
+    }
+
+    #[test]
+    fn get_prints_other_values_as_glib_does() {
+        let d = |v: f64| get_text(&Value::F64(v));
+        assert_eq!(d(2.0), "2.0");
+        assert_eq!(d(0.1), "0.10000000000000001");
+        assert_eq!(d(1e20), "1e+20");
+        assert_eq!(d(1e17), "1e+17");
+        assert_eq!(d(1e16), "10000000000000000.0");
+        assert_eq!(d(123_456_789_012_345_678.0), "1.2345678901234568e+17");
+        assert_eq!(d(1e-5), "1.0000000000000001e-05");
+        assert_eq!(d(0.0001), "0.0001");
+        assert_eq!(d(-0.0), "-0.0");
+        assert_eq!(d(1.5e300), "1.5000000000000001e+300");
+        assert_eq!(d(5e-324), "4.9406564584124654e-324");
+        assert_eq!(d(f64::INFINITY), "inf");
+        assert_eq!(d(f64::NEG_INFINITY), "-inf");
+        assert_eq!(d(f64::NAN), "nan");
+        assert_eq!(d(3.0e-10), "3e-10");
+        assert_eq!(d(100.0), "100.0");
+        assert_eq!(get_text(&Value::Rational(1, 1000)), "(1, 1000)");
+        assert_eq!(get_text(&Value::RangeU64(1, 1000)), "(1, 1000)");
+        assert_eq!(get_text(&Value::RangeF64(1.0, 2.5)), "(1.0, 2.5)");
+        assert_eq!(get_text(&Value::RangeF64(-0.5, 1e-7)), "(-0.5, 9.9999999999999995e-08)");
+        assert_eq!(get_text(&Value::KeyValue("k".into(), "it's".into())), "{'k': \"it's\"}");
+        assert_eq!(get_text(&Value::I32(-3)), "-3");
+        assert_eq!(get_text(&Value::U64(u64::MAX)), "18446744073709551615");
+        assert_eq!(get_text(&Value::Bool(true)), "true");
+    }
 }

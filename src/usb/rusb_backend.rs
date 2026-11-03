@@ -204,6 +204,19 @@ impl Transport for Rusb {
         self.handle.write_bulk(endpoint, data, timeout).map_err(map)
     }
 
+    fn interrupt_out(&mut self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
+        self.handle.write_interrupt(endpoint, data, timeout).map_err(map)
+    }
+
+    fn interrupt_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        let mps = self.max_packet_size(endpoint)?.max(1);
+        let len = len.div_ceil(mps).max(1) * mps;
+        let mut buf = vec![0u8; len];
+        let n = self.handle.read_interrupt(endpoint, &mut buf, timeout).map_err(map)?;
+        buf.truncate(n);
+        Ok(buf)
+    }
+
     /// libusb's synchronous API has no queue, so a thread reads back to
     /// back into a channel. The gap between two reads is the thread's
     /// turnaround, which is short but not zero; the nusb backend keeps

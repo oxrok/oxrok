@@ -1,0 +1,29 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    probe_names
+microchip-pickit2:conn=BUS.ADDR - Microchip PICkit2 with 3 channels: pin4 pin5 pin6
+Channel groups:
+    Logic: channels pin4 pin5 pin6
+Supported configuration options across all channel groups:
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      5 kHz
+      10 kHz
+      25 kHz
+      50 kHz
+      100 kHz
+      250 kHz
+      500 kHz
+      1 MHz (current)
+    limit_samples: 1024 (current)
+    Supported triggers: 0 1 r f 
+    captureratio:  - supported values:
+      0 (current)
+      1
+      2
+      3
+      4
+      5
+      6

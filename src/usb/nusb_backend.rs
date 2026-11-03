@@ -3,7 +3,9 @@
 use crate::core::Error;
 use crate::usb::{BulkStream, ControlRequest, Handle, Result, Transport, UsbDeviceInfo};
 use nusb::MaybeFuture;
-use nusb::transfer::{Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Out, Recipient};
+use nusb::transfer::{
+    Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Interrupt, Out, Recipient,
+};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -77,6 +79,8 @@ pub(crate) fn open(info: &UsbDeviceInfo) -> Result<Box<dyn Transport>> {
         interfaces: HashMap::new(),
         in_endpoints: HashMap::new(),
         out_endpoints: HashMap::new(),
+        int_in_endpoints: HashMap::new(),
+        int_out_endpoints: HashMap::new(),
     }))
 }
 
@@ -86,6 +90,8 @@ struct Nusb {
     interfaces: HashMap<u8, nusb::Interface>,
     in_endpoints: HashMap<u8, nusb::Endpoint<Bulk, In>>,
     out_endpoints: HashMap<u8, nusb::Endpoint<Bulk, Out>>,
+    int_in_endpoints: HashMap<u8, nusb::Endpoint<Interrupt, In>>,
+    int_out_endpoints: HashMap<u8, nusb::Endpoint<Interrupt, Out>>,
 }
 
 fn control_type(req: ControlRequest) -> (ControlType, Recipient) {
@@ -110,6 +116,39 @@ fn transfer_error(e: nusb::transfer::TransferError) -> Error {
         T::Disconnected => Error::device("device disconnected"),
         T::Stall => Error::device("endpoint stalled"),
         other => Error::Device(other.to_string()),
+    }
+}
+
+/// Claims an interface, detaching the kernel driver only when one is
+/// bound, as libsigrok's drivers do (`libusb_kernel_driver_active`,
+/// then `libusb_detach_kernel_driver`). nusb's detach-and-claim
+/// reattaches on release whether or not it detached anything, and on
+/// Linux that makes the kernel probe its drivers for the interface
+/// again: `usbhid` reads the serial number string while it probes even
+/// a device on its ignore list (the `PICkit2`), a control transfer
+/// libsigrok never causes.
+fn claim(
+    device: &nusb::Device,
+    interface: u8,
+) -> std::result::Result<nusb::Interface, nusb::Error> {
+    claim_or_detach(
+        || device.claim_interface(interface).wait(),
+        || device.detach_and_claim_interface(interface).wait(),
+        |e| e.kind() == nusb::ErrorKind::Busy,
+    )
+}
+
+/// The policy of [`claim`]: a plain claim first, the detaching one
+/// only when the plain one finds the interface `busy` (a kernel driver
+/// holds it).
+fn claim_or_detach<T, E>(
+    claim: impl FnOnce() -> std::result::Result<T, E>,
+    detach_and_claim: impl FnOnce() -> std::result::Result<T, E>,
+    busy: impl Fn(&E) -> bool,
+) -> std::result::Result<T, E> {
+    match claim() {
+        Err(e) if busy(&e) => detach_and_claim(),
+        r => r,
     }
 }
 
@@ -148,9 +187,33 @@ impl Nusb {
         Ok(self.out_endpoints.get_mut(&endpoint).expect("inserted"))
     }
 
+    fn int_in_endpoint(&mut self, endpoint: u8) -> Result<&mut nusb::Endpoint<Interrupt, In>> {
+        if !self.int_in_endpoints.contains_key(&endpoint) {
+            let ep = self
+                .interface_for(endpoint)?
+                .endpoint::<Interrupt, In>(endpoint)
+                .map_err(|e| map(&e, "usb"))?;
+            self.int_in_endpoints.insert(endpoint, ep);
+        }
+        Ok(self.int_in_endpoints.get_mut(&endpoint).expect("inserted"))
+    }
+
+    fn int_out_endpoint(&mut self, endpoint: u8) -> Result<&mut nusb::Endpoint<Interrupt, Out>> {
+        if !self.int_out_endpoints.contains_key(&endpoint) {
+            let ep = self
+                .interface_for(endpoint)?
+                .endpoint::<Interrupt, Out>(endpoint)
+                .map_err(|e| map(&e, "usb"))?;
+            self.int_out_endpoints.insert(endpoint, ep);
+        }
+        Ok(self.int_out_endpoints.get_mut(&endpoint).expect("inserted"))
+    }
+
     fn drop_endpoints(&mut self) {
         self.in_endpoints.clear();
         self.out_endpoints.clear();
+        self.int_in_endpoints.clear();
+        self.int_out_endpoints.clear();
     }
 
     /// Opens the device again. The handle caches the descriptors it
@@ -192,7 +255,7 @@ impl Transport for Nusb {
         if self.interfaces.contains_key(&interface) {
             return Ok(());
         }
-        let claimed = match self.device.detach_and_claim_interface(interface).wait() {
+        let claimed = match claim(&self.device, interface) {
             Ok(i) => i,
             Err(e) if e.kind() == nusb::ErrorKind::NotFound => {
                 // Right after a firmware renumeration macOS can hand out
@@ -211,9 +274,7 @@ impl Transport for Nusb {
                     .wait()
                     .map_err(|e| map(&e, &format!("set configuration {config}")))?;
                 self.reopen()?;
-                self.device
-                    .detach_and_claim_interface(interface)
-                    .wait()
+                claim(&self.device, interface)
                     .map_err(|e| map(&e, &format!("claim interface {interface}")))?
             }
             Err(e) => return Err(map(&e, &format!("claim interface {interface}"))),
@@ -371,6 +432,29 @@ impl Transport for Nusb {
             Err(e) => Err(transfer_error(e)),
         }
     }
+
+    fn interrupt_out(&mut self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize> {
+        let ep = self.int_out_endpoint(endpoint)?;
+        let mut buf = Buffer::new(data.len());
+        buf.extend_from_slice(data);
+        let c = ep.transfer_blocking(buf, timeout);
+        match c.status {
+            Ok(()) => Ok(c.actual_len),
+            Err(nusb::transfer::TransferError::Cancelled) if c.actual_len > 0 => Ok(c.actual_len),
+            Err(e) => Err(transfer_error(e)),
+        }
+    }
+
+    fn interrupt_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        let ep = self.int_in_endpoint(endpoint)?;
+        let mps = ep.max_packet_size().max(1);
+        let len = len.div_ceil(mps).max(1) * mps;
+        let c = ep.transfer_blocking(Buffer::new(len), timeout);
+        match c.status {
+            Ok(()) => Ok(c.buffer.into_vec()),
+            Err(e) => Err(transfer_error(e)),
+        }
+    }
 }
 
 struct NusbStream {
@@ -406,5 +490,35 @@ impl Drop for NusbStream {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::claim_or_detach;
+    use std::cell::Cell;
+
+    #[derive(Debug, PartialEq)]
+    enum E {
+        Busy,
+        Gone,
+    }
+
+    /// The detaching claim runs only when a driver holds the interface,
+    /// so a release never binds a kernel driver that was not bound.
+    #[test]
+    fn detaches_only_a_busy_interface() {
+        let detached = Cell::new(0);
+        let detach = || {
+            detached.set(detached.get() + 1);
+            Ok::<_, E>("detached")
+        };
+        let busy = |e: &E| *e == E::Busy;
+        assert_eq!(claim_or_detach(|| Ok("claimed"), detach, busy), Ok("claimed"));
+        assert_eq!(detached.get(), 0);
+        assert_eq!(claim_or_detach(|| Err(E::Gone), detach, busy), Err(E::Gone));
+        assert_eq!(detached.get(), 0);
+        assert_eq!(claim_or_detach(|| Err(E::Busy), detach, busy), Ok("detached"));
+        assert_eq!(detached.get(), 1);
     }
 }
