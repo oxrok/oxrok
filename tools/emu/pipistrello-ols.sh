@@ -68,6 +68,12 @@ emu_cases() {
     # Stages: one per character of a match.
     emu_case "two stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=10 -O bits
     emu_case "three stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=r1f -O bits
+    # Two stages at captureratio=0: trigger_at is -2, which the driver
+    # only tests against -1, so it sends 2 samples from before its
+    # sample buffer (glibc's chunk header, 0x91 then 0 today): 34
+    # samples for 32. The filter masks those two as xx, so heap bytes
+    # cannot make the case flaky; the count of columns still shows.
+    emu_case "ratio 0 two stages" --filter 's/^([0-9]+:)../\1xx/' -- -d $D -C 0-7 --samples 32 --triggers 3=10 -O bits
     emu_case "five stages" --stderr --expect-fail -- -d $D --samples 64 --triggers 3=10101
 
     # RLE: a run is a word and a count word (top bit set), counts of
@@ -144,6 +150,11 @@ emu_cases() {
     # bytes, the channel count never read.
     pols_options metadata=01414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414100200000002000
     emu_case "metadata long" --keep-header -- -d $D --scan
+    # No memory key: max_samples is 0, the read and delay counts go out
+    # as 0xffffffff and the driver sends an empty logic packet, which
+    # sigrok-cli's output dies on (SIGSEGV).
+    pols_options metadata=01414200200000002000
+    emu_case "no memory capture" --stderr --expect-fail -- -d $D -C 0-7 --samples 16 -O hex
     # The FPGA answers no metadata: the driver gives up.
     pols_options metadata=none
     emu_case "metadata none" --stderr --expect-fail -- -d $D --samples 10

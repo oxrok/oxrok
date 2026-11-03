@@ -61,11 +61,13 @@
 //! 15 (the RLE mode, which the driver fixes at 0), both test patterns,
 //! or every channel group disabled, a trigger config with a delay, a
 //! serial trigger or a channel number (the driver sends none, and the
-//! model has none), trigger value or edge bits outside the mask, a run
-//! before any read count, a read count beyond the memory and a delay
-//! count beyond the read count (`dev_acquisition_start` sends
-//! 0xffffffff for `captureratio=100`, where `delaycount` is 0; see
-//! below).
+//! model has none), trigger value or edge bits outside the mask, demux
+//! flags whose group bits 4-5 do not repeat bits 2-3 (`api.c` requires
+//! the replication, comment before `CMD_SET_FLAGS`), and a run before
+//! any read count. Counts are taken as they come, as the OLS takes
+//! them: a read count beyond the memory reads back the whole memory, a
+//! delay count beyond the read count captures that long (the driver
+//! sends 0xffffffff for `captureratio=100`, see below).
 //!
 //! **The metadata** answer, keys as `p_ols_get_metadata` parses them
 //! (type in bits 5-7: 0 a NUL terminated string, 1 a 32 bit big endian
@@ -130,15 +132,26 @@
 //! runs off the buffer: sigrok-cli dies of SIGSEGV (cases `101 samples`,
 //! `200 MHz 100 samples`). With two or more stages the trigger marker
 //! is `num_stages - 1` samples early, since the driver's start stage
-//! follows the last match by one sample, not by `num_stages`. These
-//! cannot be cases: a 4-stage trigger (`0=0101`) gets no start bit
-//! (`set_trigger` sets it on stage `num_stages`, 4, which does not
-//! exist), so the capture never starts and the driver polls for ever;
+//! follows the last match by one sample, not by `num_stages`. With two
+//! or more stages and `captureratio=0` (the default), `trigger_at` is
+//! `-num_stages` (`api.c` 524), which `protocol.c` 620 only tests
+//! against -1, so 642-645 send `num_stages` samples from before the
+//! sample buffer (glibc's chunk header): case `ratio 0 two stages`. A
+//! board whose metadata has no memory key (0x21) makes `max_samples`
+//! 0, so the read and delay counts go out as 0xffffffff and the driver
+//! sends a logic packet of length 0 that sigrok-cli's output dies on
+//! (case `no memory capture`). Pending the harness's `--hangs` (not on
+//! main yet), not cases so far: a 4-stage trigger (`3=1010`) gets no
+//! start bit (`set_trigger` sets it on stage `num_stages`, 4, which
+//! does not exist), so the capture never starts and the driver polls
+//! for ever; a 200 MHz capture with the default 32 channels takes each
+//! demux word for one sample and waits for ever for the rest;
 //! `captureratio=100` with a trigger sends a delay count of 0xffffffff
-//! (flagged); no sample limit sends a read count of 0xffffffff
-//! (flagged), then `g_try_malloc(0)` fails; a 200 MHz capture with the
-//! default 32 channels takes each demux word for one sample and waits
-//! for ever for the rest.
+//! (`api.c` 523, 562-565), which the device takes as 2^34 words to
+//! capture. sigrok-cli cannot capture without a sample limit
+//! (`main.c` 321 needs one, `--time` becomes one), so the driver's
+//! read count of 0xffffffff and `g_try_malloc(0)` for a missing limit
+//! are out of its reach.
 //!
 //! Options: `product=`, `manufacturer=`, `serial=` (empty: no string;
 //! the driver finds no board whose product is not `Pipistrello LX45`);
@@ -146,7 +159,7 @@
 //! answer, HEX four bytes); `metadata=none|HEX` (no answer, or the raw
 //! block); `name=`, `fpga-version=`, `channels=`, `memory=`,
 //! `max-rate=`, `protocol=` (the default block's values; `memory=` is
-//! also what the model holds a read count against); `ext-clock=HZ`; and
+//! also the memory the board has, whatever the block says); `ext-clock=HZ`; and
 //! the FTDI shell's faults ([`Faults`]): `stall=`, `in-stall=`, `idle=`
 //! (port B's IN endpoint is `0x83`).
 
@@ -545,6 +558,13 @@ impl Fpga {
                 if f & flag::GROUPS == flag::GROUPS {
                     v.report(format!("flags {f:#06x}: every channel group disabled"));
                 }
+                // api.c, before CMD_SET_FLAGS: in demux mode the lower two
+                // channel_disable bits must be replicated to the upper two.
+                if f & flag::DEMUX != 0 && (f >> 2) & 3 != (f >> 4) & 3 {
+                    v.report(format!(
+                        "flags {f:#06x}: demux with groups 3 and 4 not replicating groups 1 and 2"
+                    ));
+                }
                 self.flags = f;
             }
             cmd::DELAYCOUNT => self.delay = arg,
@@ -589,19 +609,6 @@ impl Fpga {
         let delay_words = (u64::from(self.delay) + 1) * 4;
         let stored = u64::from(if width == 3 { 4 } else { width });
         let capacity = u64::from(self.board.memory) / stored.max(1);
-        if read_words > capacity {
-            v.report(format!(
-                "read count {read:#x}: {read_words} words of {stored} bytes, the memory holds \
-                 {capacity}"
-            ));
-        }
-        if delay_words > read_words {
-            v.report(format!(
-                "delay count {:#x} beyond read count {read:#x}: the trigger falls outside \
-                 what is read back",
-                self.delay
-            ));
-        }
         self.out.clear();
         self.capture = Some(Capture {
             demux: self.flags & flag::DEMUX != 0,
@@ -1001,11 +1008,12 @@ mod tests {
         assert_eq!(d.len(), 16);
         assert_eq!(&d[..6], &[0x00, 0xff, 0x00, 0xff, 0x01, 0xff]);
         // Demux, groups 1 and 2: a word is samples 2k (high) and 2k+1.
-        configure(&mut dev, flag::DEMUX | 0x30, 0, 0, &mut v);
+        // Channels 0-7 as the driver asks: groups 2 and 4 disabled,
+        // group 3 replicating group 1, so bytes of samples 2k+1 and 2k.
+        configure(&mut dev, flag::DEMUX | 0x28, 0, 0, &mut v);
         write(&mut dev, &[cmd::RUN], &mut v);
-        // Groups 3 and 4 disabled: 2 bytes, sample 2k+1, per word.
         let d = read(&mut dev, &mut v);
-        assert_eq!(d, [7, 0, 5, 0, 3, 0, 1, 0]);
+        assert_eq!(d, [7, 6, 5, 4, 3, 2, 1, 0]);
         configure(&mut dev, flag::DEMUX, 0, 0, &mut v);
         write(&mut dev, &[cmd::RUN], &mut v);
         let d = read(&mut dev, &mut v);
@@ -1033,18 +1041,17 @@ mod tests {
         one(&long(cmd::SET_FLAGS, 0x1000), "RLE mode");
         one(&long(cmd::SET_FLAGS, 0x0c00), "both test patterns");
         one(&long(cmd::SET_FLAGS, 0x3c), "no group");
+        one(&long(cmd::SET_FLAGS, 0x31), "demux, groups 3 and 4 not replicated");
         one(&long(0xc2, 5), "a trigger delay");
         let mut dev = board();
         let mut v = Violations::default();
+        // Counts as the OLS takes them: a delay beyond the read count
+        // captures that long (here, for ever).
         dev.out(4, &long(cmd::SET_FLAGS, 0), &mut v);
-        dev.out(4, &long(cmd::READCOUNT, 1 << 20), &mut v);
-        dev.out(4, &[cmd::RUN], &mut v);
-        assert_eq!(v.drain().len(), 1, "a read count beyond the memory");
-        dev.out(4, &[cmd::RESET], &mut v);
         dev.out(4, &long(cmd::READCOUNT, 3), &mut v);
         dev.out(4, &long(cmd::DELAYCOUNT, 0xffff_ffff), &mut v);
         dev.out(4, &[cmd::RUN], &mut v);
-        assert_eq!(v.drain().len(), 1, "a delay beyond the read count");
+        assert!(v.is_empty(), "{v:?}");
         // The capture never ends: commands during it.
         dev.out(4, &[cmd::ID], &mut v);
         dev.out(4, &long(cmd::SET_FLAGS, 0), &mut v);
@@ -1065,6 +1072,23 @@ mod tests {
         let s = Setup { request_type: 0x40, request: 0x09, value: 16, index: 1, length: 0 };
         dev.control(s, &[], &mut v);
         assert!(v.is_empty(), "the kernel's latency timer on port A");
+    }
+
+    /// A read count beyond the memory reads back the whole memory.
+    #[test]
+    fn read_count_beyond_the_memory() {
+        let mut dev = PipistrelloOls::new(
+            config(Some("FTDI"), Some(PRODUCT), None),
+            Board { memory: 64, ..Board::default() },
+        );
+        let mut v = Violations::default();
+        configure(&mut dev, flag::FILTER, 0, 0xffff_ffff, &mut v);
+        write(&mut dev, &long(cmd::DELAYCOUNT, 3), &mut v);
+        write(&mut dev, &[cmd::RUN], &mut v);
+        let d = read(&mut dev, &mut v);
+        assert_eq!(d.len(), 64);
+        assert_eq!(&d[..4], &stimulus(15).to_le_bytes());
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
