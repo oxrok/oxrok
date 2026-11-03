@@ -26,11 +26,12 @@
 //!   the chip is taken to be an FX2LP (16 KiB); its stand-in size is the
 //!   model's (`tools/emu/lecroy-logicstudio.firmware`).
 //! - **Before the firmware** the FX2 enumerates as `05ff:a001` (a `0xC0`
-//!   EEPROM, assumed) and takes `ezusb_upload_firmware()`'s upload
-//!   (configuration 0 in the driver, which `ezusb.c` does not set when
-//!   the device is configured already), held byte for byte against the
-//!   stand-in; then it renumerates as `05ff:a002` on the same port, which
-//!   `dev_open()` waits up to 3 s of wall time for.
+//!   EEPROM, assumed) and takes `ezusb_upload_firmware()`'s upload:
+//!   `SET_CONFIGURATION` 0 (`USB_CONFIGURATION`, which `ezusb.c` sends
+//!   whatever the device's state, so every recorded scan starts with
+//!   it), the reset hold, the image, the release, held byte for byte
+//!   against the stand-in; then it renumerates as `05ff:a002` on the
+//!   same port, which `dev_open()` waits up to 3 s of wall time for.
 //! - **The firmware's device**: high speed, interface 0 with interrupt
 //!   IN 1 (`EP_INTR`, the 32 byte status packets, `INTR_BUF_SIZE`; a
 //!   32 byte endpoint and `bInterval` 1 are assumed), bulk IN 2
@@ -110,7 +111,12 @@
 //!   (`trigger_sample_offset` of the rate, 8 more with 16 channels,
 //!   0x18, one sample period): the model reports the time from which
 //!   the driver's arithmetic gives back the trigger sample, the only
-//!   account of that latency there is.
+//!   account of that latency there is. That makes the check of the
+//!   trigger's place self-referential: `trigger_ns()` is the inverse of
+//!   `handle_intr_data()`, so the driver always finds the trigger where
+//!   the model put it. It catches errors in the packet's layout, in the
+//!   memory's wrap and in the window shown, not in the latency, which
+//!   nothing here can check.
 //! - **The fetch** (`fetch_samples_async()`) makes the FPGA send the
 //!   whole memory, from byte 0, on bulk IN 2; the driver reads it at the
 //!   positions it computes (`sample_to_byte_offset()`), so the order is
@@ -137,7 +143,7 @@
 //! trigger at the capture ratio (10004 of 20000 at 50 % with 16
 //! channels, 20000 of 40000 with 8; after the last sample at 100 %);
 //! the runs that never end (no trigger, a trigger that never fires, a
-//! STALLed fetch, a short status packet, a halted sample endpoint, an
+//! stalled fetch, a short status packet, a halted sample endpoint, an
 //! unplug while waiting or fetching) were stopped after 3 s. Those runs
 //! reached 94.6 % of `protocol.c` (453 of 479 lines). The unit tests
 //! drive the model the same way.
@@ -158,7 +164,14 @@
 //! `wValue`, `wIndex` and length; register transfers other than the
 //! driver's; the fixed values (thresholds, status bytes, the `REG_UNK*`
 //! values); register writes to a blank FPGA other than the driver's stop
-//! before its first upload; a settle read before a design is loaded, or
+//! before its first upload; an upload (`0xb3`) not right after the stop
+//! and the three thresholds with `wValue` 0, and those thresholds
+//! anywhere else; an `ARM` or `FETCH` base other than the driver's
+//! (`magic_arm_trigger` 0x00 and `magic_fetch_samples` 0 after an
+//! upload's thresholds, 0x0c from an arm and 1 from a fetch, even one
+//! that failed; a stop takes 0x00 as well after an arm, the base of a
+//! new process's driver, which the board cannot tell from the old
+//! one); a settle read before a design is loaded, or
 //! out of the 0x0f-0x12 order; the trigger layout; an arm without the
 //! design, the thresholds, the status write, the channel group or the
 //! trigger since the upload, or with counts no capture ratio gives; a
@@ -166,6 +179,33 @@
 //! complete or another start; bulk IN transfers of other lengths than
 //! the driver's (17 KiB, then what is left, 16 KiB at most); a firmware
 //! upload to the running firmware.
+//!
+//! **The driver's bugs** (libsigrok `0bc24877`), which the model shows
+//! as the driver meets them:
+//!
+//! - `upload_fpga_bitstream()` logs a failed `0xb3` with
+//!   `libusb_error_name(ret)`, `ret` being `SR_ERR`, not the transfer's
+//!   `r` (`protocol.c:452-454`): `stall=upload` logs
+//!   `LIBUSB_ERROR_IO` whatever the error.
+//! - It returns from a failed verify read without
+//!   `sr_resource_close()` (`protocol.c:490-492`): the bitstream's
+//!   resource leaks (`stall=verify`).
+//! - `recv_bulk_transfer()` never looks at the transfer's status
+//!   (`protocol.c:1017-1027`): a failed or stalled sample transfer adds
+//!   its 0 bytes and is resubmitted for ever (`bulk_stall=1`, an unplug
+//!   during the fetch).
+//! - With no trigger `lls_start_acquisition()` submits the interrupt
+//!   transfer and arms nothing (`protocol.c:1119`), and
+//!   `recv_intr_transfer()` resubmits only a completed transfer
+//!   (`protocol.c:926-933`): the first 100 ms timeout ends the polling
+//!   and the acquisition waits for ever. `configure_trigger()` ignores
+//!   matches on disabled channels (`protocol.c:674`), so a trigger only
+//!   on disabled channels does the same.
+//! - 1 GHz is in `lls_set_samplerate()`'s table but not in the list
+//!   `config_list()` gives: `samplerate=1G` is taken, and never shown.
+//! - The driver lists no scan options (`config_list()` answers
+//!   `SR_CONF_SCAN_OPTIONS` with `SR_ERR_NA`), so libsigrok refuses any,
+//!   `conn=` included, and a board cannot be chosen among several.
 //!
 //! **Faults**, all off by default: `stall=NAME[:N]` STALLs the request
 //! (every one, or its Nth since the model was built; comma lists), NAME
@@ -707,6 +747,15 @@ pub struct LogicStudio {
     renumerate: bool,
     still: bool,
     fpga: Fpga,
+    /// The steps of the upload's prelude seen in order: the stop, then
+    /// each threshold with `wValue` 0 (`lls_setup_acquisition()`).
+    prelude: usize,
+    /// The driver's `magic_arm_trigger` and `magic_fetch_samples`: 0
+    /// once a new design has its thresholds, 0x0c from an arm and 1 from
+    /// a fetch, written or not (the driver sets them before the
+    /// transfer). A failed upload leaves them as they were.
+    arm_base: u16,
+    fetch_base: u16,
     /// Requests seen per kind, for the faults' Nth.
     counts: [u32; 5],
     faults: Faults,
@@ -728,6 +777,9 @@ impl LogicStudio {
             renumerate: false,
             still,
             fpga: Fpga::blank(),
+            prelude: 0,
+            arm_base: 0x00,
+            fetch_base: 0,
             counts: [0; 5],
             faults: Faults::default(),
         }
@@ -806,6 +858,12 @@ impl LogicStudio {
             }
             (CTRL_OUT, REQ_REGS) => {
                 if self.count(Request::Write) {
+                    // The driver moved its bases before it sent them.
+                    match (data.len(), data.first()) {
+                        (51, Some(&REG_ARM_TRIGGER)) => self.arm_base = 0x0c,
+                        (36, Some(&REG_UNK1_LO)) => self.fetch_base = 1,
+                        _ => {}
+                    }
                     return Reply::Stall;
                 }
                 self.write_transfer(setup, data, v);
@@ -838,6 +896,13 @@ impl LogicStudio {
                 if self.fpga.capture.as_ref().is_some_and(|c| !c.done) {
                     v.report("FPGA upload started during a capture");
                 }
+                if self.prelude != 1 + THRESHOLDS.len() {
+                    v.report(
+                        "FPGA upload not right after the stop and the three thresholds with \
+                         wValue 0",
+                    );
+                }
+                self.prelude = 0;
                 let memory = std::mem::take(&mut self.fpga.memory);
                 self.fpga = Fpga::blank();
                 self.fpga.memory = memory;
@@ -899,10 +964,22 @@ impl LogicStudio {
         }
         let regs: Vec<(u8, u16)> =
             data.chunks(3).map(|t| (t[0], u16::from_be_bytes([t[1], t[2]]))).collect();
+        let step = self.prelude;
+        self.prelude = 0;
         if (setup.value, setup.index) == (0, 0) {
-            // The thresholds before an upload, one each.
+            // The thresholds before an upload, one each, in order.
             match regs[..] {
-                [(reg, val)] if THRESHOLDS.contains(&(reg, val)) => {}
+                [(reg, val)] if THRESHOLDS.contains(&(reg, val)) => {
+                    if (1..=THRESHOLDS.len()).contains(&step) && THRESHOLDS[step - 1] == (reg, val)
+                    {
+                        self.prelude = step + 1;
+                    } else {
+                        v.report(format!(
+                            "threshold {reg:#04x} with wValue 0 out of place; the driver sends \
+                             {THRESHOLDS:02x?} so, in that order, between the stop and an upload"
+                        ));
+                    }
+                }
                 _ => v.report(format!(
                     "register write {regs:02x?} with wValue 0 wIndex 0; the driver sends only \
                      the thresholds {THRESHOLDS:02x?} so, one at a time"
@@ -921,18 +998,19 @@ impl LogicStudio {
         }
     }
 
-    /// Whether the base of an `ARM` pulse is one the driver uses: 0 after
-    /// an upload, 0x0c after an arm.
-    fn arm_base_ok(x: u16) -> bool {
-        x == 0x00 || x == 0x0c
-    }
-
-    /// `lls_stop_acquisition()`: `ARM` x then x|2.
+    /// `lls_stop_acquisition()`: `ARM` x then x|2, x the driver's
+    /// `magic_arm_trigger`, or 0x00 from a new process's driver, which
+    /// starts at 0 whatever the board did before.
     fn stop(&mut self, regs: &[(u8, u16)], v: &mut Violations) {
         let (_, x) = regs[0];
-        if !Self::arm_base_ok(x) || regs[1] != (REG_ARM_TRIGGER, x | 2) {
-            v.report(format!("stop {regs:02x?}; the driver writes ARM x then x|2, x 0x00 or 0x0c"));
+        let base = self.arm_base;
+        if (x != base && x != 0x00) || regs[1] != (REG_ARM_TRIGGER, x | 2) {
+            v.report(format!(
+                "stop {regs:02x?}; the driver writes ARM x then x|2, x {base:#04x} (or 0x00 from \
+                 a new process)"
+            ));
         }
+        self.prelude = 1;
         // Before its first upload the driver stops a blank FPGA; the
         // write has nothing to act on.
         self.fpga.capture = None;
@@ -950,7 +1028,12 @@ impl LogicStudio {
 
     /// `lls_start_acquisition()`'s 17 registers.
     fn arm(&mut self, regs: &[(u8, u16)], v: &mut Violations) {
-        if let Some(arm) = self.check_arm(regs, v) {
+        let arm = self.check_arm(regs, v);
+        if regs.len() == 17 {
+            // The driver's base is 0x0c from this arm on, whatever came of it.
+            self.arm_base = 0x0c;
+        }
+        if let Some(arm) = arm {
             self.start_capture(&arm);
         }
     }
@@ -984,14 +1067,15 @@ impl LogicStudio {
             return None;
         }
         let val = |i: usize| regs[i].1;
-        let base = val(0);
-        if !Self::arm_base_ok(base) || val(1) != base | 2 || val(16) != 0x0d {
+        let base = self.arm_base;
+        if val(0) != base || val(1) != base | 2 || val(16) != 0x0d {
             v.report(format!(
-                "arm pulse {:#06x} {:#06x} .. {:#06x}; the driver writes x, x|2 (x 0x00 or 0x0c), \
+                "arm pulse {:#06x} {:#06x} .. {:#06x}; the driver writes {base:#04x}, {:#04x}, \
                  then 0x0d",
                 val(0),
                 val(1),
-                val(16)
+                val(16),
+                base | 2
             ));
         }
         let fixed = [val(2), val(3), val(4), val(5), val(6), val(7), val(8), val(9)];
@@ -1128,14 +1212,16 @@ impl LogicStudio {
             return;
         }
         let val = |i: usize| regs[i].1;
-        let m = val(2);
+        let m = self.fetch_base;
+        self.fetch_base = 1;
         let tail = [val(4), val(5), val(6), val(7), val(8), val(9), val(10), val(11)];
         let want = [0, 0, UNK0 as u16, (UNK0 >> 16) as u16, UNK3 as u16, (UNK3 >> 16) as u16, 2, 3];
-        if (m != 0 && m != 1) || val(3) != m | 2 || tail != want {
+        if val(2) != m || val(3) != m | 2 || tail != want {
             v.report(format!(
-                "fetch {:04x?}; the driver writes UNK1, FETCH m, m|2 (m 0 or 1), UNK1 0, UNK2 \
-                 {UNK0}, UNK3 {UNK3}, FETCH 2, 3",
-                regs.iter().map(|r| r.1).collect::<Vec<_>>()
+                "fetch {:04x?}; the driver writes UNK1, FETCH {m}, {}, UNK1 0, UNK2 {UNK0}, UNK3 \
+                 {UNK3}, FETCH 2, 3",
+                regs.iter().map(|r| r.1).collect::<Vec<_>>(),
+                m | 2
             ));
         }
         let Some(c) = &self.fpga.capture else {
@@ -1208,7 +1294,16 @@ impl LogicStudio {
         match reg {
             REG_THRESH_LOWER | REG_THRESH_UPPER | REG_THRESH_EXTERNAL => {
                 match THRESHOLDS.iter().position(|t| *t == (reg, val)) {
-                    Some(i) => self.fpga.thresholds |= 1 << i,
+                    Some(i) => {
+                        let before = self.fpga.thresholds;
+                        self.fpga.thresholds |= 1 << i;
+                        if before != 0b111 && self.fpga.thresholds == 0b111 {
+                            // A new design's thresholds: the driver's
+                            // bases start again.
+                            self.arm_base = 0x00;
+                            self.fetch_base = 0;
+                        }
+                    }
                     None => v.report(format!(
                         "threshold {reg:#04x} = {val:#06x}; the driver writes {THRESHOLDS:02x?}"
                     )),
@@ -1493,10 +1588,31 @@ mod tests {
         dev.control(s, &[], v)
     }
 
+    /// The stop and the thresholds with `wValue` 0, then `0xb3`.
+    fn start_upload(dev: &mut Device, base: u16, v: &mut Violations) -> Reply {
+        sync(dev, &[(REG_ARM_TRIGGER, base), (REG_ARM_TRIGGER, base | 2)], v);
+        for t in THRESHOLDS {
+            write(dev, 0, 0, &[t], v);
+        }
+        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], v)
+    }
+
+    fn verify(dev: &mut Device, v: &mut Violations) -> Reply {
+        let s = Setup {
+            request_type: CTRL_IN,
+            request: REQ_VERIFY,
+            value: 7,
+            index: MAGIC_INDEX,
+            length: 1,
+        };
+        dev.control(s, &[], v)
+    }
+
+    /// `lls_setup_acquisition()`'s upload: the stop, the thresholds,
     /// `upload_fpga_bitstream()` and `wait_for_dev_to_settle()`.
     fn upload(dev: &mut Device, groups: u8, v: &mut Violations) {
         let (name, size) = if groups == 1 { BITSTREAM_8 } else { BITSTREAM_16 };
-        assert_eq!(dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], v), Reply::ack());
+        assert_eq!(start_upload(dev, 0, v), Reply::ack());
         for c in ezusb::standin(name, size).chunks(CHUNK) {
             assert_eq!(dev.transfer_out(6, c, v), Reply::ack());
         }
@@ -1518,47 +1634,77 @@ mod tests {
     /// `lls_setup_acquisition()` for a first commit: `group` is the
     /// channel group register, `stages` the trigger.
     fn commit(dev: &mut Device, groups: u8, group: u16, stages: &[Stage], v: &mut Violations) {
-        sync(dev, &[(REG_ARM_TRIGGER, 0), (REG_ARM_TRIGGER, 2)], v);
-        for t in THRESHOLDS {
-            write(dev, 0, 0, &[t], v);
-        }
         upload(dev, groups, v);
         for t in THRESHOLDS {
             sync(dev, &[t], v);
         }
         sync(dev, &[(REG_SELECT_CHANNELS, group)], v);
-        for (i, base) in STAGE_BASE.iter().enumerate() {
-            let st = stages.get(i).copied().unwrap_or_default();
-            let b = st.encode(i == 1);
-            for chunk in 0..9 {
-                let mut regs = Vec::new();
-                for j in 0..5 {
-                    let at = chunk * 5 + j;
-                    let val = (u16::from(*base) + at as u16) << 8 | u16::from(b[at]);
-                    regs.extend([
-                        (REG_TRIGGER_CFG, val),
-                        (REG_TRIGGER_CFG, val | 0x8000),
-                        (REG_TRIGGER_CFG, val),
-                    ]);
-                }
-                sync(dev, &regs, v);
-            }
-        }
         let op = if stages.len() > 1 { OP_A_AND_B } else { OP_A };
-        sync(dev, &[(REG_TRIGGER_COMBINE_OP, op)], v);
+        let a = stages.first().copied().unwrap_or_default();
+        let b = stages.get(1).copied().unwrap_or_default();
+        trigger(dev, [a.encode(false), b.encode(true)], op, v);
         sync(dev, &[THRESHOLDS[0]], v);
         sync(dev, &[THRESHOLDS[1]], v);
         dev.control(out_setup(REQ_STATUS, 0x12, MAGIC_INDEX, 16), &STATUS_BYTES, v);
     }
 
+    /// One write of the trigger configuration: `addr << 8 | byte` three
+    /// times, bit 15 set in the middle one.
+    fn cfg(addr: u8, byte: u8) -> [(u8, u16); 3] {
+        let val = u16::from(addr) << 8 | u16::from(byte);
+        [(REG_TRIGGER_CFG, val), (REG_TRIGGER_CFG, val | 0x8000), (REG_TRIGGER_CFG, val)]
+    }
+
+    /// `program_trigger()` and `upload_trigger()`: both stages' bytes,
+    /// five a transfer, then the combination.
+    fn trigger(dev: &mut Device, stages: [[u8; STAGE_SIZE]; 2], op: u16, v: &mut Violations) {
+        for (bytes, base) in stages.iter().zip(STAGE_BASE) {
+            for chunk in bytes.chunks(5).enumerate() {
+                let regs: Vec<(u8, u16)> = chunk
+                    .1
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(j, b)| cfg(base + (chunk.0 * 5 + j) as u8, *b))
+                    .collect();
+                sync(dev, &regs, v);
+            }
+        }
+        sync(dev, &[(REG_TRIGGER_COMBINE_OP, op)], v);
+    }
+
+    /// The violations since the last call: exactly one for each of
+    /// `what`, in any order.
+    fn expect(v: &mut Violations, what: &[&str]) {
+        let got = v.drain();
+        assert_eq!(got.len(), what.len(), "{what:?}: {got:?}");
+        for w in what {
+            assert!(got.iter().any(|g| g.contains(w)), "{w:?} not in {got:?}");
+        }
+    }
+
+    /// A board with the 16 channel design, its thresholds, group 0 and a
+    /// trigger on D0 rising: ready to arm.
+    fn ready() -> (Device, Violations) {
+        let mut dev = board(&[]);
+        let mut v = Violations::default();
+        commit(&mut dev, 2, 0, &[rising(0)], &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        (dev, v)
+    }
+
     /// `lls_start_acquisition()`'s registers.
     fn arm_regs(groups: u8, ratio: u64, cfg: u16, id: u16) -> Vec<(u8, u16)> {
+        rearm_regs(groups, ratio, cfg, id, 0)
+    }
+
+    /// The arm with the driver's `magic_arm_trigger` `base`.
+    fn rearm_regs(groups: u8, ratio: u64, cfg: u16, id: u16, base: u16) -> Vec<(u8, u16)> {
         let total = thousands(groups) * 1000;
         let pre = total * ratio / 100;
         let (p, q) = (transform(pre, groups), transform(total - pre, groups));
         vec![
-            (REG_ARM_TRIGGER, 0),
-            (REG_ARM_TRIGGER, 2),
+            (REG_ARM_TRIGGER, base),
+            (REG_ARM_TRIGGER, base | 2),
             (REG_UNK6_LO, 0),
             (REG_UNK6_HI, 0),
             (REG_UNK0_LO, UNK0 as u16),
@@ -1600,11 +1746,16 @@ mod tests {
     }
 
     fn fetch_regs(start: u64) -> Vec<(u8, u16)> {
+        refetch_regs(start, 0)
+    }
+
+    /// The fetch with the driver's `magic_fetch_samples` `base`.
+    fn refetch_regs(start: u64, base: u16) -> Vec<(u8, u16)> {
         vec![
             (REG_UNK1_LO, start as u16),
             (REG_UNK1_HI, (start >> 16) as u16),
-            (REG_FETCH_SAMPLES, 0),
-            (REG_FETCH_SAMPLES, 2),
+            (REG_FETCH_SAMPLES, base),
+            (REG_FETCH_SAMPLES, base | 2),
             (REG_UNK1_LO, 0),
             (REG_UNK1_HI, 0),
             (REG_UNK2_LO, UNK0 as u16),
@@ -1754,7 +1905,7 @@ mod tests {
         read(&mut dev, 0x0f, &mut v);
         assert_eq!(v.drain().len(), 1, "a settle read with no design");
         // A bitstream that is not a stand-in.
-        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        start_upload(&mut dev, 0, &mut v);
         for c in vec![0u8; BITSTREAM_16.1].chunks(CHUNK) {
             dev.transfer_out(6, c, &mut v);
         }
@@ -1768,6 +1919,10 @@ mod tests {
         };
         assert_eq!(dev.control(s, &[], &mut v), Reply::Data(vec![0]));
         // Chunks of another size.
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0), (REG_ARM_TRIGGER, 2)], &mut v);
+        for t in THRESHOLDS {
+            write(&mut dev, 0, 0, &[t], &mut v);
+        }
         dev.control(out_setup(REQ_UPLOAD, 7, 0, 0), &[], &mut v);
         assert_eq!(v.drain().len(), 1, "wIndex");
         dev.transfer_out(6, &[0; 1000], &mut v);
@@ -1821,11 +1976,11 @@ mod tests {
         regs[12].1 += 1;
         sync(&mut dev, &regs, &mut v);
         assert_eq!(v.drain().len(), 1, "counts");
-        let mut regs = arm_regs(2, 50, 0x02, 1);
+        let mut regs = rearm_regs(2, 50, 0x02, 1, 0x0c);
         regs[1].1 = 0;
         sync(&mut dev, &regs, &mut v);
         assert_eq!(v.drain().len(), 2, "the pulse; cfg 2 is no rate");
-        sync(&mut dev, &arm_regs(2, 50, 0x00, 1), &mut v);
+        sync(&mut dev, &rearm_regs(2, 50, 0x00, 1, 0x0c), &mut v);
         assert!(v.is_empty(), "{v:?}");
         sync(&mut dev, &fetch_regs(0), &mut v);
         assert_eq!(v.drain().len(), 1, "a fetch before the capture completed");
@@ -1891,7 +2046,7 @@ mod tests {
         };
         assert_eq!(dev.control(s, &[], &mut v), Reply::Stall);
         let mut dev = board(&[("verify", "3"), ("settle", "2")]);
-        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        start_upload(&mut dev, 0, &mut v);
         for c in ezusb::standin(BITSTREAM_8.0, BITSTREAM_8.1).chunks(CHUNK) {
             dev.transfer_out(6, c, &mut v);
         }
@@ -1905,7 +2060,7 @@ mod tests {
         assert_eq!(groups[2], groups[3]);
         assert!(v.is_empty(), "{v:?}");
         let mut dev = board(&[("stall_bitstream", "3")]);
-        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        start_upload(&mut dev, 0, &mut v);
         let r: Vec<Reply> = (0..3).map(|_| dev.transfer_out(6, &[0; CHUNK], &mut v)).collect();
         assert_eq!(r[2], Reply::Stall);
         assert!(build(&opts(&[("stall", "nothing")])).is_err());
@@ -1939,10 +2094,220 @@ mod tests {
         }
         assert_eq!(got, MEMORY);
         assert!(v.is_empty(), "{v:?}");
-        sync(&mut dev, &fetch_regs(earliest % 20_480 * 2 / 8), &mut v);
+        sync(&mut dev, &refetch_regs(earliest % 20_480 * 2 / 8, 1), &mut v);
         dev.in_submitted(2, 16 << 10);
         dev.transfer_in(2, 16 << 10, &mut v);
         assert_eq!(v.drain().len(), 1, "the first transfer of a fetch is 17 KiB");
+    }
+
+    #[test]
+    fn the_upload_comes_after_the_stop_and_the_thresholds() {
+        let mut dev = board(&[]);
+        let mut v = Violations::default();
+        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        expect(&mut v, &["not right after the stop"]);
+        // A threshold missing.
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0), (REG_ARM_TRIGGER, 2)], &mut v);
+        write(&mut dev, 0, 0, &[THRESHOLDS[0]], &mut v);
+        write(&mut dev, 0, 0, &[THRESHOLDS[1]], &mut v);
+        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        expect(&mut v, &["not right after the stop"]);
+        // Out of order, and with no stop before them.
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0), (REG_ARM_TRIGGER, 2)], &mut v);
+        write(&mut dev, 0, 0, &[THRESHOLDS[1]], &mut v);
+        expect(&mut v, &["out of place"]);
+        write(&mut dev, 0, 0, &[THRESHOLDS[0]], &mut v);
+        expect(&mut v, &["out of place"]);
+        // After a configuration, with no upload to follow.
+        let (mut dev, mut v) = ready();
+        write(&mut dev, 0, 0, &[THRESHOLDS[0]], &mut v);
+        expect(&mut v, &["out of place"]);
+        // During a capture.
+        sync(&mut dev, &arm_regs(2, 50, 0, 1), &mut v);
+        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        expect(&mut v, &["during a capture", "not right after the stop"]);
+    }
+
+    #[test]
+    fn the_arm_and_fetch_bases_follow_the_driver() {
+        let mut dev = board(&[]);
+        let mut v = Violations::default();
+        // A stop with 0x0c before any arm.
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0x0c), (REG_ARM_TRIGGER, 0x0e)], &mut v);
+        expect(&mut v, &["stop"]);
+        let (mut dev, mut v) = ready();
+        sync(&mut dev, &rearm_regs(2, 50, 0, 1, 0x0c), &mut v);
+        expect(&mut v, &["arm pulse"]);
+        // From now on 0x0c; a stop may also come from a new process's 0.
+        sync(&mut dev, &arm_regs(2, 50, 0, 2), &mut v);
+        expect(&mut v, &["arm pulse"]);
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0), (REG_ARM_TRIGGER, 2)], &mut v);
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0x0c), (REG_ARM_TRIGGER, 0x0e)], &mut v);
+        sync(&mut dev, &rearm_regs(2, 50, 0, 3, 0x0c), &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // A capture and its fetch with 0, then another capture, whose
+        // fetch takes 1.
+        let mut dev = board(&[]);
+        capture(&mut dev, 2, 0, &[rising(3)], 50, 1, &mut v);
+        let (rate, offset, cfg) = RATES[1];
+        sync(&mut dev, &rearm_regs(2, 50, cfg, 2, 0x0c), &mut v);
+        let packet = loop {
+            let Reply::Data(p) = dev.transfer_in(1, 32, &mut v) else { panic!("no status") };
+            if p[0x1f] == STATE_DONE {
+                break p;
+            }
+        };
+        assert!(v.is_empty(), "{v:?}");
+        let (earliest, _) = driver_view(&packet, 2, rate, offset);
+        let start = earliest % 20_480 * 2 / 8;
+        sync(&mut dev, &refetch_regs(start, 0), &mut v);
+        expect(&mut v, &["fetch ["]);
+        sync(&mut dev, &refetch_regs(start, 1), &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // Another first sample than the one the times reported.
+        sync(&mut dev, &refetch_regs(start + 1, 1), &mut v);
+        expect(&mut v, &["fetch from"]);
+        // Values off the driver's.
+        let mut regs = refetch_regs(start, 1);
+        regs[6].1 += 1;
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["fetch ["]);
+        // Another order.
+        let mut regs = refetch_regs(start, 1);
+        regs.swap(6, 8);
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["fetch with registers"]);
+    }
+
+    #[test]
+    fn a_stalled_arm_still_moves_the_drivers_base() {
+        // The commit is 29 writes; the arm, the 30th, stalls.
+        let mut dev = board(&[("stall", "write:30")]);
+        let mut v = Violations::default();
+        commit(&mut dev, 2, 0, &[rising(0)], &mut v);
+        assert_eq!(sync(&mut dev, &arm_regs(2, 50, 0, 1), &mut v), Reply::Stall);
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0x0c), (REG_ARM_TRIGGER, 0x0e)], &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // A failed upload leaves the base as it was.
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0x0c), (REG_ARM_TRIGGER, 0x0e)], &mut v);
+        for t in THRESHOLDS {
+            write(&mut dev, 0, 0, &[t], &mut v);
+        }
+        dev.control(out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0), &[], &mut v);
+        sync(&mut dev, &[(REG_ARM_TRIGGER, 0x0c), (REG_ARM_TRIGGER, 0x0e)], &mut v);
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn the_arm_is_the_drivers_17_registers() {
+        let mut dev = board(&[]);
+        let mut v = Violations::default();
+        sync(&mut dev, &arm_regs(2, 50, 0, 1), &mut v);
+        expect(&mut v, &["arm with no FPGA design"]);
+        let (mut dev, mut v) = ready();
+        let mut regs = arm_regs(2, 50, 0, 1);
+        regs.swap(12, 14);
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["arm with registers"]);
+        let mut regs = rearm_regs(2, 50, 0, 1, 0x0c);
+        regs[4].1 += 1;
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["arm UNK6, UNK0"]);
+        let mut regs = rearm_regs(2, 50, 0, 1, 0x0c);
+        regs[2].1 = 1;
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["arm UNK6, UNK0"]);
+    }
+
+    #[test]
+    fn the_trigger_stages_follow_program_trigger() {
+        let a = rising(0).encode(false);
+        let b = rising(1).encode(true);
+        let empty = Stage::default().encode(true);
+        // A byte the layout never writes.
+        let (mut dev, mut v) = ready();
+        let mut odd = a;
+        odd[STAGE_SIZE - 1] = 0xab;
+        trigger(&mut dev, [odd, empty], OP_A, &mut v);
+        expect(&mut v, &["not program_trigger()'s layout"]);
+        trigger(&mut dev, [a, b], OP_A, &mut v);
+        expect(&mut v, &["TRIGGER_OP_A with conditions in stage B"]);
+        trigger(&mut dev, [a, empty], OP_A_AND_B, &mut v);
+        expect(&mut v, &["TRIGGER_OP_A_AND_B with an empty stage"]);
+        trigger(&mut dev, [a, empty], 0x2000, &mut v);
+        expect(&mut v, &["trigger combination 0x2000"]);
+        trigger(&mut dev, [a, b], OP_A_AND_B, &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // An address between the stages.
+        let regs: Vec<(u8, u16)> = (0..5).flat_map(|i| cfg(0x30 + i, 0)).collect();
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["outside both stages"; 5]);
+        // With no design.
+        let mut dev = board(&[]);
+        let regs: Vec<(u8, u16)> = (0..5).flat_map(|i| cfg(i, 0)).collect();
+        sync(&mut dev, &regs, &mut v);
+        expect(&mut v, &["trigger configuration with no FPGA design"]);
+    }
+
+    #[test]
+    fn single_registers_are_the_drivers() {
+        let (mut dev, mut v) = ready();
+        sync(&mut dev, &[(REG_THRESH_LOWER, 0x00c4)], &mut v);
+        expect(&mut v, &["threshold 0x23"]);
+        sync(&mut dev, &[(0x30, 1)], &mut v);
+        expect(&mut v, &["write of register 0x30 alone"]);
+        sync(&mut dev, &[(REG_SELECT_CHANNELS, 2)], &mut v);
+        expect(&mut v, &["channel group 2"]);
+    }
+
+    #[test]
+    fn register_writes_are_whole_triplets() {
+        let (mut dev, mut v) = ready();
+        for data in [&[0x21u8, 0][..], &[0x21, 0, 0, 0x22]] {
+            dev.control(out_setup(REQ_REGS, 0x12, MAGIC_INDEX, data.len()), data, &mut v);
+            expect(&mut v, &["register write of"]);
+        }
+        let data = vec![0x21u8; 33 * 3];
+        dev.control(out_setup(REQ_REGS, 0x12, MAGIC_INDEX, data.len()), &data, &mut v);
+        expect(&mut v, &["register write of 99 bytes"]);
+    }
+
+    #[test]
+    fn the_status_register_and_the_verify_have_their_place() {
+        let mut dev = board(&[]);
+        let mut v = Violations::default();
+        dev.control(out_setup(REQ_STATUS, 0x12, MAGIC_INDEX, 16), &STATUS_BYTES, &mut v);
+        expect(&mut v, &["with no FPGA design", "before the thresholds"]);
+        assert_eq!(verify(&mut dev, &mut v), Reply::Data(vec![0]));
+        expect(&mut v, &["verified with no upload"]);
+        let (mut dev, mut v) = ready();
+        dev.control(out_setup(REQ_STATUS, 0x12, MAGIC_INDEX, 15), &STATUS_BYTES[..15], &mut v);
+        expect(&mut v, &["of 15 bytes; it has 16", "status register ["]);
+        let s = Setup { length: 2, ..out_setup(REQ_UPLOAD, 7, MAGIC_INDEX, 0) };
+        let s = Setup { request_type: CTRL_IN, request: REQ_VERIFY, ..s };
+        dev.control(s, &[], &mut v);
+        expect(&mut v, &["of 2 bytes; it has 1"]);
+    }
+
+    #[test]
+    fn transfers_go_to_the_drivers_endpoints() {
+        let mut v = Violations::default();
+        let mut dev = board(&[]);
+        dev.transfer_out(6, &[0; CHUNK], &mut v);
+        expect(&mut v, &["with no FPGA upload started"]);
+        // The model alone: the device stops transfers to endpoints the
+        // descriptors lack before the model sees them.
+        let mut model = build(&opts(&[("flashed", "1")])).unwrap();
+        assert_eq!(model.out(2, &[0; 4], &mut v), Reply::Stall);
+        expect(&mut v, &["OUT transfer to endpoint 2"]);
+        assert_eq!(model.in_transfer(3, 512, &mut v), Reply::Stall);
+        expect(&mut v, &["IN transfer from endpoint 3"]);
+        let mut bare = build(&[]).unwrap();
+        assert_eq!(bare.in_transfer(1, 32, &mut v), Reply::Stall);
+        expect(&mut v, &["of the FX2 without firmware"]);
+        let s = Setup { request_type: CTRL_OUT, request: REQ_REGS, value: 0, index: 0, length: 0 };
+        assert_eq!(bare.control(s, &[], &mut v), Reply::Stall);
+        expect(&mut v, &["only its boot loader"]);
     }
 
     #[test]
