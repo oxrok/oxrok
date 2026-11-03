@@ -75,7 +75,7 @@
 //! transfer, so a longer reply comes as several transfers.
 //!
 //! **The LWLA1034** (`lwla1034.c`): registers 0x1074 memory control
-//! (bit 0 "wr1rd0", bit 1 "clr_idx"), 0x1078 memory fill level (read),
+//! (bit 0 `wr1rd0`, bit 1 `clr_idx`), 0x1078 memory fill level (read),
 //! 0x107c memory read start, 0x1094 clock boost (0 or 1), and 0x10b0 to
 //! 0x10bc the strobe, address, low and high words of the 64-bit long
 //! registers: a strobe read latches the addressed long register into
@@ -88,7 +88,10 @@
 //! capture control (0x74 clears, 1 arms the trigger, 0 stops), 100 the
 //! test word `0x1234567887654321`. Long registers 0 to 4 read 0
 //! (assumed: "The first five long registers do not return useful
-//! values when read"), 6 reads 0. Status bits (before the driver's
+//! values when read"), 6 reads 0, and so does 8 (an emulation artifact:
+//! the driver ignores the levels, and a counter there would keep the
+//! transactions of a capture waiting for its trigger from repeating, so
+//! a `--hangs` case could not cut them). Status bits (before the driver's
 //! shift by one): 1 capturing, 4 triggered, 5 memory available. With
 //! the clock boost on during a capture the FPGA runs at 125 MHz and its
 //! millisecond counter counts 0.8 ms (the comment of
@@ -174,7 +177,7 @@
 //! **Emulation artifacts**, in one place: the clock counted in status
 //! polls; replies at once; the one-shot STALLs; the invented signal,
 //! the external clock's and TRG input's rates; zeros where the memory
-//! was not written and in long registers 0 to 4 and 6.
+//! was not written and in long registers 0 to 4, 6 and 8.
 //!
 //! **What the model shows about the driver** (C line numbers of
 //! libsigrok 0bc24877):
@@ -325,7 +328,6 @@ const R34_LONG_LOW: u16 = 0x10b8;
 const R34_LONG_HIGH: u16 = 0x10bc;
 const L_MEM_FILL: usize = 5;
 const L_DURATION: usize = 7;
-const L_CHAN_STATE: usize = 8;
 const L_STATUS: usize = 9;
 const L_CAP_CTRL: u32 = 10;
 const L_TEST_ID: u32 = 100;
@@ -507,7 +509,8 @@ impl Trigger {
                 return false;
             }
             let (b, n) = (sig.trg(s - 1), sig.trg(s));
-            if self.trg_rise && !(n && !b) || self.trg_fall && !(b && !n) {
+            let (rose, fell) = (n && !b, b && !n);
+            if (self.trg_rise && !rose) || (self.trg_fall && !fell) {
                 return false;
             }
         }
@@ -852,7 +855,7 @@ impl Lwla {
         KINDS.iter().position(|(_, k)| *k == kind).unwrap_or(0)
     }
 
-    /// Counts a command of `kind`; whether it is to be STALLed.
+    /// Counts a command of `kind`; whether it is to be stalled.
     fn count(&mut self, kind: Kind) -> (u32, bool) {
         let i = Self::kind_index(kind);
         self.counts[i] += 1;
@@ -939,7 +942,7 @@ impl Lwla {
     }
 
     fn command(&mut self, data: &[u8], v: &mut Violations) -> Reply {
-        if data.len() % 2 != 0 || data.len() < 2 {
+        if !data.len().is_multiple_of(2) || data.len() < 2 {
             v.report(format!("command of {} bytes; commands are 16-bit words", data.len()));
             return Reply::ack();
         }
@@ -1020,7 +1023,7 @@ impl Lwla {
         if count == 0 {
             v.report("memory read of 0 words");
         }
-        if wide && count % 8 != 0 {
+        if wide && !count.is_multiple_of(8) {
             v.report(format!("36-bit memory read of {count} words, not whole slices of 8"));
         }
         if bytes > REPLY_MAX {
@@ -1147,7 +1150,6 @@ impl Lwla {
         match i {
             L_MEM_FILL => u64::from(self.fill34()),
             L_DURATION => c.map_or(0, Capture::duration),
-            L_CHAN_STATE => c.map_or(0, |c| self.sig.input(c.end.unwrap_or_else(|| c.now()))),
             L_STATUS => c.map_or(0, |c| {
                 let mut s = 0;
                 if c.running() {
@@ -1313,9 +1315,8 @@ impl Lwla {
             let value = u64::from(word32(&q[2..4])) << 32 | u64::from(word32(&q[0..2]));
             let addr = first + i;
             let bad = match addr {
-                0 => value & !all != 0,
+                0 | 2 | 3 => value & !all != 0,
                 1 => value > DIV_MAX || value != 0 && self.r34.clk_boost == 1,
-                2 | 3 => value & !all != 0,
                 4 => value & !(all | 3 << 34) != 0,
                 L_MEM_FILL => value <= 4 || value > u64::from(DEPTH),
                 _ => value != 0,

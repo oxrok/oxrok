@@ -320,7 +320,7 @@ fn encodes_runs_the_driver_decodes() {
     // to 65536.
     let sig = signal(16);
     let (words, end, _) = encode(&sig, Format::Plain16, 0xffff, 10, 15, 100);
-    assert_eq!((words, end), (vec![11 << 16 | 10, 13 << 16 | 12], 14));
+    assert_eq!((words, end), (vec![0x000b_000a, 0x000d_000c], 14));
     let (words, _, _) = encode(&sig, Format::Rle16, 0x8000, 0, 70_000, 100);
     assert_eq!(words, vec![0x7fff << 16, 0x7fff << 16 | 0x8000, (4464 - 1) << 16]);
     let (words, _, _) = encode(&sig, Format::Rle16, 0, 0, 70_000, 100);
@@ -374,7 +374,7 @@ fn lwla1034_boost_runs_the_clock_fast_and_fills_the_memory() {
     let st = h.read_lregs(5, 5);
     assert_eq!(st[4], ST34_TRIGGERED, "stopped, memory full");
     assert_eq!(st[0], u64::from(DEPTH - 16));
-    let words = (DEPTH - 20) as u64;
+    let words = u64::from(DEPTH - 20);
     assert_eq!(st[2], words * 1250 / 125_000_000);
     let read = h.stop_and_read34(false);
     assert_eq!(read.len() as u64, words);
@@ -396,7 +396,7 @@ fn lwla1034_triggers_late_and_on_the_trg_input() {
     h.start34(1, 0, 1, [0, 0, 1 << 35]);
     h.read_lregs(5, 5);
     let samples = decode36(&h.stop_and_read34(true));
-    assert_eq!(samples[0], 50 & 1);
+    assert_eq!(samples[0], 0, "sample 50 of channel 1");
     assert_eq!(samples.len(), 100_000 - 50);
 }
 
@@ -540,6 +540,14 @@ fn flags_what_the_driver_never_sends() {
     }
     h.send(&[7, 0, 1, 0]);
     expect(&mut h, "takes 7");
+}
+
+#[test]
+fn flags_a_capture_and_a_readout_out_of_order() {
+    let expect = |h: &mut Host, what: &str| {
+        let v = h.violations();
+        assert!(v.iter().any(|m| m.contains(what)), "wanted '{what}', got {v:?}");
+    };
     // Armed without the configuration, cleared capture control, and in
     // read mode.
     let mut h = Host::new(&[]);
@@ -695,10 +703,10 @@ fn host_counts_are_bounded() {
     h.write_reg(R34_MEM_START, 4);
     assert_eq!(h.send(&[6, 0, 4, 0xffff, 0xfff8]), Reply::ack());
     assert_eq!(h.data(4096).len(), 28 * 36);
-    assert!(!h.violations().is_empty());
+    assert_ne!(h.violations(), Vec::<String>::new());
     assert_eq!(h.send(&[8, 0, 0xffff]), Reply::ack());
     assert_eq!(h.data(1024).len(), 11 * 8);
-    assert!(!h.violations().is_empty());
+    assert_ne!(h.violations(), Vec::<String>::new());
     // A threshold beyond the memory does not grow it.
     let mut w = vec![7u16, 0, 10];
     for value in [Board::Lwla1034.all(), 0, 0, 0, 0, u64::MAX, 0, 0, 0, 0] {

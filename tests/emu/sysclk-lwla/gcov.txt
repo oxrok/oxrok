@@ -1,4 +1,4 @@
-gcov sysclk-lwla (libsigrok unknown): executable lines reached
+gcov sysclk-lwla (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        87.0%  287 of 330
   lwla.c       85.2%  75 of 88
   lwla1016.c   96.7%  175 of 181
@@ -38,7 +38,7 @@ never reached, by function (line ranges hold no reached line):
     transfer_in_completed: 396-399, 419, 425, 432-435
     init_acquisition_state: 450-451, 454-455, 460, 464-465, 469-471
     lwla_start_acquisition: 538-539, 546, 558-559, 567-568
-gcov shared sources (libsigrok unknown): executable lines the session reached
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/usb.c   74.2%  170 of 229
   total       74.2%  170 of 229
 never reached, by function (line ranges hold no reached line):
