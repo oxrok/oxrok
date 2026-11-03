@@ -1,0 +1,8 @@
+# Firmware stand-ins for the fx2lafw model (emu/src/models/fx2lafw.rs):
+# the files the driver uploads to the three emulated profiles. The sizes
+# are those of the model's PROFILES, which a unit test checks; they
+# are not the sizes of the sigrok-firmware-fx2lafw release files, which
+# the model does not need (it checks the stand-in byte for byte).
+fx2lafw-cypress-fx2.fw 7690
+fx2lafw-saleae-logic.fw 7642
+fx2lafw-sigrok-fx2-8ch.fw 7570

@@ -1,0 +1,33 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    probe_names
+fx2lafw - Cypress FX2 with 16 channels: D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15
+Channel groups:
+    Logic: channels D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_frames: 1 (current)
+    limit_samples: 0 (current)
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      20 kHz (current)
+      25 kHz
+      50 kHz
+      100 kHz
+      200 kHz
+      250 kHz
+      500 kHz
+      1 MHz
+      2 MHz
+      3 MHz
+      4 MHz
+      6 MHz
+      8 MHz
+      12 MHz
+      16 MHz
+      24 MHz
+      48 MHz
+    Supported triggers: 0 1 r f e 
+    captureratio: 0 (current)
