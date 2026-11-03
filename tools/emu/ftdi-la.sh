@@ -6,6 +6,7 @@
 EMU_MODEL=ftdi-la
 EMU_OPTIONS="-o chip=ft2232h"
 EMU_DRIVER=ftdi-la
+EMU_GCOV_SHARED="src/usb.c"
 # oxrok has no ftdi-la driver yet: these are oracle cases.
 EMU_FULL=""
 

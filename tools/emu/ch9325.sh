@@ -11,6 +11,7 @@
 EMU_MODEL=ch9325
 EMU_OPTIONS="-o packet=3131323334353b3030303a300d0a,3132303435363b3030303a300d0a,3f3f3f3f3f"
 EMU_DRIVER=uni-t-ut61e-ser
+EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_ch9325.c"
 EMU_GCOV=serial-dmm
 # oxrok has the driver: its cases must run full.
 EMU_FULL=uni-t-ut61e-ser

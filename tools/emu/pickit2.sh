@@ -6,8 +6,17 @@
 EMU_MODEL=pickit2
 EMU_OPTIONS=""
 EMU_DRIVER=microchip-pickit2
+EMU_GCOV_SHARED="src/usb.c"
 # oxrok has the driver: its cases must run full.
 EMU_FULL=microchip-pickit2
+
+# The model's options for the cases that follow (every case's reset
+# builds the model with them); none restores EMU_OPTIONS.
+pickit2_options() {
+    # The emulator trims what it acknowledges: no trailing space.
+    set -- options "$@"
+    emu_cmd "$*" >/dev/null || emu_fail "pickit2: the emulator refused '$*'"
+}
 
 emu_cases() {
     P=microchip-pickit2
@@ -55,4 +64,28 @@ emu_cases() {
     emu_case "pickit2 captureratio no trigger" -- -d $P -c captureratio=4 --samples 16 -O bits
     # A ratio outside the presets is ignored, as in libsigrok.
     emu_case "pickit2 captureratio 50" -- -d $P -c captureratio=50 --samples 16 -t pin4=1 -O bits
+    # Faults (emu/src/models/pickit2.rs): what the drivers do when the
+    # device misbehaves.
+    SIGINT_BUG="sigrok-cli has no SIGINT handler: it dies, and api.c's stop is never asked for"
+    SPIN_BUG="libsigrok 0bc24877 reads a vanished PICkit2 for ever (protocol.c pickit2_usb_send_recv)"
+    # Nobody presses the button: the capture waits until interrupted.
+    pickit2_options button=0
+    emu_case "pickit2 fault interrupt while waiting" --interrupt model --oracle-bug "$SIGINT_BUG" --no-output -- -d $P --samples 32 -t pin4=r,pin5=r -O bits
+    # The cable pulled after the status and the first READ answer.
+    pickit2_options
+    emu_case "pickit2 fault unplug during read-out" --unplug in=1:2 --timeout 3 --oracle-bug "$SPIN_BUG" --no-output -- -d $P --samples 32 -O bits
+    # A STALL or a short packet in place of the status, of a READ
+    # answer; the answer comes with the next IN transfer.
+    pickit2_options stall-in=1
+    emu_case "pickit2 fault status stalled" -- -d $P --samples 32 -O bits
+    pickit2_options stall-in=4
+    emu_case "pickit2 fault read stalled" -- -d $P --samples 32 -O bits
+    pickit2_options short-in=1
+    emu_case "pickit2 fault status short" -- -d $P --samples 32 -O bits
+    pickit2_options short-in=4
+    emu_case "pickit2 fault read short" -- -d $P --samples 32 -O bits
+    # A stalled SETUP: the drivers ignore the error and wait.
+    pickit2_options stall-out=1
+    emu_case "pickit2 fault setup stalled" --interrupt model --oracle-bug "$SIGINT_BUG" --no-output -- -d $P --samples 32 -O bits
+    pickit2_options
 }

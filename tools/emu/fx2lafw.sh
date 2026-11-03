@@ -7,6 +7,7 @@
 EMU_MODEL=fx2lafw
 EMU_OPTIONS="-o profile=cypress-fx2"
 EMU_DRIVER=fx2lafw
+EMU_GCOV_SHARED="src/usb.c src/ezusb.c"
 # oxrok has the driver: its cases must run full.
 EMU_FULL=fx2lafw
 

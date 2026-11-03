@@ -31,6 +31,17 @@
 //! callback returns no data, and an output report is accepted and
 //! flagged.
 //!
+//! Options for the driver's error paths, all off by default:
+//! `serial=TEXT` or `serial=0xHEX` sets the five serial bytes the
+//! report carries (the C driver skips a board whose serial has a
+//! character outside 0x20 to 0x7e), `stall-get=N` STALLs the Nth
+//! `GET_REPORT` of the feature report and `short-get=N` answers it
+//! with its first four bytes only, `stall-set=N` STALLs the Nth
+//! `SET_REPORT` of the feature report, which the board then has not
+//! taken (each N counts from 1, once, as firmware that refuses one
+//! request does; the kernel's own requests at the attach come before
+//! a case's model, so do not count).
+//!
 //! The device is full speed with a 64 byte endpoint 0 and a 64 byte
 //! interrupt IN endpoint polled every 2 ms, as the `TinyUSB` stack on
 //! the Pico presents it; a real board is a low speed V-USB device with
@@ -46,16 +57,24 @@ use crate::{Error, Result};
 /// The model name.
 pub const NAME: &str = "usbrelay";
 /// What `oxrok-emu list` says about it.
-pub const ABOUT: &str =
-    "dcttech USBRelay board (HID, 16c0:05df), the Pico emulator's role; relays=N (1 to 8, default 2)";
+pub const ABOUT: &str = "dcttech USBRelay board (HID, 16c0:05df), the Pico emulator's role; \
+     relays=N (1 to 8, default 2), serial=TEXT|0xHEX (5 bytes), faults: stall-get=N, short-get=N, \
+     stall-set=N";
 
-/// A board from the `-o` options: `relays=N`, 1 to 8, default 2.
+/// A board from the `-o` options: `relays=N`, 1 to 8, default 2;
+/// `serial=` five bytes as text or `0x` and ten hex digits; the faults
+/// `stall-get=N`, `short-get=N`, `stall-set=N` (N from 1).
 ///
 /// # Errors
 ///
-/// On an unknown option or a relay count out of range.
+/// On an unknown option or a value out of range.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut relays = 2;
+    let mut serial = *SERIAL;
+    let mut faults = Faults::default();
+    let nth = |k: &str, v: &str| -> Result<Option<u32>> {
+        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+    };
     for (k, v) in options {
         match k.as_str() {
             "relays" => {
@@ -65,10 +84,43 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .filter(|n| (1..=8).contains(n))
                     .ok_or_else(|| Error(format!("relays={v}: 1 to 8")))?;
             }
+            "serial" => serial = parse_serial(v)?,
+            "stall-get" => faults.stall_get = nth(k, v)?,
+            "short-get" => faults.short_get = nth(k, v)?,
+            "stall-set" => faults.stall_set = nth(k, v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(UsbRelay::new(relays)))
+    let mut dev = UsbRelay::new(relays);
+    dev.board.serial = serial;
+    dev.board.faults = faults;
+    Ok(Box::new(dev))
+}
+
+/// Five serial bytes: text, or `0x` and ten hex digits.
+fn parse_serial(v: &str) -> Result<[u8; 5]> {
+    let bytes: Option<Vec<u8>> = if let Some(hex) = v.strip_prefix("0x") {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| hex.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()))
+            .collect()
+    } else {
+        Some(v.as_bytes().to_vec())
+    };
+    bytes
+        .and_then(|b| <[u8; 5]>::try_from(b).ok())
+        .ok_or_else(|| Error(format!("serial={v}: five bytes, as text or 0x and ten hex digits")))
+}
+
+/// The faults of the `-o` options; none by default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Faults {
+    /// This feature `GET_REPORT` (from 1) gets a STALL.
+    pub stall_get: Option<u32>,
+    /// This feature `GET_REPORT` is answered with four bytes.
+    pub short_get: Option<u32>,
+    /// This feature `SET_REPORT` (from 1) gets a STALL and is not taken.
+    pub stall_set: Option<u32>,
 }
 
 /// The USB vendor id (shared by many V-USB projects).
@@ -109,13 +161,20 @@ pub struct Board {
     pub relays: u8,
     /// One bit per relay, bit 0 is `R1`.
     pub state: u8,
+    /// The serial number in the report.
+    pub serial: [u8; 5],
+    /// The faults.
+    pub faults: Faults,
+    /// Feature reports read and written so far, for the faults.
+    gets: u32,
+    sets: u32,
 }
 
 impl Board {
     /// The feature report as the board reports it.
     pub fn report(&self) -> [u8; REPORT_BYTES] {
         let mut r = [0u8; REPORT_BYTES];
-        r[..5].copy_from_slice(SERIAL);
+        r[..5].copy_from_slice(&self.serial);
         r[7] = self.state;
         r
     }
@@ -162,7 +221,14 @@ impl HidReports for Board {
                 "GET_REPORT of {length} bytes; the feature report has {REPORT_BYTES}"
             ));
         }
+        self.gets += 1;
+        if self.faults.stall_get == Some(self.gets) {
+            return Reply::Stall;
+        }
         let r = self.report();
+        if self.faults.short_get == Some(self.gets) {
+            return Reply::Data(r[..4].to_vec());
+        }
         Reply::Data(r[..length.min(REPORT_BYTES)].to_vec())
     }
 
@@ -172,6 +238,10 @@ impl HidReports for Board {
         }
         match kind {
             hid::FEATURE => {
+                self.sets += 1;
+                if self.faults.stall_set == Some(self.sets) {
+                    return Reply::Stall;
+                }
                 if data.len() != REPORT_BYTES {
                     v.report(format!(
                         "SET_REPORT of {} bytes; the feature report has {REPORT_BYTES}",
@@ -231,7 +301,14 @@ impl UsbRelay {
                 ],
             },
             hid,
-            board: Board { relays, state: 0 },
+            board: Board {
+                relays,
+                state: 0,
+                serial: *SERIAL,
+                faults: Faults::default(),
+                gets: 0,
+                sets: 0,
+            },
         }
     }
 
@@ -344,5 +421,34 @@ mod tests {
         let output = Setup { request_type: 0x21, request: 9, value: 0x0200, index: 0, length: 8 };
         assert_eq!(dev.control(output, &[0; 8], &mut v), Reply::ack());
         assert_eq!(v.drain().len(), 1, "output report");
+    }
+
+    #[test]
+    fn faults_and_serial_options() {
+        let o = |k: &str, val: &str| vec![(k.to_owned(), val.to_owned())];
+        assert!(build(&o("serial", "ABCD")).is_err());
+        assert!(build(&o("serial", "0x41424344zz")).is_err());
+        assert!(build(&o("stall-get", "0")).is_err());
+        let mut v = Violations::default();
+        let mut dev = build(&o("serial", "0x4142014445")).unwrap();
+        assert_eq!(
+            dev.control(feature(0xa1, 1, 8), &[], &mut v),
+            Reply::Data(b"AB\x01DE\0\0\0".to_vec())
+        );
+        let mut dev = build(&o("stall-get", "2")).unwrap();
+        assert!(matches!(dev.control(feature(0xa1, 1, 8), &[], &mut v), Reply::Data(_)));
+        assert_eq!(dev.control(feature(0xa1, 1, 8), &[], &mut v), Reply::Stall);
+        assert!(matches!(dev.control(feature(0xa1, 1, 8), &[], &mut v), Reply::Data(_)));
+        let mut dev = build(&o("short-get", "1")).unwrap();
+        assert_eq!(dev.control(feature(0xa1, 1, 8), &[], &mut v), Reply::Data(b"ABCD".to_vec()));
+        let mut dev = build(&o("stall-set", "1")).unwrap();
+        let on = [0xfe, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(dev.control(feature(0x21, 9, 8), &on, &mut v), Reply::Stall);
+        assert_eq!(
+            dev.control(feature(0xa1, 1, 8), &[], &mut v),
+            Reply::Data(b"ABCDE\0\0\0".to_vec()),
+            "not taken"
+        );
+        assert!(v.is_empty(), "{v:?}");
     }
 }

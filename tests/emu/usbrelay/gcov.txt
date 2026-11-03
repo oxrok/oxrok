@@ -1,17 +1,54 @@
 gcov dcttech-usbrelay (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        77.5%  169 of 218
-  protocol.c   80.8%  42 of 52
-  total        78.1%  211 of 270
+  api.c        81.7%  178 of 218
+  protocol.c   84.6%  44 of 52
+  total        82.2%  222 of 270
 never reached, by function (line ranges hold no reached line):
   api.c
-    probe_device_common: 79, 81, 90-91, 101-103, 106-107, 110-111, 124-125, 134-135
+    probe_device_common: 79, 81, 90-91, 101-103
     probe_device_conn: 223-224, 229, 231, 234, 236, 239
-    scan: 259, 291, 300, 302, 304, 312, 315, 318, 321, 327
+    scan: 259, 291, 300, 302, 304, 312, 315, 318, 321
     dev_open: 342-343, 351
     config_get: 382, 385-386, 394, 397-398
     config_set: 413-414, 421-422
     config_list: 439-440, 448-449
   protocol.c
-    dcttech_usbrelay_update_state: 40, 42-44
-    dcttech_usbrelay_switch_cg: 102-104, 108
+    dcttech_usbrelay_update_state: 42-44
+    dcttech_usbrelay_switch_cg: 102-104
     dcttech_usbrelay_query_cg: 127, 131
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/serial.c    3.2%  13 of 402
+  total           3.2%  13 of 402
+never reached, by function (line ranges hold no reached line):
+  src/serial.c
+    dev_is_supported: never called (59-64)
+    serial_open: never called (82-144)
+    serial_close: never called (157-177)
+    serial_flush: never called (190-204)
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: never called (287-292)
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: never called (395-412)
+    serial_write_blocking: never called (430-433)
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: never called (455-472)
+    serial_read_blocking: never called (490-493)
+    serial_read_nonblocking: never called (510-513)
+    serial_set_params: never called (534-563)
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: never called (620-719)
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: 963, 967-972
+    serial_source_add: never called (987-1004)
+    serial_source_remove: never called (1009-1020)
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    sr_serial_find_usb: never called (1119-1137)
+    serial_timeout: never called (1141-1166)

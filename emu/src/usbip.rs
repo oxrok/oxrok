@@ -29,7 +29,7 @@ use std::thread;
 use std::time::Duration;
 
 use crate::device::Device;
-use crate::model::{Descriptors, Reply, Setup, Violations};
+use crate::model::{Descriptors, Event, Reply, Setup, Violations};
 use crate::txlog::{TxLog, control_line, transfer_line};
 use crate::{Error, Result};
 
@@ -215,6 +215,7 @@ pub struct Server {
     busnum: u32,
     devnum: u32,
     renumeration: Option<mpsc::Sender<String>>,
+    events: Option<mpsc::Sender<Event>>,
 }
 
 impl Server {
@@ -228,7 +229,15 @@ impl Server {
         busnum: u32,
         devnum: u32,
     ) -> Server {
-        Server { device, log, busid: busid.to_owned(), busnum, devnum, renumeration: None }
+        Server {
+            device,
+            log,
+            busid: busid.to_owned(),
+            busnum,
+            devnum,
+            renumeration: None,
+            events: None,
+        }
     }
 
     /// Where a renumeration request of the model is sent: one message
@@ -237,6 +246,18 @@ impl Server {
     #[must_use]
     pub fn on_renumeration(mut self, tx: mpsc::Sender<String>) -> Server {
         self.renumeration = Some(tx);
+        self
+    }
+
+    /// Where an armed event that fired is sent
+    /// ([`crate::device::Device::arm`]), after its log line. Once an
+    /// unplug fired, the server answers nothing more on the connection:
+    /// the transfers the host submits until the device is detached are
+    /// dropped (comments in a verbose log), as a device that is gone
+    /// answers nothing.
+    #[must_use]
+    pub fn on_event(mut self, tx: mpsc::Sender<Event>) -> Server {
+        self.events = Some(tx);
         self
     }
 
@@ -333,11 +354,20 @@ impl Server {
         });
         let mut out = stream;
         let mut held: Vec<Urb> = Vec::new();
+        let mut gone = false;
         loop {
             if stop.load(Ordering::Relaxed) {
                 return Ok(());
             }
             match rx.recv_timeout(TICK) {
+                Ok(Pdu::Submit(urb)) if gone => {
+                    self.event(&format!(
+                        "seq {}: ep {:#04x} {} dropped, the device is unplugged",
+                        urb.seqnum,
+                        urb.ep,
+                        dir_word(urb.direction)
+                    ));
+                }
                 Ok(Pdu::Submit(urb)) => {
                     if urb.ep != 0 && urb.direction == DIR_IN {
                         self.device().in_submitted(urb.ep, urb.length);
@@ -355,8 +385,10 @@ impl Server {
                         held.push(urb);
                     } else {
                         let (reply, v) = self.perform(&urb);
+                        let event = self.fired(&urb, &reply);
                         self.finish(&mut out, urb, reply, v, &mut held, true)?;
                         self.check_renumeration();
+                        gone |= self.event_fired(event, &mut held);
                     }
                 }
                 Ok(Pdu::Unlink { seqnum, target }) => {
@@ -386,6 +418,9 @@ impl Server {
             let mut blocked: Vec<(u8, u32)> = Vec::new();
             for urb in pending {
                 let key = (urb.ep, urb.direction);
+                if gone {
+                    break;
+                }
                 if urb.ep != 0 && blocked.contains(&key) {
                     held.push(urb);
                     continue;
@@ -394,10 +429,40 @@ impl Server {
                 if reply == Reply::Nak {
                     blocked.push(key);
                 }
+                let event = self.fired(&urb, &reply);
                 self.finish(&mut out, urb, reply, v, &mut held, false)?;
                 self.check_renumeration();
+                gone |= self.event_fired(event, &mut held);
             }
         }
+    }
+
+    /// Whether the transfer just offered fires the armed event.
+    fn fired(&self, urb: &Urb, reply: &Reply) -> Option<Event> {
+        self.device().fired(urb.ep, urb.direction == DIR_IN, reply)
+    }
+
+    /// Logs an event that fired (`unplug`, `interrupt`, a line the
+    /// comparisons keep, in the running section right after the
+    /// transfer that fired it) and passes it on. Returns whether the
+    /// device is now gone; the held transfers are dropped then.
+    fn event_fired(&mut self, event: Option<Event>, held: &mut Vec<Urb>) -> bool {
+        let Some(event) = event else {
+            return false;
+        };
+        self.log.lock().expect("log lock").transfer(event.word());
+        if let Some(tx) = &self.events {
+            let _ = tx.send(event);
+        } else {
+            self.event("an armed event fired; nobody to pass it to");
+        }
+        if event == Event::Unplug {
+            for u in held.drain(..) {
+                self.event(&format!("seq {}: dropped, the device is unplugged", u.seqnum));
+            }
+            return true;
+        }
+        false
     }
 
     /// Passes a renumeration request of the model on. The log gets

@@ -229,7 +229,11 @@ impl UsbRelayDevice {
                 report[2] = n as u8;
             }
         }
-        self.dev.set_feature(&report)?;
+        // libsigrok reports a failed write as SR_ERR_IO, whatever the
+        // cause.
+        self.dev
+            .set_feature(&report)
+            .map_err(|_| Error::Io(std::io::Error::other("input/output error")))?;
         let _ = self.update_state();
         Ok(())
     }
@@ -291,7 +295,10 @@ impl Device for UsbRelayDevice {
     }
 
     fn open(&mut self) -> Result<()> {
-        self.update_state()
+        // As in libsigrok, a board whose state cannot be read opens all
+        // the same, with the state it had.
+        let _ = self.update_state();
+        Ok(())
     }
 
     fn start(&mut self, sink: PacketSink) -> Result<()> {
@@ -352,5 +359,45 @@ mod tests {
         assert_eq!(sent[0][..3], [0, 0xff, 2]);
         assert_eq!(sent[1][..2], [0, 0xfc]);
         assert!(dev.get(&Key::Enabled, Some("R3")).is_err());
+    }
+
+    /// A board that refuses every request after the scan.
+    struct Refusing;
+
+    impl HidDevice for Refusing {
+        fn read_report(&mut self, _buf: &mut [u8], _timeout: std::time::Duration) -> Result<usize> {
+            Err(Error::device("refused"))
+        }
+
+        fn write_report(&mut self, _data: &[u8]) -> Result<()> {
+            Err(Error::device("refused"))
+        }
+
+        fn get_feature(&mut self, _buf: &mut [u8]) -> Result<usize> {
+            Err(Error::device("hid: ioctl(GET_FEATURE) error: Broken pipe"))
+        }
+
+        fn set_feature(&mut self, _data: &[u8]) -> Result<()> {
+            Err(Error::device("hid: ioctl(SET_FEATURE) error: Broken pipe"))
+        }
+    }
+
+    /// As in libsigrok: a failed state read does not stop the open,
+    /// and a failed switch is an I/O error.
+    #[test]
+    fn refused_requests() {
+        let mut dev = UsbRelayDevice::new(
+            Box::new(Refusing),
+            VENDOR_STRING.into(),
+            "USBRelay2".into(),
+            "ABCDE".into(),
+            "/dev/hidraw0".into(),
+            2,
+            0,
+        );
+        dev.open().unwrap();
+        assert_eq!(dev.get(&Key::Enabled, Some("R1")).unwrap(), Value::Bool(false));
+        let e = dev.set(&Key::Enabled, &Value::Bool(true), Some("R2")).unwrap_err();
+        assert_eq!(e.to_string(), "input/output error");
     }
 }
