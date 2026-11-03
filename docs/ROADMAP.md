@@ -23,7 +23,7 @@
 | 9a | transport shells: vendor bulk and interrupt, FTDI, EZ-USB renumeration, HID, CDC-ACM with modem lines, USBTMC | the six Pico roles, the LogicPort and fx2lafw re-run on the host; `tools/diffcli.sh --emu` needs no hardware. 2026-11-03: HID (relay, PICkit2, the BU-86X, CH9325 and Victor cables, all full cases) and FTDI shells done |
 | 9b | oracle instrumentation: libsigrok built with `--coverage`, a per driver gcov report of the lines the scenarios reach, transaction log diff in `diffcli.sh` | each emulated driver has a coverage figure and a list of C paths not emulated. Harness done 2026-11-02: models found by `emu/build.rs`, one scenario file per model with goldens (oracle-only cases before a port exists), a host-wide session lock, firmware stand-ins, `tools/emu-gcov.sh` and `diffcli.sh --gcov` (`docs/USB.md`). 2026-11-03: the shared sources (`usb.c`, `ezusb.c`, `serial*.c`) reported too, fault options in the shells and models, unplug and interrupt events; drivers at 60% to 86% |
 | 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%) until the driver is ported; check which chip the ChronoVu LA8/LA16 and SIGMA carry before their models |
-| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (49 cases, gcov 83.6%); USBee AX analog open |
+| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (49 cases, gcov 83.6%); USBee AX analog open. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%), ready for their ports; `lecroy-logicstudio` remains |
 | 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host |
 | 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
@@ -98,7 +98,14 @@ table says "emulator" rather than "hardware" for it:
    emulated" on purpose (hardware error paths, model variants nobody
    has). The figure says when to stop writing scenarios.
 5. Replay fixtures recorded from the emulator run, so `cargo test`
-   needs neither the model nor root.
+   needs neither the model nor root: one or two `--record` cases per
+   driver (`tests/fixtures/DRIVER/emu-*.txt` with oxrok's stdout beside
+   it), replayed by `tests/emu_replay.rs` through the oxrok binary on
+   every platform, and stable from one emulator run to the next (a run
+   without `EMU_BLESS` fails on a recording that differs). Done
+   2026-11-03 for `fx2lafw`, `microchip-pickit2`, `dcttech-usbrelay`,
+   `brymen-bm86x`, `uni-t-ut61e-ser` (CH9325 and CP2110 cables) and
+   `victor-dmm`.
 6. `diffcli.sh --hw` runs the same scenarios against the real device
    with one command, so a user who has it can promote the driver to
    hardware-verified and report back.
@@ -231,8 +238,14 @@ each with where it belongs:
   (BM85x) and the multi display ones (EEVblog 121GW, MS2115B, Metex 4
   display) wait for the CDC-ACM shell (9f); they hold most of
   serial-dmm's unreached lines.
-- Criterion 5, replay fixtures recorded from emulator runs, is open for
-  every model; and the emulator tier has no CI yet (row 9).
+- The emulator tier has no CI yet (row 9).
+- An oracle `--expect-fail` case that may end by `--timeout`: the
+  drivers that retry capture errors for ever (hantek-dso, hantek-6xxx
+  after its flush) hang sigrok-cli, so those paths have no case; their
+  cases wait commented out in the scenarios.
+- `tools/attribution.py` credits files only: facts taken from a
+  firmware source tree (the fx2lafw and hantek-6xxx models use
+  sigrok-firmware-fx2lafw) are credited by hand in the model's header.
 
 ### Risks
 

@@ -26,6 +26,10 @@ Deliberate, and kept small:
   prints stray `A0: ...` lines next to `csv` and `vcd` output.
 - The `binary` input parses `samplerate=200k` as 200 kHz. sigrok-cli
   reads it as 200 Hz, since it ignores the suffix for this option.
+- A size with a fraction keeps its suffix: `samplerate=12.5M` is
+  12.5 MHz. libsigrok's `sr_parse_sizestring()` skips the suffix after
+  the fraction, so sigrok-cli sets 12 Hz (and a bare `12.5` makes it
+  read past the string); oxrok refuses a bare fraction.
 - The VCD input reads undefined bits (`x`, `z`, `u`, `-`) as 0 with one
   warning. sigrok-cli stops with an error. `--strict` turns every
   warning into a failed run, at any `-l` level, which gives the

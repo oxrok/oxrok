@@ -572,6 +572,213 @@ stream as 2 byte samples and the data starts at half the trigger
 offset; oxrok uses the stream's width, and the cases avoid that
 configuration.
 
+## Saleae Logic16
+
+`saleae-logic16` (21a9:1001): 16 channels, 100 MHz / n or 160 MHz / n
+(n up to 256, the driver lists 500 kHz to 100 MHz), at most 300 MHz
+across the enabled channels. It needs `saleae-logic16-fx2.fw` and an
+FPGA bitstream, `saleae-logic16-fpga-18.bitstream` for 1.8 V and 3.3 V
+logic or `-33` for 5 V (`voltage_threshold`), which sigrok-util
+extracts from the vendor's application. oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `saleae-logic16`,
+options `flashed=0|1`, `bitstream=old|new` (the two FPGA register maps
+of `protocol.c`) and `variant=original|mcupro` (the clone whose FPGA
+holds its design). The FX2 takes its firmware through the boot loader
+and renumerates as "Saleae LLC" / "Logic S/16"; commands go to bulk
+EP1 (64 byte packets) scrambled by `encrypt()`, which the model undoes
+and applies to its answers, so a host that sends plain bytes or keeps
+the scrambler's state across transfers is refused. The bitstream comes
+in 62 byte chunks after `0x7e` and is checked byte for byte against
+the stand-in; the FPGA is then primed with the EEPROM's 16 bytes from
+address 16 and their `map_eeprom_data()`, checked as `prime_fpga()`'s
+whole write sequence (MODE brackets, the PRIMER_CONTROL pulse, the
+final MODE). Samples are 16-bit words of 16 samples of one channel,
+first sample in bit 15, round the selected channels. Faults, off by
+default: each command or its answer STALLed or its answer short
+(`stall=`, `stall_reply=`, `short_reply=`, `NAME[:N]`), a wrong abort
+answer, another FPGA version, flipped status or mode bits, a FIFO
+overflow, and empty, stalled, short or odd-length sample transfers.
+The 85 cases of `tools/emu/saleae-logic16.sh` cover scan, show,
+selection, the driver's rates and two off its list on both base
+clocks, the 5 V re-upload, triggers, a time limit, refused rates and
+thresholds, the flashed board with the new bitstream and the mcupro
+clone, a claimed interface, 44 faults (the version, status, mode and
+overflow cases show the driver's warnings) and an unplug mid capture
+and at three points of the FX2 upload, with no violation under
+sigrok-cli. gcov: 91.6% (`api.c` 85.8%, `protocol.c` 96.4%); `usb.c`
+and `ezusb.c` 67.6%. Many device facts (bcdDevice 0, no serial, the
+EEPROM beyond the bytes the driver reads, FPGA versions 0x10 and 0x13)
+come from the C driver alone; no firmware or recording was at hand.
+
+What the model taught: the driver divides 0 by 0 at `api.c:544`
+(`500 * bytes_per_ms() / get_buffer_size()`, both 0 under 8000 bytes
+per second) from `get_timeout()` before it checks the rate, so
+`-C 0 -c samplerate=1k` kills sigrok-cli with SIGFPE. And libsigrok's
+`sr_parse_sizestring()` (`strutil.c:1213-1244`) skips the suffix after
+a fraction, so `samplerate=12.5M` is 12 Hz (and then hits the crash)
+and a bare `12.5` reads past the string's end; `12500k` works.
+
+## DreamSourceLab DSLogic
+
+`dreamsourcelab-dslogic`: the DSLogic, Pro, Plus and Basic and the
+DSCope (2a0e:0001, 0003, 0020, 0021, 0002). oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model
+`dreamsourcelab-dslogic`, options `profile=plus|basic|pro|dslogic|dscope`
+(the Plus by default) and `flashed=0|1`. The FX2 takes its firmware,
+renumerates as "DreamSourceLab" / "USB-based Instrument", and every
+open loads the FPGA bitstream over bulk OUT 2 after vendor request
+0xb3 and writes the threshold register; both uploads are checked byte
+for byte against the stand-ins. The model decodes the 360 byte setting
+packet (`struct fpga_config`) field by field: syncs and headers, mode
+bits, a divider of a listed rate, half and quarter mode only at
+divider 1, RLE exactly where the driver's rule sets it, a trigger
+position in 64 sample steps within the memory, the trigger stages as
+`set_trigger()` writes them (stage 0 at its defaults without a
+trigger, no value bit under a mask, nothing on a disabled channel).
+It answers the 512 byte trigger packet and streams a counter in 64
+sample atoms per channel on bulk IN 6. The global trigger word the
+driver leaves uninitialised without a trigger is logged as `xxxx`.
+Faults, off by default: version, each vendor request, the FPGA and
+setting writes STALLed or short, the trigger packet STALLed, short or
+never sent, empty, stalled or short sample transfers, each step of the
+FX2 upload. The 80 cases of `tools/emu/dreamsourcelab-dslogic.sh`
+(10 kHz to 400 MHz, 1 to 16 channels, five trigger kinds, stream mode,
+external clock, threshold, RLE, every profile, the flashed start, 22
+faults with an unplug and a claimed interface) log no violation under
+sigrok-cli. gcov: 90.2% (`api.c` 87.0%, `protocol.c` 91.9%); `usb.c`
+and `ezusb.c` 72.0%. Open questions without DSView's FPGA source:
+whether the FPGA reads that trigger word without a trigger (if so, the
+uninitialised bytes change captures), and how a buffered capture ends
+(`count = limit_samples / 16` truncates, so `--samples 65` might come
+up short).
+
+What the model taught about the C driver: the trigger word goes out
+uninitialised; `clock_edge` always reads back "rising"; the first
+DSLogic loads its 3.3 V bitstream but reports the 1.4-3.6 V range; the
+90 % trigger-position bound overflows 32 bits on the 256 Mibit boards
+(about 10 %, found by reading); a STALLed or short trigger packet is
+freed without a branch for it, so the capture never ends and a later
+abort cancels freed memory; after a failed FX2 upload the driver opens
+the bare FX2 and asks it for its version; handles leak in `scan()`,
+`dslogic_dev_open()` (again on each retry) and
+`ezusb_upload_firmware()`.
+
+## Kingst LA2016 family
+
+`kingst-la2016`: the LA2016, LA1016 (and their A1 boards), LA1010,
+LA5016 and LA5032. oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `kingst-la2016`
+(`emu/src/models/kingst-la2016/`), options
+`model=la2016a1|la2016|la1016|la1016a1|la1010a1|la5016a1|la5032a0`,
+`mcu=1` (firmware running) and `fpga=1` (bitstream loaded). The bare
+FX2 takes `kingst-la-01a2.fw` (the name is built from the PID) and
+renumerates; the EEPROM holds the model's magic in a primary and a
+backup copy with their complements, the bitstream goes up in 4096
+byte chunks with zero padding, and a loaded FPGA is reused unless a
+PWM output was left running or the run state is unexpected. Captures
+advance by 50 ms of samples per poll of the run state (the driver's
+poll interval, counted in polls), in the run-length encoded memory the
+driver downloads; streaming, the PWM outputs, thresholds and triggers
+follow `protocol.c`. Faults, off by default: any request STALLed
+(`stall=WHAT[@N]`), FPGA init answers, run states, PWM left on, EEPROM
+contents, extra or short data, a firmware that never runs. The 138
+cases of `tools/emu/kingst-la2016.sh` (all seven models, 3051 Hz to
+500 MHz including rates off the list, time limits with and without a
+pending trigger, triggers with capture ratios 0 to 100, streaming, PWM,
+groups, a claimed interface, every vendor request failing, an unplug
+mid download) log no violation under sigrok-cli. gcov: 91.2%
+(`api.c` 88.7%, `protocol.c` 92.7%); `usb.c` and `ezusb.c` 69.8%.
+
+What the model taught: when `la2016_receive_data()` fails with the
+bulk transfers in flight (a refused download or stream start), it
+ends without cancelling them and `dev_close()` frees them, and libusb
+aborts (three cases expect it); `run_state()` returns a failed read as
+0xfff5, whose idle bit makes the driver download a capture that has
+not finished; at the lowest rate the driver accepts (3051 Hz on the
+LA2016) the divider is truncated to 16 bits and the device samples at
+12.5 MHz; the driver passes on every sample of the transfer in which
+the limit falls; and sigrok-cli parses float options in single
+precision (20000001 Hz is 2e7).
+
+## Hantek 6022BE/BL and relatives (hantek-6xxx)
+
+`hantek-6xxx`: the Hantek 6022BE and 6022BL, Voltcraft DSO-2020,
+Sainsmart DDS120, YiXingDianZi MDSO and Instrustar ISDS205B, two
+channel USB scopes on an FX2LP with sigrok's own firmware
+(sigrok-firmware-fx2lafw). oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `hantek-6xxx`, options
+`profile=6022be|6022be-04b5|dso2020|dds120|6022bl|6022bl-04b5|mdso|isds205b`
+and `flashed=0|1`. It follows the firmware source (0.1.7-10-g0f2d324:
+`scope.inc`, `hw/*/fw.c`, `dscr_scope.inc`): the scope renumerates as
+1d50:608e with bcdDevice telling the boards apart, vendor commands
+0xe0 to 0xe6 each stop sampling first, values a board does not know
+are ignored and other requests STALL, and the stream interleaves one
+byte of CH1 and one of CH2 on bulk IN 6. The model holds the driver to
+its own tables and checks that the rate, both gains and (on the DDS120
+and ISDS205B) the coupling are sent before every start. Inputs are
+invented: a 1 kHz square wave on CH1, a 10 kHz triangle on CH2; the
+gains are the driver's own V/div table. Faults, off by default: each
+configuration request and each upload step STALLed, empty or stalled
+transfers, short packets, another board's firmware. The 86 cases of
+`tools/emu/hantek-6xxx.sh` (all eight profiles flashed or not, every
+rate from 100 kHz to 48 MHz, every range, coupling, single channels,
+get and set, faults, a claimed interface, an unplug) log no violation
+under sigrok-cli. gcov: 90.8% (`api.c` 92.6%, `protocol.c` 84.8%);
+`ezusb.c` 82.6%, `usb.c` 63.8%. Not emulated: the end of a capture by
+a plain `--time` limit (wall time), a continuous capture.
+
+What the model taught: with CH1 disabled, CH2's samples come out
+labelled CH1; a bulk transfer that completes empty or fails after the
+flush is neither resubmitted nor ends the capture, so it hangs for
+ever (read from `receive_transfer()`; its cases wait for an oracle
+case that may end by `--timeout`); `coupling=DC` on a DC-only board
+reads back AC; `num_vdiv` cannot be read; a rate off the list is sent
+as 100 kHz while the output is labelled with it; configuration errors
+are logged and the capture goes on with the old settings; three
+ISDS205B ranges (1.28 V, 57.6 mV, 17.6 mV) cannot be set from
+sigrok-cli; and the open after an upload ignores bcdDevice, so a scope
+with another board's firmware opens.
+
+## Hantek DSO-2090 family (hantek-dso)
+
+`hantek-dso`: the Hantek DSO-2090, 2150, 2250, 5200 and 5200A. oxrok
+has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `hantek-dso`, options
+`profile=dso-2090|dso-2150|dso-2250|dso-5200|dso-5200a`, `flashed=1`,
+`speed=full`, `ext=1`, `fill=N`, `wrap=N`. The FX2 takes
+`hantek-dso-*.fw` and renumerates from 04b4 to 04b5; the model follows
+`protocol.c`'s bulk commands behind the 'begin' request, the capture
+state polls, triggers, timebases, ranges, coupling and filters, the
+EEPROM calibration, and a Gray-coded trigger position in the state
+answer. Faults, off by default: each request STALLed
+(`stall=WHAT[@N]`), capture states (`state=V@N`), endpoint layouts the
+driver refuses. The 132 cases of `tools/emu/hantek-dso.sh` (frames with
+every trigger source, slope, ratio, timebase branch, range, coupling
+and filter, full speed, the DSO-2250's own commands and each of CH2's
+range groups, the upload and every step of the init and capture loop
+failing) log no violation under sigrok-cli; frame outputs keep every
+64th line plus a digest of the whole output (`--digest`). gcov: 96.1%
+(`ezusb.c` 82.6%, `usb.c` 63.8%). Not emulated: a second device, every
+path that never ends (the driver retries capture errors for ever: an
+empty transfer, a vanished device, the DSO-5200's 9-bit frames, a
+trigger that never fires). Known flake source: the driver submits a
+frame's transfers at once with a 40 ms timeout each, and a timeout
+hangs sigrok-cli; no run has hit it.
+
+What the model taught: `--get num_hdiv` and `num_vdiv` always fail
+(`config_get()` fills the value, then returns `SR_ERR_NA`); a frame
+whose trigger offset is 0 sends an empty analog packet, on which
+`output/analog.c` frees its buffer twice and sigrok-cli aborts;
+capture errors are retried for ever; probably, the DSO-2250's voltage
+header bit 0x08 overlaps CH2's range bit, so CH2 at 5 V, 500 mV and
+50 mV reads as 1 V, 100 mV and 10 mV; and the capture-state answer's
+length is never checked.
+
 ## Oracle
 
 The sigrok build that `tools/diffcli.sh` and the emulation work of

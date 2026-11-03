@@ -81,13 +81,56 @@ on time, so a replay may poll more or fewer times than the recording:
 a read identical to the one just answered is answered again, and
 leftover identical reads in the recording are skipped.
 
-`OXROK_USB_RECORD=FILE` makes `usb::open` record every session
-and write the fixture when the device is closed, with any program
-that uses the drivers:
+`OXROK_USB_RECORD=FILE` makes `usb::open` record every session and
+write it to `FILE` when the device is closed; a later session of the
+same process (a scan that opened the device, then the acquisition) is
+appended after it, each starting with its own `# oxrok usb fixture 1`
+line. This works with any program that uses the drivers:
 
 ```sh
 OXROK_USB_RECORD=capture.txt oxrok -d intronix-logicport -c samplerate=10M --samples 64 -O bits
 ```
+
+`OXROK_USB_REPLAY=FILE` is the other way round: the USB listing shows
+only the device of the file's first session (no hardware is asked),
+and each open of it is served the file's next session as a `Replay`.
+A session not played to its end, or one no open asked for, makes the
+command line tool exit with an error. So a recording runs again on any
+system with the same command line:
+
+```sh
+OXROK_USB_REPLAY=capture.txt oxrok -d intronix-logicport -c samplerate=10M --samples 64 -O bits
+```
+
+The `device` line also takes `strings=M,P,S`, the string descriptor
+indexes, recorded when the driver asked for them (the OS answers from
+its cache, so they are no step) and answered from there on replay;
+fx2lafw's scan needs them to read the strings.
+
+`OXROK_HID_RECORD=FILE` and `OXROK_HID_REPLAY=FILE` do the same for HID
+devices (`hid::record`): `# oxrok hid fixture 1`, a `device vid= pid=
+manufacturer= product= serial= path=` line, then `read LEN -> DATA`
+(`-` for a read that timed out), `write DATA -> ok`,
+`get_feature ID LEN -> DATA` and `set_feature DATA -> ok`, errors as in
+USB fixtures. The `path` is the node the device had (`/dev/hidrawN`);
+a replayed listing reports it, and a `conn=` that names it matches it
+as text, so the fixture also runs on macOS and Windows. With either
+replay variable set, both listings show only replayed devices. A serial
+over HID cable records its HID reports here, which covers the chip
+adapter too (`OXROK_SERIAL_RECORD` keeps the decoded bytes, but there
+is no serial replay variable). Timed out reads depend on the pace of
+the run, so on replay they float: one recorded where the replay makes
+another call is skipped, and a read where the recording has no read
+next (or nothing more) answers a timeout. Data reads, writes and
+feature reports must come as recorded. As on a real device, extra
+reads that come back empty are not caught: a driver that polls more
+often than recorded passes.
+
+Replay fixtures of drivers with an emulator model are recorded from
+the model, not written by hand: `emu_case --record` (see "Scenarios")
+keeps oxrok's sessions and stdout as `tests/fixtures/DRIVER/emu-SLUG.txt`
+and `.out`, and `tests/emu_replay.rs` runs the oxrok binary on every
+such file with the recorded arguments and the replay variable set.
 
 To record, wrap the transport before handing it to the driver:
 
@@ -234,6 +277,24 @@ is how a driver is verified against sigrok-cli without the hardware
   resubmits, and a read error on hidraw is only an unplug, which cannot
   be timed against libsigrok's reads, so `serial_hid*.c` read errors
   stay unreached.
+- A model can name the bytes of an OUT transfer the host leaves
+  undefined (`DeviceModel::log_undefined`): the log prints them as
+  `xx`, and in a digest they count as 0 and their ranges follow
+  (`@LEN:SHA256/xx=A-B`). The DSLogic driver sends an uninitialised
+  struct field that would otherwise make the log differ between runs.
+- What the EZ-USB family taught (batch 2, 2026-11-03): a driver that
+  submits its whole batch of transfers after the start would see every
+  one complete under a plain one-per-submission rule, so a streaming
+  model completes one per submission made after the previous
+  completion; a renumerated device's scan line carries its new
+  address, so scan cases filter it; the C drivers' `LIBUSB_ERROR_ACCESS`
+  retry after a renumeration shows in stderr at random, so a stderr
+  filter matches the line it wants, not line 1; a driver that retries
+  capture errors for ever (hantek-dso, hantek-6xxx after its flush)
+  cannot have unplug or empty-transfer cases while an oracle case may
+  not end by `--timeout`; and fault cases run on a board that starts
+  with its firmware (`flashed=1` or the like), since after an upload
+  the drivers retry a failing open for 3 s of wall time.
 - CDC-ACM and USBTMC come next.
 - Models live in `emu/src/models`, one file `NAME.rs` or one directory
   `NAME/mod.rs` each, and nothing else names them: `emu/build.rs` finds
@@ -378,6 +439,21 @@ full case or oracle case. What else is checked depends on oxrok:
 - `--digest` ends the compared output with the SHA-256 of the whole
   output before `--filter`, so a filter that thins a long output (the
   hantek-dso frames keep every 64th line) still compares every byte.
+- `--record` records oxrok's run of a full case with
+  `OXROK_USB_RECORD` and `OXROK_HID_RECORD` set (the USB recording is
+  kept when both wrote), as `tests/fixtures/DRIVER/emu-SLUG.txt`
+  (`DRIVER` the case's driver id with `-` made `_`), and its stdout as
+  `emu-SLUG.out`, node names made generic and the version line
+  dropped. The fixture gets the case name as `# emu MODEL: NAME` and
+  the arguments as one `# arg: ...` line each, so arguments with
+  spaces survive; node names are made generic as in the output, the
+  bus and address are dropped from a USB `device` line, and timed out
+  reads are dropped from a HID recording (their number depends on the
+  run). Like the goldens, `EMU_BLESS=1` writes them and otherwise the
+  new recording must equal the kept one byte for byte, so a recording
+  that is not deterministic fails the case. Only a full case that
+  succeeds, without an event or `--stderr`, can be recorded. Fixtures
+  no case records any more are not removed: delete them by hand.
 - `--unplug WHEN` and `--interrupt WHEN` arm the event for each tool's
   run, which must fire it. After an unplug the harness replugs and
   takes over the new nodes and address, so a case that names the
