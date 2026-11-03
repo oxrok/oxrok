@@ -11,9 +11,12 @@
 //! 1024 samples at up to 1 MHz on pins 4 to 6, with a hardware trigger
 //! and a few pre-trigger positions. The driver is `microchip-pickit2`.
 //!
-//! The device is a HID; libsigrok reaches it with raw USB transfers,
-//! which macOS does not allow, so this driver speaks HID reports and
-//! works on every platform the HID transport does.
+//! The device is a HID with a 64 byte interrupt endpoint each way.
+//! libsigrok reaches it with raw USB interrupt transfers. Linux keeps
+//! `usbhid` off the PICkit2 (it is on the kernel's HID ignore list, so
+//! there is no hidraw node), so there this driver does the same, over
+//! [`crate::usb`]; macOS does not let a program claim a HID interface,
+//! and Windows binds its HID driver, so elsewhere it speaks HID reports.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::doc_markdown)]
@@ -24,6 +27,7 @@ use crate::core::{
     ValueList,
 };
 use crate::hid::HidDevice;
+use crate::usb::{Transport, UsbDeviceInfo};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -42,6 +46,9 @@ const CMD_SETUP: u8 = 0xb8;
 const CMD_SETPOS: u8 = 0xb9;
 const SEL_BANK0: u8 = 0x06;
 const TIMEOUT: Duration = Duration::from_millis(250);
+const USB_INTERFACE: u8 = 0;
+const EP_OUT: u8 = 0x01;
+const EP_IN: u8 = 0x81;
 
 const SCAN_OPTIONS: [Key; 2] = [Key::Conn, Key::ProbeNames];
 const CLASSES: [DeviceClass; 1] = [DeviceClass::LogicAnalyzer];
@@ -98,6 +105,21 @@ impl Driver for Pickit2Driver {
                 other => return Err(Error::UnknownKey(other.id().to_owned())),
             }
         }
+        let mut devices: Vec<Box<dyn Device>> = Vec::new();
+        if cfg!(target_os = "linux") {
+            // As libsigrok: VID.PID in hex or bus.address.
+            for info in crate::usb::list_devices()? {
+                if !info.matches_conn(&conn) {
+                    continue;
+                }
+                let mut dev = Pickit2Device::new(Source::Usb(info));
+                if let Some(spec) = &probe_names {
+                    dev.name_channels(spec);
+                }
+                devices.push(Box::new(dev));
+            }
+            return Ok(devices);
+        }
         let (vid, pid) = match conn.split_once('.') {
             Some((v, p)) => match (u16::from_str_radix(v, 16), u16::from_str_radix(p, 16)) {
                 (Ok(vid), Ok(pid)) => (vid, pid),
@@ -105,12 +127,11 @@ impl Driver for Pickit2Driver {
             },
             None => return Err(Error::Arg(format!("Invalid conn '{conn}': use VID.PID."))),
         };
-        let mut devices: Vec<Box<dyn Device>> = Vec::new();
         for info in crate::hid::list()? {
             if info.vendor_id != vid || info.product_id != pid {
                 continue;
             }
-            let mut dev = Pickit2Device::new(info, conn.clone());
+            let mut dev = Pickit2Device::new(Source::Hid(info, conn.clone()));
             if let Some(spec) = &probe_names {
                 dev.name_channels(spec);
             }
@@ -128,30 +149,133 @@ struct Settings {
     capture_ratio_idx: usize,
 }
 
+/// Where a scanned PICkit2 is, to open it.
+pub enum Source {
+    /// A HID, with the `conn` it was found by.
+    Hid(crate::hid::HidInfo, String),
+    /// A USB device, reached with interrupt transfers.
+    Usb(UsbDeviceInfo),
+}
+
+/// The packets to and from endpoint 1, over HID reports or raw USB.
+pub trait Link: Send {
+    /// Sends one 64 byte packet.
+    ///
+    /// # Errors
+    ///
+    /// When the transport fails or takes less than the packet.
+    fn send(&mut self, packet: &[u8; PACKET]) -> Result<()>;
+    /// Reads one packet into `buf`, waiting at most `timeout`; its
+    /// length, or 0 when none came.
+    ///
+    /// # Errors
+    ///
+    /// When the transport fails.
+    fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
+    /// Gives the device back, before it is closed.
+    ///
+    /// # Errors
+    ///
+    /// When the transport fails.
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// HID reports: output reports out, input reports in.
+pub struct HidLink(pub Box<dyn HidDevice>);
+
+impl Link for HidLink {
+    fn send(&mut self, packet: &[u8; PACKET]) -> Result<()> {
+        // HID output reports carry the report id first; this device
+        // has none, so it is zero.
+        let mut report = [0u8; 1 + PACKET];
+        report[1..].copy_from_slice(packet);
+        self.0.write_report(&report)
+    }
+
+    fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        self.0.read_report(buf, timeout)
+    }
+}
+
+/// Interrupt transfers on the claimed interface 0, as libsigrok does.
+pub struct UsbLink(pub Box<dyn Transport>);
+
+impl UsbLink {
+    /// Claims the interface (detaching a kernel driver, as libsigrok's
+    /// `dev_open` does).
+    ///
+    /// # Errors
+    ///
+    /// When the interface cannot be claimed.
+    pub fn claim(mut transport: Box<dyn Transport>) -> Result<UsbLink> {
+        transport.claim_interface(USB_INTERFACE)?;
+        Ok(UsbLink(transport))
+    }
+}
+
+impl Link for UsbLink {
+    fn send(&mut self, packet: &[u8; PACKET]) -> Result<()> {
+        let sent = self.0.interrupt_out(EP_OUT, packet, TIMEOUT)?;
+        if sent != PACKET {
+            return Err(Error::device(format!("USB short send: {sent}/{PACKET} bytes.")));
+        }
+        Ok(())
+    }
+
+    fn recv(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        match self.0.interrupt_in(EP_IN, PACKET, timeout) {
+            Ok(d) => {
+                let n = d.len().min(buf.len());
+                buf[..n].copy_from_slice(&d[..n]);
+                Ok(n)
+            }
+            Err(Error::Timeout) => Ok(0),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.0.release_interface(USB_INTERFACE)
+    }
+}
+
 /// One PICkit2.
 pub struct Pickit2Device {
     info: DeviceInfo,
-    hid: Option<crate::hid::HidInfo>,
+    source: Option<Source>,
     conn: String,
     channels: Vec<Channel>,
     groups: Vec<ChannelGroup>,
     settings: Settings,
     trigger: Option<Trigger>,
-    pending: Option<Box<dyn HidDevice>>,
-    dev: Arc<Mutex<Option<Box<dyn HidDevice>>>>,
+    pending: Option<Box<dyn Link>>,
+    dev: Arc<Mutex<Option<Box<dyn Link>>>>,
     worker: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
 }
 
 impl Pickit2Device {
-    /// A device for a listed PICkit2; the HID is opened on `open`.
-    pub fn new(info: crate::hid::HidInfo, conn: String) -> Pickit2Device {
-        let mut d = Self::with_device(None, conn);
-        d.hid = Some(info);
+    /// A device for a listed PICkit2, opened on `open`. A USB device's
+    /// connection is its `bus.address`, as libsigrok reports it; a HID's
+    /// is the `conn` it was found by.
+    pub fn new(source: Source) -> Pickit2Device {
+        let conn = match &source {
+            Source::Hid(_, conn) => conn.clone(),
+            Source::Usb(info) => info.conn(),
+        };
+        let mut d = Self::with_link(None, conn);
+        d.source = Some(source);
         d
     }
 
     /// A device on an already open HID, e.g. a fake in tests.
     pub fn with_device(dev: Option<Box<dyn HidDevice>>, conn: String) -> Pickit2Device {
+        Self::with_link(dev.map(|d| Box::new(HidLink(d)) as Box<dyn Link>), conn)
+    }
+
+    /// A device on an already open link, e.g. a replayed USB transport.
+    pub fn with_link(dev: Option<Box<dyn Link>>, conn: String) -> Pickit2Device {
         let channels: Vec<Channel> = CHANNEL_NAMES
             .iter()
             .enumerate()
@@ -166,7 +290,7 @@ impl Pickit2Device {
                 serial: String::new(),
                 conn: Some(conn.clone()),
             },
-            hid: None,
+            source: None,
             conn,
             groups: vec![ChannelGroup::new("Logic", (0..channels.len()).collect())],
             channels,
@@ -247,28 +371,24 @@ pub fn convert_samples(raw: &[u8]) -> Vec<u8> {
     out
 }
 
-fn send(dev: &mut dyn HidDevice, packet: &[u8; PACKET]) -> Result<()> {
-    // HID output reports carry the report id first; this device has
-    // none, so it is zero.
-    let mut report = [0u8; 1 + PACKET];
-    report[1..].copy_from_slice(packet);
-    dev.write_report(&report)
-}
-
 fn padded(bytes: &[u8]) -> [u8; PACKET] {
     let mut p = [CMD_PAD; PACKET];
     p[..bytes.len()].copy_from_slice(bytes);
     p
 }
 
-/// Reads one 64 byte report, waiting for it.
-fn recv(dev: &mut dyn HidDevice, stop: &AtomicBool) -> Result<Option<[u8; PACKET]>> {
+fn send(dev: &mut dyn Link, packet: &[u8; PACKET]) -> Result<()> {
+    dev.send(packet)
+}
+
+/// Reads one 64 byte packet, waiting for it.
+fn recv(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<[u8; PACKET]>> {
     let mut buf = [0u8; crate::hid::MAX_REPORT];
     loop {
         if stop.load(Ordering::SeqCst) {
             return Ok(None);
         }
-        let n = dev.read_report(&mut buf, TIMEOUT)?;
+        let n = dev.recv(&mut buf, TIMEOUT)?;
         if n == PACKET {
             let mut p = [0u8; PACKET];
             p.copy_from_slice(&buf[..PACKET]);
@@ -282,7 +402,7 @@ fn recv(dev: &mut dyn HidDevice, stop: &AtomicBool) -> Result<Option<[u8; PACKET
 
 /// Reads the 512 raw sample bytes: two banks, two halves each, two
 /// READ packets per half.
-fn retrieve(dev: &mut dyn HidDevice, stop: &AtomicBool) -> Result<Option<Vec<u8>>> {
+fn retrieve(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<Vec<u8>>> {
     let mut raw = Vec::with_capacity(RAW_LEN);
     for bank in 0..2u8 {
         for offset in [0x00u8, 0x80] {
@@ -399,9 +519,12 @@ impl Device for Pickit2Device {
         if self.dev.lock().expect("dev lock").is_some() {
             return Ok(());
         }
-        let dev = match self.pending.take() {
+        let dev: Box<dyn Link> = match self.pending.take() {
             Some(d) => d,
-            None => self.hid.as_ref().ok_or_else(|| Error::device("no device to open"))?.open()?,
+            None => match self.source.as_ref().ok_or_else(|| Error::device("no device to open"))? {
+                Source::Hid(info, _) => Box::new(HidLink(info.open()?)),
+                Source::Usb(info) => Box::new(UsbLink::claim(crate::usb::open(info)?)?),
+            },
         };
         *self.dev.lock().expect("dev lock") = Some(dev);
         Ok(())
@@ -409,7 +532,9 @@ impl Device for Pickit2Device {
 
     fn close(&mut self) -> Result<()> {
         self.stop()?;
-        self.dev.lock().expect("dev lock").take();
+        if let Some(mut dev) = self.dev.lock().expect("dev lock").take() {
+            dev.close()?;
+        }
         Ok(())
     }
 
@@ -467,7 +592,7 @@ impl Device for Pickit2Device {
 /// One capture: SETUP, wait for the status (the trigger, or a cancel
 /// with the device's button), read the banks, send the samples.
 fn run(
-    dev: &mut dyn HidDevice,
+    dev: &mut dyn Link,
     sink: &PacketSink,
     stop: &AtomicBool,
     setup: &[u8; PACKET],
@@ -563,6 +688,53 @@ mod tests {
         assert_eq!(&out[1][..4], &[0, CMD_SETPOS, 0x00, SEL_BANK0]);
         assert_eq!(out[2][1], CMD_READ);
         assert_eq!(out.len(), 1 + 4 * 3);
+    }
+
+    /// The same capture over raw USB, as on Linux: the interface is
+    /// claimed, every packet is a 64 byte interrupt transfer on
+    /// endpoint 1, a timed out IN while the trigger is pending is
+    /// polled again, and close releases the interface.
+    #[test]
+    fn capture_over_usb_interrupt_transfers() {
+        use crate::usb::record::{Replay, hex};
+        use std::fmt::Write as _;
+        let pad = |b: &[u8]| hex(&padded(b));
+        let mut text = String::from(
+            "# oxrok usb fixture 1\ndevice vid=04d8 pid=0033 bus=1 addr=5\nclaim 0 -> ok\n",
+        );
+        let _ = writeln!(text, "int_out 01 {} -> 64", pad(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]));
+        text += "int_in 81 64 -> err timeout\n";
+        let _ = writeln!(text, "int_in 81 64 -> {}", hex(&[0u8; PACKET]));
+        for (bank, offset) in [(0u8, 0u8), (0, 0x80), (1, 0), (1, 0x80)] {
+            let _ =
+                writeln!(text, "int_out 01 {} -> 64", pad(&[CMD_SETPOS, offset, SEL_BANK0 + bank]));
+            for _ in 0..2 {
+                let _ = writeln!(text, "int_out 01 {} -> 64", pad(&[CMD_READ]));
+                let _ = writeln!(text, "int_in 81 64 -> {}", hex(&[0x44u8; PACKET]));
+            }
+        }
+        text += "release 0 -> ok\n";
+        let replay = Replay::from_text(&text).unwrap();
+        let link = UsbLink::claim(Box::new(replay)).unwrap();
+        let mut dev = Pickit2Device::with_link(Some(Box::new(link)), "1.5".into());
+        dev.open().unwrap();
+        dev.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        dev.start(PacketSink::new(tx, 0)).unwrap();
+        let mut samples = Vec::new();
+        for (_, p) in rx {
+            match p {
+                Packet::Logic(l) => samples.extend_from_slice(&l.data),
+                Packet::End => break,
+                _ => {}
+            }
+        }
+        // 0x44: pin4 in both nibbles. A call off the recording would
+        // have failed the capture before its samples.
+        assert_eq!(samples, [1, 1, 1, 1]);
+        // The release is the recording's last step: the replay took
+        // every other one before it.
+        dev.close().unwrap();
     }
 
     #[test]

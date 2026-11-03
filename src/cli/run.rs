@@ -46,10 +46,45 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
             let value = device
                 .get(&key, group.as_deref())
                 .map_err(|e| Error::Arg(format!("Failed to get '{name}': {e}")))?;
-            println!("{value}");
+            println!("{}", get_text(&value));
         }
     }
     device.close()
+}
+
+/// A `--get` value as sigrok-cli prints it, which is `g_variant_print`
+/// for everything but measured quantities: a string comes quoted and
+/// escaped the way `GLib` writes a string literal (`'1.5'`; in double
+/// quotes whenever it holds a single quote, with `\\`, the quote in
+/// use and control characters escaped).
+fn get_text(value: &Value) -> String {
+    use std::fmt::Write as _;
+    let Value::Str(s) = value else { return value.to_string() };
+    let quote = if s.contains('\'') { '"' } else { '\'' };
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push(quote);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{07}' => out.push_str("\\a"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0b}' => out.push_str("\\v"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out.push(quote);
+    out
 }
 
 /// `--set`.
@@ -157,4 +192,23 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     result?;
     pipeline.check_limit(limit_samples);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_prints_strings_as_glib_does() {
+        assert_eq!(get_text(&Value::Str("1.5".into())), "'1.5'");
+        assert_eq!(get_text(&Value::Str("it's".into())), "\"it's\"");
+        // GLib picks double quotes for any single quote, and escapes
+        // the double quote then (checked against g_variant_print).
+        assert_eq!(get_text(&Value::Str("a'\"b\\\n".into())), "\"a'\\\"b\\\\\\n\"");
+        assert_eq!(get_text(&Value::Str("a\"b".into())), "'a\"b'");
+        assert_eq!(get_text(&Value::Str("\u{e9}x\u{7f}".into())), "'\u{e9}x\\u007f'");
+        assert_eq!(get_text(&Value::Str("\u{1}".into())), "'\\u0001'");
+        assert_eq!(get_text(&Value::U64(5)), "5");
+        assert_eq!(get_text(&Value::Bool(true)), "true");
+    }
 }

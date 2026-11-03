@@ -4,8 +4,8 @@
 
 //! USB access for oxrok drivers.
 //!
-//! Drivers talk to a [`Transport`]: control and bulk transfers with
-//! timeouts, interface claims and resets. Two backends implement it,
+//! Drivers talk to a [`Transport`]: control, bulk and interrupt
+//! transfers with timeouts, interface claims and resets. Two backends implement it,
 //! selected by cargo feature: `nusb` (default, pure Rust) and `libusb`
 //! (through `rusb`, for platforms nusb does not cover). The drivers never
 //! see which one is in use.
@@ -220,6 +220,16 @@ pub trait Transport: Send {
     /// Reads up to `len` bytes from a bulk IN endpoint. `len` is rounded
     /// up to a multiple of the packet size by the backend.
     fn bulk_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>>;
+
+    /// Writes one interrupt OUT transfer. Returns the number of bytes
+    /// the device took, which is less than `data.len()` only on a
+    /// timeout.
+    fn interrupt_out(&mut self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize>;
+
+    /// Reads one interrupt IN transfer of up to `len` bytes, rounded up
+    /// to a multiple of the packet size by the backend. Nothing within
+    /// `timeout` is [`Error::Timeout`].
+    fn interrupt_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>>;
 
     /// Opens a stream of bulk IN transfers that keeps `depth` transfers
     /// of `transfer_size` bytes in flight, for devices that stream
