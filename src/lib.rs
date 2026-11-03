@@ -81,6 +81,7 @@ pub mod drivers {
     pub mod chronovu_la;
     pub mod dcttech_usbrelay;
     pub mod demo;
+    pub mod dreamsourcelab_dslogic;
     pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod ikalogic_scanaplus;
@@ -111,4 +112,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
+    registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
 }
