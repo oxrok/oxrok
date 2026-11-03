@@ -1,7 +1,7 @@
 gcov hantek-4032l (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        91.8%  268 of 292
-  protocol.c   89.2%  239 of 268
-  total        90.5%  507 of 560
+  protocol.c   89.6%  240 of 268
+  total        90.7%  508 of 560
 never reached, by function (line ranges hold no reached line):
   api.c
     scan: 226
@@ -13,7 +13,6 @@ never reached, by function (line ranges hold no reached line):
   protocol.c
     h4032l_data_transfer_callback: 171-172
     h4032l_usb_callback: 225-226, 235-237, 298-299, 327
-    h4032l_voltage2pwm: 350
     h4032l_start_data_transfers: 376, 394-399
     h4032l_start: 441-444
     h4032l_dev_open: 473-475, 489, 493, 502-508

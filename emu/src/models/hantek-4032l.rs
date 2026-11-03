@@ -104,13 +104,33 @@
 //! than 512 bytes for the status and the first stream transfer, or
 //! other than 512 or 2048 for the rest; transfers on other endpoints.
 //!
-//! What the driver does not keep, which the model flags but no case
-//! runs (a case must log no violation): a capture ratio of 100 (libsigrok
-//! refuses more, `hwdriver.c` `check_key()`; api.c:409-410 takes it and
-//! api.c:508 then makes `pre_trigger_size` equal to the sample count),
-//! and a threshold of -8.2 V or below (api.c:430 takes
-//! any value; `h4032l_voltage2pwm()` clamps the reference at 10 V,
-//! which gives a PWM value of 4096 where the comment says 4095).
+//! What the driver sends against its own comments, which the model
+//! takes because a board could not refuse it (the configure is a bulk
+//! OUT with no answer): a capture ratio of 100 (libsigrok refuses more,
+//! `hwdriver.c` `check_key()`; api.c:409-410 takes it and api.c:508
+//! then makes `pre_trigger_size` equal to the sample count, where
+//! protocol.h:150 says it must be below; the trigger point is then
+//! sample `sample_size`, past the capture, so sigrok-cli shows no
+//! trigger marker), and a threshold of -8.2 V or below (api.c:430
+//! takes any value; `h4032l_voltage2pwm()` clamps the reference at
+//! 10 V, which gives a PWM value of 4096 where the comment at
+//! protocol.c:345-346 says 4095; a C habit of an inclusive clamp, the
+//! uint16 field carries it). Cases "set captureratio=100", "trigger
+//! captureratio=100" and "threshold A minus 9" run both; a pre-trigger
+//! count above the sample count is still flagged.
+//!
+//! A latent libsigrok bug: `h4032l_data_transfer_callback()` checks the
+//! end word at `buf[num_samples]` (protocol.c:194), `num_samples` being
+//! the samples the last data transfer takes. When that transfer is full
+//! of samples (2048 bytes, the end word left for the next packet), the
+//! read lands 4 bytes past the buffer. The model sends the start word
+//! and 127 samples in the first 512 bytes, so the last transfer always
+//! holds 385 samples and the end word (1544 bytes). A board that sent
+//! the start word in a short packet of its own (commit 74c4c174 says
+//! packetization varies) would leave a sample count, a multiple of 512,
+//! that fills the last transfer exactly, and the driver would read heap
+//! memory every time. No fault or case reaches it: its output would
+//! depend on what lies past the buffer.
 //!
 //! Faults, all off by default: `stall=WHAT[@N],...` STALLs the Nth (or
 //! every) `reset` request, `out` bulk OUT command or `in` bulk IN
@@ -141,8 +161,7 @@
 //! after an abort (171-172, 225-226: the driver submits exactly the
 //! transfers the stream needs, and only `dev_acquisition_stop()`, which
 //! sigrok-cli never calls, aborts earlier), the callback in the idle
-//! state (235-237, 327: an idle transfer is freed, not resubmitted), a
-//! reference above 10 V (350: flagged, see above), fewer than 512
+//! state (235-237, 327: an idle transfer is freed, not resubmitted), fewer than 512
 //! samples left after the first transfer (376: at least 1921 are),
 //! submissions that fail at the start of the data or of the capture
 //! (298-299, 394-399, 441-444: an unplug right after the stream's start,
@@ -535,12 +554,9 @@ impl H4032l {
                 "trigger flags {flags:#04x}: the driver sets trigger 1 (bit 0) alone"
             ));
         }
-        let pwm = [u16_at(p, 4), u16_at(p, 6)];
-        for (g, val) in ["A", "B"].iter().zip(pwm) {
-            if val > 4095 {
-                v.report(format!("PWM {g} {val}: the threshold DAC takes 12 bits, 0 to 4095"));
-            }
-        }
+        // PWM values are not checked: the driver sends 4096 for -8.2 V
+        // and below (see the module doc), and a uint16 field of a
+        // command with no answer is nothing a board could refuse.
         if u16_at(p, 8) != 0 {
             v.report(format!("reserved word {:#06x}, not 0", u16_at(p, 8)));
         }
@@ -551,9 +567,9 @@ impl H4032l {
             ));
         }
         let pre = u32_at(p, 14);
-        if pre >= samples {
+        if pre > samples {
             v.report(format!(
-                "pre-trigger count {pre}: must be below the sample count {samples} (protocol.h)"
+                "pre-trigger count {pre}: above the sample count {samples} (protocol.h)"
             ));
         }
         let t = &p[18..50];
@@ -561,7 +577,7 @@ impl H4032l {
         let mut cfg = Config {
             rate,
             trigger: flags & 1 != 0,
-            pwm,
+            pwm: [u16_at(p, 4), u16_at(p, 6)],
             samples,
             pre,
             mask: u32_at(t, 20),
@@ -1067,13 +1083,10 @@ mod tests {
         p[3] = 2;
         bad.push(("trigger 2", p));
         let mut p = configure(2048, 0);
-        p[4..6].copy_from_slice(&4096u16.to_le_bytes());
-        bad.push(("PWM 4096", p));
-        let mut p = configure(2048, 0);
         p[8] = 1;
         bad.push(("reserved", p));
         bad.push(("2560 samples ok, 1000 not", configure(1000, 0)));
-        bad.push(("pre equal to samples", configure(2048, 2048)));
+        bad.push(("pre above samples", configure(2048, 2560)));
         let mut p = configure(2048, 0);
         p[3] = 1;
         p[18..22].copy_from_slice(&(EDGE_DISABLED << 5 | 1 << 12 | 1 << 13).to_le_bytes());

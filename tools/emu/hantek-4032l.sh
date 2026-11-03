@@ -80,7 +80,7 @@ emu_cases() {
     for r in 1k 2k 4k 8k 16k 31250 62500 125k 250k 500k 625k 781250 1M 1250k 1562500 2M 2500k 3125k 4M 5M 6250k 10M 12500k 20M 25M 40M 50M 80M 160M 200M 320M 400M; do
         emu_case "samplerate $r" --digest --filter '1,3!d' -- -d $H -C A0 -c samplerate=$r --samples $S -O bits
     done
-    for kv in captureratio=0 captureratio=50 captureratio=99; do
+    for kv in captureratio=0 captureratio=50 captureratio=99 captureratio=100; do
         emu_case "set $kv" --digest --filter "$B" -- -d $H -C $CH -c $kv --samples $S -O bits
     done
     # Thresholds: the PWM values in the configure.
@@ -91,6 +91,9 @@ emu_cases() {
     # Out of the listed range, which the driver takes all the same: the
     # reference is clamped at -5 V (PWM 0).
     emu_case "threshold A 9" --digest --filter '1,3!d' -- -d $H -g A -c voltage_threshold=9-9 -C A0 --samples $S -O bits
+    # The other way, the reference is clamped at 10 V, PWM 4096, one more
+    # than the 4095 of protocol.c's comment; sent all the same.
+    emu_case "threshold A minus 9" --digest --filter '1,3!d' -- -d $H -g A -c voltage_threshold=-9--9 -C A0 --samples $S -O bits
     emu_case "external clock" --digest --filter "$B" -- -d $H -c external_clock=1 -C $CH --samples $S -O bits
     for src in ACLK BCLK; do
         for edge in rising falling both; do
@@ -107,6 +110,10 @@ emu_cases() {
     emu_case "trigger levels" --digest --filter "$B" -- -d $H -C $CH -t A0=1,B0=0,A1=1 --samples $S -O bits
     emu_case "trigger level and edge" --digest --filter "$B" -- -d $H -C $CH,B7 -t B7=1,A2=r -c captureratio=10 --samples $S -O bits
     emu_case "trigger B15 rising" --digest --filter '1~16b; /^T:/b; d' -- -d $H -C A0,B15 -t B15=r -c captureratio=50 --samples $S -O bits
+    # A ratio of 100: pre_trigger_size equals the sample count, the
+    # trigger point falls just past the capture, and sigrok-cli shows
+    # no trigger marker.
+    emu_case "trigger captureratio=100" --digest --filter "$B" -- -d $H -C $CH -t A1=r -c captureratio=100 --samples $S -O bits
     # A trigger at sample 0: no samples before the trigger marker.
     emu_case "trigger ratio 0" --digest --filter "$B" -- -d $H -C $CH -t A1=f -c captureratio=0 --samples $S -O bits
     # The trigger past the first transfer (127 samples), in a data
@@ -202,16 +209,16 @@ emu_cases() {
     # does not notice, and the board, never configured, answers status
     # 0 for ever.
     h4032l_options stall=out@2
-    emu_case "fault configure stall hangs" --hangs --timeout 5 --stderr --no-output -- -d $H --samples $S
+    emu_case "fault configure stall hangs" --hangs --timeout 2 --stderr --no-output -- -d $H --samples $S
     # The get refused (OUT #5): the board goes on answering the status,
     # which the driver drops while it waits for the start word, for
     # ever.
     h4032l_options stall=out@5
-    emu_case "fault get stall hangs" --hangs --timeout 5 --stderr --no-output -- -d $H --samples $S
+    emu_case "fault get stall hangs" --hangs --timeout 2 --stderr --no-output -- -d $H --samples $S
     # A trigger the counter never meets (A0 high and B0 rising: B0 rises
     # where A0 is low): status 1 for ever.
     h4032l_options
-    emu_case "trigger never fires hangs" --hangs --timeout 5 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
+    emu_case "trigger never fires hangs" --hangs --timeout 2 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
 
     # Unplugged while the driver polls the status (after IN #3), and in
     # the middle of the data (after IN #9 of a 64k sample capture).
