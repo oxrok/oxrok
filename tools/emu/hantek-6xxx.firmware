@@ -1,0 +1,11 @@
+# Firmware stand-ins for the hantek-6xxx model (emu/src/models/hantek-6xxx.rs):
+# the files the driver uploads to the emulated boards. The size, 0x3f80,
+# is the model's FIRMWARE_SIZE (a unit test checks it): the scope build
+# of sigrok-firmware-fx2lafw links up to its jump table at 0x3f00
+# (Makefile.am), so the image spans four 4 KiB chunks of ezusb.c. The
+# model checks the stand-in byte for byte.
+fx2lafw-hantek-6022be.fw 16256
+fx2lafw-hantek-6022bl.fw 16256
+fx2lafw-sainsmart-dds120.fw 16256
+fx2lafw-yixingdianzi-mdso.fw 16256
+fx2lafw-instrustar-isds205b.fw 16256

@@ -1,0 +1,15 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+hantek-6xxx - Sainsmart DDS120 with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options on channel group CH1:
+    coupling: AC, DC (current)
+    vdiv - supported values:
+      1 V
+      500 mV
+      250 mV (current)
+      100 mV

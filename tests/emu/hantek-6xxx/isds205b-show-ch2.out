@@ -1,0 +1,17 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+hantek-6xxx - Instrustar ISDS205B with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options on channel group CH2:
+    coupling: AC, DC (current)
+    vdiv - supported values:
+      1.28 V
+      705 mV
+      288 mV (current)
+      140 mV
+      0.0576 V
+      0.0176 V
