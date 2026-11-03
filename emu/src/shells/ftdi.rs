@@ -1,7 +1,10 @@
 // Counterpart in sigrok:
-//   libftdi1 (ftdi.c), by Intra2net AG and the libftdi developers.
+//   libftdi1 (ftdi.c: ftdi_to_clkbits, ftdi_convert_baudrate), by Intra2net
+//   AG and the libftdi developers.
 // This file is written for oxrok from FTDI's application notes; libftdi was
-//   the reference for which requests a driver sends.
+//   the reference for which requests a driver sends, and libftdi_divisor is a
+//   port of libftdi's ftdi_to_clkbits and ftdi_convert_baudrate
+//   (LGPL-2.1-only, taken under its section 3 as GPL-3.0-or-later).
 
 //! The FTDI shell: what every FT232/FT245/FT2232/FT4232/FT232H/FT-X
 //! device shares, so that a model only says what its pins and FIFOs
@@ -36,6 +39,16 @@
 //! is the exception: on single port chips its `wIndex` is bit 16 of
 //! the divisor, on the others the high byte holds divisor bit 16 and,
 //! on the H chips, the 120 MHz clock switch in bit 9.
+//!
+//! libftdi 1.5 puts the port in `SET_BAUD_RATE`'s `wIndex` on the H
+//! chips only; on every other chip, the FT2232C included, it sends the
+//! divisor's bits 16 and up alone, as for a single port chip. On the
+//! FT2232C the chip reads that `wIndex` as the kernel's form, port in
+//! the low byte: 0 (bit 16 clear) addresses port A, which the shell
+//! takes, and 1 (bit 16 set) is port A with bit 16 clear, so libftdi's
+//! fractions of 3/8, 5/8, 6/8 and 7/8 lose their bit 16 there, and a
+//! baud rate libftdi sets on port B lands on port A. Neither can be
+//! told from the kernel's own requests, so neither is flagged.
 //!
 //! A model implements [`FtdiPorts`]: notice of what the host changed
 //! ([`Event`]), the bytes the host writes, the bytes the chip has for
@@ -349,6 +362,10 @@ pub fn decode_divisor(chip: Chip, value: u16, bits: u16) -> Result<Divisor, Stri
 /// factor of 4 already applied by the caller): `wValue`, the divisor
 /// bits of `wIndex` as [`decode_divisor`] takes them, and the rate it
 /// gives. libftdi refuses rates more than 5 % from what they give.
+///
+/// A port of libftdi 1.5's `ftdi_to_clkbits` and the H chip branch of
+/// `ftdi_convert_baudrate` (LGPL-2.1, see the file header), not of
+/// the AM's `ftdi_to_clkbits_AM`.
 pub fn libftdi_divisor(chip: Chip, baud: u32) -> (u16, u16, u32) {
     fn clkbits(baud: u64, clk: u64, div: u64) -> (u32, u32) {
         if baud >= clk / div {
@@ -572,10 +589,13 @@ impl Ftdi {
     }
 
     /// The port of a request's `wIndex` low byte, 0 based.
-    fn port_of(&self, low: u8, v: &mut Violations) -> Option<usize> {
+    fn port_of(&self, low: u8, baud: bool, v: &mut Violations) -> Option<usize> {
         let n = self.chip().ports();
         let port = match low {
             0 | 1 if n == 1 => Some(0),
+            // libftdi's SET_BAUD_RATE on an FT2232C, bit 16 clear (see
+            // the module documentation).
+            0 if self.chip() == Chip::Ft2232c && baud => Some(0),
             1.. if low <= n => Some(usize::from(low - 1)),
             _ => None,
         };
@@ -666,7 +686,8 @@ impl Ftdi {
         if whole && self.chip() == Chip::Ft230x && low == 0 && hi != 0 {
             whole = false;
         }
-        let port = if whole { Some(0) } else { self.port_of(low, v) };
+        let port =
+            if whole { Some(0) } else { self.port_of(low, setup.request == r::SET_BAUD_RATE, v) };
         let Some(port) = port else { return Reply::Stall };
         let baud_bits = if whole { setup.index } else { hi };
         if setup.request != r::SET_BAUD_RATE && setup.request != r::SET_FLOW_CTRL && hi != 0 {
@@ -676,6 +697,16 @@ impl Ftdi {
             ));
         }
         let chip = self.chip();
+        if chip == Chip::Am
+            && matches!(setup.request, r::SET_LATENCY_TIMER | r::GET_LATENCY_TIMER | r::READ_PINS)
+        {
+            v.report(format!(
+                "vendor request {:#04x} on an AM chip, which has no latency timer and no bit \
+                 modes (libftdi refuses it there)",
+                setup.request
+            ));
+            return Reply::Stall;
+        }
         let state = &mut self.ports[port];
         let event = match setup.request {
             r::RESET => match setup.value {
@@ -945,6 +976,14 @@ pub fn port_letter(i: usize) -> char {
     char::from(b'A' + (i as u8))
 }
 
+/// The `bcdDevice` a board reports: the chip's, except that a BM
+/// without a serial number string reports 0x0200, as an AM does; which
+/// is why libftdi and `ftdi_sio` take 0x0200 with `iSerialNumber` 0 for
+/// a BM. (An AM without a serial number is therefore taken for a BM.)
+pub fn bcd_device(c: &FtdiConfig) -> u16 {
+    if c.chip == Chip::Bm && c.serial.is_none() { 0x0200 } else { c.chip.bcd_device() }
+}
+
 fn build_descriptors(c: &FtdiConfig) -> Descriptors {
     let mut strings = Vec::new();
     let mut index = |s: &Option<String>| -> u8 {
@@ -970,7 +1009,7 @@ fn build_descriptors(c: &FtdiConfig) -> Descriptors {
         max_packet0: c.chip.max_packet0(),
         vendor: c.vendor,
         product: c.product,
-        device: c.chip.bcd_device(),
+        device: bcd_device(c),
         strings: [i_manufacturer, i_product, i_serial],
         configurations: 1,
     };
@@ -996,7 +1035,7 @@ pub fn build_eeprom(c: &FtdiConfig) -> Vec<u16> {
     let mut b = vec![0u8; words * 2];
     b[2..4].copy_from_slice(&c.vendor.to_le_bytes());
     b[4..6].copy_from_slice(&c.product.to_le_bytes());
-    b[6..8].copy_from_slice(&c.chip.bcd_device().to_le_bytes());
+    b[6..8].copy_from_slice(&bcd_device(c).to_le_bytes());
     b[8] = c.attributes;
     b[9] = (c.max_power / 2) as u8;
     // Use the serial number string.
@@ -1271,6 +1310,48 @@ mod tests {
     }
 
     #[test]
+    fn ft2232c_baud_as_libftdi_and_the_kernel_send_it() {
+        let mut ports = Counter::default();
+        let mut v = Violations::default();
+        let mut f = Ftdi::new(FtdiConfig::new(Chip::Ft2232c));
+        // libftdi's open: 9600 Bd, wIndex the divisor's bit 16 alone (0).
+        let (value, bits, best) = libftdi_divisor(Chip::Ft2232c, 9600);
+        assert_eq!(bits, 0);
+        assert_eq!(f.control(&mut ports, out(3, value, bits), &[], &mut v), Reply::ack());
+        assert_eq!(f.port(0).baud(), Some(best));
+        // The kernel's form: bit 16 in the high byte, port B in the low.
+        let (value, bits, best) = libftdi_divisor(Chip::Ft2232c, 1_263_158);
+        assert_eq!(bits, 1);
+        let s = out(3, value, (bits << 8) | 2);
+        assert_eq!(f.control(&mut ports, s, &[], &mut v), Reply::ack());
+        assert!(f.port(1).baud().unwrap().abs_diff(best) <= 1);
+        // libftdi's form with bit 16 set: the chip reads port A, bit 16
+        // clear; indistinguishable from the kernel's port A, so no flag.
+        assert_eq!(f.control(&mut ports, out(3, value, bits), &[], &mut v), Reply::ack());
+        assert_eq!(f.port(0).baud(), Some(1_500_000));
+        assert!(v.is_empty(), "{v:?}");
+        // Other requests still need a port: 0 is none on a two port chip.
+        assert_eq!(f.control(&mut ports, out(0, 0, 0), &[], &mut v), Reply::Stall);
+        assert_eq!(v.drain().len(), 1);
+    }
+
+    #[test]
+    fn am_and_bm_quirks() {
+        let mut ports = Counter::default();
+        let mut v = Violations::default();
+        let mut f = Ftdi::new(FtdiConfig::new(Chip::Am));
+        for s in [inp(0x0a, 0, 1, 1), out(9, 2, 1), inp(0x0c, 0, 1, 1), out(0x0b, 0x0100, 1)] {
+            assert_eq!(f.control(&mut ports, s, &[], &mut v), Reply::Stall, "{s:?}");
+            assert_eq!(v.drain().len(), 1, "{s:?}");
+        }
+        // A BM without a serial number reports 0x0200, with one 0x0400.
+        let mut c = FtdiConfig::new(Chip::Bm);
+        assert_eq!(Ftdi::new(c.clone()).descriptors().bcd_device(), 0x0200);
+        c.serial = Some("FTB4ZQ7K".to_owned());
+        assert_eq!(Ftdi::new(c).descriptors().bcd_device(), 0x0400);
+    }
+
+    #[test]
     fn in_packets_carry_status_bytes() {
         let mut chip = Ftdi::new(FtdiConfig::new(Chip::R));
         let mut ports = Counter::default();
@@ -1309,7 +1390,7 @@ mod tests {
         for chip in [Chip::Bm, Chip::R, Chip::Ft2232h, Chip::Ft4232h, Chip::Ft232h, Chip::Ft230x] {
             let f = Ftdi::new(FtdiConfig::new(chip));
             let d = f.descriptors();
-            assert_eq!(d.bcd_device(), chip.bcd_device());
+            assert_eq!(d.bcd_device(), bcd_device(f.config()));
             assert_eq!(d.vendor_id(), FTDI_VENDOR);
             let eps = Descriptors::endpoints(&d.configs[0]);
             assert_eq!(eps.len(), 2 * usize::from(chip.ports()));
