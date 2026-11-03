@@ -8,6 +8,7 @@
 EMU_MODEL=victor
 EMU_OPTIONS="-o packet=2b31323334203130000080000d0a,2d30303432203030000040000d0a"
 EMU_DRIVER=victor-dmm
+EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_victor.c"
 EMU_GCOV=serial-dmm
 # oxrok has the driver: its cases must run full.
 EMU_FULL=victor-dmm

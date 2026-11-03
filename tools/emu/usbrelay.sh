@@ -4,6 +4,7 @@
 EMU_MODEL=usbrelay
 EMU_OPTIONS="-o relays=2"
 EMU_DRIVER=dcttech-usbrelay
+EMU_GCOV_SHARED="src/serial.c"
 # oxrok has the driver: its cases must run full.
 EMU_FULL=dcttech-usbrelay
 

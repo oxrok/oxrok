@@ -731,17 +731,22 @@ if [ $emu = 1 ]; then
     }
 
     # emu_gcov zero|report: tools/emu-gcov.sh on each of the model's
-    # libsigrok driver directories; fails when one of them fails.
+    # libsigrok driver directories, then on the shared sources it names
+    # (EMU_GCOV_SHARED); fails when one of them fails.
     emu_gcov() {
         gst=0
         for d in ${EMU_GCOV:-$EMU_DRIVER}; do sh "$TOOLS/emu-gcov.sh" "$d" "$1" || gst=1; done
+        if [ -n "$EMU_GCOV_SHARED" ]; then
+            # shellcheck disable=SC2086
+            sh "$TOOLS/emu-gcov.sh" --shared "$1" $EMU_GCOV_SHARED || gst=1
+        fi
         return $gst
     }
 
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_FULL=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }

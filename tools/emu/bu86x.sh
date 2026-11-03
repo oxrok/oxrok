@@ -12,6 +12,7 @@
 EMU_MODEL=bu86x
 EMU_OPTIONS="-o packet=000001a0dbf8e47c01007cbebf0004008686868600000000,000001a0dbbee47c01007cbebf0004008686868600000000 -o drop=4"
 EMU_DRIVER=brymen-bm86x
+EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_bu86x.c"
 EMU_GCOV=serial-dmm
 # oxrok has the driver: its cases must run full.
 EMU_FULL=brymen-bm86x

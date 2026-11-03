@@ -11,6 +11,7 @@
 EMU_MODEL=cp2110
 EMU_OPTIONS=""
 EMU_DRIVER=uni-t-ut61e-ser
+EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_cp2110.c"
 # Coverage of the serial-dmm driver. serial_hid_cp2110.c is outside
 # src/hardware, which tools/emu-gcov.sh does not cover: delete
 # libsigrok's src/.libs/serial_hid_cp2110.gcda before the session and

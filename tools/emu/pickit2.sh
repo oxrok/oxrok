@@ -6,6 +6,7 @@
 EMU_MODEL=pickit2
 EMU_OPTIONS=""
 EMU_DRIVER=microchip-pickit2
+EMU_GCOV_SHARED="src/usb.c"
 # oxrok has the driver: its cases must run full.
 EMU_FULL=microchip-pickit2
 
