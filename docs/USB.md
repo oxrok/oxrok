@@ -476,7 +476,13 @@ full case or oracle case. What else is checked depends on oxrok:
   ran, S skipped`. A case behind a helper that holds the device is
   counted too: the helpers do nothing in the dry count. A driver that
   `EMU_FULL` lists but `oxrok -L` lacks fails its cases, as in a normal
-  run, and a run in which no case ran fails.
+  run, and a run in which no case ran fails. Before each of oxrok's runs
+  the harness unbinds, through sysfs as root, any kernel driver still
+  bound to a vendor-specific interface of the emulated device (ftdi_sio
+  on the FTDI models), as libftdi's detach in the sigrok-cli run that
+  would have gone first leaves it; class interfaces (HID, CDC, USBTMC)
+  keep their drivers, and each unbind is logged as a section of its own
+  in the session log, outside the cases' transactions.
 - A scenario that sets `EMU_TX_FOLD=1` folds its transaction log before
   it is compared or cut at a hang. Each run of two or more consecutive
   lines that differ only in their one `@LEN:SHA256` payload digest (same
