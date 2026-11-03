@@ -134,6 +134,7 @@ emu_cases() {
     emu_case "trigger ratio 100" -- -d $K -c captureratio=100 --samples 40 -t CH1=r -O bits
     emu_case "trigger high channel" -- -d $K -c samplerate=50M --samples 2000 -t CH8=r -O hex
     emu_case "trigger two edges" --expect-fail --stderr --filter "$E" -- -d $K --samples 40 -t CH0=r,CH1=f -O bits
+    emu_case "trigger two edges falling first" --expect-fail --stderr --filter "$E" -- -d $K --samples 40 -t CH0=f,CH1=r -O bits
 
     # Streaming: no compression, the enabled channels in turn.
     emu_case "stream" -- -d $K -c samplerate=1M:continuous=on --samples 100 -O hex

@@ -1,7 +1,7 @@
 gcov kingst-la2016 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        88.7%  464 of 523
-  protocol.c   92.3%  789 of 855
-  total        90.9%  1253 of 1378
+  protocol.c   92.5%  791 of 855
+  total        91.1%  1255 of 1378
 never reached, by function (line ranges hold no reached line):
   api.c
     threshold_voltage: 183
@@ -24,7 +24,7 @@ never reached, by function (line ranges hold no reached line):
     upload_fpga_bitstream: 334-336, 342
     set_threshold_voltage: 409, 411, 432-433, 438, 440
     set_pwm_config: 482, 485
-    set_trigger_config: 629-630, 648-649, 662-664
+    set_trigger_config: 629-630, 662-664
     set_sample_config: 765-766, 769-771
     run_state: 937
     la2016_upload_firmware: 1011

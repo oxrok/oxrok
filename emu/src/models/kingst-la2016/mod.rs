@@ -70,6 +70,20 @@
 //! ends the capture with every sample it was asked for. A capture
 //! keeps at most [`capture::MAX_SAMPLES`] samples.
 //!
+//! What the model taught about the C driver: when
+//! `la2016_receive_data()` fails after the bulk transfers were
+//! submitted (a refused bulk start of the download or of a stream, or
+//! the stream's run mode), it returns FALSE with the eight transfers in
+//! flight and the feed not ended; `dev_close()` then frees them and
+//! libusb aborts (sigrok-cli dies with SIGABRT). `run_state()` returns
+//! a failed read's `SR_ERR_IO` as a `u16`, `0xfff5`, whose idle bit is
+//! set: one failed poll makes the driver download a capture that has
+//! not finished. The driver passes on every sample of the transfer in
+//! which the sample limit falls, so a device holding more samples than
+//! asked yields more. Neither the date nor the magic check makes the
+//! driver refuse a device (a bad date is a warning; the magic falls
+//! back to its backup copy and to two byte checks).
+//!
 //! The pedantic checks: the upload of the MCU firmware as `ezusb.c`
 //! sends it; requests other than the firmware's, or with other types,
 //! values, indexes and lengths than the driver uses; EEPROM reads other
