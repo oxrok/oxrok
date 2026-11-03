@@ -26,4 +26,24 @@ emu_cases() {
     # oxrok alone, against the goldens.
     emu_case "victor search hid" --oracle-bug "$SEARCH_BUG" -- -d victor-dmm:conn=hid --samples 1
     emu_case "victor default conn" --oracle-bug "$SEARCH_BUG" -- -d victor-dmm --samples 1
+
+    # The meter misbehaving, through the emulator's options. One that
+    # never sends: the scan gives up after its 3 s.
+    victor_options burst=0
+    emu_case "victor never sends" --keep-header --no-output -- -d $V --scan
+    # Three packets of noise (42 bytes) before the first good one: the
+    # scan warns that it dropped a lot of data and takes the packet.
+    # A packet every 20 polls, so that the fourth comes within the
+    # scan's 3 s.
+    N14=3f3f3f3f3f3f3f3f3f3f3f3f3f3f
+    victor_options packet=$N14,$N14,$N14,2b31323334203130000080000d0a,2d30303432203030000040000d0a period=20
+    emu_case "victor noise before the first packet" -- -d $V --samples 1
+    victor_options
+}
+
+# The model's options for the cases that follow (see
+# tools/emu/ftdi-la.sh); none restores EMU_OPTIONS.
+victor_options() {
+    set -- options "$@"
+    emu_cmd "$*" >/dev/null || emu_fail "victor: the emulator refused '$*'"
 }

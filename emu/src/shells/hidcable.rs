@@ -102,6 +102,15 @@ pub fn parse_packets(value: &str, min: usize, max: usize) -> Result<Vec<Vec<u8>>
     Ok(out)
 }
 
+/// Parses `burst=N`, packets per start (0 to 1000).
+///
+/// # Errors
+///
+/// When it is not a number in the range.
+pub fn parse_burst(value: &str) -> Result<Option<u32>> {
+    parse_number("burst", value, 0..=1000).map(Some)
+}
+
 /// Parses a decimal option within `range`.
 ///
 /// # Errors
@@ -188,35 +197,55 @@ impl Reports {
 /// kernel's usbhid drops what arrives (`HID_RESUME_RUNNING`), unless
 /// the node was opened and closed again several times within one
 /// period.
+///
+/// A burst limit makes the count independent of how long the host
+/// listens: at most that many packets per start (an open, for the
+/// cables that learn of one), then silence until the next. A scan that
+/// finds nothing listens for 3 s of wall time, in which an unlimited
+/// stream sends a number of packets that varies from run to run; a
+/// limited one sends its burst well inside them, and nothing after.
+/// A burst of 0 is a meter that never sends.
 #[derive(Clone, Debug)]
 pub struct Stream {
     period: u32,
     polls: u32,
     running: bool,
+    burst: Option<u32>,
+    sent: u32,
 }
 
 impl Stream {
     /// A stream of a packet per `period` polls; it runs from the start
     /// when `running`.
     pub fn new(period: u32, running: bool) -> Stream {
-        Stream { period, polls: 0, running }
+        Stream { period, polls: 0, running, burst: None, sent: 0 }
     }
 
-    /// Starts it, or starts the period over.
+    /// At most `burst` packets per start; `None` (the default) sends
+    /// for as long as the host polls.
+    #[must_use]
+    pub fn with_burst(mut self, burst: Option<u32>) -> Stream {
+        self.burst = burst;
+        self
+    }
+
+    /// Starts it, or starts the period (and the burst) over.
     pub fn restart(&mut self) {
         self.running = true;
         self.polls = 0;
+        self.sent = 0;
     }
 
     /// One offer of the interrupt IN transfer with no report queued:
     /// true when a packet is due.
     pub fn poll(&mut self) -> bool {
-        if !self.running {
+        if !self.running || self.burst.is_some_and(|b| self.sent >= b) {
             return false;
         }
         self.polls += 1;
         if self.polls >= self.period {
             self.polls = 0;
+            self.sent += 1;
             true
         } else {
             false
@@ -248,6 +277,20 @@ mod tests {
         assert!(!s.poll() && !s.poll() && !s.poll() && !s.poll());
         s.restart();
         assert_eq!([s.poll(), s.poll(), s.poll(), s.poll()], [false, false, true, false]);
+        let mut burst = Stream::new(1, true).with_burst(Some(2));
+        assert_eq!(
+            [burst.poll(), burst.poll(), burst.poll()],
+            [true, true, false],
+            "two, then silence"
+        );
+        burst.restart();
+        assert_eq!(
+            [burst.poll(), burst.poll(), burst.poll()],
+            [true, true, false],
+            "two per start"
+        );
+        let mut silent = Stream::new(1, true).with_burst(Some(0));
+        assert!(!silent.poll() && !silent.poll());
         let mut r = Reports::default();
         let mut v = Violations::default();
         assert_eq!(r.answer(64, &mut v), Reply::Nak);

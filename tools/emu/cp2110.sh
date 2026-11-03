@@ -45,11 +45,20 @@ emu_cases() {
     # oxrok does what serialcomm says.
     emu_case "cp2110 even parity" -- -d $D:$C:serialcomm=19200/7e1 --samples 1
     emu_case "cp2110 two stop bits" -- -d $D:$C:serialcomm=19200/7o2 --samples 1
-    # No case for 8 data bits (the meter's parity bit lands in bit 7)
-    # or another baud rate (garbled bytes): the scan searches them for
-    # 3 s of wall time and finds nothing, but how many packets the poll
-    # counted stream sends in those 3 s is not stable from run to run.
-    # The model's unit tests cover them.
+    # No parity: the meter's parity bit is taken for the stop bit, the
+    # 7 data bits arrive.
+    emu_case "cp2110 no parity" -- -d $D:$C:serialcomm=19200/7n1 --samples 2
+    # 8 data bits (the meter's parity bit lands in bit 7) and another
+    # baud rate (garbled bytes): the scan searches them for 3 s of wall
+    # time and finds nothing. Two packets per open (burst=2), so that
+    # the number the stream sends in those 3 s does not depend on time.
+    cp2110_options burst=2
+    emu_case "cp2110 8n1" --keep-header --no-output -- -d $D:$C:serialcomm=19200/8n1 --scan
+    emu_case "cp2110 9600 baud" --keep-header --no-output -- -d $D:$C:serialcomm=9600/7o1 --scan
+    # A meter that never sends.
+    cp2110_options burst=0
+    emu_case "cp2110 never sends" --keep-header --no-output -- -d $D:$C --scan
+    cp2110_options
     # What the chip cannot do, refused before any report is sent: the
     # scan finds nothing.
     emu_case "cp2110 baud rate too low" --keep-header --no-output -- -d $D:$C:serialcomm=200/7o1 --scan
@@ -59,4 +68,11 @@ emu_cases() {
     emu_case "cp2110 search chip" --oracle-bug "$SEARCH_BUG" -- -d $D:conn=hid/cp2110 --samples 1
     emu_case "cp2110 search sn" --oracle-bug "$SEARCH_BUG" -- -d $D:conn=hid/cp2110/sn=0001A5F8 --samples 1
     emu_case "cp2110 search any" --oracle-bug "$SEARCH_BUG" -- -d $D:conn=hid --samples 1
+}
+
+# The model's options for the cases that follow (see
+# tools/emu/ftdi-la.sh); none restores EMU_OPTIONS.
+cp2110_options() {
+    set -- options "$@"
+    emu_cmd "$*" >/dev/null || emu_fail "cp2110: the emulator refused '$*'"
 }

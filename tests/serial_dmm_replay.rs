@@ -155,11 +155,11 @@ fn detection_finds_a_packet_in_noise() {
     );
     let mut port = Replay::from_text(&fixture).unwrap();
     let model = models::find("uni-t-ut61e-ser").unwrap();
-    assert!(detect(&mut port, &model.protocol, Duration::from_secs(1)).unwrap());
+    assert!(detect(&mut port, &model.protocol, false, Duration::from_secs(1)).unwrap());
     let fixture = "# oxrok serial fixture 1\nport p 19200/7o1\nread 1 -> 00\nread 1 -> -\n";
     let mut port = Replay::from_text(fixture).unwrap();
     // The replay runs out of data: that is an error, not a detection.
-    assert!(detect(&mut port, &model.protocol, Duration::from_millis(300)).is_err());
+    assert!(detect(&mut port, &model.protocol, false, Duration::from_millis(300)).is_err());
 }
 
 /// A BM86x answer: 1.2345 V AC and 50.0 Hz.

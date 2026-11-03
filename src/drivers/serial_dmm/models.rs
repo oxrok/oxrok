@@ -44,6 +44,12 @@ pub struct Model {
     pub request_delay_ms: u64,
     /// Line handling the meter needs right after the port is opened.
     pub after_open: Option<fn(&mut dyn Port) -> crate::core::Result<()>>,
+    /// The meter's request ignores whether its write went out, as
+    /// `sr_brymen_bm86x_packet_request` does (it always returns
+    /// `SR_OK`): a failed write is then no failure. For the other
+    /// meters a failed request ends the scan without a device, and an
+    /// acquisition at the requests `receive_data` sends.
+    pub request_unchecked: bool,
 }
 
 macro_rules! single {
@@ -224,6 +230,7 @@ const fn m(
         request_timeout_ms: 0,
         request_delay_ms: 0,
         after_open: None,
+        request_unchecked: false,
     }
 }
 
@@ -256,6 +263,11 @@ const fn timed(mut model: Model, timeout_ms: u64, delay_ms: u64) -> Model {
     model
 }
 
+const fn unchecked_request(mut model: Model) -> Model {
+    model.request_unchecked = true;
+    model
+}
+
 const fn on_hid(mut model: Model, conn: &'static str) -> Model {
     model.conn = conn;
     model
@@ -281,7 +293,10 @@ pub static MODELS: &[Model] = &[
         timed(m("brymen-bm85x", "Brymen", "BM85x", "9600/8n1/dtr=1/rts=1", BM85X), 2000, 400),
         bm85x_after_open,
     ),
-    on_hid(timed(m("brymen-bm86x", "Brymen", "BM86x", "9600/8n1", BM86X), 500, 100), "hid/bu86x"),
+    on_hid(
+        unchecked_request(timed(m("brymen-bm86x", "Brymen", "BM86x", "9600/8n1", BM86X), 500, 100)),
+        "hid/bu86x",
+    ),
     m("peaktech-3415", "PeakTech", "3415", "2400/8n1/rts=0/dtr=1", DTM0660),
     m("velleman-dvm4100", "Velleman", "DVM4100", "2400/8n1/rts=0/dtr=1", DTM0660),
     m("eevblog-121gw", "EEVblog", "121GW", "115200/8n1", EEV121GW),
@@ -460,6 +475,7 @@ pub fn hid_models() -> &'static [Model] {
                     request_timeout_ms: 0,
                     request_delay_ms: 0,
                     after_open: None,
+                    request_unchecked: false,
                 }
             })
             .collect()

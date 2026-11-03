@@ -34,6 +34,11 @@
 //! path before it opens the node for good, where the held transfer is
 //! offered some 10 times.
 //!
+//! Option `burst=N`: the meter sends N packets in all (from the
+//! model's start, which nothing restarts here) and then falls silent;
+//! `burst=0` is a meter that never sends, whose scan gives up after
+//! its 3 s. The default sends for as long as the host polls.
+//!
 //! The pedantic checks: the host sends no report of any kind and reads
 //! none by `GET_REPORT`.
 
@@ -48,7 +53,7 @@ pub const NAME: &str = "victor";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Victor 70C/86C meter cable (HID, 1244:d237, scrambled FS9922), the Pico \
                          emulator's role; packet=HEX[,HEX...] (14 bytes each), period=N (polls \
-                         per packet, default 50)";
+                         per packet, default 50), burst=N (packets in all, then silence)";
 
 /// The USB vendor id.
 pub const VENDOR_ID: u16 = 0x1244;
@@ -70,14 +75,18 @@ const SHUFFLE: [usize; REPORT_BYTES] = [6, 13, 5, 11, 2, 7, 9, 8, 3, 10, 12, 0, 
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut packets = cable::parse_packets(DEFAULT_PACKET, REPORT_BYTES, REPORT_BYTES)?;
     let mut period = 50;
+    let mut burst = None;
     for (k, v) in options {
         match k.as_str() {
             "packet" => packets = cable::parse_packets(v, REPORT_BYTES, REPORT_BYTES)?,
             "period" => period = cable::parse_number(k, v, 4..=1000)?,
+            "burst" => burst = cable::parse_burst(v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Victor::new(packets, period)))
+    let mut cable = Victor::new(packets, period);
+    cable.meter.stream = Stream::new(period, true).with_burst(burst);
+    Ok(Box::new(cable))
 }
 
 /// A packet as the cable puts it on the wire.
