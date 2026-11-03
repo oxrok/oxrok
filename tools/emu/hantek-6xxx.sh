@@ -99,6 +99,9 @@ emu_cases() {
     # A rate outside the list: the driver keeps it, logs that it cannot
     # convert it and sends the last register, 100 kHz.
     emu_case "6022be unlisted 2M" -- -d $H -c samplerate=2M --samples 100 -O analog
+    # A time limit alone has no case: receive_transfer() ends the capture
+    # once g_get_monotonic_time() says limit_msec went by, so how many
+    # transfers it takes depends on wall time.
     # A time limit with a sample limit: data_amount() sizes the
     # transfer from the time left (10 ms at 100 kHz, 2000 bytes, 2048
     # whether 0 or 4 ms have gone), and the sample limit ends the capture.
@@ -108,9 +111,10 @@ emu_cases() {
     emu_case "6022be get limit_time" -- -d $H --get limit_time
     emu_case "6022be get ch1 vdiv" -- -d $H -g CH1 --get vdiv
     emu_case "6022be get ch2 coupling" -- -d $H -g CH2 --get coupling
-    # NUM_VDIV is answered in the first switch, then the second one,
-    # for the device as a whole, says SR_ERR_NA; on a channel group the
-    # answer stands.
+    # For the device as a whole, config_get() answers NUM_VDIV in its
+    # first switch, then its second one says SR_ERR_NA. On a channel
+    # group libsigrok's check_key() (hwdriver.c:768-780) refuses before
+    # the driver is asked: NUM_VDIV is not in devopts_cg.
     emu_case "6022be get num_vdiv" --expect-fail --stderr --filter "$L" -- -d $H --get num_vdiv
     emu_case "6022be get ch1 num_vdiv" --expect-fail --stderr --filter "$L" -- -d $H -g CH1 --get num_vdiv
     # The address the scope renumerated to, known once it is open.
@@ -202,7 +206,14 @@ emu_cases() {
     emu_case "fault stop stall" -- -d $H -c samplerate=100k --samples 50 -O analog
     # The flush transfer empty or STALLed: the driver ignores what it
     # holds anyway. A second one would end the capture for good: the
-    # driver neither resubmits nor stops (not a case, see the model).
+    # driver neither resubmits nor stops. That is read in
+    # receive_transfer(), not run: sigrok-cli hangs and the harness fails
+    # an oracle case that ends by timeout.
+    # TODO: enable once an oracle --expect-fail case may end by --timeout.
+    # hantek_options profile=6022be flashed=1 empty=2
+    # emu_case "fault empty after the flush hangs" --expect-fail --timeout 10 -- -d $H -c samplerate=100k --samples 50 -O analog
+    # hantek_options profile=6022be flashed=1 stall_in=2
+    # emu_case "fault stalled after the flush hangs" --expect-fail --timeout 10 -- -d $H -c samplerate=100k --samples 50 -O analog
     hantek_options profile=6022be flashed=1 empty=1
     emu_case "fault empty flush" -- -d $H -c samplerate=100k --samples 50 -O analog
     hantek_options profile=6022be flashed=1 stall_in=1

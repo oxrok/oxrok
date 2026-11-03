@@ -9,7 +9,11 @@
 //   Markus Siegert, Mike Meyer, Romain Tartière, Sebastian Tabares Amaya,
 //   Sebastian Zagrodzki, Sergey Alirzaev, Thomas Emmert, litospain, majekw,
 //   waka, Timo Rothenpieler
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877),
+//   sigrok-firmware-fx2lafw: Copyright (C) 2009 Ubixum, Inc.,
+//   Copyright (C) 2015 Jochen Hoenicke,
+//   Copyright (C) 2018 Marek Wodzinski (hw/yixingdianzi-mdso/fw.c)
+//   (sigrok-firmware-fx2lafw-0.1.7-10-g0f2d324).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! The Hantek 6022BE/6022BL USB oscilloscopes and their relatives
@@ -22,7 +26,7 @@
 //! - the profiles (ids before and after the upload, `bcdDevice`,
 //!   firmware file, coupling, V/div table), the requests and what the
 //!   driver sends: `api.c`, `protocol.c` and `protocol.h` of the driver;
-//! - the firmware: sigrok-firmware-fx2lafw 0.1.7, `include/scope.inc`
+//! - the firmware: sigrok-firmware-fx2lafw 0.1.7-10-g0f2d324, `include/scope.inc`
 //!   (the vendor commands), `hw/<board>/fw.c` (the gains and rates each
 //!   board accepts, the coupling), `include/dscr_scope.inc` and
 //!   `hw/<board>/dscr.a51` (the descriptors and strings), and
@@ -32,7 +36,9 @@
 //!
 //! Without `flashed=1` the scope comes up as an FX2 without firmware
 //! under the board's own ids (`04b4:6022` and so on, from its EEPROM),
-//! takes the upload through the boot loader and renumerates as
+//! with the bare FX2LP's `bcdDevice` 0xa001: an assumption, as a real
+//! board's `0xC0` EEPROM load sets its own, which the driver does not
+//! look at before the upload, so it changes nothing here. It takes the upload through the boot loader and renumerates as
 //! `1d50:608e`, the `bcdDevice` telling the boards apart (`VER = 0x0100`
 //! in `dscr.a51` is big endian, as in fx2lafw: 0x0001 for the 6022BE, 2
 //! DDS120, 3 6022BL, 4 MDSO, 5 ISDS205B). Strings `sigrok`, `fx2lafw` and
@@ -61,9 +67,11 @@
 //! rates of the driver's tables (`VDIV_REG`, `SAMPLERATE_REGS`), not
 //! only those the firmware takes (it also has 2 and 12 MHz, a gain of 20
 //! on the DDS120 and 16 on the MDSO); coupling only to a board that has
-//! it, with bits 0 and 4 only; `0xe3` with 0 or 1; a start
-//! before the rate and both gains were sent since the firmware came up
-//! (the driver's `hantek_6xxx_init()` sends them before every start);
+//! it, with bits 0 and 4 only; `0xe3` with 0 or 1; `bmRequestType`
+//! 0x40 (vendor, device, OUT); a start without the rate, both gains
+//! and, on the DDS120 and ISDS205B, the coupling sent since the previous
+//! start (the driver's `hantek_6xxx_init()` sends them before every
+//! start);
 //! bulk IN transfers that are not a multiple of 512 bytes or from
 //! another endpoint; the upload byte for byte as `ezusb.c` sends it, of
 //! the profile's file; a firmware upload to the running firmware.
@@ -104,13 +112,19 @@
 //!
 //! What the model taught about the C driver (see `tools/emu/hantek-6xxx.sh`):
 //! a transfer that completes empty or fails after the flush is neither
-//! resubmitted nor ends the acquisition, which then never ends; with
+//! resubmitted nor ends the acquisition, which then never ends (read in
+//! `receive_transfer()`, not run: the harness cannot yet pass a case
+//! whose oracle has to be stopped by a timeout, so `empty=2` and
+//! `stall_in=2` wait commented out in the scenario); with
 //! CH1 disabled, CH2's samples go out as CH1's (`send_chunk()` walks
 //! `enabled_channels`, which holds every channel); on a DC only board,
 //! setting coupling `DC` stores index 0, `COUPLING_AC`, so the driver
 //! then reports `AC`; a rate outside its list is accepted and sent as
 //! 100 kHz; the errors of the configuration requests are logged and
-//! the capture goes on.
+//! the capture goes on. A plain `--time` limit ends the capture in
+//! `receive_transfer()` by wall time (`g_get_monotonic_time()` against
+//! `limit_msec`), so how many transfers it takes depends on timing: no
+//! case has it; `--time` with `--samples` covers the transfer sizing.
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{
@@ -491,8 +505,11 @@ struct Scope {
     rate: u8,
     /// Bit 0 CH1, bit 4 CH2: set for DC.
     coupling: u8,
+    /// What the driver's `hantek_6xxx_init()` sent since the last start
+    /// (or since the firmware came up): the rate, the gains, the coupling.
     sent_rate: bool,
     sent_gain: [bool; 2],
+    sent_coupling: bool,
     acq: Option<Acquisition>,
 }
 
@@ -507,7 +524,19 @@ impl Scope {
             coupling: if p.key == "dds120" { 0 } else { 0x11 },
             sent_rate: false,
             sent_gain: [false; 2],
+            sent_coupling: false,
             acq: None,
+        }
+    }
+
+    /// Notes that the host sent configuration command `cmd`, applied or
+    /// not.
+    fn note_sent(&mut self, cmd: u8) {
+        match cmd {
+            VDIV_CH1 | VDIV_CH2 => self.sent_gain[usize::from(cmd - VDIV_CH1)] = true,
+            SAMPLERATE => self.sent_rate = true,
+            COUPLING => self.sent_coupling = true,
+            _ => {}
         }
     }
 }
@@ -644,6 +673,13 @@ impl Hantek {
         if setup.is_in() {
             v.report(format!("request {cmd:#04x} as an IN; the driver writes its one byte"));
         }
+        if setup.recipient() != crate::model::RECIPIENT_DEVICE {
+            v.report(format!(
+                "request {cmd:#04x} with bmRequestType {:#04x}; the driver sends 0x40 (vendor, \
+                 device)",
+                setup.request_type
+            ));
+        }
         if setup.value != 0 || setup.index != 0 {
             v.report(format!(
                 "request {cmd:#04x} with value {:#06x} index {:#06x}; the driver sends 0",
@@ -657,11 +693,7 @@ impl Hantek {
         if self.faults.stalls(cmd, value) {
             // A STALLed command has no effect, but the host did send it.
             if let Stage::Running(scope) = &mut self.stage {
-                match cmd {
-                    VDIV_CH1 | VDIV_CH2 => scope.sent_gain[usize::from(cmd - VDIV_CH1)] = true,
-                    SAMPLERATE => scope.sent_rate = true,
-                    _ => {}
-                }
+                scope.note_sent(cmd);
             }
             return Reply::Stall;
         }
@@ -679,6 +711,7 @@ impl Hantek {
     fn apply(&mut self, cmd: u8, value: u8, v: &mut Violations) {
         let p = self.profile;
         let Stage::Running(scope) = &mut self.stage else { unreachable!() };
+        scope.note_sent(cmd);
         match cmd {
             VDIV_CH1 | VDIV_CH2 => {
                 let ch = usize::from(cmd - VDIV_CH1);
@@ -690,7 +723,6 @@ impl Hantek {
                         p.board
                     ));
                 }
-                scope.sent_gain[ch] = true;
                 if p.gains.contains(&value) {
                     scope.gain[ch] = value;
                 }
@@ -699,19 +731,31 @@ impl Hantek {
                 if !SAMPLERATES.iter().any(|(_, r)| *r == value) {
                     v.report(format!("rate register {value}: not one of the driver's rates"));
                 }
-                scope.sent_rate = true;
                 if p.rates.contains(&value) {
                     scope.rate = value;
                 }
             }
             TRIGGER => match value {
                 1 => {
+                    // dev_acquisition_start() runs hantek_6xxx_init()
+                    // before every start: the rate, both gains and, on a
+                    // board with coupling, the coupling, each time.
                     if !scope.sent_rate || scope.sent_gain != [true; 2] {
                         v.report(
-                            "acquisition started before the rate and both gains were set; \
-                             hantek_6xxx_init() sends them first",
+                            "acquisition started without the rate and both gains sent since the \
+                             last start; hantek_6xxx_init() sends them first",
                         );
                     }
+                    if p.coupling && !scope.sent_coupling {
+                        v.report(format!(
+                            "acquisition started without the coupling sent since the last start; \
+                             hantek_6xxx_init() sends it to the {}",
+                            p.board
+                        ));
+                    }
+                    scope.sent_rate = false;
+                    scope.sent_gain = [false; 2];
+                    scope.sent_coupling = false;
                     scope.acq = Some(Acquisition {
                         sample: 0,
                         ready: true,
@@ -1023,6 +1067,15 @@ mod tests {
         let mut dev = flashed("dds120", &[]);
         dev.control(cmd(COUPLING), &[0x31], &mut v);
         assert_eq!(v.drain().len(), 1, "an undefined coupling bit");
+        dev.control(Setup { request_type: 0x41, ..cmd(SAMPLERATE) }, &[1], &mut v);
+        assert_eq!(v.drain().len(), 1, "to the interface");
+        start(&mut dev, 1, [1, 1], Some(0x11), &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        // A second start: init() sends everything again.
+        dev.control(cmd(TRIGGER), &[1], &mut v);
+        assert_eq!(v.drain().len(), 2, "rate and gains, and coupling, not sent again");
+        start(&mut dev, 1, [1, 1], None, &mut v);
+        assert_eq!(v.drain().len(), 1, "the coupling not sent on the DDS120");
         for bad in [
             ("profile", "6022"),
             ("flashed", "2"),
