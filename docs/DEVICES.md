@@ -546,10 +546,14 @@ transfers, stalled bulk IN transfers, and the interface claimed by
 another program (a usbfs helper in the scenario holds it). A second is
 oxrok only: a firmware of another major version, which
 `fx2lafw_dev_open()` reports but opens anyway (its `ret` still holds
-the REVID read's `SR_OK`). gcov: 83.6% of the driver (`api.c` 84.1%,
-`protocol.c` 83.3%); `usb.c` and `ezusb.c` 63.3%. Not emulated: the
-USBee AX analog channel, string read failures, unplugging mid-capture,
-upload failures, and allocation failures.
+the REVID read's `SR_OK`). Six more full cases: `stall_string=I` and
+`short_string=I` fail the scan's string descriptor reads (the model's
+`fail_standard` hook; a short answer is the 2 byte header, which libusb
+reads as an I/O error), and an unplug mid capture ends both tools'
+acquisition after 3 transfers. gcov: 85.3% of the driver; `usb.c` and
+`ezusb.c` 63.3%. Not emulated: the USBee AX analog channel, a
+`libusb_open` that fails at the scan, upload failures, and allocation
+failures.
 
 What the model changed in oxrok's port, which now follows `api.c` and
 `protocol.c`: the upload moved into the scan; open finds the device by
@@ -727,15 +731,15 @@ transfers, short packets, another board's firmware. The 86 cases of
 `tools/emu/hantek-6xxx.sh` (all eight profiles flashed or not, every
 rate from 100 kHz to 48 MHz, every range, coupling, single channels,
 get and set, faults, a claimed interface, an unplug) log no violation
-under sigrok-cli. gcov: 90.8% (`api.c` 92.6%, `protocol.c` 84.8%);
+under sigrok-cli, plus two `--hangs` cases. gcov: 91.0%;
 `ezusb.c` 82.6%, `usb.c` 63.8%. Not emulated: the end of a capture by
 a plain `--time` limit (wall time), a continuous capture.
 
 What the model taught: with CH1 disabled, CH2's samples come out
 labelled CH1; a bulk transfer that completes empty or fails after the
 flush is neither resubmitted nor ends the capture, so it hangs for
-ever (read from `receive_transfer()`; its cases wait for an oracle
-case that may end by `--timeout`); `coupling=DC` on a DC-only board
+ever (two `--hangs` cases: an empty and a stalled transfer after the
+flush); `coupling=DC` on a DC-only board
 reads back AC; `num_vdiv` cannot be read; a rate off the list is sent
 as 100 kHz while the output is labelled with it; configuration errors
 are logged and the capture goes on with the old settings; three
@@ -762,11 +766,12 @@ every trigger source, slope, ratio, timebase branch, range, coupling
 and filter, full speed, the DSO-2250's own commands and each of CH2's
 range groups, the upload and every step of the init and capture loop
 failing) log no violation under sigrok-cli; frame outputs keep every
-64th line plus a digest of the whole output (`--digest`). gcov: 96.1%
-(`ezusb.c` 82.6%, `usb.c` 63.8%). Not emulated: a second device, every
-path that never ends (the driver retries capture errors for ever: an
-empty transfer, a vanished device, the DSO-5200's 9-bit frames, a
-trigger that never fires). Known flake source: the driver submits a
+64th line plus a digest of the whole output (`--digest`). Five `--hangs` cases cover the paths that never end
+(the driver retries capture errors for ever): an empty data transfer
+(fault `empty=N`), an unplug mid frame and while polling, an external
+trigger that never fires, and the DSO-5200's 9-bit frames ("Not yet
+supported." at every poll). gcov: 96.2% (`ezusb.c` 82.6%, `usb.c`
+67.7%). Not emulated: a second device. Known flake source: the driver submits a
 frame's transfers at once with a 40 ms timeout each, and a timeout
 hangs sigrok-cli; no run has hit it.
 
@@ -778,6 +783,196 @@ capture errors are retried for ever; probably, the DSO-2250's voltage
 header bit 0x08 overlaps CH2's range bit, so CH2 at 5 V, 500 mV and
 50 mV reads as 1 V, 100 mV and 10 mV; and the capture-state answer's
 length is never checked.
+
+## ChronoVu LA8 / LA16 (chronovu-la)
+
+oxrok has no `chronovu-la` driver yet; the emulator checks libsigrok's
+driver alone, so its cases are oracle cases.
+
+Emulated (2026-11-03): model `chronovu-la`
+(`emu/src/models/chronovu-la.rs`, on the FTDI shell), an FTDI FIFO chip
+in front of the analyzer's logic and 8 MiB of memory. The command block
+(LA8: divcount, 0xff, pattern, mask; LA16: divcount, 0xff, then pattern,
+mask and edge mask high byte first) starts a capture; status-only reads
+follow until the memory is full (`fill=N` polls, 2 by default, counted
+in polls rather than time); then the whole 8 MiB comes out in the order
+the driver de-mangles (1 MiB sections; LA8 byte pairs swapped except at
+divcount 0); eight 0x01 bytes reset the sequencer. By default the first
+stored sample is the one that met the trigger (an assumption: the driver
+gets no trigger position); `pretrigger=N` keeps N samples before it. The
+inputs carry t ^ t>>8 ^ t>>16 (LA8) or t ^ t>>16 (LA16). Options:
+`model=la8|la16`, `pid=` (0x8867 by default, 0x6001 the "old" id),
+`chip=bm|r` (the chip is not known), `product=`, `serial=`, `fill=`,
+`pretrigger=`; faults `no-trigger=1`, `gap=N` and the FTDI shell's
+`stall=`, `in-stall=`, `idle=`. `tools/emu/chronovu-la.sh` runs 42
+oracle cases: scan, show, get and set, captures at 100 MHz, 1 MHz, the
+slowest rate, with -C and conn=, with 100 pre-trigger samples, conn by
+ids and two refused conn strings, the error answers (invalid samplerate,
+too many samples, an edge trigger on the LA8); LA16 captures with state,
+edge-only, mixed and high-channel triggers; the old id, an FT232R, no
+serial, unknown and missing product strings; FIFO gaps in blocks 0 and
+2, a halted bulk IN, each request of the open STALLed, unplugs in and
+after the readout, and a trigger that never comes (a --hangs case
+stopped after 3 s). The driver ignores the sample limit and always reads
+and sends the whole memory, so captures use --digest. No violation under
+sigrok-cli. gcov: 87.0 % (368 of 423). Reached but uncounted: cv_write's
+error branch, which runs in the unplug case before sigrok-cli dies of
+SIGSEGV. Not emulated: allocation failures, failed string descriptor
+reads, NULL and default branches sigrok-cli never reaches, trigger
+stages and disabled-channel triggers (sigrok-cli refuses them), a short
+write (impossible for one packet), purge or reset failures after a
+successful write, and a trigger in the last sample of a block.
+
+What the model taught about the driver: the LA16 trigger search compares
+single bytes (before the byte swap) with a 16 bit mask and an 8 bit
+expected value, so channel 0 high gives a 1 byte packet of unitsize 2;
+hex and bits output then crash (length - unitsize wraps) and csv shows
+the rest of the block a byte off, while triggers on channels 8 to 15
+always match the first byte and an edge-only trigger sends no trigger at
+all. Any write failure recurses for ever between cv_write and
+close_usb_reset_sequencer (an unplug mid capture overflows the stack).
+The capture deadline adds the capture time in seconds to a microsecond
+clock, so it is 10 s whatever the rate: a real LA8 times out at divcount
+119 and up (below about 833 kHz), where a full memory takes longer; the
+sum is also computed in float, which loses the clock's precision after
+long uptimes. Every capture completes in the emulator only because the
+memory fills in polls. The error message at protocol.c:142-143 prints
+its two counts in the wrong order. A port should place the trigger at
+the right sample of 16 bit data, report edge triggers, stop on a failed
+write, size its deadline from the rate, and honour the sample limit on
+the host side.
+
+## ASIX SIGMA and SIGMA2 (asix-sigma)
+
+`asix-sigma`: the ASIX SIGMA and SIGMA2; the OMEGA is found by the scan
+but not opened. oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `asix-sigma`
+(`emu/src/models/asix-sigma/`), an FT245BM in front of a Xilinx FPGA
+without flash. The driver configures it in async bit-bang mode on every
+acquisition (suicide sequence, PROG pulse, INIT_B poll, bitstream as
+CCLK/DIN pairs). The model unscrambles the stand-in netlists and checks
+every bit clocked in. The FPGA then answers the FIFO command protocol:
+register file, trigger LUT, run-length-compressed sample memory read row
+by row; a forced stop stores one last cluster. Options:
+`variant=sigma|sigma2|omega`, `serial=`, `product=`, `step=N`; faults
+`init-busy=N`, `config=fail`, `id=N`, `scratch=stuck|bit0`,
+`stop-polls=N` and the FTDI shell's `stall=`, `in-stall=`, `idle=`. 104
+oracle cases (scan, show, get/set, captures at 50/25/30/100/200 MHz and
+external clock, a full-memory wrap, LUT and edge triggers at 200 kHz to
+200 MHz, run-length compression, variants, faults, 19 unplugs). gcov
+89.4% (`api.c` 93.7%, `protocol.c` 88.0%). Not emulated: allocation,
+session and limit failures, a missing firmware file, the OMEGA's open, a
+second acquisition in one session, a stop during capture, and the
+trigger functions the driver never builds.
+
+What it taught:
+- The driver ends captures on wall time: a time limit checked every 10
+  ms. Deterministic cases need rates >=25 MHz with small limits, or
+  `captureratio=100`, which removes the limit.
+- With a trigger the sample limit is ignored and the whole memory region
+  is output.
+- A trigger in the first 28 events gets no marker.
+- The last stored event is never decoded: the decremented stop position
+  is used as a count. A wrapped capture decodes nothing of the last row
+  it reads.
+- Channel 16 as the external clock overflows the 4-bit pin field into
+  `CLKSEL_RISING`.
+- Unplugs and read faults end a capture with "USB data read/write
+  failed" and exit 0.
+
+## IKALOGIC ScanaPLUS (ikalogic-scanaplus)
+
+`ikalogic-scanaplus`: oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `ikalogic-scanaplus`
+(emu/src/models/ikalogic-scanaplus.rs, FTDI shell): an FT232H
+`0403:6014` with the product string `SCANAPLUS` in sync FIFO mode, and
+the device id in EEPROM words 16-17. Behind it is an FPGA that takes
+(register, value) pairs and streams run length compressed pairs: a count
+and channel 9, then channels 1 to 8. The FPGA's register meanings and
+its start point are assumed. Options: `devid=XXXXXX`, `product=`,
+latency flushes `short=N:M[,N:M...]` (transfer N of the stream carries M
+bytes, 0 the status bytes alone), and the shell's `stall=`, `in-stall=`,
+`idle=`. 51 oracle cases (2026-11-03): settings, captures with sample
+and time limits, id and product variants, short and odd reads, each open
+request STALLed, read errors, and unplugs before every write with its
+own error return. gcov: driver 93.8 % (288/307). Not emulated:
+allocation failures, libftdi calls that send nothing over USB
+(set_interface, set_chunksize), the default branches that check_key
+keeps sigrok-cli from reaching, the NULL guards, and a partial bulk
+write.
+
+What the model found:
+- libftdi reads in 16 KiB transfers on Linux, and ends a read early only
+  on a transfer of the status bytes alone.
+- With both limits set, the sample limit wins even when the time limit
+  is smaller (protocol.c 358-367; cases "time 1 ms, 300000 samples" and
+  "time 1 ms, 700000 samples"). A port should end on whichever limit is
+  reached first.
+- The first read is dropped as if it were 64 KiB whatever its length
+  (protocol.c 345-350; case "short first read").
+- A read of an odd length is decoded with a stale byte past its end, and
+  every later pair is split (the TODO at protocol.c 352; case "odd
+  read"). A port should carry the odd byte over to the next read.
+- A failed start makes session.c stop the failing device too (session.c
+  831-835), which logs "Cannot remove non-existing event source".
+
+## Pipistrello OLS (p-ols)
+
+`p-ols`: the Pipistrello board with the Open Logic Sniffer bitstream.
+oxrok has no port yet.
+
+Emulated (2026-11-03), oracle cases only: model `pipistrello-ols`
+(`emu/src/models/pipistrello-ols.rs`): an FT2232H (`0403:6010`, product
+string "Pipistrello LX45") whose port B carries SUMP to an Open Logic
+Sniffer FPGA. The parser is strict: one command per write, little-endian
+arguments, divider of 24 bits and flags of 16, and demux flags must
+replicate the lower channel-group bits. Counts are taken as an OLS takes
+them: an oversized read count reads the whole memory, and a delay beyond
+the read count captures that long. The model answers "1ALS" and a
+metadata block of keys the driver parses. It has four trigger stages
+with level, start and edge masks, RLE on words with the count in the top
+bit of the top enabled group, demux packing two 16-channel samples per
+word, and disabled channel groups packed out of each word. Captures are
+sent newest first. Capture time counts in port B reads that get no data,
+each one 16 ms latency period of samples.
+
+Options: `product=`, `manufacturer=`, `serial=`, `id=sla|ols|none|HEX`,
+`metadata=none|HEX`, `name=`, `fpga-version=`, `channels=`, `memory=`,
+`max-rate=`, `protocol=`, `ext-clock=HZ`, and the FTDI shell's `stall=`,
+`in-stall=`, `idle=`.
+
+100 oracle cases: scan, show, get and set, captures from 10 Hz to 200
+MHz, channel groups, triggers of one to three stages, RLE, demux, the
+flags, the refusals, metadata variants, ID and product faults, each
+request of the open STALLed, read halts, 15 unplugs, and three `--hangs`
+cases. gcov 97.0% (api.c 97.2%, protocol.c 96.7%). Not emulated:
+allocation failures, `ftdi_set_interface` failing, partial writes
+(libusb never makes them), paths sigrok-cli never takes (no device
+instance, unknown keys, a limit below 4, triggers on disabled channels),
+and a capture without a sample limit (sigrok-cli always sets one).
+
+What the model found:
+- A sample limit that is not a multiple of 4 (8 in demux) crashes
+  sigrok-cli, because `rle_count` wraps in the non-RLE overrun path
+  (protocol.c 557-563, 597-600).
+- With two or more stages and `captureratio=0`, the driver sends
+  `num_stages` samples from before its sample buffer (`trigger_at =
+  -num_stages`, protocol.c 620 tests only -1).
+- With two or more stages and a capture ratio above 0, the trigger
+  marker is `num_stages - 1` samples early.
+- Metadata without a memory size makes the read and delay counts
+  0xffffffff, and sigrok-cli dies on the empty logic packet.
+- These never end: a 4-stage trigger (no start bit), all 32 channels at
+  200 MHz (each demux word taken for one sample), `captureratio=100`
+  (delay count 0xffffffff).
+A port should compute the counts without underflow; refuse more stages
+than leave room for its start stage, or put the start bit on the last
+user stage as openbench-logic-sniffer does (its protocol.c 567), with
+the marker placed to match; test for any negative trigger position;
+refuse a board that reports no memory; and stop on the device's own
+sample count.
 
 ## Oracle
 

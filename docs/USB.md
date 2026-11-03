@@ -282,6 +282,21 @@ is how a driver is verified against sigrok-cli without the hardware
   `xx`, and in a digest they count as 0 and their ranges follow
   (`@LEN:SHA256/xx=A-B`). The DSLogic driver sends an uninitialised
   struct field that would otherwise make the log differ between runs.
+- A model can fail a standard request that `Device` answers itself
+  (`DeviceModel::fail_standard`): it STALLs it, with no effect, or
+  cuts the answer short. The kernel's enumeration goes through the
+  same hook, so such a fault is one whose options leave the
+  descriptors unchanged (no re-attach). fx2lafw's `stall_string=I` and
+  `short_string=I` fail `scan()`'s string reads this way.
+- What the FTDI family taught (batch 3, 2026-11-03): libftdi reads in
+  16 KiB transfers on Linux and ends a read early only on a transfer
+  of the two status bytes alone, so a model shows a short read as a
+  short transfer followed by an empty one; drivers that end captures
+  on wall time (asix-sigma checks a time limit every 10 ms) need cases
+  where the limit has surely run out at the first poll, or none at
+  all; drivers that always read the whole memory (chronovu-la,
+  asix-sigma) make large `.tx` goldens; and `options` values cannot
+  contain spaces (a `product=` with a space hung the session).
 - What the EZ-USB family taught (batch 2, 2026-11-03): a driver that
   submits its whole batch of transfers after the start would see every
   one complete under a plain one-per-submission rule, so a streaming
@@ -291,8 +306,8 @@ is how a driver is verified against sigrok-cli without the hardware
   retry after a renumeration shows in stderr at random, so a stderr
   filter matches the line it wants, not line 1; a driver that retries
   capture errors for ever (hantek-dso, hantek-6xxx after its flush)
-  cannot have unplug or empty-transfer cases while an oracle case may
-  not end by `--timeout`; and fault cases run on a board that starts
+  have their unplug, empty-transfer and never-firing-trigger cases as
+  `--hangs` cases; and fault cases run on a board that starts
   with its firmware (`flashed=1` or the like), since after an upload
   the drivers retry a failing open for 3 s of wall time.
 - CDC-ACM and USBTMC come next.
@@ -465,6 +480,25 @@ full case or oracle case. What else is checked depends on oxrok:
   SIGINT handler (it dies, where oxrok ends the capture), so interrupt
   cases are `--oracle-bug` cases, and a run killed by a signal writes
   no gcov counts.
+- `--hangs` marks an oracle case where the C driver never ends (it
+  retries for ever, or waits for a transfer it never submitted). The
+  case passes when `--timeout` stops sigrok-cli (status 124, or 137
+  after timeout's KILL) and fails if sigrok-cli ends on its own. A
+  full case cannot take it: a port must end there, so such a case is
+  an `--oracle-bug` one. Its transactions are cut where the log
+  becomes periodic up to its end: the first full period is kept, then
+  a `~ the last P lines repeat to the end (3 or more times)` line. The
+  period is at most `EMU_HANG_PERIOD`, 512, lines and must be seen at
+  least three times; the cut that keeps the fewest lines wins. Three
+  periods are all the cut checks, so the line does not claim that the
+  loop ran until the timeout. A log that simply stops is kept whole.
+  The compared output, usually stderr, goes through `uniq`, by design:
+  a looping driver repeats its message as often as the time allows, so
+  runs of a repeated line count once, as in an `.oracle` golden.
+  sigrok-cli runs with a preload that turns timeout's SIGTERM into
+  `exit()`, so its gcov counts are written; an `exit()` that deadlocks
+  is ended by an alarm 2 s later and writes none. A hang case compares
+  `--stderr` or uses `--no-output`.
 - Either way the output and the transactions are compared with the
   goldens `tests/emu/MODEL/SLUG.out` and `SLUG.tx` (`SLUG` is the case
   name in lower case, runs of other characters made `-`), the

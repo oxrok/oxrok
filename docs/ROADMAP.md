@@ -22,7 +22,7 @@
 | 9 | USB/IP device server in Rust (`emu`): the protocol, a `DeviceModel` trait, attach and detach through `vhci-hcd`, pedantic checks and a transaction log | done 2026-11-02 on Fedora 44: `oxrok-emu` attaches the relay board; `tools/diffcli.sh --emu` runs 11 cases with identical output, identical transactions and zero violations under both tools, and found the first Linux-only HID bug of the port. Open: running it on CI (`modprobe vhci-hcd` on the hosted runner, else a self-hosted Linux runner for this tier) |
 | 9a | transport shells: vendor bulk and interrupt, FTDI, EZ-USB renumeration, HID, CDC-ACM with modem lines, USBTMC | the six Pico roles, the LogicPort and fx2lafw re-run on the host; `tools/diffcli.sh --emu` needs no hardware. 2026-11-03: HID (relay, PICkit2, the BU-86X, CH9325 and Victor cables, all full cases) and FTDI shells done |
 | 9b | oracle instrumentation: libsigrok built with `--coverage`, a per driver gcov report of the lines the scenarios reach, transaction log diff in `diffcli.sh` | each emulated driver has a coverage figure and a list of C paths not emulated. Harness done 2026-11-02: models found by `emu/build.rs`, one scenario file per model with goldens (oracle-only cases before a port exists), a host-wide session lock, firmware stand-ins, `tools/emu-gcov.sh` and `diffcli.sh --gcov` (`docs/USB.md`). 2026-11-03: the shared sources (`usb.c`, `ezusb.c`, `serial*.c`) reported too, fault options in the shells and models, unplug and interrupt events; drivers at 60% to 86% |
-| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%) until the driver is ported; check which chip the ChronoVu LA8/LA16 and SIGMA carry before their models |
+| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%) until the driver is ported. Batch 3 (2026-11-03): `chronovu-la` (42 cases, gcov 87.0%), `asix-sigma` (104, 89.4%), `ikalogic-scanaplus` (51, 93.8%) and `pipistrello-ols` (100, 97.0%) modelled as oracle cases, ready for their ports; the chips are inferred from the C drivers and marked unverified in each model |
 | 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (49 cases, gcov 83.6%); USBee AX analog open. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%), ready for their ports; `lecroy-logicstudio` remains |
 | 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host |
@@ -216,16 +216,14 @@ among the supplies).
 Left over from the first batch and the coverage round (2026-11-03),
 each with where it belongs:
 
-- fx2lafw unplugged mid-capture (`protocol.c` 444-447, `NO_DEVICE`):
-  the `--unplug` event exists now; a case in `tools/emu/fx2lafw.sh`.
 - USBee AX analog (9d): a profile with analog channels in the fx2lafw
   model reaches `mso_send_data_proc` and the analog setup, the largest
   unreached block of the driver; oxrok's fx2lafw has no analog path
   yet, so it is a port as well as a model.
-- A model hook to fail a standard request (a STALLed or short string
-  descriptor): `Device` answers GET_DESCRIPTOR itself today. fx2lafw's
-  scan (`api.c` 255-288) and every driver that reads strings at the
-  scan need it.
+- Failed string descriptor reads at the scan for the batch 2 and 3
+  models (chronovu-la `api.c` 192-204 and the like): the
+  `fail_standard` hook exists now (fx2lafw uses it); each model needs
+  its own option and cases.
 - A persistent endpoint halt: the models' `stall-in=N` STALLs once, as
   firmware that re-arms its endpoint; a real STALL halts until
   CLEAR_FEATURE, which no C driver sends. A variant would show what
@@ -239,10 +237,17 @@ each with where it belongs:
   display) wait for the CDC-ACM shell (9f); they hold most of
   serial-dmm's unreached lines.
 - The emulator tier has no CI yet (row 9).
-- An oracle `--expect-fail` case that may end by `--timeout`: the
-  drivers that retry capture errors for ever (hantek-dso, hantek-6xxx
-  after its flush) hang sigrok-cli, so those paths have no case; their
-  cases wait commented out in the scenarios.
+- Large transaction goldens: chronovu-la (2.9 MB) and asix-sigma
+  (2.6 MB) are mostly one hash line per bulk IN of a full memory
+  readout. A `.tx` option that folds a run of same-shape transfers into
+  one line (count and running hash) would shrink them; the `.out`
+  already has `--digest`.
+- `pickit2 fault unplug during read-out` failed once in a full `--emu`
+  run under heavy load and passed alone; watch it.
+- `tools/attribution.py --check` would rewrite the headers of
+  `emu/src/models/hantek-dso.rs` and `src/drivers/fx2lafw/mod.rs`
+  (a hand-added "hantekdso project" credit is not in the generator's
+  sources); the credit belongs in `tools/attribution.d`.
 - `tools/attribution.py` credits files only: facts taken from a
   firmware source tree (the fx2lafw and hantek-6xxx models use
   sigrok-firmware-fx2lafw) are credited by hand in the model's header.
