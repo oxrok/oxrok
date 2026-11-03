@@ -15,6 +15,9 @@ EMU_DRIVER=chronovu-la
 EMU_GCOV_SHARED="src/usb.c"
 # oxrok has no chronovu-la driver yet: these are oracle cases.
 EMU_FULL=""
+# The memory readouts are thousands of same-shape bulk INs: fold them
+# (tools/diffcli.sh, EMU_TX_FOLD).
+EMU_TX_FOLD=1
 
 # The model's options for the cases that follow: every case's reset
 # builds the model with them, and re-attaches the device when its
