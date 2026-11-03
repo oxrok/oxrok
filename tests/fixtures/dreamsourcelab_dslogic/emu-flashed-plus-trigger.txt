@@ -11,7 +11,7 @@
 # arg: -t
 # arg: 2=f
 # arg: -O
-# arg: csv:trigger=true
+# arg: bits
 device vid=2a0e pid=0020 version=0000 manufacturer="DreamSourceLab" product="USB-based Instrument" interfaces=0:ff:ff:ff strings=1,2,0
 ctl_in 00 06 0300 0000 4 -> 04030904
 ctl_in 00 06 0301 0409 255 -> 1e0344007200650061006d0053006f0075007200630065004c0061006200
