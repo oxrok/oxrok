@@ -22,8 +22,8 @@
 | 9 | USB/IP device server in Rust (`emu`): the protocol, a `DeviceModel` trait, attach and detach through `vhci-hcd`, pedantic checks and a transaction log | done 2026-11-02 on Fedora 44: `oxrok-emu` attaches the relay board; `tools/diffcli.sh --emu` runs 11 cases with identical output, identical transactions and zero violations under both tools, and found the first Linux-only HID bug of the port. Open: running it on CI (`modprobe vhci-hcd` on the hosted runner, else a self-hosted Linux runner for this tier) |
 | 9a | transport shells: vendor bulk and interrupt, FTDI, EZ-USB renumeration, HID, CDC-ACM with modem lines, USBTMC | the six Pico roles, the LogicPort and fx2lafw re-run on the host; `tools/diffcli.sh --emu` needs no hardware. 2026-11-03: HID (relay, PICkit2, the BU-86X, CH9325 and Victor cables, all full cases) and FTDI shells done |
 | 9b | oracle instrumentation: libsigrok built with `--coverage`, a per driver gcov report of the lines the scenarios reach, transaction log diff in `diffcli.sh` | each emulated driver has a coverage figure and a list of C paths not emulated. Harness done 2026-11-02: models found by `emu/build.rs`, one scenario file per model with goldens (oracle-only cases before a port exists), a host-wide session lock, firmware stand-ins, `tools/emu-gcov.sh` and `diffcli.sh --gcov` (`docs/USB.md`). 2026-11-03: the shared sources (`usb.c`, `ezusb.c`, `serial*.c`) reported too, fault options in the shells and models, unplug and interrupt events; drivers at 60% to 86% |
-| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) and `ftdi-la` as oracle cases (36, gcov 79.0%) |
-| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified |
+| 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%) until the driver is ported; check which chip the ChronoVu LA8/LA16 and SIGMA carry before their models |
+| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (49 cases, gcov 83.6%); USBee AX analog open |
 | 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host |
 | 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
@@ -204,6 +204,36 @@ among the supplies).
 - A vendor program. `asix-omega-rtm-cli` runs the vendor's CLI and
   reads its stream; a stand-in executable on `PATH` is the model.
 
+### Open items of the emulator tier
+
+Left over from the first batch and the coverage round (2026-11-03),
+each with where it belongs:
+
+- fx2lafw unplugged mid-capture (`protocol.c` 444-447, `NO_DEVICE`):
+  the `--unplug` event exists now; a case in `tools/emu/fx2lafw.sh`.
+- USBee AX analog (9d): a profile with analog channels in the fx2lafw
+  model reaches `mso_send_data_proc` and the analog setup, the largest
+  unreached block of the driver; oxrok's fx2lafw has no analog path
+  yet, so it is a port as well as a model.
+- A model hook to fail a standard request (a STALLed or short string
+  descriptor): `Device` answers GET_DESCRIPTOR itself today. fx2lafw's
+  scan (`api.c` 255-288) and every driver that reads strings at the
+  scan need it.
+- A persistent endpoint halt: the models' `stall-in=N` STALLs once, as
+  firmware that re-arms its endpoint; a real STALL halts until
+  CLEAR_FEATURE, which no C driver sends. A variant would show what
+  both tools do then (likely log for ever, so `--timeout` and
+  `--oracle-bug`).
+- The BM52x `data_source` option (recordings stored in the meter):
+  libsigrok has it, oxrok does not, so the `bu86x` model's `meter=bm52x`
+  has no `--show` case (6b).
+- Meters whose packets are of variable length or need `after_open`
+  (BM85x) and the multi display ones (EEVblog 121GW, MS2115B, Metex 4
+  display) wait for the CDC-ACM shell (9f); they hold most of
+  serial-dmm's unreached lines.
+- Criterion 5, replay fixtures recorded from emulator runs, is open for
+  every model; and the emulator tier has no CI yet (row 9).
+
 ### Risks
 
 - The hosted CI kernel may not ship `vhci-hcd`; `linux-modules-extra`
@@ -246,8 +276,16 @@ Hardware checks not yet done, with what each needs:
 - Frequency counter above 1 MHz, up to the 300 MHz the vendor states:
   needs a faster source than the ESP32's LEDC output.
 - HID cables: the BU-86X, CH9325 and Victor paths are verified with
-  the Pico emulator (see `docs/DEVICES.md`); the CP2110 framing and
-  feature reports are tested only against the C code.
+  the Pico emulator and the host emulator, the CP2110 with the host
+  emulator only (see `docs/DEVICES.md`). A real CP2110 would settle
+  which parity codes the chip follows (libsigrok sends AN434 rev 0.4's,
+  pyserial the other order) and whether it honours the purge as an
+  output report.
+- fx2lafw on the Saleae clone again: the upload moved into the scan
+  and the open order changed (version and REVID before the claim) on
+  2026-11-03, checked on the emulator only; a cold start after a power
+  cycle on macOS covers the renumeration path. The nusb backend's claim
+  before the first control transfer on Windows has not run on Windows.
 - `rigol-ds` on the other series (DS2000, DS1000Z, DS4000, MSO5000, the
   Agilent DSO1000): the DS1102E is verified; each other series needs
   a recording (`OXROK_SCPI_RECORD`) and a sigrok-cli comparison.
