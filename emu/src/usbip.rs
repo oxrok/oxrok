@@ -52,6 +52,9 @@ pub const DIR_OUT: u32 = 0;
 pub const DIR_IN: u32 = 1;
 
 const EPIPE: i32 = -32;
+/// A device sent more than the URB holds: babble, as the Linux HCDs
+/// report it.
+const EOVERFLOW: i32 = -75;
 const EINVAL: i32 = -22;
 const ECONNRESET: i32 = -104;
 
@@ -370,6 +373,9 @@ impl Server {
                 }
                 Ok(Pdu::Submit(urb)) => {
                     if urb.ep != 0 && urb.direction == DIR_IN {
+                        // The URB's own length, as the host submitted it
+                        // (not rounded to the packet size as for the
+                        // model's in_transfer(): see in_length()).
                         self.device().in_submitted(urb.ep, urb.length);
                     }
                     let queued = urb.ep != 0
@@ -495,6 +501,27 @@ impl Server {
         let _ = tx.send(resume);
     }
 
+    /// The length of an IN URB as the device sees it. A bulk IN asks
+    /// for whole packets: the host controller takes up to
+    /// `wMaxPacketSize` bytes per IN token whatever the URB's length, so
+    /// a device cannot tell a URB of 1 byte from one of 64 on a 64 byte
+    /// endpoint. libusb passes any length (libsigrok's Logic16 driver
+    /// reads 1 byte answers), nusb only multiples of the packet size;
+    /// the length is rounded up to the packet size for the model and the
+    /// log, so the two read the same. Interrupt and control INs keep
+    /// their length. The URB's own length still decides the outcome on
+    /// the host: an answer longer than it is a babble (`finish()`).
+    fn in_length(&self, urb: &Urb) -> usize {
+        let address = 0x80 | urb.ep;
+        match self.device().endpoint(address) {
+            Some(e) if e.transfer_type() == crate::model::BULK && e.max_packet > 0 => {
+                let mps = usize::from(e.max_packet);
+                urb.length.div_ceil(mps).max(1) * mps
+            }
+            _ => urb.length,
+        }
+    }
+
     /// Offers a URB to the device.
     fn perform(&mut self, urb: &Urb) -> (Reply, Violations) {
         let mut v = Violations::default();
@@ -509,11 +536,12 @@ impl Server {
             v.report(format!("isochronous URB with {} packets; not supported", urb.packets));
             return (Reply::Stall, v);
         }
+        let length = if urb.direction == DIR_IN { self.in_length(urb) } else { urb.length };
         let mut device = self.device();
         let reply = if urb.ep == 0 {
             device.control(Setup::from_bytes(&urb.setup), &urb.data, &mut v)
         } else if urb.direction == DIR_IN {
-            device.transfer_in(urb.ep, urb.length, &mut v)
+            device.transfer_in(urb.ep, length, &mut v)
         } else {
             device.transfer_out(urb.ep, &urb.data, &mut v)
         };
@@ -545,7 +573,8 @@ impl Server {
             } else {
                 self.device().log_undefined(urb.ep, &urb.data)
             };
-            transfer_line_undefined(kind, address, urb.length, &urb.data, &undefined, &reply, above)
+            let length = if urb.direction == DIR_IN { self.in_length(&urb) } else { urb.length };
+            transfer_line_undefined(kind, address, length, &urb.data, &undefined, &reply, above)
         };
         for message in v.drain() {
             log.violation(&message);
@@ -563,11 +592,21 @@ impl Server {
                 write_ret_submit(out, urb.seqnum, EPIPE, 0, &[])
             }
             Reply::Data(d) => {
-                log.transfer(&line);
-                if urb.direction == DIR_IN {
+                if urb.direction == DIR_IN && urb.ep != 0 && d.len() > urb.length {
+                    // More than the URB holds: the HCD ends it with
+                    // -EOVERFLOW and the bytes that fit, as for a
+                    // babbling device.
+                    log.transfer(&format!("{line} (babble: the URB holds {})", urb.length));
+                    let d = &d[..urb.length];
+                    write_ret_submit(out, urb.seqnum, EOVERFLOW, d.len(), d)
+                } else if urb.direction == DIR_IN {
+                    log.transfer(&line);
+                    // A control IN longer than wLength is cut, as the
+                    // model trait says.
                     let d = &d[..d.len().min(urb.length)];
                     write_ret_submit(out, urb.seqnum, 0, d.len(), d)
                 } else {
+                    log.transfer(&line);
                     let taken =
                         if d.is_empty() { urb.data.len() } else { d.len().min(urb.data.len()) };
                     write_ret_submit(out, urb.seqnum, 0, taken, &[])
@@ -759,5 +798,110 @@ mod tests {
         stop.store(true, Ordering::Relaxed);
         handle.join().unwrap().unwrap();
         assert_eq!(log.lock().unwrap().violations(), 0);
+    }
+
+    /// Answers each IN with `answer` bytes and remembers the lengths it
+    /// was given: a bulk IN on 0x82 (64 byte packets), an interrupt IN
+    /// on 0x81 (8 byte packets).
+    struct Babbler {
+        descriptors: crate::model::Descriptors,
+        answer: usize,
+        asked: Asked,
+    }
+
+    /// Which call (`submitted` or `transfer`), the endpoint, the length.
+    type Asked = Arc<Mutex<Vec<(&'static str, u8, usize)>>>;
+
+    impl crate::model::DeviceModel for Babbler {
+        fn name(&self) -> &'static str {
+            "babbler"
+        }
+        fn descriptors(&self) -> &crate::model::Descriptors {
+            &self.descriptors
+        }
+        fn control(&mut self, _: Setup, _: &[u8], _: &mut Violations) -> Reply {
+            Reply::ack()
+        }
+        fn out(&mut self, _: u8, _: &[u8], _: &mut Violations) -> Reply {
+            Reply::ack()
+        }
+        fn in_transfer(&mut self, ep: u8, max: usize, _: &mut Violations) -> Reply {
+            self.asked.lock().unwrap().push(("transfer", ep, max));
+            Reply::Data(vec![0xa5; self.answer])
+        }
+        fn in_submitted(&mut self, ep: u8, max: usize) {
+            self.asked.lock().unwrap().push(("submitted", ep, max));
+        }
+        fn reset(&mut self) {}
+    }
+
+    #[test]
+    fn an_answer_longer_than_the_urb_is_a_babble() {
+        use crate::descriptor::{self, DeviceDescriptor};
+        let mut body = Vec::new();
+        body.extend_from_slice(&descriptor::interface(0, 0, 2, [0xff, 0, 0], 0));
+        body.extend_from_slice(&descriptor::endpoint(0x81, 3, 8, 1));
+        body.extend_from_slice(&descriptor::endpoint(0x82, 2, 64, 0));
+        let device = DeviceDescriptor {
+            usb: 0x0200,
+            class: [0, 0, 0],
+            max_packet0: 64,
+            vendor: 0x1234,
+            product: 0x5678,
+            device: 0x0100,
+            strings: [0, 0, 0],
+            configurations: 1,
+        };
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let model = Babbler {
+            descriptors: crate::model::Descriptors {
+                speed: crate::model::Speed::Full,
+                device: device.bytes(),
+                configs: vec![descriptor::configuration(1, 0, 0x80, 50, &body)],
+                strings: Vec::new(),
+            },
+            answer: 6,
+            asked: Arc::clone(&asked),
+        };
+        let log = Arc::new(Mutex::new(TxLog::new(None, false).unwrap()));
+        let device = Arc::new(Mutex::new(Device::new(Box::new(model))));
+        let server = Server::new(Arc::clone(&device), Arc::clone(&log), "1-1", 1, 2);
+        let devid = server.devid();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = Arc::clone(&stop);
+        let handle = thread::spawn(move || server.run(&listener, &stop2));
+        let (mut s, _) = import(addr, "1-1").unwrap();
+        s.write_all(&cmd_submit(1, devid, DIR_OUT, 0, 0, Some(setup(0x00, 9, 1, 0, 0)), &[]))
+            .unwrap();
+        assert_eq!(read_ret(&mut s, false).unwrap().status, 0);
+        // Bulk: the model is asked for a whole packet, the URB of 4
+        // bytes babbles with the 4 that fit.
+        s.write_all(&cmd_submit(2, devid, DIR_IN, 2, 4, None, &[])).unwrap();
+        let r = read_ret(&mut s, true).unwrap();
+        assert_eq!((r.status, r.data), (EOVERFLOW, vec![0xa5; 4]));
+        // A URB that holds the answer completes.
+        s.write_all(&cmd_submit(3, devid, DIR_IN, 2, 6, None, &[])).unwrap();
+        let r = read_ret(&mut s, true).unwrap();
+        assert_eq!((r.status, r.data), (0, vec![0xa5; 6]));
+        // Interrupt: the length is not rounded, and the same holds.
+        s.write_all(&cmd_submit(4, devid, DIR_IN, 1, 2, None, &[])).unwrap();
+        let r = read_ret(&mut s, true).unwrap();
+        assert_eq!((r.status, r.data), (EOVERFLOW, vec![0xa5; 2]));
+        drop(s);
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap().unwrap();
+        assert_eq!(
+            *asked.lock().unwrap(),
+            [
+                ("submitted", 2, 4),
+                ("transfer", 2, 64),
+                ("submitted", 2, 6),
+                ("transfer", 2, 64),
+                ("submitted", 1, 2),
+                ("transfer", 1, 2),
+            ]
+        );
     }
 }

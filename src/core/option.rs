@@ -84,6 +84,9 @@ pub enum ValueList {
     Rational(Vec<(u64, u64)>),
     /// The trigger match types a device supports.
     TriggerMatches(Vec<TriggerMatch>),
+    /// A list of float pairs, e.g. the voltage thresholds of a device
+    /// with fixed logic families (`std_gvar_thresholds()`).
+    RangeF64(Vec<(f64, f64)>),
 }
 
 impl ValueList {

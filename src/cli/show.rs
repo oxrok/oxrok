@@ -335,7 +335,19 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
                     Some(Value::RangeF64(lo, hi)) => Some((lo, hi)),
                     _ => None,
                 };
-                if let Some(values) = list().and_then(|l| l.f64_values()) {
+                let list = list();
+                if let Some(ValueList::RangeF64(pairs)) = &list {
+                    // sigrok-cli: each pair as lo-hi with one decimal,
+                    // the current one when both bounds are equal.
+                    let parts: Vec<String> = pairs
+                        .iter()
+                        .map(|&(lo, hi)| {
+                            let mark = if current == Some((lo, hi)) { " (current)" } else { "" };
+                            format!("{lo:.1}-{hi:.1}{mark}")
+                        })
+                        .collect();
+                    println!("{}", parts.join(", "));
+                } else if let Some(values) = list.and_then(|l| l.f64_values()) {
                     let parts: Vec<String> = values
                         .iter()
                         .map(|v| {

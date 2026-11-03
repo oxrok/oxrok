@@ -3,11 +3,11 @@ ctl_in 00 06 0301 0409 255 -> 1603530061006c0065006100650020004c004c004300
 ctl_in 00 06 0300 0000 4 -> 04030904
 ctl_in 00 06 0302 0409 255 -> 16034c006f00670069006300200053002f0031003600
 bulk_out 01 61d4 -> 2
-bulk_in 81 1 -> 40
+bulk_in 81 64 -> 40
 bulk_out 01 dfc6b35160 -> 5
-bulk_in 81 8 -> f932de19d957e2e3
+bulk_in 81 64 -> f932de19d957e2e3
 bulk_out 01 55e0c4 -> 3
-bulk_in 81 1 -> da
+bulk_in 81 64 -> da
 bulk_out 01 54 -> 1
 bulk_out 01 57bd9940a09faee30946bd8a8e4a6d3a9250a0640de54a7fc9cb7c21d120e2756f3e64a938278bc02aca72f1c5f84facae1751aab1b7c6dc38d47e01946e9777 -> 64
 bulk_out 01 57bd7d78d2cb8bf03a747d590512daf10c928dfdb95a5f0a0e1cde8970b678fa550b27ff910fe4593d3aa51cea4b0d978ad94caacec999bfe59e504b9d118641 -> 64
@@ -59,13 +59,13 @@ bulk_out 01 57bd65c47da63daf0822a64045d5bb45f50270c093f410bcfa5d02cabe994eeae410
 bulk_out 01 57bd685d14a266d271ae1304b44562f23cffb81310c4fa8190f6e2f4dcc34fc69dc2a9a7ba492e7f0464b59067fd441a6f8bbc0536bcc746b1890fcc64493fdd -> 64
 bulk_out 01 576c0e3dee229757635e198b4edf00fd65380d7db5093311c7e8c0 -> 27
 bulk_out 01 55e0c4 -> 3
-bulk_in 81 1 -> ca
+bulk_in 81 64 -> ca
 bulk_out 01 55e0c5 -> 3
-bulk_in 81 1 -> da
+bulk_in 81 64 -> da
 bulk_out 01 dfc6b38918 -> 5
-bulk_in 81 16 -> 25fe1f25e1cbc93ae504b1b4b040f7f8
+bulk_in 81 64 -> 25fe1f25e1cbc93ae504b1b4b040f7f8
 bulk_out 01 55e01e -> 3
-bulk_in 81 1 -> da
+bulk_in 81 64 -> da
 bulk_out 01 5ad536872419dc40ce9fdc11d630edc6df2f -> 18
 bulk_out 01 5ad72c2ea61754a91ede0da6ff8f -> 14
 bulk_out 01 5ad72cf8ce9fdc11d6b8ad069f6f -> 14
@@ -84,7 +84,7 @@ bulk_out 01 5ad72c32a61754a91e0a753e8727 -> 14
 bulk_out 01 5ad72c00feef4ca146d0fd36ef1f -> 14
 bulk_out 01 5a324c61 -> 4
 bulk_out 01 55e0c4 -> 3
-bulk_in 81 1 -> ca
+bulk_in 81 64 -> ca
 bulk_out 01 701df4df79836f2e292d33d9cbaddd5cdf47bd535aad04ef1e9928db32f5bc77b601a0 -> 35
 bulk_out 01 70fd349f6e49b8cbc2e58c278671b073bacde48ffe3988fb92159c17962180238afd34 -> 35
 bulk_out 01 53fc2273426a -> 6

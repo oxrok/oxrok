@@ -16,8 +16,9 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 6] = [
+const RECORDED: [&str; 7] = [
     "fx2lafw",
+    "saleae-logic16",
     "microchip-pickit2",
     "dcttech-usbrelay",
     "brymen-bm86x",

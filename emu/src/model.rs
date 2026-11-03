@@ -248,7 +248,10 @@ pub trait DeviceModel: Send {
     /// An OUT transfer to endpoint number `ep`.
     fn out(&mut self, ep: u8, data: &[u8], v: &mut Violations) -> Reply;
 
-    /// An IN transfer from endpoint number `ep`, up to `max` bytes.
+    /// An IN transfer from endpoint number `ep`, up to `max` bytes. For
+    /// a bulk endpoint `max` is the URB's length rounded up to whole
+    /// packets, which is what the device sees on the bus; an answer
+    /// longer than the URB itself is a babble on the host (`-EOVERFLOW`).
     fn in_transfer(&mut self, ep: u8, max: usize, v: &mut Violations) -> Reply;
 
     /// A bus reset, or a new attach (also the one after a
@@ -256,7 +259,8 @@ pub trait DeviceModel: Send {
     fn reset(&mut self);
 
     /// A new IN transfer was submitted on endpoint number `ep`, asking
-    /// for up to `max` bytes; called once per transfer, before
+    /// for up to `max` bytes, the URB's own length (not rounded as for
+    /// [`DeviceModel::in_transfer`]); called once per transfer, before
     /// [`DeviceModel::in_transfer`] first offers it. A streaming model
     /// can pace itself by the host's submissions instead of the
     /// clock, so that what completes does not depend on timing.
