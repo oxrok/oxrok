@@ -24,6 +24,9 @@ pub enum Error {
     /// The device is already in use.
     #[error("device is busy")]
     Busy,
+    /// The device is gone (unplugged), libusb's `LIBUSB_ERROR_NO_DEVICE`.
+    #[error("device disconnected")]
+    Disconnected,
     /// The device did not answer in time.
     #[error("timeout")]
     Timeout,

@@ -442,13 +442,11 @@ fn try_open(
 /// under the C driver. `set_configuration(1)` comes first; it sends
 /// nothing when the configuration is active (always on Linux) but is
 /// needed on macOS, which can leave a device unconfigured right after
-/// renumeration. On Windows (`WinUSB`) no control transfer goes
-/// without a claimed interface, so the claim comes first there.
+/// renumeration. The same sequence on every OS: on Windows, where
+/// `WinUSB` needs a claimed interface for any control transfer, the
+/// nusb backend claims it for the first read.
 fn set_up(t: &mut dyn Transport) -> Result<()> {
     t.set_configuration(CONFIGURATION)?;
-    if cfg!(windows) {
-        t.claim_interface(INTERFACE)?;
-    }
     check_firmware(t)?;
     t.claim_interface(INTERFACE).map_err(|e| match e {
         Error::Busy => Error::device(
@@ -723,12 +721,6 @@ impl Device for Fx2lafwDevice {
     }
 }
 
-/// Whether a transfer failed because the device is gone (libusb's
-/// `LIBUSB_TRANSFER_NO_DEVICE`), as both USB backends word it.
-fn is_disconnect(e: &Error) -> bool {
-    matches!(e, Error::Device(m) if m.ends_with("device disconnected"))
-}
-
 /// One acquisition, on its own thread: `start_transfers()` and
 /// `receive_transfer()` of `protocol.c`.
 struct Acquisition {
@@ -777,7 +769,7 @@ impl Acquisition {
             let data = match stream.next(timeout) {
                 Ok(d) => d,
                 Err(Error::Timeout) => Vec::new(),
-                Err(e) if is_disconnect(&e) => return Err(e),
+                Err(Error::Disconnected) => return Err(Error::Disconnected),
                 Err(e) => {
                     log::debug!("Transfer failed: {e}.");
                     Vec::new()

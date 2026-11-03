@@ -1,6 +1,6 @@
 //! The driver against a hand written session of a Saleae Logic clone
-//! with the firmware running: open (configuration, version
-//! checks, claim), a start command for 1 MHz and three transfers of samples.
+//! with the firmware running: open (configuration, claim, version
+//! checks), a start command for 1 MHz and three transfers of samples.
 
 use oxrok::core::session::Flow;
 use oxrok::core::{Device, Key, Packet, Session, Trigger, TriggerMatch, Value};
@@ -10,9 +10,9 @@ use oxrok::usb::record::Replay;
 const SESSION: &str = "# oxrok usb fixture 1\n\
     device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
     config 1 -> ok\n\
+    claim 0 -> ok\n\
     ctl_in 40 b0 0000 0000 2 -> 0104\n\
     ctl_in 40 b2 0000 0000 1 -> 01\n\
-    claim 0 -> ok\n\
     ctl_out 40 b1 0000 0000 40002f -> ok\n\
     bulk_in 82 10240 -> 00{5000}01{5240}\n\
     bulk_in 82 10240 -> ff{10240}\n\
@@ -87,9 +87,9 @@ fn frames_take_the_samples_that_follow() {
     let text = "# oxrok usb fixture 1\n\
         device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
         config 1 -> ok\n\
+        claim 0 -> ok\n\
         ctl_in 40 b0 0000 0000 2 -> 0104\n\
         ctl_in 40 b2 0000 0000 1 -> 01\n\
-        claim 0 -> ok\n\
         ctl_out 40 b1 0000 0000 40002f -> ok\n\
         bulk_in 82 10240 -> 00{4}01{4}02{10232}\n";
     let mut dev =
@@ -123,9 +123,9 @@ fn frames_ending_on_a_transfer_boundary() {
     let text = "# oxrok usb fixture 1\n\
         device vid=0925 pid=3881 version=0001 bus=1 addr=4 manufacturer=\"sigrok\" product=\"fx2lafw\"\n\
         config 1 -> ok\n\
+        claim 0 -> ok\n\
         ctl_in 40 b0 0000 0000 2 -> 0104\n\
         ctl_in 40 b2 0000 0000 1 -> 01\n\
-        claim 0 -> ok\n\
         ctl_out 40 b1 0000 0000 40002f -> ok\n\
         bulk_in 82 10240 -> 00{10240}\n\
         bulk_in 82 10240 -> 01{10240}\n\
@@ -166,9 +166,9 @@ fn a_wrong_rate_fails_before_the_device_is_touched() {
 }
 
 /// A session recorded on a Saleae Logic clone (firmware 1.4) with
-/// `OXROK_USB_RECORD`, 2026-10-22, inputs floating high. The claim
-/// has since moved after the version reads, as in the C driver; it is
-/// no transfer, so the device saw the same.
+/// `OXROK_USB_RECORD`, 2026-10-22, inputs floating high. The driver
+/// now claims after the version reads, as the C driver does; the
+/// replay lets a claim float among control transfers.
 #[test]
 fn recorded_capture_replays() {
     let replay = Replay::from_text(include_str!("fixtures/fx2lafw/capture-1m.txt")).unwrap();

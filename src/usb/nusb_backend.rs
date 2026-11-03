@@ -13,7 +13,7 @@ fn map(e: &nusb::Error, what: &str) -> Error {
     use nusb::ErrorKind as K;
     match e.kind() {
         K::Busy => Error::Busy,
-        K::Disconnected => Error::device(format!("{what}: device disconnected")),
+        K::Disconnected => Error::Disconnected,
         K::PermissionDenied => Error::Io(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             format!("{what}: {e} (permission denied)"),
@@ -117,7 +117,7 @@ fn transfer_error(e: nusb::transfer::TransferError) -> Error {
     use nusb::transfer::TransferError as T;
     match e {
         T::Cancelled => Error::Timeout,
-        T::Disconnected => Error::device("device disconnected"),
+        T::Disconnected => Error::Disconnected,
         T::Stall => Error::device("endpoint stalled"),
         other => Error::Device(other.to_string()),
     }
@@ -157,6 +157,27 @@ fn claim_or_detach<T, E>(
 }
 
 impl Nusb {
+    /// `WinUSB` sends no control transfer without a claimed interface:
+    /// one is claimed for it, the request's own for an interface
+    /// recipient, else the active configuration's first. Drivers keep
+    /// one sequence on every OS; their later claim of it is a no-op.
+    #[cfg(target_os = "windows")]
+    fn claim_for_control(&mut self, req: ControlRequest) -> Result<()> {
+        if !self.interfaces.is_empty() {
+            return Ok(());
+        }
+        let number = if req.recipient() == 1 {
+            (req.index & 0xff) as u8
+        } else {
+            self.device
+                .active_configuration()
+                .ok()
+                .and_then(|c| c.interfaces().next().map(|i| i.interface_number()))
+                .unwrap_or(0)
+        };
+        self.claim_interface(number)
+    }
+
     /// The claimed interface that owns `endpoint`.
     fn interface_for(&self, endpoint: u8) -> Result<&nusb::Interface> {
         self.interfaces
@@ -368,16 +389,20 @@ impl Transport for Nusb {
             index: req.index,
             data,
         };
+        #[cfg(target_os = "windows")]
+        self.claim_for_control(req)?;
         let r = if let Some(i) = self.interfaces.values().next() {
             i.control_out(out, timeout).wait()
         } else {
+            // nusb has no device-level control transfer on Windows;
+            // claim_for_control() left an interface claimed there.
             #[cfg(not(target_os = "windows"))]
             {
                 self.device.control_out(out, timeout).wait()
             }
             #[cfg(target_os = "windows")]
             {
-                return Err(Error::device("claim an interface before control transfers"));
+                return Err(Error::device("no interface claimed for a control transfer"));
             }
         };
         r.map_err(transfer_error)
@@ -398,16 +423,20 @@ impl Transport for Nusb {
             index: req.index,
             length: u16::try_from(len).map_err(|_| Error::arg("control transfer too long"))?,
         };
+        #[cfg(target_os = "windows")]
+        self.claim_for_control(req)?;
         let r = if let Some(i) = self.interfaces.values().next() {
             i.control_in(inp, timeout).wait()
         } else {
+            // nusb has no device-level control transfer on Windows;
+            // claim_for_control() left an interface claimed there.
             #[cfg(not(target_os = "windows"))]
             {
                 self.device.control_in(inp, timeout).wait()
             }
             #[cfg(target_os = "windows")]
             {
-                return Err(Error::device("claim an interface before control transfers"));
+                return Err(Error::device("no interface claimed for a control transfer"));
             }
         };
         r.map_err(transfer_error)
