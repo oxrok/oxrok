@@ -32,10 +32,13 @@ emu_cases() {
     HEAD16='19,$d'
     # sigrok-cli's own lines after the driver's: a repeated line once.
     UNIQ='$!N; /^(.*)\n\1$/!P; D'
+    # The harness makes the first attach's address generic; a device
+    # attached again for other options has a new one.
+    ADDR='s/conn=[0-9]+\.[0-9]+/conn=BUS.ADDR/; s/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/'
 
     # The LA8, at 0403:8867 (the udev rules' "new VID/PID").
-    emu_case "la8 scan" --keep-header -- -d $D --scan
-    emu_case "la8 show" --keep-header -- -d $D --show
+    emu_case "la8 scan" --keep-header --filter "$ADDR" -- -d $D --scan
+    emu_case "la8 show" --keep-header --filter "$ADDR" -- -d $D --show
     emu_case "la8 get samplerate" -- -d $D --get samplerate
     # conn is the device's bus.address, which changes per attach.
     emu_case "la8 get conn" --filter "s/'[0-9]+\\.[0-9]+'/'BUS.ADDR'/" -- -d $D --get conn
@@ -54,7 +57,7 @@ emu_cases() {
         -d $D:conn=$EMU_USB -C 0,1,4 -c samplerate=20m --triggers 0=0,1=1 --samples 100 -O hex
     # conn= by ids, and two that sr_usb_find refuses: an address beyond
     # 127, no numbers at all.
-    emu_case "la8 by ids" --keep-header -- -d $D:conn=0403.8867 --scan
+    emu_case "la8 by ids" --keep-header --filter "$ADDR" -- -d $D:conn=0403.8867 --scan
     emu_case "la8 conn out of range" --stderr --expect-fail -- -d $D:conn=1.200 --samples 10
     emu_case "la8 conn zero" --stderr --expect-fail -- -d $D:conn=0.0 --samples 10
     emu_case "la8 get limit" --stderr --expect-fail -- -d $D --get limit_samples
@@ -65,8 +68,8 @@ emu_cases() {
 
     # The LA16.
     chronovu_options model=la16
-    emu_case "la16 scan" --keep-header -- -d $D --scan
-    emu_case "la16 show" --keep-header -- -d $D --show
+    emu_case "la16 scan" --keep-header --filter "$ADDR" -- -d $D --scan
+    emu_case "la16 show" --keep-header --filter "$ADDR" -- -d $D --show
     emu_case "la16 200 MHz" --digest --filter "$HEAD16" -- -d $D --samples 100 -O hex
     emu_case "la16 slowest channels" --digest --filter '7,$d' -- \
         -d $D -C 0,8,15 -c samplerate=784313 --samples 100 -O hex
@@ -83,7 +86,7 @@ emu_cases() {
     # sends a 1 byte packet of unitsize 2 before the trigger and the
     # rest of the block a byte off. csv drops the odd byte and shows the
     # block's samples shifted ...
-    emu_case "la16 trigger csv" --digest --filter '1,4d; 14,$d' -- -d $D --triggers 0=1 --samples 100 -O csv
+    emu_case "la16 trigger csv" --digest --filter '10,$d' -- -d $D --triggers 0=1 --samples 100 -O csv:header=false
     # ... while hex (and bits) takes length - unitsize, 1 - 2 in 64 bits,
     # as its loop bound and reads past the packet until it crashes.
     emu_case "la16 trigger hex crashes" --stderr --expect-fail \
@@ -94,12 +97,12 @@ emu_cases() {
     # (bcdDevice 0x0200, which libftdi still takes for a BM), and
     # product strings the driver does not know.
     chronovu_options pid=0x6001
-    emu_case "pid 6001 scan" --keep-header -- -d $D --scan
+    emu_case "pid 6001 scan" --keep-header --filter "$ADDR" -- -d $D --scan
     emu_case "pid 6001 capture" --digest --filter "$HEAD8" -- -d $D -c samplerate=10m --triggers 3=1 --samples 100 -O hex
     chronovu_options chip=r
-    emu_case "ft232r scan" --keep-header -- -d $D --scan
+    emu_case "ft232r scan" --keep-header --filter "$ADDR" -- -d $D --scan
     chronovu_options serial=
-    emu_case "no serial scan" --keep-header -- -d $D --scan
+    emu_case "no serial scan" --keep-header --filter "$ADDR" -- -d $D --scan
     chronovu_options product=LA8
     emu_case "unknown product" --stderr --expect-fail -- -d $D --samples 10
     chronovu_options product=

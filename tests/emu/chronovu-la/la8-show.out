@@ -6,7 +6,7 @@ chronovu-la:conn=BUS.ADDR - ChronoVu LA8 [S/N: CV0000001] with 8 channels: 0 1 2
 Supported configuration options:
     limit_time: 
     Maximum number of samples: 8388608
-    conn: 1.60 (current)
+    conn: BUS.ADDR (current)
     samplerate - supported samplerates:
       392.156 kHz
       393.7 kHz
