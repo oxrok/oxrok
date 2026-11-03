@@ -112,10 +112,9 @@
 //!
 //! What the model taught about the C driver (see `tools/emu/hantek-6xxx.sh`):
 //! a transfer that completes empty or fails after the flush is neither
-//! resubmitted nor ends the acquisition, which then never ends (read in
-//! `receive_transfer()`, not run: the harness cannot yet pass a case
-//! whose oracle has to be stopped by a timeout, so `empty=2` and
-//! `stall_in=2` wait commented out in the scenario); with
+//! resubmitted nor ends the acquisition, which then never ends (the
+//! `--hangs` cases with `empty=2` and `stall_in=2`: sigrok-cli waits,
+//! with no transfer after, until the harness stops it); with
 //! CH1 disabled, CH2's samples go out as CH1's (`send_chunk()` walks
 //! `enabled_channels`, which holds every channel); on a DC only board,
 //! setting coupling `DC` stores index 0, `COUPLING_AC`, so the driver

@@ -27,4 +27,4 @@ ctl_out 40 b3 0000 0000 0f03030368acfe000100 -> ok
 bulk_out 02 0300 -> 2
 ctl_out 40 b3 0000 0000 0f03030368acfe000100 -> ok
 bulk_out 02 0400 -> 2
-~ the last 16 lines repeat until the timeout
+~ the last 16 lines repeat to the end (3 or more times)

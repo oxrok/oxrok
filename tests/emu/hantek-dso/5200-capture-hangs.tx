@@ -35,4 +35,4 @@ bulk_in 86 512 -> @512:ee3d09ed1ccf7ff91d61f8b7f01cbb03be42c282fc572dd8287002272
 ctl_out 40 b3 0000 0000 0f03030368acfe000100 -> ok
 bulk_out 02 0600 -> 2
 bulk_in 86 512 -> @512:e87940e6fb89c12e02d5cdd665e150df9ffef8faf9d2fff71c92dcfa7c155b9c
-~ the last 3 lines repeat until the timeout
+~ the last 3 lines repeat to the end (3 or more times)

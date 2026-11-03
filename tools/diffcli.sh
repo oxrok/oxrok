@@ -526,11 +526,13 @@ if [ $emu = 1 ]; then
             /^# section / { on = 0 } on && !/^#/' "$EMULOG/$EMU_MODEL.log"
     }
     # The transactions of a --hangs case, made deterministic: a driver
-    # that never ends repeats its last steps for as long as the timeout
-    # lets it, so where the log is periodic up to its end (a period of
-    # at most EMU_HANG_PERIOD lines, default 512, seen at least three
-    # times), it is cut after the first full period and a `~` line says
-    # so. Of the periods, the one that keeps the fewest lines wins (an
+    # that never ends may repeat its last steps for as long as the
+    # timeout lets it, so where the log is periodic up to its end (a
+    # period of at most EMU_HANG_PERIOD lines, default 512, seen at
+    # least three times), it is cut after the first full period and a
+    # `~` line says so. Three periods are all the cut checks: they do
+    # not tell a loop that runs until the timeout from one that stops
+    # after a few rounds, and the line claims no more than that. Of the periods, the one that keeps the fewest lines wins (an
     # outer loop over an inner one). A log without such a tail, a driver
     # that waits without a transfer, is kept whole.
     emu_hang_cut() {
@@ -546,7 +548,7 @@ if [ $emu = 1 ]; then
                     if (n - s + 1 >= 3 * p && j < best) { best = j; bp = p }
                 }
                 for (i = 1; i <= best; i++) print l[i]
-                if (bp) printf "~ the last %d lines repeat until the timeout\n", bp
+                if (bp) printf "~ the last %d lines repeat to the end (3 or more times)\n", bp
             }'
     }
     emu_slug() {
