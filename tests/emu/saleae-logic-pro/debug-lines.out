@@ -1,0 +1,10 @@
+sr: saleae-logic-pro: fw-version: oxrok-emu Logic Pro 16 1.0
+sr: saleae-logic-pro: Skipping bitstream upload.
+sr: saleae-logic-pro: temperature = 37
+sr: saleae-logic-pro: 2 channels enabled (0x0003)
+sr: saleae-logic-pro: random: 0xd7 0xc3 0x6a 0xb1
+sr: saleae-logic-pro: nonce: 0xef 0x53 0x6b 0x2e
+sr: saleae-logic-pro: nonce: 0x4f 0x98 0x56 0xad
+sr: saleae-logic-pro: sig: 0x30 0x91 0xd9 0xc1
+sr: saleae-logic-pro: sig crc: 0x27 0xa7
+sr: saleae-logic-pro: Authenticate 0x00000000 -> 0x727ca563

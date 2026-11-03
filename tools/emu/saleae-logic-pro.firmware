@@ -1,0 +1,7 @@
+# Firmware stand-ins for the saleae-logic-pro model (emu/src/models/saleae-logic-pro.rs):
+# the FPGA bitstream the driver uploads in chunks of 1020 bytes. The
+# size is the model's (a unit test checks it), not the vendor file's;
+# it leaves a short last chunk (820 bytes). The FX3 firmware is a
+# container of parts that the driver parses, which a plain stand-in is
+# not: tools/emu/saleae-logic-pro.sh writes it.
+saleae-logicpro16-fpga.bitstream 10000

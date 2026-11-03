@@ -1,0 +1,15 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+saleae-logic-pro:conn=BUS.ADDR - Saleae Logic Pro 16 with 16 channels: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Supported configuration options:
+    continuous: on, off
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      1 MHz
+      2 MHz
+      2.5 MHz
+      10 MHz (current)
+      25 MHz
+      50 MHz
