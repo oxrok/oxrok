@@ -346,12 +346,15 @@ if [ $emu = 1 ]; then
     fi
     # A --hangs case stops sigrok-cli with timeout's SIGTERM, of which
     # it would die without writing its gcov counts. This preload makes
-    # the signal an exit(), whose handlers write them (a run that does
-    # not end then is killed 5 s later, as any other). Without a C
-    # compiler the case still runs; it only counts nothing.
+    # the signal an exit(), whose handlers write them. An exit() from a
+    # signal handler can deadlock (the signal may land inside a lock an
+    # exit handler takes; it does now and then in hantek-6xxx), so an
+    # alarm ends such a run 2 s later, without counts but still as a
+    # timed out run (status 124). Without a C compiler the case still
+    # runs; it only counts nothing.
     EMU_TERM_EXIT=""
-    printf '%s\n' '#include <signal.h>' '#include <stdlib.h>' \
-        'static void on_term(int s) { (void)s; exit(1); }' \
+    printf '%s\n' '#include <signal.h>' '#include <stdlib.h>' '#include <unistd.h>' \
+        'static void on_term(int s) { (void)s; alarm(2); exit(1); }' \
         '__attribute__((constructor)) static void init(void) { signal(SIGTERM, on_term); }' \
         >"$TMP/term-exit.c"
     if cc -shared -fPIC -o "$TMP/term-exit.so" "$TMP/term-exit.c" 2>"$TMP/term-exit.err"; then
@@ -707,7 +710,11 @@ if [ $emu = 1 ]; then
             if [ -n "$bug" ] && [ $t = a ]; then
                 [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
             elif [ $hangs = 1 ]; then
-                [ $st = 124 ] || why="$why; $(basename "$tool") exited $st before the timeout, where --hangs says it never ends"
+                # 137: timeout's KILL, 5 s after a TERM that did not end it.
+                case $st in
+                    124 | 137) ;;
+                    *) why="$why; $(basename "$tool") exited $st before the timeout, where --hangs says it never ends" ;;
+                esac
             else
                 if [ $expect = 0 ] && [ $st != 0 ]; then why="$why; $(basename "$tool") exited $st"; fi
                 if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
