@@ -1,0 +1,69 @@
+gcov asix-sigma (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        93.7%  314 of 335
+  protocol.c   88.0%  921 of 1047
+  total        89.4%  1235 of 1382
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 182-185, 191-194
+    dev_open: 277-278
+    config_get: 302, 329-330
+    config_set: 390-391
+    config_list: 409, 417, 428-429
+    dev_acquisition_start: 476, 515, 617, 623
+    dev_acquisition_stop: 644
+  protocol.c
+    sigma_ftdi_open: 73, 76, 82, 86-88
+    sigma_check_open: never called (114-133)
+    sigma_check_close: never called (136-150)
+    sigma_force_open: 159, 162
+    sigma_write_raw: 214
+    sigma_write_register: 268-269
+    sigma_get_registers: 320-321
+    sigma_read_dram: 393-394
+    sigma_write_trigger_lut: 457, 475, 477, 479, 481
+    sigma_fpga_init_la: 724-725
+    sigma_fw_2_bitbang: 769, 798-800
+    upload_firmware: 835, 838, 842-843, 872-873
+    sigma_set_acquire_timeout: 948, 963, 988
+    sigma_fetch_hw_config: 1046
+    sigma_set_samplerate: 1098
+    alloc_submit_buffer: 1177
+    setup_submit_limit: 1204, 1215
+    free_submit_buffer: 1228, 1232
+    flush_submit_buffer: 1254
+    addto_submit_buffer: 1286
+    sigma_location_is_eq: 1312
+    sigma_location_decrement: 1331, 1345
+    sigma_location_increment: 1352
+    rewind_trig_arm_pos: 1376
+    alloc_sample_buffer: 1456
+    sigma_convert_trigger: 1629
+    sample_matches_trigger: 1697
+    send_trigger_marker: 1728, 1731
+    check_and_submit_sample: 1750
+    sigma_location_check: 1760
+    download_capture: 2033, 2037, 2040, 2077, 2090, 2096
+    sigma_receive_data: 2182, 2192, 2198
+    add_trigger_function: 2259-2266, 2273-2290, 2298-2302, 2316, 2319-2322, 2325
+    sigma_build_basic_trigger: 2371, 2374, 2385, 2387
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   27.9%  64 of 229
+  total       27.9%  64 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: 337, 346
+    sr_usb_find: 418-420
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)

@@ -1,0 +1,9 @@
+# Firmware stand-ins for the asix-sigma model (emu/src/models/asix-sigma/):
+# the FPGA netlists the driver uploads for 50, 100 and 200 MHz. The
+# sizes are the model's (a unit test checks them), not the vendor
+# files'; the model unscrambles the stand-ins as the driver does and
+# checks every bit clocked into the FPGA. The driver never chooses
+# asix-sigma-50sync.fw or asix-sigma-phasor.fw.
+asix-sigma-50.fw 2000
+asix-sigma-100.fw 2100
+asix-sigma-200.fw 2200

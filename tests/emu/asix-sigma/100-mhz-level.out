@@ -1,0 +1,5 @@
+sr: asix-sigma: 100/200MHz modes limited to edge trigger.
+sr: asix-sigma: Could not configure triggers.
+sr: session: Could not start asix-sigma device BUS.ADDR acquisition.
+sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
+Failed to start session.
