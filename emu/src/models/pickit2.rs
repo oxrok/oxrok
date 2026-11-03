@@ -61,7 +61,9 @@
 //! the status of a capture that was not cancelled, with the banks and
 //! offsets in the C driver's order; READ comes at most twice after
 //! each SETPOS, and never while the answer to the previous READ is
-//! still unread; an IN transfer asks for 64 bytes. The HID class
+//! still unread; an IN transfer asks for 64 bytes and comes only while
+//! a status or a READ answer is to come (a NAKed transfer is not
+//! logged, so a stray read would otherwise go unseen). The HID class
 //! requests a kernel sends (`SET_IDLE`, the report descriptor) are
 //! answered; reports over the control pipe (`GET_REPORT`,
 //! `SET_REPORT`) are not how either driver talks to the device and are
@@ -380,6 +382,17 @@ impl Analyzer {
         self.answer = Some(a);
     }
 
+    /// The state, for a message.
+    fn state_name(&self) -> &'static str {
+        match self.state {
+            State::Idle => "no capture",
+            State::Armed { .. } => "a capture runs",
+            State::Reading { reads: 0, .. } => "after SETUP's status or a SETPOS",
+            State::Reading { .. } => "after a READ was answered",
+            State::Cancelled => "after a cancelled capture",
+        }
+    }
+
     /// One offer of an IN transfer of up to `max` bytes.
     pub fn poll(&mut self, max: usize, v: &mut Violations) -> Reply {
         if max != PACKET {
@@ -399,10 +412,18 @@ impl Analyzer {
             }
             return Reply::Data(status.to_vec());
         }
-        match self.answer.take() {
-            Some(a) => Reply::Data(a.to_vec()),
-            None => Reply::Nak,
+        if let Some(a) = self.answer.take() {
+            return Reply::Data(a.to_vec());
         }
+        // Neither driver reads without a status or a READ
+        // answer to come; a NAKed read is not logged as a
+        // transfer, so it is flagged here.
+        v.report(format!(
+            "IN transfer with no answer to come ({}); the driver reads after SETUP \
+             and after each READ only",
+            self.state_name()
+        ));
+        Reply::Nak
     }
 }
 
@@ -539,7 +560,6 @@ mod tests {
         }
         for (offset, bank) in READ_ORDER {
             assert_eq!(dev.out(1, &packet(&[CMD_SETPOS, offset, bank]), v), Reply::ack());
-            assert_eq!(dev.in_transfer(1, PACKET, v), Reply::Nak, "SETPOS has no answer");
             for _ in 0..2 {
                 dev.out(1, &packet(&[CMD_READ]), v);
                 let Reply::Data(d) = dev.in_transfer(1, PACKET, v) else { panic!() };
@@ -588,6 +608,7 @@ mod tests {
         let mut dev = Pickit2::new(2);
         let mut v = Violations::default();
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak, "nothing armed");
+        assert_eq!(v.drain().len(), 1, "an IN with nothing to come is flagged");
         dev.out(1, &packet(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]), &mut v);
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
@@ -681,5 +702,22 @@ mod tests {
         assert_eq!(v.drain().len(), 1, "SET_REPORT");
         assert_eq!(dev.out(2, &packet(&[CMD_READ]), &mut v), Reply::Stall);
         assert_eq!(v.drain().len(), 1, "endpoint 2");
+
+        // An IN after SETPOS, after a READ was answered, after a cancel.
+        let mut dev = Pickit2::new(0);
+        dev.out(1, &packet(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]), &mut v);
+        assert!(matches!(dev.in_transfer(1, PACKET, &mut v), Reply::Data(_)));
+        dev.out(1, &packet(&[CMD_SETPOS, 0, 6]), &mut v);
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert_eq!(v.drain().len(), 1, "IN after SETPOS");
+        dev.out(1, &packet(&[CMD_READ]), &mut v);
+        assert!(matches!(dev.in_transfer(1, PACKET, &mut v), Reply::Data(_)));
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert_eq!(v.drain().len(), 1, "a second IN for one READ");
+        let mut dev = Pickit2::new(0);
+        dev.out(1, &packet(&[CMD_SETUP, 1, 0x0c, 0x0c, 0x0c, 1, 0, 0, 0]), &mut v);
+        dev.in_transfer(1, PACKET, &mut v);
+        assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
+        assert_eq!(v.drain().len(), 1, "IN after a cancel");
     }
 }

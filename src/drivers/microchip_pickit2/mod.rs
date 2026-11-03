@@ -377,8 +377,13 @@ fn padded(bytes: &[u8]) -> [u8; PACKET] {
     p
 }
 
-fn send(dev: &mut dyn Link, packet: &[u8; PACKET]) -> Result<()> {
-    dev.send(packet)
+/// Sends one packet. As in libsigrok (`pickit2_usb_send_recv`), a
+/// failed or short send is logged and otherwise ignored: the answer
+/// the driver then waits for, or does not get, decides.
+fn send(dev: &mut dyn Link, packet: &[u8; PACKET]) {
+    if let Err(e) = dev.send(packet) {
+        log::error!("USB transmit error: {e}");
+    }
 }
 
 /// Reads one 64 byte packet, waiting for it.
@@ -394,8 +399,11 @@ fn recv(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<[u8; PACKET]>> {
             p.copy_from_slice(&buf[..PACKET]);
             return Ok(Some(p));
         }
+        // libsigrok logs a short packet and keeps reading. A transport
+        // error ends the capture here, where libsigrok would poll a
+        // vanished device for ever.
         if n > 0 {
-            return Err(Error::device(format!("USB short recv: {n}/{PACKET} bytes.")));
+            log::error!("USB short recv: {n}/{PACKET} bytes.");
         }
     }
 }
@@ -406,9 +414,9 @@ fn retrieve(dev: &mut dyn Link, stop: &AtomicBool) -> Result<Option<Vec<u8>>> {
     let mut raw = Vec::with_capacity(RAW_LEN);
     for bank in 0..2u8 {
         for offset in [0x00u8, 0x80] {
-            send(dev, &padded(&[CMD_SETPOS, offset, SEL_BANK0 + bank]))?;
+            send(dev, &padded(&[CMD_SETPOS, offset, SEL_BANK0 + bank]));
             for _ in 0..2 {
-                send(dev, &padded(&[CMD_READ]))?;
+                send(dev, &padded(&[CMD_READ]));
                 match recv(dev, stop)? {
                     Some(p) => raw.extend_from_slice(&p),
                     None => return Ok(None),
@@ -598,7 +606,7 @@ fn run(
     setup: &[u8; PACKET],
     limit: u64,
 ) -> Result<()> {
-    send(dev, setup)?;
+    send(dev, setup);
     sink.send(Packet::header());
     let Some(status) = recv(dev, stop)? else {
         log::warn!("Cannot terminate by software, need either data trigger or cancel button.");
@@ -735,6 +743,56 @@ mod tests {
         // The release is the recording's last step: the replay took
         // every other one before it.
         dev.close().unwrap();
+    }
+
+    /// A scripted link: sends fail as listed, reads answer in turn.
+    struct FlakyLink {
+        send_fails: Vec<bool>,
+        sent: usize,
+        answers: std::collections::VecDeque<Vec<u8>>,
+    }
+
+    impl Link for FlakyLink {
+        fn send(&mut self, _packet: &[u8; PACKET]) -> Result<()> {
+            let fail = self.send_fails.get(self.sent).copied().unwrap_or(false);
+            self.sent += 1;
+            if fail { Err(Error::device("USB short send: 0/64 bytes.")) } else { Ok(()) }
+        }
+
+        fn recv(&mut self, buf: &mut [u8], _timeout: Duration) -> Result<usize> {
+            let a = self.answers.pop_front().unwrap_or_default();
+            buf[..a.len()].copy_from_slice(&a);
+            Ok(a.len())
+        }
+    }
+
+    /// As in libsigrok, failed sends (here the SETUP and a READ) are
+    /// logged and ignored, and a short packet is read past: the capture
+    /// goes on with the answers that come.
+    #[test]
+    fn send_errors_and_short_reads_do_not_end_a_capture() {
+        let mut answers = std::collections::VecDeque::new();
+        answers.push_back(vec![0u8; 3]); // short: read again
+        answers.push_back(vec![0u8; PACKET]); // the status
+        for _ in 0..8 {
+            answers.push_back(vec![0x44u8; PACKET]);
+        }
+        let mut link = FlakyLink { send_fails: vec![true, false, true], sent: 0, answers };
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let sink = PacketSink::new(tx, 0);
+        let setup = setup_packet([0, 0, 0], 0, 1_000_000);
+        run(&mut link, &sink, &AtomicBool::new(false), &setup, 2).unwrap();
+        drop(sink);
+        let samples: Vec<u8> = rx
+            .into_iter()
+            .filter_map(|(_, p)| match p {
+                Packet::Logic(l) => Some(l.data),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        assert_eq!(samples, [1, 1]);
+        assert_eq!(link.sent, 1 + 4 * 3);
     }
 
     #[test]
