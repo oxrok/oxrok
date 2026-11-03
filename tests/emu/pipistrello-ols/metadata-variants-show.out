@@ -1,0 +1,11 @@
+Driver functions:
+    Logic analyzer
+p-ols - OLS Ancillary version A, FPGA version F, Ancillary version B with 16 channels: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15
+Supported configuration options:
+    samplerate (10 Hz - 200 MHz in steps of 1 Hz)
+    Supported triggers: 0 1 r f 
+    captureratio: 0 (current)
+    pattern: None (current), External, Internal
+    external_clock: on, off (current)
+    swap: on, off
+    rle: on, off (current)

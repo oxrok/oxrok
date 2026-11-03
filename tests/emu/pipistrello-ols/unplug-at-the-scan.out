@@ -1,0 +1,4 @@
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: pipistrello-ols: Could not reset device. Quitting.
+sr: pipistrello-ols: Failed to close FTDI device (-1): usb bulk write failed.
+No devices found.

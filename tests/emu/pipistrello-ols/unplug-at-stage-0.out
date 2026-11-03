@@ -1,0 +1,9 @@
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: session: Could not start p-ols device (null) acquisition.
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: pipistrello-ols: Failed to write FTDI data (-1): usb bulk write failed.
+sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
+Failed to start session.

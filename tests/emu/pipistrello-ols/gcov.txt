@@ -1,0 +1,19 @@
+gcov pipistrello-ols (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        88.3%  286 of 324
+  protocol.c   96.1%  321 of 334
+  total        92.2%  607 of 658
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 106-107, 123, 127-128, 169
+    config_get: 206, 222, 224, 234-235
+    config_set: 262, 273-274, 300-301, 309-310, 313-314
+    config_list: 340
+    set_trigger: 402, 410, 419, 427
+    disable_trigger: 442, 446, 451, 456
+    dev_acquisition_start: 514, 529, 534, 541, 553, 561, 567, 599, 603
+  protocol.c
+    write_shortcommand: 36-38
+    write_longcommand: 58-60, 62-64
+    p_ols_open: 78-80, 115-117
+    pols_convert_trigger: 194
+    p_ols_receive_data: 391-392
