@@ -1,0 +1,4 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: Failed to receive response to request 0x8b: incorrect length 127 != 128.
+Failed to open device.

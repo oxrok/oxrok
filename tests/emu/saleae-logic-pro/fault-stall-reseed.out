@@ -1,0 +1,4 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: Failed to send request 0x24: LIBUSB_ERROR_PIPE.
+Failed to open device.

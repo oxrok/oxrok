@@ -1,0 +1,3 @@
+sr: session: Could not start saleae-logic-pro device usb/PORT acquisition.
+sr: session: Cannot remove non-existing event source 0xADDR.
+Failed to start session.

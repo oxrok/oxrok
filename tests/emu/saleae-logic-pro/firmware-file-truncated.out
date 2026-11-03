@@ -1,0 +1,8 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device (no firmware loaded).
+sr: saleae-logic-pro: Uploading firmware 'saleae-logicpro16-fx3.fw'.
+sr: saleae-logic-pro: Truncated firmware file.
+sr: saleae-logic-pro: Firmware upload failed, name saleae-logicpro16-fx3.fw.
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: Failed to send request 0x24: LIBUSB_ERROR_IO.
+Failed to open device.

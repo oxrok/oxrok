@@ -1,0 +1,8 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device (no firmware loaded).
+sr: saleae-logic-pro: Uploading firmware 'saleae-logicpro16-fx3.fw'.
+sr: saleae-logic-pro: Unable to send firmware to device: LIBUSB_ERROR_NO_DEVICE.
+sr: saleae-logic-pro: Firmware upload failed, name saleae-logicpro16-fx3.fw.
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: usb: Failed to open device: LIBUSB_ERROR_NO_DEVICE.
+Failed to open device.

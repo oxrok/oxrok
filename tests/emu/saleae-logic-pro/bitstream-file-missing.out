@@ -1,0 +1,6 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: fw-version: oxrok-emu Logic Pro 16 1.0
+sr: saleae-logic-pro: read serial
+sr: resource: Failed to open resource 'saleae-logicpro16-fpga.bitstream' (use loglevel 5/spew for details).
+Failed to open device.

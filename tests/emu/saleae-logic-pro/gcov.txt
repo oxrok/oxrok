@@ -1,0 +1,38 @@
+gcov saleae-logic-pro (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        93.9%  216 of 230
+  protocol.c   98.4%  492 of 500
+  total        97.0%  708 of 730
+never reached, by function (line ranges hold no reached line):
+  api.c
+    upload_firmware: 78
+    scan_firmware: 142
+    scan: 244
+    config_get: 314, 320, 324-325
+    config_set: 344-345
+    config_list: 361-362
+    dev_acquisition_abort: 375
+    dev_acquisition_handle: 391
+    dev_acquisition_start: 439
+  protocol.c
+    transact: 105, 117-119
+    write_regs: 162
+    read_regs: 191
+    read_i2c: 274
+    write_i2c: 301
+    upload_bitstream_part: 472
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   79.9%  183 of 229
+  total       79.9%  183 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 208, 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346
+    sr_usb_find: 418-420
+    sr_usb_open: 453-455, 461-463
+    usb_source_add: 504
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)

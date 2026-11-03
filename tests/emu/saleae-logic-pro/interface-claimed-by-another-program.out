@@ -1,0 +1,4 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: Failed to claim interface: LIBUSB_ERROR_BUSY.
+Failed to open device.

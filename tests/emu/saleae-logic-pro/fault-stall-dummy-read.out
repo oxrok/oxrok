@@ -1,0 +1,11 @@
+sr: saleae-logic-pro: Found a Logic Pro 16 device.
+sr: device: saleae-logic-pro: Opening device instance.
+sr: saleae-logic-pro: fw-version: oxrok-emu Logic Pro 16 1.0
+sr: saleae-logic-pro: read serial
+sr: saleae-logic-pro: Skipping bitstream upload.
+sr: saleae-logic-pro: reset ADC
+sr: saleae-logic-pro: init ADC
+sr: saleae-logic-pro: resets
+sr: saleae-logic-pro: read dummy
+sr: saleae-logic-pro: Failed to send request 0x81: LIBUSB_ERROR_PIPE.
+Failed to open device.
