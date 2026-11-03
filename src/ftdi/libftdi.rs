@@ -376,6 +376,19 @@ impl Context {
         Ok(best)
     }
 
+    /// `ftdi_setflowctrl`: `flowctrl` is the high byte of `wIndex`
+    /// (`SIO_RTS_CTS_HS` is `0x0100`), the port index the low one.
+    ///
+    /// # Errors
+    ///
+    /// `-1`, "set flow control failed".
+    pub fn set_flow_ctrl(&mut self, flowctrl: u16) -> std::result::Result<(), FtdiError> {
+        self.out(req::SET_FLOW_CTRL, 0, flowctrl | INDEX_A).map_err(|e| {
+            log::debug!("flow control: {e}");
+            FtdiError::new(-1, "set flow control failed")
+        })
+    }
+
     /// `ftdi_read_data`: fills `buf` from what the last transfer left,
     /// then from bulk transfers of 4096 bytes (or what
     /// [`Context::set_read_chunksize`] set), their status bytes
@@ -709,5 +722,19 @@ mod tests {
         let mut buf = vec![0u8; 100];
         assert_eq!(ctx.read_data(&mut buf), Ok(100));
         ctx.close().unwrap();
+    }
+
+    #[test]
+    fn flow_control_as_libftdi() {
+        let steps = format!(
+            "{OPEN}ctl_out 40 02 0000 0101 - -> ok\n\
+             ctl_out 40 02 0000 0101 - -> err device \"endpoint stalled\"\n"
+        );
+        let mut ctx = Context::open(replay(&steps)).unwrap();
+        ctx.set_flow_ctrl(0x0100).unwrap();
+        assert_eq!(
+            ctx.set_flow_ctrl(0x0100).unwrap_err(),
+            FtdiError::new(-1, "set flow control failed")
+        );
     }
 }

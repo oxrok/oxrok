@@ -1,6 +1,5 @@
 Acquisition with 3/8 channels at 20 MHz
-0:55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 
-1:cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc cc 
-4:00 03 ff fc 00 03 ff fc 00 03 ff fc 00 03 ff fc 00 03 ff fc 00 03 ff fc 
-T:^ 0
-f26a81c14a10a2def94ac2f0accf7dd72494b5acf0063f5dcfb540cecc530615  -
+0:55 55 55 55 55 55 55 55 55 55 55 55 50 
+1:cc cc cc cc cc cc cc cc cc cc cc cc c0 
+4:00 03 ff fc 00 03 ff fc 00 03 ff fc 00 
+39442dca6a8c8ead41d0d0668fc5a4dc535f8192225a91a30ff0b568eb62159d  -
