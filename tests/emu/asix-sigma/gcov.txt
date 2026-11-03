@@ -1,10 +1,9 @@
 gcov asix-sigma (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        93.4%  313 of 335
+  api.c        93.7%  314 of 335
   protocol.c   88.0%  921 of 1047
-  total        89.3%  1234 of 1382
+  total        89.4%  1235 of 1382
 never reached, by function (line ranges hold no reached line):
   api.c
-    known_vid_pid: 104
     scan: 182-185, 191-194
     dev_open: 277-278
     config_get: 302, 329-330

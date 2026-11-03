@@ -175,6 +175,8 @@ fn variants_and_options() {
     let m = sigma(&[]);
     assert_eq!(m.descriptors().bcd_device(), 0x0400);
     assert_eq!(m.descriptors().strings, ["ASIX", "SIGMA", "A6010A3C"]);
+    let m = sigma(&[("product", "0xa001")]);
+    assert_eq!(m.descriptors().product_id(), 0xa001);
     let m = sigma(&[("serial", "")]);
     assert_eq!(m.descriptors().strings, ["ASIX", "SIGMA"]);
     let o = |k: &str, v: &str| vec![(k.to_owned(), v.to_owned())];

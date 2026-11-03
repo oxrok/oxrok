@@ -69,7 +69,10 @@ emu_cases() {
     emu_case "150000 samples" --digest --filter "$LONG" -- -d $D -c samplerate=50m --samples 150000 -O hex
     # A time limit long enough for the memory to fill (14.7 million
     # events, 30 polls at 50 MHz) well before it: without a trigger the
-    # driver stops once the write position wraps and reads the whole
+    # driver stops once the write position wraps and reads all rows but
+    # the one being written, 32767, yet decodes only 32766 of them: the
+    # stop position it computes for a wrapped memory is the start of the
+    # last row, so that row's event count (stop & ROW_MASK) is 0.
     # memory but the row being written.
     emu_case "memory wraps" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 10000 -C 1 -O hex
     # External clock: the driver takes it as 50 MHz.
@@ -86,19 +89,25 @@ emu_cases() {
     # The same with two blocks, and three.
     T2='36,$ {$!d}'
     T3='52,$ {$!d}'
-    # Triggers in the 50 MHz netlist: the poll that sees the trigger
-    # starts the limit, the next ends the capture.
+    # A trigger in the 50 MHz netlist that ends on the time limit: the
+    # poll that sees the trigger starts the limit, the next ends the
+    # capture with a forced stop (2 polls, about 2200 rows).
     emu_case "trigger level" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 40 -t 5=1 -O bits
-    emu_case "trigger rising" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 40 -t 5=r -O bits
-    emu_case "trigger falling" --digest --filter "$T" -- -d $D -c samplerate=25m --samples 40 -t 5=f -O bits
-    emu_case "trigger level and edge" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 60 -t 1=0,4=0,5=r -O bits
+    # The others with captureratio=100: no limit, the device stops 1/256
+    # of the memory (128 rows) after the trigger.
+    R=captureratio=100
+    emu_case "trigger rising" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 40 -t 5=r -O bits
+    emu_case "trigger falling" --digest --filter "$T" -- -d $D -c samplerate=25m:$R --samples 40 -t 5=f -O bits
+    emu_case "trigger level and edge" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 60 -t 1=0,4=0,5=r -O bits
     # A trigger within 28 events of the start gets no marker: the
     # software check is armed at the start position, which the decode
     # compares only after moving past it.
-    emu_case "trigger near the start" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 40 -t 3=r -O bits
+    emu_case "trigger near the start" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 40 -t 3=r -O bits
     # The trigger 28 events before the hardware's position lies in the
-    # previous row: the rewind crosses a row boundary.
-    emu_case "trigger in row 1" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 6=1,7=1,8=1 -O bits
+    # previous row: the rewind crosses a row boundary. The marker comes
+    # after the eighth block (samples 448 to 511): keep the first block
+    # and the T: line.
+    emu_case "trigger in row 1" --digest --filter '18,$ {/^T:/!d}' -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 6=1,7=1,8=1 -O bits
     # sigrok-cli refuses a trigger on a disabled channel itself.
     emu_case "trigger on a disabled channel" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m:captureratio=100 -C 1,2 --samples 40 -t 5=r -O bits
     emu_case "trigger two edges" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m --samples 40 -t 1=r,2=f
@@ -108,14 +117,16 @@ emu_cases() {
     emu_case "trigger 1 MHz" --digest --filter "$T" -- -d $D -c samplerate=1m:captureratio=100 --samples 40 -t 5=r -O bits
     emu_case "trigger 200 kHz" --digest --filter "$T" -- -d $D -c samplerate=200k:captureratio=100 --samples 40 -t 5=r -O bits
     # The 100/200 MHz netlists: one channel's edge.
-    emu_case "100 MHz rising" --digest --filter "$T2" -- -d $D -c samplerate=100m --samples 40 -t 6=r -O bits
-    emu_case "100 MHz falling" --digest --filter "$T2" -- -d $D -c samplerate=100m --samples 40 -t 5=f -O bits
+    # Channel 6 rises at sample 64, falls at 128.
+    emu_case "100 MHz rising" --digest --filter "$T2" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=r -O bits
+    emu_case "100 MHz falling" --digest --filter "$T3" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=f -O bits
     emu_case "100 MHz level" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=100m --samples 40 -t 3=1
     emu_case "100 MHz two pins" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=100m --samples 40 -t 3=r,4=r
     # Four channels at 200 MHz: a slower count puts the edge past the
     # first 28 events.
     asix_sigma_options step=20
     emu_case "200 MHz rising" --digest --filter "$T3" -- -d $D -c samplerate=200m:captureratio=100 --samples 40 -t 4=r -O bits
+    # On the time limit, as "trigger level".
     emu_case "200 MHz falling" --digest --filter "$T3" -- -d $D -c samplerate=200m --samples 40 -t 4=f -O bits
 
     # Run length compression: a count that changes every 100000
@@ -129,6 +140,9 @@ emu_cases() {
     # Attached again (other strings): an address the READY line did not report.
     emu_case "sigma2 scan" --keep-header --filter 's/conn=[0-9]+[.][0-9]+/conn=BUS.ADDR/' -- -d $D --scan
     emu_case "sigma2 capture" -- -d $D -c samplerate=50m --samples 20 -O hex
+    # Another product id of ASIX's: not a SIGMA.
+    asix_sigma_options product=0xa001
+    emu_case "other product" --no-output -- -d $D --scan
     asix_sigma_options variant=omega
     emu_case "omega scan" --stderr --filter "$A" -- -d $D --scan
     asix_sigma_options serial=

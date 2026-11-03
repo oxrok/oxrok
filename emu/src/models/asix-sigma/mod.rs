@@ -70,13 +70,50 @@
 //! bitstream that matches a netlist.
 //!
 //! Options: `variant=sigma|sigma2|omega`, `serial=` (empty: no serial
-//! number string), `step=N` (samples per count of the pattern, see
+//! number string), `product=N` (another product id of ASIX's, which
+//! the driver's scan skips), `step=N` (samples per count of the pattern, see
 //! [`fpga`]); faults, all off by default: `init-busy=N` (above),
 //! `config=fail` (the FPGA rejects the bitstream, as on a CRC error,
 //! and stays unconfigured), `id=N` (what `READ_ID` answers, 0xa6),
 //! `scratch=stuck` (the scratch register reads 0xff, as libsigrok saw
 //! unused registers read) or `scratch=bit0` (its bit 0 stuck at 1), `stop-polls=N` (mode reads before a forced
 //! stop is over), and the FTDI shell's `stall=`, `in-stall=`, `idle=`.
+//!
+//! What the cases (`tools/emu/asix-sigma.sh`) leave unreached in the C
+//! driver (`tests/emu/asix-sigma/gcov.txt`), and why:
+//!
+//! - Scan: `libusb_open` or the serial string read failing (`api.c`
+//!   182-194); the device opens and answers its descriptors.
+//! - The OMEGA's open (`dev_open` 277-278): the scan skips it.
+//! - Guards against NULL arguments and the driver's own buffer size
+//!   checks (`config_get` 302, `config_list` 409/417, 73/76/82,
+//!   159/162, 268-269, 320-321, 393-394, 1046, 1312, 1331, 1352, 1376,
+//!   1697, 1760, 1228/1232).
+//! - Allocation failures (86-88, 798-800, 1177, 1456, 2033) and
+//!   failures of the session or of the software limits (476, 617, 623,
+//!   948, 963, 988, 1204, 1215, 1254, 1286, 1728/1731, 1750, 2037,
+//!   2040, 2077, 2090, 2096); `sigma_build_basic_trigger` and the
+//!   samplerate normalisation never fail where checked (`api.c` 515,
+//!   1098).
+//! - Defaults for keys sigrok-cli never passes (`api.c` 329-330,
+//!   390-391, 428-429).
+//! - `sigma_check_open`/`_close`: called only from the dead code after
+//!   `sigma_fetch_hw_config`'s `return SR_ERR_NA`.
+//! - A missing firmware file (769, 872-873, the host's files, not the
+//!   device's), a bad firmware index (835, 838), "not uploading again"
+//!   (842-843: a second acquisition in one session, which sigrok-cli
+//!   never makes).
+//! - A short bulk write (214): libusb does not return one here.
+//! - A failed write of the netlist's first commands (724-725): a
+//!   control request precedes it, which an unplug fails first.
+//! - A rewind across row 0 (1345): a wrapped capture with its trigger
+//!   in the first events of row 0.
+//! - A trigger on a disabled channel (1629): sigrok-cli refuses it.
+//! - A stop asked for during a capture (`api.c` 644, 2182, 2192, 2198):
+//!   sigrok-cli has no SIGINT handler.
+//! - The trigger functions the driver never builds: a second edge or a
+//!   function other than OR (457, 475-481, 2259-2325, 2371-2387); two
+//!   edges are refused before.
 
 mod fpga;
 
@@ -94,7 +131,7 @@ pub use fpga::{Fpga, FpgaFaults, Netlist};
 pub const NAME: &str = "asix-sigma";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "ASIX SIGMA/SIGMA2 (FT245BM and an FPGA configured over bit-bang); \
-     variant=sigma|sigma2|omega, serial= (empty: none), step=N; faults: \
+     variant=sigma|sigma2|omega, serial= (empty: none), product=N, step=N; faults: \
      init-busy=N, config=fail, id=N, scratch=stuck|bit0, stop-polls=N, the FTDI shell's stall=, in-stall=, idle=";
 
 /// ASIX's vendor id.
@@ -150,6 +187,7 @@ pub fn netlist_bits(name: &str, size: usize) -> Vec<u8> {
 /// On an unknown option or a bad value.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut variant = VARIANTS[0];
+    let mut product = None;
     let mut serial: Option<Option<String>> = None;
     let mut step = 2;
     let mut faults = Faults::default();
@@ -167,6 +205,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 variant = *VARIANTS.iter().find(|x| x.0 == v).ok_or_else(|| {
                     Error(format!("variant={v}: sigma, sigma2 or omega"))
                 })?;
+            }
+            "product" => {
+                product = Some(
+                    u16::try_from(number(k, v)?)
+                        .map_err(|_| Error(format!("product={v}: 16 bits")))?,
+                );
             }
             "serial" => serial = Some((!v.is_empty()).then(|| v.clone())),
             "step" => {
@@ -194,7 +238,8 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             }
         }
     }
-    let (_, product, chip, description, default_serial) = variant;
+    let (_, variant_product, chip, description, default_serial) = variant;
+    let product = product.unwrap_or(variant_product);
     let mut config = FtdiConfig::new(chip);
     config.vendor = VENDOR;
     config.product = product;

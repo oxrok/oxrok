@@ -1,11 +1,13 @@
 // Counterpart in sigrok:
+//   libsigrok/src/hardware/asix-sigma/api.c (the clock select, trigger select 2 and post trigger values of dev_acquisition_start),
 //   libsigrok/src/hardware/asix-sigma/protocol.c (the FPGA commands, registers, trigger table and sample memory layout),
 //   libsigrok/src/hardware/asix-sigma/protocol.h,
 //   Copyright (C) 2010-2012 Håvard Espeland <gus@ping.uio.no>,,
 //   Copyright (C) 2010 Martin Stensgård <mastensg@ping.uio.no>,
 //   Copyright (C) 2010 Carl Henrik Lunde <chlunde@ping.uio.no>,
 //   Copyright (C) 2020 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann, Daniel Trnka, Lars-Peter Clausen, jry
+//   with commits by Uwe Hermann, Lars-Peter Clausen, Niklas Thorne, jry,
+//   Daniel Trnka
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
@@ -76,8 +78,17 @@
 //!   final value: the channel in bits 0 to 2, bit 3 for a falling edge
 //!   as the driver uses it (its comment says the documentation calls
 //!   the bit rising).
-//! - `WMR_FORCESTOP` raises `RMR_POSTTRIGGERED` after `stop-polls=N`
+//! - `WMR_FORCESTOP` stores one more cluster, the slot at the stop
+//!   tick whether its pins changed or not (the hardware "stores
+//!   clusters regardless of pin changes" then, `download_capture`'s
+//!   comment), and raises `RMR_POSTTRIGGERED` after `stop-polls=N`
 //!   reads of the mode register (0 by default).
+//! - The external clock byte is taken as the driver writes it: the pin
+//!   field (bits 0 to 3) is the channel index plus 1, so channel 16
+//!   writes 16, which spills into `CLKSEL_RISING` and leaves the pin
+//!   field 0 (`api.c`, `div = clock_pin + 1` against `CLKSEL_PINMASK`).
+//!   A known habit of the driver, not flagged; the model's external
+//!   clock ignores the pin anyway.
 //! - Memory beyond what a capture wrote reads 0.
 
 use std::collections::VecDeque;
@@ -367,6 +378,17 @@ impl Capture {
                 self.over = true;
             }
         }
+    }
+
+    /// `WMR_FORCESTOP`: the slot at the stop tick is stored whatever it
+    /// holds, and the capture ends.
+    fn force_stop(&mut self) {
+        self.running = false;
+        let spe = self.netlist.samples_per_event();
+        let start = self.scanned;
+        self.slots.push(start);
+        self.last = self.sample((start + EVENTS_PER_CLUSTER) * spe - 1);
+        self.scanned += EVENTS_PER_CLUSTER;
     }
 
     /// A poll: the next 10 ms.
@@ -829,7 +851,7 @@ impl Fpga {
             _ if value & !TRGEN == TRGRES | SDRAMWRITEEN => self.start(value & TRGEN != 0, v),
             _ if value == FORCESTOP | SDRAMWRITEEN => match self.capture.as_mut() {
                 Some(c) if c.running => {
-                    c.running = false;
+                    c.force_stop();
                     c.stop_left = Some(self.faults.stop_polls);
                 }
                 _ => v.report("WMR_FORCESTOP with no capture running"),
@@ -1095,6 +1117,13 @@ mod tests {
         assert_eq!(c.slots[0], 0);
         assert!(c.slots.windows(2).all(|w| w[1] - w[0] <= 65536 + 6));
         assert_eq!(c.slots.len(), 1 + 5 + 7);
+        // A forced stop stores the slot at the stop tick, unchanged pins
+        // and all.
+        let at = c.scanned;
+        c.force_stop();
+        assert_eq!(c.slots.len(), 1 + 5 + 7 + 1);
+        assert_eq!(c.slots.last(), Some(&at));
+        assert!(!c.running);
     }
 
     #[test]
