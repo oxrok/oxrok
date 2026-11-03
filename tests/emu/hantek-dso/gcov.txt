@@ -1,0 +1,40 @@
+gcov hantek-dso (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        95.6%  437 of 457
+  protocol.c   96.6%  454 of 470
+  total        96.1%  891 of 927
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 358
+    config_get: 439, 449, 491
+    config_set: 563-564, 572, 587-588
+    config_list: 607, 620-624, 637-638
+    receive_transfer: 721
+    dev_acquisition_start: 922-923
+  protocol.c
+    dso_getmps: 78, 81
+    dso_open: 134, 138
+    dso_close: 181
+    dso2250_set_trigger_samplerate: 288-289
+    dso_set_trigger_samplerate: 436-437, 493
+    dso_get_channeldata: 922-923, 929-934
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/ezusb.c   82.6%  38 of 46
+  src/usb.c     63.8%  146 of 229
+  total         66.9%  184 of 275
+never reached, by function (line ranges hold no reached line):
+  src/ezusb.c
+    ezusb_install_firmware: 69
+    ezusb_upload_firmware: 108-109, 118-121, 127-129
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: never called (199-221)
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 409-410, 418-420
+    sr_usb_open: never called (444-486)
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: 553
+    usb_match_manuf_prod: never called (565-599)

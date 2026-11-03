@@ -1,0 +1,10 @@
+# Firmware stand-ins for the hantek-dso model (emu/src/models/hantek-dso.rs):
+# the files the driver uploads to the five emulated profiles. The sizes
+# are the model's PROFILES, which a unit test checks; the real files
+# (extracted from Hantek's Windows driver) are not available here, and the
+# model checks the stand-in byte for byte.
+hantek-dso-2090.fw 5642
+hantek-dso-2150.fw 5714
+hantek-dso-2250.fw 6890
+hantek-dso-5200.fw 7024
+hantek-dso-5200A.fw 7120
