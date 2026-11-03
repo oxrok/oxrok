@@ -237,6 +237,19 @@ fn decode36(words: &[u64]) -> Vec<u64> {
     out
 }
 
+/// The samples the words decode to, without expanding them.
+fn run_total36(words: &[u64]) -> u64 {
+    let mut total = 0;
+    let mut it = words.iter();
+    while let Some(&w) = it.next() {
+        total += (w >> 34 & 1) + 1;
+        if w & 1 << 35 != 0 {
+            total += it.next().unwrap() << 1;
+        }
+    }
+    total
+}
+
 fn signal(channels: u32) -> Signal {
     Signal { period: 1, ext_trg: 1000, ext_clock: 1_000_000, tick: 100, channels }
 }
@@ -296,7 +309,9 @@ fn encodes_runs_the_driver_decodes() {
     }
     // A run longer than one pair holds is split.
     let (words, _, _) = encode(&sig, Format::Rle36, 0, 0, RUN36_MAX + 5, 1000);
-    assert_eq!(decode36(&words).len() as u64, RUN36_MAX + 5);
+    // (Counted, not expanded: 2^37 samples do not fit in memory.)
+    assert_eq!(words.len(), 4);
+    assert_eq!(run_total36(&words), RUN36_MAX + 5);
     // The memory runs full: the words stop at the limit, the end sample
     // is the first one not stored.
     let (words, end, full) = encode(&sig, Format::Rle36, 0b100, 0, 1000, 9);
@@ -307,6 +322,8 @@ fn encodes_runs_the_driver_decodes() {
     let (words, end, _) = encode(&sig, Format::Plain16, 0xffff, 10, 15, 100);
     assert_eq!((words, end), (vec![11 << 16 | 10, 13 << 16 | 12], 14));
     let (words, _, _) = encode(&sig, Format::Rle16, 0x8000, 0, 70_000, 100);
+    assert_eq!(words, vec![0x7fff << 16, 0x7fff << 16 | 0x8000, (4464 - 1) << 16]);
+    let (words, _, _) = encode(&sig, Format::Rle16, 0, 0, 70_000, 100);
     assert_eq!(words, vec![0xffff << 16, (4464 - 1) << 16]);
 }
 
@@ -613,4 +630,97 @@ fn flags_what_the_lwla1016_driver_never_sends() {
     h.send(&[3, 0, 5, 0, 8]);
     h.receive(1024);
     expect(&mut h, "the read pointer is at 2");
+}
+
+#[test]
+fn flags_the_remaining_checks() {
+    let expect = |h: &mut Host, what: &str| {
+        let v = h.violations();
+        assert!(v.iter().any(|m| m.contains(what)), "wanted '{what}', got {v:?}");
+    };
+    let mut h = Host::new(&[]);
+    let mut data = u32::try_from(BITSTREAM_MAX + 5).unwrap().to_be_bytes().to_vec();
+    data.resize(BITSTREAM_MAX + 5, 0);
+    h.dev.transfer_out(EP_CONFIG, &data, &mut h.v);
+    expect(&mut h, "over 256 KiB");
+    h.open34();
+    h.send(&[7, 0]);
+    expect(&mut h, "long register write of 2 words");
+    h.send(&[7, 9, 2, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(&mut h, "long register write of 9 to 11");
+    h.write_reg(R34_LONG_ADDR, 50);
+    h.read_reg(R34_LONG_STROBE);
+    expect(&mut h, "read of long register 50");
+    h.start34(1, 99, 0, [0; 3]);
+    h.write_long(10, 0x74);
+    expect(&mut h, "cleared while capturing");
+    h.start34(1, 99, 0, [0; 3]);
+    h.write_long(10, 1);
+    expect(&mut h, "armed twice");
+    h.write_long(10, 0);
+    h.write_reg(R34_MEM_CTRL, 2);
+    h.write_reg(R34_MEM_START, 4);
+    h.send(&[6, 0, 4, 0, 0]);
+    h.receive(1024);
+    expect(&mut h, "memory read of 0 words");
+
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    h.start16(1, 99, [0; 3]);
+    h.write_reg(R16_CAP_COUNT, 100);
+    h.write_reg(R16_CAP_CTRL, CAP16_TRG_EN);
+    expect(&mut h, "armed twice");
+    h.write_reg(R16_CAP_CTRL, 3);
+    expect(&mut h, "capture control 0x3 while capturing");
+    h.send(&[3, 3, 0xfff0, 0, 32]);
+    h.receive(1024);
+    expect(&mut h, "beyond the memory");
+
+    let mut model = Lwla::new(Board::Lwla1034, signal(34));
+    let mut v = Violations::default();
+    assert_eq!(model.out(1, &[0, 0], &mut v), Reply::Stall);
+    assert_eq!(model.in_transfer(2, 512, &mut v), Reply::Stall);
+    let setup = Setup { request_type: 0x40, request: 0xa0, value: 0, index: 0, length: 0 };
+    assert_eq!(model.control(setup, &[], &mut v), Reply::Stall);
+    assert_eq!(v.drain().len(), 3);
+}
+
+/// What the host sends is flagged, never allocated: the model holds no
+/// more than the board's memory and its FX2's two buffers.
+#[test]
+fn host_counts_are_bounded() {
+    let mut h = Host::new(&[]);
+    h.open34();
+    h.write_reg(R34_MEM_CTRL, 2);
+    h.write_reg(R34_MEM_START, 4);
+    assert_eq!(h.send(&[6, 0, 4, 0xffff, 0xfff8]), Reply::ack());
+    assert_eq!(h.data(4096).len(), 28 * 36);
+    assert!(!h.violations().is_empty());
+    assert_eq!(h.send(&[8, 0, 0xffff]), Reply::ack());
+    assert_eq!(h.data(1024).len(), 11 * 8);
+    assert!(!h.violations().is_empty());
+    // A threshold beyond the memory does not grow it.
+    let mut w = vec![7u16, 0, 10];
+    for value in [Board::Lwla1034.all(), 0, 0, 0, 0, u64::MAX, 0, 0, 0, 0] {
+        w.extend_from_slice(&[(value >> 16) as u16, value as u16, (value >> 48) as u16, (value >> 32) as u16]);
+    }
+    h.send(&w);
+    h.write_reg(R34_MEM_CTRL, 1);
+    h.write_long(10, 0x74);
+    h.write_long(10, 1);
+    h.violations();
+    let st = h.read_lregs(5, 5);
+    assert_eq!(st[0], u64::from(DEPTH));
+
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    assert_eq!(h.send(&[3, 0, 0, 0xffff, 0xffff]), Reply::ack());
+    assert_eq!(h.data(4096).len(), REPLY_MAX);
+    h.write_reg(R16_CHAN_MASK, 0xffff);
+    h.write_reg(R16_MEM_CTRL, 2);
+    h.write_reg(R16_CAP_COUNT, u32::MAX);
+    h.write_reg(R16_CAP_CTRL, CAP16_TRG_EN);
+    h.violations();
+    let (_, fill, _) = h.poll16();
+    assert_eq!(fill, 2 + DEPTH);
 }

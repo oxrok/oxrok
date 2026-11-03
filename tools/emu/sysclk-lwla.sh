@@ -6,8 +6,6 @@
 EMU_MODEL=sysclk-lwla
 EMU_DRIVER=sysclk-lwla
 EMU_GCOV_SHARED="src/usb.c"
-# The memory readouts: runs of digested reads fold.
-EMU_TX_FOLD=1
 
 # The model's options for the cases that follow (see fx2lafw.sh).
 lwla_options() {
@@ -196,6 +194,9 @@ emu_cases() {
     emu_case "fault shut down" --stderr --filter "$E" -- -d $F --show
     # The commit's bitstream for the external clock (the second upload).
     emu_case "fault commit bitstream" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -c external_clock=1 --samples 10 -O bits
+    # emu_case begins with a reset, which re-attaches only when the
+    # descriptors change: every case of this section is an LWLA1034, so
+    # the claim stays on the attached device.
     if lwla_hold; then
         emu_case "interface claimed by another program" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 --samples 10 -O bits
         lwla_release
@@ -240,6 +241,7 @@ emu_cases() {
     emu_case "1016 time" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1k --time 300 -O bits
     emu_case "1016 trigger" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3 -t CH3=r -c samplerate=1M --samples 64 -O bits
     emu_case "1016 trigger never fires" --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    emu_case "1016 3M divides" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=3M:rle=0 --samples 100 -O bits
     lwla_options model=1016 short_transfers=1
     emu_case "1016 short transfers" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M --samples 100 -O bits
 

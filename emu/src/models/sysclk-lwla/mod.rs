@@ -177,7 +177,36 @@
 //! was not written and in long registers 0 to 4 and 6.
 //!
 //! **What the model shows about the driver** (C line numbers of
-//! libsigrok 0bc24877): see `docs/DEVICES.md`, "Sysclk LWLA".
+//! libsigrok 0bc24877):
+//!
+//! - `dev_inst_new_matching()` filters by `conn=` only when
+//!   `sr_usb_find()` found something (`api.c:104`): a `conn` that matches
+//!   no device, or that `sr_usb_find()` refuses, selects every LWLA.
+//! - `config_set()` takes any rate in the range (`api.c:409-411`) and
+//!   the divider is an integer division (`lwla1034.c:390-394`,
+//!   `lwla1016.c:312-315`): the board runs at 3.03 MHz for 3 MHz, at 100
+//!   MHz for 60 MHz, and the LWLA1034 at 125 MHz for anything above 100
+//!   MHz (`protocol.c:503`), while the limits and the output's header use
+//!   the rate asked for.
+//! - On the external clock neither limit is derived from the other
+//!   (`protocol.c:499-519`): with `--samples` the capture has no time
+//!   limit and runs until the memory fills, however few samples were
+//!   asked for; with `--time` it has no sample limit and all of the
+//!   memory is read.
+//! - A time limit shorter than a sample makes `samples_max` 0
+//!   (`protocol.c:510-511`), which `handle_read_response()` takes as done
+//!   (`protocol.c:212-214`): one read, and no samples, exit 0.
+//! - An error during a capture ends it with exit 0
+//!   (`protocol.c:299-309`): only stderr tells, and samples not yet sent
+//!   in a packet are lost (`protocol.c:216-219`).
+//! - After a capture sigrok-cli does not close the device (only
+//!   `main.c:201,228` and `show.c:855` do), so the LWLA1034's shut-down
+//!   bitstream goes out only after `--show`, `--get` and `--set`.
+//! - A claim held by another program fails at `libusb_set_configuration()`
+//!   (`api.c:238`, `LIBUSB_ERROR_BUSY`), before the claim of `api.c:246`.
+//! - Read only, not shown by a case: `prepare_trigger_masks()` returns
+//!   early without a trigger (`api.c:501-502`), leaving the masks of an
+//!   earlier session in `devc` for a later one in the same process.
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{BULK, Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
@@ -1031,8 +1060,10 @@ impl Lwla {
             }
             words.get((a - base) as usize).copied().unwrap_or(0)
         };
-        let count = count.min(DEPTH);
-        let mut out = Vec::with_capacity(bytes);
+        // Flagged above when over the FX2's two buffers; a count from the
+        // host is never allocated beyond them.
+        let count = if wide { count.min(REPLY_MAX as u32 / 36 * 8) } else { count.min(REPLY_MAX as u32 / 4) };
+        let mut out = Vec::with_capacity(REPLY_MAX);
         if wide {
             for slice in 0..count / 8 {
                 let mut high = 0u32;
@@ -1238,7 +1269,8 @@ impl Lwla {
             trg_rise: enable & 1 << 35 != 0,
             trg_fall: enable & 1 << 34 != 0,
         };
-        let limit = (r.lregs[L_MEM_FILL] as usize).saturating_sub(4);
+        // Flagged when written if beyond the memory; the board has no more.
+        let limit = r.lregs[L_MEM_FILL].min(u64::from(DEPTH)).saturating_sub(4) as usize;
         let mask = r.lregs[0];
         self.r34.cleared = false;
         self.capture = Some(Capture {
@@ -1315,7 +1347,7 @@ impl Lwla {
         {
             c.poll(&self.sig);
         }
-        for i in first..first + count {
+        for i in first..(first + count).min(11) {
             put64(&mut out, if up && i <= 10 { self.lreg_read(i) } else { 0 });
         }
         out
@@ -1468,7 +1500,7 @@ impl Lwla {
                 trg_fall: false,
             },
             format,
-            limit: limit as usize,
+            limit: limit.min(DEPTH) as usize,
             ms: 0,
             searched: 0,
             at: None,
