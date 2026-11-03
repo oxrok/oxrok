@@ -148,7 +148,13 @@ impl Driver for SerialDmmDriver {
                 log::debug!("{}: {e}", self.0.id);
                 return Ok(Vec::new());
             }
-            Err(e) => return Err(e),
+            // Nor is a given port that does not open (or refuses the
+            // parameters): sigrok's scan finds no device, it does not
+            // fail.
+            Err(e) => {
+                log::error!("{}: {e}", self.0.id);
+                return Ok(Vec::new());
+            }
         };
         if let Some(after_open) = self.0.after_open {
             after_open(port.as_mut())?;
@@ -474,9 +480,6 @@ impl Acquisition {
                 }
                 if sent {
                     samples += 1;
-                    if self.limit_samples > 0 && samples >= self.limit_samples {
-                        return Ok(());
-                    }
                 }
                 pos += len;
                 if let Some(req) = p.request {
@@ -488,6 +491,12 @@ impl Acquisition {
                 }
             }
             buf.drain(..pos);
+            // As receive_data: the limit is checked once every packet
+            // of a read is out, so a read holding several packets
+            // sends them all.
+            if self.limit_samples > 0 && samples >= self.limit_samples {
+                return Ok(());
+            }
             if buf.len() >= BUF_SIZE {
                 log::info!("Dropping unparsed data to resync.");
                 buf.clear();

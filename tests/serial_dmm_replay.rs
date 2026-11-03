@@ -5,8 +5,8 @@
 //! real cable does.
 
 use oxrok::core::session::Flow;
-use oxrok::core::{Device, Key, Mq, MqFlags, Packet, Session, Unit, Value};
-use oxrok::drivers::serial_dmm::{DmmDevice, detect, models};
+use oxrok::core::{Device, Driver, Key, Mq, MqFlags, Packet, Session, Unit, Value};
+use oxrok::drivers::serial_dmm::{DmmDevice, SerialDmmDriver, detect, models};
 use oxrok::serial::record::Replay;
 use std::time::Duration;
 
@@ -70,6 +70,36 @@ fn ut61e_stream_mid_packet() {
     assert!(flags.contains(MqFlags::DC | MqFlags::AUTORANGE));
     assert!((out[1].1 + 0.1).abs() < 1e-5);
     assert!((out[2].1 - 12.345).abs() < 1e-4);
+}
+
+#[test]
+fn ut61e_limit_is_checked_after_a_whole_read() {
+    // libsigrok's receive_data checks the sample limit once a read's
+    // packets are all handled: four packets in one read with a limit
+    // of one are four samples.
+    let mut stream = Vec::new();
+    for d in ["12345", "00100", "12345", "00100"] {
+        stream.extend(ut61e(1, d, 0x3b, 0, 8 | 2));
+    }
+    let fixture = format!(
+        "# oxrok serial fixture 1\nport /dev/ttyUSB0 19200/7o1/rts=0/dtr=1\nread 128 -> {}\nread 128 -> {}\n",
+        hex(&stream),
+        hex(&ut61e(1, "99999", 0x3b, 0, 8 | 2))
+    );
+    assert_eq!(run("uni-t-ut61e-ser", &fixture, 1).len(), 4);
+    assert_eq!(run("uni-t-ut61e-ser", &fixture, 5).len(), 5);
+}
+
+#[test]
+fn a_port_that_does_not_open_is_no_device() {
+    // As serial-dmm's scan: a failed serial_open finds nothing, it is
+    // not an error.
+    let driver = SerialDmmDriver(models::find("uni-t-ut61e-ser").unwrap());
+    let conn = |c: &str| vec![(Key::Conn, Value::Str(c.to_owned()))];
+    assert!(driver.scan(&conn("/dev/oxrok-no-such-port")).unwrap().is_empty());
+    let mut opts = conn("/dev/oxrok-no-such-port");
+    opts.push((Key::Serialcomm, Value::Str("200/7o1".to_owned())));
+    assert!(driver.scan(&opts).unwrap().is_empty());
 }
 
 #[test]

@@ -260,9 +260,7 @@ pub fn open(name: &str, params: Params) -> Result<Box<dyn Port>> {
     let info = &devices[i];
     log::info!("Opening {full} ({:04x}:{:04x}).", info.vendor_id, info.product_id);
     let dev = info.open()?;
-    let mut port = HidPort::new(chip, dev, full);
-    port.set_params(params)?;
-    Ok(Box::new(port))
+    Ok(Box::new(HidPort::open(chip, dev, full, params)?))
 }
 
 /// A [`Port`] over a serial over HID cable.
@@ -278,6 +276,25 @@ impl HidPort {
     /// A port on an open device of `chip`, named `name`.
     pub fn new(chip: Chip, dev: Box<dyn HidDevice>, name: String) -> HidPort {
         HidPort { name, chip, dev, rx: VecDeque::new(), data_bits: 8 }
+    }
+
+    /// A port on an open device, set up as libsigrok's `serial_open`
+    /// does: the line parameters, then a flush (for the CP2110 a purge
+    /// of both FIFOs).
+    ///
+    /// # Errors
+    ///
+    /// When the chip refuses the parameters or the purge fails.
+    pub fn open(
+        chip: Chip,
+        dev: Box<dyn HidDevice>,
+        name: String,
+        params: Params,
+    ) -> Result<HidPort> {
+        let mut port = HidPort::new(chip, dev, name);
+        port.set_params(params)?;
+        port.purge()?;
+        Ok(port)
     }
 
     /// Reads one report and queues the bytes it carries. Returns how
@@ -402,6 +419,10 @@ impl Port for HidPort {
                     break;
                 }
             }
+            // As libsigrok's ser_hid_read: keep taking reports while
+            // they come within 10 ms of each other (an empty one ends
+            // it too), so a burst of reports is one read.
+            while self.rx.len() < buf.len() && self.fill(Duration::from_millis(10))? > 0 {}
         }
         let n = buf.len().min(self.rx.len());
         for b in &mut buf[..n] {
@@ -566,7 +587,7 @@ mod tests {
 
     #[test]
     fn bu86x_is_a_bare_stream() {
-        let (mut p, fake) = port(Chip::Bu86x, &[&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10]]);
+        let (mut p, fake) = port(Chip::Bu86x, &[&[1, 2, 3, 4, 5, 6, 7, 8], &[9, 10], &[]]);
         let mut buf = [0u8; 5];
         assert_eq!(p.read(&mut buf, T).unwrap(), 5);
         assert_eq!(buf, [1, 2, 3, 4, 5]);
@@ -580,7 +601,7 @@ mod tests {
 
     #[test]
     fn ch9325_frames_and_params() {
-        let (mut p, fake) = port(Chip::Ch9325, &[&[0xf3, b'a', b'b', b'c', 0, 0, 0, 0]]);
+        let (mut p, fake) = port(Chip::Ch9325, &[&[0xf3, b'a', b'b', b'c', 0, 0, 0, 0], &[]]);
         p.set_params(Params::parse("2400/7o1").unwrap()).unwrap();
         assert_eq!(fake.features(), vec![vec![0, 0x60, 0x09, 0, 0, 2]]);
         let mut buf = [0u8; 8];
@@ -592,7 +613,7 @@ mod tests {
         assert_eq!(out[0], [7, b'0', b'1', b'2', b'3', b'4', b'5', b'6']);
         assert_eq!(out[1], [3, b'7', b'8', b'9', 0, 0, 0, 0]);
         // The 7 bit mask applies to the queued bytes.
-        let (mut q, _) = port(Chip::Ch9325, &[&[0xf1, 0xc1]]);
+        let (mut q, _) = port(Chip::Ch9325, &[&[0xf1, 0xc1], &[]]);
         q.set_params(Params::parse("2400/7o1").unwrap()).unwrap();
         assert_eq!(q.read(&mut buf, T).unwrap(), 1);
         assert_eq!(buf[0], 0x41);
@@ -620,6 +641,35 @@ mod tests {
         assert_eq!(out[1], [0x43, 0x03]);
         assert!(p.set_params(Params::parse("110/8n1").unwrap()).is_err());
         assert!(p.set_params(Params::parse("9600/8n1/flow=2").unwrap()).is_err());
+    }
+
+    #[test]
+    fn cp2110_open_purges_after_the_line_settings() {
+        // libsigrok's serial_open: set_params (enable, config), then
+        // serial_flush, which the CP2110 sends as output report 0x43.
+        let fake = SharedFake::default();
+        let params = Params::parse("19200/7o1/rts=0/dtr=1").unwrap();
+        HidPort::open(Chip::Cp2110, Box::new(fake.clone()), "hid".to_owned(), params).unwrap();
+        assert_eq!(fake.features(), [vec![0x41, 1], vec![0x50, 0, 0, 0x4b, 0, 2, 0, 2, 0]]);
+        assert_eq!(fake.output(), [vec![0x43, 0x03]]);
+    }
+
+    #[test]
+    fn a_burst_of_reports_is_one_read() {
+        // An empty report: nothing more within 10 ms.
+        let (mut p, _) =
+            port(Chip::Cp2110, &[&[2, b'a', b'b'], &[3, b'c', b'd', b'e'], &[1, b'f'], &[]]);
+        let mut buf = [0u8; 16];
+        assert_eq!(p.read(&mut buf, T).unwrap(), 6);
+        assert_eq!(&buf[..6], b"abcdef");
+        // A smaller buffer stops taking reports once it is full.
+        let (mut p, _) =
+            port(Chip::Cp2110, &[&[2, b'a', b'b'], &[3, b'c', b'd', b'e'], &[1, b'f'], &[]]);
+        let mut buf = [0u8; 4];
+        assert_eq!(p.read(&mut buf, T).unwrap(), 4);
+        assert_eq!(p.read(&mut buf, T).unwrap(), 1);
+        assert_eq!(p.read(&mut buf, T).unwrap(), 1);
+        assert_eq!(buf[0], b'f');
     }
 
     #[test]

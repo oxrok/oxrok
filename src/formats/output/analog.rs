@@ -68,7 +68,11 @@ pub fn si_prefix(value: &mut f32, digits: &mut i32) -> &'static str {
         return "";
     }
     let logval = value.abs().log10();
-    let mut prefix = (logval / 3.0 - if logval < 1.0 { 1.0 } else { 0.0 }) as i32;
+    let p = logval / 3.0 - if logval < 1.0 { 1.0 } else { 0.0 };
+    // C converts with cvttss2si, which gives INT_MIN for an infinite
+    // (an overload reading) or out of range value; Rust's `as`
+    // saturates, and INT_MAX would overflow `3 * prefix` below.
+    let mut prefix = if p.is_finite() && p.abs() < 2e9 { p as i32 } else { i32::MIN };
     if prefix < -NEG {
         prefix = -NEG;
     }
@@ -149,6 +153,13 @@ mod tests {
         assert_eq!(f(0.5), "500.0 mV DC");
         // Significant digits are kept, so the decimals grow with the prefix.
         assert_eq!(f(1500.0), "1.5000000 kV DC");
+    }
+
+    #[test]
+    fn infinity_takes_the_prefix_of_the_digits() {
+        // A UT61E overload on the 220 MOhm range: sigrok prints "inf MΩ".
+        assert_eq!(format_value(f32::INFINITY, -4, Unit::Ohm, MqFlags::empty()), "inf M\u{2126}");
+        assert_eq!(format_value(f32::NEG_INFINITY, 2, Unit::Volt, MqFlags::empty()), "-inf V");
     }
 
     #[test]
