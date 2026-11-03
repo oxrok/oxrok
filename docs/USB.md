@@ -157,7 +157,41 @@ is how a driver is verified against sigrok-cli without the hardware
   port at attach, reads and sets the latency timer of each, and reads
   the EEPROM of R, FT232H and FT-X chips for its CBUS GPIOs; libftdi
   detaches it from the interface it claims and does not reattach it.
-- EZ-USB comes next, then CDC-ACM and USBTMC.
+- `shells/ezusb.rs` is the FX2 without firmware: its built-in
+  descriptors, the boot loader's vendor request `0xa0` (RAM `0x0000`
+  up to 8 or 16 KiB and `0xe000` to `0xe1ff`, CPUCS at `0xe600`), and
+  `Loader::check_ezusb_c`, which holds an upload against libsigrok's
+  `ezusb.c` byte for byte. When the 8051 is released the model asks to
+  renumerate (`DeviceModel::take_renumeration`). The server logs
+  `disconnect` and `connect VID:PID` at once in the running section,
+  and what the host sends until the detach follows there and is
+  compared. The main loop then detaches the device, imports it again
+  and re-attaches it on the same port, since a driver finds a
+  renumerated device by its port path. From the detach on the log is
+  in a `renumeration` section; the run's section resumes once the
+  kernel has configured the device, then `vhci::open_device` runs and
+  a `RENUMERATED port=... usb=...` line reports the new nodes. So the
+  kernel's enumeration never lands in a tool's transactions. libusb
+  can open a renumerated device before its node is world accessible;
+  the C driver logs `LIBUSB_ERROR_ACCESS` and tries again, so only its
+  stderr changes.
+- A `reset` whose fresh model has other descriptors than the attached
+  device (it renumerated, or the options changed) re-attaches the same
+  way, from a `reset` section. The stdin command `options
+  KEY=VALUE...` sets the options of the resets that follow (`options`
+  alone restores the command line's), which is how one scenario covers
+  several boards or chips.
+- A model sees each IN submission (`DeviceModel::in_submitted`), and
+  transfers on one endpoint complete in order. A streaming model can
+  thus complete one transfer per submission, which real devices do
+  not do, so that the number of transfers a capture completes does not
+  depend on timing. A model can ask for data over a size to be logged
+  as `@LEN:SHA256`, the fixtures' digest form
+  (`DeviceModel::log_digest_above`; fx2lafw does, for its firmware
+  chunks and transfers of up to 240 KiB); by default every byte is
+  logged. What fx2lafw taught: a driver that stops after a transfer
+  must not have resubmitted it first, or one more completes.
+- CDC-ACM and USBTMC come next.
 - Models live in `emu/src/models`, one file `NAME.rs` or one directory
   `NAME/mod.rs` each, and nothing else names them: `emu/build.rs` finds
   them and generates the module declarations, the table

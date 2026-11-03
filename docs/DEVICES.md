@@ -449,9 +449,13 @@ is `fx2lafw`; 8 channels at up to 24 MS/s, 16 channels at up to
 
 Firmware: the sigrok `fx2lafw-*.fw` files (the `sigrok-firmware-fx2lafw`
 package, or `/opt/homebrew/share/sigrok-firmware` from Homebrew's
-sigrok). The driver uploads the file for the device's USB id when the
-device does not report the firmware in its strings, then waits up to
-3 s for it to renumerate.
+sigrok). As libsigrok's driver, the scan uploads the file for the
+device's USB id when the device does not report the firmware in its
+strings (the scan line then has no `conn=`, which stays unknown until
+the device is back), and open waits 300 ms and retries until 3 s for
+it to renumerate, finding it again by its port path. Open sets
+configuration 1 if it is not active and claims, which macOS needs
+right after renumeration, then checks the firmware version and REVID.
 
 Analog channels (USBee AX) are not supported.
 
@@ -460,7 +464,53 @@ the cold path after a power cycle (upload, renumeration in about 2 s,
 reopen and claim), 60 s at 24 MS/s delivering every byte, and `--show`
 identical to sigrok-cli. Trigger and timing checks against the
 signal generator need a wire from the ESP32 to the analyzer; they are
-not run yet.
+not run yet. That check ran the open path of the time (upload on open);
+the scan-time upload and the open order of 2026-11-03 are checked on
+the emulator only and want a second run on the clone.
+
+Emulated (2026-11-03): model `fx2lafw` of `oxrok-emu`, options
+`profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch` and `flashed=0|1`.
+Without `flashed=1` it is an FX2 without firmware that takes the
+upload through its boot loader and renumerates; it checks the upload
+byte for byte against the stand-in files (`tools/emu/fx2lafw.firmware`)
+in 4096 byte chunks between the CPUCS hold and release. With
+`flashed=1` it starts with the firmware running (bcdDevice 0x0001, as
+the real firmware reports). It checks the vendor requests, start
+flags, sample delays and rates against `protocol.c` and streams a
+counter from endpoint 2. Unlike the real device, which fills its
+queued transfers as fast as it samples, the model completes one
+transfer per transfer the host submits after the previous one
+completed, so a run's transactions do not depend on timing; that is
+an emulation artifact. The 40 cases of `tools/emu/fx2lafw.sh` (scan,
+show, conn by ids, probe names, 20 kHz to 48 MHz on 8 channels, 50 kHz
+to 12 MHz on 16, up to six transfers, triggers with capture ratio, in
+later transfers and with frames, frames across transfers, a time
+limit, the refused 16 channel 24 MHz, and the already-flashed start of
+each board) give identical output and transactions with no violation
+under either tool. One is oxrok only (`--oracle-bug`): a frame without
+trigger that ends exactly at the end of a transfer, where libsigrok's
+`receive_transfer()` hands its NULL soft trigger to
+`soft_trigger_logic_check()` and crashes (`protocol.c:484`); oxrok
+begins the next frame with the next transfer. gcov: 78.9% of the
+driver (`api.c` 81.2%, `protocol.c` 77.3%). Not emulated: the USBee AX
+analog channel, open, string, claim and upload failures, empty or
+failed transfers, and allocation failures.
+
+What the model changed in oxrok's port, which now follows `api.c` and
+`protocol.c`: the upload moved into the scan; open finds the device by
+port path and fails on a failed REVID read; transfers count one byte
+per sample even at 16 bits (16 bit captures used twice the size);
+frames continue in the stream instead of restarting the device; the
+soft trigger is a line by line port of `soft_trigger_logic`; 48 MHz is
+accepted on 8 channels; and nusb's bulk stream resubmits a transfer
+when the next is asked for, as a libusb callback does, so no extra
+transfer completes after a capture stops (the rusb backend's reader
+thread still reads ahead). One C bug is not followed: libsigrok's soft
+trigger takes its sample width from all logic channels of the device,
+so on a 16 channel board with only D0 to D7 enabled it reads the 1 byte
+stream as 2 byte samples and the data starts at half the trigger
+offset; oxrok uses the stream's width, and the cases avoid that
+configuration.
 
 ## Oracle
 
