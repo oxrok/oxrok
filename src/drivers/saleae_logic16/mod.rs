@@ -103,13 +103,53 @@ static TRIGGER_MATCHES: [TriggerMatch; 5] = [
     TriggerMatch::Edge,
 ];
 
-/// Whether `conn` is a spec `sr_usb_find()` understands: `VID.PID` in
-/// hex or `BUS.ADDRESS`.
-fn conn_parses(conn: &str) -> bool {
-    conn.split_once('.').is_some_and(|(a, b)| {
-        let hex = |s: &str| !s.is_empty() && s.len() <= 4 && u16::from_str_radix(s, 16).is_ok();
-        (hex(a) && hex(b)) || (a.parse::<u8>().is_ok() && b.parse::<u8>().is_ok())
-    })
+/// A `conn` spec as `sr_usb_split_conn()` reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Conn {
+    /// `VID.PID`, four hex digits each.
+    Ids(u16, u16),
+    /// `BUS.ADDRESS` in decimal.
+    BusAddress(u8, u8),
+}
+
+/// `sr_usb_split_conn()` and the checks of `sr_usb_find()`: four hex
+/// digits each are a `VID.PID` (tried first, so `1000.1000` is one),
+/// else decimal digits a `BUS.ADDRESS` with the bus at most 255 and the
+/// address at most 127. `Err` is the message `sr_usb_find()` logs; zero
+/// in either half, or no match, cannot name a device.
+fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
+    const INVALID: &str = "Invalid input, or neither VID:PID nor bus.address specified.";
+    const NEITHER: &str = "Could neither determine VID:PID nor bus.address numbers.";
+    let Some((a, b)) = conn.split_once('.') else { return Err(NEITHER) };
+    let hex = |s: &str| s.len() == 4 && s.bytes().all(|c| c.is_ascii_hexdigit());
+    if hex(a) && hex(b) {
+        let (vid, pid) =
+            (u16::from_str_radix(a, 16).unwrap_or(0), u16::from_str_radix(b, 16).unwrap_or(0));
+        return if vid != 0 && pid != 0 { Ok(Conn::Ids(vid, pid)) } else { Err(NEITHER) };
+    }
+    let dec = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    if !(dec(a) && dec(b)) {
+        return Err(NEITHER);
+    }
+    // strtoul() saturates; anything that does not fit is out of range.
+    let num = |s: &str| s.parse::<u64>().unwrap_or(u64::MAX);
+    let (bus, addr) = (num(a), num(b));
+    if bus > 255 || addr > 127 {
+        return Err(INVALID);
+    }
+    match (u8::try_from(bus), u8::try_from(addr)) {
+        (Ok(bus @ 1..), Ok(addr @ 1..)) => Ok(Conn::BusAddress(bus, addr)),
+        _ => Err(NEITHER),
+    }
+}
+
+impl Conn {
+    fn matches(self, d: &UsbDeviceInfo) -> bool {
+        match self {
+            Conn::Ids(vid, pid) => d.id() == UsbId { vendor: vid, product: pid },
+            Conn::BusAddress(bus, addr) => d.bus == bus && d.address == addr,
+        }
+    }
 }
 
 impl Driver for Logic16Driver {
@@ -137,16 +177,17 @@ impl Driver for Logic16Driver {
                 other => return Err(Error::UnknownKey(other.id().to_owned())),
             }
         }
-        if let Some(c) = &conn
-            && !conn_parses(c)
-        {
-            // sr_usb_find() finds nothing, and the scan no device.
-            log::error!("Could neither determine VID:PID nor bus.address numbers.");
-            return Ok(Vec::new());
-        }
+        let conn = match conn.as_deref().map(split_conn).transpose() {
+            Ok(c) => c,
+            Err(msg) => {
+                // sr_usb_find() finds nothing, and the scan no device.
+                log::error!("{msg}");
+                return Ok(Vec::new());
+            }
+        };
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
         for info in crate::usb::find_devices(&[ID])? {
-            if conn.as_deref().is_some_and(|c| !info.matches_conn(c)) {
+            if conn.is_some_and(|c| !c.matches(&info)) {
                 continue;
             }
             let mut dev = Logic16Device::new(info, None);
@@ -425,10 +466,13 @@ impl Device for Logic16Device {
             Key::LimitSamples => self.settings.limit_samples = value.as_u64().ok_or_else(bad)?,
             Key::CaptureRatio => {
                 let r = value.as_u64().ok_or_else(bad)?;
-                // libsigrok takes any value; above 100 its pre-trigger
-                // count passes the sample limit.
+                // sr_config_set() refuses it before the driver sees it
+                // (hwdriver.c:757-764); api.c:473 itself would take any
+                // value, and above 100 the pre-trigger count of api.c:655
+                // would pass the sample limit.
                 if r > 100 {
-                    return Err(Error::arg("capture ratio is a percentage"));
+                    log::error!("Capture ratio must be 0..100.");
+                    return Err(Error::arg("capture ratio must be 0..100"));
                 }
                 self.settings.capture_ratio = r;
             }
@@ -605,7 +649,9 @@ impl Acquisition {
         while !stop.load(Ordering::SeqCst) {
             let transfer = match stream.next(self.timeout) {
                 Err(Error::Disconnected) => {
-                    log::error!("Device has been disconnected.");
+                    // LIBUSB_TRANSFER_NO_DEVICE: the C driver ends the
+                    // capture without a message (protocol.c:875-878).
+                    log::debug!("Device has been disconnected.");
                     break;
                 }
                 other => other,
@@ -748,11 +794,31 @@ mod tests {
     }
 
     #[test]
-    fn conn_specs() {
-        assert!(conn_parses("21a9.1001"));
-        assert!(conn_parses("3.7"));
-        assert!(!conn_parses("nonsense"));
-        assert!(!conn_parses("1.x"));
+    fn conn_specs_follow_sr_usb_split_conn() {
+        let invalid = Err("Invalid input, or neither VID:PID nor bus.address specified.");
+        let neither = Err("Could neither determine VID:PID nor bus.address numbers.");
+        assert_eq!(split_conn("21a9.1001"), Ok(Conn::Ids(0x21a9, 0x1001)));
+        assert_eq!(split_conn("1000.1000"), Ok(Conn::Ids(0x1000, 0x1000)));
+        assert_eq!(split_conn("3.7"), Ok(Conn::BusAddress(3, 7)));
+        assert_eq!(split_conn("255.127"), Ok(Conn::BusAddress(255, 127)));
+        assert_eq!(split_conn("3.128"), invalid);
+        assert_eq!(split_conn("256.1"), invalid);
+        assert_eq!(split_conn("1.99999999999999999999999"), invalid);
+        assert_eq!(split_conn("0.0"), neither);
+        assert_eq!(split_conn("0.5"), neither);
+        assert_eq!(split_conn("0000.1001"), neither);
+        assert_eq!(split_conn("21a.1001"), neither);
+        assert_eq!(split_conn("nonsense"), neither);
+        assert_eq!(split_conn("1.x"), neither);
+        assert_eq!(split_conn("1.2.3"), neither);
+    }
+
+    #[test]
+    fn a_capture_ratio_above_100_is_refused() {
+        let mut d = Logic16Device::new(UsbDeviceInfo::default(), None);
+        d.set(&Key::CaptureRatio, &Value::U64(100), None).unwrap();
+        assert!(d.set(&Key::CaptureRatio, &Value::U64(150), None).is_err());
+        assert_eq!(d.get(&Key::CaptureRatio, None).unwrap(), Value::U64(100));
     }
 
     #[test]

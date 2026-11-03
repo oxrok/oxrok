@@ -489,7 +489,8 @@ impl Link {
         self.read_eeprom(8, 8)?;
         let version = self.read_register(0);
         if let Ok(v @ (0x40 | 0x41)) = version {
-            log::info!("mcupro Saleae16 detected (FPGA version {v:#04x}).");
+            log::debug!("FPGA version {v:#04x}.");
+            log::info!("mcupro Saleae16 detected.");
             self.variant = Variant::Mcupro;
         } else {
             log::info!("Original Saleae Logic16 detected.");

@@ -59,9 +59,14 @@ emu_cases() {
     N='s/^sr: [a-z0-9-]+: //; s/^oxrok: [a-z]+: [a-z0-9_:]+: //'
     # The tool's own line when the open fails; oxrok adds the reason.
     O='s/^(Failed to open device).*$/\1./'
-    # A capture that fails to start: sigrok-cli and oxrok word it
-    # differently, and only the last line, the tool's own, is kept.
-    R='$!d; s/.*/refused/'
+    # A capture that fails to start. The C driver logs nothing of its
+    # own there: sigrok-cli's two lines are libsigrok's session ("Could
+    # not start saleae-logic16 device usb/... acquisition.") and its own
+    # "Failed to start session."; oxrok's session hands back the
+    # driver's error, which sigrok-cli never prints. No line of one tool
+    # has a counterpart in the other, so the last line is reduced to
+    # where the run failed: at the open, or at the start.
+    R='$!d; /^Failed to open device/{s/.*/Failed to open device./;b}; s/.*/start refused/'
     # A refused rate: the message alone.
     S="/Unable to sample/!d; $N"
 
@@ -91,6 +96,9 @@ emu_cases() {
     emu_case "get captureratio" -- -d $F --get captureratio
     emu_case "trigger rising" -- -d $F -C $D4 -c samplerate=1M --samples 32 -t 3=r -O bits
     emu_case "trigger ratio" -- -d $F -C $D4 -c samplerate=2M:captureratio=50 --samples 40 -t 2=f -O bits
+    # A ratio above 100: api.c:473 would take it, but sr_config_set()
+    # refuses it first (hwdriver.c:757-764), and so does oxrok.
+    emu_case "trigger ratio above 100" --expect-fail --stderr --filter "$N; s/(invalid argument).*\$/\1./" -- -d $F -C $D4 -c samplerate=2M:captureratio=150 --samples 40 -t 2=f -O bits
     emu_case "trigger two" -- -d $F -C 0,1,9 -c samplerate=4M --samples 24 -t 0=0,9=r -O bits
     emu_case "trigger late" --filter '1,/^4:/!d' -- -d $F -C 0,1,2,3,4 -c samplerate=500k --samples 40 -t 4=e -O bits
     # Rates off the list the driver takes all the same: 100 MHz / 250
@@ -200,7 +208,7 @@ emu_cases() {
     logic16_options flashed=1 stall=upload-init:2
     emu_case "fault stall second upload" --expect-fail --stderr --filter "$R" -- -d $F -C 0 -c voltage_threshold=1.4-3.6 --samples 8 -O hex
     logic16_options flashed=1
-    emu_case "unplug mid capture" --unplug in=2:2 --stderr --filter "/Device only sent/!d; $N" -- -d $F -C 0,1 -c samplerate=1M --samples 100000 -O hex
+    emu_case "unplug mid capture" --unplug in=2:2 --stderr --filter "$N" -- -d $F -C 0,1 -c samplerate=1M --samples 100000 -O hex
     # Unplugged during the firmware upload in the scan (the Nth control
     # write: SET_CONFIGURATION, the reset hold, the 2 chunks, the
     # release): the scan still lists the device, which is gone when
