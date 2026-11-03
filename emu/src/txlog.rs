@@ -13,6 +13,7 @@
 use std::fmt::Write as _;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
+use std::ops::Range;
 use std::path::Path;
 
 use sha2::{Digest as _, Sha256};
@@ -108,6 +109,31 @@ pub fn data(bytes: &[u8], above: Option<usize>) -> String {
     }
 }
 
+/// Bytes as [`data`], those in `undefined` (bytes the host left
+/// undefined, [`crate::model::DeviceModel::log_undefined`]) as `xx`; in
+/// a digest they count as 0 and their ranges follow it, `@LEN:SHA256/xx=A-B,...`.
+pub fn data_undefined(bytes: &[u8], undefined: &[Range<usize>], above: Option<usize>) -> String {
+    let inside = |i: usize| undefined.iter().any(|r| r.contains(&i));
+    if undefined.is_empty() {
+        data(bytes, above)
+    } else if above.is_some_and(|n| bytes.len() > n) {
+        let zeroed: Vec<u8> =
+            bytes.iter().enumerate().map(|(i, b)| if inside(i) { 0 } else { *b }).collect();
+        let ranges: Vec<String> =
+            undefined.iter().map(|r| format!("{}-{}", r.start, r.end.saturating_sub(1))).collect();
+        format!("{}/xx={}", data(&zeroed, above), ranges.join(","))
+    } else {
+        bytes.iter().enumerate().fold(String::with_capacity(2 * bytes.len()), |mut s, (i, b)| {
+            if inside(i) {
+                s.push_str("xx");
+            } else {
+                let _ = write!(s, "{b:02x}");
+            }
+            s
+        })
+    }
+}
+
 fn result(reply: &Reply, is_in: bool, above: Option<usize>) -> String {
     match reply {
         Reply::Data(d) if is_in => data(d, above),
@@ -154,6 +180,20 @@ pub fn transfer_line(
     reply: &Reply,
     above: Option<usize>,
 ) -> String {
+    transfer_line_undefined(transfer_type, address, max, bytes, &[], reply, above)
+}
+
+/// [`transfer_line`] with the OUT payload's `undefined` bytes shown as
+/// [`data_undefined`] shows them.
+pub fn transfer_line_undefined(
+    transfer_type: u8,
+    address: u8,
+    max: usize,
+    bytes: &[u8],
+    undefined: &[Range<usize>],
+    reply: &Reply,
+    above: Option<usize>,
+) -> String {
     let word = match transfer_type {
         BULK => "bulk",
         INTERRUPT => "int",
@@ -168,13 +208,40 @@ pub fn transfer_line(
             Reply::Data(d) => d.len().to_string(),
             other => result(other, false, above),
         };
-        format!("{word}_out {address:02x} {} -> {taken}", data(bytes, above))
+        format!("{word}_out {address:02x} {} -> {taken}", data_undefined(bytes, undefined, above))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undefined_bytes_show_as_xx() {
+        let r = Reply::ack();
+        let mid = 1..3;
+        let head = 0..2;
+        assert_eq!(
+            transfer_line_undefined(
+                BULK,
+                0x02,
+                0,
+                &[1, 2, 3, 4],
+                std::slice::from_ref(&mid),
+                &r,
+                None
+            ),
+            "bulk_out 02 01xxxx04 -> 4"
+        );
+        let long = vec![7u8; HASH_ABOVE + 2];
+        let mut zeroed = long.clone();
+        zeroed[..2].fill(0);
+        assert_eq!(
+            data_undefined(&long, std::slice::from_ref(&head), Some(HASH_ABOVE)),
+            format!("{}/xx=0-1", data(&zeroed, Some(HASH_ABOVE)))
+        );
+        assert_eq!(data_undefined(&[5], &[], None), "05");
+    }
 
     #[test]
     fn lines_follow_the_fixture_dialect() {

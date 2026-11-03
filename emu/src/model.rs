@@ -271,6 +271,17 @@ pub trait DeviceModel: Send {
         None
     }
 
+    /// The bytes of an OUT transfer of `data` to endpoint number `ep`
+    /// (not 0) that the host leaves undefined, such as a C driver's
+    /// uninitialised struct field, which would make the log differ from
+    /// one run to the next. The log shows them as `xx`
+    /// ([`crate::txlog::data_undefined`]); the model documents each.
+    /// None, the default.
+    fn log_undefined(&self, ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
+        let _ = (ep, data);
+        Vec::new()
+    }
+
     /// Whether the model wants to leave the bus and come back with
     /// what [`DeviceModel::descriptors`] says now, as an EZ-USB device
     /// does once its new firmware runs. Asked after every transfer; a
