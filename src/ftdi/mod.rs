@@ -17,6 +17,8 @@ use crate::core::{Error, Result};
 use crate::usb::{ControlRequest, Transport};
 use std::time::Duration;
 
+pub mod libftdi;
+
 /// Vendor request numbers.
 mod req {
     pub const RESET: u8 = 0x00;
