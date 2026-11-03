@@ -17,94 +17,90 @@
 //! `conn=hid/cp2110`.
 //!
 //! The chip, after Silicon Labs' AN434 (CP2110/4 Interface
-//! Specification):
+//! Specification, rev 0.4):
 //!
 //! - UART data travels on the interrupt pipes in reports 0x01 to 0x3f,
 //!   the report id being the number of data bytes behind it (1 to 63).
-//!   The device here sends exactly that many; libsigrok reads into a 64
-//!   byte buffer and takes the count from byte 0.
+//!   The device sends exactly that many; libsigrok reads into a 64 byte
+//!   buffer and takes the count from byte 0. Get Receive Data (5.2)
+//!   also lets the host fetch them by `GET_REPORT` of an input report;
+//!   the model answers it from the same FIFO.
 //! - Configuration is feature reports on the control pipe, the report
 //!   id in byte 0 of the payload: 0x41 Get/Set UART Enable (1 byte,
 //!   0 or 1), 0x42 Get UART Status (TX FIFO and RX FIFO fill, two bytes
 //!   each, error status, break status), 0x43 Set Purge FIFOs (1 byte:
 //!   1 TX, 2 RX, 3 both), 0x46 Get Version Information (part number
 //!   0x0a, device version), 0x50 Get/Set UART Config (baud rate as a
-//!   32 bit big endian number, parity, flow control 0 or 1, data bits
-//!   0 to 3 for 5 to 8, stop bits 0 short or 1 long).
+//!   32 bit big endian number, parity, flow control 0 or 1, data bits,
+//!   stop bits 0 short or 1 long).
 //! - A Get Report the chip does not know stalls (AN434 2.1.2).
+//!
+//! The UART receives whenever it is enabled, as a real one does: the
+//! meter sends a packet every `period` polls of the interrupt IN
+//! endpoint (default 25, about half a second, a UT61E's rate), counted
+//! rather than timed (see `shells::hidcable::Stream`) so that both
+//! tools see the same packets. A packet reaches the FIFO in two parts,
+//! 9 bytes and then, 3 polls later, the other 5, as the bytes of a
+//! packet trickle in over the wire: a read can end inside a packet,
+//! which the driver keeps for the next one. The FIFO goes to the host
+//! in reports of what it holds, up to 63 bytes. Every Set UART Enable
+//! of 1 (each open, in `cp2110_set_params`) starts the period over, so
+//! a host that opens and closes again at once (`--show` after its
+//! scan) sees no packet, and a purge empties the FIFO.
+//!
+//! The meter plays eight readings (DC volts, negative DC volts with
+//! hold, AC volts, ohms, DC milliamps, capacitance, frequency, an
+//! overload) and then ten packets of noise (`?` bytes, no CR LF), which
+//! the driver has to search through, and again; the last digit counts
+//! the cycles. A model reset starts over at the first.
+//!
+//! What the line settings do to the bytes: at another baud rate than
+//! 19200 every byte is received as a garbled one (framing errors; the
+//! model maps each byte to another, one for one, rather than modelling
+//! bit timing); with 8 data bits the meter's parity bit lands in bit 7;
+//! with 5 or 6 data bits a byte is cut to its low bits (a real UART
+//! would also misframe the next start bit; the model does not). A
+//! parity setting that the meter's odd parity bit does not satisfy
+//! sets the parity error bit of Get UART Status; the bytes still
+//! arrive. More than the FIFO's 480 bytes sets the overrun bit and
+//! drops the rest.
 //!
 //! The pedantic checks: feature report ids, lengths (report id
 //! included) and values as above, the report id in byte 0 of a
 //! `SET_REPORT` agreeing with `wValue`, a baud rate within 300 to
 //! 1000000 (libsigrok's `CP2110_BAUDRATE_MAX`; AN434 rev 0.4 says
-//! 500000, later parts and revisions 1000000), data reports only once
-//! the UART is enabled, and with a byte count between 1 and 63 that
-//! fits the transfer. Reports the model does not implement (GPIO, lock
-//! bytes, line break, the PROM customisation) stall and are flagged:
-//! neither tool has a reason to send them.
+//! 500000, later parts 1000000), data bits 0 to 3, parity 0 to 4, data
+//! reports only once the UART is enabled, and with a byte count between
+//! 1 and 63 that fits the transfer. Reports the model does not
+//! implement (GPIO, lock bytes, line break, the PROM customisation)
+//! stall and are flagged: neither tool has a reason to send them.
 //!
-//! Two habits of the C code that the chip's documentation does not
-//! back, documented here rather than flagged so that a sigrok-cli run
-//! is clean:
+//! Habits of the C code that the chip's documentation does not back,
+//! documented here rather than flagged so that a sigrok-cli run is
+//! clean:
 //!
 //! - `cp2110_flush` purges with `hid_write`, an output report 0x43 on
-//!   the interrupt pipe, where AN434 has Set Purge FIFOs as a feature
-//!   report on the control pipe (as pyserial's CP2110 backend sends
-//!   it). What a real chip makes of a report id above 0x3f on its
-//!   interrupt OUT pipe is not documented; the model takes it as the
-//!   purge it is meant to be, and takes the feature report as well.
-//! - libsigrok's parity codes are 1 for even and 2 for odd, as in
-//!   AN434 rev 0.4. Revision 0.5 "corrected the values for Data Bits
-//!   and Parity" to 1 odd, 2 even, which is what pyserial, pycp2110 and
-//!   the `cp211x_uart` crate send; libsigrok has the corrected data bits
-//!   (0 to 3) but the old parity. A UT61E's 7o1 frames under a chip
-//!   set to code 2 are then checked for even parity: the bytes still
-//!   arrive, the chip only raises the parity error flag in its status.
-//!   The model does that (`Get UART Status` error bit 0x01), so the
-//!   bytes the host sees do not depend on which reading is right, and
-//!   no host reads the status. Any code 0 to 4 is legal.
+//!   the interrupt pipe, where AN434 (Table 7) has Set Purge FIFOs as a
+//!   feature report on the control pipe (as pyserial's CP2110 backend
+//!   sends it). Whether a real chip honours 0x43 on its interrupt OUT
+//!   pipe is not documented; the model takes both as the purge.
+//! - The codes: AN434 rev 0.4 has parity 1 even, 2 odd and data bits
+//!   0x05 to 0x08; pyserial's backend sends parity 1 odd, 2 even and
+//!   data bits 0 to 3. libsigrok mixes the two, rev 0.4's parity with
+//!   data bits 0 to 3. The model takes data bits 0 to 3 and reads
+//!   parity as pyserial does (unverified on a chip), so libsigrok's 7o1
+//!   (code 2) is checked as even parity: only the error bit shows it,
+//!   which no host reads.
 //!
-//! The meter's stream is cut to what the host can see deterministically.
-//! A real UT61E sends a packet about every half second whatever the
-//! host does; the kernel polls the interrupt IN endpoint as long as the
-//! `hidraw` node is open, so a model that answered every poll would log
-//! as many transfers as the host had time for. Instead the RX FIFO
-//! fills once per purge of it (a purge is the last thing libsigrok's
-//! `serial_open` does): with the UART enabled and set to the meter's
-//! 19200 baud, the next `packets` packets of the meter (default 4)
-//! become receivable `delay_ms` (default 200) after the purge, in three
-//! reports of 5, 8 and the rest of the bytes, so that the first packet
-//! only completes in the last report and every report has been fetched
-//! before a host that stops at its first or its Nth packet closes the
-//! node. Then the FIFO stays empty until the next purge. The delay is
-//! the meter's (a UT61E sends twice a second) and keeps a host that
-//! opens the cable without reading (`--show` opens the device after
-//! its scan) from racing the kernel's polling: it closes before the
-//! burst is due, so no report goes. A configuration at another baud rate receives
-//! nothing (framing errors); 8 data bits deliver the parity bit as bit
-//! 7, 5 or 6 data bits cut the bytes short, as a UART does.
+//! What the model showed about libsigrok (0bc24877):
 //!
-//! What the model showed about the hosts:
-//!
-//! - libsigrok finds a CP2110 only by its node,
-//!   `conn=hid/cp2110/raw=/dev/hidrawN`. Its search (`conn=hid`,
-//!   `hid/cp2110`, `hid/cp2110/sn=...`) puts the full port name
-//!   (`hid/cp2110/raw=/dev/hidrawN`) where the hidapi path belongs and
-//!   asks hidapi-hidraw to open that, which fails ("Failed to open HID
-//!   device"); the scenario names the node.
-//! - libsigrok's nonblocking HID read keeps taking reports while they
-//!   come within 10 ms, so the three reports of a burst are one read,
-//!   and serial-dmm checks the sample limit only after every packet of
-//!   a read is out: a burst of four packets gives four samples whatever
-//!   `--samples` (up to four) asks. oxrok now does both.
-//! - Every open is enable, config, purge: serial-dmm closes the cable
-//!   after its scan and opens it again to acquire, so a scan and an
-//!   acquisition see two bursts (packets 0 to 3, then 4 to 7).
-//!
-//! The packets cycle through eight readings (DC volts, negative DC
-//! volts with hold, AC volts, ohms, DC milliamps, capacitance,
-//! frequency, an overload), the last digit counting the cycles, and
-//! start over on `reset`, so both tools see the same numbers.
+//! - It finds a CP2110 only by path, `conn=hid/cp2110/raw=/dev/hidrawN`:
+//!   its search (`conn=hid`, `hid/cp2110`, `hid/cp2110/sn=...`,
+//!   `ser_hid_chip_search`) converts the searched path twice and hands
+//!   hidapi the port name to open, whatever the hidapi backend.
+//! - `cp2110_set_params` reads `serialcomm`'s flow (1 RTS/CTS, 2
+//!   XON/XOFF) with libserialport's numbering (1 XON/XOFF, 2 RTS/CTS):
+//!   it refuses `flow=1` and turns RTS/CTS on for `flow=2`.
 //!
 //! The device is full speed with a 64 byte endpoint 0, interrupt IN
 //! 0x81 and interrupt OUT 0x01 of 64 bytes polled every millisecond,
@@ -113,16 +109,15 @@
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
 use crate::shells::hid::{self, HidInterface, HidReports};
+use crate::shells::hidcable::Stream;
 use crate::{Error, Result};
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
 
 /// The model name.
 pub const NAME: &str = "cp2110";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Silicon Labs CP2110 HID-to-UART bridge (10c4:ea80) with a UNI-T UT61E stream; \
-     packets=N per purge (1 to 4, default 4), delay_ms=N after it (default 200), \
-     serial=TEXT (default 0001A5F8)";
+     period=N polls per packet (5 to 1000, default 25), serial=TEXT (default 0001A5F8)";
 
 /// A cable from the `-o` options.
 ///
@@ -130,25 +125,11 @@ pub const ABOUT: &str = "Silicon Labs CP2110 HID-to-UART bridge (10c4:ea80) with
 ///
 /// On an unknown option or a value out of range.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
-    let mut packets = 4;
-    let mut delay_ms = 200;
+    let mut period = 25;
     let mut serial = DEFAULT_SERIAL.to_owned();
     for (k, v) in options {
         match k.as_str() {
-            "packets" => {
-                packets = v
-                    .parse()
-                    .ok()
-                    .filter(|n| (1..=4).contains(n))
-                    .ok_or_else(|| Error(format!("packets={v}: 1 to 4")))?;
-            }
-            "delay_ms" => {
-                delay_ms = v
-                    .parse()
-                    .ok()
-                    .filter(|n| *n <= 10_000)
-                    .ok_or_else(|| Error(format!("delay_ms={v}: 0 to 10000")))?;
-            }
+            "period" => period = crate::shells::hidcable::parse_number(k, v, 5..=1000)?,
             "serial" => {
                 if v.is_empty() || v.len() > 30 {
                     return Err(Error(format!("serial={v}: 1 to 30 characters")));
@@ -158,9 +139,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    let mut cable = Cp2110::new(packets, &serial);
-    cable.chip.delay = Duration::from_millis(delay_ms);
-    Ok(Box::new(cable))
+    Ok(Box::new(Cp2110::new(period, &serial)))
 }
 
 /// The USB vendor id.
@@ -186,23 +165,31 @@ pub const MAX_DATA: usize = 63;
 pub const PART_NUMBER: u8 = 0x0a;
 /// The device version it reports.
 pub const DEVICE_VERSION: u8 = 0x01;
+/// The RX FIFO's size.
+pub const FIFO_BYTES: usize = 480;
 
 /// Purge type bits.
 const PURGE_TX: u8 = 0x01;
 const PURGE_RX: u8 = 0x02;
 
-/// Parity codes as AN434 rev 0.5 has them.
+/// Parity codes as pyserial has them.
 const PARITY_ODD: u8 = 1;
 /// Error status: a parity error since the last read.
 const ERROR_PARITY: u8 = 0x01;
+/// Error status: the RX FIFO overran.
+const ERROR_OVERRUN: u8 = 0x02;
 
 /// The meter's line: 19200 baud, 7 data bits, odd parity, 1 stop bit.
 pub const METER_BAUD: u32 = 19200;
 /// The meter's packet length.
 pub const PACKET_BYTES: usize = 14;
-/// How the bytes of a burst are cut into reports, the rest going into
-/// the last one.
-const SPLIT: [usize; 2] = [5, 8];
+/// The bytes of a packet that reach the FIFO first.
+const FIRST_PART: usize = 9;
+/// Polls after which the rest of a packet follows.
+const REST_POLLS: u32 = 3;
+/// Readings, then noise packets, per cycle of the meter.
+const READINGS: u64 = 8;
+const NOISE: u64 = 10;
 
 /// Every feature report the model implements: id, payload length after
 /// the id, and whether it can be got and set.
@@ -263,11 +250,12 @@ const OL: u8 = 1 << 0;
 const HOLD: u8 = 1 << 1;
 
 /// Packet `n` of the meter's stream: eight readings in turn, the last
-/// digit counting the cycles.
+/// digit counting the cycles, then ten packets of noise.
 pub fn meter_packet(n: u64) -> [u8; PACKET_BYTES] {
-    let cycle = b'0' + (n / 8 % 10) as u8;
+    let cycle_len = READINGS + NOISE;
+    let cycle = b'0' + (n / cycle_len % 10) as u8;
     let d = |s: &[u8; 4]| [s[0], s[1], s[2], s[3], cycle];
-    match n % 8 {
+    match n % cycle_len {
         // 1.2345 V DC, auto range.
         0 => packet(0, d(b"1234"), 0x3b, 0, [0, 0, DC | AUTO, 0]),
         // -4.7110 V DC, held.
@@ -283,7 +271,9 @@ pub fn meter_packet(n: u64) -> [u8; PACKET_BYTES] {
         // 5000.0 Hz.
         6 => packet(2, d(b"0500"), 0x32, 0, [0, 0, AUTO, 0]),
         // Overload on the resistance range.
-        _ => packet(6, d(b"0000"), 0x33, OL, [0, 0, AUTO, 0]),
+        7 => packet(6, d(b"0000"), 0x33, OL, [0, 0, AUTO, 0]),
+        // Noise.
+        _ => [b'?'; PACKET_BYTES],
     }
 }
 
@@ -322,103 +312,125 @@ pub struct Chip {
     pub config: Config,
     /// Error status bits since the last Get UART Status.
     pub errors: u8,
-    /// Input reports ready for the interrupt IN pipe, each with its
-    /// count byte.
-    pub rx: VecDeque<Vec<u8>>,
-    /// Packets per burst.
-    pub packets: usize,
+    /// The RX FIFO.
+    pub fifo: VecDeque<u8>,
     /// The meter's next packet.
     pub next_packet: u64,
-    /// Bursts delivered.
-    pub bursts: u32,
-    /// How long after a purge the burst is receivable.
-    pub delay: Duration,
-    /// When the reports in `rx` are receivable.
-    pub ready_at: Option<Instant>,
+    /// When the meter's packets are due.
+    stream: Stream,
+    /// The part of the last packet still on the wire, and the polls
+    /// until it is in.
+    rest: Vec<u8>,
+    rest_in: u32,
+    period: u32,
 }
 
 impl Chip {
-    fn new(packets: usize) -> Chip {
+    fn new(period: u32) -> Chip {
         Chip {
             enabled: false,
             config: Config::DEFAULT,
             errors: 0,
-            rx: VecDeque::new(),
-            packets,
+            fifo: VecDeque::new(),
             next_packet: 0,
-            bursts: 0,
-            delay: Duration::from_millis(200),
-            ready_at: None,
+            stream: Stream::new(period, false),
+            rest: Vec::new(),
+            rest_in: 0,
+            period,
         }
     }
 
-    /// The bytes in the RX FIFO.
-    fn rx_fill(&self) -> usize {
-        self.rx.iter().map(|r| r.len() - 1).sum()
+    /// One offer of the interrupt IN transfer: the meter's bytes that
+    /// are due go into the FIFO.
+    fn tick(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        if self.rest_in > 0 {
+            self.rest_in -= 1;
+            if self.rest_in == 0 {
+                let rest = std::mem::take(&mut self.rest);
+                self.receive(&rest);
+            }
+        }
+        if self.stream.poll() {
+            let p = meter_packet(self.next_packet);
+            self.next_packet += 1;
+            self.receive(&p[..FIRST_PART]);
+            self.rest = p[FIRST_PART..].to_vec();
+            self.rest_in = REST_POLLS;
+        }
+    }
+
+    /// Set UART Enable: on starts the meter's period over, off stops
+    /// the reception.
+    fn enable(&mut self, on: bool) {
+        self.enabled = on;
+        self.rest.clear();
+        self.rest_in = 0;
+        if on {
+            self.stream.restart();
+        } else {
+            self.stream = Stream::new(self.period, false);
+        }
     }
 
     /// Set Purge FIFOs, by feature report or (libsigrok's way) by output
-    /// report. Purging RX with the UART enabled at the meter's baud rate
-    /// lets the next burst in.
+    /// report.
     fn purge(&mut self, kind: u8, v: &mut Violations) {
         if kind & !(PURGE_TX | PURGE_RX) != 0 || kind == 0 {
             v.report(format!("purge type {kind:#04x}; AN434 has 1 (TX), 2 (RX) or 3 (both)"));
             return;
         }
-        if kind & PURGE_RX == 0 {
-            return;
+        if kind & PURGE_RX != 0 {
+            self.fifo.clear();
         }
-        self.rx.clear();
-        self.ready_at = None;
-        if !self.enabled || self.config.baud != METER_BAUD {
-            return;
-        }
-        let mut bytes = Vec::with_capacity(self.packets * PACKET_BYTES);
-        for _ in 0..self.packets {
-            bytes.extend_from_slice(&meter_packet(self.next_packet));
-            self.next_packet += 1;
-        }
-        self.receive(&bytes);
-        self.ready_at = Some(Instant::now() + self.delay);
-        self.bursts += 1;
     }
 
-    /// The meter's 7o1 bytes as this UART configuration receives them,
-    /// cut into the burst's reports.
+    /// The meter's 7o1 bytes as this UART configuration receives them.
     fn receive(&mut self, bytes: &[u8]) {
         let bits = self.config.data_bits + 5;
-        let framed: Vec<u8> = bytes
-            .iter()
-            .map(|&b| match bits {
+        let garbled = self.config.baud != METER_BAUD;
+        let framed = bytes.iter().map(|&b| {
+            let b = if garbled {
+                // A framing error, one for one.
+                b.wrapping_mul(0x9d) ^ 0x5a
+            } else if bits == 8 {
                 // The parity bit, odd, lands in bit 7.
-                8 => b | (u8::from(b.count_ones() % 2 == 0) << 7),
-                7 => b,
-                n => b & ((1u8 << n) - 1),
-            })
-            .collect();
+                b | (u8::from(b.count_ones() % 2 == 0) << 7)
+            } else {
+                b
+            };
+            if bits < 8 { b & ((1u8 << bits) - 1) } else { b }
+        });
         // Parity is checked on the bit after the data bits: with 7 data
         // bits that is the meter's odd parity bit; with 8 it is the stop
         // bit, which is 1.
         let parity_ok = match (bits, self.config.parity) {
-            (7, p) => p == 0 || p == PARITY_ODD,
-            (8, 0) => true,
+            (_, 0) => true,
+            (7, p) => p == PARITY_ODD,
             _ => false,
         };
-        if !parity_ok {
+        if garbled || !parity_ok {
             self.errors |= ERROR_PARITY;
         }
-        let mut rest = framed.as_slice();
-        for cut in SPLIT {
-            if rest.len() <= cut {
-                break;
+        for b in framed {
+            if self.fifo.len() < FIFO_BYTES {
+                self.fifo.push_back(b);
+            } else {
+                self.errors |= ERROR_OVERRUN;
             }
-            let (head, tail) = rest.split_at(cut);
-            self.rx.push_back(data_report(head));
-            rest = tail;
         }
-        if !rest.is_empty() {
-            self.rx.push_back(data_report(rest));
-        }
+    }
+
+    /// Up to `max` bytes of the FIFO as a data report: count, then
+    /// the bytes.
+    fn data_report(&mut self, max: usize) -> Vec<u8> {
+        let n = self.fifo.len().min(max).min(MAX_DATA);
+        let mut r = Vec::with_capacity(n + 1);
+        r.push(n as u8);
+        r.extend(self.fifo.drain(..n));
+        r
     }
 
     /// An output report on the interrupt pipe (or, flagged, by
@@ -456,20 +468,20 @@ impl Chip {
     }
 }
 
-/// A UART data report: count byte and data.
-fn data_report(bytes: &[u8]) -> Vec<u8> {
-    let mut r = Vec::with_capacity(bytes.len() + 1);
-    r.push(bytes.len() as u8);
-    r.extend_from_slice(bytes);
-    r
-}
-
 impl HidReports for Chip {
     fn get_report(&mut self, kind: u8, id: u8, length: usize, v: &mut Violations) -> Reply {
+        if kind == hid::INPUT {
+            // Get Receive Data (AN434 5.2).
+            if !(1..=MAX_DATA as u8).contains(&id) {
+                v.report(format!("GET_REPORT of input report {id:#04x}: data reports are 0x01 to 0x3f"));
+                return Reply::Stall;
+            }
+            let mut r = self.data_report(usize::from(id));
+            r.truncate(length);
+            return Reply::Data(r);
+        }
         if kind != hid::FEATURE {
-            v.report(format!(
-                "GET_REPORT of kind {kind} id {id:#04x}; UART data comes on the interrupt pipe"
-            ));
+            v.report(format!("GET_REPORT of kind {kind} id {id:#04x}"));
             return Reply::Stall;
         }
         let Some(&(_, len, _, _)) = FEATURES.iter().find(|f| f.0 == id && f.2) else {
@@ -488,7 +500,7 @@ impl HidReports for Chip {
             UART_STATUS => {
                 // TX drains at once: the meter takes nothing.
                 r.extend_from_slice(&0u16.to_be_bytes());
-                r.extend_from_slice(&(self.rx_fill() as u16).to_be_bytes());
+                r.extend_from_slice(&(self.fifo.len() as u16).to_be_bytes());
                 r.push(self.errors);
                 r.push(0);
                 self.errors = 0;
@@ -531,8 +543,8 @@ impl HidReports for Chip {
         let p = &data[1..];
         match id {
             UART_ENABLE => match p[0] {
-                0 => self.enabled = false,
-                1 => self.enabled = true,
+                0 => self.enable(false),
+                1 => self.enable(true),
                 other => v.report(format!("UART enable {other}; 0 or 1")),
             },
             PURGE_FIFOS => self.purge(p[0], v),
@@ -581,9 +593,9 @@ pub struct Cp2110 {
 }
 
 impl Cp2110 {
-    /// A cable sending `packets` meter packets per purge, with this USB
-    /// serial number.
-    pub fn new(packets: usize, serial: &str) -> Cp2110 {
+    /// A cable whose meter sends a packet every `period` polls, with
+    /// this USB serial number.
+    pub fn new(period: u32, serial: &str) -> Cp2110 {
         let hid = HidInterface::new(0, report_descriptor());
         let mut body = Vec::new();
         body.extend_from_slice(&descriptor::interface(0, 0, 2, [3, 0, 0], 0));
@@ -613,7 +625,7 @@ impl Cp2110 {
                 ],
             },
             hid,
-            chip: Chip::new(packets),
+            chip: Chip::new(period),
         }
     }
 
@@ -649,24 +661,21 @@ impl DeviceModel for Cp2110 {
     }
 
     fn in_transfer(&mut self, _ep: u8, max: usize, v: &mut Violations) -> Reply {
-        if self.chip.ready_at.is_some_and(|t| Instant::now() < t) {
+        self.chip.tick();
+        if self.chip.fifo.is_empty() {
             return Reply::Nak;
         }
-        match self.chip.rx.front() {
-            Some(r) if r.len() > max => {
-                v.report(format!("interrupt IN of {max} bytes, the report has {}", r.len()));
-                Reply::Stall
-            }
-            Some(_) => Reply::Data(self.chip.rx.pop_front().expect("report")),
-            None => Reply::Nak,
+        if max < 2 {
+            v.report(format!("interrupt IN of {max} bytes; a data report needs 2 or more"));
+            return Reply::Stall;
         }
+        Reply::Data(self.chip.data_report(max - 1))
     }
 
     fn reset(&mut self) {
-        // A bus reset restarts the chip with its power-on settings.
-        let (packets, delay) = (self.chip.packets, self.chip.delay);
-        self.chip = Chip::new(packets);
-        self.chip.delay = delay;
+        // A bus reset restarts the chip with its power-on settings, and
+        // the meter with its first packet.
+        self.chip = Chip::new(self.chip.period);
         self.hid.reset();
     }
 }
@@ -675,12 +684,8 @@ impl DeviceModel for Cp2110 {
 mod tests {
     use super::*;
 
-    /// A cable whose bursts are receivable at once.
-    fn cable(packets: usize) -> Cp2110 {
-        let mut dev = Cp2110::new(packets, DEFAULT_SERIAL);
-        dev.chip.delay = Duration::ZERO;
-        dev
-    }
+    /// No report.
+    const NONE: Vec<Vec<u8>> = Vec::new();
 
     fn set_feature(dev: &mut Cp2110, data: &[u8], v: &mut Violations) -> Reply {
         let s = Setup {
@@ -693,11 +698,11 @@ mod tests {
         dev.control(s, data, v)
     }
 
-    fn get_feature(dev: &mut Cp2110, id: u8, length: u16, v: &mut Violations) -> Reply {
+    fn get_report(dev: &mut Cp2110, kind: u8, id: u8, length: u16, v: &mut Violations) -> Reply {
         let s = Setup {
             request_type: 0xa1,
             request: 1,
-            value: 0x0300 | u16::from(id),
+            value: u16::from(kind) << 8 | u16::from(id),
             index: 0,
             length,
         };
@@ -708,115 +713,162 @@ mod tests {
     fn open_like_libsigrok(dev: &mut Cp2110, v: &mut Violations) {
         assert_eq!(set_feature(dev, &[0x41, 1], v), Reply::ack());
         assert_eq!(set_feature(dev, &[0x50, 0, 0, 0x4b, 0, 2, 0, 2, 0], v), Reply::ack());
-        let mut purge = vec![0x43, 0x03];
-        purge.resize(2, 0);
-        assert_eq!(dev.out(2, &purge, v), Reply::ack());
+        assert_eq!(dev.out(1, &[0x43, 0x03], v), Reply::ack());
     }
 
-    fn collect(dev: &mut Cp2110, v: &mut Violations) -> Vec<Vec<u8>> {
+    /// The reports of `polls` offers of the interrupt IN transfer.
+    fn poll(dev: &mut Cp2110, polls: u32, v: &mut Violations) -> Vec<Vec<u8>> {
         let mut reports = Vec::new();
-        while let Reply::Data(r) = dev.in_transfer(1, 64, v) {
-            reports.push(r);
+        for _ in 0..polls {
+            if let Reply::Data(r) = dev.in_transfer(1, 64, v) {
+                reports.push(r);
+            }
         }
         reports
     }
 
+    fn bytes(reports: &[Vec<u8>]) -> Vec<u8> {
+        reports.iter().flat_map(|r| r[1..].to_vec()).collect()
+    }
+
     #[test]
-    fn streams_a_burst_per_purge_as_libsigrok_opens_it() {
-        let mut dev = cable(4);
+    fn streams_a_packet_per_period_in_two_parts() {
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
         let mut v = Violations::default();
-        // Nothing before the UART is up.
-        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak);
+        // Nothing before the UART is up, however long.
+        assert_eq!(poll(&mut dev, 20, &mut v), NONE);
         open_like_libsigrok(&mut dev, &mut v);
-        let reports = collect(&mut dev, &mut v);
+        // Poll 5: the first 9 bytes; poll 8: the other 5.
+        assert_eq!(poll(&mut dev, 4, &mut v), NONE);
+        let first = poll(&mut dev, 1, &mut v);
+        assert_eq!(first, [[&[9u8][..], &meter_packet(0)[..9]].concat()]);
+        assert_eq!(poll(&mut dev, 2, &mut v), NONE);
+        let rest = poll(&mut dev, 1, &mut v);
+        assert_eq!(rest, [[&[5u8][..], &meter_packet(0)[9..]].concat()]);
+        // And on: packet 1 at poll 10.
+        assert_eq!(bytes(&poll(&mut dev, 5, &mut v)), meter_packet(1));
         assert!(v.is_empty(), "{v:?}");
-        assert_eq!(reports.iter().map(Vec::len).collect::<Vec<_>>(), [6, 9, 44]);
-        let bytes: Vec<u8> = reports.iter().flat_map(|r| r[1..].to_vec()).collect();
-        for (i, r) in reports.iter().enumerate() {
-            assert_eq!(usize::from(r[0]), r.len() - 1, "report {i} id is its count");
-        }
-        assert_eq!(&bytes[..14], &meter_packet(0));
-        assert_eq!(&bytes[42..], &meter_packet(3));
-        // libsigrok's parity code 2 is even under AN434 rev 0.5.
+        // libsigrok's parity code 2 is even under pyserial's reading.
         assert_eq!(dev.chip().errors, ERROR_PARITY);
-        // Read the status: RX FIFO empty, the parity error, cleared after.
-        let s = get_feature(&mut dev, 0x42, 7, &mut v);
+        let s = get_report(&mut dev, 3, 0x42, 7, &mut v);
         assert_eq!(s, Reply::Data(vec![0x42, 0, 0, 0, 0, 1, 0]));
         assert_eq!(dev.chip().errors, 0);
-        // The FIFO stays empty until the next open.
-        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak);
-        open_like_libsigrok(&mut dev, &mut v);
-        let bytes: Vec<u8> = collect(&mut dev, &mut v).iter().flat_map(|r| r[1..].to_vec()).collect();
-        assert_eq!(&bytes[..14], &meter_packet(4));
-        assert_eq!(get_feature(&mut dev, 0x46, 3, &mut v), Reply::Data(vec![0x46, 0x0a, 0x01]));
+        assert_eq!(get_report(&mut dev, 3, 0x46, 3, &mut v), Reply::Data(vec![0x46, 0x0a, 0x01]));
         assert_eq!(
-            get_feature(&mut dev, 0x50, 9, &mut v),
+            get_report(&mut dev, 3, 0x50, 9, &mut v),
             Reply::Data(vec![0x50, 0, 0, 0x4b, 0, 2, 0, 2, 0])
         );
-        assert_eq!(get_feature(&mut dev, 0x41, 2, &mut v), Reply::Data(vec![0x41, 1]));
-        assert!(v.is_empty(), "{v:?}");
-        // The feature report purge of AN434 does the same.
-        assert_eq!(set_feature(&mut dev, &[0x43, 0x02], &mut v), Reply::ack());
-        assert_eq!(collect(&mut dev, &mut v).len(), 3);
+        assert_eq!(get_report(&mut dev, 3, 0x41, 2, &mut v), Reply::Data(vec![0x41, 1]));
         assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
-    fn the_burst_waits_for_the_delay() {
-        let mut dev = Cp2110::new(1, DEFAULT_SERIAL);
-        dev.chip.delay = Duration::from_millis(50);
+    fn a_purge_drops_what_the_fifo_holds_and_enable_restarts_the_period() {
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
         let mut v = Violations::default();
         open_like_libsigrok(&mut dev, &mut v);
-        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak, "not yet");
-        std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(collect(&mut dev, &mut v).len(), 3, "14 bytes: 5, 8 and 1");
-        // A reset keeps the option.
+        // Packet 0's first part is in the FIFO, unread (no IN offer
+        // takes it: Get Receive Data peeks at the fill instead).
+        for _ in 0..5 {
+            dev.chip.tick();
+        }
+        assert_eq!(dev.chip().fifo.len(), 9);
+        set_feature(&mut dev, &[0x43, 0x02], &mut v);
+        assert!(dev.chip().fifo.is_empty(), "the feature report purge");
+        // The rest still comes: it was on the wire.
+        assert_eq!(bytes(&poll(&mut dev, 3, &mut v)), meter_packet(0)[9..]);
+        // A new open starts the period over: packet 1 five polls later.
+        open_like_libsigrok(&mut dev, &mut v);
+        assert_eq!(poll(&mut dev, 4, &mut v), NONE);
+        assert_eq!(bytes(&poll(&mut dev, 4, &mut v)), meter_packet(1));
+        // Disabled, the UART receives nothing.
+        set_feature(&mut dev, &[0x41, 0], &mut v);
+        assert_eq!(poll(&mut dev, 20, &mut v), NONE);
+        // A reset starts the meter over.
         dev.reset();
-        assert_eq!(dev.chip.delay, Duration::from_millis(50));
+        open_like_libsigrok(&mut dev, &mut v);
+        assert_eq!(bytes(&poll(&mut dev, 8, &mut v)), meter_packet(0));
         assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
-    fn readings_are_valid_ut61e_packets() {
-        for n in 0..16 {
-            let p = meter_packet(n);
-            assert_eq!(&p[12..], b"\r\n");
-            assert!(p[..12].iter().all(|b| (0x30..=0x3f).contains(b)), "{p:?}");
-            assert!(p[1..6].iter().all(u8::is_ascii_digit));
+    fn get_receive_data_reads_the_fifo() {
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
+        let mut v = Violations::default();
+        open_like_libsigrok(&mut dev, &mut v);
+        for _ in 0..5 {
+            dev.chip.tick();
         }
-        assert_eq!(meter_packet(8)[5], b'1', "the cycle count");
-        assert_eq!(meter_packet(0), meter_packet(80), "ten cycles wrap");
+        let r = get_report(&mut dev, 1, 4, 64, &mut v);
+        assert_eq!(r, Reply::Data([&[4u8][..], &meter_packet(0)[..4]].concat()));
+        let r = get_report(&mut dev, 1, 63, 64, &mut v);
+        assert_eq!(r, Reply::Data([&[5u8][..], &meter_packet(0)[4..9]].concat()));
+        assert_eq!(get_report(&mut dev, 1, 63, 64, &mut v), Reply::Data(vec![0]), "empty");
+        assert!(v.is_empty(), "{v:?}");
+        assert_eq!(get_report(&mut dev, 1, 0x40, 64, &mut v), Reply::Stall);
+        assert_eq!(v.drain().len(), 1, "input report 0x40");
+    }
+
+    #[test]
+    fn readings_and_noise() {
+        for n in 0..36 {
+            let p = meter_packet(n);
+            if n % 18 < 8 {
+                assert_eq!(&p[12..], b"\r\n");
+                assert!(p[..12].iter().all(|b| (0x30..=0x3f).contains(b)), "{p:?}");
+                assert!(p[1..6].iter().all(u8::is_ascii_digit));
+            } else {
+                assert!(!p.contains(&b'\n'), "noise is no packet");
+            }
+        }
+        assert_eq!(meter_packet(18)[5], b'1', "the cycle count");
+        assert_eq!(meter_packet(0), meter_packet(180), "ten cycles wrap");
     }
 
     #[test]
     fn the_line_settings_shape_the_bytes() {
         let mut v = Violations::default();
-        // Another baud rate: framing errors, nothing received.
-        let mut dev = cable(1);
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
         set_feature(&mut dev, &[0x41, 1], &mut v);
-        set_feature(&mut dev, &[0x50, 0, 0, 0x25, 0x80, 0, 0, 3, 0], &mut v);
-        set_feature(&mut dev, &[0x43, 3], &mut v);
-        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak);
+        // Another baud rate: garbled bytes, flagged in the status.
+        set_feature(&mut dev, &[0x50, 0, 0, 0x25, 0x80, 0, 0, 2, 0], &mut v);
+        let got = bytes(&poll(&mut dev, 8, &mut v));
+        assert_eq!(got.len(), 14);
+        assert_ne!(got, meter_packet(0));
+        assert!(got.iter().all(|b| *b < 0x80), "7 data bits");
+        assert_eq!(dev.chip().errors, ERROR_PARITY);
         // 8 data bits: the odd parity bit becomes bit 7.
         set_feature(&mut dev, &[0x50, 0, 0, 0x4b, 0, 0, 0, 3, 0], &mut v);
-        set_feature(&mut dev, &[0x43, 3], &mut v);
-        let bytes: Vec<u8> = collect(&mut dev, &mut v).iter().flat_map(|r| r[1..].to_vec()).collect();
-        let plain = meter_packet(0);
-        for (b, p) in bytes.iter().zip(plain) {
+        set_feature(&mut dev, &[0x41, 1], &mut v);
+        let got = bytes(&poll(&mut dev, 8, &mut v));
+        for (b, p) in got.iter().zip(meter_packet(1)) {
             assert_eq!(b & 0x7f, p);
             assert_eq!(b.count_ones() % 2, 1, "odd parity over 8 bits");
         }
-        assert_eq!(dev.chip().errors, 0);
-        // A purge with the UART disabled lets nothing in.
-        set_feature(&mut dev, &[0x41, 0], &mut v);
-        set_feature(&mut dev, &[0x43, 3], &mut v);
-        assert_eq!(dev.in_transfer(1, 64, &mut v), Reply::Nak);
+        // 5 data bits: the low five.
+        set_feature(&mut dev, &[0x50, 0, 0, 0x4b, 0, 0, 0, 0, 0], &mut v);
+        set_feature(&mut dev, &[0x41, 1], &mut v);
+        let got = bytes(&poll(&mut dev, 8, &mut v));
+        assert!(got.iter().zip(meter_packet(2)).all(|(b, p)| *b == p & 0x1f));
         assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
+    fn the_fifo_overruns() {
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
+        let mut v = Violations::default();
+        open_like_libsigrok(&mut dev, &mut v);
+        // 40 packets of 14 bytes, never read: 560 > 480.
+        for _ in 0..40 * 5 + 3 {
+            dev.chip.tick();
+        }
+        assert_eq!(dev.chip().fifo.len(), FIFO_BYTES);
+        assert_eq!(dev.chip().errors & ERROR_OVERRUN, ERROR_OVERRUN);
+    }
+
+    #[test]
     fn flags_what_the_chip_does_not_take() {
-        let mut dev = cable(4);
+        let mut dev = Cp2110::new(5, DEFAULT_SERIAL);
         let mut v = Violations::default();
         // Baud rate out of range; parity, flow, data bits, stop bits.
         set_feature(&mut dev, &[0x50, 0, 0, 0, 200, 0, 0, 3, 0], &mut v);
@@ -838,37 +890,39 @@ mod tests {
         let s = Setup { request_type: 0x21, request: 9, value: 0x0341, index: 0, length: 2 };
         dev.control(s, &[0x50, 0], &mut v);
         assert_eq!(v.drain().len(), 1, "payload id differs from wValue");
-        assert_eq!(get_feature(&mut dev, 0x43, 2, &mut v), Reply::Stall);
+        assert_eq!(get_report(&mut dev, 3, 0x43, 2, &mut v), Reply::Stall);
         assert_eq!(v.drain().len(), 1, "purge is set only");
-        get_feature(&mut dev, 0x50, 64, &mut v);
+        get_report(&mut dev, 3, 0x50, 64, &mut v);
         assert_eq!(v.drain().len(), 1, "config of 64 bytes");
-        let input = Setup { request_type: 0xa1, request: 1, value: 0x0105, index: 0, length: 6 };
-        assert_eq!(dev.control(input, &[], &mut v), Reply::Stall);
-        assert_eq!(v.drain().len(), 1, "input report by GET_REPORT");
         // Data before enable, to a meter that takes none; bad ids.
         let mut data = vec![3, b'a', b'b', b'c'];
         data.resize(64, 0);
-        dev.out(2, &data, &mut v);
+        dev.out(1, &data, &mut v);
         assert_eq!(v.drain().len(), 2, "data before enable, and to the meter");
-        dev.out(2, &[0x40, 0], &mut v);
+        dev.out(1, &[0x40, 0], &mut v);
         assert_eq!(v.drain().len(), 1, "report id 0x40 on the interrupt pipe");
-        dev.out(2, &[9, 1, 2], &mut v);
+        dev.out(1, &[9, 1, 2], &mut v);
         assert_eq!(v.drain().len(), 3, "9 bytes announced, 2 sent");
-        dev.out(2, &[0x43, 3, 0], &mut v);
+        dev.out(1, &[0x43, 3, 0], &mut v);
         assert_eq!(v.drain().len(), 1, "purge output report of 3 bytes");
         let output = Setup { request_type: 0x21, request: 9, value: 0x0243, index: 0, length: 2 };
         dev.control(output, &[0x43, 3], &mut v);
         assert_eq!(v.drain().len(), 1, "output report over the control pipe");
+        // An interrupt IN too short for a data report.
+        open_like_libsigrok(&mut dev, &mut v);
+        for _ in 0..5 {
+            dev.chip.tick();
+        }
+        assert_eq!(dev.in_transfer(1, 1, &mut v), Reply::Stall);
+        assert_eq!(v.drain().len(), 1, "a one byte transfer");
     }
 
     #[test]
     fn options_are_checked() {
-        assert!(build(&[("packets".into(), "5".into())]).is_err());
-        assert!(build(&[("packets".into(), "2".into())]).is_ok());
+        assert!(build(&[("period".into(), "4".into())]).is_err());
+        assert!(build(&[("period".into(), "50".into())]).is_ok());
         assert!(build(&[("serial".into(), String::new())]).is_err());
         assert!(build(&[("colour".into(), "red".into())]).is_err());
-        assert!(build(&[("delay_ms".into(), "10001".into())]).is_err());
-        assert!(build(&[("delay_ms".into(), "0".into())]).is_ok());
         let m = build(&[("serial".into(), "XYZ".into())]).unwrap();
         assert_eq!(m.descriptors().strings[2], "XYZ");
         assert_eq!(report_descriptor().len(), 14 + 63 * 12 + 5 * 8 + 1);
