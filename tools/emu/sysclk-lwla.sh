@@ -188,8 +188,10 @@ emu_cases() {
     emu_case "fault quirk check short" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     lwla_options short_transfers=1 short_reply=read-lregs:1
     emu_case "fault quirk check split short" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
-    # The close's shut-down bitstream (the second upload): sigrok-cli
-    # closes the device after --show, not after a capture.
+    # The close's shut-down bitstream (the second upload), after --show:
+    # sr_dev_close() sets the status INACTIVE first. A close from
+    # sr_exit() goes through std_dev_clear() with the status still ACTIVE,
+    # so the FPGA stays on after a capture.
     lwla_options stall=bitstream:2
     emu_case "fault shut down" --stderr --filter "$E" -- -d $F --show
     # The commit's bitstream for the external clock (the second upload).
@@ -235,6 +237,11 @@ emu_cases() {
     emu_case "1016 get external clock refused" --expect-fail --stderr -- -d $F --get external_clock
     emu_case "1016 100M" --digest --filter "$B" -- -d $F --samples 100 -O bits
     emu_case "1016 1M plain" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3 -c samplerate=1M:rle=0 --samples 200 -O bits
+    # One sample at 100 Hz in 10 ms does not fill a word of two: the
+    # capture has no words (protocol.c:177-179) and nothing is read.
+    lwla_options model=1016 tick=10
+    emu_case "1016 capture with no words" --no-output -- -d $F -C CH1 -c samplerate=100:rle=0 --time 1 -O bits
+    lwla_options model=1016
     emu_case "1016 odd samples plain" --digest --filter "$B" -- -d $F -c samplerate=1M:rle=0 --samples 101 -O bits
     emu_case "1016 rle runs" --digest --filter "$B" -- -d $F -C CH5,CH6 -c samplerate=1M --samples 300 -O bits
     emu_case "1016 30000 samples" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=10M:rle=0 --samples 60000 -O bits

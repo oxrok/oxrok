@@ -83,8 +83,9 @@
 //! channel mask (34 bits), 1 clock divider (`100 MHz / (n + 1)`), 2
 //! trigger levels, 3 trigger types (edge where set), 4 trigger enable
 //! (bits 34 and 35 the external TRG input's falling and rising edge),
-//! 5 the memory fill level (written: the full threshold), 7 the time
-//! since the trigger in ms, 8 the input levels, 9 the status, 10
+//! 5 the memory fill level (written: the full threshold), 7 the
+//! elapsed time in ms (from the trigger: see "The clock's start" below),
+//! 8 the input levels, 9 the status, 10
 //! capture control (0x74 clears, 1 arms the trigger, 0 stops), 100 the
 //! test word `0x1234567887654321`. Long registers 0 to 4 read 0
 //! (assumed: "The first five long registers do not return useful
@@ -104,7 +105,8 @@
 //! register (0x1078) reads the address after the last word.
 //!
 //! **The LWLA1016** (`lwla1016.c`): registers 0x1000 channel mask,
-//! 0x1010 time since the trigger in ms (written 0 to clear), 0x1070
+//! 0x1010 capture duration in ms (written 0 to clear; from the trigger:
+//! see "The clock's start" below), 0x1070
 //! write pointer, 0x107c memory control (bit 0 reset, bit 1 write),
 //! 0x10b0 capture count (written: the full threshold in words; read:
 //! the address of the last word written, data starting at 2, so the
@@ -141,6 +143,21 @@
 //! `ext_clock=HZ` (1 MHz by default) on the external clock. The memory
 //! is full when its words would pass the threshold the driver wrote;
 //! the capture then stops on its own and the status says so.
+//!
+//! **The clock's start** (assumed): the C calls these counters "elapsed
+//! time in ms" and "capture duration in ms" and only a struct comment
+//! says "since trigger" (`duration_now`, `lwla.h`), while
+//! `handle_status_response()` tests the time limit before the trigger
+//! (`protocol.c:144-148`). The model counts from the trigger. If the real
+//! counter runs from the arming, a trigger that never fires with
+//! `--samples` would end on the derived time limit rather than hang: the
+//! two `--hangs` cases of the scenario depend on this assumption.
+//!
+//! **The memory reset's second read** (LWLA1016): "Issue another read
+//! request or the device will stall" (`lwla1016.c:281`). The model does
+//! not stall, but after the first memory read following a memory reset
+//! in read mode anything other than a second memory read is flagged. A
+//! capture's readout owes none: the memory went through write mode.
 //!
 //! **Pedantic checks**: commands of the wrong length, unknown ids,
 //! commands of the other model, a command while a reply is unread, a
@@ -185,12 +202,16 @@
 //!   `protocol.c:293,354,360,366,419,425`): sigrok-cli stops a session
 //!   only on a failed decoder, and a failed start leaves nothing to
 //!   cancel; it has no signal handler for an interrupt case.
-//! - A capture with no words (`protocol.c:178-179`): the model's fill
-//!   grows with the time since the trigger, which is what ends a capture,
-//!   and no fault was invented for it.
+//! - A capture with no words (`protocol.c:178-179`) on the LWLA1034: each
+//!   sample there is a word at once, and the model's fill grows with the
+//!   time that ends a capture, so it would take a fault, and none was
+//!   invented for it. The LWLA1016 reaches it (the case "1016 capture with
+//!   no words": one sample does not fill a word of two).
 //! - A failing submission of the start (`protocol.c:567-568`): only an
 //!   unplug causes it, and whether the submission or its completion fails
 //!   depends on timing.
+//! - A close during an acquisition (`api.c:296-299`): sigrok-cli closes
+//!   only after the session ended.
 //! - The second interface claim (`api.c:248-251`): another program's
 //!   claim fails at `api.c:238` first.
 //! - A partly taken OUT (`lwla.c:106-108,136-138`): a bulk OUT that does
@@ -224,9 +245,12 @@
 //! - An error during a capture ends it with exit 0
 //!   (`protocol.c:299-309`): only stderr tells, and samples not yet sent
 //!   in a packet are lost (`protocol.c:216-219`).
-//! - After a capture sigrok-cli does not close the device (only
-//!   `main.c:201,228` and `show.c:855` do), so the LWLA1034's shut-down
-//!   bitstream goes out only after `--show`, `--get` and `--set`.
+//! - A close from `sr_exit()` goes through `std_dev_clear()` with the
+//!   status still ACTIVE (`std.c:427-428`; only `sr_dev_close()` sets
+//!   INACTIVE first, `device.c:779`), so `apply_fpga_config()` finds "No
+//!   change" (`lwla1034.c:314-324`) and the FPGA stays on: the LWLA1034's
+//!   shut-down bitstream goes out only after `--show`, `--get` and `--set`
+//!   (`sr_dev_close()`), not after a capture.
 //! - A claim held by another program fails at `libusb_set_configuration()`
 //!   (`api.c:238`, `LIBUSB_ERROR_BUSY`), before the claim of `api.c:246`.
 //! - Read only, not shown by a case: `prepare_trigger_masks()` returns
@@ -738,6 +762,10 @@ struct Regs16 {
     cap_count: Option<u32>,
     trg_sel: u32,
     read_ptr: Option<u32>,
+    /// The memory was reset and has not been read or in write mode since.
+    reset_reads: bool,
+    /// One memory read since that reset: a second one is due.
+    second_read_due: bool,
 }
 
 /// The board.
@@ -998,6 +1026,14 @@ impl Lwla {
             v.report(format!("command {} is not the {:?}'s", w[0], self.board));
             return Reply::ack();
         }
+        if self.board == Board::Lwla1016 && self.r16.second_read_due && kind != Kind::ReadMem {
+            v.report(format!(
+                "command {} after one memory read since the memory reset; the device stalls \
+                 without a second (lwla1016.c:281)",
+                w[0]
+            ));
+            self.r16.second_read_due = false;
+        }
         if !self.pending.is_empty() {
             v.report(format!("command {} while a reply is unread", w[0]));
             self.pending.clear();
@@ -1053,6 +1089,10 @@ impl Lwla {
         }
         if u64::from(address) + u64::from(count) > u64::from(DEPTH) {
             v.report(format!("memory read of {count} words at {address}, beyond the memory"));
+        }
+        if self.board == Board::Lwla1016 {
+            let r = &mut self.r16;
+            r.second_read_due = std::mem::take(&mut r.reset_reads);
         }
         let (write_mode, read_ptr) = match self.board {
             Board::Lwla1034 => (self.r34.mem_ctrl & 1 != 0, self.r34.read_ptr),
@@ -1225,6 +1265,9 @@ impl Lwla {
             R34_LONG_LOW => r.long_low = value,
             R34_LONG_HIGH => r.long_high = value,
             R34_LONG_STROBE => {
+                if value != 0 {
+                    v.report(format!("long register strobe written {value}; the driver writes 0"));
+                }
                 let full = u64::from(r.long_high) << 32 | u64::from(r.long_low);
                 let addr = r.long_addr;
                 if addr == L_CAP_CTRL {
@@ -1282,7 +1325,8 @@ impl Lwla {
         let div = r.lregs[1];
         let rate = match self.design {
             Some(Design::Int) if boost => 125_000_000,
-            Some(Design::Int) => 100_000_000 / (div + 1),
+            // A host's divider beyond the slowest was flagged when written.
+            Some(Design::Int) => (100_000_000 / div.saturating_add(1)).max(1),
             _ => self.sig.ext_clock,
         };
         let enable = r.lregs[4];
@@ -1441,8 +1485,13 @@ impl Lwla {
                     v.report(format!("memory control {value:#x}; the driver writes 0, 1 or 2"));
                 }
                 r.mem_ctrl = value;
+                if value == MEM16_WRITE {
+                    r.reset_reads = false;
+                }
                 if value & MEM16_RESET != 0 {
                     r.read_ptr = None;
+                    r.reset_reads = true;
+                    r.second_read_due = false;
                 } else if value == 0 && self.capture.as_ref().is_some_and(|c| !c.running()) {
                     // Read mode after a capture: the readout.
                     r.read_ptr = Some(Board::Lwla1016.read_start());
@@ -1512,7 +1561,8 @@ impl Lwla {
         }
         let format = if self.design == Some(Design::Timing) { Format::Rle16 } else { Format::Plain16 };
         self.capture = Some(Capture {
-            rate: 100_000_000 / (u64::from(r.div) + 1),
+            // A host's divider beyond the slowest was flagged when written.
+            rate: (100_000_000 / (u64::from(r.div) + 1)).max(1),
             boost: false,
             mask: u64::from(r.chan_mask),
             trigger: Trigger {

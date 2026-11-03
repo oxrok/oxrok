@@ -250,6 +250,20 @@ fn run_total36(words: &[u64]) -> u64 {
     total
 }
 
+/// The words of a bulk write of long registers 0 to 9.
+fn lregs(values: [u64; 10]) -> Vec<u16> {
+    let mut w = vec![7u16, 0, 10];
+    for value in values {
+        w.extend_from_slice(&[
+            (value >> 16) as u16,
+            value as u16,
+            (value >> 48) as u16,
+            (value >> 32) as u16,
+        ]);
+    }
+    w
+}
+
 fn signal(channels: u32) -> Signal {
     Signal { period: 1, ext_trg: 1000, ext_clock: 1_000_000, tick: 100, channels }
 }
@@ -731,4 +745,86 @@ fn host_counts_are_bounded() {
     h.violations();
     let (_, fill, _) = h.poll16();
     assert_eq!(fill, 2 + DEPTH);
+
+    // A divider no rate comes from: flagged, and the clock still runs.
+    let mut h = Host::new(&[]);
+    h.open34();
+    h.send(&lregs([Board::Lwla1034.all(), u64::MAX, 0, 0, 0, u64::from(DEPTH - 16), 0, 0, 0, 0]));
+    h.write_reg(R34_MEM_CTRL, 1);
+    h.write_long(10, 0x74);
+    h.write_long(10, 1);
+    assert_ne!(h.violations(), Vec::<String>::new());
+    assert_eq!(h.read_lregs(5, 5).len(), 5);
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    h.write_reg(R16_DIV_COUNT, u32::MAX);
+    h.write_reg(R16_MEM_CTRL, 2);
+    h.write_reg(R16_CAP_COUNT, 100);
+    h.write_reg(R16_CAP_CTRL, CAP16_TRG_EN);
+    assert_ne!(h.violations(), Vec::<String>::new());
+    h.poll16();
+}
+
+#[test]
+fn lwla1016_flags_a_missing_second_memory_read() {
+    let wanted = "without a second";
+    // The open as the driver does it: clean (Host::open16 checks).
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    // Only one read after the reset.
+    h.write_reg(R16_MEM_CTRL, 1);
+    h.write_reg(R16_MEM_CTRL, 0);
+    h.send(&[3, 0, 0, 0, 24]);
+    h.data(512);
+    h.clean();
+    h.write_reg(R16_CHAN_MASK, 1);
+    let v = h.violations();
+    assert!(v.iter().any(|m| m.contains(wanted)), "got {v:?}");
+    // Once: the next command is not flagged again.
+    h.write_reg(R16_CHAN_MASK, 1);
+    h.clean();
+    // A new bitstream starts over: the open's retry owes nothing.
+    h.write_reg(R16_MEM_CTRL, 1);
+    h.write_reg(R16_MEM_CTRL, 0);
+    h.send(&[3, 0, 0, 0, 24]);
+    h.data(512);
+    assert_eq!(h.bitstream("sysclk-lwla1016-100.rbf"), Reply::ack());
+    assert_eq!(h.read_reg(R16_TEST_ID), 0);
+    h.clean();
+    // A capture's readout of one read owes none: write mode came between.
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    h.start16(0xffff, 999_999, [0; 3]);
+    h.poll16();
+    assert_eq!(h.stop_and_read16().len(), 5);
+}
+
+#[test]
+fn flags_the_register_values_the_driver_never_writes() {
+    let expect = |h: &mut Host, what: &str| {
+        let v = h.violations();
+        assert!(v.iter().any(|m| m.contains(what)), "wanted '{what}', got {v:?}");
+    };
+    let th = u64::from(DEPTH - 16);
+    let all = Board::Lwla1034.all();
+    let mut h = Host::new(&[]);
+    h.open34();
+    h.send(&lregs([all, 0, 1 << 34, 0, all, th, 0, 0, 0, 0]));
+    expect(&mut h, "long register 2 written");
+    h.send(&lregs([all, 0, 0, 1 << 34, all, th, 0, 0, 0, 0]));
+    expect(&mut h, "long register 3 written");
+    h.send(&lregs([all, 0, 0, 0, 1 << 36, th, 0, 0, 0, 0]));
+    expect(&mut h, "long register 4 written");
+    h.send(&lregs([all, DIV_MAX + 1, 0, 0, 0, th, 0, 0, 0, 0]));
+    expect(&mut h, "long register 1 written");
+    h.send(&lregs([all, 0, 0, 0, 0, 4, 0, 0, 0, 0]));
+    expect(&mut h, "long register 5 written");
+    h.write_reg(R34_LONG_STROBE, 1);
+    expect(&mut h, "strobe written 1");
+    let mut h = Host::new(&[("model", "1016")]);
+    h.open16("sysclk-lwla1016-100.rbf");
+    h.write_reg(0x1004, 0);
+    expect(&mut h, "does not write");
+    h.write_reg(R16_CAP_COUNT, 0);
+    expect(&mut h, "capture count 0");
 }
