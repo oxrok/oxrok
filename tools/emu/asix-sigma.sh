@@ -19,6 +19,9 @@ EMU_MODEL=asix-sigma
 EMU_DRIVER=asix-sigma
 EMU_GCOV_SHARED="src/usb.c"
 EMU_FULL=""
+# The memory readouts are thousands of same-shape bulk INs: fold them
+# (tools/diffcli.sh, EMU_TX_FOLD).
+EMU_TX_FOLD=1
 
 # The model's options for the cases that follow (none: the defaults).
 asix_sigma_options() {

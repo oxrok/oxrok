@@ -12,8 +12,7 @@ ctl_out 40 02 0000 0101 - -> ok
 bulk_out 02 00ff0000 -> 4
 bulk_in 81 4096 -> 0160
 bulk_in 81 4096 -> 0160
-bulk_in 81 4096 -> @4096:34cf3ad66f91a2a10748eb19b3399cadceff9e46effa032e92d33dc5ddb37542
-bulk_in 81 4096 -> @4096:02ae86570bf3cf8a18385b6af2b7b4ef7a8c4133a047790f5e0ed1ea4a6d965e
+bulk_in 81 4096 -> @4096:fold=2:4b80f3cf0f625f614ea34cdc8fbb95be68ae286597f8950f9883890e36bb6342
 bulk_in 81 4096 -> err stall
 bulk_in 81 4096 -> err stall
 bulk_out 02 0101010101010101 -> 8
