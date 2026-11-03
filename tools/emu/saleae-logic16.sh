@@ -84,14 +84,16 @@ emu_cases() {
     # rate. sigrok-cli dies of SIGFPE, printing nothing.
     emu_case "low rate crash" --expect-fail --no-output -- -d $F -C 0 -c samplerate=1k --samples 8 -O hex
     emu_case "rate above 100M" --expect-fail --stderr --filter '/Unable to sample/!d' -- -d $F -C 0 -c samplerate=200M --samples 8 -O hex
-    emu_case "bad threshold" --expect-fail --stderr -- -d $F -C 0 -c voltage_threshold=1.0-2.0 --samples 8 -O hex
+    # Only the last line: libusb may log LIBUSB_ERROR_ACCESS first for the
+    # renumerated device (docs/USB.md).
+    emu_case "bad threshold" --expect-fail --stderr --filter '/Failed to set/!d' -- -d $F -C 0 -c voltage_threshold=1.0-2.0 --samples 8 -O hex
     emu_case "too many channels" --expect-fail --stderr --filter '/Unable to sample/!d' -- -d $F -C $D4 -c samplerate=100M --samples 8 -O hex
 
     # The firmware already running: no upload, and the scan reads the
     # strings.
     logic16_options flashed=1
     emu_case "flashed scan" --keep-header --filter "$C" -- -d $F --scan
-    emu_case "flashed get conn" --filter "$C" -- -d $F --get conn
+    emu_case "flashed get conn" --filter "s/'[0-9]+[.][0-9]+'/'BUS.ADDR'/" -- -d $F --get conn
     emu_case "flashed 4ch 2M" -- -d $F -C $D4 -c samplerate=2M --samples 48 -O bits
     logic16_options flashed=1 bitstream=new
     emu_case "new bitstream" -- -d $F -C $D4 -c samplerate=5M --samples 48 -O bits
