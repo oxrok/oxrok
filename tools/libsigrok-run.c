@@ -124,10 +124,12 @@ static GHashTable *parse_generic_arg(const char *arg, gboolean sep_first)
 /* session.c's opt_to_gvar(), for the types drivers take. */
 static int opt_to_gvar(const char *key, const char *value, struct sr_config *src)
 {
-	const struct sr_key_info *srci;
+	const struct sr_key_info *srci, *srmqi;
 	double dlow, dhigh;
-	uint64_t tmp_u64, p, q, low, high;
+	uint64_t tmp_u64, p, q, low, high, mqflags;
 	GVariant *pair[2];
+	GVariantBuilder *vbl;
+	gchar **parts;
 	int ret;
 
 	if (!(srci = sr_key_info_name_get(SR_KEY_CONFIG, key))) {
@@ -188,8 +190,42 @@ static int opt_to_gvar(const char *key, const char *value, struct sr_config *src
 		pair[1] = g_variant_new_double(dhigh);
 		src->data = g_variant_new_tuple(pair, 2);
 		break;
+	case SR_T_KEYVALUE:
+		parts = g_strsplit(value, "=", 2);
+		if (!parts[0] || !parts[1]) {
+			ret = -1;
+		} else {
+			vbl = g_variant_builder_new(G_VARIANT_TYPE_DICTIONARY);
+			g_variant_builder_add(vbl, "{ss}", parts[0], parts[1]);
+			src->data = g_variant_builder_end(vbl);
+		}
+		g_strfreev(parts);
+		break;
+	case SR_T_MQ:
+		parts = g_strsplit(value, "/", 0);
+		if (!parts[0] || !(srmqi = sr_key_info_name_get(SR_KEY_MQ, parts[0]))) {
+			g_strfreev(parts);
+			ret = -1;
+			break;
+		}
+		pair[0] = g_variant_new_uint32(srmqi->key);
+		mqflags = 0;
+		for (int i = 1; parts[i]; i++) {
+			if (!(srmqi = sr_key_info_name_get(SR_KEY_MQFLAGS, parts[i]))) {
+				ret = -1;
+				break;
+			}
+			mqflags |= srmqi->key;
+		}
+		g_strfreev(parts);
+		if (ret != -1) {
+			pair[1] = g_variant_new_uint64(mqflags);
+			src->data = g_variant_new_tuple(pair, 2);
+		}
+		break;
 	default:
-		g_critical("libsigrok-run does not take option '%s' (its type is not handled).", key);
+		g_critical("Unknown data type specified for option '%s' "
+			"(driver implementation bug?).", key);
 		ret = -1;
 	}
 	if (ret < 0)
@@ -293,23 +329,46 @@ static void show_dev_list(void)
 	g_slist_free(devices);
 }
 
-/* main.c's select_channels() with parsers.c's parse_channelstring(),
- * names and renames (no ranges). */
+static struct sr_channel *find_channel(GSList *channels, const char *name)
+{
+	for (GSList *l = channels; l; l = l->next)
+		if (!strcmp(((struct sr_channel *)l->data)->name, name))
+			return l->data;
+	return NULL;
+}
+
+/* main.c's select_channels() with parsers.c's parse_channelstring():
+ * names, renames, and A-B ranges of channels named as numbers. */
 static void select_channels(struct sr_dev_inst *sdi)
 {
 	GSList *channels = sr_dev_inst_channels_get(sdi), *selected = NULL, *l;
-	char **tokens, **names;
+	char **tokens, **names, *end, str[12];
 	struct sr_channel *ch;
+	long b, e;
 
 	if (!opt_channels)
 		return;
 	tokens = g_strsplit(opt_channels, ",", 0);
 	for (int i = 0; tokens[i]; i++) {
+		if (!tokens[i][0])
+			g_critical("Invalid empty channel.");
+		if (strchr(tokens[i], '-')) {
+			b = strtol(tokens[i], &end, 10);
+			if (end == tokens[i] || *end != '-')
+				g_critical("Invalid channel syntax '%s'.", tokens[i]);
+			e = strtol(end + 1, &end, 10);
+			if (*end || b < 0 || b >= e)
+				g_critical("Invalid channel range '%s'.", tokens[i]);
+			for (; b <= e; b++) {
+				snprintf(str, sizeof(str), "%ld", b);
+				if (!(ch = find_channel(channels, str)))
+					g_critical("unknown channel '%ld'.", b);
+				selected = g_slist_append(selected, ch);
+			}
+			continue;
+		}
 		names = g_strsplit(tokens[i], "=", 2);
-		ch = NULL;
-		for (l = channels; l; l = l->next)
-			if (!strcmp(((struct sr_channel *)l->data)->name, names[0]))
-				ch = l->data;
+		ch = find_channel(channels, names[0]);
 		if (!ch)
 			g_critical("unknown channel '%s'.", names[0]);
 		if (names[1])

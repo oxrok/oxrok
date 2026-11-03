@@ -151,6 +151,9 @@ emu_cases() {
     # port path made generic.
     P='s#usb/[0-9][0-9.-]*#usb/PORT#'
     ls_options flashed=1
+    # The runner's --scan against sigrok-cli's: this golden must equal
+    # flashed-scan.out.
+    emu_case "lib flashed scan" --libsigrok --keep-header -- -d $L --scan
     # The rate classes of lls_set_samplerate() (samplerates[]: the
     # trigger latency differs between them) with 16 channels.
     for r in 1G 500M 250M 100M 10M 1M 1k; do
@@ -161,8 +164,8 @@ emu_cases() {
     # sample (no marker).
     emu_case "lib 16ch ratio 0" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=0 -t D3=r -O bits
     emu_case "lib 16ch ratio 100" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=100 -t D3=r -O bits
-    # D13 rises at sample 8192 x 3: the 20000 samples before and after
-    # it go round the 20480 sample memory.
+    # D13's first rise once armed is at sample 24576, so the capture
+    # goes round the 20480 sample memory.
     emu_case "lib 16ch memory wraps" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D13=r -O bits
     # Two stages (D0 high, then D0 rising), a level with an edge in one
     # stage, and several levels with an edge.
@@ -176,10 +179,11 @@ emu_cases() {
     # whose memory wraps.
     emu_case "lib 8ch lower 1M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=1M -t D3=r -O bits
     emu_case "lib 8ch lower 500M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=500M -t D3=r -O bits
-    # Where the part of the memory before the wrap is a whole number of
-    # send_samples()'s 4096 sample chunks, the 8 channel path sends the
-    # remainder all the same (protocol.c:980-989), a logic packet of 0
-    # bytes; libsigrok's bits and hex outputs loop to length - unitsize
+    # The stretch after the wrap and before the trigger is 8192 bytes
+    # here, a whole number of send_samples()'s 4096 sample chunks, and
+    # the 8 channel path sends the remainder all the same
+    # (protocol.c:980-989), a logic packet of 0 bytes; libsigrok's bits
+    # and hex outputs loop to length - unitsize
     # (bits.c:158, hex.c:163), which wraps for 0, and the run dies of
     # SIGSEGV after the samples before it. sigrok-cli's datafeed_in()
     # hands the empty packet on the same way. The ascii output counts
@@ -187,9 +191,9 @@ emu_cases() {
     emu_case "lib 8ch upper wraps bits crash" --libsigrok --expect-fail --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
     emu_case "lib 8ch upper wraps ascii" --libsigrok --digest --filter '1,/^D15:/b; /T/{=;b;}; d' -- -d $L -C $HI -c samplerate=1M -t D14=r -O ascii
     emu_case "lib 8ch upper 1G ratio 20" --libsigrok --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1G:captureratio=20 -t D9=r -O bits
-    # The runner's own limit: the session stopped after 1000 samples,
-    # once the driver has sent them all (dev_acquisition_stop() then
-    # has nothing to stop).
+    # The runner's own limit (--stop-after): the output cut at 1000
+    # samples and the session stopped from the first packet that
+    # reaches them.
     emu_case "lib stop after 1000" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
     # The C driver never ends: with no trigger it arms nothing and waits
     # (protocol.c:1119, 926-933); an unplug during the fetch or while
@@ -198,9 +202,10 @@ emu_cases() {
     emu_case "lib unplug mid fetch hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
     emu_case "lib unplug while waiting hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
     # Faults that end the session before it starts: the Nth register
-    # write (the stop, the thresholds' writes before an upload, the
-    # trigger, the arm), the upload, a bitstream chunk, the verify, the
-    # settle reads and the status write.
+    # write (1 the stop, 2 and 5 the thresholds, 8 the channel group,
+    # 9 the trigger, up to the arm at 30), the upload, a bitstream
+    # chunk, the verify, the settle reads (the first pass and a later
+    # one) and the status write.
     for f in stall=write:1 stall=write:2 stall=write:5 stall=write:8 stall=write:9 stall=write:27 \
              stall=write:28 stall=write:29 stall=write:30 stall=upload stall_bitstream=5 verify=4 \
              stall=verify stall=read:3 stall=read:5 settle=100 stall=status; do
