@@ -19,7 +19,7 @@ emu_cases() {
     emu_case "victor scan" --keep-header -- -d $V --scan
     emu_case "victor show" --keep-header -- -d $V --show
     emu_case "victor samples 1" -- -d $V --samples 1
-    emu_case "victor samples 2" -- -d $V --samples 2
+    emu_case "victor samples 2" --record -- -d $V --samples 2
     emu_case "victor samples 3" -- -d $V --samples 3
     emu_case "victor no chip" -- -d victor-dmm:conn=hid/raw=$EMU_HIDRAW --samples 1
     # The forms users type, which sigrok-cli cannot open (see above):

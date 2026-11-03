@@ -1,0 +1,13 @@
+# oxrok hid fixture 1
+# emu cp2110: cp2110 csv
+# args: -d uni-t-ut61e-ser:conn=hid/cp2110/raw=/dev/hidrawN --samples 3 -O csv:header=false
+device vid=10c4 pid=ea80 manufacturer="Silicon Laboratories" product="CP2110 HID USB-to-UART Bridge" serial="0001A5F8"
+set_feature 4101 -> ok
+set_feature 5000004b0002000200 -> ok
+write 4303 -> ok
+read 64 -> 093130343731303b3430
+read 64 -> 05303a320d0a
+read 64 -> 093232333030303b3030
+read 64 -> 053036300d0a
+read 64 -> 09333130{4}333030
+read 64 -> 053032300d0a

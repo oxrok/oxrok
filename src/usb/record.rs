@@ -126,7 +126,7 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    fn from_error(e: &Error) -> Self {
+    pub(crate) fn from_error(e: &Error) -> Self {
         let (kind, msg) = match e {
             Error::Timeout => ("timeout", String::new()),
             Error::Busy => ("busy", String::new()),
@@ -138,7 +138,7 @@ impl Outcome {
         Outcome::Err(kind.to_owned(), msg)
     }
 
-    fn to_error(&self) -> Error {
+    pub(crate) fn to_error(&self) -> Error {
         match self {
             Outcome::Err(kind, msg) => match kind.as_str() {
                 "timeout" => Error::Timeout,
@@ -303,7 +303,7 @@ impl Fixture {
     }
 }
 
-fn quote(s: &str) -> String {
+pub(crate) fn quote(s: &str) -> String {
     let mut out = String::from("\"");
     for c in s.chars() {
         match c {
@@ -319,7 +319,7 @@ fn quote(s: &str) -> String {
 }
 
 /// Reads a quoted string at the start of `s`; returns it and the rest.
-fn unquote(s: &str) -> std::result::Result<(String, &str), String> {
+pub(crate) fn unquote(s: &str) -> std::result::Result<(String, &str), String> {
     let rest = s.strip_prefix('"').ok_or("expected a quoted string")?;
     let mut out = String::new();
     let mut chars = rest.char_indices();
@@ -779,7 +779,10 @@ impl BulkStream for RecordedStream {
 
 /// A transport that answers from a [`Fixture`] and fails on any call
 /// that differs from the recording, except for repeated polls (see
-/// [`Replay::finish`] and the rules in the source).
+/// [`Replay::finish`] and the rules in the source). A clone shares the
+/// cursor, so a test can hand the replay to a driver and check with
+/// the clone that it was played to the end.
+#[derive(Clone)]
 pub struct Replay {
     shared: Arc<Mutex<ReplayState>>,
     device: UsbDeviceInfo,

@@ -23,7 +23,7 @@ emu_cases() {
     emu_case "bm86x scan" --keep-header -- -d $B --scan
     emu_case "bm86x show" --keep-header -- -d $B --show
     emu_case "bm86x samples 1" -- -d $B --samples 1
-    emu_case "bm86x samples 3" -- -d $B --samples 3
+    emu_case "bm86x samples 3" --record -- -d $B --samples 3
     emu_case "bm86x P2 only" -- -d $B -C P2 --samples 2
     emu_case "bm86x csv" -- -d $B --samples 2 -O csv:header=false
     # The chip from the node's USB id.

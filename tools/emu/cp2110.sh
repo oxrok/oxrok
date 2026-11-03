@@ -29,7 +29,7 @@ emu_cases() {
     emu_case "cp2110 four samples" -- -d $D:$C --samples 4
     # Past the noise: the driver searches 140 bytes for the next packet.
     emu_case "cp2110 nine samples" -- -d $D:$C --samples 9
-    emu_case "cp2110 csv" -- -d $D:$C --samples 3 -O csv:header=false
+    emu_case "cp2110 csv" --record -- -d $D:$C --samples 3 -O csv:header=false
     emu_case "cp2110 analog" -- -d $D:$C --samples 7 -O analog
     # The chip from the node's USB id.
     emu_case "cp2110 raw without chip" -- -d $D:conn=hid/raw=$EMU_HIDRAW --samples 1

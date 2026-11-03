@@ -22,7 +22,7 @@ emu_cases() {
     emu_case "ut61e scan" --keep-header -- -d $U --scan
     emu_case "ut61e show" --keep-header -- -d $U --show
     emu_case "ut61e samples 1" -- -d $U --samples 1
-    emu_case "ut61e samples 2" -- -d $U --samples 2
+    emu_case "ut61e samples 2" --record -- -d $U --samples 2
     emu_case "ut61e samples 4" -- -d $U --samples 4
     emu_case "ut61e no chip" -- -d uni-t-ut61e-ser:conn=hid/raw=$EMU_HIDRAW --samples 1
     # The forms users type, which sigrok-cli cannot open (see above):

@@ -151,8 +151,14 @@ pub fn relay_count(product: &str) -> Option<usize> {
     (n > 0).then_some(n)
 }
 
-/// Reads the board's report: its serial number and the relay state.
-fn read_state(dev: &mut dyn HidDevice) -> Result<(String, u8)> {
+/// Reads the board's report: its serial number and the relay state,
+/// as the scan does before it builds the device.
+///
+/// # Errors
+///
+/// When the report cannot be read, is short, or holds a serial number
+/// that does not print.
+pub fn read_state(dev: &mut dyn HidDevice) -> Result<(String, u8)> {
     let mut report = [0u8; 1 + REPORT_BYTES];
     let n = dev.get_feature(&mut report)?;
     if n != report.len() {

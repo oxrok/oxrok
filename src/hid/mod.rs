@@ -20,6 +20,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod record;
+
 use crate::core::{Error, Result};
 use async_hid::{AsyncHidFeatureHandle, AsyncHidRead, AsyncHidWrite, HidBackend};
 use futures_lite::future::{block_on, or};
@@ -122,12 +124,31 @@ pub fn list() -> Result<Vec<HidInfo>> {
 }
 
 impl HidInfo {
-    /// Opens the device for reading and writing.
+    /// Opens the device for reading and writing. With
+    /// `OXROK_HID_RECORD=FILE` in the environment the session is
+    /// recorded and written to `FILE` when the device is closed
+    /// ([`record`]).
     pub fn open(&self) -> Result<Box<dyn HidDevice>> {
         block_on(async {
             let (reader, writer) = self.device.open().await.map_err(|e| map(&e))?;
             let feature = self.device.open_feature_handle().await.map_err(|e| map(&e))?;
-            Ok(Box::new(Native { reader, writer, feature }) as Box<dyn HidDevice>)
+            let native = Box::new(Native { reader, writer, feature }) as Box<dyn HidDevice>;
+            if let Ok(file) = std::env::var("OXROK_HID_RECORD")
+                && !file.is_empty()
+            {
+                log::info!("Recording the HID session to {file}.");
+                let device = record::DeviceLine {
+                    vendor_id: self.vendor_id,
+                    product_id: self.product_id,
+                    manufacturer: self.manufacturer.clone(),
+                    product: Some(self.product.clone()),
+                    serial: self.serial.clone(),
+                };
+                return Ok(
+                    Box::new(record::Recorder::to_file(native, device, file)) as Box<dyn HidDevice>
+                );
+            }
+            Ok(native)
         })
     }
 }
