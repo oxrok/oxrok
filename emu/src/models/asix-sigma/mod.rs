@@ -2,7 +2,7 @@
 //   libsigrok/src/hardware/asix-sigma/api.c (the ids, the scan by serial number),
 //   libsigrok/src/hardware/asix-sigma/protocol.c (the bit-bang pins, the netlist scrambling, the FPGA configuration sequence),
 //   libsigrok/src/hardware/asix-sigma/protocol.h,
-//   Copyright (C) 2010-2012 Håvard Espeland <gus@ping.uio.no>,,
+//   Copyright (C) 2010-2012 Håvard Espeland <gus@ping.uio.no>,
 //   Copyright (C) 2010 Martin Stensgård <mastensg@ping.uio.no>,
 //   Copyright (C) 2010 Carl Henrik Lunde <chlunde@ping.uio.no>,
 //   Copyright (C) 2020 Gerhard Sittig <gerhard.sittig@gmx.net>,
