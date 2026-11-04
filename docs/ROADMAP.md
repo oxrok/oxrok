@@ -271,6 +271,10 @@ each with where it belongs:
 - `--oracle-bug` accepts any non-zero exit, and `--oracle-hangs` now
   pins a real hang (pipistrello-ols); dslogic's two trigger-fault cases
   still have an empty `.oracle`, which pins nothing.
+- Rare flakes seen in full runs, not yet explained: `lib fault still=1
+  hangs` (lecroy-logicstudio: the runner exited 1 about 38 transactions
+  early, once in 12 runs) and `fault halt after one`
+  (saleae-logic-pro: two `bulk_in` lines reordered, once).
 - Device firmware sources may settle what models assume: the
   Pipistrello's overturned three of them. Look for the others'
   (DreamSourceLab's FPGA sources, for one).
