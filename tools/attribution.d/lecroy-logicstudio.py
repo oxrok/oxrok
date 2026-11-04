@@ -5,3 +5,11 @@ MAP["emu/src/models/lecroy-logicstudio.rs"] = (
      "upload, trigger layout, status packets, sample memory)",
      "libsigrok/src/hardware/lecroy-logicstudio/protocol.h"],
     INDEPENDENT)
+MAP["src/drivers/lecroy_logicstudio/mod.rs"] = (
+    ["libsigrok/src/hardware/lecroy-logicstudio/api.c",
+     "libsigrok/src/hardware/lecroy-logicstudio/protocol.c (the acquisition)"],
+    INDEPENDENT)
+MAP["src/drivers/lecroy_logicstudio/protocol.rs"] = (
+    ["libsigrok/src/hardware/lecroy-logicstudio/protocol.c",
+     "libsigrok/src/hardware/lecroy-logicstudio/protocol.h"],
+    INDEPENDENT)

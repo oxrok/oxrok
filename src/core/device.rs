@@ -173,6 +173,18 @@ pub trait Device: Send {
         Ok(())
     }
 
+    /// Closes the device at the end of the CLI's capture run, whether or
+    /// not its start succeeded. It exists for wire parity with sigrok-cli,
+    /// which never calls `sr_dev_close()` there: `sr_exit()` closes through
+    /// `std_dev_clear()` with the device still active (`std.c:427-428`,
+    /// where `sr_dev_close()` sets it inactive first, `device.c:779`). A
+    /// driver whose close depends on that state (sysclk-lwla's shut-down
+    /// bitstream) overrides this; a library client calls [`Device::close`]
+    /// and gets what `sr_dev_close()` gives.
+    fn close_after_capture(&mut self) -> Result<()> {
+        self.close()
+    }
+
     /// What the device's trigger can do beyond level and edge stages.
     /// The default is nothing beyond them, with any number of stages.
     fn trigger_features(&self) -> TriggerFeatures {
@@ -185,6 +197,14 @@ pub trait Device: Send {
             None => Ok(()),
             Some(_) => Err(Error::not_supported("triggers")),
         }
+    }
+
+    /// Whether a capture with `trigger` can start at all, asked before the
+    /// output is opened: a refusal here leaves an existing output file
+    /// alone. [`Device::start`] may refuse later for other reasons.
+    fn check_capture(&self, trigger: Option<&Trigger>) -> Result<()> {
+        let _ = trigger;
+        Ok(())
     }
 
     /// Starts acquiring. Packets go to `sink` from the device's own
@@ -228,8 +248,23 @@ pub trait Driver: Send + Sync {
         &[]
     }
 
+    /// The keys `-d DRIVER:KEY=VALUE` takes, which `--show` does not list
+    /// when they are not [`Driver::scan_options`]: for a port that accepts
+    /// what the driver it follows does not advertise.
+    fn accepted_scan_options(&self) -> &'static [Key] {
+        self.scan_options()
+    }
+
     /// What kind of instruments the driver serves.
     fn classes(&self) -> &'static [DeviceClass];
+
+    /// Whether a capture ends by itself, with no limit to set: the driver
+    /// offers none of the keys `--samples`, `--time`, `--frames` and
+    /// `--continuous` need, so `-O`, `-o` or `-t` alone starts a capture
+    /// (where sigrok-cli prints its help).
+    fn ends_captures_itself(&self) -> bool {
+        false
+    }
 
     /// Finds devices. `options` are scan options, e.g. a connection.
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>>;

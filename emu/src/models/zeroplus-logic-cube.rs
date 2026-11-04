@@ -143,7 +143,7 @@
 //!   true (api.c:148), so a rate not in the list reads past the array until a
 //!   crash or a match, and the check at api.c:152 cannot fire. What happens
 //!   depends on the build's rodata. In the oracle's build 3M and 123456789
-//!   crash with SIGSEGV (`--expect-fail` cases "samplerate 3M crashes" and
+//!   crash with SIGSEGV (`--oracle-bug` cases "samplerate 3M crashes" and
 //!   "samplerate 123456789 crashes"). 46 (as 10, 41, 109, 116, 2669 and
 //!   3045960) meets its value there and is accepted, exit 0.
 //!   `__analyzer_set_freq()` then finds it in no table and returns -1

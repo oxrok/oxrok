@@ -37,6 +37,8 @@ pub struct HidInterface {
     pub number: u8,
     /// The report descriptor.
     pub report_descriptor: Vec<u8>,
+    /// `bcdHID` of the class descriptor.
+    pub version: u16,
     idle: u8,
     protocol: u8,
 }
@@ -44,14 +46,22 @@ pub struct HidInterface {
 impl HidInterface {
     /// A HID interface with this report descriptor.
     pub fn new(number: u8, report_descriptor: Vec<u8>) -> HidInterface {
-        HidInterface { number, report_descriptor, idle: 0, protocol: 1 }
+        HidInterface { number, report_descriptor, version: 0x0111, idle: 0, protocol: 1 }
     }
 
-    /// The HID class descriptor (HID 1.11, no country, one report
-    /// descriptor), which goes after the interface descriptor.
+    /// The same interface with another `bcdHID` than the default 1.11.
+    #[must_use]
+    pub fn with_version(mut self, version: u16) -> HidInterface {
+        self.version = version;
+        self
+    }
+
+    /// The HID class descriptor (no country, one report descriptor), which
+    /// goes after the interface descriptor.
     pub fn descriptor(&self) -> [u8; 9] {
         let len = (self.report_descriptor.len() as u16).to_le_bytes();
-        [9, descriptor::HID, 0x11, 0x01, 0, 1, descriptor::HID_REPORT, len[0], len[1]]
+        let version = self.version.to_le_bytes();
+        [9, descriptor::HID, version[0], version[1], 0, 1, descriptor::HID_REPORT, len[0], len[1]]
     }
 
     /// Back to the defaults: no idle, report protocol.

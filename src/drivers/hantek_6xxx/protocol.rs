@@ -346,21 +346,11 @@ impl Link {
 
     /// One transfer of samples, `len` bytes or what it held when its
     /// timeout ran out; nothing by then is
-    /// [`crate::core::Error::Timeout`]. A transfer that cannot fill at
-    /// `rate` before the timeout will run out, and the backend is told.
-    pub fn read(&mut self, len: usize, rate: u64) -> Result<Vec<u8>> {
+    /// [`crate::core::Error::Timeout`].
+    pub fn read(&mut self, len: usize) -> Result<Vec<u8>> {
         log::debug!("Request channel data.");
-        if will_time_out(len, rate) {
-            self.t.bulk_in_partial(ENDPOINT_IN, len, TRANSFER_TIMEOUT)
-        } else {
-            self.t.bulk_in(ENDPOINT_IN, len, TRANSFER_TIMEOUT)
-        }
+        self.t.bulk_in(ENDPOINT_IN, len, TRANSFER_TIMEOUT)
     }
-}
-
-/// Whether `len` bytes take longer than [`TRANSFER_TIMEOUT`] at `rate`.
-fn will_time_out(len: usize, rate: u64) -> bool {
-    u128::from(len as u64) * 1000 > u128::from(rate) * 2 * TRANSFER_TIMEOUT.as_millis()
 }
 
 #[cfg(test)]
@@ -474,16 +464,6 @@ mod tests {
         assert_eq!(vdiv_index(&VDIVS, &v(2, 1)), None);
         assert_eq!(vdiv_index(&VDIVS_INSTRUSTAR, &v(141, 200)), Some(1));
         assert_eq!(vdiv_index(&VDIVS, &Value::U64(1)), None);
-    }
-
-    /// Only a transfer that cannot fill in 4 s: 1 MiB at 100 kHz, not
-    /// 256 KiB.
-    #[test]
-    fn which_transfers_will_time_out() {
-        assert!(will_time_out(1024 * 1024, 100_000));
-        assert!(!will_time_out(256 * 1024, 100_000));
-        assert!(!will_time_out(12 * 1024 * 1024, 2_000_000));
-        assert!(will_time_out(12 * 1024 * 1024, 1_000_000));
     }
 
     #[test]

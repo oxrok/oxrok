@@ -574,7 +574,7 @@ impl Acquisition {
         let _ = link.start();
         // What the first transfer holds or how it ends is of no interest,
         // as long as there is a device.
-        let flushed = link.read(FLUSH_SIZE, self.rate);
+        let flushed = link.read(FLUSH_SIZE);
         if !matches!(flushed, Err(Error::Disconnected)) {
             self.transfers(link, sink, stop);
         }
@@ -589,7 +589,7 @@ impl Acquisition {
         let mut failures = 0;
         while !stop.load(Ordering::SeqCst) {
             let amount = protocol::data_amount(self.limits, self.rate, elapsed(), received);
-            let data = match link.read(amount, self.rate) {
+            let data = match link.read(amount) {
                 Ok(d) if d.is_empty() => {
                     // api.c:647-649 returns here without the next
                     // transfer, and the capture waits for ever.

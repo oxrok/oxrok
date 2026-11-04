@@ -1,0 +1,11 @@
+sr: device: sysclk-sla5032: Opening device instance.
+sr: hwdriver: sysclk-sla5032: Starting acquisition.
+sr: sysclk-sla5032: start acquision, smp lim: 512, cap ratio: 50.
+sr: sysclk-sla5032: start acquision, pre: 256, post: 256.
+sr: sysclk-sla5032: start acquision, pre: 1, post: 1.
+sr: sysclk-sla5032: set trigger: val: 00000000, e_mask: 00000000, mask: 00000000.
+sr: sysclk-sla5032: set sample rate: 500000000.
+sr: sysclk-sla5032: get status, reg2: A5A5A5AB.
+sr: sysclk-sla5032: acquision done, status: 0.
+sr: sysclk-sla5032: Failed to send command 4: LIBUSB_ERROR_PIPE.
+sr: hwdriver: sysclk-sla5032: Stopping acquisition.

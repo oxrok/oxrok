@@ -1,0 +1,3 @@
+sr: device: sysclk-sla5032: Opening device instance.
+sr: sysclk-sla5032: Failed to send command 3: LIBUSB_ERROR_PIPE.
+Failed to open device.
