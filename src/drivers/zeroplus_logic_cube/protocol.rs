@@ -926,9 +926,10 @@ fn read_samples(
             for piece in pieces {
                 let packet = match piece {
                     Piece::Trigger => Packet::Trigger,
-                    Piece::Samples(range) => {
-                        Packet::Logic(LogicData { unit_size: UNIT_SIZE, data: data[range].to_vec() })
-                    }
+                    Piece::Samples(range) => Packet::Logic(LogicData {
+                        unit_size: UNIT_SIZE,
+                        data: data[range].to_vec(),
+                    }),
                 };
                 if !sink.send(packet) {
                     return true;
@@ -1053,7 +1054,7 @@ mod tests {
         t.add(0, 25, TriggerMatch::Rising);
         let r = trigger_regs(Some(&t), &on).unwrap();
         assert_eq!(r.status, [0x09, 0, 0x01, 0, 0, 0, 0, 0x80]);
-        assert_eq!(r.edge, 0x40 | 25);
+        assert_eq!(r.edge, 0x59);
         assert!(r.any);
     }
 
@@ -1152,11 +1153,7 @@ mod tests {
         let mut r = Readout::new(plan, true);
         assert_eq!(
             r.feed(PACKET_SIZE),
-            Feed::Send(vec![
-                Piece::Samples(0..400),
-                Piece::Trigger,
-                Piece::Samples(400..1600)
-            ])
+            Feed::Send(vec![Piece::Samples(0..400), Piece::Trigger, Piece::Samples(400..1600)])
         );
     }
 

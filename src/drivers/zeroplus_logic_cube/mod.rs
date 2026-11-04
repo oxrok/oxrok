@@ -922,6 +922,42 @@ mod tests {
     }
 
     #[test]
+    fn a_trigger_does_not_outlive_its_capture() {
+        // analyzer.c:515-516 leaves the registers and analyzer.c:525 the
+        // flag as they were when the next capture has no trigger.
+        let empty = |s: &mut String| {
+            r(s, 0x21, 2);
+            r(s, 0x21, 2);
+            address(s, 0x9b, 0);
+            address(s, 0x96, 0);
+            address(s, 0x90, 0);
+        };
+        let triggered = Regs {
+            trigger_status: [1, 0, 0, 0, 0, 0, 0, 0],
+            trigger_edge: 0x41,
+            ramsize_trigger: 99,
+            ..Regs::default()
+        };
+        let plain = Regs { ramsize_trigger: 99, ..Regs::default() };
+        let mut s = device_steps();
+        start_steps(&mut s, &triggered);
+        empty(&mut s);
+        start_steps(&mut s, &plain);
+        empty(&mut s);
+        let mut d = device(&s);
+        d.set(&Key::LimitSamples, &Value::U64(100), None).unwrap();
+        let mut t = Trigger::new();
+        t.add(0, 0, TriggerMatch::One);
+        t.add(0, 1, TriggerMatch::Rising);
+        d.set_trigger(Some(t)).unwrap();
+        assert_eq!(capture(&mut d).len(), 2);
+        assert_eq!(d.regs.trigger_edge, 0x41);
+        d.set_trigger(None).unwrap();
+        assert_eq!(capture(&mut d).len(), 2);
+        assert_eq!(d.regs, plain);
+    }
+
+    #[test]
     fn a_set_during_a_capture_is_refused() {
         let mut s = device_steps();
         start_steps(&mut s, &regs_1000());
