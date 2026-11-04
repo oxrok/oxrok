@@ -183,7 +183,8 @@ emu_cases() {
     for vd in 10mV 20mV 50mV 200mV 1V 5V; do
         emu_case "2250 CH2 $vd" --digest --filter "$HD_FRAME" -- -d $H -g CH2 -c vdiv=$vd --frames 1
     done
-    emu_case "2250 large frame" --digest --filter "$HD_FRAME" -- -d $H -c buffersize=524288:captureratio=30 --frames 1
+    # Every 1024th line, for the golden's size; the digest covers the rest.
+    emu_case "2250 large frame" --digest --filter '1~1024!d' -- -d $H -c buffersize=524288:captureratio=30 --frames 1
     emu_case "2250 125M" --expect-fail --stderr --filter "$E" -- -d $H -c samplerate=125M --frames 1
     hantek_options profile=dso-2250 ext=1
     emu_case "2250 trigger EXT" --digest --filter "$HD_FRAME" -- -d $H -c triggersource=EXT --frames 1
@@ -237,7 +238,8 @@ emu_cases() {
     # Faults the C driver never ends on, sigrok-cli running until the
     # harness stops it. A channel data transfer that completes empty
     # leaves the frame one packet short, and the driver waits for the
-    # transfer it never submitted; oxrok reads on, and has the frame.
+    # transfer it never submitted; oxrok reads on, and on this model,
+    # which keeps the bytes for the next transfer, has the frame.
     hantek_options profile=dso-2090 flashed=1 empty=3
     emu_case "fault empty data transfer hangs" --oracle-bug "api.c:719-721 returns for an empty transfer, and protocol.c:917-927 submitted one per packet of the frame: it never ends" --oracle-hangs --timeout 5 --digest --filter "$HD_FRAME" -- -d $H --frames 1
     # Unplugged in the middle of the frame (the 20th IN of endpoint 6:
@@ -263,6 +265,9 @@ emu_cases() {
     # out, the pre-trigger samples are dropped.
     hantek_options profile=dso-2090 flashed=1 in-limit=20
     emu_case "interrupt in a frame" --interrupt in=6:20 --oracle-bug "$I" --digest --filter "$HD_FRAME" -- -d $H --frames 1
+    # The same, its stderr: the stop ends the frame, it does not read on
+    # to the failure bound, whose output would be the same.
+    emu_case "interrupt in a frame stderr" --interrupt in=6:20 --oracle-bug "$I" --stderr --no-output -- -d $H --frames 1
     # No frame limit: two frames, and a Ctrl-C at the poll after them (six
     # polls and 40 transfers, then two polls and 40 transfers).
     hantek_options profile=dso-2090 flashed=1 in-limit=88

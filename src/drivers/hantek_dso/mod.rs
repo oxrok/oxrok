@@ -25,19 +25,29 @@
 //! A frame is read one packet at a time, as many as the C driver submits
 //! at once. A transfer of one packet cannot end with part of the data, so
 //! blocking reads give up nothing a queue would hold; each has the C
-//! driver's 40 ms. Unlike the C driver's, an empty or timed out transfer
-//! does not lose the frame: the bytes are still in the device, the read
-//! is repeated.
+//! driver's 40 ms. Unlike the C driver, the port repeats the read after
+//! an empty or timed out transfer. On the emulator's model the bytes are
+//! still in the device, so the frame completes; that is the model's choice,
+//! not a fact of the firmware. On a device where an empty packet means
+//! there is no more, the port ends the frame with an error after
+//! [`MAX_FAILURES`] such reads (at 40 ms each about 2.56 s if they time
+//! out, at once if they answer empty).
 //!
 //! Where the C driver is wrong the port does otherwise: `num_hdiv` and
 //! `num_vdiv` are answered (`config_get()` fills them in, then returns
 //! `SR_ERR_NA`); a frame without pre-trigger samples sends no empty
 //! analog packet, on which `output/analog.c` frees its buffer twice; and
-//! no error is retried for ever. A disconnect ends the capture at once,
-//! and so do [`MAX_FAILURES`] failures in a row of any one kind, which a
-//! DSO-5200's 9 bit frames ("Not yet supported.") count as. A trigger
-//! that never fires is no error, and is waited for until a stop, as a
-//! scope does.
+//! failures are not retried for ever. A disconnect ends the capture at
+//! once, and so do [`MAX_FAILURES`] failures in a row of any one kind,
+//! which a DSO-5200's 9 bit frames ("Not yet supported.") count as;
+//! unknown capture states end it after [`MAX_UNKNOWN_STATES`].
+//!
+//! Three states are waited in until a stop, with no bound: a trigger that
+//! never fires (state 0, restarted) and a slow frame filling (state 1) are
+//! no errors, as on any scope, and state 127, the device's "timeout", is one
+//! the C driver says "doesn't matter" of (api.c:902-904). A device stuck in
+//! 127 therefore polls on as in C, with one warning after
+//! [`MAX_FAILURES`] of them in a row.
 
 #![forbid(unsafe_code)]
 
@@ -94,6 +104,13 @@ const RENUM_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Failures of one kind in a row after which a capture ends, the bound
 /// fx2lafw has as `MAX_EMPTY_TRANSFERS`; the C driver retries for ever.
 const MAX_FAILURES: usize = 64;
+/// Unknown capture states in a row after which a capture ends. C polls on
+/// for ever (api.c:905-907), which also lets it recover from what a run
+/// stopped in mid-frame left unread: the next run's polls read those samples
+/// as states, 512 bytes a poll, and their first byte is mostly no known
+/// state. So the bound is what the largest frame (512 Ki samples of 2 bytes)
+/// takes to drain, plus [`MAX_FAILURES`]; by reasoning, not seen on hardware.
+const MAX_UNKNOWN_STATES: usize = 2 * 512 * 1024 / 512 + MAX_FAILURES;
 
 /// `usb_get_port_path()`: `BUS-PORT.PORT...`.
 fn port_path(d: &UsbDeviceInfo) -> String {
@@ -657,6 +674,10 @@ struct Acquisition {
     commands: Failures,
     /// A 9 bit frame's message was logged for this run of them.
     told_9bit: bool,
+    /// Unknown states in a row.
+    unknown_states: usize,
+    /// States 127 in a row.
+    timeout_states: usize,
 }
 
 impl Acquisition {
@@ -668,6 +689,8 @@ impl Acquisition {
             polls: Failures::default(),
             commands: Failures::default(),
             told_9bit: false,
+            unknown_states: 0,
+            timeout_states: 0,
         }
     }
 
@@ -729,7 +752,9 @@ impl Acquisition {
                     log::error!("Not yet supported.");
                     self.told_9bit = true;
                 }
-                return self.not_going_on("the device's 9 bit samples");
+                self.unknown_states = 0;
+                self.timeout_states = 0;
+                return self.nine_bit();
             }
             protocol::CAPTURE_EMPTY
             | protocol::CAPTURE_FILLING
@@ -738,11 +763,18 @@ impl Acquisition {
             | protocol::CAPTURE_TIMEOUT => {}
             other => {
                 log::debug!("Unknown capture state: {other}.");
-                return self.not_going_on("unknown capture states");
+                self.timeout_states = 0;
+                return self.unknown_state();
             }
         }
         self.polls.0 = 0;
         self.told_9bit = false;
+        self.unknown_states = 0;
+        if state == protocol::CAPTURE_TIMEOUT {
+            self.timeout_state();
+        } else {
+            self.timeout_states = 0;
+        }
         match state {
             protocol::CAPTURE_EMPTY => {
                 self.capture_empty_count += 1;
@@ -775,14 +807,37 @@ impl Acquisition {
         }
     }
 
-    /// An answer the capture cannot go on from, which may yet change.
-    fn not_going_on(&mut self, what: &str) -> Next {
+    /// A 9 bit frame, which is not read and may yet change.
+    fn nine_bit(&mut self) -> Next {
         self.polls.0 += 1;
         if self.polls.0 >= MAX_FAILURES {
-            log::error!("{MAX_FAILURES} polls in a row answered {what}, giving up.");
+            log::error!(
+                "{MAX_FAILURES} polls in a row answered the device's 9 bit samples, giving up."
+            );
             return Next::End;
         }
         Next::Poll
+    }
+
+    /// An unknown state, see [`MAX_UNKNOWN_STATES`].
+    fn unknown_state(&mut self) -> Next {
+        self.unknown_states += 1;
+        if self.unknown_states >= MAX_UNKNOWN_STATES {
+            log::error!("{MAX_UNKNOWN_STATES} polls in a row answered unknown states, giving up.");
+            return Next::End;
+        }
+        Next::Poll
+    }
+
+    /// State 127: polled on, as C does; whether this one was worth the
+    /// warning, given once a run of them.
+    fn timeout_state(&mut self) -> bool {
+        self.timeout_states += 1;
+        let warn = self.timeout_states == MAX_FAILURES;
+        if warn {
+            log::warn!("{MAX_FAILURES} polls in a row answered the device's timeout state.");
+        }
+        warn
     }
 
     fn send_chunk(&self, sink: &PacketSink, buf: &[u8]) -> bool {
@@ -999,7 +1054,8 @@ mod tests {
     }
 
     /// api.c:719-721 leaves the transfer it got nothing from behind, and
-    /// the frame unfinished for ever; the data is still in the device.
+    /// the frame unfinished for ever; on the model the data is still in
+    /// the device.
     #[test]
     fn an_empty_or_timed_out_transfer_is_read_again() {
         let steps = format!(
@@ -1055,10 +1111,52 @@ mod tests {
         assert_eq!(run(small(), &steps), []);
     }
 
+    /// Long enough to drain the largest frame a stopped run left unread,
+    /// and a known state starts the count again. (About 5 s of polls.)
     #[test]
-    fn unknown_states_end_the_capture_after_a_while() {
-        let steps = poll(255).repeat(MAX_FAILURES);
+    fn unknown_states_end_the_capture_after_a_frame_could_have_drained() {
+        assert_eq!(MAX_UNKNOWN_STATES, 2048 + MAX_FAILURES);
+        let mut steps = poll(255).repeat(MAX_UNKNOWN_STATES - 1);
+        steps.push_str(&poll(protocol::CAPTURE_FILLING));
+        steps.push_str(&poll(255).repeat(MAX_UNKNOWN_STATES));
         assert_eq!(run(small(), &steps), []);
+    }
+
+    /// api.c:902-904 tries again: so does the port, past the warning.
+    #[test]
+    fn state_127_polls_on_and_warns_once_a_run() {
+        let steps = format!(
+            "{}{}{BEGIN}bulk_out 02 0500 -> 2\nbulk_in 86 4 -> 00ff00ff\n",
+            poll(protocol::CAPTURE_TIMEOUT).repeat(2 * MAX_FAILURES),
+            poll(protocol::CAPTURE_READY_8BIT)
+        );
+        assert_eq!(run(small(), &steps).len(), 4);
+        let mut a = Acquisition::new(small());
+        let warned = (0..2 * MAX_FAILURES).filter(|_| a.timeout_state()).count();
+        assert_eq!(warned, 1);
+        a.timeout_states = 0;
+        assert!((1..MAX_FAILURES).all(|_| !a.timeout_state()));
+        assert!(a.timeout_state());
+    }
+
+    /// A stop in a frame ends it before the next transfer. The whole frame
+    /// is on offer, so a read would show as analog packets; failed reads
+    /// up to the bound would give what a stop gives.
+    #[test]
+    fn a_stop_ends_a_frame_at_once() {
+        let text = "# oxrok usb fixture 1\ndevice vid=04b5 pid=2090\nbulk_in 86 4 -> 00ff00ff\n";
+        let r = crate::usb::record::Replay::from_text(text).unwrap();
+        let mut link = Link::new(Box::new(r.clone()), 0x2090, 4, [[[0; 2]; 9]; 2]);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let next = Acquisition::new(small()).fetch(
+            &mut link,
+            0,
+            &PacketSink::new(tx, 0),
+            &AtomicBool::new(true),
+        );
+        assert_eq!(next, Next::End);
+        let p: Vec<Packet> = rx.try_iter().map(|(_, p)| p).collect();
+        assert_eq!(p, [Packet::FrameBegin, Packet::FrameEnd]);
     }
 
     /// Three empty states restart with a force when no source is set; the
