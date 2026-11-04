@@ -76,10 +76,10 @@ emu_cases() {
     emu_case "by ids" -- -d $F:conn=2961.66b0 --scan
     emu_case "by address" -- -d $F:conn=$EMU_USB --scan
     # sr_usb_find() matches nothing: no match list, so every SLA5032 is
-    # listed (api.c:126-127).
+    # listed (api.c:116-117).
     emu_case "conn matching nothing" -- -d $F:conn=9.99 --scan
     emu_case "bad conn" --stderr --filter '/usb:|sysclk-sla5032:/!d; s/ *\[[0-9:.]+\]//' -- -l 4 -d $F:conn=nonsense --scan
-    # Another device's address: the warning of api.c:138-140 (the root hub).
+    # Another device's address: the warning of api.c:132-133 (the root hub).
     emu_case "conn another device" --stderr --filter "$E; s/device [0-9]+\.1 /device BUS.1 /" -- -l 4 -d $F:conn=${EMU_USB%.*}.1 --scan
     # --show opens the device: the bitstream goes up.
     emu_case "show" --keep-header -- -d $F --show
@@ -115,7 +115,7 @@ emu_cases() {
     for ratio in 0 20 30 70 90 100; do
         emu_case "ratio $ratio" --digest --filter "$B" -- -d $F -C CH0 -c captureratio=$ratio --samples 2000 -O bits
     done
-    # A ratio the list does not hold is taken all the same (api.c:341).
+    # A ratio the list does not hold is taken all the same (api.c:332).
     emu_case "ratio not listed" --digest --filter "$B" -- -d $F -C CH0 -c captureratio=15 --samples 2000 -O bits
     emu_case "ratio over 100 refused" --expect-fail --stderr --filter "$O" -- -d $F -c captureratio=101 --samples 512 -O bits
     # The time limit becomes samples, in sigrok-cli.
@@ -185,8 +185,14 @@ emu_cases() {
         sla_options $f
         emu_case "fault open ignored $f" --digest --filter "$B" -- -d $F -C CH0 --samples 512 -O bits
     done
-    # The key's failures are ignored too (la_cfg_fpga_done()'s result,
-    # protocol.c): the FPGA has no keys, and the capture never ends.
+    # The key's failures are ignored too (protocol.c:646, la_cfg_fpga_done()'s
+    # result): the open still succeeds. These assume nothing about the board.
+    for f in stall=read-mem stall=write-reg:1; do
+        sla_options $f
+        emu_case "fault keys ignored $f" --stderr --filter "$E" -- -l 5 -d $F --show
+    done
+    # Assumed, not the C's: an FPGA without its keys never samples, so
+    # register 2 repeats A5A5A5A0 and the capture never ends.
     for f in stall=read-mem stall_reply=read-mem short_reply=read-mem stall=write-reg:1 stall=write-reg:2; do
         sla_options $f
         emu_case "fault keys $f" --hangs --timeout 2 --no-output -- -d $F -C CH0 --samples 512 -O bits
@@ -243,6 +249,8 @@ emu_cases() {
     sla_options configured=1 data_stall=1
     emu_case "fault chunk stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     # The driver gives up after USB_DATA_TIMEOUT_MS, 2 s.
+    sla_options configured=1 data_stall=2
+    emu_case "fault second chunk stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 1500000 -O bits
     sla_options configured=1 data_hold=1
     emu_case "fault chunk never sent" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=0
@@ -251,6 +259,10 @@ emu_cases() {
     emu_case "fault chunk short and uneven" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=600
     emu_case "fault chunk short samples" --digest --filter "$B" -- -d $F -C CH0 --samples 512 -O bits
+    # Records claiming over 2^31 samples: the int at protocol.c:782 goes
+    # negative and g_try_malloc() fails (protocol.c:797-801). About 197 KB.
+    sla_options configured=1 overcount=1
+    emu_case "fault samples over an int" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     # No answer to a poll: the driver waits 500 s (USB_REPLY_TIMEOUT_MS).
     sla_options configured=1 hold_reply=read-reg:16
     emu_case "fault no answer to a poll" --hangs --timeout 2 --no-output -- -d $F -C CH0 --samples 512 -O bits

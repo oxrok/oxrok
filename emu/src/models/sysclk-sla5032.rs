@@ -18,8 +18,10 @@
 //! `lsusb -v` on the sigrok wiki (`Sysclk SLA5032/Info`), and the chips
 //! its device page (CY7C68013A-56LTXI, XC6SLX16, 2x 1 Gbit DDR2). I looked
 //! for firmware or HDL source (sigrok-firmware, GitHub, the wiki's links)
-//! and found none: the vendor ships a closed `top.bit`. So nothing here
-//! was checked against the device's own logic. How sure: ids, strings,
+//! and found none: the vendor ships a closed `top.bit`. That means none
+//! was found, not that none exists: the vendor ISO the wiki links
+//! (`sla5032_2015_1_24.iso`, with the real `top.bit`) was not examined. So
+//! nothing here was checked against the device's own logic. How sure: ids, strings,
 //! endpoints and packet size are a recording and certain; command bytes,
 //! register numbers and the record format are the driver's and certain;
 //! what is marked "assumed" below is the model's reading, "invented" is
@@ -68,7 +70,8 @@
 //! driver's buffer of 6 MiB), 4 PLL divider less 1, 5 control bits, 6 and
 //! 7 post- and pre-trigger depth, `(x + 1) * 256` samples, 9 to 12 the two
 //! PWM generators, 14 sampling on or off, 16 and 17 the keys. Read: 0
-//! post-trigger samples so far in units of 256, 1 the inputs, 2 the
+//! post-trigger samples so far in units of 256 (half of register 6 while
+//! triggered is invented; the driver only logs it), 1 the inputs, 2 the
 //! status, 5 as written. Others are flagged. Register 5 reads 0 after the
 //! bitstream (assumed; the driver only ever changes single bits and the
 //! whole read-back value). Register 2 reads `B6FF9C97`, `12FF9C97`,
@@ -81,7 +84,10 @@
 //! sample 0. The trigger is looked for once the pre-trigger depth is
 //! full (assumed), so memory holds `pre` samples before the trigger and
 //! `post` from it on, and without a trigger enabled the capture takes
-//! the first `pre + post` samples. Reading them back: register 5 is
+//! the first `pre + post` samples. The depth counts samples whatever the
+//! records they take (assumed): the memory is 2 x 1 Gbit, 256 MiB, about
+//! 44.7 Mi records of 6 bytes, so 64 Mi samples that all change may not
+//! fit on the real board. Reading them back: register 5 is
 //! written `0x08`, then `0x28`; then per chunk `07 03`, register 3 and a
 //! rise of register 5's bit 4 (the comment says "b5: ->0->1 upload next
 //! data chunk", the code toggles bit 4 after bit 5 was set; the model
@@ -129,7 +135,8 @@
 //! limit with a ratio of 0 or 100, which the comment forbids
 //! ("`(x+1)*256 + (y+1)*256 <= 64M`") but the driver's `MAX(.., 2)`
 //! sends (the case "limit highest ratio 0"); a device has no way to
-//! refuse a register write. The model captures all of it (assumed). Register 5 written whole by the
+//! refuse a register write. The model keeps all of it, over 64 Mi samples
+//! too (assumed). Register 5 written whole by the
 //! read-back, losing the PLL bits; the sampling is over. Bit 6 is set
 //! twice by the start list.
 //!
@@ -142,16 +149,25 @@
 //! `read-reg` and `read-mem`); `data_stall=N` STALLs the Nth chunk's read,
 //! `data_hold=N` never sends it (the driver gives up after 2 s),
 //! `data_short=BYTES` ends the first chunk after so many bytes with no
-//! marker, and `no_marker=1` ends the data without a marker. A one-shot
+//! marker, `no_marker=1` ends the data without a marker, and `overcount=1`
+//! sends 32769 records of 65535 samples and the marker whatever the depth
+//! (memory gone wrong: about 197 KB that claim over 2^31 samples, for the
+//! driver's `int`, and no larger total is offered). A one-shot
 //! STALL is an emulation artifact: a real STALL halts the endpoint until
 //! it is cleared, which the driver never does.
 //!
 //! **Emulation artifacts**, in one place: the time counted in status
 //! reads; replies at once; the one-shot STALLs; the invented signal and
 //! the marker's value; inputs read as 0 while waiting, so that a `--hangs`
-//! log repeats; a transfer that ends on a packet boundary needs a
-//! zero-length packet on the bus, which the emulator's completed transfer
-//! stands for.
+//! log repeats; R0's half depth while triggered; a transfer that ends on a
+//! packet boundary needs a zero-length packet on the bus, which the
+//! emulator's completed transfer stands for. Whether the firmware sends one
+//! is unknown, and it matters: without a short packet or a ZLP
+//! `libusb_bulk_transfer()` runs to its 2 s timeout, and `protocol.c:749`
+//! checks `ret` before `xfer_len`, so the chunk is dropped with exit 0.
+//! With no ZLP that would hit about 1 capture in 256, those whose records
+//! end on a packet boundary. The model always ends the transfer, so no case
+//! shows this path with data ("fault chunk never sent" shows it without).
 //!
 //! **Not reached by the cases** (`tests/emu/sysclk-sla5032/gcov.txt`):
 //!
@@ -167,11 +183,13 @@
 //!   channel indexes (`api.c:354-355,411-412`), re-enabling a channel
 //!   (`api.c:363`), one trigger stage (`api.c:396-397`), a trigger on a
 //!   disabled channel (`api.c:405`: "Invalid channel"), the trigger's kinds
-//!   (`api.c:418-419`), a rate not listed (`protocol.c:347`).
+//!   (`api.c:418-419`).
+//! - A rate not listed (`protocol.c:347`): the driver's own `config_set()`
+//!   refuses it first (`api.c:321-322`).
 //! - `config_commit()`'s failures (`api.c:445,449-450`): the open has
 //!   already configured the FPGA, so its apply does nothing.
 //! - Cannot happen: allocation failures (`protocol.c:132-133,541-543,
-//!   564-565,741-743,797-801,892-893`), libusb's list and descriptor calls
+//!   564-565,741-743,892-893`; 797-801 can, see below), libusb's list and descriptor calls
 //!   (`api.c:121-123,174-178`), a file that shrinks while read
 //!   (`protocol.c:550-552`), null arguments (`protocol.c:600`), the state
 //!   check (`protocol.c:882-883`: `devc->state` is only ever `STATE_IDLE`),
@@ -189,31 +207,43 @@
 //!   no device selects every SLA5032.
 //! - `sla5032_send_bitstream()` ignores `la_cfg_fpga_done()`'s result
 //!   (`protocol.c:646`), so a failed key read or write still reports a
-//!   good open. By the model's assumption the capture then never ends, and
-//!   with no time limit in the driver sigrok-cli waits for ever (the "fault
-//!   keys" cases, `--hangs`).
+//!   good open, exit 0 (the cases "fault keys ignored", which assume
+//!   nothing). That the capture then never ends is the model's assumption
+//!   (the "fault keys" cases, `--hangs`): register 2's `A5A5A5A0` for ever
+//!   is its choice, not the C's.
 //! - A trigger that never fires has no limit at all: the driver polls for
 //!   ever. A reply that never comes waits `USB_REPLY_TIMEOUT_MS`, 500 s
 //!   (`protocol.h:46`).
 //! - An error during a capture ends it with exit 0 (`protocol.c:719-723,
 //!   733-737,749-756`): only the log tells, and the chunk is lost.
 //! - The depths have a minimum of 512 samples each and are whole units of
-//!   256 (`protocol.c:904-910`), and the driver sends all the memory holds:
-//!   a limit of 512 yields 1024 samples, and only sigrok-cli's own limit
-//!   cuts them. Disabled channels are sent as well (`channel_mask` is
+//!   256 (`protocol.c:904-910`), and the driver sends all the memory holds.
+//!   The rounding goes both ways: a limit of 512 yields 1024 samples, of
+//!   which only sigrok-cli's own limit cuts the excess, and a limit of 5000
+//!   yields 4608, fewer than asked for. Disabled channels are sent as well (`channel_mask` is
 //!   written at `api.c:363,365` and read nowhere).
-//! - The soft trigger looks through the samples again from their start
-//!   (`protocol.c:834`), so where the hardware's own trigger position
-//!   would be is lost: a level trigger that already holds in the pre-trigger
-//!   samples fires on the first one, and an edge on the first it finds, 16
-//!   samples in rather than 256 for the case "trigger rising". On the real
-//!   board this depends on the assumption above about where the hardware
-//!   fires.
+//! - T goes on the first match in memory, whatever the depth; the distance
+//!   from the hardware's trigger is unknown. `protocol.c:834` scans from the
+//!   first sample read back and nothing uses register 7 or register 0, so
+//!   the driver never had a position to lose. That an earlier match can be
+//!   in memory at all is the model's assumption about where the hardware
+//!   fires: the case "trigger rising" has T at offset 16 and the model's
+//!   hardware position at offset 512 (`pre()` with register 7 at 1), and
+//!   those two numbers say nothing about a real board.
 //! - A failed start can leave register 14 at 1 and `devc->stl` allocated
 //!   (`protocol.c:890,915-945`). Read only, not shown by a case: every
 //!   early `return SR_ERR` of `la_write_cmd_buf()` leaks its buffer
 //!   (`protocol.c:176,181`), and `devc->stl` is freed only on the good path
 //!   (`protocol.c:861-864`).
+//! - Records from the device are summed into an `int` with no check
+//!   (`protocol.c:782`), which then sizes the buffer (`protocol.c:795`) that
+//!   the decoder fills by the records' own counts (`protocol.c:818-821`).
+//!   Read only, no case: 65537 records of 65535 samples sum to 2^32 - 1, and
+//!   one more of 2 samples wraps it to 1, so the driver allocates 4 bytes
+//!   and writes about 17 GB. A total from 2^31 up to 2^32 goes negative, and
+//!   its huge `size_t` fails `g_try_malloc()`, the memory error at
+//!   `protocol.c:797-801` (the case "fault samples over an int", exit 0).
+//!   A capture of 64 Mi samples never comes near; it takes bad data.
 //! - The comment's "b5: ->0->1 upload next data chunk" (`protocol.c:72`)
 //!   does not match the code, which toggles bit 4 (`protocol.c:435,439`).
 
@@ -228,7 +258,7 @@ pub const NAME: &str = "sysclk-sla5032";
 pub const ABOUT: &str = "Sysclk SLA5032 (2961:66b0), FX2LP relaying commands to an FPGA with RLE \
                          sample memory; period=N, wait=N, configured=1, fw_size=N; faults: \
                          stall=, stall_reply=, short_reply=, hold_reply=KIND[:N], data_stall=N, \
-                         data_hold=N, data_short=BYTES, no_marker=1";
+                         data_hold=N, data_short=BYTES, no_marker=1, overcount=1";
 
 /// The vendor id (`USB_VID_SYSCLK`).
 pub const VID: u16 = 0x2961;
@@ -318,6 +348,8 @@ const CHUNK_BYTES: usize = 0x60_0000;
 const END_MARKER: u16 = 0xffff;
 /// The longest run of one record.
 const RUN_MAX: u64 = 0xffff;
+/// The records of the fault `overcount`: 32769 * 65535 is just over 2^31.
+const OVERCOUNT_RECORDS: u64 = 32769;
 
 /// The PWM constants of `sla5032_start_acquisition()`.
 const PWM: [(usize, u32); 4] = [
@@ -430,6 +462,7 @@ struct Faults {
     data_hold: Option<u32>,
     data_short: Option<usize>,
     no_marker: bool,
+    overcount: bool,
 }
 
 /// The options that make a board.
@@ -668,6 +701,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 );
             }
             "no_marker" => o.faults.no_marker = flag(v)?,
+            "overcount" => o.faults.overcount = flag(v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
@@ -751,6 +785,11 @@ impl Sla5032 {
             v.report(format!("command {id} with a reply unread"));
             self.pending = None;
         }
+        // A new start, or the status read that begins the next open, ends
+        // an upload the driver gave up on when a chunk failed.
+        if kind == Kind::Init || (kind == Kind::ReadReg && usize::from(data[1]) == R_MASK * 4) {
+            self.upload = None;
+        }
         if self.upload.is_some() && kind != Kind::Chunk {
             v.report(format!("command {id} in the middle of the upload"));
         }
@@ -766,7 +805,9 @@ impl Sla5032 {
     }
 
     fn init_upload(&mut self, v: &mut Violations) {
-        if self.configured {
+        // Without its keys register 2 says "not configured", so the driver
+        // uploads again, as it may.
+        if self.configured && self.keyed() {
             v.report("a bitstream upload to a configured FPGA");
         }
         self.configured = false;
@@ -1103,7 +1144,18 @@ impl Sla5032 {
     fn encode(&mut self) -> bool {
         let period = self.options.period;
         let no_marker = self.options.faults.no_marker;
+        let overcount = self.options.faults.overcount;
         let r = &mut self.readout;
+        if overcount {
+            // `next` counts records here, from the window's start of 0.
+            if r.next < OVERCOUNT_RECORDS {
+                r.carry.extend_from_slice(&0u32.to_le_bytes());
+                r.carry.extend_from_slice(&((RUN_MAX - 1) as u16).to_le_bytes());
+                r.next += 1;
+                return true;
+            }
+            r.next = r.end.max(r.next);
+        }
         if r.next < r.end {
             let value = input(period, r.next);
             let run = (period - r.next % period).min(r.end - r.next).min(RUN_MAX);
@@ -1649,6 +1701,7 @@ mod tests {
             ("stall_reply", "write-reg"),
             ("data_stall", "0"),
             ("data_short", "6291457"),
+            ("overcount", "2"),
         ] {
             assert!(build(&opts(&[o])).is_err(), "{o:?}");
         }
@@ -1708,8 +1761,62 @@ mod tests {
         wrong.extend_from_slice(&[0; CHUNK]);
         h.send(&wrong);
         h.flagged("bitstream differs");
-        h.send(&[CMD_READ_REG, 8, 4]);
+        h.send(&[CMD_READ_REG, 5 * 4, 4]);
         h.flagged("in the middle of the upload");
+    }
+
+    #[test]
+    fn a_board_without_keys_may_be_uploaded_again() {
+        let mut h = Host::new(&[]);
+        h.read(2);
+        h.send_image();
+        assert_eq!(h.read(2), 0xa5a5_a5a0);
+        h.upload();
+        h.clean();
+        assert_eq!(h.read(2), 0xa5a5_a5a1);
+    }
+
+    #[test]
+    fn a_status_read_or_a_start_ends_an_abandoned_upload() {
+        let chunk: Vec<u8> = [CMD_UPLOAD_FW_CHUNK, CHUNK as u8]
+            .into_iter()
+            .chain(upload_image(BITSTREAM_SIZE)[..CHUNK].iter().copied())
+            .collect();
+        // The status read of the next open, then its upload.
+        let mut h = Host::new(&[]);
+        h.send(&[CMD_INIT_FW_UPLOAD]);
+        h.send(&chunk);
+        assert_eq!(h.read(2), UNCONFIGURED[0]);
+        h.clean();
+        h.upload();
+        h.clean();
+        // A new start with no status read before it.
+        let mut h = Host::new(&[]);
+        h.send(&[CMD_INIT_FW_UPLOAD]);
+        h.send(&chunk);
+        h.send_image();
+        h.clean();
+        assert_eq!(h.read(2), 0xa5a5_a5a0);
+        // A chunk after the status read has no upload to go to.
+        let mut h = Host::new(&[]);
+        h.send(&[CMD_INIT_FW_UPLOAD]);
+        h.send(&chunk);
+        h.read(2);
+        h.send(&chunk);
+        h.flagged("without the upload");
+    }
+
+    #[test]
+    fn overcount_claims_over_2_31_samples_in_few_bytes() {
+        let mut h = Host::configured(&[("overcount", "1")]);
+        h.done_capture(1, 1);
+        let r = records(&h.chunk());
+        assert_eq!(r.len(), 32770);
+        assert_eq!(r[0], (0, 0xfffe));
+        assert_eq!(r[32769], (0, END_MARKER));
+        let total: u64 = r[..32769].iter().map(|(_, c)| u64::from(*c) + 1).sum();
+        assert!(total > 1 << 31 && total < 1 << 32);
+        h.clean();
     }
 
     #[test]

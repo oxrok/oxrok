@@ -1,7 +1,7 @@
 gcov sysclk-sla5032 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        84.4%  200 of 237
-  protocol.c   93.5%  402 of 430
-  total        90.3%  602 of 667
+  protocol.c   94.7%  407 of 430
+  total        91.0%  607 of 667
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_inst_new_matching: 121-123
@@ -19,7 +19,7 @@ never reached, by function (line ranges hold no reached line):
     sla5032_set_samplerate: 347
     load_bitstream: 541-543, 550-552, 564-565
     sla5032_send_bitstream: 600
-    la_prepare_data: 741-743, 797-801, 814-815
+    la_prepare_data: 741-743, 814-815
     sla5032_start_acquisition: 882-883, 892-893
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/usb.c   35.4%  81 of 229
