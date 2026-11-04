@@ -1,13 +1,13 @@
 # oxrok usb fixture 1
-# emu ikalogic-scanalogic2: ratio 33 rounding
+# emu ikalogic-scanalogic2: ratio 1 rounding
 # arg: -d
 # arg: ikalogic-scanalogic2
 # arg: -c
-# arg: samplerate=1M:captureratio=33
+# arg: samplerate=1M:captureratio=1
 # arg: -t
 # arg: 1=r
 # arg: --samples
-# arg: 150
+# arg: 25
 # arg: -O
 # arg: bits
 device vid=20a0 pid=4123 version=0100 manufacturer="ikalogic" product="SCANALOGIC" interfaces=0:03:00:00
@@ -23,13 +23,13 @@ device vid=20a0 pid=4123 version=0100 manufacturer="ikalogic" product="SCANALOGI
 claim 0 -> ok
 ctl_out 21 09 0300 0000 0200{127} -> ok
 ctl_out 21 09 0300 0000 0700{127} -> ok
-ctl_out 21 09 0300 0000 010007000d0004010200{119} -> ok
+ctl_out 21 09 0300 0000 01000000040004010200{119} -> ok
 ctl_in 21 01 0300 0000 128 -> 056000{126}
-ctl_in 21 01 0300 0000 128 -> 0500{4}9e3cda7817b553f18f2ecc6a08a745e3811fbe00{104}
-ctl_in 21 01 0300 0000 128 -> 050100008927c56302a03edc7a19b755f39230ce6c0aa94700{104}
-ctl_in 21 01 0300 0000 128 -> 0502000012b04eed8b29c76604a240de7d1bb957f59432d000{104}
-ctl_in 21 01 0300 0000 128 -> 050300009b39d87614b251ef8d2bc96806a442e07f1dbb5900{104}
+ctl_in 21 01 0300 0000 128 -> 0500{4}9e3cda00{120}
+ctl_in 21 01 0300 0000 128 -> 050100008927c56300{120}
+ctl_in 21 01 0300 0000 128 -> 0502000012b04eed00{120}
+ctl_in 21 01 0300 0000 128 -> 050300009b39d87600{120}
 ctl_in 21 01 0300 0000 128 -> 056300{126}
 ctl_in 21 01 0300 0000 128 -> 056300{126}
-ctl_out 21 09 0300 0000 070007000d0004010200{119} -> ok
+ctl_out 21 09 0300 0000 07000000040004010200{119} -> ok
 release 0 -> ok

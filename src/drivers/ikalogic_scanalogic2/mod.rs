@@ -16,8 +16,10 @@
 //! holds the interface, and the C driver's detach outlasts it. The scan and
 //! the open detach usbhid if it is bound, and it stays detached after oxrok
 //! ends ([`crate::usb::Transport::detach_kernel_driver`]), as libusb leaves
-//! it. Where the system keeps a HID device for itself (macOS and Windows,
-//! not tried here) the claim can be expected to fail, as for the C driver.
+//! it. On Windows the default nusb backend cannot claim a device bound to
+//! the HID driver (nusb's `windows_winusb/device.rs:217`), while libusb has a
+//! HID backend there (`windows_winusb.c`), so the C and a libusb build may
+//! work. Both from their source; neither Windows nor macOS was tried.
 //!
 //! The scan resets the device, reads its info report, resets it and leaves
 //! it idle; the open resets it and leaves it idle; a capture asks for the
@@ -30,9 +32,11 @@
 //! The differences from the C driver:
 //! - A two stage trigger is refused, where the C logs the error, drops it
 //!   and captures with no trigger (api.c:342).
-//! - A report too short for what is used out of it ends the capture, where
-//!   the C ignores `actual_length` and uses what its buffer held
-//!   (protocol.c:245-375).
+//! - A sample packet that lacks bytes this capture uses ends the capture,
+//!   where the C ignores `actual_length` and uses what its buffer held
+//!   (protocol.c:245-375). A short one that holds them all is fine.
+//! - A status of fewer than two bytes is no valid status and the device is
+//!   asked again, where the C takes its old buffer for the answer.
 //! - Of a trigger on several channels the device takes only the last, as in
 //!   C (protocol.c:495-513), but with a warning.
 //! - An info report that does not start `0a` gets a warning
@@ -42,8 +46,15 @@
 //!   error (protocol.c:668).
 //! - A capture with no limit, which only a library client can start, ends
 //!   where the C divides by zero (protocol.c:317).
-//! - A device that does not get ready after a capture ends it, after a
-//!   hundred status reads, where the C reads and resets for ever.
+//! - A device that does not get ready after a capture or a stop ends it,
+//!   after a hundred status reads, where the C reads and resets for ever.
+//!   That is a few seconds at low speed, not a time the device is known to
+//!   need: the reset loop has no status wait. A device still busy then stays
+//!   un-idled until the next scan or open resets it.
+//! - For a library client (the CLI refuses these earlier, or cannot ask): a
+//!   trigger match that is no edge is refused, where the C sets the channel
+//!   and no type; a capture with no channel enabled is refused, where the C
+//!   reads `channel_map[-1]` (protocol.c:302).
 
 #![forbid(unsafe_code)]
 
@@ -275,7 +286,7 @@ impl Device for Scanalogic2Device {
                 // (hwdriver.c:757-764).
                 let ratio = value.as_u64().ok_or_else(bad)?;
                 if ratio > 100 {
-                    return Err(Error::arg("Capture ratio must be 0..100."));
+                    return Err(Error::arg("Capture ratio must be 0..100"));
                 }
                 self.capture_ratio = ratio;
             }
@@ -555,7 +566,10 @@ mod tests {
             input(&status(protocol::STATUS_DEVICE_READY)),
             out(&idle),
         );
-        let mut d = device(&steps);
+        let text = format!("{}{steps}", opened());
+        let replay = Replay::from_text(&text).unwrap();
+        let check = replay.clone();
+        let mut d = Scanalogic2Device::from_transport(Box::new(replay), INFO);
         d.wait = Duration::from_secs(3600);
         d.set(&Key::LimitSamples, &Value::U64(8), None).unwrap();
         d.open().unwrap();
@@ -568,5 +582,6 @@ mod tests {
         let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
         d.close().unwrap();
         assert_eq!(packets, [Packet::End]);
+        check.finish().unwrap();
     }
 }

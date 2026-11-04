@@ -1,2 +1,2 @@
-sr: ikalogic-scanalogic2: Sample packet 1 of channel 0 is 4 bytes of 128.
+sr: ikalogic-scanalogic2: Sample packet 1 of channel 0 is 4 bytes: it needs 128.
 oxrok: warn: oxrok::cli::pipeline: Device only sent 992 samples.

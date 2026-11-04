@@ -60,9 +60,14 @@ pub const WAIT_DATA_READY: Duration = Duration::from_millis(1500);
 const USB_TIMEOUT: Duration = Duration::from_secs(5);
 /// How often a status wait looks at the stop flag.
 const STOP_POLL: Duration = Duration::from_millis(10);
-/// Status reads to wait for a ready device after a capture, where the C
-/// waits for ever and nothing can stop it. At low speed this is some
-/// seconds, and all the samples have been delivered by then.
+/// Status reads to wait for a ready device after a capture or a stop, where
+/// the C waits for ever and nothing can stop it. The loop has no status
+/// wait (protocol.c:342, 360, 367), so at low speed this is an estimated 1
+/// to 4 s, which is no time the device is known to need: a stop of a long
+/// capture at a low rate, on a device that does not recognize the reset by
+/// then, leaves it un-idled until the next scan or open resets it. Sizing it
+/// for a whole capture (210 s at 1.25 kHz) would mean many thousands of
+/// rounds, with no event that could end them sooner.
 const MAX_RESET_ROUNDS: u32 = 100;
 
 /// `CMD_SAMPLE`.
@@ -427,10 +432,20 @@ impl Samples {
 
     /// `buffer_sample_data()`.
     fn keep(&mut self, bytes: &[u8]) {
+        let bytes = &bytes[..bytes.len().min(PACKET_SAMPLE_BYTES)];
         let offset = self.packet * PACKET_SAMPLE_BYTES;
-        if let Some(to) = self.kept[self.channel].get_mut(offset..offset + PACKET_SAMPLE_BYTES) {
+        if let Some(to) = self.kept[self.channel].get_mut(offset..offset + bytes.len()) {
             to.copy_from_slice(bytes);
         }
+    }
+
+    /// The sample bytes of the current packet that [`Samples::process`] will
+    /// use, in any enabled channel: the samples skipped at the start and the
+    /// limit decide how many of the bytes asked for count.
+    fn bytes_used(&self) -> usize {
+        let skip = u64::from(self.plan.pre_bytes) * 8 - self.plan.pre_samples;
+        let total = (skip + self.plan.limit).div_ceil(8) as usize;
+        total.saturating_sub(self.packet * PACKET_SAMPLE_BYTES).min(PACKET_SAMPLE_BYTES)
     }
 
     /// `process_sample_data()`: the current packet is the last channel's.
@@ -590,10 +605,12 @@ impl Machine {
     /// # Errors
     ///
     /// The message of what ends the capture. The C ignores `actual_length`
-    /// and goes on with what its buffer held before, so a report too short
-    /// to hold what is used out of it ends the capture here, like a failed
-    /// transfer. So does a device that does not get ready within
-    /// [`MAX_RESET_ROUNDS`] status reads.
+    /// and goes on with what its buffer held before, so a sample packet that
+    /// lacks bytes this capture uses ends the capture here, like a failed
+    /// transfer; a shorter report is fine when it holds them all, as nothing
+    /// shows that the firmware always sends 128 bytes. So does a device that
+    /// does not get ready within [`MAX_RESET_ROUNDS`] status reads. A status
+    /// of fewer than two bytes is no valid one, and cannot harm the samples.
     pub fn after_in(
         &mut self,
         data: &[u8],
@@ -606,7 +623,7 @@ impl Machine {
         self.state = self.next;
         match self.state {
             State::WaitDataReady => {
-                let [valid, code] = status(data)?;
+                let [valid, code] = status(data);
                 if valid == STATUS_VALID {
                     if code == STATUS_WAITING_FOR_TRIGGER {
                         log::debug!("Waiting for trigger.");
@@ -632,7 +649,7 @@ impl Machine {
                         "The device is not ready after {MAX_RESET_ROUNDS} status reads."
                     ));
                 }
-                let [valid, code] = status(data)?;
+                let [valid, code] = status(data);
                 if valid != STATUS_VALID {
                     // Not able to take a command yet: ask again.
                     return Ok(Next::In);
@@ -661,14 +678,17 @@ impl Machine {
         if s.past_the_end() {
             self.next = State::ResetAndIdle;
         } else if s.wants_data() {
-            let Some(bytes) = data.get(4..PACKET_LENGTH) else {
+            let bytes = data.get(4..).unwrap_or(&[]);
+            let used = s.bytes_used();
+            if bytes.len() < used {
                 return Err(format!(
-                    "Sample packet {} of channel {} is {} bytes of {PACKET_LENGTH}.",
+                    "Sample packet {} of channel {} is {} bytes: it needs {}.",
                     s.packet,
                     s.channel,
-                    data.len()
+                    data.len(),
+                    used + 4
                 ));
-            };
+            }
             if s.channel == s.last_channel() {
                 s.process(bytes, emit);
             } else {
@@ -680,11 +700,12 @@ impl Machine {
     }
 }
 
-/// The two bytes of a status.
-fn status(data: &[u8]) -> std::result::Result<[u8; 2], String> {
+/// The two bytes of a status; a shorter one is no valid status, where the C
+/// reads the rest from its old buffer.
+fn status(data: &[u8]) -> [u8; 2] {
     match data {
-        [valid, code, ..] => Ok([*valid, *code]),
-        _ => Err(format!("A status of {} bytes.", data.len())),
+        [valid, code, ..] => [*valid, *code],
+        _ => [0, 0],
     }
 }
 
@@ -769,6 +790,9 @@ fn wait_or_stop(wait: Duration, stop: &AtomicBool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usb::record::Replay;
+    use crate::usb::{BulkStream, UsbDeviceInfo};
+    use std::sync::Arc;
 
     fn trigger(stages: &[&[(usize, TriggerMatch)]]) -> Trigger {
         let mut t = Trigger::new();
@@ -839,9 +863,10 @@ mod tests {
     fn pre_and_post_round_up_to_bytes() {
         let p = Plan::new(100, 1, 4, RISING_0, vec![0]);
         assert_eq!((p.pre_samples, p.pre_bytes, p.post_bytes), (1, 1, 13));
-        // 49.5 and 100.5 lose a sample between them: post gets it back.
-        let p = Plan::new(150, 33, 4, RISING_0, vec![0]);
-        assert_eq!((p.pre_samples, p.pre_bytes, p.post_bytes), (49, 7, 13));
+        // 0.25 and 24.75 lose a sample between them: post gets it back, and
+        // 25 samples take a fourth byte.
+        let p = Plan::new(25, 1, 4, RISING_0, vec![0]);
+        assert_eq!((p.pre_samples, p.pre_bytes, p.post_bytes), (0, 0, 4));
         // No trigger: no ratio.
         let p = Plan::new(100, 50, 4, DeviceTrigger::NONE, vec![0]);
         assert_eq!((p.pre_samples, p.pre_bytes, p.post_bytes), (0, 0, 13));
@@ -914,6 +939,8 @@ mod tests {
         assert_eq!(feed(&mut m, &status_report(0x62)).0, Ok(Next::Wait));
         // The old buffer: not a status.
         assert_eq!(feed(&mut m, &[0x0a; 128]).0, Ok(Next::Wait));
+        // "Data ready" counts only behind the byte that makes it a status.
+        assert_eq!(feed(&mut m, &[0x0a, STATUS_DATA_READY]).0, Ok(Next::Wait));
         assert_eq!(feed(&mut m, &status_report(STATUS_DATA_READY)).0, Ok(Next::In));
     }
 
@@ -995,7 +1022,7 @@ mod tests {
     fn a_short_packet_ends_the_capture_instead_of_repeating_old_samples() {
         let mut m = at_data(Plan::new(32, 0, 0, DeviceTrigger::NONE, vec![0]));
         let (r, out) = feed(&mut m, &[5, 0, 0, 0]);
-        assert_eq!(r.unwrap_err(), "Sample packet 0 of channel 0 is 4 bytes of 128.");
+        assert_eq!(r.unwrap_err(), "Sample packet 0 of channel 0 is 4 bytes: it needs 8.");
         assert_eq!(out.len(), 0);
         // Of a channel that is kept too.
         let mut m = at_data(Plan::new(32, 0, 0, DeviceTrigger::NONE, vec![0, 1]));
@@ -1003,14 +1030,65 @@ mod tests {
     }
 
     #[test]
-    fn a_status_needs_two_bytes() {
-        let mut m = Machine::new(Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]));
-        m.after_out(false);
-        assert!(feed(&mut m, &[5]).0.is_err());
-        // Two are enough.
-        let mut m = Machine::new(Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]));
-        m.after_out(false);
-        assert_eq!(feed(&mut m, &[5, 0x60]).0, Ok(Next::In));
+    fn a_short_packet_that_holds_every_byte_used_is_fine() {
+        // 16 samples: two sample bytes, in a report of six.
+        let mut m = at_data(Plan::new(16, 0, 0, DeviceTrigger::NONE, vec![0]));
+        let (r, out) = feed(&mut m, &[5, 0, 0, 0, 0xff, 0x0f]);
+        assert_eq!(r, Ok(Next::In));
+        assert_eq!(logic(&out), [1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1]);
+        // One byte less is not.
+        let mut m = at_data(Plan::new(16, 0, 0, DeviceTrigger::NONE, vec![0]));
+        let e = feed(&mut m, &[5, 0, 0, 0, 0xff]).0.unwrap_err();
+        assert_eq!(e, "Sample packet 0 of channel 0 is 5 bytes: it needs 6.");
+        // A kept channel's, which the last one's samples then meet.
+        let mut m = at_data(Plan::new(16, 0, 0, DeviceTrigger::NONE, vec![0, 1]));
+        assert_eq!(feed(&mut m, &[5, 0, 0, 0, 0xff, 0x0f]).0, Ok(Next::In));
+        let (_, out) = feed(&mut m, &[5, 1, 0, 0, 0x00, 0xff]);
+        assert_eq!(logic(&out), [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
+        // The samples skipped at the start count: 3 + 10 samples in 3 bytes.
+        let plan = Plan::new(13, 25, 0, RISING_0, vec![0]);
+        let mut m = at_data(plan.clone());
+        assert!(feed(&mut m, &[5, 0, 0, 0, 0xff, 0xff]).0.is_err());
+        let mut m = at_data(plan);
+        assert_eq!(feed(&mut m, &[5, 0, 0, 0, 0xff, 0xff, 0xff]).0, Ok(Next::In));
+        // The second packet of 125 bytes needs one.
+        let mut m = at_data(Plan::new(1000, 0, 0, DeviceTrigger::NONE, vec![0]));
+        assert_eq!(feed(&mut m, &packet(0, 0, 0xff)).0, Ok(Next::In));
+        assert!(feed(&mut m, &[5, 0, 1, 0]).0.is_err());
+        let mut m = at_data(Plan::new(1000, 0, 0, DeviceTrigger::NONE, vec![0]));
+        assert_eq!(feed(&mut m, &packet(0, 0, 0xff)).0, Ok(Next::In));
+        assert_eq!(logic(&feed(&mut m, &[5, 0, 1, 0, 0xff]).1), [1; 8]);
+        // A packet asked for only by the rounding needs none: 8 samples at a
+        // ratio of 100 fill one byte, and nothing of a later channel counts.
+        let mut m = at_data(Plan::new(8, 100, 0, RISING_0, vec![0]));
+        assert_eq!(feed(&mut m, &packet(0, 0, 0xff)).0, Ok(Next::In));
+        assert_eq!(feed(&mut m, &[5]).0, Ok(Next::In));
+    }
+
+    #[test]
+    fn a_status_of_fewer_than_two_bytes_is_no_status() {
+        for short in [&[][..], &[5][..]] {
+            let mut m = Machine::new(Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]));
+            m.after_out(false);
+            assert_eq!(feed(&mut m, short).0, Ok(Next::Wait));
+            // Two are enough.
+            assert_eq!(feed(&mut m, &[5, 0x60]).0, Ok(Next::In));
+            let _ = feed(&mut m, &packet(0, 0, 0));
+            let _ = feed(&mut m, &packet(1, 0, 0));
+            // After the capture: ask again, under the bound.
+            let mut rounds = 0;
+            loop {
+                match feed(&mut m, short).0 {
+                    Ok(Next::In) => rounds += 1,
+                    Err(e) => {
+                        assert!(e.contains("not ready"), "{e}");
+                        break;
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+            assert_eq!(rounds, MAX_RESET_ROUNDS);
+        }
     }
 
     #[test]
@@ -1121,5 +1199,152 @@ mod tests {
         assert_eq!(transfer_status_name(&Error::Disconnected), "LIBUSB_TRANSFER_NO_DEVICE");
         assert_eq!(transfer_status_name(&Error::Timeout), "LIBUSB_TRANSFER_TIMED_OUT");
         assert_eq!(transfer_status_name(&Error::device("other")), "LIBUSB_TRANSFER_ERROR");
+    }
+
+    /// A replay that sets the stop flag during a transfer, as a stop arrives
+    /// while that one is under way: `run()` must look at the flag after it.
+    struct StopAt {
+        replay: Replay,
+        reads: usize,
+        writes: usize,
+        stop: Arc<AtomicBool>,
+        /// The transfers in order: a command's byte, or 0 for a read. The
+        /// replay would answer an extra status read by repeating the last.
+        log: Vec<u8>,
+    }
+
+    impl Transport for StopAt {
+        fn info(&self) -> &UsbDeviceInfo {
+            self.replay.info()
+        }
+        fn set_configuration(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn claim_interface(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn release_interface(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn reset(&mut self) -> Result<()> {
+            unreachable!()
+        }
+        fn max_packet_size(&mut self, _: u8) -> Result<usize> {
+            unreachable!()
+        }
+        fn interfaces(&mut self) -> Result<Vec<crate::usb::InterfaceDesc>> {
+            unreachable!()
+        }
+        fn control_out(&mut self, req: ControlRequest, data: &[u8], t: Duration) -> Result<()> {
+            self.log.push(data[0]);
+            self.writes = self.writes.saturating_sub(1);
+            if self.writes == 0 {
+                self.stop.store(true, Ordering::SeqCst);
+            }
+            self.replay.control_out(req, data, t)
+        }
+        fn control_in(&mut self, req: ControlRequest, n: usize, t: Duration) -> Result<Vec<u8>> {
+            self.log.push(0);
+            self.reads = self.reads.saturating_sub(1);
+            if self.reads == 0 {
+                self.stop.store(true, Ordering::SeqCst);
+            }
+            self.replay.control_in(req, n, t)
+        }
+        fn bulk_out(&mut self, _: u8, _: &[u8], _: Duration) -> Result<usize> {
+            unreachable!()
+        }
+        fn bulk_in(&mut self, _: u8, _: usize, _: Duration) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+        fn interrupt_out(&mut self, _: u8, _: &[u8], _: Duration) -> Result<usize> {
+            unreachable!()
+        }
+        fn interrupt_in(&mut self, _: u8, _: usize, _: Duration) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+        fn bulk_in_stream(&mut self, _: u8, _: usize, _: usize) -> Result<Box<dyn BulkStream>> {
+            unreachable!()
+        }
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn set(bytes: &[u8; 128]) -> String {
+        format!("ctl_out 21 09 0300 0000 {} -> ok\n", hex(bytes))
+    }
+
+    fn get(bytes: &[u8; 128]) -> String {
+        format!("ctl_in 21 01 0300 0000 128 -> {}\n", hex(bytes))
+    }
+
+    /// `run()` on a replay of `steps`, the flag set on the Nth read or write.
+    /// Every step must be used, in order, and the packets and the transfers
+    /// come back.
+    fn run_stopped(plan: Plan, steps: &str, reads: usize, writes: usize) -> (Vec<Packet>, Vec<u8>) {
+        let text = format!(
+            "# oxrok usb fixture 1\ndevice vid=20a0 pid=4123 version=0100 bus=0 addr=0 \
+             strings=1,2,0\n{steps}"
+        );
+        let replay = Replay::from_text(&text).unwrap();
+        let check = replay.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut t = StopAt { replay, reads, writes, stop: Arc::clone(&stop), log: Vec::new() };
+        let (tx, rx) = std::sync::mpsc::sync_channel(16);
+        run(&mut t, plan, Duration::from_millis(1), &PacketSink::new(tx, 0), &stop);
+        check.finish().unwrap();
+        (rx.try_iter().map(|(_, p)| p).collect(), t.log)
+    }
+
+    fn with_command(mut report: [u8; 128], command: u8) -> [u8; 128] {
+        report[0] = command;
+        report
+    }
+
+    /// The stop comes during the second packet's read: its samples go, and
+    /// so do the packets after it, which the device still offers. A mutant
+    /// passing `false` for the flag to `after_in` sends them.
+    #[test]
+    fn run_stops_on_a_read_and_drops_what_it_brought() {
+        let plan = Plan::new(5000, 0, 0, DeviceTrigger::NONE, vec![0]);
+        let cmd = plan.sample_command();
+        let steps = [
+            set(&cmd),
+            get(&status_report(STATUS_DATA_READY)),
+            get(&packet(0, 0, 0xff)),
+            get(&packet(0, 1, 0xff)),
+            // The status read: a packet is valid, and not ready.
+            get(&packet(0, 2, 0xff)),
+            set(&with_command(cmd, CMD_RESET)),
+            get(&status_report(STATUS_DEVICE_READY)),
+            set(&with_command(cmd, CMD_IDLE)),
+        ]
+        .concat();
+        let (packets, log) = run_stopped(plan, &steps, 3, usize::MAX);
+        assert_eq!(log, [CMD_SAMPLE, 0, 0, 0, 0, CMD_RESET, 0, CMD_IDLE]);
+        assert!(matches!(packets[0], Packet::Header { .. }));
+        assert_eq!(packets[1..], [Packet::logic(1, vec![1; 992])]);
+    }
+
+    /// The stop comes during `CMD_SAMPLE`: the next read is taken as the
+    /// status. A mutant passing `false` to `after_out` reads it as the wait
+    /// for data, and goes on to one read more before any RESET.
+    #[test]
+    fn run_stops_on_a_write_and_reads_a_status() {
+        let plan = Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]);
+        let cmd = plan.sample_command();
+        let steps = [
+            set(&cmd),
+            get(&status_report(0x61)),
+            set(&with_command(cmd, CMD_RESET)),
+            get(&status_report(STATUS_DEVICE_READY)),
+            set(&with_command(cmd, CMD_IDLE)),
+        ]
+        .concat();
+        let (packets, log) = run_stopped(plan, &steps, usize::MAX, 1);
+        assert_eq!(log, [CMD_SAMPLE, 0, CMD_RESET, 0, CMD_IDLE]);
+        assert_eq!(packets.len(), 1, "{packets:?}");
     }
 }

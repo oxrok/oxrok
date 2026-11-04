@@ -180,8 +180,9 @@ emu_cases() {
     for c in 1 10 25 33 50 75 99 100; do
         emu_case "ratio $c" -- -d $S -c samplerate=1M:captureratio=$c -t 1=r --samples 100 -O bits
     done
-    # 49.5 and 100.5 lose a sample between them: post gets it back.
-    emu_case "ratio 33 rounding" --record -- -d $S -c samplerate=1M:captureratio=33 -t 1=r --samples 150 -O bits
+    # 0.25 and 24.75 lose a sample between them: post gets it back, and
+    # with it a fourth byte.
+    emu_case "ratio 1 rounding" --record -- -d $S -c samplerate=1M:captureratio=1 -t 1=r --samples 25 -O bits
     # Ignored without a trigger.
     emu_case "ratio without trigger" -- -d $S -c samplerate=1M:captureratio=50 --samples 32 -O bits
     # The trigger in a later packet of the output, and a later channel.
@@ -241,6 +242,8 @@ emu_cases() {
     # A short answer: the C names ret, its length, as a libusb error.
     sl2_options short-get=1
     emu_case "scan read short" --oracle-differs "ret, 4, goes to libusb_error_name() as LIBUSB_TRANSFER_STALL, protocol.c:666-668" --stderr --filter "$P" -- -d $S --scan
+    # The runner shows the C's message, which that case does not keep.
+    emu_case "scan read short stderr" --libsigrok --stderr -- -d $S --scan
     sl2_options stall-set=3
     emu_case "scan second reset stalls" --stderr --filter "$P" -- -d $S --scan
     sl2_options stall-set=4
@@ -285,6 +288,19 @@ emu_cases() {
     # nothing says so. oxrok delivers the first one's samples only.
     sl2_options short-get=4
     emu_case "short second packet" --oracle-differs "$A" --stderr --filter "$P" -- -d $S -C 0 -c samplerate=1M --samples 1984 -O hex
+    # Short, with every byte used: both tools have the right samples.
+    sl2_options short-get=3 short-len=6
+    emu_case "short packet holding all" -- -d $S -C 0 -c samplerate=1M --samples 16 -O bits
+    # A status of one byte, or none: not "data ready", under either tool; the
+    # next read comes 1.5 s later.
+    sl2_options sampling=1 short-get=2 short-len=1
+    emu_case "status of one byte" -- -d $S -c samplerate=1M --samples 16 -O bits
+    sl2_options sampling=1 short-get=2 short-len=0
+    emu_case "status of no bytes" -- -d $S -c samplerate=1M --samples 16 -O bits
+    # After a capture the C takes its old buffer, a packet, for a valid status
+    # and resets; oxrok asks again.
+    sl2_options short-get=5 short-len=0
+    emu_case "status of no bytes after a capture" --oracle-differs "sl2_receive_transfer_in() ignores actual_length and reads its old buffer as the status, protocol.c:323-334" -- -d $S -C 0 -c samplerate=1M --samples 8 -O bits
     sl2_options
 
     # Another program holds the interface.
