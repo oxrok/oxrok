@@ -29,7 +29,11 @@
 //! the LA16 trigger is placed at the sample that met it and edge
 //! triggers are reported, a failed write ends in one sequencer reset
 //! rather than a recursion, and the wait for the trigger is sized from
-//! the rate; [`protocol`] lists each with the C lines.
+//! the rate; a stop resets the sequencer and closes the chip; and the
+//! device opened is the one the scan found, where `ftdi_usb_open_desc`
+//! opens the first with those ids and that product string, so of two
+//! boards libsigrok opens the first for both. [`protocol`] lists the
+//! others with the C lines.
 
 #![forbid(unsafe_code)]
 
@@ -173,6 +177,7 @@ pub struct ChronovuLaDevice {
     samplerate: u64,
     limit_samples: u64,
     limit_msec: u64,
+    poll_interval: Duration,
     trigger: Option<Trigger>,
     pending: Option<Box<dyn Transport>>,
     ftdi: Arc<Mutex<Option<Ftdi>>>,
@@ -208,6 +213,7 @@ impl ChronovuLaDevice {
             samplerate: prof.max_samplerate,
             limit_samples: 0,
             limit_msec: 0,
+            poll_interval: Duration::from_micros(protocol::POLL_INTERVAL_US),
             trigger: None,
             pending: transport,
             ftdi: Arc::new(Mutex::new(None)),
@@ -425,6 +431,7 @@ impl Device for ChronovuLaDevice {
             divcount,
             trigger,
             limit: protocol::sample_limit(self.limit_samples, self.limit_msec, self.samplerate),
+            poll_interval: self.poll_interval,
         };
         let slot = Arc::clone(&self.ftdi);
         let stop = Arc::new(AtomicBool::new(false));
@@ -597,6 +604,7 @@ mod tests {
              ctl_out 40 00 0000 0001 - -> ok\nrelease 0 -> ok\n",
         );
         let mut dev = device(&steps);
+        dev.poll_interval = Duration::ZERO;
         dev.open().unwrap();
         let mut t = Trigger::new();
         t.add(0, 0, TriggerMatch::One);
@@ -639,12 +647,81 @@ mod tests {
             divcount: 0,
             trigger: protocol::TriggerMasks::default(),
             limit: 0,
+            poll_interval: Duration::ZERO,
         };
         let (tx, rx) = sync_channel(4);
         let stop = AtomicBool::new(true);
         assert!(protocol::run(ftdi, cap, &PacketSink::new(tx, 0), &stop).is_none());
         let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
         assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
+    }
+
+    #[test]
+    fn a_stop_while_sending_ends_at_the_next_packet() {
+        let steps = format!("bulk_out 02 00ff0000 -> 4\n{}", readout(1, 0));
+        let mut dev = device(&steps);
+        dev.open().unwrap();
+        let mut ftdi = dev.lock().take().unwrap();
+        assert_eq!(ftdi.write(&[0, 0xff, 0, 0]), Some(4));
+        let cap = Capture {
+            prof: dev.prof,
+            divcount: 0,
+            trigger: protocol::TriggerMasks::default(),
+            limit: 0,
+            poll_interval: Duration::ZERO,
+        };
+        let (tx, rx) = sync_channel(0);
+        let stop = AtomicBool::new(false);
+        let rest = std::thread::scope(|scope| {
+            let stop = &stop;
+            let worker =
+                scope.spawn(move || protocol::run(ftdi, cap, &PacketSink::new(tx, 0), stop));
+            assert!(matches!(rx.recv().unwrap().1, Packet::Header { .. }));
+            assert!(matches!(rx.recv().unwrap().1, Packet::Logic(_)));
+            stop.store(true, Ordering::SeqCst);
+            let rest: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+            assert!(worker.join().unwrap().is_some(), "the chip stays open");
+            rest
+        });
+        assert!(rest.len() <= 2, "at most the packet in hand and the end: {}", rest.len());
+        assert!(matches!(rest.last(), Some(Packet::End)));
+    }
+
+    #[test]
+    fn a_second_start_after_a_reset_is_refused() {
+        let steps = "bulk_out 02 00ff0000 -> 4\n\
+            bulk_in 81 4096 -> err device \"endpoint stalled\"\n\
+            bulk_in 81 4096 -> err device \"endpoint stalled\"\n\
+            bulk_out 02 0101010101010101 -> 8\n\
+            ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n\
+            ctl_out 40 00 0000 0001 - -> ok\nrelease 0 -> ok\n";
+        let mut dev = device(steps);
+        dev.open().unwrap();
+        assert_eq!(capture(&mut dev).len(), 2, "header and end");
+        let (tx, _rx) = sync_channel(4);
+        let e = dev.start(PacketSink::new(tx, 0)).err().expect("the chip is closed");
+        assert!(e.to_string().contains("not open"), "{e}");
+        dev.stop().unwrap();
+        dev.close().unwrap();
+    }
+
+    #[test]
+    fn status_only_polls_are_paced() {
+        // Three polls after the first read, 30 ms apart, then the failed
+        // read's reset, whose own sleep is 100 ms.
+        let steps = "bulk_out 02 00ff0000 -> 4\n\
+            bulk_in 81 4096 -> 0160\nbulk_in 81 4096 -> 0160\nbulk_in 81 4096 -> 0160\n\
+            bulk_in 81 4096 -> err device \"endpoint stalled\"\n\
+            bulk_in 81 4096 -> err device \"endpoint stalled\"\n\
+            bulk_out 02 0101010101010101 -> 8\n\
+            ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n\
+            ctl_out 40 00 0000 0001 - -> ok\nrelease 0 -> ok\n";
+        let mut dev = device(steps);
+        dev.poll_interval = Duration::from_millis(30);
+        dev.open().unwrap();
+        let started = std::time::Instant::now();
+        assert_eq!(capture(&mut dev).len(), 2);
+        assert!(started.elapsed() >= Duration::from_millis(190), "{:?}", started.elapsed());
     }
 
     #[test]

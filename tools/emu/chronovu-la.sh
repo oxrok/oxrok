@@ -61,7 +61,7 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     BYTES="protocol.c:425-445 compares single bytes, before the LA16 byte swap, with the 16 bit mask and an 8 bit expected value"
     EDGES="protocol.c:436 searches for no trigger when the state mask is 0, as for an edge-only trigger"
     RECURSE="protocol.c:137-145 and 198: a failed write resets the sequencer, whose own write fails and resets it again until the stack overflows"
-    WAIT="api.c:491-492: the trigger wait is 10 s of wall time (the capture time added in seconds to a microsecond clock), as many reads as the machine makes in it; the port counts reads"
+    WAIT="api.c:491-492 waits 10 s of wall time, so sigrok-cli makes as many reads as the machine manages, where oxrok makes a fixed count: the answer at this rate is the same, only the poll count differs"
 
     # The LA8, at 0403:8867 (the udev rules' "new VID/PID").
     emu_case "la8 scan" --keep-header --filter "$ADDR" -- -d $D --scan
@@ -76,6 +76,7 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # A state trigger: the memory starts at the first sample with
     # channel 7 high, 128 periods after the command.
     emu_case "la8 trigger" --oracle-differs "$LIMIT" --digest --filter "$HEAD8" -- -d $D -c samplerate=1m --triggers 7=1 --samples 100 -O hex
+    emu_case "la8 100 MHz whole memory" --digest --filter "$HEAD8" -- -d $D --samples 8388608 -O hex
     # The same with the whole memory as the limit: every sample of both
     # tools compared.
     emu_case "la8 whole memory" --digest --filter "$HEAD8" -- -d $D -c samplerate=1m --triggers 7=1 --samples 8388608 -O hex
@@ -86,7 +87,7 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # libsigrok's deadline (api.c:491-492, the capture time added in seconds
     # to a microsecond clock) is 10 s, so it would report "Trigger timed
     # out. Bytes read: 0." from divcount 119 on. oxrok waits 10 s plus
-    # the capture time, counted in 16 ms status-only reads.
+    # the capture time, counted in status-only reads at least 16 ms apart.
     emu_case "la8 slowest" --oracle-differs "$LIMIT" --digest --filter "$HEAD8" -- -d $D -c samplerate=392156 --time 5 -O hex
     # Three channels; a trigger of two (sigrok-cli refuses one on a
     # disabled channel), pattern 0x02, mask 0x03: sample 2.
@@ -134,7 +135,7 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # An edge alone leaves the driver's trigger mask 0, and its search
     # stops at once (protocol.c:436): no trigger marker, though the
     # device triggered (the data start at sample 2). oxrok marks it.
-    emu_case "la16 edge only" --oracle-differs "$EDGES; $LIMIT" --digest --filter "$HEAD16" -- -d $D --triggers 1=r --samples 100 -O hex
+    emu_case "la16 edge only" --oracle-differs "$EDGES; $LIMIT" --digest --filter "$HEAD16" -- -d $D --triggers 1=r --samples 192 -O hex
     # libsigrok's trigger search compares single bytes, before its byte
     # swap, with the 16 bit mask and an 8 bit expected value: for
     # channels 8 to 15 both sides are 0, so the first byte matches
@@ -153,9 +154,15 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # .oracle golden keeps sigrok-cli's stderr, timestamps and all.
     emu_case "la16 trigger hex crashes" --oracle-bug "$BYTES" --digest --filter "$HEAD16" -- -d $D --triggers 0=1 --samples 100 -O hex
     # The device keeps 100 samples before the trigger: channel 1 rising
-    # alone is sample 2 of the memory. libsigrok sends no trigger.
+    # alone is sample 2 of the memory. libsigrok sends no trigger. 192
+    # samples, a full line: hex prints its T: line only with one.
     chronovu_options model=la16 pretrigger=100
-    emu_case "la16 rising pretrigger" --oracle-differs "$EDGES; $LIMIT" --digest --filter "$HEAD16" -- -d $D --triggers 1=r --samples 100 -O hex
+    emu_case "la16 rising pretrigger" --oracle-differs "$EDGES; $LIMIT" --digest --filter "$HEAD16" -- -d $D --triggers 1=r --samples 192 -O hex
+    # The limit of oxrok's rule that an edge channel at its new level on
+    # sample 0 is the edge: channel 1 falls at sample 4, but is low from
+    # sample 0, so oxrok marks sample 0. Nothing in the data tells this
+    # from a device that kept no samples before its trigger.
+    emu_case "la16 falling pretrigger" --oracle-differs "$EDGES; $LIMIT" --digest --filter "$HEAD16" -- -d $D --triggers 1=f --samples 192 -O hex
 
     # The variants: the "old VID/PID" (ftdi_sio binds it at attach and
     # libftdi detaches it), an FT232R, a BM without serial number
@@ -174,12 +181,12 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     emu_case "no product" --stderr --expect-fail -- -d $D --samples 10
 
     # Faults. The inputs never meet the trigger: the device answers
-    # status-only reads for ever. libsigrok's block 0 loop reads for 10 s
-    # of wall time; the harness stops sigrok-cli after 3 s. oxrok waits
-    # 10 s plus the capture time (84 ms at 100 MHz) in 16 ms reads, 631
-    # after the first, then reports the timeout and resets the device.
+    # status-only reads for ever. Both tools give up after about 10 s
+    # (oxrok after 10 s plus the capture time, 84 ms at 100 MHz, in reads
+    # at least 16 ms apart, 631 after the first), report the timeout and
+    # reset the device. This takes 20 s or so of the session.
     chronovu_options no-trigger=1
-    emu_case "no trigger" --oracle-bug "$WAIT" --timeout 3 --stderr --filter "$E" -- -d $D --triggers 0=1 --samples 10
+    emu_case "no trigger" --oracle-differs "$WAIT" --no-output -- -d $D --triggers 0=1 --samples 10
     chronovu_options
     # The FIFO runs dry for one read in the middle of block 0, then of
     # block 2: libftdi returns what it has, the driver takes it for a
@@ -211,12 +218,18 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # Unplugged during the readout: the read fails, and the sequencer
     # reset's write fails, which calls the sequencer reset again, for
     # ever (cv_write and close_usb_reset_sequencer): a stack overflow.
-    # oxrok logs the failed write, purge, reset and close once each.
+    # oxrok logs the failed write, purge and reset once each, and no
+    # failed close: nusb 0.2.8 cannot report a failed release
+    # (linux_usbfs/device.rs:721-731).
     emu_case "unplug in readout" --oracle-bug "$RECURSE" --unplug in=1:10 --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
     # Unplugged right after the last transfer of the readout (2 status-only
     # reads, then 2115): the capture is complete, and the close fails.
     # libsigrok logs "Failed to close FTDI device (-1): all fine." (libusb's
-    # release fails); oxrok's USB layer releases a gone device without an
-    # error, so the case compares the samples.
+    # release fails); nusb 0.2.8 cannot report a failed release
+    # (linux_usbfs/device.rs:721-731), so the case compares the samples.
+    # A SIGINT while the samples go out: oxrok's stop must end the run
+    # though the device's thread may be blocked on a full queue.
+    # sigrok-cli has no SIGINT handler.
+    emu_case "interrupt after readout" --oracle-bug "sigrok-cli has no SIGINT handler" --interrupt in=1:2117 --no-output --stderr -- -d $D --samples 8388608 -O hex
     emu_case "unplug after readout" --oracle-differs "$LIMIT" --unplug in=1:2117 --digest --filter "$HEAD8" -- -d $D --samples 100 -O hex
 }

@@ -20,8 +20,8 @@
 //!   until it is full the chip answers status-only packets, reads of 0
 //!   bytes. Then the whole memory comes out, 2048 blocks of 4096 bytes,
 //!   in eight sections of 1 MiB that interleave the samples
-//!   ([`demangle_index`]); on the LA16 the two bytes of a sample come
-//!   high byte first.
+//!   ([`demangle_index`]); on the LA16 each sample comes low byte first
+//!   (the C de-mangling swaps each pair and its byte swap undoes it).
 //! - Eight bytes of 0x01 reset the sequencer, after a failure, before
 //!   the FTDI chip is purged, reset and closed.
 //!
@@ -44,7 +44,8 @@
 //!   write fails again and recurses until the stack overflows
 //!   (`protocol.c:137-145`, `198`).
 //! - The wait for the trigger and the full memory is sized from the
-//!   rate and counted in reads ([`deadline_polls`]). The C deadline adds
+//!   rate and counted in reads ([`Profile::deadline_polls`]), each
+//!   status-only poll paced to at least 16 ms. The C deadline adds
 //!   the capture time in seconds to a microsecond clock
 //!   (`api.c:491-492`): 10 s whatever the rate, shorter than a full
 //!   memory takes below about 833 kHz on the LA8. The purge before a
@@ -54,6 +55,10 @@
 //!   (the samples are spread over the whole readout) but sends no more
 //!   than asked. The C driver stores `limit_samples` and `limit_msec`
 //!   and never reads them (`api.c:337-342`).
+//! - A stop resets the sequencer and closes the chip, so that the
+//!   device is not left mid-capture; the next capture needs the device
+//!   opened again. The C stop only removes the source and sends the end
+//!   (`api.c:502-508`).
 //! - "only N/M bytes written" names the written count first; the C
 //!   message swaps them (`protocol.c:142-143`).
 
@@ -61,7 +66,7 @@ use crate::core::{Packet, PacketSink, Trigger, TriggerMatch};
 use crate::ftdi::libftdi::{Context, FtdiError};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// `SDRAM_SIZE`: the sample memory, in bytes.
 pub const SDRAM_SIZE: usize = 8 * 1024 * 1024;
@@ -78,10 +83,12 @@ pub const SIO_RTS_CTS_HS: u16 = 0x0100;
 /// How long the C driver waits for the trigger beyond the capture
 /// time (`api.c:492`, meant as 10 s).
 pub const TRIGGER_WAIT_US: u64 = 10_000_000;
-/// How long a status-only read takes on the device: the FTDI chip
-/// answers one when its latency timer runs out, 16 ms after a reset
-/// (the driver never sets it).
-pub const LATENCY_US: u64 = 16_000;
+/// The shortest time between two status-only polls while waiting for
+/// the memory to fill. The chip answers one when its latency timer runs
+/// out; the driver never sets that timer, so a poll may come back
+/// sooner, and the sleep makes a count of polls a lower bound on time.
+/// A longer timer stretches the wait in proportion.
+pub const POLL_INTERVAL_US: u64 = 16_000;
 /// The reads of the purge before a sequencer reset: enough for the
 /// whole memory and what a read left, then one that brings nothing.
 pub const DRAIN_READS: usize = NUM_BLOCKS + 2;
@@ -168,12 +175,13 @@ impl Profile {
 
     /// How many reads to wait for the memory to fill: the time a full
     /// memory takes at `divcount`, plus the C driver's 10 s for the
-    /// trigger, in status-only reads of [`LATENCY_US`] each. Counted in
-    /// reads rather than wall time, as the device paces them.
+    /// trigger, in status-only reads at least [`POLL_INTERVAL_US`] apart.
+    /// Counted in reads rather than wall time, so that the transactions
+    /// do not depend on the machine.
     pub fn deadline_polls(&self, divcount: u8) -> u64 {
         let capture_us =
             self.max_samples() * (u64::from(divcount) + 1) * 1_000_000 / self.max_samplerate;
-        (TRIGGER_WAIT_US + capture_us).div_ceil(LATENCY_US)
+        (TRIGGER_WAIT_US + capture_us).div_ceil(POLL_INTERVAL_US)
     }
 }
 
@@ -261,8 +269,9 @@ pub fn demangle_index(model: Model, divcount: u8, offset: usize) -> usize {
     }
 }
 
-/// The LA16's byte swap (`cv_send_block_to_session_bus`): high byte
-/// first from the device, little endian samples after.
+/// The LA16's byte swap (`cv_send_block_to_session_bus`): it undoes the
+/// swap [`demangle_index`] makes of each pair, so the samples end up
+/// little endian, as they came from the device.
 pub fn swap_pairs(data: &mut [u8]) {
     for pair in data.as_chunks_mut::<2>().0 {
         pair.swap(0, 1);
@@ -278,8 +287,11 @@ fn sample(data: &[u8], unit: usize, i: usize) -> u16 {
 /// channels, at the edge's new level after a change from the sample
 /// before. The device stores from the sample that met its trigger (or
 /// some before it), so on sample 0, which has none before it, an edge
-/// channel at its new level counts as the edge. `None` without a
-/// trigger or a match.
+/// channel at its new level counts as the edge. That misfires when the
+/// device kept samples before the trigger and the channel was already
+/// at that level (falling, low from the start): the marker is then at
+/// sample 0, ahead of the real edge. Nothing in the data tells the two
+/// apart. `None` without a trigger or a match.
 pub fn find_trigger(data: &[u8], unit: usize, t: TriggerMasks) -> Option<usize> {
     if t.mask | t.edges == 0 {
         return None;
@@ -336,7 +348,8 @@ pub fn chunks(total: usize, unit: usize, trigger: Option<usize>, limit: u64) -> 
 /// The sample limit a capture honours: the smaller of `limit_samples`
 /// and what `limit_msec` gives at `samplerate`, each 0 for none.
 pub fn sample_limit(limit_samples: u64, limit_msec: u64, samplerate: u64) -> u64 {
-    let by_time = if limit_msec > 0 { (limit_msec * samplerate / 1000).max(1) } else { 0 };
+    let by_time =
+        if limit_msec > 0 { (limit_msec.saturating_mul(samplerate) / 1000).max(1) } else { 0 };
     match (limit_samples, by_time) {
         (0, t) => t,
         (s, 0) => s,
@@ -450,6 +463,8 @@ pub struct Capture {
     pub trigger: TriggerMasks,
     /// The samples to send, 0 for all.
     pub limit: u64,
+    /// The shortest time between two status-only polls.
+    pub poll_interval: Duration,
 }
 
 /// The acquisition after the command, on its own thread: the header,
@@ -468,12 +483,15 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
             return None;
         }
         log::trace!("Reading block {block}.");
+        let mut polled = Instant::now();
         let mut got = ftdi.read(&mut buf);
         if got == 0 && block == 0 {
             // Until the memory is full: status-only reads.
             let mut polls = 0;
             while got == 0 && polls < deadline && !stop.load(Ordering::SeqCst) {
+                std::thread::sleep(cap.poll_interval.saturating_sub(polled.elapsed()));
                 log::trace!("Reading block 0 (again).");
+                polled = Instant::now();
                 got = ftdi.read(&mut buf);
                 polls += 1;
             }
@@ -506,6 +524,10 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
         log::debug!("Trigger at sample {t}.");
     }
     for chunk in chunks(image.len() / unit, unit, trigger, cap.limit) {
+        if stop.load(Ordering::SeqCst) {
+            log::debug!("Stopped while sending the samples.");
+            break;
+        }
         let packet = match chunk {
             Chunk::Logic(r) => Packet::logic(unit, image[r.start * unit..r.end * unit].to_vec()),
             Chunk::Trigger => Packet::Trigger,
@@ -712,5 +734,7 @@ mod tests {
         assert_eq!(sample_limit(100, 0, 1_000_000), 100);
         assert_eq!(sample_limit(0, 5, 392_156), 1960);
         assert_eq!(sample_limit(1000, 5, 392_156), 1000);
+        // --time 1000000000000 at 200 MHz does not fit in 64 bits.
+        assert_eq!(sample_limit(0, 1_000_000_000_000, 200_000_000), u64::MAX / 1000);
     }
 }
