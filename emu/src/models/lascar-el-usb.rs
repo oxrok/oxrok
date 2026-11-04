@@ -2,6 +2,7 @@
 //   libsigrok/src/hardware/lascar-el-usb/protocol.c (the commands, the configuration block, the sample bytes),
 //   libsigrok/src/hardware/lascar-el-usb/protocol.h,
 //   libsigrok/src/hardware/lascar-el-usb/api.c (the log download),
+//   eltuxusb (Romain Aviolat), GPL-3.0-or-later, version 0.3,
 //   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
 //   Martin Ling, Soeren Apel, Aurelien Jacobs, Daniel Glöckner,
@@ -30,8 +31,9 @@
 //!   the two programs. The wiki's prose also says the count is at 0x2e; its
 //!   own table and the C say 0x1e.
 //! - **The sample bytes.** Temperature and humidity pairs, 0xff after the
-//!   log, from eltuxusb's `el_parse.py` (`while value != 255`, `(raw - 80) /
-//!   2` Celsius, `raw - 40` Fahrenheit, `raw / 2` %RH) and the C. The CO
+//!   log, from eltuxusb 0.3's `el_parse.py` (`while value != 255`, `(raw - 80)
+//!   / 2` Celsius at :65, `raw - 40` Fahrenheit at :68, `raw / 2` %RH at :149)
+//!   and the C. The CO
 //!   format is the C's alone: big endian counts (`protocol.c:483`).
 //! - **Block sizes.** eltuxusb's `device_nb_packets` reads N times with a
 //!   4096 byte buffer and gets the memory: EL-USB-2 64 times, EL-USB-CO 127
@@ -40,10 +42,13 @@
 //!   size, which takes a zero length packet. With the wiki's 32 kB and 64 kB
 //!   EEPROMs this gives the header's lengths, 32768 and 65024. This is
 //!   inference, from a program and not a recording.
-//! - **Configuration sizes.** eltuxusb's table: 64 for EL-USB-1, 128 for
-//!   EL-USB-2, 256 for the others (a commented-out table beside it says 128
-//!   for the 2-LCD and 2+). Ids 14 to 21 are in neither; the model takes 256
-//!   and 32768, unverified.
+//! - **Configuration and memory sizes.** eltuxusb 0.3's table: 64 for
+//!   EL-USB-1, 128 for EL-USB-2, 256 for the others, with a commented-out
+//!   table beside it saying 128 for the 2-LCD and 2+. Later eltuxusb agrees on
+//!   128 for the 2-LCD (ab91106, 2013), and its branch `el-usb1-pro` (f7aa7f7)
+//!   lists id 14 with 256, 127 reads and so 65024 bytes. The 2+ stays at 0.3's
+//!   256. Ids 15 to 21 are in none of them; the model takes 256 and 32768,
+//!   unverified. The driver takes the length from the header either way.
 //! - **Field values** in the default block (the name aside) come from the
 //!   one real block found, eltuxusb's `backup_buffer` from an EL-USB-1: start
 //!   time, interval 60 s, alarms, calibration 0.5 and -40, firmware `v2.0`,
@@ -53,7 +58,8 @@
 //!   Which ones fail on a real unit is not known, so by default none does;
 //!   `stall-ctl=` makes them.
 //!
-//! No firmware source or USB capture was found; the vendor's `EasyLog`
+//! Line numbers in eltuxusb's files are of 0.3 unless they say otherwise. No
+//! firmware source or USB capture was found; the vendor's `EasyLog`
 //! software was not examined.
 //!
 //! Pedantic checks: a vendor request other than the C's three; a command of
@@ -67,8 +73,8 @@
 //! it first ("Keep a read request waiting in the wings", `protocol.c:112`).
 //! That comment is no fact about the device, and eltuxusb, written against
 //! real EL-USB-1 and 2 units, writes each command and reads afterwards
-//! (`el_device.py:259-268`). It sends no flush either, so that check rests on
-//! the C's word alone.
+//! (`el_device.py:259-268` in 0.3, 326-328 at its latest). It sends no flush
+//! either, so that check rests on the C's word alone.
 //!
 //! C habits, documented and not flagged: the scan's bulk reads come with no
 //! claimed interface (usbfs claims it itself; the bus shows nothing) and
@@ -122,14 +128,15 @@ const LOG_READ: usize = 4096;
 const MAX_CONFIG: usize = 256;
 
 /// `(configuration bytes, memory bytes, block bytes)` by model id, from
-/// eltuxusb's `el_devices_settings.py`, unverified for ids above 13.
+/// eltuxusb's `el_devices_settings.py` (see the module documentation),
+/// unverified for ids above 14.
 fn sizes(id: u8) -> (usize, usize, usize) {
     match id {
         1 => (64, 16384, 64),
         2 => (64, 16384, 512),
-        3 => (128, 32768, 512),
+        3 | 12 => (128, 32768, 512),
         8 => (256, 5120, 512),
-        4..=7 | 9..=11 => (256, 65024, 512),
+        4..=7 | 9..=11 | 14 => (256, 65024, 512),
         _ => (256, 32768, 512),
     }
 }
@@ -805,7 +812,9 @@ mod tests {
 
     #[test]
     fn the_config_read_gives_the_header_then_the_block() {
-        for (id, size) in [("1", 64usize), ("2", 64), ("3", 128), ("9", 256), ("21", 256)] {
+        for (id, size) in
+            [("1", 64usize), ("2", 64), ("3", 128), ("9", 256), ("12", 128), ("13", 256), ("14", 256), ("21", 256)]
+        {
             let mut d = dev(&[("model", id)]);
             mode(&mut d);
             let mut v = Violations::default();
@@ -819,6 +828,14 @@ mod tests {
             assert!(v.is_empty(), "{v:?}");
             assert_eq!(d.in_transfer(EP, 256, &mut v), Reply::Nak, "nothing more");
         }
+    }
+
+    #[test]
+    fn sizes_follow_eltuxusb() {
+        assert_eq!(sizes(12), (128, 32768, 512), "ab91106");
+        assert_eq!(sizes(14), (256, 65024, 512), "f7aa7f7");
+        assert_eq!(sizes(13), (256, 32768, 512), "0.3");
+        assert_eq!(sizes(15), (256, 32768, 512), "in none");
     }
 
     #[test]

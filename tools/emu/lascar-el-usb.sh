@@ -185,7 +185,7 @@ emu_cases() {
     # Half steps: "temp[j] = buf[i * 2] / 2 - 40" and "rh[j] = buf[i * 2 + 1] /
     # 2" (protocol.c:426, 430) divide integers, under the comment "Celsius is
     # stored in half-degree increments" and with one digit declared; eltuxusb
-    # keeps the halves (el_parse.py:65, 147).
+    # 0.3 keeps the halves (el_parse.py:65, 149).
     N="protocol.c:426,430 divide integers, losing the half degrees and percents"
     el_options pattern=half
     emu_case "half steps" --oracle-differs "$N" -- -d $C --samples 100

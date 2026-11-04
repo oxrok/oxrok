@@ -114,7 +114,7 @@ pub const PROFILES: [Profile; 21] = [
 ];
 
 /// The block's byte `at`, 0 past its end: the C reads its uninitialised
-/// buffer there (`protocol.c:96`, 317).
+/// buffer there (`config[]` at `protocol.c:359`, read at 317).
 fn byte(config: &[u8], at: usize) -> u8 {
     config.get(at).copied().unwrap_or(0)
 }
@@ -226,7 +226,7 @@ pub fn interval_ms(config: &[u8]) -> u64 {
 /// The samples of `pair`, a temperature and a humidity byte. `protocol.c:426`,
 /// 430 divide integers, so that half a degree and half a percent are lost
 /// although its comment says "half-degree increments" and it declares one
-/// digit; eltuxusb (`el_parse.py:65`, 147) keeps them.
+/// digit; eltuxusb 0.3 (`el_parse.py:65`, 149) keeps them.
 pub fn decode_pair(pair: [u8; 2], fahrenheit: bool) -> (f32, f32) {
     let temp = if fahrenheit { f32::from(pair[0]) - 40.0 } else { f32::from(pair[0]) / 2.0 - 40.0 };
     (temp, f32::from(pair[1]) / 2.0)
@@ -300,7 +300,8 @@ impl Decoder {
                 let keep = self.keep(co.len());
                 co.truncate(keep);
                 if keep > 0 && self.first {
-                    // api and protocol set no digits for CO: 0 of sr_analog_init().
+                    // No digits set for CO: 0 of sr_analog_init(). 6 would print a
+                    // mislabelled 0.000155 ppm; see the module documentation.
                     vec![analog(0, co, Mq::CarbonMonoxide, Unit::Concentration, 0)]
                 } else {
                     Vec::new()
@@ -657,6 +658,11 @@ mod tests {
         assert_eq!(d.received, 3, "they count");
         let mut d = decoder(Decoding::TempRh { fahrenheit: false }, 1, 0);
         assert_eq!(d.packets(&[80, 0]), []);
+        // In Fahrenheit, 0 degrees and 0 % is raw 40, 0; raw 80, 0 is 40 degrees.
+        let mut d = decoder(Decoding::TempRh { fahrenheit: true }, 2, 0);
+        let p = d.packets(&[40, 0, 80, 0]);
+        assert_eq!(p[0].samples, [40.0]);
+        assert_eq!(p[1].samples, [0.0]);
         // Half a degree with no humidity is a measurement here.
         let mut d = decoder(Decoding::TempRh { fahrenheit: false }, 1, 0);
         assert_eq!(d.packets(&[81, 0])[0].samples, [0.5]);

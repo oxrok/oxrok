@@ -1,6 +1,7 @@
 // Counterpart in sigrok:
 //   libsigrok/src/hardware/lascar-el-usb/api.c,
 //   libsigrok/src/hardware/lascar-el-usb/protocol.c (the receive callback),
+//   eltuxusb (Romain Aviolat), GPL-3.0-or-later, version 0.3,
 //   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
 //   Frank Stettner, Martin Ling, Soeren Apel, Aurelien Jacobs,
@@ -26,15 +27,26 @@
 //!   [`MAX_FAILED_READS`] reads in a row bring nothing; `protocol.c:558`
 //!   goes on for ever;
 //! - nothing past the buffer: `api.c:312` reads 256 bytes into `resp[4]`, and
-//!   a device with more than 4 queued kills it;
+//!   a device with enough queued kills it;
 //! - an invalid configuration header leaves the device open:
 //!   `protocol.c:155` closes it, and everyone goes on using the handle.
 //! - `Temp` and `Hum` have their own indexes, both 0 at `protocol.c:336`.
 //!
-//! What it keeps from C with no evidence either way: CO's `/ 1e6` and its 0
-//! digits, which print small values as 0 ppm in the `analog` output
-//! (`protocol.c:484`); the top three bits of byte 0x21 cleared on every write
-//! (`protocol.c:591`).
+//! What it keeps from C:
+//! - CO's `/ 1e6` and its 0 digits (`protocol.c:484`). `libsigrok.h:293-298`
+//!   defines `SR_UNIT_CONCENTRATION` as normalised 0 to 1, so the division is
+//!   deliberate, while `src/analog.c:70` labels the unit "ppm". The `analog` output
+//!   shows 0 for all realistic readings: anything under 500,000 ppm, if `s *
+//!   high + low` is ppm, which is inferred. Use `-O csv` and multiply by 1e6.
+//!   6 digits would print a mislabelled `0.000155 ppm`.
+//! - `datalog=on` sets bit 0 of 0x21 and zeroes 0x18 to 0x1b, and no more
+//!   (`protocol.c:630-637`). eltuxusb's start (`el_ui.py`, `start_recording`)
+//!   writes 0x21 = `00000011`, a sample count of 0, a new start time and every
+//!   other field. So after this the count, the time and the downloaded bit
+//!   (bit 1 is "data NOT downloaded", `el_ui.py:169-185`) stay as they were.
+//!   Download first: the effect on stored data is unverified on hardware.
+//! - The top three bits of byte 0x21 cleared on every write
+//!   (`protocol.c:591`).
 
 pub mod protocol;
 
@@ -526,10 +538,14 @@ mod tests {
 
     #[test]
     fn no_memory_ends_at_the_first_timeout() {
-        let (p, r) =
-            run_on("bulk_in 82 4096 -> err timeout\n", decoder(1, 0), 0, &AtomicBool::new(false));
+        let (p, r) = run_on(
+            "bulk_in 82 4096 -> err timeout\nbulk_in 82 4096 -> 7850\n",
+            decoder(1, 0),
+            0,
+            &AtomicBool::new(false),
+        );
         assert_eq!(p, []);
-        r.finish().unwrap();
+        assert_eq!(r.remaining(), 1, "the last step is left unread");
     }
 
     #[test]
@@ -551,16 +567,18 @@ mod tests {
             for _ in 0..MAX_FAILED_READS {
                 text.push_str(step);
             }
+            // One step more, which the bound leaves unread.
+            text.push_str(step);
             let (p, r) = run_on(&text, decoder(1, 0), 512, &AtomicBool::new(false));
             assert_eq!(p, []);
-            r.finish().unwrap();
+            assert_eq!(r.remaining(), 1, "the last step is left unread");
         }
         let mut text = String::new();
-        for _ in 0..MAX_FAILED_READS {
+        for _ in 0..=MAX_FAILED_READS {
             let _ = writeln!(text, "bulk_in 82 4096 -> err device \"endpoint stalled\"");
         }
         let (_, r) = run_on(&text, decoder(1, 0), 512, &AtomicBool::new(false));
-        r.finish().unwrap();
+        assert_eq!(r.remaining(), 1, "the last step is left unread");
     }
 
     #[test]
@@ -580,20 +598,22 @@ mod tests {
     #[test]
     fn a_disconnect_ends_it_at_once() {
         let (p, r) = run_on(
-            "bulk_in 82 4096 -> 7850\nbulk_in 82 4096 -> err disconnected\n",
+            "bulk_in 82 4096 -> 7850\nbulk_in 82 4096 -> err disconnected\n\
+             bulk_in 82 4096 -> 7850\n",
             decoder(9, 0),
             512,
             &AtomicBool::new(false),
         );
         assert_eq!(p.len(), 2);
-        r.finish().unwrap();
+        assert_eq!(r.remaining(), 1, "the last step is left unread");
     }
 
     #[test]
     fn a_stop_ends_it_with_data_on_offer() {
         // The fixture offers data; a mutant that ignores the stop reads it.
-        let (p, _r) = run_on("bulk_in 82 4096 -> 7850\n", decoder(1, 0), 2, &AtomicBool::new(true));
+        let (p, r) = run_on("bulk_in 82 4096 -> 7850\n", decoder(1, 0), 2, &AtomicBool::new(true));
         assert_eq!(p, [], "stopped before any read");
+        assert_eq!(r.remaining(), 1, "the offered read is left");
     }
 
     #[test]
