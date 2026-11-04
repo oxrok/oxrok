@@ -106,7 +106,7 @@ emu_cases() {
     # so CH2's samples come out labelled CH1.
     emu_case "6022be ch2 only" --oracle-differs "api.c:187-192, 588: CH2's samples are labelled CH1" -- -d $H -C CH2 -c samplerate=100k --samples 100 -O analog
     # A rate outside the list: the driver keeps it, logs that it cannot
-    # convert it and sends the last register, 100 kHz (protocol.c:152-162).
+    # convert it and sends the last register, 100 kHz (protocol.c:135-149).
     # The same goes out here and the samples are the same, but the C
     # driver goes on saying 2 MHz over samples taken at 100 kHz.
     emu_case "6022be unlisted 2M" -- -d $H -c samplerate=2M --samples 100 -O analog
