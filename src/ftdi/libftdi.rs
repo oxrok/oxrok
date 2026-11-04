@@ -32,8 +32,8 @@
 //!
 //! Opening ([`Context::open`]) is `ftdi_usb_open_dev`: claim the port,
 //! reset it, take the chip type from `bcdDevice`, the packet size from
-//! the endpoint, then 9600 Bd. Closing is dropping it: libftdi sends
-//! nothing either.
+//! the endpoint, then 9600 Bd. Closing ([`Context::close`], or dropping
+//! it) sends nothing, as in libftdi.
 //!
 //! One difference the device sees: libftdi detaches the kernel's
 //! `ftdi_sio` from port A and never attaches it again, while oxrok's
@@ -341,6 +341,8 @@ impl Context {
         if ctx.set_baudrate(9600).is_err() {
             return Err(ctx.fail(-7, "set baudrate failed"));
         }
+        // ftdi_usb_open_dev's last ftdi_error_return.
+        ctx.error = "all fine";
         Ok(ctx)
     }
 
