@@ -1,7 +1,7 @@
 gcov lecroy-logicstudio (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        92.9%  170 of 183
-  protocol.c   96.5%  462 of 479
-  total        95.5%  632 of 662
+  protocol.c   97.1%  465 of 479
+  total        95.9%  635 of 662
 never reached, by function (line ranges hold no reached line):
   api.c
     scan: 138, 171-172, 177
@@ -16,7 +16,7 @@ never reached, by function (line ranges hold no reached line):
     upload_fpga_bitstream: 463
     transform_trigger: 611, 615
     configure_trigger: 671, 681
-    recv_intr_transfer: 921-923, 932
+    recv_intr_transfer: 932
     recv_bulk_transfer: 1012
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/ezusb.c   82.6%  38 of 46

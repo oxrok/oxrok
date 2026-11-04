@@ -123,12 +123,6 @@ emu_cases() {
     emu_case "show" --keep-header --filter "$C" -- -d $F --show
     emu_case "by ids" --digest --filter "$B4" -- -d $F:conn=21a9.1006 -C $D4 --continuous -O bits
     emu_case "unflashed 16ch 10M" --digest --filter "$B16" -- -d $F --continuous -O bits
-    # By its real address without firmware: the case before left the
-    # board renumerated, so a reset of its own moves it first and the
-    # case line reads where it went. libsigrok's debug line shows
-    # sr_usb_find() matching it.
-    emu_reset
-    emu_case "by address after a reset" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$EMU_USB --scan
     # The boot stage's strings are not known: with strings, each
     # strcmp() of scan_firmware() fails in turn, and the upload follows.
     logicpro_options boot_strings=Cypress/WestBridge
@@ -136,8 +130,18 @@ emu_cases() {
     logicpro_options boot_strings=Saleae/Bootloader
     emu_case "boot strings other product" --keep-header --filter "$C" -- -d $F --scan
 
-    # The firmware running: no upload, and the scan reads the strings.
+    # By its real address on a board just attached again: back to the
+    # boot stage, then the firmware running, whose descriptors differ, so
+    # without emu_reset the case's own reset would move the board after
+    # the case line read EMU_USB. libsigrok's debug line shows
+    # sr_usb_find() matching it. (Without firmware no conn= can match:
+    # the upload moves the board before sr_usb_find() runs.)
+    logicpro_options
+    emu_reset
     logicpro_options flashed=1
+    emu_reset
+    emu_case "by address after a reset" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$EMU_USB --scan
+    # The firmware running: no upload, and the scan reads the strings.
     emu_case "flashed scan" --keep-header --filter "$C" -- -d $F --scan
     # An address no device has, and a bus and an address out of range
     # (sr_usb_split_conn() refuses them): listed all the same.
