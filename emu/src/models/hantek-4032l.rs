@@ -515,8 +515,8 @@ pub struct H4032l {
     data_transfers: u32,
     /// What the oldest held transfer still holds, in bytes.
     partial: u32,
-    /// `release=1` came into force in this capture.
-    released: bool,
+    /// `hold=` in this capture, until `release=1` ends it.
+    hold: Option<u32>,
     seen: Vec<(What, u32)>,
 }
 
@@ -556,7 +556,7 @@ impl H4032l {
             first_stream_in: false,
             data_transfers: 0,
             partial: 0,
-            released: false,
+            hold: None,
             seen: Vec::new(),
         }
     }
@@ -723,7 +723,7 @@ impl H4032l {
                 self.first_stream_in = true;
                 self.data_transfers = 0;
                 self.partial = self.faults.partial;
-                self.released = false;
+                self.hold = self.faults.hold;
                 self.capture = None;
                 self.ready = false;
             }
@@ -764,9 +764,8 @@ impl H4032l {
     fn holding(&self) -> bool {
         matches!(self.state, State::Stream { .. })
             && !self.first_stream_in
-            && !self.released
             && self.stale == 0
-            && self.faults.hold.is_some_and(|n| self.data_transfers >= n)
+            && self.hold.is_some_and(|n| self.data_transfers >= n)
     }
 
     /// The status packet.
@@ -887,7 +886,9 @@ impl DeviceModel for H4032l {
         if ep != EP_DATA || !self.holding() {
             return None;
         }
-        self.released = self.faults.release;
+        if self.faults.release {
+            self.hold = None;
+        }
         let State::Stream { at, len, first } = self.state else { return None };
         let n = (self.partial as usize).min(max).min(len - at);
         self.partial = 0;
@@ -902,7 +903,7 @@ impl DeviceModel for H4032l {
     fn reset(&mut self) {
         self.data_transfers = 0;
         self.partial = 0;
-        self.released = false;
+        self.hold = None;
         self.state = State::Idle;
         self.armed = false;
         self.capture = None;
