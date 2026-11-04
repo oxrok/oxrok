@@ -1,0 +1,3 @@
+sr: testo: Failed to set comm parameters: LIBUSB_ERROR_PIPE
+sr: session: Could not start testo device usb/1-1 acquisition.
+Failed to start session.

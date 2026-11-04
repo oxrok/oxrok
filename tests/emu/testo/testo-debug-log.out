@@ -1,0 +1,8 @@
+testo: Probing for channels.
+testo: Found 2 channels.
+testo: Requested new packet.
+testo: Got 23-byte packet.
+testo: Packet: 21 00 00 00 01 00 02 00 00 ae 41 01 00 00 00 00 36 42 03 00 00 33 e2
+testo: Requested new packet.
+testo: Got 23-byte packet.
+testo: Packet: 21 00 00 00 01 00 02 00 00 b0 41 01 00 00 00 00 38 42 03 00 00 72 9b
