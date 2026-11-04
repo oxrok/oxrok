@@ -19,7 +19,7 @@
 //!
 //! **Commands.** A command is one bulk OUT on endpoint 1 of 2 to 1024
 //! bytes (a flag byte, the command, its arguments), and every command but
-//! the reseed is answered by one bulk IN on endpoint 1. Both are XORed
+//! the reseed is answered by one bulk IN on endpoint 1. Both go through an XOR
 //! with a 32 bit LFSR, byte `i` with bits `8 * (i % 4)` up, except bits
 //! `0x28` of a command's first byte, and each direction steps the LFSR
 //! once ([`Link::transact`]). The reseed zeroes the state, and 0 is a
@@ -127,13 +127,11 @@ fn load_resource(name: &str, max: usize) -> Result<Vec<u8>> {
     Ok(image)
 }
 
-/// `upload_firmware()`: the parts of `name` to an open boot loader.
-pub fn upload_firmware(t: &mut dyn Transport, name: &str) -> Result<()> {
+/// The file of `upload_firmware()`, loaded before the device is opened.
+pub fn load_firmware(name: &str) -> Result<Vec<u8>> {
     let image = load_resource(name, FW_MAX_SIZE)?;
     log::info!("Uploading firmware '{name}'.");
-    send_firmware(t, &image)?;
-    log::info!("Firmware upload done.");
-    Ok(())
+    Ok(image)
 }
 
 /// The loop of `upload_firmware()`. A header that promises more than the
@@ -141,7 +139,7 @@ pub fn upload_firmware(t: &mut dyn Transport, name: &str) -> Result<()> {
 /// part that is not flagged final fails here too, where the C driver logs
 /// "Missing final part." and returns the transfer's 0, `SR_OK`
 /// (`api.c:111-116`).
-fn send_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
+pub fn send_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     let mut offset = 0;
     let mut last = None;
     while offset + FW_HEADER_SIZE <= image.len() {
@@ -175,6 +173,7 @@ fn send_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
         log::error!("Missing final part.");
         return Err(Error::device("missing final firmware part"));
     }
+    log::info!("Firmware upload done.");
     Ok(())
 }
 
@@ -503,7 +502,7 @@ impl Link {
         if let Err(e) = self.authenticate() {
             log::debug!("No authentication, capturing all the same: {e}.");
         }
-        let [mask_lsb, mask_msb] = channels.to_le_bytes();
+        let [low, high] = channels.to_le_bytes();
         #[allow(clippy::cast_possible_truncation)]
         let count = channels.count_ones() as u8;
         let _ = self.write_reg(0x15, 0x03);
@@ -512,8 +511,8 @@ impl Link {
             (0x00, 0x00),
             (0x08, 0x00),
             (0x09, 0x00),
-            (0x06, mask_lsb),
-            (0x07, mask_msb),
+            (0x06, low),
+            (0x07, high),
             (0x0a, 0x00),
             (0x0b, divider),
             (0x0c, 0x00),
@@ -569,9 +568,10 @@ impl Converter {
             return out;
         }
         self.partial.extend_from_slice(data);
-        let words = self.partial.len() / 4;
-        for word in self.partial[..words * 4].chunks_exact(4) {
-            let samples = u32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+        let (words, _) = self.partial.as_chunks::<4>();
+        let whole = words.len() * 4;
+        for word in words {
+            let samples = u32::from_le_bytes(*word);
             let channel = self.masks[self.index];
             for (i, s) in self.batch.iter_mut().enumerate() {
                 if samples >> (31 - i) & 1 != 0 {
@@ -587,7 +587,7 @@ impl Converter {
                 self.batch = [0; 32];
             }
         }
-        self.partial.drain(..words * 4);
+        self.partial.drain(..whole);
         out
     }
 }
@@ -673,19 +673,19 @@ mod tests {
         let words: Vec<u8> = [0xffff_ffffu32, 0].iter().flat_map(|w| w.to_le_bytes()).collect();
         // A word and a half, then the rest: nothing until the batch is
         // whole.
-        assert!(c.convert(&words[..6]).is_empty());
+        assert_eq!(c.convert(&words[..6]), [0u8; 0]);
         let out = c.convert(&words[6..]);
         assert_eq!(out.len(), 64);
         assert!(out.chunks(2).all(|s| s == [1, 0]));
         // A short transfer gives only its own samples.
         let mut one = Converter::new(0b1);
         assert_eq!(one.convert(&[0; 4]).len(), 64);
-        assert!(one.convert(&[]).is_empty());
+        assert_eq!(one.convert(&[]), [0u8; 0]);
     }
 
     #[test]
     fn no_channels_convert_to_nothing() {
-        assert!(Converter::new(0).convert(&[0; 8]).is_empty());
+        assert_eq!(Converter::new(0).convert(&[0; 8]), [0u8; 0]);
     }
 
     #[test]

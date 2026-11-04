@@ -766,7 +766,7 @@ flush()
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
-    #          [--libsigrok] -- ARGS...
+    #          [--libsigrok] [--tx-filter SED] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -803,7 +803,10 @@ flush()
     #   transactions cut where they start repeating (emu_hang_cut), runs
     #   of a repeated output line counted once; sigrok-cli's stdout is
     #   lost with it, so such a case compares --stderr or --no-output.
-    #   --libsigrok, a library-verified oracle case: libsigrok-run
+    #   --tx-filter, a sed -E script over each tool's transaction log
+    #   before it is compared, for an order the C driver's timing decides;
+    #   the case says what it hides. --libsigrok, a library-verified
+    #   oracle case: libsigrok-run
     #   (tools/libsigrok-run.c, sigrok-cli's syntax, no limit needed,
     #   --stop-after N its own sample count) runs in sigrok-cli's place
     #   and alone, whatever oxrok has, held to the case's goldens like
@@ -824,7 +827,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; tx_filter=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -845,6 +848,7 @@ flush()
                 --record) record=1 ;;
                 --hangs) hangs=1 ;;
                 --libsigrok) libsig=1 ;;
+                --tx-filter) tx_filter=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -1002,6 +1006,9 @@ flush()
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
+            if [ -n "$tx_filter" ]; then
+                sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+            fi
             # The fold runs before the --hangs cut, so the cut sees folded
             # lines: a loop that repeats a digested transfer of one shape
             # folds into a single line whose count is however many rounds

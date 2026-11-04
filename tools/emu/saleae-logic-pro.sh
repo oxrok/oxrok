@@ -2,11 +2,12 @@
 # that takes its firmware and renumerates, then an FPGA bitstream and
 # an authentication through LFSR-scrambled commands on endpoint 1.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". oxrok has no port of the driver yet: every case is an oracle
-# case.
+# model".
 EMU_MODEL=saleae-logic-pro
 EMU_DRIVER=saleae-logic-pro
 EMU_GCOV_SHARED="src/usb.c"
+# oxrok has the driver: its cases must run full.
+EMU_FULL=saleae-logic-pro
 
 # The FX3 firmware stand-in: the driver parses saleae-logicpro16-fx3.fw
 # as parts (size LE16, address LE32, final flag, data), so the plain
@@ -52,6 +53,7 @@ PY
 # Claims interface 0 through usbfs as another program would, until
 # logicpro_release (as logic16_hold in saleae-logic16.sh).
 logicpro_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]
@@ -88,6 +90,17 @@ logicpro_options() {
 emu_cases() {
     F=saleae-logic-pro
     logicpro_fx3_standin || emu_fail "saleae-logic-pro: could not write the FX3 stand-in"
+    # The driver's log lines under both tools' prefixes. What goes, all
+    # wording of the frame around the driver's lines: oxrok's module path
+    # for libsigrok's driver name; libsigrok's "Opening device instance",
+    # its session's and hwdriver's lines; the cause oxrok adds to
+    # "Failed to open device." and "Failed to start session." (the driver
+    # logged the cause itself, which stays). The two messages of
+    # sr_resource_load() come from oxrok's driver, under its name. The
+    # byte in two messages goes too, as the C prints the wrong one
+    # (protocol.c:341 i2c_rsp[0] for i2c_rsp[1], protocol.c:540 rsp[0] for
+    # reg_val); oxrok's is pinned by unit tests.
+    N='s/ \[[0-9:.]+\]//; s/^oxrok: [a-z]+: oxrok::drivers::saleae_logic_pro[a-z0-9_:]*: /sr: saleae-logic-pro: /; s/^sr: saleae-logic-pro: (Failed to (locate|open resource) )/sr: resource: \1/; /^sr: device: saleae-logic-pro: Opening device instance/d; /^sr: (session|hwdriver): /d; s/^Failed to open device.*/Failed to open device./; s/^(Unknown sample rate|device disconnected).*/Failed to start session./; s/(I2C wake read \(|read-back \()0x[0-9a-f]+/\1BYTE/'
     # A renumerated device's address, in the text the harness's conn=
     # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
@@ -106,20 +119,25 @@ emu_cases() {
     # and lists the renumerated device (scan(), api.c:213-218): the
     # device must be back within the 500 ms, which the emulator's
     # re-attach is.
-    # By the address of the session's first attach: the upload moves
-    # the device to another address, so conn= matches nothing in the
-    # scan's second pass, and a conn that matches nothing selects every
-    # Logic Pro (api.c:219-236 filters only on a non-empty match): the
-    # renumerated board is listed. The driver's own lines (-l 4) show
-    # the upload.
+    # A by-address case on this board cannot run full: the first tool's
+    # upload moves it, so the second tool's address is stale. sigrok-cli
+    # lists it all the same through the conn= hole (api.c:219-236); oxrok
+    # is held to following it by this case, under --no-oracle only (oxrok
+    # alone, on the session's first attach), with the goldens of the
+    # same run by ids below: the same scan, by address.
     logicpro_options
-    L='/saleae-logic-pro:/!d; s/ \[[0-9:.]+\]//'
-    emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
+    L="$N; /saleae-logic-pro:/!d; s/ \[[0-9:.]+\]//"
+    if [ "$no_oracle" = 1 ]; then
+        emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
+    fi
+    emu_case "by ids unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=21a9.1006 --scan
     emu_case "scan" --keep-header --filter "$C" -- -d $F --scan
     # sr_usb_find() refuses the spec, and the driver lists the board all
     # the same (the stdout case below shows it).
-    emu_case "bad conn" --stderr -- -d $F:conn=nonsense --scan
-    emu_case "bad conn lists" --keep-header --filter "$C" -- -d $F:conn=nonsense --scan
+    # oxrok lists nothing for a conn= that names nothing (api.c:219-236).
+    W="api.c:222 filters only when sr_usb_find() found something: if (conn_devices) ... so a conn that matches nothing, or that it refuses, selects every Logic Pro; api.c:194-212 uploads to every board whatever the conn"
+    emu_case "bad conn" --oracle-differs "$W" --stderr --filter 's/^sr: usb: //; s/^oxrok: [a-z]+: [a-z0-9_:]+: //' -- -d $F:conn=nonsense --scan
+    emu_case "bad conn lists" --oracle-differs "$W" --keep-header --no-output --filter "$C" -- -d $F:conn=nonsense --scan
     emu_case "show" --keep-header --filter "$C" -- -d $F --show
     emu_case "by ids" --digest --filter "$B4" -- -d $F:conn=21a9.1006 -C $D4 --continuous -O bits
     emu_case "unflashed 16ch 10M" --digest --filter "$B16" -- -d $F --continuous -O bits
@@ -140,25 +158,25 @@ emu_cases() {
     emu_reset
     logicpro_options flashed=1
     emu_reset
-    emu_case "by address after a reset" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$EMU_USB --scan
+    emu_case "by address after a reset" --keep-header --filter "$C" -- -d $F:conn=$EMU_USB --scan
     # The firmware running: no upload, and the scan reads the strings.
     emu_case "flashed scan" --keep-header --filter "$C" -- -d $F --scan
     # An address no device has, and a bus and an address out of range
     # (sr_usb_split_conn() refuses them): listed all the same.
-    emu_case "conn matching nothing" --keep-header --filter "$C" -- -d $F:conn=9.99 --scan
-    emu_case "conn bus out of range" --keep-header --filter "$C" -- -d $F:conn=300.1 --scan
-    emu_case "conn address out of range" --keep-header --filter "$C" -- -d $F:conn=1.200 --scan
+    emu_case "conn matching nothing" --oracle-differs "$W" --keep-header --no-output --filter "$C" -- -d $F:conn=9.99 --scan
+    emu_case "conn bus out of range" --oracle-differs "$W" --keep-header --no-output --filter "$C" -- -d $F:conn=300.1 --scan
+    emu_case "conn address out of range" --oracle-differs "$W" --keep-header --no-output --filter "$C" -- -d $F:conn=1.200 --scan
     # A conn= that names no device any more: A0 is the address of the
     # session's first attach, which the uploads above moved the board
     # away from, so sr_usb_find() matches nothing and the board is
     # captured only because such a conn selects every Logic Pro.
-    emu_case "stale address captures all the same" --digest --filter "$B4" -- -d $F:conn=$A0 -C $D4 --continuous -O bits
+    emu_case "stale address captures all the same" --oracle-differs "$W" --expect-fail --stderr --digest --filter "$B4" -- -d $F:conn=$A0 -C $D4 --continuous -O bits
     # Selected by its real address (EMU_USB, the board as it is now):
     # the previous case left the board with these descriptors, so the
     # next case's reset does not re-attach it and the address still
     # holds. libsigrok's debug line shows sr_usb_find() matching it.
     A=$EMU_USB
-    emu_case "by address" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$A --scan
+    emu_case "by address" --keep-header --filter "$C" -- -d $F:conn=$A --scan
     emu_case "by address capture" --digest --filter "$B4" -- -d $F:conn=$A -C $D4 --continuous -O bits
     emu_case "get conn" --filter "s/'[0-9]+[.][0-9]+'/'BUS.ADDR'/" -- -d $F --get conn
     emu_case "get samplerate" -- -d $F --get samplerate
@@ -173,19 +191,25 @@ emu_cases() {
     emu_case "csv" --digest --filter '1,/^0,/!d' -- -d $F -C 0,1 -c samplerate=1M --continuous -O csv:header=false
     # The driver lists no sample or time limit (api.c devopts).
     emu_case "samples refused" --expect-fail --stderr -- -d $F -C 0 --samples 100 -O bits
-    emu_case "time refused" --expect-fail --stderr -- -d $F -C 0 --time 10 -O bits
+    emu_case "time refused" --expect-fail --stderr --filter "$N" -- -d $F -C 0 --time 10 -O bits
     # config_set() takes any rate; saleae_logic_pro_prepare() refuses it.
     # The session then stops the device it could not start: the stop
     # sequence goes out all the same.
-    A='s/0x[0-9a-f]+/0xADDR/; s,usb/[0-9.-]+,usb/PORT,'
-    emu_case "bad rate" --expect-fail --stderr --filter "$A" -- -d $F -C 0 -c samplerate=3M --continuous -O bits
+    emu_case "bad rate" --expect-fail --stderr --filter "$N" -- -d $F -C 0 -c samplerate=3M --continuous -O bits
     logicpro_options flashed=1 transfers=5
     emu_case "five transfers" --digest --filter "$B1" -- -d $F -C 4 -c samplerate=50M --continuous -O bits
     logicpro_options flashed=1 fpga=1
     emu_case "fpga configured" --digest --filter "$B4" -- -d $F -C $D4 --continuous -O bits
+    # The recorded captures: a transfer from a board with its FPGA up, and
+    # one that takes the bitstream first (tests/fixtures/saleae_logic_pro).
+    logicpro_options flashed=1 fpga=1 transfers=1
+    emu_case "recorded capture" --record --digest --filter '1,/^3:/!d' -- -d $F -C $D4 --continuous -O hex
+    logicpro_options flashed=1 transfers=1
+    emu_case "recorded bitstream upload" --record --digest --filter '1,/^0:/!d' -- -d $F -C 0 --continuous -O hex
+    logicpro_options flashed=1 fpga=1
     # The driver's debug lines: the firmware version, the temperature
     # and the authentication (the values are the model's invention).
-    emu_case "debug lines" --stderr --filter '/saleae-logic-pro: (fw-version|temperature|random|nonce|sig|Authenticate|[0-9]+ channels|Skipping)/!d; s/ \[[0-9:.]+\]//' -- -l 5 -d $F -C 0,1 --continuous -O bits
+    emu_case "debug lines" --stderr --filter "$N"'; /saleae-logic-pro: (fw-version|temperature|random|nonce|sig|Authenticate|[0-9]+ channels|Skipping)/!d; s/ \[[0-9:.]+\]//' -- -l 5 -d $F -C 0,1 --continuous -O bits
 
     # A claim held by another program: dev_open() fails to claim.
     # emu_case begins with a reset, which re-attaches the board when the
@@ -195,7 +219,7 @@ emu_cases() {
     # this one: here the firmware's, as "debug lines" leaves them.
     logicpro_options flashed=1 fpga=1
     if logicpro_hold; then
-        emu_case "interface claimed by another program" --expect-fail --stderr --filter '/saleae-logic-pro:|Failed to open/!d; s/ \[[0-9:.]+\]//' -- -l 4 -d $F -C 0 --continuous -O bits
+        emu_case "interface claimed by another program" --expect-fail --stderr --filter "$N; /saleae-logic-pro:|Failed to open/!d; s/ \[[0-9:.]+\]//" -- -l 4 -d $F -C 0 --continuous -O bits
         logicpro_release
     fi
 
@@ -204,7 +228,7 @@ emu_cases() {
     # Init fails: the open fails with the driver's debug line.
     # -l 5 for the debug line of the failing request; the LFSR steps
     # (0 to 0 before the authentication) and the chunk sizes go.
-    E='/saleae-logic-pro:|Failed to open/!d; /Iterate|Uploading [0-9]+ bytes/d; s/ \[[0-9:.]+\]//'
+    E="$N"'; /saleae-logic-pro:|Failed to open/!d; /Iterate|Uploading [0-9]+ bytes/d; s/ \[[0-9:.]+\]//'
     for f in reseed fw-version read-eeprom read-reg init-bitstream send-bitstream; do
         logicpro_options flashed=1 stall=$f
         emu_case "fault stall $f" --expect-fail --stderr --filter "$E" -- -l 5 -d $F -C 0 --continuous -O bits
@@ -244,7 +268,7 @@ emu_cases() {
     # The authentication fails: saleae_logic_pro_prepare() ignores it
     # (protocol.c:783), both sides keep the plain state, and the
     # capture runs. Only the debug line of the failure differs.
-    G='/saleae-logic-pro: (Failed|Authenticate)/!d; s/ \[[0-9:.]+\]//'
+    G="$N"'; /saleae-logic-pro: (Failed|Authenticate)/!d; s/ \[[0-9:.]+\]//'
     for f in wake-i2c read-i2c:1 write-i2c:1 read-i2c:2 write-i2c:2 read-i2c:3 write-i2c:3 read-i2c:4 write-i2c:4 read-i2c:5; do
         logicpro_options flashed=1 fpga=1 stall_reply=$f
         emu_case "fault auth stall reply $f" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
@@ -263,11 +287,25 @@ emu_cases() {
     logicpro_options flashed=1 fpga=1 stall_reply=read-reg:10
     emu_case "fault stop status read" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     logicpro_options flashed=1 fpga=1 capture_status=0x00
-    emu_case "fault capture error" --stderr --filter '/Capture error/!d' -- -d $F -C 0 --continuous -O bits
+    emu_case "fault capture error" --stderr --filter "$N; /Capture error/!d" -- -d $F -C 0 --continuous -O bits
+
+    # Ctrl-C: sigrok-cli has no SIGINT handler, while oxrok sends the stop's
+    # requests and ends the capture. The idle timeout would end it as well
+    # (the model stops after its transfers), so this shows the path through
+    # the CLI, and a unit test (a_stop_ends_a_stream_that_goes_on) that the
+    # flag ends a stream that does not stop. How much output comes
+    # before the stop depends on time: only the first line counts.
+    logicpro_options flashed=1 fpga=1 transfers=3
+    emu_case "interrupt during a capture" --interrupt in=2:3 --oracle-bug "sigrok-cli has no SIGINT handler" --filter '2,$d' -- -d $F -C 0 --continuous -O bits
 
     # The sample stream.
     logicpro_options flashed=1 fpga=1 halt_in=1
-    emu_case "fault halt after one" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    # The transfer that brought the data goes back in from its callback, in
+    # the C driver's event handling inside the blocking write of the start
+    # (protocol.c:909), before or after that write's answer is asked for:
+    # its STALL lands on either side of the answer, by timing. The stalled
+    # IN lines move to the end of the log, so their number still counts.
+    emu_case "fault halt after one" --tx-filter '/^bulk_in 82 16384 -> err stall$/{H;d}; ${G}' --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     logicpro_options flashed=1 fpga=1 halt_in=0
     emu_case "fault halt at once" --no-output -- -d $F -C 0 --continuous -O bits
     # A short transfer: receive_data() converts all 16 KiB of the buffer
@@ -277,7 +315,7 @@ emu_cases() {
     # the header, the first line (32 samples, the 4 bytes sent) and the
     # number of the last line: 4096 lines of 32 samples after the header.
     logicpro_options flashed=1 fpga=1 short_in=4 transfers=1
-    emu_case "fault short transfer" --filter '1,2p; $=; d' -- -d $F -C 0 --continuous -O bits:width=32
+    emu_case "fault short transfer" --oracle-differs "protocol.c:906 converts 16 * 1024 / 4 words whatever transfer->actual_length" --filter '1,2p; $=; d' -- -d $F -C 0 --continuous -O bits:width=32
     # Unplugged at the third transfer: the transfers then end with
     # LIBUSB_TRANSFER_NO_DEVICE, which the driver drops, and the stop's
     # requests fail; how many of the driver's debug lines that makes
@@ -288,7 +326,7 @@ emu_cases() {
     # The scan cannot read the running firmware's strings: it takes it
     # for the boot loader and uploads, which the firmware refuses; the
     # board is listed and runs all the same.
-    U='/saleae-logic-pro:|Failed/!d; s/ \[[0-9:.]+\]//'
+    U="$N"'; /saleae-logic-pro:|Failed/!d; s/ \[[0-9:.]+\]//'
     logicpro_options flashed=1 fpga=1 stall_string=1
     emu_case "fault manufacturer unreadable" --stderr --filter "$U" -- -l 4 -d $F --scan
     logicpro_options flashed=1 fpga=1 short_string=2
@@ -311,7 +349,7 @@ emu_cases() {
     # requests, dev_acquisition_start() then fails to submit its
     # transfers and gives up (api.c:421-427).
     logicpro_options flashed=1 fpga=1
-    emu_case "unplug during prepare" --unplug out=1:61 --expect-fail --stderr --filter '/Failed to submit|Failed to start session/!d; s/ \[[0-9:.]+\]//' -- -d $F -C 0 --continuous -O bits
+    emu_case "unplug during prepare" --unplug out=1:61 --expect-fail --stderr --filter "$N; /Failed to submit|Failed to start session/!d; s/ \[[0-9:.]+\]//" -- -d $F -C 0 --continuous -O bits
 
     # The bitstream file missing: upload_bitstream() fails (moved away
     # for the case, then back).

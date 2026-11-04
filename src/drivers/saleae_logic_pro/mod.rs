@@ -116,10 +116,7 @@ impl Driver for LogicProDriver {
                 log::info!("Found a Logic Pro 16 device (no firmware loaded).");
                 match upload(info) {
                     Ok(()) => uploaded = true,
-                    Err(e) => {
-                        log::debug!("Firmware upload: {e}.");
-                        log::error!("Firmware upload failed, name {FX3_FIRMWARE}.");
-                    }
+                    Err(_) => log::error!("Firmware upload failed, name {FX3_FIRMWARE}."),
                 }
             }
         }
@@ -154,9 +151,11 @@ fn has_firmware(info: &UsbDeviceInfo) -> bool {
         && crate::usb::read_string_ascii(t.as_mut(), p).is_ok_and(|s| s == "Logic Pro")
 }
 
+/// `upload_firmware()`: the file, then the device.
 fn upload(info: &UsbDeviceInfo) -> Result<()> {
+    let image = protocol::load_firmware(FX3_FIRMWARE)?;
     let mut t = crate::usb::open(info)?;
-    protocol::upload_firmware(t.as_mut(), FX3_FIRMWARE)
+    protocol::send_firmware(t.as_mut(), &image)
 }
 
 /// `dev_open()`: the claim and `saleae_logic_pro_init()`.
@@ -499,6 +498,44 @@ mod tests {
         let stalled = Err(Error::device("stalled"));
         assert_eq!(on_transfer(stalled, &mut c, &mut idle, &sink), Next::End);
         assert_eq!(on_transfer(Err(Error::Disconnected), &mut c, &mut idle, &sink), Next::End);
+    }
+
+    /// A stream that never ends, setting the stop flag at its third answer.
+    struct Endless(Arc<AtomicBool>, u32);
+
+    impl BulkStream for Endless {
+        fn next(&mut self, _timeout: Duration) -> Result<Vec<u8>> {
+            self.1 += 1;
+            if self.1 == 3 {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            Ok(vec![0xff; 4])
+        }
+    }
+
+    #[test]
+    fn a_stop_ends_a_stream_that_goes_on() {
+        // In plain bytes, the LFSR at 0: the start, then the stop's three
+        // requests, the status read fine.
+        let r = crate::usb::record::Replay::from_text(
+            "# oxrok usb fixture 1\ndevice vid=21a9 pid=1006 version=0000 interfaces=0:ff:ff:ff\n\
+             bulk_out 01 0080010001 -> 5\nbulk_in 81 1 -> 00\n\
+             bulk_out 01 0080010000 -> 5\nbulk_in 81 1 -> 00\n\
+             bulk_out 01 0002 -> 2\nbulk_in 81 2 -> 0000\n\
+             bulk_out 01 00810140 -> 4\nbulk_in 81 1 -> 20\n",
+        )
+        .unwrap();
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut link = Link::new(Box::new(r.clone()));
+        let stream = Box::new(Endless(Arc::clone(&stop), 0));
+        run(stream, &mut link, Converter::new(1), &PacketSink::new(tx, 0), &stop);
+        r.finish().unwrap();
+        let packets: Vec<Packet> = rx.try_iter().map(|(_, p)| p).collect();
+        assert!(matches!(packets[0], Packet::Header { .. }));
+        assert_eq!(packets[1..4], vec![Packet::logic(2, [1, 0].repeat(32)); 3][..]);
+        assert_eq!(packets[4], Packet::End);
+        assert_eq!(packets.len(), 5);
     }
 
     #[test]
