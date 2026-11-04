@@ -1,7 +1,7 @@
 gcov saleae-logic-pro (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        93.9%  216 of 230
+  api.c        94.3%  217 of 230
   protocol.c   98.4%  492 of 500
-  total        97.0%  708 of 730
+  total        97.1%  709 of 730
 never reached, by function (line ranges hold no reached line):
   api.c
     upload_firmware: 78
@@ -11,7 +11,6 @@ never reached, by function (line ranges hold no reached line):
     config_set: 344-345
     config_list: 361-362
     dev_acquisition_abort: 375
-    dev_acquisition_handle: 391
     dev_acquisition_start: 439
   protocol.c
     transact: 105, 117-119
