@@ -43,9 +43,8 @@ use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
     PacketSink, Result, Trigger, TriggerFeatures, Value, ValueList,
 };
-use crate::drivers::saleae_logic16::split_conn;
 use crate::ftdi::libftdi::{Context, FtdiError};
-use crate::usb::{Transport, UsbDeviceInfo};
+use crate::usb::{Transport, UsbDeviceInfo, split_conn};
 use protocol::{Capture, Ftdi, Profile};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

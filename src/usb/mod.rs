@@ -138,6 +138,55 @@ impl UsbDeviceInfo {
     }
 }
 
+/// A `conn` spec as `sr_usb_split_conn()` reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conn {
+    /// `VID.PID`, four hex digits each.
+    Ids(u16, u16),
+    /// `BUS.ADDRESS` in decimal.
+    BusAddress(u8, u8),
+}
+
+/// `sr_usb_split_conn()` and the checks of `sr_usb_find()`: four hex
+/// digits each are a `VID.PID` (tried first, so `1000.1000` is one),
+/// else decimal digits a `BUS.ADDRESS` with the bus at most 255 and the
+/// address at most 127. `Err` is the message `sr_usb_find()` logs; zero
+/// in either half, or no match, cannot name a device.
+pub fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
+    const INVALID: &str = "Invalid input, or neither VID:PID nor bus.address specified.";
+    const NEITHER: &str = "Could neither determine VID:PID nor bus.address numbers.";
+    let Some((a, b)) = conn.split_once('.') else { return Err(NEITHER) };
+    let hex = |s: &str| s.len() == 4 && s.bytes().all(|c| c.is_ascii_hexdigit());
+    if hex(a) && hex(b) {
+        let (vid, pid) =
+            (u16::from_str_radix(a, 16).unwrap_or(0), u16::from_str_radix(b, 16).unwrap_or(0));
+        return if vid != 0 && pid != 0 { Ok(Conn::Ids(vid, pid)) } else { Err(NEITHER) };
+    }
+    let dec = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
+    if !(dec(a) && dec(b)) {
+        return Err(NEITHER);
+    }
+    // strtoul() saturates; anything that does not fit is out of range.
+    let num = |s: &str| s.parse::<u64>().unwrap_or(u64::MAX);
+    let (bus, addr) = (num(a), num(b));
+    if bus > 255 || addr > 127 {
+        return Err(INVALID);
+    }
+    match (u8::try_from(bus), u8::try_from(addr)) {
+        (Ok(bus @ 1..), Ok(addr @ 1..)) => Ok(Conn::BusAddress(bus, addr)),
+        _ => Err(NEITHER),
+    }
+}
+
+impl Conn {
+    pub fn matches(self, d: &UsbDeviceInfo) -> bool {
+        match self {
+            Conn::Ids(vid, pid) => d.id() == UsbId { vendor: vid, product: pid },
+            Conn::BusAddress(bus, addr) => d.bus == bus && d.address == addr,
+        }
+    }
+}
+
 /// Backend specific identity, enough to open the device.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum Handle {
@@ -530,6 +579,26 @@ pub fn open(info: &UsbDeviceInfo) -> Result<Box<dyn Transport>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conn_specs_follow_sr_usb_split_conn() {
+        let invalid = Err("Invalid input, or neither VID:PID nor bus.address specified.");
+        let neither = Err("Could neither determine VID:PID nor bus.address numbers.");
+        assert_eq!(split_conn("21a9.1001"), Ok(Conn::Ids(0x21a9, 0x1001)));
+        assert_eq!(split_conn("1000.1000"), Ok(Conn::Ids(0x1000, 0x1000)));
+        assert_eq!(split_conn("3.7"), Ok(Conn::BusAddress(3, 7)));
+        assert_eq!(split_conn("255.127"), Ok(Conn::BusAddress(255, 127)));
+        assert_eq!(split_conn("3.128"), invalid);
+        assert_eq!(split_conn("256.1"), invalid);
+        assert_eq!(split_conn("1.99999999999999999999999"), invalid);
+        assert_eq!(split_conn("0.0"), neither);
+        assert_eq!(split_conn("0.5"), neither);
+        assert_eq!(split_conn("0000.1001"), neither);
+        assert_eq!(split_conn("21a.1001"), neither);
+        assert_eq!(split_conn("nonsense"), neither);
+        assert_eq!(split_conn("1.x"), neither);
+        assert_eq!(split_conn("1.2.3"), neither);
+    }
 
     #[test]
     fn conn_matching() {

@@ -87,8 +87,7 @@ use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
     Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
 };
-use crate::drivers::saleae_logic16::split_conn;
-use crate::usb::{Transport, UsbDeviceInfo, UsbId};
+use crate::usb::{Transport, UsbDeviceInfo, UsbId, split_conn};
 use protocol::{Capture, FpgaConfig, Link, PROFILES, Profile, SAMPLERATES, THRESHOLDS, VID};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

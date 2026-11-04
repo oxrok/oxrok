@@ -47,7 +47,7 @@ use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
     Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
 };
-use crate::usb::{BulkStream, Transport, UsbDeviceInfo, UsbId, libusb_error_name};
+use crate::usb::{BulkStream, Transport, UsbDeviceInfo, UsbId, libusb_error_name, split_conn};
 use protocol::{Download, Feed, Link, Model, Pwm, Setup, Stream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -107,52 +107,6 @@ const POLLS_AFTER_STOP: usize = 100;
 /// the bound fx2lafw has as `MAX_EMPTY_TRANSFERS`; the C driver of this
 /// device resubmits for ever.
 const MAX_FAILED_TRANSFERS: usize = 64;
-
-/// A `conn` spec as `sr_usb_split_conn()` reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Conn {
-    /// `VID.PID`, four hex digits each.
-    Ids(u16, u16),
-    /// `BUS.ADDRESS` in decimal.
-    BusAddress(u8, u8),
-}
-
-/// `sr_usb_split_conn()` and the checks of `sr_usb_find()` (as the
-/// saleae-logic16 port reads them). `Err` is the message
-/// `sr_usb_find()` logs.
-fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
-    const INVALID: &str = "Invalid input, or neither VID:PID nor bus.address specified.";
-    const NEITHER: &str = "Could neither determine VID:PID nor bus.address numbers.";
-    let Some((a, b)) = conn.split_once('.') else { return Err(NEITHER) };
-    let hex = |s: &str| s.len() == 4 && s.bytes().all(|c| c.is_ascii_hexdigit());
-    if hex(a) && hex(b) {
-        let (vid, pid) =
-            (u16::from_str_radix(a, 16).unwrap_or(0), u16::from_str_radix(b, 16).unwrap_or(0));
-        return if vid != 0 && pid != 0 { Ok(Conn::Ids(vid, pid)) } else { Err(NEITHER) };
-    }
-    let dec = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
-    if !(dec(a) && dec(b)) {
-        return Err(NEITHER);
-    }
-    let num = |s: &str| s.parse::<u64>().unwrap_or(u64::MAX);
-    let (bus, addr) = (num(a), num(b));
-    if bus > 255 || addr > 127 {
-        return Err(INVALID);
-    }
-    match (u8::try_from(bus), u8::try_from(addr)) {
-        (Ok(bus @ 1..), Ok(addr @ 1..)) => Ok(Conn::BusAddress(bus, addr)),
-        _ => Err(NEITHER),
-    }
-}
-
-impl Conn {
-    fn matches(self, d: &UsbDeviceInfo) -> bool {
-        match self {
-            Conn::Ids(vid, pid) => d.id() == UsbId { vendor: vid, product: pid },
-            Conn::BusAddress(bus, addr) => d.bus == bus && d.address == addr,
-        }
-    }
-}
 
 /// `usb_get_port_path()`: `BUS-PORT.PORT...`.
 fn port_path(d: &UsbDeviceInfo) -> String {
@@ -1186,14 +1140,6 @@ mod tests {
             d.list(&Key::Samplerate, None).unwrap(),
             ValueList::U64(d.model.rates().to_vec())
         );
-    }
-
-    #[test]
-    fn conn_specs_follow_sr_usb_split_conn() {
-        assert_eq!(split_conn("77a1.01a3"), Ok(Conn::Ids(0x77a1, 0x01a3)));
-        assert_eq!(split_conn("3.7"), Ok(Conn::BusAddress(3, 7)));
-        assert!(split_conn("3.128").is_err());
-        assert!(split_conn("nonsense").is_err());
     }
 
     #[test]
