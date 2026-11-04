@@ -78,10 +78,14 @@ emu_cases() {
     serial_dmm_options
 
     # An unplug with the tty open, and an interrupt.
-    emu_case "metex unplug" --unplug in=2:3 --timeout 15 -- -d $M --samples 5
-    serial_dmm_options meter=fs9721
-    # The scan takes two packets (in 2:1 and 2:2) to find a valid one.
-    emu_case "ut60a unplug" --driver uni-t-ut60a-ser --oracle-bug "$HUP_BUG" --oracle-hangs --unplug in=2:4 --timeout 15 -- -d $F --samples 5
+    # At the marks: the third request, and a period after the packets. An
+    # unplug right behind a read loses the bytes to the hangup or not, as
+    # the pace has it, so a case never counts on that.
+    serial_dmm_options answers=2
+    emu_case "metex unplug" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $M --samples 5
+    # The scan takes two packets (at any meter of this kind) to find one.
+    serial_dmm_options meter=fs9721 burst=3
+    emu_case "ut60a unplug" --driver uni-t-ut60a-ser --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 15 -- -d $F --samples 5
     serial_dmm_options answers=3
     # The driver asks again every 50 ms until the signal lands, so what
     # follows the mark depends on the pace.

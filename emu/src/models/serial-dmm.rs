@@ -48,7 +48,7 @@
 //! - `period=N`, offers per packet of a streaming meter (4 to 1000,
 //!   default 25);
 //! - `burst=N`, packets per open of a streaming meter, then silence, and
-//!   the event point marked; 0 never sends;
+//!   the event point marked a period later; 0 never sends;
 //! - `answers=N`, requests the asking meter answers per power on; it
 //!   stays silent to the next and marks the event point.
 //!
@@ -121,6 +121,8 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
         noise,
         stream: Stream::new(period, false).with_burst(burst),
         burst_left: burst,
+        period,
+        quiet: 0,
         burst,
         answers,
         answered: 0,
@@ -165,6 +167,8 @@ struct Meter {
     stream: Stream,
     burst: Option<u32>,
     burst_left: Option<u32>,
+    period: u32,
+    quiet: u32,
     answers: Option<u32>,
     answered: u32,
 }
@@ -209,6 +213,7 @@ impl Serial for Meter {
         {
             self.stream.restart();
             self.burst_left = self.burst;
+            self.quiet = 0;
         }
     }
 
@@ -222,8 +227,14 @@ impl Serial for Meter {
                 *left = left.saturating_sub(1);
             }
         } else if self.burst_left == Some(0) {
-            port.mark_event_point();
-            self.burst_left = None;
+            // A period after the last packet, so that the tool has read it
+            // before an event lands: bytes just delivered are lost to an
+            // unplug's hangup, or not, as the pace has it.
+            self.quiet += 1;
+            if self.quiet >= self.period {
+                port.mark_event_point();
+                self.burst_left = None;
+            }
         }
     }
 }
@@ -324,7 +335,10 @@ mod tests {
             h.offer();
         }
         assert!(matches!(h.offer(), Reply::Data(_)));
-        assert!(!h.cdc.take_event_point());
+        for _ in 0..3 {
+            assert_eq!(h.offer(), Reply::Nak);
+            assert!(!h.cdc.take_event_point(), "a period later");
+        }
         assert_eq!(h.offer(), Reply::Nak);
         assert!(h.cdc.take_event_point());
         for _ in 0..10 {
