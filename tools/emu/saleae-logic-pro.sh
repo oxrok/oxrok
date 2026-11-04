@@ -14,7 +14,7 @@ EMU_FULL=saleae-logic-pro
 # stand-in of tools/emu-firmware.sh would not upload. These are its
 # SHA-256 blocks (10000 bytes) in parts of 4096 from 0x40003000, then
 # the empty final part that starts it: fx3_image() of the model.
-# logicpro_fx3_standin [big|truncated|nofinal|missing] writes a broken
+# logicpro_fx3_standin [big|truncated|nofinal|unflagged|missing] writes a broken
 # one instead, for upload_firmware()'s checks of the file; the cases
 # that use one write the good one back after them.
 logicpro_fx3_standin() {
@@ -37,7 +37,7 @@ for i in range(0, size, 4096):
 if how == "truncated":
     out = out[:7 + 4096 + 7 + 100]
 elif how != "nofinal":
-    out += struct.pack("<HIB", 0, base, 1)
+    out += struct.pack("<HIB", 0, base, 0 if how == "unflagged" else 1)
 try:
     with open(dest, "rb") as f:
         if f.read() == out:
@@ -93,14 +93,16 @@ emu_cases() {
     # The driver's log lines under both tools' prefixes. What goes, all
     # wording of the frame around the driver's lines: oxrok's module path
     # for libsigrok's driver name; libsigrok's "Opening device instance",
-    # its session's and hwdriver's lines; the cause oxrok adds to
-    # "Failed to open device." and "Failed to start session." (the driver
-    # logged the cause itself, which stays). The two messages of
-    # sr_resource_load() come from oxrok's driver, under its name. The
-    # byte in two messages goes too, as the C prints the wrong one
-    # (protocol.c:341 i2c_rsp[0] for i2c_rsp[1], protocol.c:540 rsp[0] for
-    # reg_val); oxrok's is pinned by unit tests.
-    N='s/ \[[0-9:.]+\]//; s/^oxrok: [a-z]+: oxrok::drivers::saleae_logic_pro[a-z0-9_:]*: /sr: saleae-logic-pro: /; s/^sr: saleae-logic-pro: (Failed to (locate|open resource) )/sr: resource: \1/; /^sr: device: saleae-logic-pro: Opening device instance/d; /^sr: (session|hwdriver): /d; s/^Failed to open device.*/Failed to open device./; s/^(Unknown sample rate|device disconnected).*/Failed to start session./; s/(I2C wake read \(|read-back \()0x[0-9a-f]+/\1BYTE/'
+    # its session's, hwdriver's and resource.c's lines, and oxrok's
+    # one line for a missing file, with its hint, against resource.c's two;
+    # oxrok's refusal of the limit under hwdriver's name, which then goes
+    # the same way; the cause oxrok adds to "Failed to open device." and
+    # "Failed to start session." (the driver logged the cause itself, which
+    # stays). The byte of two messages is masked as the C prints the wrong
+    # one, only for the pair each case can show (protocol.c:341 the count
+    # 0x04 for the status 0x00, protocol.c:540 rsp[0] 0x00 for reg_val 0x55),
+    # so another byte fails; oxrok's is pinned by unit tests.
+    N='s/ \[[0-9:.]+\]//; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^oxrok: [a-z]+: oxrok::drivers::saleae_logic_pro[a-z0-9_:]*: /sr: saleae-logic-pro: /; /^sr: saleae-logic-pro: firmware file not found/d; /^sr: device: saleae-logic-pro: Opening device instance/d; /^sr: (session|hwdriver|resource): /d; s/^Failed to open device.*/Failed to open device./; s/^(Unknown sample rate|device disconnected).*/Failed to start session./; s/(I2C wake read \()0x(04|00)/\1BYTE/; s/(read-back \()0x(00|55)/\1BYTE/'
     # A renumerated device's address, in the text the harness's conn=
     # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
@@ -123,13 +125,11 @@ emu_cases() {
     # upload moves it, so the second tool's address is stale. sigrok-cli
     # lists it all the same through the conn= hole (api.c:219-236); oxrok
     # is held to following it by this case, under --no-oracle only (oxrok
-    # alone, on the session's first attach), with the goldens of the
-    # same run by ids below: the same scan, by address.
+    # alone, on the session's first attach), with goldens copied from the
+    # run by ids below: the same scan, by address.
     logicpro_options
     L="$N; /saleae-logic-pro:/!d; s/ \[[0-9:.]+\]//"
-    if [ "$no_oracle" = 1 ]; then
-        emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
-    fi
+    emu_case "by address unflashed" --no-oracle-only --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
     emu_case "by ids unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=21a9.1006 --scan
     emu_case "scan" --keep-header --filter "$C" -- -d $F --scan
     # sr_usb_find() refuses the spec, and the driver lists the board all
@@ -298,14 +298,26 @@ emu_cases() {
     logicpro_options flashed=1 fpga=1 transfers=3
     emu_case "interrupt during a capture" --interrupt in=2:3 --oracle-bug "sigrok-cli has no SIGINT handler" --filter '2,$d' -- -d $F -C 0 --continuous -O bits
 
+    # The driver's own idle stop (api.c:391): the runner has no any-key
+    # stop, so nothing else ends the capture after the model's transfers.
+    # sigrok-cli's stdin is /dev/null, so it never gets here.
+    logicpro_options flashed=1 fpga=1
+    emu_case "lib idle stop" --libsigrok --oxrok --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+
+    # oxrok's --strict makes the warning of a failed authentication a
+    # failed run; sigrok-cli has no such flag.
+    logicpro_options flashed=1 fpga=1 bad_status=wake-i2c
+    emu_case "strict on a failed authentication" --no-oracle-only --expect-fail --stderr --filter "$N; /No authentication|treated as error/!d" -- --strict -d $F -C 0 --continuous -O bits
+
     # The sample stream.
     logicpro_options flashed=1 fpga=1 halt_in=1
     # The transfer that brought the data goes back in from its callback, in
     # the C driver's event handling inside the blocking write of the start
     # (protocol.c:909), before or after that write's answer is asked for:
     # its STALL lands on either side of the answer, by timing. The stalled
-    # IN lines move to the end of the log, so their number still counts.
-    emu_case "fault halt after one" --tx-filter '/^bulk_in 82 16384 -> err stall$/{H;d}; ${G}' --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    # IN lines between the data and the next write move to the end of the
+    # log, so their number still counts.
+    emu_case "fault halt after one" --tx-filter '/^bulk_in 82 16384 -> @/,/^bulk_out/{/err stall/{H;d}}; ${G}' --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     logicpro_options flashed=1 fpga=1 halt_in=0
     emu_case "fault halt at once" --no-output -- -d $F -C 0 --continuous -O bits
     # A short transfer: receive_data() converts all 16 KiB of the buffer
@@ -368,5 +380,11 @@ emu_cases() {
         logicpro_fx3_standin $how || emu_fail "saleae-logic-pro: could not write the $how FX3 file"
         emu_case "firmware file $how" --expect-fail --stderr --filter "$U" -- -l 4 -d $F -C 0 --continuous -O bits
     done
+    # The last part empty but not flagged final: the boot loader starts
+    # the firmware, and both tools list the running board. libsigrok calls
+    # that a success with its "Missing final part." (api.c:111-116, ret is
+    # the transfer's 0), oxrok a failed upload: stderr differs, not this.
+    logicpro_fx3_standin unflagged || emu_fail "saleae-logic-pro: could not write the unflagged FX3 file"
+    emu_case "firmware file unflagged" --keep-header --filter "$C" -- -d $F --scan
     logicpro_fx3_standin || emu_fail "saleae-logic-pro: could not write the FX3 stand-in back"
 }

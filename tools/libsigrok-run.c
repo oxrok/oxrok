@@ -32,11 +32,12 @@
  * The options mean what they mean to sigrok-cli, and the common failures
  * read the same (a --samples the driver cannot take is "Failed to
  * configure sample limit."). It is a subset, not a copy: no -g, -o,
- * --continuous, --get, --set, --show, decoders or transforms, no
- * channel_group= in -c, and a scan that finds several devices is
- * refused rather than narrowed to the one that is not a demo device.
- * With none of --samples, --time and --frames the session runs until the
- * driver ends it.
+ * --get, --set, --show, decoders or transforms, no channel_group= in -c,
+ * and a scan that finds several devices is refused rather than narrowed to
+ * the one that is not a demo device. With none of --samples, --time and
+ * --frames the session runs until the driver ends it; --continuous is
+ * taken and means just that, with no any-key stop, so that a full case can
+ * give oxrok the same arguments.
  *
  * --stop-after N is a sample limit for a driver that has none. The runner
  * counts the samples itself (logic ones, else those of the first analog
@@ -808,6 +809,9 @@ int main(int argc, char **argv)
 		const char *a = argv[i];
 		char **val = NULL;
 
+		/* A session here runs until the driver ends it anyway. */
+		if (!strcmp(a, "--continuous"))
+			continue;
 		if (!strcmp(a, "--scan")) {
 			opt_scan = TRUE;
 			continue;

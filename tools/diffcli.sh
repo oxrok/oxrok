@@ -769,7 +769,7 @@ flush()
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
-    #          [--libsigrok [--oxrok]] [--tx-filter SED] -- ARGS...
+    #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -806,6 +806,11 @@ flush()
     #   transactions cut where they start repeating (emu_hang_cut), runs
     #   of a repeated output line counted once; sigrok-cli's stdout is
     #   lost with it, so such a case compares --stderr or --no-output.
+    #   --no-oracle-only, a case that runs only under --no-oracle, for
+    #   what sigrok-cli cannot run first (a flag it lacks, an address its
+    #   upload would move); its goldens are written by hand, as a bless
+    #   does not run it, and its slug counts in every mode, so that a bless
+    #   keeps them.
     #   --tx-filter, a sed -E script over each tool's transaction log
     #   before it is compared, for an order the C driver's timing decides;
     #   the case says what it hides. --libsigrok, a library-verified
@@ -833,7 +838,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -856,6 +861,7 @@ flush()
                 --libsigrok) libsig=1 ;;
                 --oxrok) libsig_full=1 ;;
                 --tx-filter) tx_filter=$2; shift ;;
+                --no-oracle-only) no_oracle_only=1 ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -874,6 +880,7 @@ flush()
             *" $slug "*) emu_fail "$name: another case of $EMU_MODEL has the file name $slug"; return ;;
         esac
         emu_slugs="$emu_slugs $slug"
+        [ $no_oracle_only = 0 ] || [ $no_oracle = 1 ] || return
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
         # A library case is the runner's alone, whatever oxrok has,
         # unless it says --oxrok.

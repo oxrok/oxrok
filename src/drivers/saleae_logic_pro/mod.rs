@@ -110,21 +110,33 @@ impl Driver for LogicProDriver {
         };
         let mut found: Vec<UsbDeviceInfo> = crate::usb::find_devices(&[ID])?;
         found.retain(|d| conn.is_none_or(|c| c.matches(d)));
-        let mut uploaded = false;
-        for info in &found {
+        let mut reached = false;
+        // A board whose upload failed stays listed, as in the C driver's
+        // old list: its open then says what is wrong.
+        let mut failed = vec![false; found.len()];
+        for (info, failed) in found.iter().zip(&mut failed) {
             if !has_firmware(info) {
                 log::info!("Found a Logic Pro 16 device (no firmware loaded).");
-                match upload(info) {
-                    Ok(()) => uploaded = true,
-                    Err(_) => log::error!("Firmware upload failed, name {FX3_FIRMWARE}."),
+                if upload(info, &mut reached).is_err() {
+                    log::error!("Firmware upload failed, name {FX3_FIRMWARE}.");
+                    *failed = true;
                 }
             }
         }
-        if uploaded {
-            // Give the device some time to come back and scan again.
+        if reached {
+            // Give the device some time to come back and scan again. After
+            // any upload that got to the board, which may have started the
+            // firmware whatever the file's end says.
             std::thread::sleep(RENUM_WAIT);
             let again = crate::usb::find_devices(&[ID])?;
-            found = again.into_iter().filter(|d| found.iter().any(|s| same_board(d, s))).collect();
+            found = found
+                .iter()
+                .zip(&failed)
+                .filter_map(|(s, &failed)| {
+                    let now = again.iter().find(|d| same_board(d, s));
+                    now.or(failed.then_some(s)).cloned()
+                })
+                .collect();
         }
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
         for info in found {
@@ -152,10 +164,10 @@ fn has_firmware(info: &UsbDeviceInfo) -> bool {
 }
 
 /// `upload_firmware()`: the file, then the device.
-fn upload(info: &UsbDeviceInfo) -> Result<()> {
-    let image = protocol::load_firmware(FX3_FIRMWARE)?;
+fn upload(info: &UsbDeviceInfo, reached: &mut bool) -> Result<()> {
+    let image = protocol::load_firmware(FX3_FIRMWARE).inspect_err(|e| log::error!("{e}"))?;
     let mut t = crate::usb::open(info)?;
-    protocol::send_firmware(t.as_mut(), &image)
+    protocol::send_firmware(t.as_mut(), &image, reached)
 }
 
 /// `dev_open()`: the claim and `saleae_logic_pro_init()`.
@@ -443,10 +455,14 @@ fn on_transfer(
         }
         Err(Error::Timeout) => {
             *idle += 1;
-            if *idle >= IDLE_POLLS { Next::End } else { Next::Continue }
+            if *idle < IDLE_POLLS {
+                return Next::Continue;
+            }
+            log::warn!("No transfer for 1 s, ending the capture.");
+            Next::End
         }
         Err(e) => {
-            log::debug!("Transfer failed: {e}.");
+            log::warn!("A transfer failed, ending the capture: {e}.");
             Next::End
         }
     }

@@ -81,7 +81,7 @@ const FW_TIMEOUT: Duration = Duration::from_millis(100);
 const BITSTREAM_MAX_SIZE: usize = 512 * 1024;
 const BITSTREAM_PART_SIZE: usize = 1020;
 const BITSTREAM: &str = "saleae-logicpro16-fpga.bitstream";
-const HINT: &str = "see docs/DEVICES.md";
+const HINT: &str = "extract it with sigrok-fwextract-saleae-logic16, see docs/DEVICES.md";
 
 /// The ADC writes of the open: address and value, in order, up to
 /// register `0x15` (`saleae_logic_pro_init()`).
@@ -111,18 +111,13 @@ const CRYPTO_NONCE: [u8; 28] = {
     p
 };
 
-/// A file, as `sr_resource_load()` takes it: its two messages when it is
-/// not there, a refusal when it is over `max` bytes.
+/// A file, with the size limit each caller gives `sr_resource_load()`
+/// (`api.c:71`, `protocol.c:503`): the C driver refuses a larger one. The
+/// error is oxrok's own, and names how to get a missing file.
 fn load_resource(name: &str, max: usize) -> Result<Vec<u8>> {
-    let image = firmware::read(name, HINT).inspect_err(|e| {
-        if matches!(e, Error::Firmware(_)) {
-            log::debug!("Failed to locate '{name}'.");
-        }
-        log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
-    })?;
+    let image = firmware::read(name, HINT)?;
     if image.len() > max {
-        log::error!("Size {} of '{name}' exceeds limit {max}.", image.len());
-        return Err(Error::device(format!("{name} is too large")));
+        return Err(Error::device(format!("{name} is over the {max} bytes the driver takes")));
     }
     Ok(image)
 }
@@ -138,8 +133,9 @@ pub fn load_firmware(name: &str) -> Result<Vec<u8>> {
 /// file holds stops it where it is; parts sent stay sent. An empty last
 /// part that is not flagged final fails here too, where the C driver logs
 /// "Missing final part." and returns the transfer's 0, `SR_OK`
-/// (`api.c:111-116`).
-pub fn send_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
+/// (`api.c:111-116`). `reached` says a part got to the device, which may
+/// then have started the firmware even when this fails.
+pub fn send_firmware(t: &mut dyn Transport, image: &[u8], reached: &mut bool) -> Result<()> {
     let mut offset = 0;
     let mut last = None;
     while offset + FW_HEADER_SIZE <= image.len() {
@@ -161,6 +157,7 @@ pub fn send_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
         t.control_out(ControlRequest::vendor(0xa0, value, index), data, FW_TIMEOUT).inspect_err(
             |e| log::error!("Unable to send firmware to device: {}.", libusb_error_name(e)),
         )?;
+        *reached = true;
         if size == 0 {
             log::info!("Started firmware at 0x{address:x}.");
         } else {
@@ -238,14 +235,16 @@ pub fn rate_registers(samplerate: u64) -> Option<(u8, u8)> {
 }
 
 /// A failure the driver reports at debug level, and returns.
-fn failure(msg: String) -> Error {
+fn failure(mut msg: String) -> Error {
     log::debug!("{msg}");
+    msg.truncate(msg.trim_end_matches('.').len());
     Error::Device(msg)
 }
 
 /// A failure the driver reports at error level, and returns.
-fn fatal(msg: String) -> Error {
+fn fatal(mut msg: String) -> Error {
     log::error!("{msg}");
+    msg.truncate(msg.trim_end_matches('.').len());
     Error::Device(msg)
 }
 
@@ -500,7 +499,7 @@ impl Link {
     /// one, the start command.
     pub fn prepare(&mut self, channels: u16, divider: u8, pre_divider: u8) -> Result<()> {
         if let Err(e) = self.authenticate() {
-            log::debug!("No authentication, capturing all the same: {e}.");
+            log::warn!("No authentication, capturing all the same: {e}.");
         }
         let [low, high] = channels.to_le_bytes();
         #[allow(clippy::cast_possible_truncation)]
@@ -573,10 +572,10 @@ impl Converter {
         for word in words {
             let samples = u32::from_le_bytes(*word);
             let channel = self.masks[self.index];
+            // No branch: random data would mispredict at 50 MHz.
+            #[allow(clippy::cast_possible_truncation)]
             for (i, s) in self.batch.iter_mut().enumerate() {
-                if samples >> (31 - i) & 1 != 0 {
-                    *s |= channel;
-                }
+                *s |= channel * ((samples >> (31 - i)) & 1) as u16;
             }
             self.index += 1;
             if self.index == self.masks.len() {
@@ -696,7 +695,7 @@ mod tests {
         );
         let mut image = vec![2, 0, 0x00, 0x30, 0x00, 0x40, 0, 0xaa, 0xbb];
         image.extend_from_slice(&[0, 0, 0x00, 0x30, 0x00, 0x40, 1]);
-        send_firmware(l.transport(), &image).unwrap();
+        send_firmware(l.transport(), &image, &mut true).unwrap();
         r.finish().unwrap();
     }
 
@@ -704,19 +703,38 @@ mod tests {
     fn broken_firmware_files_are_refused() {
         // Over 4 KiB.
         let (mut l, _) = link("");
-        assert!(send_firmware(l.transport(), &[1, 0x10, 0, 0, 0, 0, 0]).is_err());
+        assert!(send_firmware(l.transport(), &[1, 0x10, 0, 0, 0, 0, 0], &mut false).is_err());
         // A part the file does not hold.
         let (mut l, _) = link("");
-        assert!(send_firmware(l.transport(), &[2, 0, 0, 0, 0, 0, 0, 0xaa]).is_err());
+        assert!(send_firmware(l.transport(), &[2, 0, 0, 0, 0, 0, 0, 0xaa], &mut false).is_err());
         // No part at all, a non-empty last part, an empty unflagged one.
         let (mut l, _) = link("");
-        assert!(send_firmware(l.transport(), &[0, 0, 0]).is_err());
+        assert!(send_firmware(l.transport(), &[0, 0, 0], &mut false).is_err());
         let (mut l, r) = link("ctl_out 40 a0 0000 0000 aa -> ok\n");
-        assert!(send_firmware(l.transport(), &[1, 0, 0, 0, 0, 0, 1, 0xaa]).is_err());
+        assert!(send_firmware(l.transport(), &[1, 0, 0, 0, 0, 0, 1, 0xaa], &mut false).is_err());
         r.finish().unwrap();
         let (mut l, r) = link("ctl_out 40 a0 0000 0000 - -> ok\n");
-        assert!(send_firmware(l.transport(), &[0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert!(send_firmware(l.transport(), &[0, 0, 0, 0, 0, 0, 0], &mut false).is_err());
         r.finish().unwrap();
+    }
+
+    #[test]
+    fn a_part_that_got_there_is_reported() {
+        // Nothing sent.
+        let (mut l, _) = link("");
+        let mut reached = false;
+        assert!(send_firmware(l.transport(), &[1, 0x10, 0, 0, 0, 0, 0], &mut reached).is_err());
+        assert!(!reached);
+        // An empty part started the firmware, unflagged or not.
+        let (mut l, _) = link("ctl_out 40 a0 0000 0000 - -> ok\n");
+        assert!(send_firmware(l.transport(), &[0, 0, 0, 0, 0, 0, 0], &mut reached).is_err());
+        assert!(reached);
+    }
+
+    #[test]
+    fn a_missing_file_names_how_to_get_it() {
+        let e = load_resource("oxrok-no-such-file", 1).unwrap_err().to_string();
+        assert!(e.contains("oxrok-no-such-file") && e.contains(HINT), "{e}");
     }
 
     #[test]
@@ -739,7 +757,7 @@ mod tests {
              bulk_out 01 0081017f -> 4\nbulk_in 81 1 -> 55\n",
         );
         let e = l.send_bitstream(&[0x12]).unwrap_err().to_string();
-        assert!(e.contains("(0x55 != 0xaa)"), "{e}");
+        assert!(e.ends_with("(0x55 != 0xaa)"), "the CLI adds the period: {e}");
     }
 
     #[test]
