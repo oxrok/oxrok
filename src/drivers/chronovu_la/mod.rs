@@ -699,7 +699,7 @@ mod tests {
         dev.open().unwrap();
         assert_eq!(capture(&mut dev).len(), 2, "header and end");
         let (tx, _rx) = sync_channel(4);
-        let e = dev.start(PacketSink::new(tx, 0)).err().expect("the chip is closed");
+        let e = dev.start(PacketSink::new(tx, 0)).expect_err("the chip is closed");
         assert!(e.to_string().contains("not open"), "{e}");
         dev.stop().unwrap();
         dev.close().unwrap();
