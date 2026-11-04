@@ -5,7 +5,7 @@
 //   with commits by Gerhard Sittig, Daniel Elstner, Martin Ling,
 //   Bert Vermeulen, Lars-Peter Clausen, Soeren Apel, Elen Eisendle,
 //   Karl Palsson
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty).
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! The UNI-T UT-D04 cable as libsigrok's `uni-t-dmm` driver reaches it:
@@ -39,7 +39,7 @@
 //! The line setting is the point of the driver. `hid_chip_init` claims
 //! interface 0 and sends `SET_REPORT` of feature report 0 with
 //! `baud_lo baud_hi 00 00 03`: the 3 asks for 8 data bits whatever the
-//! meter's frame, so with a 7o1 meter (ES519xx, UT71x) the parity bit
+//! meter's frame, so with a 7o1 meter (`ES519xx`, `UT71x`) the parity bit
 //! arrives in bit 7 of each byte, and the driver masks it off. `parity`
 //! makes the model set that bit. A chip at the wrong baud rate would
 //! see framing errors; what it would hand over is unknown, so the model
