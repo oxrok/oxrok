@@ -69,11 +69,13 @@
 //! significant bits, which is how the SGPIO shifts them in too.
 //!
 //! The samples: sample `k` (`k` counts from 0 at each start and wraps at
-//! [`PERIOD`]) has low byte `k` on SGPIO0 to 7, and on SGPIO8 to 15 the
-//! low byte reversed, xored with the high byte of `k`. A capture of the
+//! [`PERIOD`]) has `k ^ (k >> 5) ^ (k >> 11)` on SGPIO0 to 7, and on SGPIO8
+//! to 15 that reversed, xored with the high byte of `k`. A capture of the
 //! upper pins so differs from the lower, and a transfer repeated or out
-//! of place shows, since 262144 bytes is no multiple of the stream's
-//! period.
+//! of place shows at any width, since 262144 bytes is no multiple of the
+//! stream's period. `level=HHLL` holds the 16 pins at that hex value
+//! instead, as a quiet input does, which makes every transfer one byte
+//! repeated and a recording of one small.
 //!
 //! Emulation artifacts:
 //!
@@ -109,7 +111,7 @@
 //! `configure-len=N` cuts configure's answer. `in-limit=N` above.
 //! `in-stall=N` halts the endpoint after N transfers, as an overrun does.
 //! `stall_string=3` and `short_string=3` fail the string read of `conn=sn=`.
-//! `wide=1` above.
+//! `wide=1` and `level=HHLL` above.
 //!
 //! What the model taught about the C driver, from sigrok-cli's runs:
 //!
@@ -152,7 +154,7 @@ pub const NAME: &str = "greatfet";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "GreatFET One (1d50:60e6) with its stock firmware's logic analyzer; \
                          in-limit=N transfers to give (1), wide=1 for a firmware with 16 bit \
-                         captures; faults: stall=serial,version,first-pin,alt,configure,start,\
+                         captures, level=HHLL for pins held still; faults: stall=serial,version,first-pin,alt,configure,start,\
                          stop, stall-read=serial,version,configure, serial=HEX, \
                          version=HEX, configure-len=N, in-stall=N, stall_string=I, short_string=I";
 
@@ -245,17 +247,17 @@ pub fn firmware_descriptors() -> Descriptors {
 
 /// The 16 pins at sample `k`.
 pub fn pins(k: usize) -> u16 {
-    let low = k as u8;
+    let low = (k ^ (k >> 5) ^ (k >> 11)) as u8;
     let high = low.reverse_bits() ^ ((k >> 8) as u8);
     u16::from_le_bytes([low, high])
 }
 
 /// One period of the stream's bytes for a bus `width` bits wide (1, 2, 4
 /// or 8) from `first_pin` (0 or 8).
-pub fn packed(width: usize, first_pin: u8) -> Vec<u8> {
+pub fn packed(width: usize, first_pin: u8, level: Option<u16>) -> Vec<u8> {
     let per_byte = 8 / width;
     let mask = ((1u16 << width) - 1) as u8;
-    let bank = |k: usize| (pins(k) >> first_pin) as u8;
+    let bank = |k: usize| (level.unwrap_or_else(|| pins(k)) >> first_pin) as u8;
     (0..PERIOD / per_byte)
         .map(|b| {
             (0..per_byte).fold(0u8, |acc, j| {
@@ -275,11 +277,11 @@ struct Streams {
 }
 
 impl Streams {
-    fn new() -> Streams {
-        let bank = |w| [packed(w, 0), packed(w, 8)];
+    fn new(level: Option<u16>) -> Streams {
+        let bank = |w| [packed(w, 0, level), packed(w, 8, level)];
         Streams {
             narrow: [bank(1), bank(2), bank(4), bank(8)],
-            wide: (0..PERIOD).flat_map(|k| pins(k).to_le_bytes()).collect(),
+            wide: (0..PERIOD).flat_map(|k| level.unwrap_or_else(|| pins(k)).to_le_bytes()).collect(),
         }
     }
 
@@ -336,10 +338,10 @@ pub struct Greatfet {
 
 impl Greatfet {
     /// A board with these limits, faults aside.
-    fn new(in_limit: u32, wide: bool, faults: Faults) -> Greatfet {
+    fn new(in_limit: u32, wide: bool, level: Option<u16>, faults: Faults) -> Greatfet {
         Greatfet {
             desc: firmware_descriptors(),
-            streams: Streams::new(),
+            streams: Streams::new(level),
             faults,
             in_limit,
             wide,
@@ -582,6 +584,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut faults = Faults::default();
     let mut in_limit = 1;
     let mut wide = false;
+    let mut level = None;
     let count = |k: &str, v: &str| -> Result<u32> {
         v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")))
     };
@@ -600,6 +603,10 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
         match k.as_str() {
             "in-limit" => in_limit = count(k, v)?,
             "wide" => wide = flag(k, v)?,
+            "level" => {
+                let bad = || Error(format!("level={v}: four hex digits"));
+                level = Some(u16::from_str_radix(v, 16).map_err(|_| bad())?);
+            }
             "stall" => {
                 faults.stall.clear();
                 for name in v.split(',').filter(|n| !n.is_empty()) {
@@ -626,7 +633,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
-    Ok(Box::new(Greatfet::new(in_limit, wide, faults)))
+    Ok(Box::new(Greatfet::new(in_limit, wide, level, faults)))
 }
 
 impl DeviceModel for Greatfet {
@@ -795,7 +802,7 @@ mod tests {
         m.in_submitted(1, 262_144);
         let Reply::Data(d) = m.in_transfer(1, 262_144, &mut v) else { panic!("no samples") };
         assert_eq!(d.len(), 262_144);
-        assert_eq!(d[..4], packed(8, 0)[..4]);
+        assert_eq!(d[..4], packed(8, 0, None)[..4]);
         // in-limit=1: the rest is held until the stop.
         assert_eq!(m.in_transfer(1, 262_144, &mut v), Reply::Nak);
         assert_eq!(quiet(&mut *m, CLASS_LA, VERB_STOP, &[], &mut v), Reply::ack());
@@ -842,17 +849,45 @@ mod tests {
         let p = packed(2, 0);
         let expected = (0..4).fold(0u8, |a, j| a | ((pins(j) as u8 & 3) << (2 * j)));
         assert_eq!(p[0], expected);
-        assert_eq!(packed(1, 8)[0] & 1, (pins(0) >> 8) as u8 & 1);
-        assert_eq!(packed(8, 8)[1], (pins(1) >> 8) as u8);
-        // A transfer's bytes are no whole number of periods.
-        for w in [1, 2, 4, 8] {
-            assert_ne!(262_144 % packed(w, 0).len(), 0);
+        assert_eq!(packed(1, 8, None)[0] & 1, (pins(0) >> 8) as u8 & 1);
+        assert_eq!(packed(8, 8, None)[1], (pins(1) >> 8) as u8);
+    }
+
+    /// One period's worth of a transfer's bytes, and the next transfer's.
+    fn two_transfers(m: &mut dyn DeviceModel, width: u8) -> (Vec<u8>, Vec<u8>) {
+        let mut v = Violations::default();
+        configure(m, 1_000_000, width, &mut v);
+        quiet(m, CLASS_LA, VERB_START, &[], &mut v);
+        let mut read = || {
+            let Reply::Data(d) = m.in_transfer(1, 262_144, &mut v) else { panic!("no samples") };
+            d
+        };
+        (read(), read())
+    }
+
+    #[test]
+    fn a_transfer_differs_from_the_next_at_any_width() {
+        for width in [1, 2, 4, 8] {
+            let (a, b) = two_transfers(&mut *board(&[("in-limit", "2")]), width);
+            assert_ne!(a, b, "width {width}");
+            assert!(a.iter().any(|x| *x != a[0]), "width {width}");
         }
     }
 
     #[test]
+    fn a_level_holds_the_pins() {
+        let m = &mut *board(&[("in-limit", "2"), ("level", "a5c3")]);
+        let (a, b) = two_transfers(m, 8);
+        assert_eq!(a, b);
+        assert_eq!((a[0], a[261_000]), (0xc3, 0xc3));
+        assert_eq!(packed(2, 0, Some(0xa5c3))[0], 0xff);
+        assert_eq!(packed(4, 8, Some(0xa5c3))[0], 0x55);
+        assert!(build(&opts(&[("level", "xyz")])).is_err());
+    }
+
+    #[test]
     fn widths_round_as_the_firmware_does() {
-        let m = Greatfet::new(1, false, Faults::default());
+        let m = Greatfet::new(1, false, None, Faults::default());
         let got: Vec<_> = (1..=9).map(|w| m.topology(w)).collect();
         let want = [Some(1), Some(2), Some(4), Some(4), Some(8), Some(8), Some(8), Some(8), None];
         assert_eq!(got, want);

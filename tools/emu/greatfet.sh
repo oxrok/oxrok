@@ -184,7 +184,7 @@ s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0
     emu_case "1ch" -- -d $F -C SGPIO0 --samples 104 -O bits
     emu_case "1ch limit in a byte" --oracle-differs "$W_OVER" -- -d $F -C SGPIO0 --samples 3 -O bits
     emu_case "2ch limit in a byte" --oracle-differs "$W_OVER" -- -d $F -C SGPIO0,SGPIO1 --samples 5 -O bits
-    emu_case "2ch" --record -- -d $F -C SGPIO0,SGPIO1 --samples 100 -O bits
+    emu_case "2ch" -- -d $F -C SGPIO0,SGPIO1 --samples 100 -O bits
     emu_case "2ch second only" -- -d $F -C SGPIO1 --samples 100 -O bits
     emu_case "3ch" -- -d $F -C SGPIO0,SGPIO1,SGPIO2 --samples 100 -O bits
     emu_case "3ch third only" -- -d $F -C SGPIO2 --samples 100 -O bits
@@ -199,6 +199,13 @@ s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0
     emu_case "upper 8ch" -- -d $F -C $B8 --samples 100 -O bits
     emu_case "upper hex" -- -d $F -C $B8 --samples 64 -O hex
     emu_case "lower csv" --filter '/^;/d' -- -d $F -C SGPIO0,SGPIO1 --samples 16 -O csv:header=false
+
+    # Pins held still: every transfer one byte repeated, small to record.
+    gf_options level=a5c3
+    emu_case "held 8ch" --record -- -d $F --samples 32 -O hex
+    emu_case "held upper 4ch" --record -- -d $F -C SGPIO8,SGPIO9,SGPIO10,SGPIO11 --samples 32 -O bits
+    emu_case "held 1ch" -- -d $F -C SGPIO0 --samples 16 -O bits
+    gf_options
 
     # Both banks: 9 bits and more are refused by this firmware without
     # telling the host, so no samples come; wide=1 stands for one that can.

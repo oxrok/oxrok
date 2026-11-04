@@ -1,11 +1,11 @@
 # oxrok usb fixture 1
-# emu greatfet: 2ch
+# emu greatfet: held upper 4ch
 # arg: -d
 # arg: greatfet
 # arg: -C
-# arg: SGPIO0,SGPIO1
+# arg: SGPIO8,SGPIO9,SGPIO10,SGPIO11
 # arg: --samples
-# arg: 100
+# arg: 32
 # arg: -O
 # arg: bits
 device vid=1d50 pid=60e6 version=0100 manufacturer="Great Scott Gadgets" product="GreatFET" serial="000000000000000057cc67e630187657" interfaces=0:ff:ff:ff,1:ff:ff:ff
@@ -15,12 +15,12 @@ ctl_out 42 65 0000 0000 00{4}01000000 -> ok
 ctl_in 42 65 0000 0000 1024 -> 76323032312e322e3100
 # oxrok usb fixture 1
 device vid=1d50 pid=60e6 version=0100 manufacturer="Great Scott Gadgets" product="GreatFET" serial="000000000000000057cc67e630187657" interfaces=0:ff:ff:ff,1:ff:ff:ff
-ctl_out 42 65 0000 0001 0d0100000100{4} -> ok
+ctl_out 42 65 0000 0001 0d0100000100000008 -> ok
 ctl_out 42 65 0000 0001 0d0100000200{4} -> ok
-ctl_out 42 65 0000 0000 0d0100{6}80cc060202 -> ok
+ctl_out 42 65 0000 0000 0d0100{6}80cc060204 -> ok
 ctl_in 42 65 0000 0000 9 -> 80cc06020040000081
 claim 1 -> ok
 ctl_out 42 65 0000 0001 0d01000003000000 -> ok
-bulk_in 81 262144 -> e4{262144}
+bulk_in 81 262144 -> 55{262144}
 ctl_out 42 65 0000 0001 0d01000004000000 -> ok
 release 1 -> ok
