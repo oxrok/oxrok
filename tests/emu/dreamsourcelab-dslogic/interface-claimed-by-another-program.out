@@ -1,1 +1,2 @@
-sr: dreamsourcelab-dslogic: Unable to claim USB interface. Another program or driver has already claimed it.
+Unable to claim USB interface. Another program or driver has already claimed it.
+Failed to open device.
