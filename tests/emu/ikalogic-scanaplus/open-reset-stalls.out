@@ -1,2 +1,2 @@
-sr: ikalogic-scanaplus: Failed to open device (-6): ftdi_usb_reset failed
+Failed to open device (-6): ftdi_usb_reset failed
 No devices found.

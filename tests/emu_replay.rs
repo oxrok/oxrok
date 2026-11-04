@@ -16,7 +16,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 8] = [
+const RECORDED: [&str; 9] = [
     "fx2lafw",
     "saleae-logic16",
     "ftdi-la",
@@ -25,6 +25,7 @@ const RECORDED: [&str; 8] = [
     "brymen-bm86x",
     "uni-t-ut61e-ser",
     "victor-dmm",
+    "ikalogic-scanaplus",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a

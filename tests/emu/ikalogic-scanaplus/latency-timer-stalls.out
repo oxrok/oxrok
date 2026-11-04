@@ -1,2 +1,2 @@
-sr: ikalogic-scanaplus: Failed to set FTDI latency timer (-2): unable to set latency timer.
+Failed to set FTDI latency timer (-2): unable to set latency timer.
 Failed to open device.

@@ -1,2 +1,2 @@
-sr: ikalogic-scanaplus: ScanaPLUS only supports samplerate = 100MHz.
+ScanaPLUS only supports samplerate = 100MHz.
 Failed to set device option 'samplerate': invalid argument.

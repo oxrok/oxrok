@@ -1,0 +1,18 @@
+Acquisition with 9/9 channels at 100 MHz
+1:3f ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+2:00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+3:1f ff ff ff ff ff ff ff e0 00 00 00 00 00 00 00 0f ff ff ff ff ff ff ff 
+4:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+5:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+6:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+8:c0 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+9:ff ff ff ff ff ff ff ff e0 00 00 00 00 00 00 00 0f ff ff ff ff ff ff ff 
+1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+2:ff ff ff ff ff ff ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+3:ff ff ff ff ff ff ff ff fe 00 00 00 00 00 00 00 00 7f ff ff ff ff ff ff 
+4:07 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 80 00 00 00 00 00 00 
+5:07 ff ff ff ff ff ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+6:07 ff ff ff ff ff ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+9:ff ff e0 00 00 00 00 00 
+cd7afd1c214d4d7b7ac1b009ce6034abae85bef31d3264e4a23fd7db2e790b01  -

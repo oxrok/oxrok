@@ -49,7 +49,9 @@
 # claims) return at once while the cases are counted. Before each of
 # oxrok's runs, the kernel drivers bound to the device's vendor-specific
 # interfaces are unbound (emu_unbind), as libftdi's detach in
-# sigrok-cli's run would have left them. Events, --record and the
+# sigrok-cli's run would have left them (in a normal run too, before
+# oxrok in an --unplug case, whose replug binds them again). Events,
+# --record and the
 # violation checks are as in a normal run; the software cases, --hw,
 # --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #
@@ -808,7 +810,13 @@ flush()
             fi
             # After the reset: a reset that applies new options
             # renumerates the device, and its drivers bind again.
-            if [ $no_oracle = 1 ] && ! emu_unbind "$name"; then
+            # So does the replug after sigrok-cli's run in an --unplug
+            # case: libftdi's detach would have left them off for oxrok,
+            # whose USB layer gives back on release what it detached
+            # (ftdi_sio's probe would land among oxrok's transactions).
+            replugged=0
+            case "$t: $event" in "b: unplug"*) replugged=1 ;; esac
+            if { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
                 emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
             fi
             if ! emu_cmd "section $t $name" >/dev/null; then
