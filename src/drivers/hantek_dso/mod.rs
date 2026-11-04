@@ -440,7 +440,8 @@ impl Device for HantekDsoDevice {
         };
         let tuple_index = |list: &[(u64, u64)]| {
             let Value::Rational(p, q) = value else { return Err(bad()) };
-            list.iter().position(|t| *t == (*p, *q)).ok_or_else(bad)
+            // The parser reduces its fractions: 10 us comes as 1/100000.
+            list.iter().position(|(a, b)| a * q == p * b).ok_or_else(bad)
         };
         match (self.group(group)?, key) {
             (None, Key::LimitFrames) => {
@@ -791,7 +792,13 @@ impl Acquisition {
     }
 
     /// `FETCH_DATA`: the frame's transfers, as many as it takes.
-    fn fetch(&mut self, link: &mut Link, offset: u32, sink: &PacketSink, stop: &AtomicBool) -> Next {
+    fn fetch(
+        &mut self,
+        link: &mut Link,
+        offset: u32,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+    ) -> Next {
         if !sink.send(Packet::FrameBegin) {
             return Next::End;
         }
@@ -1017,10 +1024,8 @@ mod tests {
 
     #[test]
     fn a_frame_that_never_comes_is_given_up() {
-        let mut steps = format!(
-            "{}{BEGIN}bulk_out 02 0500 -> 2\n",
-            poll(protocol::CAPTURE_READY_8BIT)
-        );
+        let mut steps =
+            format!("{}{BEGIN}bulk_out 02 0500 -> 2\n", poll(protocol::CAPTURE_READY_8BIT));
         for _ in 0..MAX_FAILURES {
             steps.push_str("bulk_in 86 4 -> err timeout\n");
         }

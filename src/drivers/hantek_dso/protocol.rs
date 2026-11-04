@@ -267,7 +267,7 @@ pub fn endpoint_packet_size(interfaces: &[InterfaceDesc]) -> usize {
 /// The calibration from the EEPROM's bytes, big endian words.
 pub fn parse_levels(data: &[u8; LEVELS_LEN]) -> Levels {
     let mut levels = [[[0; 2]; 9]; 2];
-    let mut words = data.chunks_exact(2).map(|w| u16::from_be_bytes([w[0], w[1]]));
+    let mut words = data.as_chunks::<2>().0.iter().map(|w| u16::from_be_bytes(*w));
     for word in levels.iter_mut().flatten().flatten() {
         *word = words.next().expect("72 bytes");
     }
@@ -382,7 +382,7 @@ pub fn cmd_2250_rate(s: &Settings) -> Option<[u8; 8]> {
 
 /// `CMD_2250_SET_CHANNELS`: 0 CH1, 2 both, 3 CH2.
 pub fn cmd_2250_channels(s: &Settings) -> [u8; 4] {
-    let code = (if s.ch_enabled[0] { 0 } else { 1 }) + (if s.ch_enabled[1] { 2 } else { 0 });
+    let code = u8::from(!s.ch_enabled[0]) + u8::from(s.ch_enabled[1]) * 2;
     [CMD_2250_SET_CHANNELS, 0, code, 0]
 }
 
@@ -521,7 +521,9 @@ pub fn analog_packets(s: &Settings, buf: &[u8]) -> Vec<AnalogData> {
         #[allow(clippy::cast_possible_truncation)]
         let digits = -(vdivlog as i32) + i32::from(vdivlog < 0.0);
         let samples = buf
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|b| range / 255.0 * f32::from(b[1 - ch]) - range / 2.0)
             .collect();
         packets.push(AnalogData {
@@ -1015,7 +1017,7 @@ mod tests {
         assert!((p[0].samples[0] - 20.0).abs() < 1e-4);
         // log10(40 / 255) = -0.8.
         assert_eq!(p[0].digits, 1);
-        assert!(analog_packets(&s, &[]).is_empty());
+        assert_eq!(analog_packets(&s, &[]), []);
     }
 
     #[test]
@@ -1040,7 +1042,7 @@ mod tests {
     fn a_trigger_offset_of_zero_or_past_the_frame() {
         let mut f = Frame::new(2, 0);
         assert_eq!(f.push(&[0, 1, 2, 3]), &[0, 1, 2, 3]);
-        assert!(f.buffered().is_empty());
+        assert_eq!(f.buffered(), &[] as &[u8]);
         let mut f = Frame::new(2, 0x00ff_ffff);
         assert_eq!(f.push(&[0, 1, 2, 3]), &[] as &[u8]);
         assert!(f.complete());
