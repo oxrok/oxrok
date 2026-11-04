@@ -90,10 +90,7 @@ than another emulator case: the output of a capture next to sigrok-cli's,
 and a recording (`OXROK_USB_RECORD=file oxrok -d DRIVER ...`) if they
 differ.
 
-CI runs on Linux, macOS and Windows. Its last completed run on `main`, on
-2026-11-03, did not pass: the tests failed on Windows and the macOS job
-was cancelled; Linux, clippy, the Python decoders and the emulator job
-passed.
+CI runs on Linux, macOS and Windows.
 
 ## Trying it
 
