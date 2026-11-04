@@ -40,8 +40,8 @@
  * --stop-after N is a sample limit for a driver that has none. The runner
  * counts the samples itself (logic ones, else those of the first analog
  * channel), cuts the packet that reaches N and drops what comes after,
- * and asks for the stop from an idle callback of the main loop, as a
- * client's key press or button would: sr_session_stop() from the
+ * and asks for the stop from a callback of the main loop at the next
+ * iteration, as a client's key press or button would: sr_session_stop() from the
  * datafeed callback would run the driver's stop inside its transfer
  * callback, inside libusb's event handling, where its control write
  * fails. A driver that ends the capture in the same callback as its
@@ -542,7 +542,11 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 	return o;
 }
 
-/* The stop --stop-after asks for, out of the datafeed callback. */
+/*
+ * The stop --stop-after asks for, out of the datafeed callback. It runs ahead
+ * of the USB source: at g_idle_add()'s priority, a completion due in the same
+ * iteration goes first, and how far the driver gets before the stop is a race.
+ */
 static gboolean stop_idle(gpointer data)
 {
 	(void)data;
@@ -556,7 +560,7 @@ static void request_stop(void)
 
 	if (!requested) {
 		requested = TRUE;
-		g_idle_add(stop_idle, NULL);
+		g_idle_add_full(G_PRIORITY_HIGH, stop_idle, NULL, NULL);
 	}
 }
 
