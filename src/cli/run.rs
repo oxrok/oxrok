@@ -44,8 +44,13 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
         for (name, _) in parsed.items {
             let key = parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
             // sigrok-cli's maybe_config_get() (main.c:81-84) asks the
-            // driver only for a key it lists as GET: SR_ERR_NA otherwise.
-            if device.option(&key, group.as_deref()).is_some_and(|o| !o.access.get) {
+            // driver only for a key it lists as GET in this scope:
+            // SR_ERR_NA for a key without GET and for one not listed. A
+            // group the device lacks stays the driver's error.
+            let readable = device
+                .options(group.as_deref())
+                .map(|l| l.iter().any(|o| o.key == key && o.access.get));
+            if readable.is_ok_and(|r| !r) {
                 return Err(Error::Arg(format!("Failed to get '{name}': not applicable")));
             }
             let value = device

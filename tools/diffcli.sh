@@ -49,7 +49,9 @@
 # claims) return at once while the cases are counted. Before each of
 # oxrok's runs, the kernel drivers bound to the device's vendor-specific
 # interfaces are unbound (emu_unbind), as libftdi's detach in
-# sigrok-cli's run would have left them. Events, --record and the
+# sigrok-cli's run would have left them (in a normal run too, before
+# oxrok in an --unplug case, whose replug binds them again). Events,
+# --record and the
 # violation checks are as in a normal run; the software cases, --hw,
 # --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #

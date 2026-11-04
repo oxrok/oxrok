@@ -27,13 +27,16 @@
 //! FPGA's init and start, each pair or run of pairs a bulk transfer,
 //! then reads. All of it as under sigrok-cli, checked with the emulator
 //! (`tools/emu/ikalogic-scanaplus.sh`), with the differences of
-//! [`protocol`] in the decoding and the limits.
+//! [`protocol`] in the decoding and the limits. A limit set during an
+//! acquisition counts from the next read, as in the C driver.
 //!
 //! As with `ftdi-la`, libftdi detaches the kernel's `ftdi_sio` from
 //! port A and never attaches it again, while oxrok gives the port back
 //! when it lets go of it: the scan's close and the device's close. On a
 //! system where `ftdi_sio` binds the `ScanaPLUS`, it then probes port A
-//! (reads the latency timer, sets it to 16 ms) after the scan and after
+//! (reads the latency timer, sets it to 16 ms, and reads EEPROM words
+//! `0x0d` and `0x0e`: `ctl_in 40 0a`, `ctl_out 40 09 0010`, `ctl_in 40
+//! 90 0000 000d`, `ctl_in 40 90 0000 000e`) after the scan and after
 //! the capture, and the next open detaches it again. The emulator's
 //! cases do not show it: sigrok-cli runs first in each, and under
 //! `--no-oracle` the harness unbinds the driver before oxrok runs.
@@ -241,8 +244,7 @@ fn configure(link: &mut Link) -> Result<()> {
 pub struct ScanaPlusDevice {
     info: DeviceInfo,
     channels: Vec<Channel>,
-    limit_samples: u64,
-    limit_msec: u64,
+    limits: Arc<protocol::Limits>,
     pending: Option<Box<dyn Transport>>,
     link: Arc<Mutex<Option<Link>>>,
     worker: Option<Worker>,
@@ -269,8 +271,7 @@ impl ScanaPlusDevice {
                 .enumerate()
                 .map(|(i, n)| Channel::new(i, ChannelKind::Logic, *n))
                 .collect(),
-            limit_samples: 0,
-            limit_msec: 0,
+            limits: Arc::default(),
             pending: transport,
             link: Arc::new(Mutex::new(None)),
             worker: None,
@@ -332,7 +333,7 @@ impl Device for ScanaPlusDevice {
             return Err(Error::ChannelGroup(g.to_owned()));
         }
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
-        // The limits are taken when an acquisition starts.
+        // The acquisition reads the limits after every read.
         match key {
             Key::Samplerate => {
                 if value.as_u64().ok_or_else(bad)? != protocol::SAMPLERATE {
@@ -340,8 +341,12 @@ impl Device for ScanaPlusDevice {
                     return Err(Error::arg("ScanaPLUS only supports samplerate = 100MHz"));
                 }
             }
-            Key::LimitMsec => self.limit_msec = value.as_u64().ok_or_else(bad)?,
-            Key::LimitSamples => self.limit_samples = value.as_u64().ok_or_else(bad)?,
+            Key::LimitMsec => {
+                self.limits.msec.store(value.as_u64().ok_or_else(bad)?, Ordering::SeqCst);
+            }
+            Key::LimitSamples => {
+                self.limits.samples.store(value.as_u64().ok_or_else(bad)?, Ordering::SeqCst);
+            }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         }
         Ok(())
@@ -396,14 +401,14 @@ impl Device for ScanaPlusDevice {
         }
         let mut link = slot.take().expect("checked above");
         drop(slot);
-        let limit = protocol::limits(self.limit_samples, self.limit_msec);
+        let limits = Arc::clone(&self.limits);
         let slot = Arc::clone(&self.link);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name("scanaplus acquisition".into())
             .spawn(move || {
-                if let Err(e) = protocol::run(&mut link.ctx, limit, &sink, &stop2) {
+                if let Err(e) = protocol::run(&mut link.ctx, &limits, &sink, &stop2) {
                     link.failed(e);
                 }
                 *slot.lock().expect("scanaplus lock") = Some(link);
@@ -487,6 +492,27 @@ mod tests {
             matches!(&packets[1], Packet::Logic(l) if l.data == [0; 20] && l.unit_size == 2),
             "{packets:?}"
         );
+        assert!(matches!(packets.last(), Some(Packet::End)));
+        dev.close().unwrap();
+    }
+
+    #[test]
+    fn a_limit_set_during_a_capture_counts() {
+        let mut steps = writes();
+        for _ in 0..5 {
+            let _ = writeln!(steps, "bulk_in 81 16384 -> {}", transfer([0x02, 0x00]));
+        }
+        let _ = writeln!(steps, "release 0 -> ok");
+        let mut dev = device(&steps);
+        dev.open().unwrap();
+        dev.set(&Key::LimitSamples, &Value::U64(10), None).unwrap();
+        // No room in the channel: the thread waits on its header, before
+        // its first read.
+        let (tx, rx) = sync_channel(0);
+        dev.start(PacketSink::new(tx, 0)).unwrap();
+        dev.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        assert!(matches!(&packets[1], Packet::Logic(l) if l.data == [0; 8]), "{packets:?}");
         assert!(matches!(packets.last(), Some(Packet::End)));
         dev.close().unwrap();
     }

@@ -54,7 +54,7 @@
 
 use crate::core::{Packet, PacketSink};
 use crate::ftdi::libftdi::{Context, FtdiError};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// The one sample rate.
 pub const SAMPLERATE: u64 = 100_000_000;
@@ -188,6 +188,23 @@ pub enum Limit {
     Time,
 }
 
+/// The limits as set, 0 for none. The acquisition reads them after every
+/// read, as the C driver reads its `devc`, so a set during a capture
+/// counts.
+#[derive(Debug, Default)]
+pub struct Limits {
+    /// `limit_samples`.
+    pub samples: AtomicU64,
+    /// `limit_msec`.
+    pub msec: AtomicU64,
+}
+
+impl Limits {
+    fn current(&self) -> Option<(u64, Limit)> {
+        limits(self.samples.load(Ordering::SeqCst), self.msec.load(Ordering::SeqCst))
+    }
+}
+
 /// The limits in samples: the sample limit and the time limit at 100
 /// MHz (0 for none), the smaller one first when both are set.
 pub fn limits(limit_samples: u64, limit_msec: u64) -> Option<(u64, Limit)> {
@@ -201,10 +218,12 @@ pub fn limits(limit_samples: u64, limit_msec: u64) -> Option<(u64, Limit)> {
 }
 
 /// How many of `available` new samples go out after `sent`, and the
-/// limit that is reached with them, if any.
+/// limit that is reached with them, if any: none of them when a limit
+/// set during the capture is already behind, where the C driver's
+/// `limit_samples - samples_sent` wraps.
 pub fn to_send(sent: u64, available: u64, limit: Option<(u64, Limit)>) -> (u64, Option<Limit>) {
     match limit {
-        Some((n, why)) if sent + available >= n => (n - sent, Some(why)),
+        Some((n, why)) if sent + available >= n => (n.saturating_sub(sent), Some(why)),
         _ => (available, None),
     }
 }
@@ -213,19 +232,19 @@ pub fn to_send(sent: u64, available: u64, limit: Option<(u64, Limit)>) -> (u64, 
 /// the header, reads until a limit, a failed read or `stop`, the end.
 pub fn run(
     ctx: &mut Context,
-    limit: Option<(u64, Limit)>,
+    limits: &Limits,
     sink: &PacketSink,
     stop: &AtomicBool,
 ) -> std::result::Result<(), FtdiError> {
     sink.send(Packet::header());
-    let r = receive(ctx, limit, sink, stop);
+    let r = receive(ctx, limits, sink, stop);
     sink.send(Packet::End);
     r
 }
 
 fn receive(
     ctx: &mut Context,
-    limit: Option<(u64, Limit)>,
+    limits: &Limits,
     sink: &PacketSink,
     stop: &AtomicBool,
 ) -> std::result::Result<(), FtdiError> {
@@ -243,7 +262,7 @@ fn receive(
         }
         samples.clear();
         decoder.feed(&buf[..n], &mut samples);
-        let (count, reached) = to_send(sent, samples.len() as u64 / 2, limit);
+        let (count, reached) = to_send(sent, samples.len() as u64 / 2, limits.current());
         if count > 0 {
             log::trace!("Sending {count} samples.");
             let bytes = usize::try_from(count * 2).expect("at most one read's samples");
@@ -359,5 +378,7 @@ mod tests {
         assert_eq!(to_send(0, 40, l), (40, None));
         assert_eq!(to_send(40, 80, l), (60, Some(Limit::Samples)));
         assert_eq!(to_send(0, 1000, None), (1000, None));
+        // A limit set during the capture, already behind.
+        assert_eq!(to_send(100, 10, limits(50, 0)), (0, Some(Limit::Samples)));
     }
 }
