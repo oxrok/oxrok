@@ -155,6 +155,9 @@ impl Driver for RaspberryPiPicoDriver {
     }
 }
 
+/// How long the output may take to leave before an acquisition starts.
+const TX_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// What the identify command reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Identity {
@@ -678,8 +681,12 @@ impl Acquisition {
     #[allow(clippy::too_many_lines)]
     fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let id = &self.identity;
+        // As dev_acquisition_start's serial_drain, bounded; then what the
+        // device still had to say, which is this driver's own.
+        port.drain(TX_DRAIN_TIMEOUT)?;
         drain(port)?;
         port.write(b"*")?;
+        port.drain(TX_DRAIN_TIMEOUT)?;
         drain(port)?;
         let mut a_mask = 0u32;
         let mut d_mask = 0u32;

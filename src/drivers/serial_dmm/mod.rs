@@ -165,9 +165,11 @@ impl Driver for SerialDmmDriver {
         log::info!("Found device on port {conn}.");
         // The scan ends in `serial_close` whatever the transport, and
         // `dev_open` opens the port again: `serial_open` sets the
-        // parameters and flushes the receive side each time. On a tty the
-        // close lowers DTR and RTS under HUPCL, as the emulator's
-        // transactions show.
+        // parameters and flushes the receive side each time. With `HUPCL`
+        // off (`Native::open`) the close leaves DTR and RTS as they are;
+        // the reopen raises both. Safe by reading on Linux; not checked on
+        // a CP2102, whose close also disables its UART, or on macOS
+        // (docs/DRIVER_PORTING.md, "Serial devices").
         drop(port);
         Ok(vec![Box::new(DmmDevice::new(self.0, conn, params, None))])
     }

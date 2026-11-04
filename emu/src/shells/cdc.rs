@@ -15,7 +15,8 @@
 //!         port.send(b"reply");
 //!     }
 //! }
-//! Box::new(Cdc::new(NAME, Identity::new(0x1234, 0x5678, "Maker", "Meter"), faults, Meter))
+//! let id = Identity::new(0x1234, 0x5678, "Maker", "Meter");
+//! Box::new(Cdc::new(NAME, &id, faults, Meter))
 //! ```
 //!
 //! What the kernel does (`drivers/usb/class/cdc-acm.c`, 7.2), which is
@@ -26,8 +27,10 @@
 //!   one interrupt IN are pending; [`Port::send`]'s bytes complete the
 //!   oldest. Closed, none is, so nothing moves and [`Serial::tick`]
 //!   stands still.
-//! - Each open raises DTR and RTS (`SET_CONTROL_LINE_STATE` 3) unless the
-//!   speed is B0, each last close lowers them under `HUPCL` (0).
+//! - Each open sends `SET_CONTROL_LINE_STATE` 3, unless the speed is B0,
+//!   whatever the lines were: see [`LineEvent::opened`]. The last close
+//!   sends 0 only under `HUPCL`, which libserialport clears, so at a
+//!   reopen DTR does not rise.
 //! - The driver sends `SET_LINE_CODING` only when the settings differ
 //!   from those it last sent, and termios outlives a close, so what a
 //!   tool causes depends on the tool before it. `tools/diffcli.sh` puts
@@ -157,8 +160,8 @@ impl Line {
 pub enum LineEvent {
     /// `SET_LINE_CODING`: the new settings.
     Coding(Line),
-    /// `SET_CONTROL_LINE_STATE`: the lines as they are now. DTR rising is
-    /// how a device learns of an open.
+    /// `SET_CONTROL_LINE_STATE`: the lines as they are now, sent whether
+    /// or not they changed.
     Lines {
         /// DTR.
         dtr: bool,
@@ -167,6 +170,16 @@ pub enum LineEvent {
     },
     /// `SEND_BREAK`: milliseconds; 0 ends a break, `0xffff` holds it.
     Break(u16),
+}
+
+impl LineEvent {
+    /// How a device learns of an open: each open sends DTR and RTS up,
+    /// also when they already are (with `HUPCL` off a close leaves them),
+    /// so DTR rising is not it. A tool that later raises RTS by hand looks
+    /// the same.
+    pub fn opened(self) -> bool {
+        self == LineEvent::Lines { dtr: true, rts: true }
+    }
 }
 
 /// The modem lines a device reports (`SERIAL_STATE`), see
@@ -184,7 +197,8 @@ pub struct ModemLines {
 /// An instrument on a byte stream.
 pub trait Serial: Send {
     /// The host wrote `data`. How it was cut into transfers means
-    /// nothing: a protocol with frames collects them itself.
+    /// nothing: a protocol with frames collects them itself, in a buffer
+    /// with a bound, as nothing limits what a host writes.
     fn received(&mut self, data: &[u8], port: &mut Port<'_>);
 
     /// The line settings or the lines changed. By default nothing
@@ -876,6 +890,19 @@ mod tests {
         h.cdc.state.notifications.push_back([0; 10]);
         assert_eq!(h.cdc.in_transfer(EP_NOTIFY, 8, &mut h.v), Reply::Stall);
         assert_eq!(drained(&mut h), 1);
+    }
+
+    #[test]
+    fn each_open_is_seen_whether_or_not_the_lines_change() {
+        let mut h = Host { cdc: cdc(&[]), v: Violations::default() };
+        h.set_lines(true, true);
+        h.set_lines(true, false);
+        h.set_lines(true, true);
+        h.set_lines(true, true);
+        let opens = h.cdc.model.events.iter().filter(|e| e.opened()).count();
+        assert_eq!(opens, 3);
+        assert!(!LineEvent::Lines { dtr: true, rts: false }.opened());
+        assert!(!LineEvent::Break(0).opened());
     }
 
     #[test]

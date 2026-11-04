@@ -93,7 +93,13 @@
 # cfmakeraw, under oxrok's Native), a repeat of the state the lines are
 # in (each open() raises them, and oxrok's Native opens twice), and the
 # order of a setting and an RTS change, which no UART can tell, do not
-# show; a DTR pulse does.
+# show; a DTR pulse does. libsigrok swaps odd and even (serial.c:652-655
+# passes libserialport's SP_PARITY_* to serial_libsp.c:253-258, which reads
+# 1 as even and 2 as odd), so in sigrok-cli's .tx alone bParityType 01 and
+# 02 are swapped back; oxrok sends what serialcomm says. A fixed libsigrok
+# fails the comparison, which is how that would show. A case whose tty
+# moves under the conn= the scenario read (a re-attach that got another
+# minor) fails rather than running against nothing.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -630,6 +636,7 @@ if [ $emu = 1 ]; then
         fi
         [ "$EMU_DEAD" = 0 ] || [ $emu_status != 0 ] || emu_status=1
         EMUPID=""
+        [ "$EMU_CDC" != 1 ] || emu_cdc_unquiet
         sudo -n "$EMU" cleanup --locked >&2
         return $emu_status
     }
@@ -669,12 +676,37 @@ if [ $emu = 1 ]; then
     # emulated device whatever its interface's protocol. For a version or
     # a setting that does not, the rule is udev's own way to keep it off,
     # in /run, for the emulated devices only.
+    # DEVPATH: udev's SUBSYSTEMS and KERNELS must match one ancestor, and
+    # vhci_hcd.0 is a platform device. emu_stop removes the rule.
+    EMU_MM_RULE=/run/udev/rules.d/90-oxrok-emu-mm.rules
     emu_cdc_quiet() {
         systemctl is-active -q ModemManager 2>/dev/null || return 0
         sudo -n mkdir -p /run/udev/rules.d
-        printf '%s\n' 'SUBSYSTEMS=="usb", KERNELS=="vhci_hcd.0", ENV{ID_MM_DEVICE_IGNORE}="1"' \
-            | sudo -n tee /run/udev/rules.d/90-oxrok-emu-mm.rules >/dev/null
+        printf '%s\n' 'DEVPATH=="*/vhci_hcd.0/*", ENV{ID_MM_DEVICE_IGNORE}="1"' \
+            | sudo -n tee "$EMU_MM_RULE" >/dev/null
         sudo -n udevadm control --reload
+    }
+    emu_cdc_unquiet() {
+        [ -e "$EMU_MM_RULE" ] || return 0
+        sudo -n rm -f "$EMU_MM_RULE"
+        sudo -n udevadm control --reload
+    }
+    # emu_tty_closing_wait CENTISECONDS, in a scenario, before a case whose
+    # device stops reading: how long the kernel holds a tool's close for
+    # bytes still in flight (30 s by default), through TIOCSSERIAL as root.
+    # It lasts until the next attach, so a scenario puts 3000 back after.
+    # serial_struct's closing_wait is at offset 40 on Linux.
+    emu_tty_closing_wait() {
+        [ "$EMU_DRY" = 0 ] || return 0
+        emu_cmd "section tty closing_wait $1" >/dev/null || return 1
+        sudo -n python3 -I -c '
+import fcntl, os, struct, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+info = bytearray(128)
+fcntl.ioctl(fd, 0x541E, info)
+struct.pack_into("H", info, 40, int(sys.argv[2]))
+fcntl.ioctl(fd, 0x541F, info)
+' "$EMU_TTY" "$1" || emu_fail "$EMU_MODEL: could not set closing_wait"
     }
     # EMU_CDC=1, before each tool's run: the tty back at the state a new
     # attach has, then a fresh model that knows nothing of the opening
@@ -729,6 +761,11 @@ def flush_setup():
             print(l)
             lines = value
     setup = []
+def swap_parity(text):
+    w = text.split(" ")
+    if w[2] == "20" and len(w[5]) == 14 and w[5][10:12] in ("01", "02"):
+        w[5] = w[5][:10] + ("02" if w[5][10:12] == "01" else "01") + w[5][12:]
+    return " ".join(w)
 for text in sys.stdin:
     text = text.rstrip("\n")
     m = OUT.match(text)
@@ -746,13 +783,13 @@ for text in sys.stdin:
         continue
     flush_data()
     if SETUP.match(text):
-        setup.append(text)
+        setup.append(swap_parity(text) if sys.argv[1] == "a" else text)
         continue
     flush_setup()
     print(text)
 flush_data()
 flush_setup()
-'
+' "$1"
     }
     # emu_case --bound DRV: binds DRV to the device's vendor interfaces, so that
     # each tool starts as on a fresh plug in, not after the other's detach. Its
@@ -1068,6 +1105,7 @@ flush()
                 why="$why; --oracle-differs takes neither --oracle-bug, --hangs nor --record"
             fi
         fi
+        tty0=$EMU_TTY
         for t in $tools; do
             if [ $t = b ]; then tool=$OXROK; elif [ $libsig = 1 ]; then tool=$EMU_LIBSIGROK_RUN; else tool=$SIGROK_CLI; fi
             if ! emu_cmd reset >/dev/null; then
@@ -1089,6 +1127,12 @@ flush()
             fi
             if [ "$EMU_CDC" = 1 ] && ! emu_tty_restore "$t $name"; then
                 emu_fail "$name: could not put the tty back"; return
+            fi
+            if [ "$EMU_CDC" = 1 ] && [ "$EMU_TTY" != "$tty0" ]; then
+                case " $* " in
+                    *"$tty0"[:\ ]*)
+                        emu_fail "$name: the tty moved from $tty0 to $EMU_TTY after the scenario read it"; return ;;
+                esac
             fi
             if ! emu_cmd "section $t $name" >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
@@ -1181,7 +1225,7 @@ flush()
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
             if [ "$EMU_CDC" = 1 ]; then
-                emu_tx_tty <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+                emu_tx_tty "$t" <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
             if [ -n "$tx_filter" ]; then
                 sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"

@@ -202,6 +202,10 @@ impl Port for Recorder {
         self.fixture.steps.push(Step::Purge);
         self.inner.purge()
     }
+
+    fn drain(&mut self, timeout: Duration) -> Result<()> {
+        self.inner.drain(timeout)
+    }
 }
 
 /// Plays a fixture back. Reads return the recorded data in order; a
