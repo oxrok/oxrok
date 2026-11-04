@@ -84,6 +84,7 @@ pub mod drivers {
     pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod ikalogic_scanaplus;
+    pub mod kingst_la2016;
     pub mod logicport;
     pub mod microchip_pickit2;
     pub mod raspberrypi_pico;
@@ -107,4 +108,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
+    registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
 }

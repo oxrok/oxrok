@@ -1,0 +1,37 @@
+# oxrok usb fixture 1
+# emu kingst-la2016: loaded stream
+# arg: -d
+# arg: kingst-la2016
+# arg: -c
+# arg: samplerate=1M:continuous=on
+# arg: --samples
+# arg: 256
+# arg: -O
+# arg: hex
+device vid=77a1 pid=01a2 version=0000 manufacturer="Kingst" product="Logic Analyzer" interfaces=0:ff:ff:ff strings=1,2,0
+claim 0 -> ok
+ctl_in 40 a2 0020 0000 4 -> 2004dffb
+ctl_in 40 a2 0008 0000 8 -> 08f7000008f710ef
+ctl_in 40 50 0000 0000 1 -> 00
+ctl_in 40 20 0000 0000 2 -> e185
+ctl_in 40 20 0002 0000 1 -> 00
+ctl_in 40 50 0000 0000 1 -> 00
+ctl_out 40 10 0001 0000 - -> ok
+ctl_in 40 20 0000 0000 2 -> e185
+ctl_out 40 38 0000 0000 - -> ok
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=77a1 pid=01a2 version=0000 manufacturer="Kingst" product="Logic Analyzer" interfaces=0:ff:ff:ff strings=1,2,0
+claim 0 -> ok
+ctl_out 40 20 0002 0000 00 -> ok
+ctl_out 40 20 0002 0000 00 -> ok
+ctl_out 40 20 0068 0000 1f02f200 -> ok
+ctl_out 40 20 0003 0000 01 -> ok
+ctl_out 40 20 0020 0010 ffff00{14} -> ok
+ctl_out 40 20 0010 0000 000100{8}010000c80000 -> ok
+ctl_out 40 38 0000 0000 - -> ok
+ctl_out 40 20 0000 0000 03 -> ok
+ctl_out 40 30 0000 0000 - -> ok
+bulk_in 86 524288 -> f0f000ff00{28}f0f000ffffff00{26}f0f000ff0000ffff00{24}f0f000ff{5}00{24}f0f000ff00{4}ffff00{22}f0f000ffffff0000ffff00{22}f0f000ff0000ff{4}00{22}f0f000ff{7}00{22}f0f000ff00{6}ffff00{20}f0f000ffffff00{4}ffff00{20}f0f000ff0000ffff0000ffff00{20}f0f000ff{5}0000ffff00{20}f0f000ff00{4}ff{4}00{20}f0f000ffffff0000ff{4}00{20}f0f000ff0000ff{6}00{20}f0f000ff{9}00{20}
+ctl_out 40 20 0000 0000 00 -> ok
+release 0 -> ok

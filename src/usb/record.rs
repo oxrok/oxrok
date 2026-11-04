@@ -758,6 +758,23 @@ impl Transport for Recorder {
             transfer_size,
         }))
     }
+
+    fn bulk_in_stream_timed(
+        &mut self,
+        endpoint: u8,
+        transfer_size: usize,
+        depth: usize,
+        transfer_timeout: Duration,
+    ) -> Result<Box<dyn BulkStream>> {
+        let inner =
+            self.inner.bulk_in_stream_timed(endpoint, transfer_size, depth, transfer_timeout)?;
+        Ok(Box::new(RecordedStream {
+            inner,
+            fixture: Arc::clone(&self.fixture),
+            endpoint,
+            transfer_size,
+        }))
+    }
 }
 
 /// A claim or release, which floats among control transfers on replay.
