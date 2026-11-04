@@ -26,7 +26,7 @@
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...
  *                 [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]
  *                 [--samples N] [--time T] [--frames N] [--stop-after N]
- *                 [--stop-after-ms N]
+ *                 [--stop-in-callback] [--stop-after-ms N]
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] --scan
  *
  * The options mean what they mean to sigrok-cli, and the common failures
@@ -51,6 +51,15 @@
  * its stop write goes out, and only the output is shorter. --stop-after 0
  * asks for the stop as soon as the session has started, at the header
  * packet, before any sample.
+ *
+ * That callback of the main loop is not always next. libusb reaps every URB
+ * it finds in one pass (op_handle_events() repeats reap_for_handle()), so a
+ * transfer the driver resubmitted and the device answered at once completes
+ * in the same pass, before the main loop runs anything; how many do is a race
+ * with the device. --stop-in-callback asks for the stop from the datafeed
+ * callback itself, so it lands at the packet that reached N. Only for a
+ * driver whose stop does no USB (ikalogic-scanalogic2 sets a flag): any
+ * other's would fail inside libusb's event handling, as above.
  *
  * --stop-after-ms N asks for the stop N ms after the session has started,
  * from a timeout of the main loop, whatever came by then. It reaches a
@@ -86,6 +95,7 @@ static char *opt_frames;
 static char *opt_stop_after;
 static char *opt_stop_after_ms;
 static gboolean opt_scan;
+static gboolean opt_stop_in_callback;
 
 static struct sr_context *sr_ctx;
 static struct sr_session *session;
@@ -569,7 +579,10 @@ static void request_stop(void)
 
 	if (!requested) {
 		requested = TRUE;
-		g_idle_add_full(G_PRIORITY_HIGH, stop_idle, NULL, NULL);
+		if (opt_stop_in_callback)
+			stop_idle(NULL);
+		else
+			g_idle_add_full(G_PRIORITY_HIGH, stop_idle, NULL, NULL);
 	}
 }
 
@@ -797,7 +810,7 @@ static void usage(void)
 	fprintf(stderr, "usage: libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...\n"
 		"         [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]\n"
 		"         [--samples N] [--time T] [--frames N] [--stop-after N]\n"
-		"         [--stop-after-ms N] | --scan\n");
+		"         [--stop-in-callback] [--stop-after-ms N] | --scan\n");
 	exit(2);
 }
 
@@ -814,6 +827,10 @@ int main(int argc, char **argv)
 			continue;
 		if (!strcmp(a, "--scan")) {
 			opt_scan = TRUE;
+			continue;
+		}
+		if (!strcmp(a, "--stop-in-callback")) {
+			opt_stop_in_callback = TRUE;
 			continue;
 		}
 		if (i + 1 >= argc)

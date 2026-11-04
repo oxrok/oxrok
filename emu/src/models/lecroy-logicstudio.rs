@@ -231,6 +231,8 @@
 //! bus as `05ff:a001` and STALLs every request); `still=1` and
 //! `flashed=1` (the FX2 firmware already running) are board states.
 
+use std::sync::LazyLock;
+
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
 use crate::shells::ezusb::{self, Chip, Loader};
@@ -257,6 +259,22 @@ pub const FX2_FIRMWARE: (&str, usize) = ("lecroy-logicstudio16-fx2lp.fw", 6214);
 pub const BITSTREAM_8: (&str, usize) = ("lecroy-logicstudio16-8.bitstream", 464_196);
 /// The bitstream for 16 channels.
 pub const BITSTREAM_16: (&str, usize) = ("lecroy-logicstudio16-16.bitstream", 464_196);
+/// The stand-ins uploads are held against.
+struct Standins {
+    fx2: Vec<u8>,
+    eight: Vec<u8>,
+    sixteen: Vec<u8>,
+}
+
+/// Made once, by [`build`], before any transfer. Hashing the two bitstreams
+/// takes 80 to 140 ms in a debug build on a tester under load, and the reply
+/// to the last chunk would wait for it, against the driver's 100 ms
+/// (`USB_TIMEOUT_MS`): "FPGA firmware upload failed." under load.
+static STANDINS: LazyLock<Standins> = LazyLock::new(|| Standins {
+    fx2: ezusb::standin(FX2_FIRMWARE.0, FX2_FIRMWARE.1),
+    eight: ezusb::standin(BITSTREAM_8.0, BITSTREAM_8.1),
+    sixteen: ezusb::standin(BITSTREAM_16.0, BITSTREAM_16.1),
+});
 /// `FPGA_FIRMWARE_CHUNK_SIZE`.
 const CHUNK: usize = 2048;
 /// `SAMPLE_BUF_SIZE`: the sample memory, bytes.
@@ -485,6 +503,7 @@ impl Faults {
 ///
 /// On an unknown option or value.
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
+    LazyLock::force(&STANDINS);
     let mut flashed = false;
     let mut still = false;
     let mut faults = Faults::default();
@@ -812,7 +831,6 @@ impl LogicStudio {
     }
 
     fn boot_control(&mut self, setup: Setup, data: &[u8], v: &mut Violations) -> Reply {
-        let image = ezusb::standin(FX2_FIRMWARE.0, FX2_FIRMWARE.1);
         let Stage8051::Boot(loader) = &mut self.stage else { return Reply::Stall };
         let Some((reply, started)) = loader.control(setup, data, v) else {
             v.report(format!(
@@ -823,7 +841,7 @@ impl LogicStudio {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&image, v);
+            loader.check_ezusb_c(&STANDINS.fx2, v);
             if self.faults.no_renumeration {
                 self.stage = Stage8051::Gone;
             } else {
@@ -1392,9 +1410,9 @@ impl LogicStudio {
             return Reply::ack();
         }
         let bytes = self.fpga.upload.take().unwrap_or_default();
-        let groups = if bytes == ezusb::standin(BITSTREAM_8.0, BITSTREAM_8.1) {
+        let groups = if bytes == STANDINS.eight {
             1
-        } else if bytes == ezusb::standin(BITSTREAM_16.0, BITSTREAM_16.1) {
+        } else if bytes == STANDINS.sixteen {
             2
         } else {
             v.report(format!(
