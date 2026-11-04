@@ -156,9 +156,6 @@ Deliberate, and kept small:
 - `ikalogic-scanaplus` decodes the stream correctly after a short or odd
   read. libsigrok's output is shifted or split then
   (protocol.c:345-352).
-- A scan option the driver lacks (`-d ikalogic-scanaplus:conn=...`) is
-  refused with "Unknown scan option 'conn'." sigrok-cli silently finds
-  no devices (hwdriver.c:584-585).
 - `ikalogic-scanaplus` gives port A back to the kernel's serial driver
   when it closes, at the scan's close too, like `ftdi-la`.
 - p-ols: captures that sigrok-cli crashes on or never ends (a limit not
