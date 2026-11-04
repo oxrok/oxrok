@@ -6,7 +6,7 @@
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
 //   Martin Ling, Soeren Apel, Aurelien Jacobs, Daniel Glöckner,
 //   Gerhard Sittig, Frank Stettner
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty).
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! The Lascar `EasyLog` EL-USB data loggers: a `SiLabs` C8051F321 running
