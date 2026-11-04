@@ -274,11 +274,21 @@ each with where it belongs:
 - `--oracle-bug` accepts any non-zero exit, and `--oracle-hangs` now
   pins a real hang (pipistrello-ols); dslogic's two trigger-fault cases
   still have an empty `.oracle`, which pins nothing.
-- Rare flake seen in full runs, not yet explained: `lib fault still=1
-  hangs` (lecroy-logicstudio: the runner exited 1 about 38 transactions
-  early, once in 12 runs). `fault halt after one` (saleae-logic-pro) is
-  explained: `protocol.c:909`'s resubmit lands inside the start's OUT or
-  IN wait; a submit-order shim over 40 runs matched the log order.
+- Two rare flakes, explained. `lib fault still=1 hangs` and the like
+  (lecroy-logicstudio): the model hashed its bitstream stand-ins inside
+  the reply to the last chunk, past the C driver's 100 ms under load;
+  they are now made when the model is built. `fault halt after one`
+  (saleae-logic-pro): `protocol.c:909`'s resubmit lands inside the
+  start's OUT or IN wait; a submit-order shim over 40 runs matched the
+  log order.
+- Other models call `ezusb::standin` during transfers: saleae-logic16 and
+  saleae-logic-pro (little exposed by the C's timeouts or the file's
+  size), dreamsourcelab-dslogic and kingst-la2016 (not checked). The same
+  stop race may be open in hantek-4032l's `lib stop while held` and
+  sysclk-lwla's `lib stop during the readout`; no failure was seen.
+- `nusb_backend`'s `bulk_out` takes `Cancelled` with some data sent as
+  success, where the C fails on a timed out write. Check it against a
+  device that times out.
 - Device firmware sources may settle what models assume: the
   Pipistrello's overturned three of them. Look for the others'
   (DreamSourceLab's FPGA sources, for one).

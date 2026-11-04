@@ -535,6 +535,10 @@ full case or oracle case. What else is checked depends on oxrok:
   is a race. `--stop-after-ms N` asks for the stop N ms after the session
   has started, from a timeout of the main loop, for a stop between a
   driver's transfers. Like `--stop-after`, it goes after the `--`.
+  `--stop-after`'s stop runs from a main-loop callback, but libusb can
+  complete further transfers in one event pass before it runs.
+  `--stop-in-callback` asks for the stop from the datafeed callback
+  instead, for a driver whose stop does no USB (ikalogic-scanalogic2).
   `--continuous` is taken and means the session runs until the driver
   ends it, with no any-key stop, so that a full case can give oxrok the
   same arguments. diffcli.sh builds the runner with `cc` against the
@@ -690,6 +694,10 @@ kernel until it detaches.
 
 ### Writing a device model
 
+Do no slow work inside a reply: the host's timeout is running, and a
+debug build under load can exceed a 100 ms one. Compute stand-ins when
+the model is built.
+
 Every file below is the model's own, so models written in parallel,
 each in its own worktree, merge without conflicts. For a model `NAME`
 of a sigrok driver `DRIVER`:
@@ -758,6 +766,9 @@ of a sigrok driver `DRIVER`:
 
 ## Troubleshooting
 
+- `Segmentation fault timeout -k 5 ...` appears twice in every
+  lecroy-logicstudio run, from the pinned `bits.c:158` crash cases. It
+  is not tied to the case printed next to it.
 - Linux: without a udev rule the device is root only. Packaging will
   ship rules (`docs/ROADMAP.md`); until then `sudo` or a rule with `MODE="0666"` for the vendor
   and product id. A kernel driver (`ftdi_sio` for FTDI devices with a

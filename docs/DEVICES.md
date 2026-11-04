@@ -858,8 +858,8 @@ gains are the driver's own V/div table. Faults, off by default: each
 configuration request and each upload step STALLed, empty or stalled
 transfers, short packets, another board's firmware. The cases cover all eight profiles flashed or not, every rate from 100
 kHz to 48 MHz, every range, coupling, single channels, get and set,
-faults, a claimed interface and an unplug. gcov: 90.8%; `ezusb.c` 82.6%,
-`usb.c` 64.6%. Not emulated: the end of a capture by a plain `--time`
+faults, a claimed interface and an unplug. gcov: 91.0%; `ezusb.c` 82.6%,
+`usb.c` 68.6%. Not emulated: the end of a capture by a plain `--time`
 limit (wall time), a continuous capture.
 
 What the model taught: with CH1 disabled, CH2's samples come out
