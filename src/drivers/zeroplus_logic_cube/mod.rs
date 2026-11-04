@@ -273,7 +273,6 @@ impl ZeroplusDevice {
         // sr_config_set() refuses it before the driver sees it
         // (hwdriver.c, check_key()).
         if samples == 0 {
-            log::error!("Cannot set 'limit_samples' to 0.");
             return Err(Error::arg("invalid value for limit_samples"));
         }
         let samples = samples.min(self.prof.max_samples());
@@ -377,7 +376,6 @@ impl Device for ZeroplusDevice {
                 // (hwdriver.c, check_key()).
                 let r = value.as_u64().ok_or_else(bad)?;
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(bad());
                 }
                 self.capture_ratio = r;

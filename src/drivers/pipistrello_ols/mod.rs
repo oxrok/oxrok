@@ -457,7 +457,6 @@ impl Device for PolsDevice {
                 let r = value.as_u64().ok_or_else(bad)?;
                 // hwdriver.c's check of the key, before the driver.
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(bad());
                 }
                 self.capture_ratio = r;

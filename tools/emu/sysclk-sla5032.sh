@@ -68,9 +68,7 @@ emu_cases() {
     # oxrok's log prefix as libsigrok's, and the messages libsigrok's own
     # layers log (usb.c, resource.c) with their prefix; the tool's last line
     # without oxrok's added reason. The filters below read this one form.
-    N='s/^oxrok: [a-z]+: oxrok::drivers::sysclk_sla5032(::protocol)?: /sr: sysclk-sla5032: /; s/^sr: sysclk-sla5032: (Could neither|Invalid input)/sr: usb: \1/; s/^sr: sysclk-sla5032: (Failed to open resource)/sr: resource: \1/; s/^(Failed to open device: |device error: |device is busy|firmware file not found: ).*$/Failed to open device./; s/invalid argument: .*$/invalid argument./'
-    # (--show gives oxrok's error as it is, where a capture adds "Failed to
-    # open device"; only that last line maps, nothing a driver logs.)
+    N='s/^oxrok: [a-z]+: oxrok::drivers::sysclk_sla5032(::protocol)?: /sr: sysclk-sla5032: /; s/^sr: sysclk-sla5032: (Could neither|Invalid input)/sr: usb: \1/; s/^sr: sysclk-sla5032: (Failed to open resource)/sr: resource: \1/; s/^Failed to open device: .*$/Failed to open device./; s/invalid argument: .*$/invalid argument./'
     # What oxrok says and the C does not, in one line each, pinned by the
     # "warned" cases: dropped from the others' comparison and nothing else.
     W="/sr: sysclk-sla5032: (The capture ended early|The FPGA's key step failed)/d"

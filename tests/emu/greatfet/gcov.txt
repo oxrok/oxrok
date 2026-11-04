@@ -1,0 +1,54 @@
+gcov greatfet (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        86.6%  207 of 239
+  protocol.c   84.1%  509 of 605
+  total        84.8%  716 of 844
+never reached, by function (line ranges hold no reached line):
+  api.c
+    greatfet_free_devc: 96
+    greatfet_free_sdi: 123
+    scan: 231, 238-239
+    dev_close: 348, 352, 358, 363-364
+    config_get: 388, 394-395, 403, 411, 417, 419-420
+    config_set: 434-435, 443, 449, 451-452
+    config_list: 470-471, 484-485
+    dev_acquisition_start: 499, 510, 516-517
+  protocol.c
+    greatfet_ctrl_out_in: 154, 163-165, 174-175, 187-189, 202-203, 212-214
+    greatfet_prep_usb_buffer: 235, 242, 245, 256, 264
+    greatfet_get_string: 287, 290
+    greatfet_get_serial_number: 340, 343, 349
+    greatfet_get_version_number: 410, 413
+    greatfet_trivial_request: 438, 441, 445, 451
+    greatfet_logic_config: 482, 486, 491, 536
+    greatfet_logic_stop: 626
+    greatfet_calc_capture_chans: 667, 670, 679, 691, 707, 709
+    greatfet_calc_submit_size: 755, 758
+    greatfet_abort_acquisition_quick: 778, 781
+    greatfet_allocate_transfers: 803, 806, 815, 821, 826
+    greatfet_prepare_transfers: 848, 852, 859, 862, 874
+    greatfet_cancel_transfers: 901, 904, 907
+    greatfet_free_transfer: 939, 944
+    xfer_complete_cb: 1007-1009, 1036, 1039, 1052, 1056-1057, 1060-1062, 1068-1069, 1074-1076
+    greatfet_setup_acquisition: 1109, 1113
+    greatfet_start_acquisition: 1126, 1130
+    greatfet_abort_acquisition: 1171, 1174
+    greatfet_stop_acquisition: 1186, 1189
+    greatfet_release_resources: 1204, 1207, 1225
+    greatfet_process_receive_data: 1281, 1284, 1297, 1299, 1317, 1322-1323, 1375
+    greatfet_receive_data: 1395, 1398, 1401
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   70.3%  161 of 229
+  total       70.3%  161 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: never called (199-221)
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: 453-455, 461-463, 472-474
+    usb_source_add: 504
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)

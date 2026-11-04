@@ -1,0 +1,1 @@
+sr: greatfet: Sample rate 10000: below what the 12 bit divider reaches, the board likely samples faster.

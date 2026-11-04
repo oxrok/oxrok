@@ -173,7 +173,7 @@ pub fn device_detail(registry: &Registry, args: &Args) -> Result<()> {
     }
     let mut device = devices.remove(0);
     println!("{}", device_line(device.as_ref()));
-    device.open()?;
+    parse::open_device(device.as_mut())?;
     if let Some(spec) = &args.channels {
         parse::select_channels(device.as_mut(), spec)?;
     }

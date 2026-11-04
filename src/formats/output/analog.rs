@@ -7,7 +7,7 @@
 
 use super::{Output, OutputContext, OutputModule, OutputOption};
 use crate::core::analog::unit_string;
-use crate::core::{Packet, Result, Value};
+use crate::core::{Key, Packet, Result, Value};
 use std::fmt::Write as _;
 
 pub(super) static MODULE: OutputModule = OutputModule {
@@ -31,7 +31,7 @@ pub(super) static MODULE: OutputModule = OutputModule {
     extensions: &[],
     analog: true,
     create: |ctx, options| {
-        let meta = options.get("meta").is_none_or(|v| crate::core::util::parse_boolstring(v));
+        let meta = super::option_bool(options, "meta", true)?;
         Ok(Box::new(Analog::new(ctx, meta)))
     },
 };
@@ -39,11 +39,35 @@ pub(super) static MODULE: OutputModule = OutputModule {
 struct Analog {
     names: Vec<(usize, String)>,
     meta: bool,
+    /// Whether a `META samplerate` line prints; see [`fallback`].
+    samplerate: bool,
+}
+
+/// The `analog` output a front end sends what the selected output cannot
+/// show. As `-O analog` but for `META samplerate` lines, which sigrok-cli
+/// prints here too and oxrok does not (docs/CLI.md).
+pub fn fallback(ctx: &OutputContext) -> Box<dyn Output> {
+    let mut analog = Analog::new(ctx, true);
+    analog.samplerate = false;
+    Box::new(analog)
+}
+
+/// A `META` line's value as analog.c:111-124 prints it: a boolean as a
+/// number, a float as `%f`, nothing for the types it has no branch for.
+fn meta_text(value: &Value) -> String {
+    match value {
+        Value::Bool(v) => u8::from(*v).to_string(),
+        Value::F64(v) => format!("{v:.6}"),
+        Value::U64(v) => v.to_string(),
+        Value::Str(v) => v.clone(),
+        _ => String::new(),
+    }
 }
 
 impl Analog {
     fn new(ctx: &OutputContext, meta: bool) -> Self {
-        Analog { names: ctx.channels.iter().map(|c| (c.index, c.name.clone())).collect(), meta }
+        let names = ctx.channels.iter().map(|c| (c.index, c.name.clone())).collect();
+        Analog { names, meta, samplerate: true }
     }
 
     fn name(&self, index: usize) -> String {
@@ -121,12 +145,10 @@ impl Output for Analog {
                 return Ok(());
             }
             for (key, value) in items {
-                // analog.c prints a boolean with `%u`.
-                let text = match value {
-                    Value::Bool(on) => u8::from(*on).to_string(),
-                    other => other.to_string(),
-                };
-                out.extend_from_slice(format!("META {key}: {text}\n").as_bytes());
+                if *key != Key::Samplerate || self.samplerate {
+                    let text = meta_text(value);
+                    out.extend_from_slice(format!("META {key}: {text}\n").as_bytes());
+                }
             }
         }
         if let Packet::Analog(a) = packet {
@@ -153,6 +175,33 @@ impl Output for Analog {
 mod tests {
     use super::*;
     use crate::core::{MqFlags, Unit};
+
+    #[test]
+    fn the_fallback_shows_all_metadata_but_the_samplerate() {
+        let meta = Packet::Meta(vec![
+            (Key::Samplerate, Value::U64(1000)),
+            (Key::Enabled, Value::Bool(true)),
+            (Key::OverCurrentProtectionEnabled, Value::Bool(false)),
+            (Key::Regulation, Value::Str("CC".into())),
+            (Key::VoltageTarget, Value::F64(5.0)),
+        ]);
+        let text = |o: &mut dyn Output| {
+            let mut out = Vec::new();
+            o.receive(&meta, &mut out).unwrap();
+            String::from_utf8(out).unwrap()
+        };
+        let ctx = OutputContext::default();
+        let rest = "META enabled: 1\nMETA ocp_enabled: 0\nMETA regulation: CC\n\
+                    META voltage_target: 5.000000\n";
+        assert_eq!(text(fallback(&ctx).as_mut()), rest);
+        assert_eq!(text(&mut Analog::new(&ctx, true)), format!("META samplerate: 1000\n{rest}"));
+        assert_eq!(text(&mut Analog::new(&ctx, false)), "");
+        // Samplerate alone gives the fallback nothing to print.
+        let mut out = Vec::new();
+        let rate = Packet::Meta(vec![(Key::Samplerate, Value::U64(1000))]);
+        fallback(&ctx).receive(&rate, &mut out).unwrap();
+        assert_eq!(out, b"");
+    }
 
     #[test]
     fn formats_like_sigrok() {

@@ -53,6 +53,7 @@ MAP = {
     "src/formats/output/bits.rs": (["libsigrok/src/output/bits.c"], INDEPENDENT),
     "src/formats/output/hex.rs": (["libsigrok/src/output/hex.c"], INDEPENDENT),
     "src/formats/output/ascii.rs": (["libsigrok/src/output/ascii.c"], INDEPENDENT),
+    "src/formats/output/null.rs": (["libsigrok/src/output/null.c"], INDEPENDENT),
     "src/formats/output/analog.rs": (["libsigrok/src/output/analog.c"], INDEPENDENT),
     "src/formats/output/csv.rs": (["libsigrok/src/output/csv.c"], INDEPENDENT),
     "src/formats/output/vcd.rs": (["libsigrok/src/output/vcd.c"], INDEPENDENT),

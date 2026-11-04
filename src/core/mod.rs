@@ -39,7 +39,7 @@ pub use channel::{Channel, ChannelGroup, ChannelKind};
 pub use device::{Device, DeviceClass, DeviceInfo, Driver, PacketSink, Registry};
 pub use error::{Error, Result};
 pub use key::Key;
-pub use option::{Access, OptionDesc, ValueList, resolve_key};
+pub use option::{Access, OptionDesc, ValueList, config_set, resolve_key};
 pub use packet::{AnalogData, LogicData, Packet};
 pub use session::Session;
 pub use softtrig::{PreTriggerBuffer, SoftTrigger, SoftTriggerLogic};

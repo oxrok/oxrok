@@ -132,11 +132,12 @@ impl Value {
     /// Parses `text` as a value of `kind`, with sigrok-cli's rules:
     /// integers take size suffixes (`1m` is one million, `200k` two
     /// hundred thousand), ranges are `low-high`, key values are
-    /// `key=value`, measured quantities are `mq/flag/flag`.
+    /// `key=value`, measured quantities are `mq/flag/flag`. A boolean is
+    /// [`util::parse_bool`]'s, where sigrok-cli has no refusal.
     pub fn parse(kind: ValueKind, text: &str) -> Result<Value> {
         let bad = || Error::Arg(format!("invalid value '{text}'"));
         Ok(match kind {
-            ValueKind::Bool => Value::Bool(util::parse_boolstring(text)),
+            ValueKind::Bool => Value::Bool(util::parse_bool(text).ok_or_else(bad)?),
             ValueKind::U64 => Value::U64(util::parse_sizestring(text)?),
             ValueKind::I32 => {
                 Value::I32(i32::try_from(util::parse_sizestring(text)?).map_err(|_| bad())?)
@@ -265,6 +266,9 @@ mod tests {
         assert_eq!(Value::parse(ValueKind::U64, "200k").unwrap(), Value::U64(200_000));
         assert_eq!(Value::parse(ValueKind::I32, "4").unwrap(), Value::I32(4));
         assert_eq!(Value::parse(ValueKind::Bool, "yes").unwrap(), Value::Bool(true));
+        assert_eq!(Value::parse(ValueKind::Bool, "OFF").unwrap(), Value::Bool(false));
+        assert!(Value::parse(ValueKind::Bool, "").is_err());
+        assert!(Value::parse(ValueKind::Bool, "1x").is_err());
         assert_eq!(Value::parse(ValueKind::RangeU64, "10-20").unwrap(), Value::RangeU64(10, 20));
         assert_eq!(
             Value::parse(ValueKind::RangeF64, "1.5-1.5").unwrap(),

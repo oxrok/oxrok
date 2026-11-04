@@ -5,7 +5,7 @@
 //! Parsers for the sigrok-cli argument syntaxes.
 
 use crate::cli::args::Args;
-use oxrok::core::{Device, Driver, Error, Key, Registry, Result, Trigger, Value};
+use oxrok::core::{Device, Driver, Error, Key, Registry, Result, Trigger, Value, ValueKind};
 
 /// A `key=value:key=value` list. `first_key` names a key whose first
 /// element may appear without a value and selects a scope, e.g. the
@@ -44,6 +44,24 @@ pub fn generic_args(text: &str, first_is_scope: bool) -> GenericArgs {
     GenericArgs { scope, items }
 }
 
+/// An option's value from `-c` or `-d`, as sigrok-cli's `opt_to_gvar()`:
+/// only a boolean goes without one, and is true.
+fn option_value(name: &str, text: Option<&str>, kind: ValueKind) -> Result<Value> {
+    if kind == ValueKind::Bool {
+        let Some(v) = text else { return Ok(Value::Bool(true)) };
+        return Value::parse(kind, v).map_err(|_| {
+            Error::Arg(format!(
+                "Invalid value: '{v}' for option '{name}': \
+                 it takes true, yes, on, 1, false, no, off or 0."
+            ))
+        });
+    }
+    match text {
+        None | Some("") => Err(Error::Arg(format!("Option '{name}' needs a value."))),
+        Some(v) => Value::parse(kind, v),
+    }
+}
+
 /// The driver named by `-d`, with its scan options.
 /// A driver and the scan options parsed for it.
 pub type DriverSpec<'a> = (&'a dyn Driver, Vec<(Key, Value)>);
@@ -60,13 +78,7 @@ pub fn driver_spec<'a>(registry: &'a Registry, spec: &str) -> Result<DriverSpec<
             .find(|key| key.id() == k)
             .cloned()
             .ok_or_else(|| Error::Arg(format!("Unknown scan option '{k}'.")))?;
-        let v = v.ok_or_else(|| Error::Arg(format!("Scan option '{k}' needs a value.")))?;
-        // sigrok-cli's opt_to_gvar (session.c:539-543), for a key of any type
-        // but a boolean.
-        if v.is_empty() && key.kind() != oxrok::core::ValueKind::Bool {
-            return Err(Error::Arg(format!("Option '{k}' needs a value.")));
-        }
-        options.push((key.clone(), Value::parse(key.kind(), &v)?));
+        options.push((key.clone(), option_value(&k, v.as_deref(), key.kind())?));
     }
     Ok((driver, options))
 }
@@ -88,37 +100,147 @@ pub fn device_scan(registry: &Registry, args: &Args) -> Result<Vec<Box<dyn Devic
     }
 }
 
+/// Opens a device for a command line, saying what sigrok-cli says with the
+/// reason added.
+pub fn open_device(device: &mut dyn Device) -> Result<()> {
+    device.open().map_err(|e| Error::Arg(format!("Failed to open device: {e}.")))
+}
+
 /// Resolves a key name against the device's options of `group`, so a
 /// driver's custom keys work like the well known ones.
 pub fn resolve_key(device: &dyn Device, name: &str, group: Option<&str>) -> Result<Key> {
     oxrok::core::resolve_key(device, name, group)
 }
 
-/// Applies every `-c` option to the device. The group comes from the
-/// option's own `channel_group=` element, else from `-g`.
-pub fn apply_configs(device: &mut dyn Device, args: &Args) -> Result<()> {
-    for config in &args.configs {
-        let parsed = generic_args(config, false);
-        let group = parsed.scope.clone().or_else(|| args.channel_group.clone());
-        for (k, v) in parsed.items {
-            let key = resolve_key(device, &k, group.as_deref())?;
-            let value = match (&v, key.kind()) {
-                (None, oxrok::core::ValueKind::Bool) => Value::Bool(true),
-                (None, _) => return Err(Error::Arg(format!("Option '{k}' needs a value."))),
-                (Some(v), kind) => Value::parse(kind, v)?,
-            };
-            let access = device.option(&key, group.as_deref()).map(|o| o.access);
-            if access.is_none_or(|a| !a.set) {
-                return Err(Error::Arg(format!(
-                    "Failed to set device option '{k}': not applicable."
-                )));
+/// One `-c` element, parsed and resolved.
+struct ConfigItem {
+    /// The name as written, for messages.
+    name: String,
+    key: Key,
+    value: Value,
+    group: Option<String>,
+    /// Which `-c` it came from.
+    config: usize,
+}
+
+impl ConfigItem {
+    /// Whether `other` sets the same key in the same scope. A device
+    /// compares its group names without case
+    /// ([`Device::group_positions`]).
+    fn same_setting(&self, other: &ConfigItem) -> bool {
+        self.key == other.key
+            && match (&self.group, &other.group) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => false,
             }
-            device
-                .set(&key, &value, group.as_deref())
-                .map_err(|e| Error::Arg(format!("Failed to set device option '{k}': {e}.")))?;
+    }
+
+    fn is_enabled(&self, on: bool) -> bool {
+        self.key == Key::Enabled && self.value == Value::Bool(on)
+    }
+}
+
+/// The `-c` options of a command line, every key resolved and every value
+/// parsed, so that a mistake anywhere in them is found with nothing sent.
+pub struct ConfigPlan {
+    /// `enabled=off` first, then the others in the order given.
+    settings: Vec<ConfigItem>,
+    /// What switches an output on, after every setting was accepted.
+    enables: Vec<ConfigItem>,
+}
+
+/// Puts the options in the order they go to the device: `enabled=off`,
+/// the others as given, `enabled=on`. sigrok-cli has no order to keep
+/// (its hash table's, session.c:700-701).
+///
+/// Sorting must not change where an output ends up, so:
+/// - The last `enabled` of a scope is the one that counts. Within one `-c`
+///   that holds for every key, as sigrok-cli's hash table keeps one value
+///   per key; across several `-c` the others are all sent, in order, as
+///   sigrok-cli does.
+/// - `enabled=off` given after an `enabled=on` that overlaps it, one of the
+///   two on the device and the other on a channel group (`-c enabled=on -c
+///   channel_group=R1:enabled=off`: all but R1), stays after it.
+fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
+    let mut kept: Vec<ConfigItem> = Vec::with_capacity(items.len());
+    for item in items {
+        kept.retain(|k| {
+            !(k.same_setting(&item) && (k.config == item.config || item.key == Key::Enabled))
+        });
+        kept.push(item);
+    }
+    let mut offs = Vec::new();
+    let mut others = Vec::new();
+    let mut enables: Vec<ConfigItem> = Vec::new();
+    for item in kept {
+        if item.is_enabled(true) {
+            enables.push(item);
+        } else if item.is_enabled(false) {
+            let overlaps = |on: &ConfigItem| on.group.is_none() || item.group.is_none();
+            if enables.iter().any(overlaps) {
+                enables.push(item);
+            } else {
+                offs.push(item);
+            }
+        } else {
+            others.push(item);
         }
     }
+    offs.append(&mut others);
+    ConfigPlan { settings: offs, enables }
+}
+
+/// Resolves and parses every `-c` option. The group comes from the
+/// option's own `channel_group=` element, else from `-g`.
+pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
+    let mut items = Vec::new();
+    for (config, text) in args.configs.iter().enumerate() {
+        let parsed = generic_args(text, false);
+        let group = parsed.scope.clone().or_else(|| args.channel_group.clone());
+        for (name, v) in parsed.items {
+            let key = resolve_key(device, &name, group.as_deref())?;
+            let value = option_value(&name, v.as_deref(), key.kind())?;
+            items.push(ConfigItem { name, key, value, group: group.clone(), config });
+        }
+    }
+    Ok(order_configs(items))
+}
+
+fn send_configs(device: &mut dyn Device, items: &[ConfigItem]) -> Result<()> {
+    for item in items {
+        let k = &item.name;
+        let group = item.group.as_deref();
+        let access = device.option(&item.key, group).map(|o| o.access);
+        if access.is_none_or(|a| !a.set) {
+            return Err(Error::Arg(format!("Failed to set device option '{k}': not applicable.")));
+        }
+        oxrok::core::config_set(device, &item.key, &item.value, group)
+            .map_err(|e| Error::Arg(format!("Failed to set device option '{k}': {e}.")))?;
+    }
     Ok(())
+}
+
+impl ConfigPlan {
+    /// Sends everything but what switches an output on, stopping at the
+    /// first error.
+    pub fn send_settings(&self, device: &mut dyn Device) -> Result<()> {
+        send_configs(device, &self.settings)
+    }
+
+    /// Sends what switches an output on: the last step, so an output goes
+    /// on only when all else was accepted.
+    pub fn send_enables(&self, device: &mut dyn Device) -> Result<()> {
+        send_configs(device, &self.enables)
+    }
+}
+
+/// Applies every `-c` option to the device; see [`order_configs`] for the
+/// order.
+pub fn apply_configs(device: &mut dyn Device, args: &Args) -> Result<()> {
+    let plan = plan_configs(&*device, args)?;
+    plan.send_settings(device)?;
+    plan.send_enables(device)
 }
 
 /// Applies `-C`: enables the listed channels, disables the rest, renames
@@ -193,6 +315,25 @@ mod tests {
     }
 
     #[test]
+    fn an_option_without_a_value_is_worded_as_in_c() {
+        let mut r = Registry::new();
+        r.register(Box::new(oxrok::drivers::demo::DemoDriver));
+        for spec in ["demo:logic_channels", "demo:logic_channels="] {
+            let e = driver_spec(&r, spec).err().unwrap();
+            assert!(
+                matches!(&e, Error::Arg(m) if m == "Option 'logic_channels' needs a value."),
+                "{spec}: {e}"
+            );
+        }
+        for (text, kind) in [(None, ValueKind::U64), (Some(""), ValueKind::Str)] {
+            let e = option_value("x", text, kind).unwrap_err();
+            assert!(matches!(&e, Error::Arg(m) if m == "Option 'x' needs a value."), "{e}");
+        }
+        assert_eq!(option_value("x", None, ValueKind::Bool).unwrap(), Value::Bool(true));
+        assert!(option_value("x", Some(""), ValueKind::Bool).is_err());
+    }
+
+    #[test]
     fn selects_and_renames_channels() {
         let mut dev = demo(4);
         select_channels(dev.as_mut(), "D0,D2=clk,A0").unwrap();
@@ -200,6 +341,245 @@ mod tests {
             dev.channels().iter().filter(|c| c.enabled).map(|c| c.name.as_str()).collect();
         assert_eq!(enabled, ["D0", "clk", "A0"]);
         assert!(select_channels(dev.as_mut(), "D9").is_err());
+    }
+
+    /// A device with outputs that records what it is sent.
+    struct Recorder {
+        info: oxrok::core::DeviceInfo,
+        channels: Vec<oxrok::core::Channel>,
+        sent: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    /// A device that cannot be opened.
+    struct Unopenable(Recorder);
+
+    impl Device for Unopenable {
+        fn info(&self) -> &oxrok::core::DeviceInfo {
+            self.0.info()
+        }
+        fn classes(&self) -> &[oxrok::core::DeviceClass] {
+            self.0.classes()
+        }
+        fn channels(&self) -> &[oxrok::core::Channel] {
+            self.0.channels()
+        }
+        fn enable_channel(&mut self, pos: usize, on: bool) -> Result<()> {
+            self.0.enable_channel(pos, on)
+        }
+        fn rename_channel(&mut self, pos: usize, name: &str) -> Result<()> {
+            self.0.rename_channel(pos, name)
+        }
+        fn options(&self, group: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+            self.0.options(group)
+        }
+        fn get(&self, key: &Key, group: Option<&str>) -> Result<Value> {
+            self.0.get(key, group)
+        }
+        fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+            self.0.set(key, value, group)
+        }
+        fn list(&self, key: &Key, group: Option<&str>) -> Result<oxrok::core::ValueList> {
+            self.0.list(key, group)
+        }
+        fn open(&mut self) -> Result<()> {
+            Err(Error::Busy)
+        }
+        fn start(&mut self, sink: oxrok::core::PacketSink) -> Result<()> {
+            self.0.start(sink)
+        }
+        fn stop(&mut self) -> Result<()> {
+            self.0.stop()
+        }
+    }
+
+    #[test]
+    fn a_failed_open_says_so_with_the_reason() {
+        let mut dev = Unopenable(Recorder {
+            info: oxrok::core::DeviceInfo::default(),
+            channels: Vec::new(),
+            sent: std::sync::Arc::default(),
+        });
+        let e = open_device(&mut dev).unwrap_err();
+        assert!(
+            matches!(&e, Error::Arg(m) if m == "Failed to open device: device is busy."),
+            "{e}"
+        );
+    }
+
+    impl Device for Recorder {
+        fn info(&self) -> &oxrok::core::DeviceInfo {
+            &self.info
+        }
+        fn classes(&self) -> &[oxrok::core::DeviceClass] {
+            &[]
+        }
+        fn channels(&self) -> &[oxrok::core::Channel] {
+            &self.channels
+        }
+        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn options(&self, _: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+            let opt = |key| oxrok::core::OptionDesc::new(key, oxrok::core::Access::GET_SET);
+            Ok(vec![
+                opt(Key::Enabled),
+                opt(Key::VoltageTarget),
+                opt(Key::CurrentLimit),
+                opt(Key::OverCurrentProtectionEnabled),
+            ])
+        }
+        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+            if *key == Key::VoltageTarget && value.as_f64().is_some_and(|v| v > 31.0) {
+                return Err(Error::arg("out of range"));
+            }
+            let scope = group.map_or(String::new(), |g| format!("{g}:"));
+            self.sent.lock().unwrap().push(format!("{scope}{}={value}", key.id()));
+            Ok(())
+        }
+        fn list(&self, key: &Key, _: Option<&str>) -> Result<oxrok::core::ValueList> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn start(&mut self, _: oxrok::core::PacketSink) -> Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What `-c` arguments send, and how the command line ended.
+    fn run_configs(extra: &[&str]) -> (Vec<String>, Result<()>) {
+        use clap::Parser as _;
+        let sent = std::sync::Arc::default();
+        let mut dev = Recorder {
+            info: oxrok::core::DeviceInfo::default(),
+            channels: Vec::new(),
+            sent: std::sync::Arc::clone(&sent),
+        };
+        let args = Args::try_parse_from([&["oxrok", "--set"], extra].concat()).unwrap();
+        let result = apply_configs(&mut dev, &args);
+        let sent = sent.lock().unwrap().clone();
+        (sent, result)
+    }
+
+    #[test]
+    fn a_bad_option_anywhere_sends_nothing() {
+        for bad in [
+            "enabled=on:voltage_target=abc",
+            "enabled=on:volage_target=5",
+            "voltage_target=5:enabled=on:current_limit",
+        ] {
+            let (sent, result) = run_configs(&["-c", bad]);
+            assert!(result.is_err(), "{bad}");
+            assert_eq!(sent, [] as [&str; 0], "{bad}");
+        }
+        // Across several -c too.
+        let (sent, result) = run_configs(&["-c", "enabled=on", "-c", "volage_target=5"]);
+        assert!(result.is_err());
+        assert_eq!(sent, [] as [&str; 0]);
+    }
+
+    #[test]
+    fn an_output_goes_on_only_after_its_setpoints_were_accepted() {
+        let (sent, result) = run_configs(&["-c", "enabled=on:voltage_target=99"]);
+        assert!(result.is_err());
+        assert_eq!(sent, [] as [&str; 0]);
+        let (sent, result) = run_configs(&["-c", "enabled=on:current_limit=1:voltage_target=99"]);
+        assert!(result.is_err());
+        assert_eq!(sent, ["current_limit=1"]);
+        let (sent, result) = run_configs(&["-c", "enabled=on", "-c", "voltage_target=99"]);
+        assert!(result.is_err());
+        assert_eq!(sent, [] as [&str; 0]);
+    }
+
+    #[test]
+    fn enabled_off_goes_first_and_on_last_the_others_as_given() {
+        let (sent, result) =
+            run_configs(&["-c", "enabled=on:current_limit=1:voltage_target=5:ocp_enabled=on"]);
+        result.unwrap();
+        assert_eq!(
+            sent,
+            ["current_limit=1", "voltage_target=5", "ocp_enabled=true", "enabled=true"]
+        );
+        let (sent, result) = run_configs(&["-c", "voltage_target=5:enabled=off:current_limit=1"]);
+        result.unwrap();
+        assert_eq!(sent, ["enabled=false", "voltage_target=5", "current_limit=1"]);
+        // A bare `enabled` is on.
+        let (sent, result) = run_configs(&["-c", "enabled:voltage_target=5"]);
+        result.unwrap();
+        assert_eq!(sent, ["voltage_target=5", "enabled=true"]);
+    }
+
+    #[test]
+    fn sorting_does_not_change_where_an_output_ends_up() {
+        // Last one wins, in one -c as in sigrok-cli's hash table and
+        // across them as in its sequence.
+        let (sent, _) = run_configs(&["-c", "enabled=on:voltage_target=5:enabled=off"]);
+        assert_eq!(sent, ["enabled=false", "voltage_target=5"]);
+        let (sent, _) = run_configs(&["-c", "enabled=on", "-c", "enabled=off"]);
+        assert_eq!(sent, ["enabled=false"]);
+        let (sent, _) = run_configs(&["-c", "enabled=off", "-c", "enabled=on"]);
+        assert_eq!(sent, ["enabled=true"]);
+        // Other keys: one value per -c, every -c sent.
+        let (sent, _) = run_configs(&["-c", "voltage_target=1:voltage_target=2"]);
+        assert_eq!(sent, ["voltage_target=2"]);
+        let (sent, _) = run_configs(&["-c", "voltage_target=1", "-c", "voltage_target=2"]);
+        assert_eq!(sent, ["voltage_target=1", "voltage_target=2"]);
+        // All on but one group, all off after one group: the order given.
+        let (sent, _) = run_configs(&["-c", "enabled=on", "-c", "channel_group=R1:enabled=off"]);
+        assert_eq!(sent, ["enabled=true", "R1:enabled=false"]);
+        let (sent, _) = run_configs(&["-c", "channel_group=R1:enabled=on", "-c", "enabled=off"]);
+        assert_eq!(sent, ["R1:enabled=true", "enabled=false"]);
+        // Groups that do not overlap: off first, on last. -g and a group
+        // named another way are the same scope.
+        let (sent, _) = run_configs(&[
+            "-c",
+            "channel_group=CH1:enabled=on",
+            "-c",
+            "channel_group=CH2:enabled=off",
+            "-c",
+            "channel_group=CH1:voltage_target=5",
+        ]);
+        assert_eq!(sent, ["CH2:enabled=false", "CH1:voltage_target=5", "CH1:enabled=true"]);
+        let (sent, _) =
+            run_configs(&["-g", "ch1", "-c", "enabled=off", "-c", "channel_group=CH1:enabled=on"]);
+        assert_eq!(sent, ["CH1:enabled=true"]);
+    }
+
+    #[test]
+    fn a_boolean_must_be_clearly_on_or_off() {
+        for (text, sent) in [
+            ("on", "true"),
+            ("TRUE", "true"),
+            ("Yes", "true"),
+            ("1", "true"),
+            ("off", "false"),
+            ("FALSE", "false"),
+            ("no", "false"),
+            ("0", "false"),
+        ] {
+            let (got, result) = run_configs(&["-c", &format!("ocp_enabled={text}")]);
+            result.unwrap();
+            assert_eq!(got, [format!("ocp_enabled={sent}")], "{text}");
+        }
+        for text in ["1x", "enable", "", "onward", "2", " on", "disable"] {
+            for key in ["ocp_enabled", "enabled"] {
+                let (got, result) = run_configs(&["-c", &format!("voltage_target=5:{key}={text}")]);
+                let e = result.unwrap_err().to_string();
+                assert!(e.contains(&format!("Invalid value: '{text}' for option '{key}'")), "{e}");
+                assert_eq!(got, [] as [&str; 0], "{key}={text}");
+            }
+        }
+        // Without a value it stays true.
+        let (got, result) = run_configs(&["-c", "ocp_enabled"]);
+        result.unwrap();
+        assert_eq!(got, ["ocp_enabled=true"]);
     }
 
     #[test]

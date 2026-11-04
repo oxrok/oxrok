@@ -181,7 +181,9 @@ strip_header() {
 # nothing.
 to_cmp() {
     if [ "$which" = stderr ]; then
-        cp "$TMP/$1.err" "$TMP/$1.cmp"
+        # The core's refusals (oxrok::core::config_set) under libsigrok's
+        # name; drivers' filters read the one form.
+        sed -E 's/^oxrok: err: oxrok::core::hwdriver: /sr: hwdriver: /' "$TMP/$1.err" >"$TMP/$1.cmp"
     elif [ $strip = 1 ]; then
         strip_header <"$TMP/$1.out" >"$TMP/$1.cmp"
     else
@@ -246,6 +248,9 @@ case_ "demo hex graycode" -- -d $D8 -g Logic -c pattern=graycode --samples 100 -
 case_ "demo ascii" -- -d $D4 -g Logic -c pattern=walking-zero --samples 50 -O ascii
 case_ "demo analog sine" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=sine --samples 20 -O analog
 case_ "demo analog square amplitude" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=square:amplitude=5 --samples 10 -O analog
+case_ "demo null" -- -d $D4 --samples 10 -O null
+case_ "demo null with analog" -- -d demo:logic_channels=2:analog_channels=1 --samples 4 -O null
+case_ "null show" --keep-header -- -O null --show
 case_ "demo csv" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O csv:header=false:time=true
 case_ "demo csv dedup" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O csv:header=false:dedup=true:label=channel
 case_ "demo vcd" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O vcd
@@ -255,6 +260,17 @@ case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic 
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
+case_ "demo scan option without a value" --stderr -- -d demo:logic_channels --scan
+case_ "demo option without a value" --stderr -- -d demo -c samplerate= --set
+case_ "demo option with an empty value" --stderr -- -d demo -c pattern= --set
+# The core's refusals, hwdriver.c:746-765; the last line without oxrok's reason.
+R0='s/(invalid argument).*$/\1./'
+case_ "demo samples 0" --stderr -- -d demo --samples 0
+case_ "demo samples 2^64-1, read as 0" --stderr -- -d demo --samples 18446744073709551615
+case_ "demo limit_samples 0" --stderr --filter "$R0" -- -d demo -c limit_samples=0 --samples 5
+case_ "demo samplerate 0" --stderr --filter "$R0" -- -d demo -c samplerate=0 --set
+case_ "demo limit_time 0" --stderr --filter "$R0" -- -d demo -c limit_time=0 --set
+case_ "demo captureratio 101" --stderr --filter "$R0" -- -d demo -c captureratio=101 --set
 # Disabled channels: sigrok's demo masks by the count of enabled ones,
 # oxrok's by position (docs/CLI.md), so the selection stays contiguous.
 case_ "demo channels selection" -- -d $D8 -g Logic -c pattern=incremental -C D0,D1,D2 --samples 24 -O bits
@@ -1417,6 +1433,13 @@ flush()
                 sed -i -E '${/^sr: *$/d;}' "$TMP/a.err" ;;
         esac
         sed -i '/LIBUSB_ERROR_ACCESS/d' "$TMP/a.err"
+        # A crash: whether timeout(1) says "dumped core" depends on the
+        # host's core pattern and limit. libsigrok may have written its
+        # "sr: " first. The exit status has shown it failed.
+        sed -i -E '/timeout: the monitored command dumped core$/d; ${/^sr: *$/d;}' "$TMP/a.err"
+        # The core's line on a refused start, for a driver whose connection
+        # id is the address that changes with each attach (greatfet).
+        sed -i -E 's/( device )[0-9]+\.[0-9]+( acquisition\.)$/\1BUS.ADDR\2/' "$TMP/a.err"
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
         blessed=""
         if [ "$EMU_BLESS" = 1 ]; then

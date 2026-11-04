@@ -623,7 +623,6 @@ impl Device for DslogicDevice {
                 let n = value.as_u64().ok_or_else(bad)?;
                 // sr_config_set() refuses 0 (hwdriver.c:746-755).
                 if n == 0 {
-                    log::error!("Cannot set 'limit_samples' to 0.");
                     return Err(bad());
                 }
                 s.limit_samples = n;
@@ -633,7 +632,6 @@ impl Device for DslogicDevice {
                 // sr_config_set() refuses it before the driver sees it
                 // (hwdriver.c:757-764).
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(Error::arg("capture ratio must be 0..100"));
                 }
                 s.capture_ratio = r;

@@ -1,0 +1,3 @@
+sr: greatfet: USB out transfer failed: LIBUSB_ERROR_PIPE (-9)
+sr: greatfet: Cannot start logic analyzer capture.
+Failed to start session.

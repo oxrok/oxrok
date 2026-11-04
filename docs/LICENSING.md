@@ -184,5 +184,5 @@ aggregated with `oxrok`, not a combined work with it, and is
 dual-licensed GPL-3.0-or-later OR Apache-2.0 (`emu/LICENSE`,
 `emu/NOTICE`); the `SPDX-License-Identifier` on its files says so. The
 one part that was a port of LGPL-2.1 code (the FTDI shell's baud-rate
-divisor, from libfti) was re-implemented from the FTDI AN_120 spec so
+divisor, from libftdi) was re-implemented from the FTDI AN_120 spec so
 the crate can carry the Apache branch.
