@@ -231,7 +231,7 @@ fn read_strings(info: &UsbDeviceInfo) -> Option<String> {
                 "Failed to open potential device with VID:PID {:04x}:{:04x}: {}.",
                 info.vendor_id,
                 info.product_id,
-                protocol::libusb_name(&e)
+                crate::usb::libusb_error_name(&e)
             );
             return None;
         }
@@ -251,7 +251,7 @@ fn read_strings(info: &UsbDeviceInfo) -> Option<String> {
             Err(e) => {
                 log::warn!(
                     "Failed to get {what} string descriptor: {}.",
-                    protocol::libusb_name(&e)
+                    crate::usb::libusb_error_name(&e)
                 );
                 return None;
             }
@@ -397,7 +397,7 @@ impl DslogicDevice {
                                 already claimed it."
                     .to_owned(),
                 Error::Disconnected => "Device has been disconnected.".to_owned(),
-                e => format!("Unable to claim interface: {}.", protocol::libusb_name(e)),
+                e => format!("Unable to claim interface: {}.", crate::usb::libusb_error_name(e)),
             };
             log::error!("{msg}");
             Error::Device(msg)
@@ -504,7 +504,7 @@ fn try_open(
         crate::usb::find_devices(&[id])?.into_iter().find(|d| same_device(d, usb, after_upload));
     let info = found.ok_or_else(|| Error::device("device not found"))?;
     let t = crate::usb::open(&info).inspect_err(|e| {
-        log::error!("Failed to open device: {}.", protocol::libusb_name(e));
+        log::error!("Failed to open device: {}.", crate::usb::libusb_error_name(e));
     })?;
     let link = identify(Link::new(t), &info)?;
     Ok((info, link))
@@ -865,7 +865,7 @@ impl Acquisition {
         let mut stream = match stream {
             Ok(s) => s,
             Err(e) => {
-                log::error!("Failed to submit transfer: {}.", protocol::libusb_name(&e));
+                log::error!("Failed to submit transfer: {}.", crate::usb::libusb_error_name(&e));
                 return;
             }
         };
@@ -938,7 +938,7 @@ impl Acquisition {
                 // stopped.
                 let why = match other {
                     Ok(p) => format!("{} bytes of {}", p.len(), protocol::TRIGGER_POS_LEN),
-                    Err(e) => protocol::libusb_name(&e).to_owned(),
+                    Err(e) => crate::usb::libusb_error_name(&e).to_owned(),
                 };
                 log::error!("Failed to read the trigger position: {why}.");
                 let _ = link.stop();

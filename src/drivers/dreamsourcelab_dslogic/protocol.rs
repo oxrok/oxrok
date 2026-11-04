@@ -499,19 +499,8 @@ pub struct Link {
 }
 
 fn fail(what: &str, e: &Error) -> Error {
-    log::error!("{what}: {}.", libusb_name(e));
+    log::error!("{what}: {}.", crate::usb::libusb_error_name(e));
     Error::Device(format!("{what}: {e}"))
-}
-
-/// The libusb error name the C driver logs for a failed transfer.
-pub fn libusb_name(e: &Error) -> &'static str {
-    match e {
-        Error::Timeout => "LIBUSB_ERROR_TIMEOUT",
-        Error::Disconnected => "LIBUSB_ERROR_NO_DEVICE",
-        Error::Busy => "LIBUSB_ERROR_BUSY",
-        Error::Device(m) if m.contains("stall") => "LIBUSB_ERROR_PIPE",
-        _ => "LIBUSB_ERROR_OTHER",
-    }
 }
 
 impl Link {

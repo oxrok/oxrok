@@ -123,6 +123,9 @@ emu_cases() {
     # wraps and sigrok-cli dies of SIGSEGV; one sample more is a full case.
     emu_case "plus trigger on the last sample" --oracle-bug "protocol.c:861-862 sends a logic packet of length 0, on which output/hex.c:163 wraps" -- -d $D -C $C4 --samples 64 -t 0=1 -O hex
     emu_case "plus trigger one sample before the end" -- -d $D -C $C4 --samples 65 -t 0=1 -O hex
+    # The packet of length 0 itself is harmless to an output whose loop
+    # counts up to the length: the same capture in binary runs full.
+    emu_case "plus trigger on the last sample binary" --digest --filter 'd' -- -d $D -C $C4 --samples 64 -t 0=1 -O binary
     # Two letters on a channel are two stages: libsigrok writes both to
     # stage 0 (rising and falling together, which the FPGA reads as
     # rising); oxrok refuses more than the one stage it can keep.
