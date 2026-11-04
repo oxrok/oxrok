@@ -306,10 +306,10 @@ impl Transport for Nusb {
         ])
     }
 
-    /// nusb's detach is a bare `USBDEVFS_DISCONNECT`, which also takes the
-    /// interface from another program holding it through usbfs, so this
-    /// looks first, as `libusb_kernel_driver_active` does. Its detach and
-    /// claim would attach the driver again on the release.
+    /// nusb's detach is a bare `USBDEVFS_DISCONNECT`, while libusb first
+    /// asks for the driver and leaves one called `usbfs`, another program's
+    /// claim, alone (`op_detach_kernel_driver`); so this looks first. nusb's
+    /// detach and claim would attach the driver again on the release.
     #[cfg(target_os = "linux")]
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
         let config = self.device.active_configuration().map(|c| c.configuration_value());
