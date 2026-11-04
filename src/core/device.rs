@@ -173,6 +173,18 @@ pub trait Device: Send {
         Ok(())
     }
 
+    /// Closes the device at the end of the CLI's capture run, whether or
+    /// not its start succeeded. It exists for wire parity with sigrok-cli,
+    /// which never calls `sr_dev_close()` there: `sr_exit()` closes through
+    /// `std_dev_clear()` with the device still active (`std.c:427-428`,
+    /// where `sr_dev_close()` sets it inactive first, `device.c:779`). A
+    /// driver whose close depends on that state (sysclk-lwla's shut-down
+    /// bitstream) overrides this; a library client calls [`Device::close`]
+    /// and gets what `sr_dev_close()` gives.
+    fn close_after_capture(&mut self) -> Result<()> {
+        self.close()
+    }
+
     /// What the device's trigger can do beyond level and edge stages.
     /// The default is nothing beyond them, with any number of stages.
     fn trigger_features(&self) -> TriggerFeatures {
