@@ -152,7 +152,10 @@
 //! marker, `no_marker=1` ends the data without a marker, and `overcount=1`
 //! sends 32769 records of 65535 samples and the marker whatever the depth
 //! (memory gone wrong: about 197 KB that claim over 2^31 samples, for the
-//! driver's `int`, and no larger total is offered). A one-shot
+//! driver's `int`, and no larger total is offered), and `no_zlp=1` gives a
+//! chunk that ends on a packet boundary, short of the host's transfer, no
+//! zero-length packet: the transfer is held and holds those bytes when the
+//! host's timeout cancels it. A one-shot
 //! STALL is an emulation artifact: a real STALL halts the endpoint until
 //! it is cleared, which the driver never does.
 //!
@@ -166,8 +169,9 @@
 //! `libusb_bulk_transfer()` runs to its 2 s timeout, and `protocol.c:749`
 //! checks `ret` before `xfer_len`, so the chunk is dropped with exit 0.
 //! With no ZLP that would hit about 1 capture in 256, those whose records
-//! end on a packet boundary. The model always ends the transfer, so no case
-//! shows this path with data ("fault chunk never sent" shows it without).
+//! end on a packet boundary. The model ends the transfer unless `no_zlp=1`
+//! says otherwise (the cases "fault chunk with no zlp"; "fault chunk never
+//! sent" shows the path with no data).
 //!
 //! **Not reached by the cases** (`tests/emu/sysclk-sla5032/gcov.txt`):
 //!
@@ -258,7 +262,7 @@ pub const NAME: &str = "sysclk-sla5032";
 pub const ABOUT: &str = "Sysclk SLA5032 (2961:66b0), FX2LP relaying commands to an FPGA with RLE \
                          sample memory; period=N, wait=N, configured=1, fw_size=N; faults: \
                          stall=, stall_reply=, short_reply=, hold_reply=KIND[:N], data_stall=N, \
-                         data_hold=N, data_short=BYTES, no_marker=1, overcount=1";
+                         data_hold=N, data_short=BYTES, no_marker=1, overcount=1, no_zlp=1";
 
 /// The vendor id (`USB_VID_SYSCLK`).
 pub const VID: u16 = 0x2961;
@@ -463,6 +467,7 @@ struct Faults {
     data_short: Option<usize>,
     no_marker: bool,
     overcount: bool,
+    no_zlp: bool,
 }
 
 /// The options that make a board.
@@ -580,6 +585,8 @@ struct Readout {
     chunks: u32,
     /// Bytes the fault `data_short` leaves in this chunk.
     short_left: Option<usize>,
+    /// The fault `no_zlp`: what a held transfer has received.
+    held: Option<Vec<u8>>,
 }
 
 /// The model.
@@ -701,6 +708,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 );
             }
             "no_marker" => o.faults.no_marker = flag(v)?,
+            "no_zlp" => o.faults.no_zlp = flag(v)?,
             "overcount" => o.faults.overcount = flag(v)?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
@@ -1174,6 +1182,9 @@ impl Sla5032 {
     }
 
     fn data(&mut self, max: usize, v: &mut Violations) -> Reply {
+        if self.readout.held.is_some() {
+            return Reply::Nak;
+        }
         let Some(left) = self.readout.armed else {
             v.report("endpoint 6 read with no chunk armed");
             return Reply::Nak;
@@ -1214,6 +1225,14 @@ impl Sla5032 {
         // A transfer that ended before the host's and the chunk's end
         // ends the chunk too; one the host cut short goes on in the next.
         self.readout.armed = if left == 0 || out.len() < want { None } else { Some(left) };
+        if self.options.faults.no_zlp
+            && out.len() < max
+            && !out.is_empty()
+            && out.len().is_multiple_of(usize::from(PACKET))
+        {
+            self.readout.held = Some(out);
+            return Reply::Nak;
+        }
         Reply::Data(out)
     }
 }
@@ -1271,6 +1290,11 @@ impl DeviceModel for Sla5032 {
                 Reply::Stall
             }
         }
+    }
+
+    /// A transfer `no_zlp` holds completes with its bytes at the cancel.
+    fn in_unlinked(&mut self, ep: u8, _max: usize) -> Option<Vec<u8>> {
+        if ep == EP_DATA { self.readout.held.take() } else { None }
     }
 
     fn reset(&mut self) {
@@ -1684,6 +1708,38 @@ mod tests {
         let mut h = Host::configured(&[("data_short", "0")]);
         h.done_capture(1, 1);
         assert_eq!(h.chunk(), [] as [u8; 0]);
+        h.clean();
+    }
+
+    #[test]
+    fn no_zlp_holds_a_chunk_on_a_packet_boundary_until_it_is_cancelled() {
+        // 65536 samples at 258 a run: 255 records and the marker, 1536 bytes.
+        let boundary = [("period", "258"), ("no_zlp", "1")];
+        let mut h = Host::configured(&boundary);
+        h.done_capture(127, 127);
+        h.arm();
+        assert_eq!(h.dev.transfer_in(EP_DATA, CHUNK_BYTES, &mut h.v), Reply::Nak);
+        assert_eq!(h.dev.transfer_in(EP_DATA, CHUNK_BYTES, &mut h.v), Reply::Nak);
+        assert_eq!(h.dev.in_unlinked(EP_DATA, CHUNK_BYTES).map(|d| d.len()), Some(1536));
+        assert_eq!(h.dev.in_unlinked(EP_DATA, CHUNK_BYTES), None, "once");
+        h.clean();
+        // Without the fault it ends as ever.
+        let mut h = Host::configured(&[("period", "258")]);
+        h.done_capture(127, 127);
+        assert_eq!(h.chunk().len(), 1536);
+        assert_eq!(h.dev.in_unlinked(EP_DATA, CHUNK_BYTES), None);
+        h.clean();
+        // A short packet needs no zero-length one: 1025 records.
+        let mut h = Host::configured(&[("no_zlp", "1")]);
+        h.done_capture(1, 1);
+        assert_eq!(h.chunk().len(), 1025 * RECORD);
+        h.clean();
+        // Nor does a transfer the data fills.
+        let mut h = Host::configured(&boundary);
+        h.done_capture(127, 127);
+        h.arm();
+        let Reply::Data(d) = h.dev.transfer_in(EP_DATA, 1024, &mut h.v) else { panic!() };
+        assert_eq!(d.len(), 1024);
         h.clean();
     }
 
