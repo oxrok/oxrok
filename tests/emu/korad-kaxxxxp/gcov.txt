@@ -16,13 +16,13 @@ never reached, by function (line ranges hold no reached line):
     next_measurement: 422-424
     korad_kaxxxxp_receive_data: 444, 447
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/serial.c         29.1%  117 of 402
+  src/serial.c         29.9%  120 of 402
   src/serial_libsp.c   43.0%  110 of 256
-  total                34.5%  227 of 658
+  total                35.0%  230 of 658
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
-    serial_open: 87-88, 99, 101, 103, 107, 122, 130, 140, 142
+    serial_open: 87-88, 99, 101, 103, 107, 122, 140, 142
     serial_close: 162-163, 169, 173-174
     serial_flush: 193-194, 202
     serial_drain: never called (217-229)
@@ -38,7 +38,7 @@ never reached, by function (line ranges hold no reached line):
     serial_read_nonblocking: never called (510-513)
     serial_set_params: 541-542, 548
     serial_set_handshake: never called (578-594)
-    serial_set_paramstr: 651-656, 664-704, 715-716
+    serial_set_paramstr: 651-656, 664-704
     serial_readline: never called (739-786)
     serial_stream_detect: never called (815-927)
     sr_serial_extract_options: never called (952-981)

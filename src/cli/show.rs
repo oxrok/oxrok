@@ -315,7 +315,19 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
             ValueKind::F64 => {
                 print!("    {id}: ");
                 let current = get().and_then(|v| v.as_f64());
-                if let Some(ValueList::F64(values)) = list() {
+                let list = list();
+                if let Some(ValueList::RangeStepF64 { min, max, step }) = list {
+                    // The three numbers of `std_gvar_min_max_step_array`,
+                    // which sigrok-cli prints as any list of doubles, `%f`.
+                    let parts: Vec<String> = [min, max, step]
+                        .iter()
+                        .map(|v| {
+                            let mark = if Some(*v) == current { " (current)" } else { "" };
+                            format!("{v:.6}{mark}")
+                        })
+                        .collect();
+                    println!("{}", parts.join(", "));
+                } else if let Some(ValueList::F64(values)) = list {
                     let parts: Vec<String> = values
                         .iter()
                         .map(|v| {

@@ -89,6 +89,7 @@ pub mod drivers {
     pub mod hantek_dso;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
+    pub mod korad_kaxxxxp;
     pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod microchip_pickit2;
@@ -108,6 +109,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::demo::DemoDriver));
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
+    registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));

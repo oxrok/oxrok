@@ -7,7 +7,7 @@
 
 use super::{Output, OutputContext, OutputModule, OutputOption};
 use crate::core::analog::unit_string;
-use crate::core::{Packet, Result};
+use crate::core::{Packet, Result, Value};
 use std::fmt::Write as _;
 
 pub(super) static MODULE: OutputModule = OutputModule {
@@ -115,7 +115,12 @@ impl Output for Analog {
                 return Ok(());
             }
             for (key, value) in items {
-                out.extend_from_slice(format!("META {key}: {value}\n").as_bytes());
+                // analog.c prints a boolean with `%u`.
+                let text = match value {
+                    Value::Bool(on) => u8::from(*on).to_string(),
+                    other => other.to_string(),
+                };
+                out.extend_from_slice(format!("META {key}: {text}\n").as_bytes());
             }
         }
         if let Packet::Analog(a) = packet {

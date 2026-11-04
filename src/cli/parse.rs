@@ -61,6 +61,11 @@ pub fn driver_spec<'a>(registry: &'a Registry, spec: &str) -> Result<DriverSpec<
             .cloned()
             .ok_or_else(|| Error::Arg(format!("Unknown scan option '{k}'.")))?;
         let v = v.ok_or_else(|| Error::Arg(format!("Scan option '{k}' needs a value.")))?;
+        // sigrok-cli's opt_to_gvar (session.c:539-543), for a key of any type
+        // but a boolean.
+        if v.is_empty() && key.kind() != oxrok::core::ValueKind::Bool {
+            return Err(Error::Arg(format!("Option '{k}' needs a value.")));
+        }
         options.push((key.clone(), Value::parse(key.kind(), &v)?));
     }
     Ok((driver, options))

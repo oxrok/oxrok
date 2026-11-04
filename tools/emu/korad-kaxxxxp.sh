@@ -4,11 +4,20 @@
 EMU_MODEL=korad-kaxxxxp
 EMU_CDC=1
 EMU_DRIVER=korad-kaxxxxp
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=korad-kaxxxxp
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 emu_cases() {
     K=korad-kaxxxxp:conn=$EMU_TTY
+    # oxrok's log prefix, on its side only, and what it adds after the
+    # error sigrok-cli names.
+    L='s/^oxrok: err: oxrok::drivers::korad_kaxxxxp: /sr: korad-kaxxxxp: /'
+    A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    NAN_BUG="api.c:432-433's two comparisons let a NaN through, and protocol.c:210 sends 'VSET1:  nan' to a live output; oxrok refuses it"
+    ORDER_BUG="sigrok-cli sets -c's options in hash table order (session.c:700-701), here OUT1 before VSET1, so the output goes on at the old voltage; oxrok sets them as given"
+    HUP_BUG="receive_data drops get_value's result (protocol.c:452) and sends the last values again until the limit, with no device there; oxrok ends the capture"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # Every entry of api.c's models[], with the ID strings its table had
     # up to libsigrok d241cc2 (72-2705's is made from its name). A scan
@@ -46,7 +55,7 @@ emu_cases() {
     korad_options setters=0 idn=$(korad_hex 'RND 320-KA3005P V5.5x')
     emu_case "scan RND with garbage" --keep-header --no-output -- -d $K --scan
     korad_options setters=0 idn=$(korad_hex 'ACME PSU 9000')
-    emu_case "scan an unknown ID" --stderr --keep-header -- -d $K --scan
+    emu_case "scan an unknown ID" --stderr --filter "$L" --keep-header -- -d $K --scan
     # A reply longer than the buffer: 48 of it are read, no match.
     korad_options setters=0 idn=$(korad_hex 'KORADKA3005PV2.0 0123456789012345678901234567890123456789')
     emu_case "scan a reply too long" --keep-header --no-output -- -d $K --scan
@@ -72,6 +81,9 @@ emu_cases() {
     korad_options setters=0 uart=9600/8n1
     emu_case "serialcomm as the wiki" --keep-header -- -d $K:serialcomm=9600/8n1 --scan
     emu_case "serialcomm misset behind the UART" --keep-header --no-output -- -d $K:serialcomm=19200/8n1 --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses
+    # them first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
 
     # What --show and --get ask for, per range in the table.
     korad_options setters=0
@@ -111,29 +123,30 @@ emu_cases() {
     emu_case "set voltage_target rounds in single precision" --no-output -- -d $K -c voltage_target=1.115 --set
     emu_case "set voltage_target rounds half to even" --no-output -- -d $K -c voltage_target=0.125 --set
     emu_case "set voltage_target -0" --no-output -- -d $K -c voltage_target=-0 --set
-    emu_case "set voltage_target too high" --stderr --expect-fail -- -d $K -c voltage_target=31.01 --set
-    emu_case "set voltage_target negative" --stderr --expect-fail -- -d $K -c voltage_target=-1 --set
-    # api.c's range check lets a NaN through: `VSET1:  nan` goes out.
-    emu_case "set voltage_target nan" --no-output -- -d $K -c voltage_target=nan --set
-    emu_case "set current_limit nan" --no-output -- -d $K -c current_limit=nan --set
+    emu_case "set voltage_target too high" --stderr --expect-fail --filter "$A" -- -d $K -c voltage_target=31.01 --set
+    emu_case "set voltage_target negative" --stderr --expect-fail --filter "$A" -- -d $K -c voltage_target=-1 --set
+    emu_case "set voltage_target nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c voltage_target=nan --set
+    emu_case "set current_limit nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c current_limit=nan --set
     emu_case "set current_limit" --no-output -- -d $K -c current_limit=2.225 --set
     emu_case "set current_limit max" --no-output -- -d $K -c current_limit=5.1 --set
     emu_case "set current_limit -0" --no-output -- -d $K -c current_limit=-0 --set
-    emu_case "set current_limit too high" --stderr --expect-fail -- -d $K -c current_limit=5.11 --set
+    emu_case "set current_limit too high" --stderr --expect-fail --filter "$A" -- -d $K -c current_limit=5.11 --set
     emu_case "set enabled on" --no-output -- -d $K -c enabled=on --set
     emu_case "set enabled off" --no-output -- -d $K -c enabled=off --set
     emu_case "set ocp on" --no-output -- -d $K -c ocp_enabled=on --set
     emu_case "set ocp off" --no-output -- -d $K -c ocp_enabled=off --set
     emu_case "set ovp on" --no-output -- -d $K -c ovp_enabled=on --set
     emu_case "set ovp off" --no-output -- -d $K -c ovp_enabled=off --set
-    emu_case "set several in order" --no-output -- -d $K -c voltage_target=3.3:current_limit=0.5:enabled=on --set
+    # In the order sigrok-cli's hash table has them, so that the tools agree.
+    emu_case "set several" --no-output -- -d $K -c current_limit=0.5:voltage_target=3.3:enabled=on --set
+    emu_case "set output after the voltage" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c voltage_target=3.3:enabled=on --set
     emu_case "set then read back" -- -d $K -c voltage_target=3.3 --get voltage_target
     korad_options idn=$(korad_hex 'VELLEMANPS3005DV1.3')
-    emu_case "set on PS3005D V1.3" --no-output -- -d $K -c voltage_target=3.3:enabled=on --set
+    emu_case "set on PS3005D V1.3" --no-output -- -d $K -c enabled=on:voltage_target=3.3 --set
     korad_options idn=$(korad_hex 'KORAD KD6005P V2.2') vmax=61
     emu_case "set KD6005P 60 V" --no-output -- -d $K -c voltage_target=60 --set
     korad_options idn=$(korad_hex 'TENMA 72-2535 V2.1') imax=3.1
-    emu_case "set 72-2535 too much current" --stderr --expect-fail -- -d $K -c current_limit=3.2 --set
+    emu_case "set 72-2535 too much current" --stderr --expect-fail --filter "$A" -- -d $K -c current_limit=3.2 --set
     korad_options
 
     # A capture: IOUT1? VOUT1? STATUS? in turn, a sample counted per VOUT1?.
@@ -141,6 +154,11 @@ emu_cases() {
     emu_case "samples 1" -- -d $K --samples 1
     emu_case "samples 2" -- -d $K --samples 2
     emu_case "samples 3" -- -d $K --samples 3
+    # hwdriver.c's check_key refuses it ahead of the driver, and logs that.
+    Z="$A
+/^sr: hwdriver: Cannot set/d"
+    emu_case "config limit_samples 0" --stderr --expect-fail --filter "$Z" -- -d $K -c limit_samples=0 --samples 1
+    emu_case "config limit_time 0" --stderr --expect-fail --filter "$Z" -- -d $K -c limit_time=0 --samples 1
     emu_case "samples 5 csv" -- -d $K --samples 5 -O csv:header=false:time=false
     emu_case "channel V only" -- -d $K -C V --samples 2
     emu_case "channel I only" -- -d $K -C I --samples 2
@@ -150,13 +168,15 @@ emu_cases() {
     korad_options setters=0 output=1 load=10 vout=12.34,12.35,00.00,31.00 iout=0.125,5.100,0.000,1.000
     emu_case "readings in turn" -- -d $K --samples 4
     # The status changes under a capture: META lines, as the C has them.
+    # Without -O, oxrok's analog fallback prints none (src/cli/pipeline.rs) and
+    # the harness strips sigrok-cli's, so these name their output.
     korad_options setters=0 status=11,51,11,10,12,31,91
-    emu_case "status changes" --keep-header -- -d $K --samples 8
+    emu_case "status changes" --keep-header -- -d $K --samples 8 -O analog
     # A setting ahead of the capture is in the first status's reckoning.
     korad_options
-    emu_case "capture after a set" --keep-header -- -d $K -c enabled=on --samples 3
+    emu_case "capture after a set" --keep-header -- -d $K -c enabled=on --samples 3 -O analog
     korad_options status=11,51
-    emu_case "capture after a set the device ignores" --keep-header -- -d $K -c enabled=off --samples 2
+    emu_case "capture after a set the device ignores" --keep-header -- -d $K -c enabled=off --samples 2 -O analog
     korad_options setters=0 output=1
     # A time limit: how many polls that is depends on the clock, so both
     # are kept up to the first status of the capture.
@@ -190,7 +210,10 @@ emu_cases() {
     korad_options setters=0 answers=2
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $K --scan
     korad_options setters=0 answers=8
-    emu_case "unplug in a capture" --unplug model --timeout 30 --tx-filter '/^unplug$/q' -- -d $K --samples 3
+    emu_case "unplug in a capture" --oracle-differs "$HUP_BUG" --unplug model --timeout 30 --tx-filter '/^unplug$/q' -- -d $K --samples 3
+    # A quiet point: the status goes unanswered, the signal lands in its wait.
+    korad_options setters=0 answers=8
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
     korad_options
 }
 
