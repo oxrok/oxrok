@@ -15,8 +15,10 @@ emu_cases() {
     L='s/^oxrok: err: oxrok::drivers::korad_kaxxxxp: /sr: korad-kaxxxxp: /'
     A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     NAN_BUG="api.c:432-433's two comparisons let a NaN through, and protocol.c:210 sends 'VSET1:  nan' to a live output; oxrok refuses it"
-    ORDER_BUG="sigrok-cli sets -c's options in hash table order (session.c:700-701), here OUT1 before VSET1, so the output goes on at the old voltage; oxrok sets them as given"
+    ORDER_BUG="sigrok-cli sets -c's options in hash table order (session.c:700-701), here OUT1 before VSET1, so the output goes on at the old voltage; oxrok sets them as given, but an output going on last and one going off first"
     HUP_BUG="receive_data drops get_value's result (protocol.c:452) and sends the last values again until the limit, with no device there; oxrok ends the capture"
+    PARTIAL_BUG="sigrok-cli sets -c's options one at a time in hash table order (session.c:700-707), so OUT1 goes out before a later option is refused; oxrok checks them all first and sends nothing"
+    LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtod and boolstring) and sends what it makes of it; oxrok refuses it and sends nothing"
     SILENT_BUG="read_chars takes no reply for no error (protocol.c:138-139, 152) and sr_atof_ascii(\"\") is 0.0 (protocol.c:333), so a silent device reads 0 V; oxrok sends no sample and fails --get"
     ZERO_BUG="api.c:432 and 440 let -0.0 through, and protocol.c:207 and 211 send it as -0.00; oxrok sends 0"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
@@ -143,8 +145,16 @@ emu_cases() {
     emu_case "set several" --no-output -- -d $K -c current_limit=0.5:voltage_target=3.3:enabled=on --set
     emu_case "set output after the voltage" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c voltage_target=3.3:enabled=on --set
     emu_case "set then read back" -- -d $K -c voltage_target=3.3 --get voltage_target
+    # Nothing is sent unless all of -c is good, and above all no OUT1.
+    emu_case "output with a voltage too high" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c enabled=on:voltage_target=99 --set
+    emu_case "output with a voltage that is no number" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $K -c enabled=on:voltage_target=abc --set
+    emu_case "output with an unknown option" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr -- -d $K -c enabled=on:volage_target=5 --set
+    emu_case "ocp with a malformed boolean" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $K -c ocp_enabled=1x --set
+    emu_case "output with a malformed boolean" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $K -c enabled=1x --set
+    emu_case "output with no value" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $K -c enabled= --set
+    emu_case "output before a limit that is no number" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr -- -d $K -c enabled=on --samples abc
     emu_options idn=$(emu_hex 'VELLEMANPS3005DV1.3')
-    emu_case "set on PS3005D V1.3" --no-output -- -d $K -c enabled=on:voltage_target=3.3 --set
+    emu_case "set on PS3005D V1.3" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c enabled=on:voltage_target=3.3 --set
     emu_options idn=$(emu_hex 'KORAD KD6005P V2.2') vmax=61
     emu_case "set KD6005P 60 V" --no-output -- -d $K -c voltage_target=60 --set
     emu_options idn=$(emu_hex 'TENMA 72-2535 V2.1') imax=3.1
@@ -170,10 +180,10 @@ emu_cases() {
     emu_options setters=0 output=1 load=10 vout=12.34,12.35,00.00,31.00 iout=0.125,5.100,0.000,1.000
     emu_case "readings in turn" -- -d $K --samples 4
     # The status changes under a capture: META lines, as the C has them.
-    # Without -O, oxrok's analog fallback prints none (src/cli/pipeline.rs) and
-    # the harness strips sigrok-cli's, so these name their output.
+    # The harness strips them unless a case keeps the header.
     emu_options setters=0 status=11,51,11,10,12,31,91
     emu_case "status changes" --keep-header -- -d $K --samples 8 -O analog
+    emu_case "status changes default output" --keep-header -- -d $K --samples 8
     # A setting ahead of the capture is in the first status's reckoning.
     emu_options
     emu_case "capture after a set" --keep-header -- -d $K -c enabled=on --samples 3 -O analog

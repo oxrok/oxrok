@@ -341,8 +341,8 @@ impl Device for KoradDevice {
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
         let model = self.link().model;
         match key {
-            // sr_config_set() refuses a 0 ahead of the driver (hwdriver.c,
-            // check_key()).
+            // `core::config_set` refuses a 0 and says so; this is for a library
+            // caller that comes straight here.
             Key::LimitSamples => {
                 self.limit_samples = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
             }
