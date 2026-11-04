@@ -792,6 +792,7 @@ mod tests {
     use super::*;
     use crate::usb::record::Replay;
     use crate::usb::{BulkStream, UsbDeviceInfo};
+    use std::fmt::Write as _;
     use std::sync::Arc;
 
     fn trigger(stages: &[&[(usize, TriggerMatch)]]) -> Trigger {
@@ -1269,7 +1270,11 @@ mod tests {
     }
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
+        let mut s = String::new();
+        for b in bytes {
+            let _ = write!(s, "{b:02x}");
+        }
+        s
     }
 
     fn set(bytes: &[u8; 128]) -> String {
