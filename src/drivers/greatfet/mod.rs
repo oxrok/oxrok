@@ -829,6 +829,7 @@ mod tests {
         Err(Error::device("refused"))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn ends_at_once() -> Result<Box<dyn BulkStream>> {
         Ok(Box::new(Failing(Some(Error::device("endpoint stalled")), false)))
     }
@@ -914,6 +915,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     fn gated() -> Result<Box<dyn BulkStream>> {
         Ok(Box::new(Gated))
     }
