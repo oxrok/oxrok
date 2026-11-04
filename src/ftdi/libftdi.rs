@@ -454,10 +454,11 @@ impl Context {
     ///
     /// `-1`, "set flow control failed".
     pub fn set_flow_ctrl(&mut self, flowctrl: u16) -> std::result::Result<(), FtdiError> {
-        self.out(req::SET_FLOW_CTRL, 0, flowctrl | INDEX_A).map_err(|e| {
+        if let Err(e) = self.out(req::SET_FLOW_CTRL, 0, flowctrl | self.port.index()) {
             log::debug!("flow control: {e}");
-            FtdiError::new(-1, "set flow control failed")
-        })
+            return Err(self.fail(-1, "set flow control failed"));
+        }
+        Ok(())
     }
 
     /// `ftdi_read_data`: fills `buf` from what the last transfer left,
