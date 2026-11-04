@@ -1,2 +1,1 @@
-sr: hwdriver: Capture ratio must be 0..100.
 Failed to set device option 'captureratio': invalid argument.

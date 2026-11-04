@@ -224,7 +224,7 @@ pub fn fmt_g(value: f64, precision: usize) -> String {
     }
     if !value.is_finite() {
         return if value.is_nan() {
-            "nan".to_owned()
+            if value.is_sign_negative() { "-nan" } else { "nan" }.to_owned()
         } else if value < 0.0 {
             "-inf".to_owned()
         } else {
@@ -304,6 +304,8 @@ mod tests {
         assert_eq!(fmt_g(-10.0, 6), "-10");
         assert_eq!(fmt_g(3.090_17, 6), "3.09017");
         assert_eq!(fmt_g(f64::from(3.090_17f32), 6), "3.09017");
+        assert_eq!(fmt_g(f64::NAN, 6), "nan");
+        assert_eq!(fmt_g(-f64::NAN, 6), "-nan");
         assert_eq!(fmt_g(0.0, 6), "0");
         assert_eq!(fmt_g(1.5e-5, 6), "1.5e-05");
         assert_eq!(fmt_g(1_234_567.0, 6), "1.23457e+06");

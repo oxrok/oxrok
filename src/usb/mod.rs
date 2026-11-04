@@ -275,7 +275,10 @@ pub trait Transport: Send {
     /// its own at every release. No transfer, so a recording has no line
     /// for it. A no-op for nusb off Linux and on Windows; libusb on macOS
     /// implements both calls (`darwin_usb.c`), and there the detach fails
-    /// with `LIBUSB_ERROR_ACCESS` without root or an entitlement.
+    /// with `LIBUSB_ERROR_ACCESS` without root or an entitlement. Auto-detach
+    /// stays off for that handle's other interfaces too, so a later claim
+    /// of one with a driver bound gets Busy on rusb, where nusb falls back
+    /// to detach-and-claim.
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
         let _ = interface;
         Ok(())

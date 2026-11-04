@@ -1,0 +1,3 @@
+found EL-USB-2 with firmware version v2.0 serial 62329
+expected 128-byte structure, got 64 bytes
+Failed to set device option 'datalog': generic/unspecified error.

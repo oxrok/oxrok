@@ -1,0 +1,29 @@
+# oxrok usb fixture 1
+# emu lascar-el-usb: set datalog on
+# arg: -d
+# arg: lascar-el-usb:conn=10c4.0002
+# arg: --set
+# arg: -c
+# arg: datalog=on
+device vid=10c4 pid=0002 version=0100 manufacturer="Silicon Labs" product="USB API" serial="1" interfaces=0:00:00:00
+ctl_out 40 00 ffff 0000 - -> ok
+ctl_out 40 02 0002 0000 - -> ok
+ctl_out 40 02 0001 0000 - -> ok
+claim 0 -> ok
+bulk_in 82 256 -> err timeout
+bulk_out 02 00ffff -> 3
+bulk_in 82 256 -> 028000
+bulk_in 82 128 -> 03006f78726f6b00{11}1008290e010a100e00003c00140004008c500000003f000020c200{4}76322e3079f300{74}
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=10c4 pid=0002 version=0100 manufacturer="Silicon Labs" product="USB API" serial="1" interfaces=0:00:00:00
+claim 0 -> ok
+bulk_in 82 256 -> err timeout
+bulk_out 02 00ffff -> 3
+bulk_in 82 256 -> 028000
+bulk_in 82 128 -> 03006f78726f6b00{11}1008290e010a100e00003c00140004008c500000003f000020c200{4}76322e3079f300{74}
+bulk_in 82 256 -> err timeout
+bulk_out 02 018000 -> 3
+bulk_out 02 03006f78726f6b00{11}1008290e010a00{4}3c00140004018c500000003f000020c200{4}76322e3079f300{74} -> 128
+bulk_in 82 256 -> ff
+release 0 -> ok

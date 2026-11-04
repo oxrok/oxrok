@@ -36,7 +36,7 @@
 //!
 //! The asking meter counts requests, so a run's bytes are the driver's
 //! own. A streaming one sends a packet per `period` offers of a read
-//! (about 20 ms each), counted from each open as DTR rises, so a tool
+//! (about 20 ms each), counted from each open ([`LineEvent::opened`]), so a tool
 //! that closes within a period of the last packet it needed has caused
 //! exactly those; see [`crate::shells::hidcable::Stream`].
 //!
@@ -45,6 +45,8 @@
 //! - `meter=metex|es51922|fs9721`;
 //! - `packet=HEX[,HEX...]`, the packets played in turn, 14 bytes each;
 //! - `noise=HEX`, bytes the meter sends before each packet;
+//! - `flood=N`, 256 bytes of noise before each packet after the first N,
+//!   past what a scan takes (128) and up to the acquisition's buffer;
 //! - `period=N`, offers per packet of a streaming meter (4 to 1000,
 //!   default 25);
 //! - `burst=N`, packets per open of a streaming meter, then silence, and
@@ -68,7 +70,7 @@ pub const NAME: &str = "serial-dmm";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A serial multimeter on a CDC-ACM cable, the shell's pilot; \
                          meter=metex|es51922|fs9721, packet=HEX[,HEX...], noise=HEX, period=N, \
-                         burst=N, answers=N, and the shell's stall=, chunk=, in-limit=, \
+                         burst=N, answers=N, flood=N, and the shell's stall=, chunk=, in-limit=, \
                          in-stall=, out-hold=";
 
 const PACKET_BYTES: usize = 14;
@@ -90,6 +92,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
     let mut period = 25;
     let mut burst = None;
     let mut answers = None;
+    let mut flood = None;
     for (k, v) in options {
         if faults.option(k, v)? {
             continue;
@@ -108,6 +111,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "period" => period = cable::parse_number(k, v, 4..=1000)?,
             "burst" => burst = cable::parse_burst(v)?,
             "answers" => answers = Some(cable::parse_number(k, v, 0..=1000)?),
+            "flood" => flood = Some(cable::parse_number(k, v, 0..=1000)?),
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
     }
@@ -126,6 +130,8 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
         burst,
         answers,
         answered: 0,
+        flood,
+        played: 0,
     };
     let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "Serial DMM cable");
     let line = Line::parse(kind.line()).expect("the table's lines parse");
@@ -171,10 +177,16 @@ struct Meter {
     quiet: u32,
     answers: Option<u32>,
     answered: u32,
+    flood: Option<u32>,
+    played: u32,
 }
 
 impl Meter {
     fn send_packet(&mut self, port: &mut Port<'_>) {
+        if self.flood.is_some_and(|n| self.played >= n) {
+            port.send(&[0x3f; 256]);
+        }
+        self.played = self.played.saturating_add(1);
         port.send(&self.noise);
         port.send(&self.packets.take());
     }
@@ -208,9 +220,7 @@ impl Serial for Meter {
     }
 
     fn changed(&mut self, event: LineEvent, _port: &mut Port<'_>) {
-        if let LineEvent::Lines { dtr: true, .. } = event
-            && self.kind != Kind::Metex
-        {
+        if event.opened() && self.kind != Kind::Metex {
             self.stream.restart();
             self.burst_left = self.burst;
             self.quiet = 0;
@@ -291,6 +301,15 @@ mod tests {
     }
 
     #[test]
+    fn a_flood_comes_after_the_first_packets() {
+        let mut h = meter(&[("flood", "1")]);
+        h.write(b"D");
+        assert_eq!(h.read(), PACKET);
+        h.write(b"D");
+        assert_eq!(h.read().len(), 256 + PACKET.len());
+    }
+
+    #[test]
     fn answers_runs_out_and_marks_the_point() {
         let mut h = meter(&[("answers", "1")]);
         h.write(b"D");
@@ -311,8 +330,8 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(h.offer(), Reply::Nak);
         }
-        // Reopened: the count starts over.
-        h.set_lines(false, false);
+        // An open, whatever the lines were: the count starts over.
+        h.set_lines(true, true);
         h.set_lines(true, false);
         for _ in 0..3 {
             assert_eq!(h.offer(), Reply::Nak);

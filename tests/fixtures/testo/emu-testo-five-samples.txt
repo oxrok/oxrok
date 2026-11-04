@@ -1,0 +1,40 @@
+# oxrok usb fixture 1
+# emu testo: testo five samples
+# arg: -d
+# arg: testo
+# arg: --samples
+# arg: 5
+device vid=128d pid=0003 version=0600 manufacturer="testo AG" product="testo 435/635/735" interfaces=0:ff:ff:ff strings=1,2,0
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0301 0409 255 -> 120374006500730074006f00200041004700
+ctl_in 00 06 0300 0000 4 -> 04030904
+ctl_in 00 06 0302 0409 255 -> 240374006500730074006f0020003400330035002f003600330035002f00370033003500
+# oxrok usb fixture 1
+device vid=128d pid=0003 version=0600 manufacturer="testo AG" product="testo 435/635/735" interfaces=0:ff:ff:ff
+claim 0 -> ok
+ctl_out 40 03 001a 0000 - -> ok
+ctl_out 40 04 0008 0000 - -> ok
+ctl_out 40 02 0008 0000 - -> ok
+ctl_out 40 01 0303 0000 - -> ok
+bulk_in 81 128 -> 0160
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000ac410100{4}344203000000f6
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=128d pid=0003 version=0600 manufacturer="testo AG" product="testo 435/635/735" interfaces=0:ff:ff:ff
+claim 0 -> ok
+ctl_out 40 03 001a 0000 - -> ok
+ctl_out 40 04 0008 0000 - -> ok
+ctl_out 40 02 0008 0000 - -> ok
+ctl_out 40 01 0303 0000 - -> ok
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000ae410100{4}364203000033e2
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000b0410100{4}3842030000729b
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000b2410100{4}3a42030000418f
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000b4410100{4}3c4203000014b3
+bulk_out 02 12000000010155d1b7 -> 9
+bulk_in 81 128 -> 0160210000000100020000b6410100{4}3e4203000027a7
+release 0 -> ok

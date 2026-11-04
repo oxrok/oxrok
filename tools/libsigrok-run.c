@@ -27,6 +27,7 @@
  *                 [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]
  *                 [--samples N] [--time T] [--frames N] [--stop-after N]
  *                 [--stop-in-callback] [--stop-after-ms N]
+ *                 [--survive-glib-critical]
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] --scan
  *
  * The options mean what they mean to sigrok-cli, and the common failures
@@ -67,6 +68,12 @@
  * cannot: for a driver that polls, pick N in the middle of a quiet interval,
  * or the poll it races with makes the run unstable.
  *
+ * --survive-glib-critical prints GLib's own criticals (a GVariant of the
+ * wrong type) and goes on, where sigrok-cli's logger exits. It reaches what
+ * lies behind such a critical in a driver (kecheng-kc-330b sends a tuple for
+ * a uint64 key before its log requests). The runner's own criticals, and
+ * those of the driver's code, still end the run.
+ *
  * The output goes through libsigrok's output modules (default bits, as
  * sigrok-cli without -o), so it reads as sigrok-cli's would.
  *
@@ -96,6 +103,7 @@ static char *opt_stop_after;
 static char *opt_stop_after_ms;
 static gboolean opt_scan;
 static gboolean opt_stop_in_callback;
+static gboolean opt_survive_glib_critical;
 
 static struct sr_context *sr_ctx;
 static struct sr_session *session;
@@ -107,7 +115,6 @@ static gboolean have_stop;
 static void logger(const gchar *log_domain, GLogLevelFlags log_level,
 		   const gchar *message, gpointer cb_data)
 {
-	(void)log_domain;
 	(void)cb_data;
 
 	if (log_level & (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL | G_LOG_LEVEL_WARNING)
@@ -115,6 +122,8 @@ static void logger(const gchar *log_domain, GLogLevelFlags log_level,
 		fprintf(stderr, "%s\n", message);
 		fflush(stderr);
 	}
+	if (opt_survive_glib_critical && log_domain && !strcmp(log_domain, "GLib"))
+		return;
 	if (log_level & (G_LOG_LEVEL_ERROR | G_LOG_LEVEL_CRITICAL))
 		exit(1);
 }
@@ -810,7 +819,8 @@ static void usage(void)
 	fprintf(stderr, "usage: libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...\n"
 		"         [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]\n"
 		"         [--samples N] [--time T] [--frames N] [--stop-after N]\n"
-		"         [--stop-in-callback] [--stop-after-ms N] | --scan\n");
+		"         [--stop-in-callback] [--stop-after-ms N]\n"
+		"         [--survive-glib-critical] | --scan\n");
 	exit(2);
 }
 
@@ -827,6 +837,10 @@ int main(int argc, char **argv)
 			continue;
 		if (!strcmp(a, "--scan")) {
 			opt_scan = TRUE;
+			continue;
+		}
+		if (!strcmp(a, "--survive-glib-critical")) {
+			opt_survive_glib_critical = TRUE;
 			continue;
 		}
 		if (!strcmp(a, "--stop-in-callback")) {
