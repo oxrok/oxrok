@@ -10,10 +10,10 @@ use crate::options::parse_hex_list;
 pub use crate::options::parse_number;
 use std::collections::VecDeque;
 
+use crate::Result;
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, Reply, Speed, Violations};
 use crate::shells::hid::HidInterface;
-use crate::Result;
 
 /// The serial number the emulator's cables report.
 pub const SERIAL: &str = "HIDCABLE1";

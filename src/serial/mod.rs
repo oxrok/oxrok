@@ -500,7 +500,7 @@ mod tests {
     /// Plays `script`, each read taking one entry: how many bytes it gives.
     /// It remembers the time each read was given.
     struct Script {
-        script: Vec<usize>,
+        reads: Vec<usize>,
         next: usize,
         asked: Vec<Duration>,
         slow_zero: bool,
@@ -508,7 +508,7 @@ mod tests {
 
     impl Script {
         fn new(script: &[usize], slow_zero: bool) -> Script {
-            Script { script: script.to_vec(), next: 0, asked: Vec::new(), slow_zero }
+            Script { reads: script.to_vec(), next: 0, asked: Vec::new(), slow_zero }
         }
     }
 
@@ -524,7 +524,7 @@ mod tests {
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
             self.asked.push(timeout);
-            let n = self.script.get(self.next).copied().unwrap_or(0).min(buf.len());
+            let n = self.reads.get(self.next).copied().unwrap_or(0).min(buf.len());
             self.next += 1;
             if n == 0 && self.slow_zero {
                 std::thread::sleep(timeout);
