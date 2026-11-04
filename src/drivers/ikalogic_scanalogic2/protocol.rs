@@ -706,6 +706,7 @@ pub fn run(
         sink.send(p);
     };
     let mut next = Next::Out;
+    let mut waited = false;
     loop {
         next = match next {
             Next::Out => {
@@ -718,11 +719,18 @@ pub fn run(
             Next::In => {
                 let data = match get_report(t) {
                     Ok(data) => data,
+                    // A device that left during the wait: libusb refuses
+                    // the C's submit, where this finds out at completion.
+                    Err(Error::Disconnected) if waited => {
+                        log::error!("Submit transfer failed: LIBUSB_ERROR_NO_DEVICE.");
+                        return;
+                    }
                     Err(e) => {
                         log::error!("Transfer to device failed: {}.", transfer_status_name(&e));
                         return;
                     }
                 };
+                waited = false;
                 match machine.after_in(&data, stop.load(Ordering::SeqCst), &mut emit) {
                     Ok(next) => next,
                     Err(message) => {
@@ -735,6 +743,7 @@ pub fn run(
                 if wait_or_stop(wait, stop) {
                     machine.stop_while_waiting();
                 }
+                waited = true;
                 Next::In
             }
             Next::Done => return,
