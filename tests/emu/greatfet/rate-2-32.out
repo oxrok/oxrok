@@ -1,2 +1,1 @@
-Acquisition with 1/16 channels at 204 MHz
-SGPIO0:01010101 01010101 01010101 01010101 10101010 10101010 10101010 10101010
+sample rate 4294967296 does not fit the firmware's 32 bit field

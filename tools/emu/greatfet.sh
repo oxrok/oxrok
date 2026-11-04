@@ -72,11 +72,13 @@ s/^(device error: the capture did not start|device disconnected)$/Failed to star
     # same effect; oxrok sends nothing to a board that left.
     D='/Cannot stop logic analyzer/d; /^oxrok: warn: oxrok::cli::pipeline: Device only sent/d; s/Cannot resubmit USB transfer\./Device gone during USB transfer./'
     # What the C fails to do and exits 0 on.
-    W_STOP='protocol.c:1097,968 send the stop from inside the transfer callback, where libusb_control_transfer() answers LIBUSB_ERROR_BUSY, so the board goes on sampling'
+    W_STOP='after a failed transfer protocol.c:1097,968 send the stop from inside the transfer callback, where libusb_control_transfer() answers LIBUSB_ERROR_BUSY, so the board goes on sampling'
     W_LOST='protocol.c:961,978: the end of a capture runs at the first transfer freed and frees the feed queue unflushed, so the samples it holds are lost'
     W_OVER='protocol.c:1354-1358,1372-1373 cut the limit to whole bytes of sample memory and submit all the samples of the last'
     W_PACKED='protocol.c:1311 takes a feed of one byte a sample for whole samples and passes packed bytes on as they are'
     W_SINT='sigrok-cli has no SIGINT handler'
+    W_WIDE='protocol.c:544 writes the u64 rate with write_u32le_inc(); the firmware field is uint32_t, so what goes out is another rate'
+    W_SLOW='nothing in api.c or protocol.c doubts an answered rate below what the 12 bit divider reaches or over the clock'
     W_HELD='api.c:524 counts a failed submission as a start that never happened, so no stop follows the start that went through'
     # A long output: its first lines and the digest of all of it.
     LONG='1,12!d'
@@ -172,14 +174,18 @@ s/: not supported: not applicable/: not applicable/" -- -d $F -g Logic --get sam
     emu_case "rate 204M 2ch refused" --expect-fail --stderr --filter "$R" -- -d $F -C SGPIO0,SGPIO1 -c samplerate=204M --samples 64 -O bits
     emu_case "rate 204M 1ch" -- -d $F -C SGPIO0 -c samplerate=204M --samples 64 -O bits
     emu_case "rate 204M upper 1ch" -- -d $F -C SGPIO8 -c samplerate=204M --samples 64 -O bits
+    # Below what the 12 bit divider reaches: the firmware answers it all the
+    # same, and oxrok warns (inferred, see the model).
+    emu_case "rate 10k" -- -d $F -c samplerate=10k --samples 64 -O bits
+    emu_case "rate 10k warns" --oracle-differs "$W_SLOW" --stderr --filter "$R" -- -d $F -c samplerate=10k --samples 64 -O bits
     # libsigrok's sr_config_set() refuses 0 before the driver.
     emu_case "rate 0 refused" --expect-fail --stderr --filter "$R
 s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0 --samples 64 -O bits
-    # The u64 setting goes out as 32 bits: 2^32 + 1 is 1 Hz, 2^32 is 0,
-    # which the firmware takes for undivided.
-    emu_case "rate over 32 bits" -- -d $F -c samplerate=4294967297 --samples 64 -O bits
-    emu_case "rate 2^32" -- -d $F -C SGPIO0 -c samplerate=4294967296 --samples 64 -O bits
-    emu_case "rate 5G refused" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=5G --samples 64 -O bits
+    # In the C the u64 setting goes out as 32 bits: 2^32 + 1 is 1 Hz, 2^32 is
+    # 0, which the firmware takes for undivided. oxrok refuses them.
+    emu_case "rate over 32 bits" --oracle-differs "$W_WIDE" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=4294967297 --samples 64 -O bits
+    emu_case "rate 2^32" --oracle-differs "$W_WIDE" --expect-fail --stderr --filter "$R" -- -d $F -C SGPIO0 -c samplerate=4294967296 --samples 64 -O bits
+    emu_case "rate 5G refused" --oracle-bug "$W_WIDE" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=5G --samples 64 -O bits
 
     # Channels: bus width and first pin, with and without gaps.
     emu_case "1ch" -- -d $F -C SGPIO0 --samples 104 -O bits
@@ -213,6 +219,10 @@ s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0
     emu_case "both banks no samples" --libsigrok --hangs --timeout 2 --stderr -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
     emu_case "both banks oxrok waits" --oracle-bug "$W_SINT" --interrupt out=0:6 --no-output -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
     emu_case "rate over the clock no samples" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C SGPIO0 -c samplerate=205M --samples 8 -O bits
+    # From the clock up to where the bandwidth limit refuses it: answered as
+    # asked, no samples, and oxrok warns.
+    emu_case "rate over the clock oxrok waits" --oracle-bug "$W_SINT" --interrupt out=0:6 --stderr --filter "$R" -- -d $F -C SGPIO0 -c samplerate=205M --samples 8 -O bits
+    emu_case "rate 336M no samples" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C SGPIO0 -c samplerate=336M --samples 8 -O bits
     gf_options wide=1
     emu_case "wide 16ch" --stderr --filter "$R" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 8 -O bits
     emu_case "wide 16ch output" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 80 -O bits
@@ -286,7 +296,10 @@ $U" -- -d $F --samples 8 -O bits
 
     # The firmware's overrun: a halted endpoint and no more stream.
     gf_options in-stall=0 in-limit=2
-    emu_case "halted at once" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
+    # The transactions alone differ: the first of these flips if the C's stop
+    # ever goes out. The second pins oxrok's message.
+    emu_case "halted at once" --oracle-differs "$W_STOP" --no-output -- -d $F --samples 8 -O bits
+    emu_case "halted at once message" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
     # The C's stop as it is, failed from inside the callback, 16 times.
     emu_case "lib halted at once" --libsigrok --stderr -- -d $F --samples 8 -O bits
     gf_options in-stall=1 in-limit=2

@@ -17,14 +17,21 @@
 //! ([`protocol`]) on its control endpoint and streams on bulk IN 0x81 until
 //! it is told to stop. The firmware answers the rate it picked, at least the
 //! one asked for; a rate that would take more USB bandwidth than
-//! [`protocol::BANDWIDTH_THRESHOLD`] is refused here, as the C driver found
-//! the board locks up otherwise (`protocol.c:575`).
+//! [`protocol::BANDWIDTH_THRESHOLD`] is refused before the start, as in the C,
+//! whose comment says the board becomes unreachable if it starts such a
+//! capture (`protocol.c:575`; only that comment says so).
 //!
 //! Where this differs from the C on purpose:
 //!
 //! - The stop goes out after a failed transfer. The C's goes out from
-//!   inside the transfer callback, where `libusb_control_transfer()` answers
-//!   `LIBUSB_ERROR_BUSY`, and the board keeps sampling.
+//!   inside the transfer callback there, where `libusb_control_transfer()`
+//!   answers `LIBUSB_ERROR_BUSY`, and the board keeps sampling. On a limit or
+//!   a stop by hand the C's stop runs outside the callback and does go out.
+//! - A rate of 2^32 or more is refused before anything is sent: the
+//!   firmware's field has 32 bits (`logic_analyzer.c`, `<IB`) and the C
+//!   sends the rest of it (`protocol.c:544`), so 2^32 runs at 204 MHz.
+//! - A warning for an answered rate the board probably doesn't run at: below
+//!   [`MIN_DIVIDED_RATE`], or over [`CLOCK`], where no samples come.
 //! - The stop goes out when the transfers can't be submitted after a start:
 //!   `api.c:524` counts that as a start that never happened.
 //! - Samples received before a failure reach the session. The C frees its
@@ -62,6 +69,14 @@ const TRANSFER_COUNT: usize = 16;
 const POLL: Duration = Duration::from_millis(50);
 /// `DEFAULT_SAMPLERATE`.
 const DEFAULT_SAMPLERATE: u64 = 34_000_000;
+/// The SGPIO clock (`platform_clock.c`'s default, and `api.c:67`).
+const CLOCK: u32 = 204_000_000;
+/// The lowest rate of the SGPIO's 12 bit divider. The firmware writes a larger
+/// divider without a mask and answers the rate it computed, so a lower
+/// rate is probably not what the board runs at. Inferred: NXP's register
+/// description has `PRESET` in bits 11:0 and AN11275 a 12 bit counter; no
+/// board has shown it.
+const MIN_DIVIDED_RATE: u32 = CLOCK / 4096;
 /// What a refused capture says; the driver has logged why.
 const START_REFUSED: &str = "the capture did not start";
 
@@ -274,14 +289,27 @@ impl GreatfetDevice {
         self.channels.iter().filter(|c| c.enabled).fold(0, |m, c| m | 1 << c.index)
     }
 
-    fn running(&self) -> bool {
+    /// A capture is running: its thread has not given the link back.
+    fn busy(&self) -> bool {
         self.worker.as_ref().is_some_and(|w| !w.handle.is_finished())
+            && self.link.lock().expect("link lock").is_none()
+    }
+
+    /// The rate as the firmware's field holds it; more is refused, where
+    /// the C truncates it (`protocol.c:544`).
+    fn wire_rate(&self) -> Result<u32> {
+        u32::try_from(self.samplerate).map_err(|_| {
+            Error::Arg(format!(
+                "sample rate {} does not fit the firmware's 32 bit field",
+                self.samplerate
+            ))
+        })
     }
 
     /// `greatfet_start_acquisition()`. A failed claim does not stop the start,
     /// as in the C.
     fn begin(&mut self, link: &mut Link, plan: &Plan) -> Result<Box<dyn BulkStream>> {
-        let configured = link.configure(plan, self.samplerate)?;
+        let configured = link.configure(plan, self.wire_rate()?)?;
         let rate = configured.rate;
         if u64::from(rate) != self.samplerate {
             log::info!("Configuration feedback, want rate {}, got rate {rate}", self.samplerate);
@@ -294,6 +322,9 @@ impl GreatfetDevice {
             log::error!("Configuration exceeds bandwidth limit. Aborting.");
             return Err(Error::device(START_REFUSED));
         }
+        if let Some(warning) = rate_warning(rate) {
+            log::warn!("Sample rate {rate}: {warning}");
+        }
         let claim = link.transport().claim_interface(SAMPLES_INTERFACE);
         link.start()?;
         // A claim that failed fails the C's submissions after the start. The
@@ -301,7 +332,7 @@ impl GreatfetDevice {
         // so (the libusb one at its first transfer), so it stops here.
         if let Err(e) = claim {
             log::debug!("Cannot claim the samples interface: {e}.");
-            link.stop();
+            stop_unless_gone(link, &e);
             return Err(e);
         }
         // Submitted after the start: the C's comment says the other order
@@ -311,8 +342,28 @@ impl GreatfetDevice {
             .inspect_err(|e| {
                 log::debug!("submit bulk xfer failed: {}", libusb_error_name(e));
                 // The start went through: the board is sampling.
-                link.stop();
+                stop_unless_gone(link, e);
             })
+    }
+}
+
+/// The stop after a start that failed further on; a board that left hears
+/// nothing.
+fn stop_unless_gone(link: &mut Link, e: &Error) {
+    if !matches!(e, Error::Disconnected) {
+        link.stop();
+    }
+}
+
+/// What is doubtful about an answered rate. The firmware answers either
+/// without complaint and the capture goes on, so this only warns.
+fn rate_warning(rate: u32) -> Option<&'static str> {
+    if rate > CLOCK {
+        Some("over the board's 204 MHz clock, the firmware will send no samples.")
+    } else if rate < MIN_DIVIDED_RATE {
+        Some("below what the 12 bit divider reaches, the board likely samples faster.")
+    } else {
+        None
     }
 }
 
@@ -382,7 +433,7 @@ impl Device for GreatfetDevice {
         if !matches!(key, Key::Samplerate | Key::LimitSamples | Key::LimitMsec) {
             return Err(Error::UnknownKey(key.id().to_owned()));
         }
-        if self.running() {
+        if self.busy() {
             return Err(Error::Busy);
         }
         match key {
@@ -432,14 +483,24 @@ impl Device for GreatfetDevice {
         Ok(())
     }
 
+    /// A refusal that needs no device.
+    fn check_capture(&self, trigger: Option<&crate::core::Trigger>) -> Result<()> {
+        let _ = trigger;
+        self.wire_rate().map(|_| ())
+    }
+
     fn start(&mut self, sink: PacketSink) -> Result<()> {
-        if let Some(w) = self.worker.take() {
-            if !w.handle.is_finished() {
-                self.worker = Some(w);
-                return Err(Error::Busy);
-            }
+        if self.busy() {
+            return Err(Error::Busy);
+        }
+        // A worker with the link back has only its End left to send; one
+        // that has not finished then ends by itself.
+        if let Some(w) = self.worker.take()
+            && w.handle.is_finished()
+        {
             let _ = w.handle.join();
         }
+        self.wire_rate()?;
         let plan = protocol::plan(self.channel_mask())
             .ok_or_else(|| Error::arg("no channel is enabled"))?;
         log::debug!(
@@ -483,7 +544,9 @@ impl Device for GreatfetDevice {
             .name("greatfet acquisition".into())
             .spawn(move || {
                 run(stream, &mut link, &capture, &sink, &stop2);
+                // Before the End, so that a client can start again at once.
                 *slot.lock().expect("link lock") = Some(link);
+                sink.send(Packet::End);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -511,7 +574,8 @@ struct Capture {
 }
 
 /// The acquisition thread: the header, the transfers until a limit, a stop
-/// or a failure, the stop request unless the board left, the end.
+/// or a failure, the stop request unless the board left. The caller gives
+/// the link back and sends the end.
 fn run(
     mut stream: Box<dyn BulkStream>,
     link: &mut Link,
@@ -561,13 +625,14 @@ fn run(
     }
     drop(stream);
     let _ = link.transport().release_interface(SAMPLES_INTERFACE);
-    sink.send(Packet::End);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::usb::ControlRequest;
     use crate::usb::record::Replay;
+    use std::sync::atomic::AtomicUsize;
 
     fn device(names: Option<&str>) -> GreatfetDevice {
         GreatfetDevice::new(UsbDeviceInfo::default(), "v1".into(), "s".into(), names)
@@ -613,14 +678,11 @@ mod tests {
         }
     }
 
-    /// The samples and whether the capture ended.
-    fn packets(rx: &std::sync::mpsc::Receiver<(usize, Packet)>) -> (usize, bool) {
-        let list: Vec<Packet> = rx.try_iter().map(|(_, p)| p).collect();
-        let samples = list
-            .iter()
-            .map(|p| if let Packet::Logic(l) = p { l.data.len() / l.unit_size } else { 0 })
-            .sum();
-        (samples, matches!(list.last(), Some(Packet::End)))
+    /// The samples sent.
+    fn packets(rx: &std::sync::mpsc::Receiver<(usize, Packet)>) -> usize {
+        rx.try_iter()
+            .map(|(_, p)| if let Packet::Logic(l) = p { l.data.len() / l.unit_size } else { 0 })
+            .sum()
     }
 
     #[test]
@@ -631,7 +693,7 @@ mod tests {
         let stream = Box::new(Endless { stop: Arc::clone(&stop), answers: 0 });
         run(stream, &mut link, &capture(0xff, 2, 0), &PacketSink::new(tx, 0), &stop);
         r.finish().unwrap();
-        assert_eq!(packets(&rx), (12, true));
+        assert_eq!(packets(&rx), 12);
     }
 
     #[test]
@@ -645,7 +707,7 @@ mod tests {
         // 1 channel, 8 samples a byte.
         run(stream, &mut link, &capture(0x1, 2, 37), &PacketSink::new(tx, 0), &stop);
         r.finish().unwrap();
-        assert_eq!(packets(&rx), (37, true));
+        assert_eq!(packets(&rx), 37);
     }
 
     #[test]
@@ -660,7 +722,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
         run(stream, &mut link, &c, &PacketSink::new(tx, 0), &stop);
         r.finish().unwrap();
-        assert_eq!(packets(&rx), (0, true));
+        assert_eq!(packets(&rx), 0);
     }
 
     /// A stream that fails with `error` after one answer.
@@ -688,16 +750,93 @@ mod tests {
             &AtomicBool::new(false),
         );
         r.finish().unwrap();
-        assert_eq!(packets(&rx), (4, true));
+        assert_eq!(packets(&rx), 4);
+    }
+
+    /// A transport that answers everything and counts the control writes.
+    struct Spy {
+        info: UsbDeviceInfo,
+        writes: Arc<AtomicUsize>,
+        claim: fn() -> Result<()>,
+        stream: fn() -> Result<Box<dyn BulkStream>>,
+    }
+
+    impl Spy {
+        fn new(stream: fn() -> Result<Box<dyn BulkStream>>) -> (Spy, Arc<AtomicUsize>) {
+            let writes = Arc::new(AtomicUsize::new(0));
+            let info = UsbDeviceInfo::default();
+            (Spy { info, writes: Arc::clone(&writes), claim: || Ok(()), stream }, writes)
+        }
+    }
+
+    impl Transport for Spy {
+        fn info(&self) -> &UsbDeviceInfo {
+            &self.info
+        }
+        fn set_configuration(&mut self, _configuration: u8) -> Result<()> {
+            Ok(())
+        }
+        fn claim_interface(&mut self, _interface: u8) -> Result<()> {
+            (self.claim)()
+        }
+        fn release_interface(&mut self, _interface: u8) -> Result<()> {
+            Ok(())
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn max_packet_size(&mut self, _endpoint: u8) -> Result<usize> {
+            Ok(512)
+        }
+        fn interfaces(&mut self) -> Result<Vec<crate::usb::InterfaceDesc>> {
+            Ok(Vec::new())
+        }
+        fn control_out(&mut self, _r: ControlRequest, _d: &[u8], _t: Duration) -> Result<()> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        /// Configure's answer: 1 MHz, the buffer, the endpoint.
+        fn control_in(&mut self, _r: ControlRequest, _l: usize, _t: Duration) -> Result<Vec<u8>> {
+            Ok(vec![0x40, 0x42, 0x0f, 0, 0, 0x40, 0, 0, 0x81])
+        }
+        fn bulk_out(&mut self, _e: u8, data: &[u8], _t: Duration) -> Result<usize> {
+            Ok(data.len())
+        }
+        fn bulk_in(&mut self, _e: u8, _l: usize, _t: Duration) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn interrupt_out(&mut self, _e: u8, data: &[u8], _t: Duration) -> Result<usize> {
+            Ok(data.len())
+        }
+        fn interrupt_in(&mut self, _e: u8, _l: usize, _t: Duration) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn bulk_in_stream(
+            &mut self,
+            _endpoint: u8,
+            _size: usize,
+            _count: usize,
+        ) -> Result<Box<dyn BulkStream>> {
+            (self.stream)()
+        }
+    }
+
+    fn gone() -> Result<Box<dyn BulkStream>> {
+        Err(Error::Disconnected)
+    }
+
+    fn refused() -> Result<Box<dyn BulkStream>> {
+        Err(Error::device("refused"))
+    }
+
+    fn ends_at_once() -> Result<Box<dyn BulkStream>> {
+        Ok(Box::new(Failing(Some(Error::device("endpoint stalled")), false)))
     }
 
     #[test]
     fn a_board_that_left_gets_no_stop() {
-        let r = Replay::from_text(
-            "# oxrok usb fixture 1\ndevice vid=1d50 pid=60e6 version=0100 interfaces=0:ff:ff:ff,1:ff:ff:ff\n",
-        )
-        .unwrap();
-        let mut link = Link::new(Box::new(r.clone()));
+        let (spy, writes) = Spy::new(gone);
+        let mut link = Link::new(Box::new(spy));
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let stream = Box::new(Failing(Some(Error::Disconnected), false));
         run(
@@ -707,8 +846,100 @@ mod tests {
             &PacketSink::new(tx, 0),
             &AtomicBool::new(false),
         );
-        r.finish().unwrap();
-        assert_eq!(packets(&rx), (0, true));
+        assert_eq!(packets(&rx), 0);
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+    }
+
+    /// First pin, alternate map, configure, start: four writes, then the stop.
+    #[test]
+    fn a_stream_that_fails_after_the_start_stops_the_board_unless_it_left() {
+        let plan = protocol::plan(0xff).unwrap();
+        for (stream, expected) in [(refused as fn() -> Result<Box<dyn BulkStream>>, 5), (gone, 4)] {
+            let (spy, writes) = Spy::new(stream);
+            let mut link = Link::new(Box::new(spy));
+            assert!(device(None).begin(&mut link, &plan).is_err());
+            assert_eq!(writes.load(Ordering::SeqCst), expected);
+        }
+    }
+
+    #[test]
+    fn a_failed_claim_stops_the_board_after_its_start() {
+        let plan = protocol::plan(0xff).unwrap();
+        let (mut spy, writes) = Spy::new(ends_at_once);
+        spy.claim = || Err(Error::Busy);
+        let mut link = Link::new(Box::new(spy));
+        assert!(device(None).begin(&mut link, &plan).is_err());
+        assert_eq!(writes.load(Ordering::SeqCst), 5);
+    }
+
+    #[test]
+    fn a_rate_over_32_bits_is_refused_before_the_wire() {
+        for rate in [1u64 << 32, (1 << 32) + 1, 5_000_000_000] {
+            let (spy, writes) = Spy::new(ends_at_once);
+            let mut d = device(None);
+            *d.link.lock().unwrap() = Some(Link::new(Box::new(spy)));
+            d.set(&Key::Samplerate, &Value::U64(rate), None).unwrap();
+            assert!(d.check_capture(None).is_err());
+            let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+            assert!(d.start(PacketSink::new(tx, 0)).is_err());
+            assert_eq!(writes.load(Ordering::SeqCst), 0);
+        }
+        let mut d = device(None);
+        d.set(&Key::Samplerate, &Value::U64(u64::from(u32::MAX)), None).unwrap();
+        assert!(d.check_capture(None).is_ok());
+    }
+
+    #[test]
+    fn doubtful_rates_are_named() {
+        assert_eq!(rate_warning(49_804), None, "a divider of 4096 fits");
+        assert!(rate_warning(49_803).is_some());
+        assert!(rate_warning(10_000).is_some());
+        assert_eq!(rate_warning(1_000_000), None);
+        assert_eq!(rate_warning(CLOCK), None);
+        assert!(rate_warning(CLOCK + 1).is_some());
+    }
+
+    /// Lets the capture of the test below end when it says so.
+    static GATE_OPEN: AtomicBool = AtomicBool::new(false);
+
+    struct Gated;
+
+    impl BulkStream for Gated {
+        fn next(&mut self, _timeout: Duration) -> Result<Vec<u8>> {
+            if GATE_OPEN.load(Ordering::SeqCst) {
+                return Err(Error::device("endpoint stalled"));
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            Err(Error::Timeout)
+        }
+    }
+
+    fn gated() -> Result<Box<dyn BulkStream>> {
+        Ok(Box::new(Gated))
+    }
+
+    /// The End comes after the link went back: while the test holds the
+    /// link's lock, the thread cannot have sent it.
+    #[test]
+    fn a_capture_gives_the_link_back_before_its_end() {
+        let (spy, _) = Spy::new(gated);
+        let mut d = device(None);
+        *d.link.lock().unwrap() = Some(Link::new(Box::new(spy)));
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let guard = d.link.lock().unwrap();
+        GATE_OPEN.store(true, Ordering::SeqCst);
+        while let Ok((_, p)) = rx.recv_timeout(Duration::from_millis(200)) {
+            assert!(!matches!(p, Packet::End), "the End came before the link went back");
+        }
+        drop(guard);
+        while !matches!(rx.recv().unwrap().1, Packet::End) {}
+        assert!(d.link.lock().unwrap().is_some());
+        // So a new capture starts at once.
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        while !matches!(rx.recv().unwrap().1, Packet::End) {}
+        d.close().unwrap();
     }
 
     #[test]

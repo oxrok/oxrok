@@ -43,7 +43,8 @@ const VERB_STOP: u32 = 4;
 /// `LOGIC_DEFAULT_TIMEOUT`.
 const TIMEOUT: Duration = Duration::from_millis(1000);
 /// What the C driver asks a string answer for: the allocated size of
-/// a `GString` sized for 520 bytes, a power of two.
+/// a `GString` sized for 520 bytes, a power of two. pygreat's
+/// `LIBGREAT_MAX_COMMAND_SIZE` is 1024 too (`usb1.py:38`).
 const STRING_READ: usize = 1024;
 /// `want_len` of `greatfet_logic_config()`.
 const CONFIGURE_ANSWER: usize = 9;
@@ -256,14 +257,13 @@ impl Link {
     }
 
     /// `greatfet_logic_config()` up to the answer: first pin, alternate
-    /// map off, configure. The rate goes out in 32 bits, as the C's
-    /// `write_u32le_inc()` truncates its u64: the firmware's field is that
-    /// wide.
+    /// map off, configure. The firmware's rate field has 32 bits; the
+    /// caller refuses what does not fit, where the C truncates it.
     ///
     /// # Errors
     ///
     /// On a failed request or an answer of another length, logged.
-    pub fn configure(&mut self, plan: &Plan, rate: u64) -> Result<Configured> {
+    pub fn configure(&mut self, plan: &Plan, rate: u32) -> Result<Configured> {
         log::debug!("about to config first pin, upper {}", i32::from(plan.use_upper_pins));
         let first = if plan.use_upper_pins { 8 } else { 0 };
         self.tell(VERB_FIRST_PIN, &[first]).inspect_err(|_| {
@@ -274,7 +274,7 @@ impl Link {
             log::error!("Cannot configure alt pin mapping.");
         })?;
         log::debug!("about to config LA, rate {rate}, chans {}", plan.capture_channels);
-        let mut args = (rate as u32).to_le_bytes().to_vec();
+        let mut args = rate.to_le_bytes().to_vec();
         args.push(plan.capture_channels);
         let answer = self
             .ask(&command(CLASS_LA, VERB_CONFIGURE, &args), CONFIGURE_ANSWER)
@@ -447,8 +447,7 @@ mod tests {
              ctl_in 42 65 0000 0000 9 -> 010000000040000081\n",
         );
         let mut link = Link::new(Box::new(r.clone()));
-        // 2^32 + 1: the setting goes out in 32 bits.
-        let c = link.configure(&plan(0x0200).unwrap(), (1 << 32) + 1).unwrap();
+        let c = link.configure(&plan(0x0200).unwrap(), 1).unwrap();
         assert_eq!(c, Configured { rate: 1, buffer_size: 0x4000, endpoint: 0x81 });
         r.finish().unwrap();
     }
