@@ -5,7 +5,7 @@ use crate::usb::{BulkStream, ControlRequest, Handle, Result, Transport, UsbDevic
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn map(e: rusb::Error) -> Error {
     match e {
@@ -264,6 +264,67 @@ impl Transport for Rusb {
                     let failed = r.is_err();
                     if tx.send(r).is_err() || failed {
                         break;
+                    }
+                }
+            })
+            .map_err(Error::Io)?;
+        Ok(Box::new(RusbStream { rx, stop }))
+    }
+
+    /// libusb's synchronous call drops what a timed out read received
+    /// (rusb gives the error alone), and the unsafe-free crate reaches
+    /// nothing else, so the thread reads one packet at a time, which a
+    /// timeout cannot split, and hands on what it has at each
+    /// `transfer_timeout`, at a short packet, or when `transfer_size` is
+    /// full. Lossless but slower than whole transfers: a device that
+    /// cannot pause (a fast stream) may overflow on this backend.
+    fn bulk_in_stream_timed(
+        &mut self,
+        endpoint: u8,
+        transfer_size: usize,
+        depth: usize,
+        transfer_timeout: Duration,
+    ) -> Result<Box<dyn BulkStream>> {
+        let mps = self.max_packet_size(endpoint)?.max(1);
+        let size = transfer_size.div_ceil(mps).max(1) * mps;
+        let (tx, rx) = sync_channel(depth.max(1));
+        let stop = Arc::new(AtomicBool::new(false));
+        let handle = Arc::clone(&self.handle);
+        let stop2 = Arc::clone(&stop);
+        std::thread::Builder::new()
+            .name("usb bulk stream".into())
+            .spawn(move || {
+                let mut packet = vec![0u8; mps];
+                let mut buf = Vec::with_capacity(size);
+                let mut deadline = Instant::now() + transfer_timeout;
+                while !stop2.load(Ordering::SeqCst) {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        if !buf.is_empty() && tx.send(Ok(std::mem::take(&mut buf))).is_err() {
+                            break;
+                        }
+                        deadline = Instant::now() + transfer_timeout;
+                        continue;
+                    }
+                    let wait = left.min(Duration::from_millis(100));
+                    match handle.read_bulk(endpoint, &mut packet, wait) {
+                        Ok(n) => {
+                            buf.extend_from_slice(&packet[..n]);
+                            if n < mps || buf.len() >= size {
+                                if tx.send(Ok(std::mem::take(&mut buf))).is_err() {
+                                    break;
+                                }
+                                deadline = Instant::now() + transfer_timeout;
+                            }
+                        }
+                        Err(rusb::Error::Timeout) => {}
+                        Err(e) => {
+                            if !buf.is_empty() {
+                                let _ = tx.send(Ok(std::mem::take(&mut buf)));
+                            }
+                            let _ = tx.send(Err(map(e)));
+                            break;
+                        }
                     }
                 }
             })

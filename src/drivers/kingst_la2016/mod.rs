@@ -97,10 +97,11 @@ const PWM_NAMES: [&str; 2] = ["PWM1", "PWM2"];
 /// libsigrok's poll interval of the run state (`usb_source_add(..., 50,
 /// ...)`), which the device's capture progress is paced by.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
-/// Polls after a stop request before the capture is given up.
-const POLLS_AFTER_STOP: usize = 20;
-/// Consecutive failed bulk IN transfers after which an acquisition ends;
-/// the C driver resubmits for ever.
+/// Polls after the halt of a stop before the capture is given up, 5 s.
+const POLLS_AFTER_STOP: usize = 100;
+/// Consecutive failed bulk IN transfers after which an acquisition ends,
+/// the bound fx2lafw has as `MAX_EMPTY_TRANSFERS`; the C driver of this
+/// device resubmits for ever.
 const MAX_FAILED_TRANSFERS: usize = 64;
 
 /// A `conn` spec as `sr_usb_split_conn()` reads it.
@@ -186,24 +187,10 @@ fn claim(t: &mut dyn Transport) -> Result<()> {
     })
 }
 
-/// `la2016_identify_read()`: the device opened (unless `t` is open
-/// already) and claimed, identified and initialised, then released and
-/// closed.
-fn identify_read(
-    info: &UsbDeviceInfo,
-    t: Option<Box<dyn Transport>>,
-    show_message: bool,
-) -> Result<&'static Model> {
-    let opened = match t {
-        Some(t) => Ok(t),
-        None => crate::usb::open(info).inspect_err(|e| {
-            if show_message {
-                log::error!("Cannot open device: {}.", libusb_error_name(e));
-            }
-        }),
-    };
-    let claimed = opened.and_then(|mut t| claim(t.as_mut()).map(|()| t));
-    let t = claimed.inspect_err(|_| {
+/// `la2016_identify_read()` on the opened device: claimed, identified
+/// and initialised, then released and closed.
+fn identify_read(mut t: Box<dyn Transport>, show_message: bool) -> Result<&'static Model> {
+    claim(t.as_mut()).inspect_err(|_| {
         if show_message {
             log::error!("Cannot communicate to MCU firmware.");
         }
@@ -237,7 +224,7 @@ fn identify_enum(usb: &UsbDeviceInfo) -> Result<(UsbDeviceInfo, &'static Model)>
         if iproduct(t.as_mut()) != protocol::IPRODUCT_INDEX {
             continue;
         }
-        let model = identify_read(&d, Some(t), false)?;
+        let model = identify_read(t, false)?;
         return Ok((d, model));
     }
     Err(Error::device("device not found"))
@@ -376,7 +363,7 @@ impl Driver for La2016Driver {
                 info.product_id,
                 protocol::mcu_firmware(info.product_id)
             );
-            match identify_read(&info, Some(t), true) {
+            match identify_read(t, true) {
                 Ok(model) => found.push((info, model)),
                 Err(_) => log::error!("Unknown or unsupported device type."),
             }
@@ -529,6 +516,15 @@ impl La2016Device {
             .fold(0, |m, c| m | 1 << c.index)
     }
 
+    /// Whether the acquisition owns the device, so a PWM setting would
+    /// never reach it.
+    fn pwm_refused(&self) -> Result<()> {
+        if self.link.lock().expect("link lock").is_none() && self.worker.is_some() {
+            return Err(Error::Busy);
+        }
+        Ok(())
+    }
+
     /// `la2016_write_pwm_config()` when the device is open. During a
     /// capture the acquisition owns the device: refused.
     fn write_pwm(&self, idx: usize) -> Result<()> {
@@ -567,10 +563,11 @@ impl La2016Device {
             link.bulk_reset().map_err(Failure::Start)?;
             let stream = link
                 .transport()
-                .bulk_in_stream(
+                .bulk_in_stream_timed(
                     protocol::EP_CAPTURE_DATA,
                     protocol::USB_BUFSZ,
                     protocol::USB_XFER_COUNT,
+                    protocol::CAPTURE_TIMEOUT,
                 )
                 .inspect_err(|e| {
                     log::error!("Cannot submit USB transfer: {}.", libusb_error_name(e));
@@ -674,6 +671,7 @@ impl Device for La2016Device {
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
         match (self.group(group)?, key) {
             (Some(Group::Pwm(i)), Key::Enabled) => {
+                self.pwm_refused()?;
                 self.settings.pwm[i].enabled = value.as_bool().ok_or_else(bad)?;
                 return self.write_pwm(i);
             }
@@ -684,6 +682,7 @@ impl Device for La2016Device {
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let f = f as f32;
+                self.pwm_refused()?;
                 self.settings.pwm[i].freq = f;
                 return self.write_pwm(i);
             }
@@ -694,6 +693,7 @@ impl Device for La2016Device {
                 }
                 #[allow(clippy::cast_possible_truncation)]
                 let d = d as f32;
+                self.pwm_refused()?;
                 self.settings.pwm[i].duty = d;
                 return self.write_pwm(i);
             }
@@ -833,8 +833,9 @@ impl Device for La2016Device {
                     .name("kingst-la2016 acquisition".into())
                     .spawn(move || {
                         acq.run(&mut link, &sink, &stop2);
-                        sink.send(Packet::End);
+                        // The link first: whoever sees the end may use it.
                         *slot.lock().expect("link lock") = Some(link);
+                        sink.send(Packet::End);
                     })
                     .map_err(Error::Io)?;
                 self.worker = Some(Worker { stop, handle });
@@ -885,7 +886,9 @@ impl Failures {
     fn failed(&mut self) -> bool {
         self.0 += 1;
         if self.0 >= MAX_FAILED_TRANSFERS {
-            log::error!("Too many failed USB transfers, giving up.");
+            log::error!(
+                "{MAX_FAILED_TRANSFERS} USB transfers failed, giving up: the data is incomplete."
+            );
             return true;
         }
         false
@@ -952,6 +955,7 @@ impl Acquisition {
                 Some(n) => {
                     *n += 1;
                     if *n > POLLS_AFTER_STOP {
+                        log::error!("Device stays busy after the halt, its capture is lost.");
                         return false;
                     }
                 }
@@ -976,7 +980,7 @@ impl Acquisition {
         let mut failures = Failures(0);
         // A stop that halted the capture wants what it holds; one that
         // comes during the download cancels it.
-        let stop_seen = halted_for_stop.is_some();
+        let stop_seen = halted_for_stop.is_some() || stop.load(Ordering::SeqCst);
         while stop_seen || !stop.load(Ordering::SeqCst) {
             let feed = match stream.next(protocol::CAPTURE_TIMEOUT) {
                 Ok(data) => {
@@ -984,7 +988,13 @@ impl Acquisition {
                         "receive_transfer(): status LIBUSB_SUCCESS received {} bytes.",
                         data.len()
                     );
-                    failures.0 = 0;
+                    // An empty transfer is no progress either: taken like
+                    // a failed one, so a device that sends nothing ends.
+                    if !data.is_empty() {
+                        failures.0 = 0;
+                    } else if failures.failed() {
+                        break;
+                    }
                     download.chunk(&data)
                 }
                 Err(Error::Disconnected) => {
@@ -1029,10 +1039,11 @@ impl Acquisition {
         link.bulk_window(read_pos, n_bytes).ok()?;
         let stream = link
             .transport()
-            .bulk_in_stream(
+            .bulk_in_stream_timed(
                 protocol::EP_CAPTURE_DATA,
                 protocol::USB_BUFSZ,
                 protocol::USB_XFER_COUNT,
+                protocol::CAPTURE_TIMEOUT,
             )
             .inspect_err(|e| {
                 log::error!("Cannot submit USB transfer: {}.", libusb_error_name(e));
@@ -1087,8 +1098,9 @@ impl Acquisition {
                     log::warn!("Lost communication to USB device.");
                     break;
                 }
-                // Slow streams fill a transfer in longer than the
-                // timeout; it stays queued.
+                // Nothing in the transfer timeout: legal at a slow rate
+                // or while a device waits ("timeouts are perfectly legal",
+                // protocol.c:1523).
                 Err(Error::Timeout) => Vec::new(),
                 Err(e) => {
                     log::debug!(
@@ -1268,6 +1280,62 @@ mod tests {
         let steps = "ctl_in 40 20 0000 0000 2 -> ed85\n\
                      ctl_in 40 20 0010 0000 16 -> err device \"endpoint stalled\"\n";
         assert_eq!(run_capture(steps, false, 0), [Packet::FrameBegin, Packet::FrameEnd]);
+    }
+
+    /// A stop in the 50 ms before the poll that sees idle: the capture is
+    /// done and is downloaded all the same.
+    #[test]
+    fn a_stop_just_before_the_idle_poll_keeps_the_capture() {
+        let steps = format!("ctl_in 40 20 0000 0000 2 -> ed85\n{DOWNLOAD}");
+        let p = run_capture(&steps, true, 0);
+        assert_eq!(p, [Packet::FrameBegin, Packet::logic(2, vec![1, 0, 1, 0]), Packet::FrameEnd]);
+    }
+
+    /// A download a timed stream hands over piece by piece, the timeouts
+    /// between them taken as empty transfers, as protocol.c:1564-1568.
+    #[test]
+    fn a_download_takes_partial_data_and_timeouts() {
+        let steps = "ctl_in 40 20 0000 0000 2 -> ed85\n\
+             ctl_in 40 20 0010 0000 16 -> 0a000000000000002000100000000000\n\
+             ctl_out 40 38 0000 0000 - -> ok\n\
+             ctl_out 40 20 0008 0000 0000100020000000 -> ok\n\
+             ctl_out 40 30 0000 0000 - -> ok\n\
+             bulk_in 86 524288 -> 01000200000000000000000000000000\n\
+             bulk_in 86 524288 -> err timeout\n\
+             bulk_in 86 524288 -> 02000300000000000000000000000000\n\
+             ctl_out 40 20 0000 0000 00 -> ok\n";
+        let p = run_capture(steps, false, 0);
+        assert_eq!(
+            p,
+            [
+                Packet::FrameBegin,
+                Packet::logic(2, vec![1, 0, 1, 0]),
+                Packet::logic(2, vec![2, 0, 2, 0, 2, 0]),
+                Packet::FrameEnd,
+            ]
+        );
+    }
+
+    /// The acquisition owns the device: a PWM setting is refused and not
+    /// kept as if it had been sent.
+    #[test]
+    fn a_pwm_set_during_a_capture_is_refused_and_not_stored() {
+        let mut d = device(0);
+        d.worker = Some(Worker {
+            stop: Arc::new(AtomicBool::new(false)),
+            handle: std::thread::spawn(|| {}),
+        });
+        let before = d.settings.pwm;
+        assert!(matches!(d.set(&Key::Enabled, &Value::Bool(true), Some("PWM1")), Err(Error::Busy)));
+        assert!(matches!(
+            d.set(&Key::OutputFrequency, &Value::F64(5000.0), Some("PWM1")),
+            Err(Error::Busy)
+        ));
+        assert!(matches!(
+            d.set(&Key::DutyCycle, &Value::F64(25.0), Some("PWM1")),
+            Err(Error::Busy)
+        ));
+        assert_eq!(d.settings.pwm, before);
     }
 
     #[test]

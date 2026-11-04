@@ -262,6 +262,27 @@ pub trait Transport: Send {
         transfer_size: usize,
         depth: usize,
     ) -> Result<Box<dyn BulkStream>>;
+
+    /// [`Transport::bulk_in_stream`] with libusb's per transfer timeout,
+    /// for drivers that follow a C driver's habit of taking whatever a
+    /// timed out transfer holds: when nothing completes for
+    /// `transfer_timeout`, [`BulkStream::next`] cancels the transfers in
+    /// flight, returns the data they had received (nothing is
+    /// [`Error::Timeout`]) and submits them again. So a slow device's data
+    /// comes every `transfer_timeout`, not when a transfer has filled, and
+    /// a device with no short packet to end its last transfer cannot hold
+    /// the data back. A transport without its own form (a replay reads
+    /// its recorded steps either way) falls back to the plain stream.
+    fn bulk_in_stream_timed(
+        &mut self,
+        endpoint: u8,
+        transfer_size: usize,
+        depth: usize,
+        transfer_timeout: Duration,
+    ) -> Result<Box<dyn BulkStream>> {
+        let _ = transfer_timeout;
+        self.bulk_in_stream(endpoint, transfer_size, depth)
+    }
 }
 
 /// Reads string descriptor `index` as `libusb_get_string_descriptor_ascii()`
@@ -316,6 +337,79 @@ pub trait BulkStream: Send {
     /// an error; nothing completing within `timeout` is
     /// [`Error::Timeout`].
     fn next(&mut self, timeout: Duration) -> Result<Vec<u8>>;
+}
+
+/// One transfer a backend's queue gave back: the bytes it holds, and
+/// how it ended ([`Error::Timeout`] when it was cancelled).
+#[cfg_attr(not(any(feature = "nusb", test)), allow(dead_code))]
+pub(crate) struct Completed {
+    pub(crate) data: Vec<u8>,
+    pub(crate) status: Result<()>,
+}
+
+/// What [`timed_next`] needs of a backend's queue of transfers.
+#[cfg_attr(not(any(feature = "nusb", test)), allow(dead_code))]
+pub(crate) trait TransferQueue {
+    /// Submits one more transfer.
+    fn submit(&mut self);
+    /// The next completed transfer, in order.
+    fn wait(&mut self, timeout: Duration) -> Option<Completed>;
+    /// Cancels the transfers in flight, which complete all the same.
+    fn cancel_all(&mut self);
+    /// Transfers not yet given back.
+    fn pending(&self) -> usize;
+}
+
+/// [`BulkStream::next`] of a timed stream, see
+/// [`Transport::bulk_in_stream_timed`]. `owed` says the transfer handed
+/// out last is still to be resubmitted. The cancelled transfers' data
+/// comes out as one piece, in order; the first of them is then owed like
+/// any transfer handed out, the others go back in at once.
+#[cfg_attr(not(any(feature = "nusb", test)), allow(dead_code))]
+pub(crate) fn timed_next(
+    q: &mut impl TransferQueue,
+    depth: usize,
+    owed: &mut bool,
+    timeout: Duration,
+    transfer_timeout: Duration,
+) -> Result<Vec<u8>> {
+    /// How long cancelled transfers may take to come back.
+    const CANCEL_WAIT: Duration = Duration::from_secs(1);
+    if std::mem::take(owed) {
+        q.submit();
+    }
+    let wait = timeout.min(transfer_timeout);
+    if let Some(c) = q.wait(wait) {
+        *owed = true;
+        return match c.status {
+            Err(e) if c.data.is_empty() => Err(e),
+            _ => Ok(c.data),
+        };
+    }
+    if wait < transfer_timeout {
+        return Err(Error::Timeout);
+    }
+    q.cancel_all();
+    let mut data = Vec::new();
+    let mut failure = None;
+    while q.pending() > 0 {
+        let Some(c) = q.wait(CANCEL_WAIT) else { break };
+        data.extend_from_slice(&c.data);
+        match c.status {
+            Ok(()) | Err(Error::Timeout) => {}
+            Err(e) => failure = failure.or(Some(e)),
+        }
+    }
+    let handed_out = !data.is_empty() || failure.is_some();
+    *owed = handed_out;
+    for _ in q.pending() + usize::from(handed_out)..depth {
+        q.submit();
+    }
+    match failure {
+        _ if !data.is_empty() => Ok(data),
+        Some(e) => Err(e),
+        None => Err(Error::Timeout),
+    }
 }
 
 /// Which backend `list_devices` and `open` use.
@@ -460,6 +554,109 @@ mod tests {
         assert_eq!(read_string_ascii(&mut r, 1).unwrap(), "sig?");
         assert!(read_string_ascii(&mut r, 0).is_err());
         r.finish().unwrap();
+    }
+
+    /// A queue of `transfers` in flight whose first holds `partial`
+    /// bytes when cancelled, unless a completion is scripted.
+    #[derive(Default)]
+    struct FakeQueue {
+        in_flight: usize,
+        submitted: usize,
+        cancelled: bool,
+        partial: Vec<u8>,
+        script: Vec<Completed>,
+    }
+
+    impl TransferQueue for FakeQueue {
+        fn submit(&mut self) {
+            self.in_flight += 1;
+            self.submitted += 1;
+        }
+        fn wait(&mut self, _timeout: Duration) -> Option<Completed> {
+            if !self.script.is_empty() {
+                self.in_flight -= 1;
+                return Some(self.script.remove(0));
+            }
+            if !self.cancelled || self.in_flight == 0 {
+                return None;
+            }
+            self.in_flight -= 1;
+            Some(Completed { data: std::mem::take(&mut self.partial), status: Err(Error::Timeout) })
+        }
+        fn cancel_all(&mut self) {
+            self.cancelled = true;
+        }
+        fn pending(&self) -> usize {
+            self.in_flight
+        }
+    }
+
+    const T: Duration = Duration::from_millis(500);
+
+    #[test]
+    fn a_timed_stream_gives_the_partial_data_and_resubmits() {
+        let mut q = FakeQueue { in_flight: 8, partial: vec![1; 512], ..FakeQueue::default() };
+        let mut owed = false;
+        assert_eq!(timed_next(&mut q, 8, &mut owed, T, T).unwrap(), vec![1; 512]);
+        // The one handed out is owed, as a completed transfer is; the
+        // seven others are back in flight.
+        assert!(owed);
+        assert_eq!((q.in_flight, q.submitted), (7, 7));
+        // Asked again: the owed one goes in, and nothing comes this time.
+        q.cancelled = false;
+        let e = timed_next(&mut q, 8, &mut owed, T, T);
+        assert!(matches!(e, Err(Error::Timeout)));
+        assert!(!owed);
+        assert_eq!(q.in_flight, 8);
+    }
+
+    #[test]
+    fn a_timed_stream_is_a_plain_one_while_transfers_complete() {
+        let mut q = FakeQueue {
+            in_flight: 2,
+            script: vec![Completed { data: vec![7; 4], status: Ok(()) }],
+            ..FakeQueue::default()
+        };
+        let mut owed = false;
+        assert_eq!(timed_next(&mut q, 2, &mut owed, T, T).unwrap(), vec![7; 4]);
+        assert!(owed && !q.cancelled);
+        assert_eq!(q.in_flight, 1);
+    }
+
+    #[test]
+    fn a_timed_stream_waits_no_longer_than_asked_without_cancelling() {
+        let mut q = FakeQueue { in_flight: 2, ..FakeQueue::default() };
+        let mut owed = false;
+        let short = Duration::from_millis(1);
+        assert!(matches!(timed_next(&mut q, 2, &mut owed, short, T), Err(Error::Timeout)));
+        assert!(!q.cancelled);
+    }
+
+    #[test]
+    fn a_timed_stream_reports_a_failure_found_while_cancelling() {
+        // Nothing completes at first; on the cancel the device is gone.
+        struct Gone(FakeQueue);
+        impl TransferQueue for Gone {
+            fn submit(&mut self) {
+                self.0.submit();
+            }
+            fn wait(&mut self, t: Duration) -> Option<Completed> {
+                if !self.0.cancelled {
+                    return None;
+                }
+                self.0.wait(t).map(|c| Completed { status: Err(Error::Disconnected), ..c })
+            }
+            fn cancel_all(&mut self) {
+                self.0.cancel_all();
+            }
+            fn pending(&self) -> usize {
+                self.0.pending()
+            }
+        }
+        let mut g = Gone(FakeQueue { in_flight: 2, ..FakeQueue::default() });
+        let mut owed = false;
+        assert!(matches!(timed_next(&mut g, 2, &mut owed, T, T), Err(Error::Disconnected)));
+        assert!(owed);
     }
 
     #[test]

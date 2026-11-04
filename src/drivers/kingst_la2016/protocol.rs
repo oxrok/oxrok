@@ -412,8 +412,9 @@ impl SampleCfg {
 /// `set_sample_config()`'s arithmetic. `Err` is the C driver's
 /// message. Unlike the C code, a rate whose divider does not fit the
 /// 16 bit register is refused: the C code truncates it (3051 Hz on the
-/// LA2016 gives 65552, sent as 16: 12.5 MHz), and at 12207 Hz on the
-/// 800 MHz models gets 65536, sent as 0, and divides by it.
+/// LA2016 gives 65552, sent as 16: 12.5 MHz; 1525 Hz on the 100 MHz
+/// models 65573, sent as 37: 2.7 MHz), and at 12207 Hz on the 800 MHz
+/// models gets 65536, sent as 0, and divides by it.
 pub fn sample_cfg(
     model: &Model,
     samplerate: u64,
@@ -1338,6 +1339,13 @@ mod tests {
             Err("Too low a sample rate: 3051.".into())
         );
         assert_eq!(sample_cfg(la2016, 3052, 8, false, 50).unwrap().divider, 65530);
+        // The same at 100 MHz: 65573, truncated to 37.
+        let la1016 = &MODELS[3];
+        assert_eq!(
+            sample_cfg(la1016, 1525, 8, false, 50),
+            Err("Too low a sample rate: 1525.".into())
+        );
+        assert_eq!(sample_cfg(la1016, 1526, 8, false, 50).unwrap().divider, 65530);
         // On the 800 MHz models the C driver's divider for 12207 Hz is
         // 65536, truncated to 0, which it divides by.
         let la5016 = &MODELS[5];

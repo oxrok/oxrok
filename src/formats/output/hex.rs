@@ -118,7 +118,11 @@ impl Output for Hex {
                 let rem = self.count % 8;
                 if rem != 0 {
                     for j in 0..self.channels.len() {
-                        let _ = write!(self.lines[j], "{:02x} ", self.bytes[j] << (8 - rem));
+                        // sample_buf is a uint8_t that the shift promotes to
+                        // int: below a byte's worth per line, bits left from
+                        // earlier lines print as more than two digits.
+                        let last = u32::from(self.bytes[j]) << (8 - rem);
+                        let _ = write!(self.lines[j], "{last:02x} ");
                         self.bytes[j] = 0;
                     }
                 }
@@ -135,6 +139,31 @@ impl Output for Hex {
 mod tests {
     use super::*;
     use crate::core::Channel;
+
+    fn run(width: usize, data: &[u8]) -> String {
+        let chans = [Channel::logic(0)];
+        let ctx = OutputContext { channels: &chans, samplerate: None, ..Default::default() };
+        let mut o = Hex::new(&ctx, width);
+        let mut out = Vec::new();
+        o.receive(&Packet::logic(1, data.to_vec()), &mut out).unwrap();
+        o.receive(&Packet::End, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn width_zero_never_wraps() {
+        let text = run(0, &[1; 20]);
+        assert!(text.ends_with("D0:ff ff f0 \n"), "{text}");
+        assert_eq!(text.matches("D0:").count(), 1);
+    }
+
+    /// `hex:width=3` as sigrok-cli prints it: no byte's worth in a line,
+    /// so the bits of all lines pile up and the last shift shows them.
+    #[test]
+    fn a_narrow_width_shows_the_c_promotion() {
+        let text = run(3, &[1; 4]);
+        assert!(text.ends_with("D0:\nD0:780 \n"), "{text}");
+    }
 
     #[test]
     fn packs_msb_first_and_pads_the_last_byte() {

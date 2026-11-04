@@ -101,20 +101,64 @@ pub fn set_cpu_reset(t: &mut dyn Transport, reset: bool) -> Result<()> {
     load(t, CPUCS, &[u8::from(reset)])
 }
 
+/// `sr_resource_load()`'s limit in `ezusb_install_firmware()`: wValue,
+/// which holds the address, has 16 bits.
+const MAX_IMAGE: usize = 1 << 16;
+
+/// Whether every block fits the 16 bit addresses. A longer one would
+/// wrap to address 0 and overwrite the start of the image.
+fn fits(blocks: &[Block]) -> bool {
+    blocks.iter().all(|b| usize::from(b.address) + b.data.len() <= MAX_IMAGE)
+}
+
+/// The reset hold, the blocks in chunks of 4096 bytes, the release. With
+/// `logged`, what `ezusb.c` logs for the file of that name.
+fn install(t: &mut dyn Transport, blocks: &[Block], logged: Option<&str>) -> Result<()> {
+    let name = |e: &Error| crate::usb::libusb_error_name(e);
+    let reset = |t: &mut dyn Transport, on: bool| {
+        if logged.is_some() {
+            log::info!("setting CPU reset mode {}...", if on { "on" } else { "off" });
+        }
+        set_cpu_reset(t, on).inspect_err(|e| {
+            if logged.is_some() {
+                log::error!("Unable to send control request: {}.", name(e));
+            }
+        })
+    };
+    reset(t, true)?;
+    if let Some(n) = logged {
+        log::info!("Uploading firmware '{n}'.");
+    }
+    let mut total = 0;
+    for b in blocks {
+        for (i, chunk) in b.data.chunks(CHUNK).enumerate() {
+            load(t, b.address.wrapping_add((i * CHUNK) as u16), chunk).inspect_err(|e| {
+                if logged.is_some() {
+                    log::error!("Unable to send firmware to device: {}.", name(e));
+                }
+            })?;
+            if logged.is_some() {
+                log::info!("Uploaded {} bytes.", chunk.len());
+            }
+            total += chunk.len();
+        }
+    }
+    if logged.is_some() {
+        log::info!("Firmware upload done.");
+    } else {
+        log::info!("Uploaded {total} bytes of firmware.");
+    }
+    reset(t, false)
+}
+
 /// Uploads a firmware image and starts it. The device renumerates
 /// afterwards; the driver looks for it again.
 pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
     let blocks = parse_image(image)?;
-    set_cpu_reset(t, true)?;
-    let mut total = 0;
-    for b in &blocks {
-        for (i, chunk) in b.data.chunks(CHUNK).enumerate() {
-            load(t, b.address.wrapping_add((i * CHUNK) as u16), chunk)?;
-            total += chunk.len();
-        }
+    if !fits(&blocks) {
+        return Err(Error::device("firmware: image does not fit 64 KiB"));
     }
-    log::info!("Uploaded {total} bytes of firmware.");
-    set_cpu_reset(t, false)
+    install(t, &blocks, None)
 }
 
 /// `ezusb_upload_firmware()` after its open and `SET_CONFIGURATION`:
@@ -122,22 +166,12 @@ pub fn upload_firmware(t: &mut dyn Transport, image: &[u8]) -> Result<()> {
 /// that a driver's errors read as its libsigrok counterpart's (the C
 /// code installs the file as one raw image).
 pub fn upload_firmware_logged(t: &mut dyn Transport, name: &str, image: &[u8]) -> Result<()> {
-    let reset = |t: &mut dyn Transport, on: bool| {
-        log::info!("setting CPU reset mode {}...", if on { "on" } else { "off" });
-        set_cpu_reset(t, on).inspect_err(|e| {
-            log::error!("Unable to send control request: {}.", crate::usb::libusb_error_name(e));
-        })
-    };
-    reset(t, true)?;
-    log::info!("Uploading firmware '{name}'.");
-    for (i, chunk) in image.chunks(CHUNK).enumerate() {
-        load(t, (i * CHUNK) as u16, chunk).inspect_err(|e| {
-            log::error!("Unable to send firmware to device: {}.", crate::usb::libusb_error_name(e));
-        })?;
-        log::info!("Uploaded {} bytes.", chunk.len());
+    let blocks = [Block { address: 0, data: image.to_vec() }];
+    if !fits(&blocks) {
+        log::error!("Size {} of '{name}' exceeds limit {MAX_IMAGE}.", image.len());
+        return Err(Error::device("firmware: image does not fit 64 KiB"));
     }
-    log::info!("Firmware upload done.");
-    reset(t, false)
+    install(t, &blocks, Some(name))
 }
 
 #[cfg(test)]
@@ -154,6 +188,20 @@ mod tests {
         assert!(parse_ihex(b":020000040000FA\n").is_err());
         let raw = parse_image(&[1, 2, 3]).unwrap();
         assert_eq!(raw, [Block { address: 0, data: vec![1, 2, 3] }]);
+    }
+
+    /// An image past 64 KiB would wrap to address 0: refused before any
+    /// transfer, whichever function uploads it; exactly 64 KiB fits.
+    #[test]
+    fn images_over_64_kib_are_refused() {
+        let text = "# oxrok usb fixture 1\ndevice vid=77a1 pid=01a2\n";
+        let mut r = Replay::from_text(text).unwrap();
+        let big = vec![0x11u8; MAX_IMAGE + 1];
+        assert!(upload_firmware(&mut r, &big).is_err());
+        assert!(upload_firmware_logged(&mut r, "x.fw", &big).is_err());
+        r.finish().unwrap();
+        assert!(fits(&[Block { address: 0, data: vec![0; MAX_IMAGE] }]));
+        assert!(!fits(&[Block { address: 0xf000, data: vec![0; 0x1001] }]));
     }
 
     #[test]
