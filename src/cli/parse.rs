@@ -105,7 +105,7 @@ pub fn apply_configs(device: &mut dyn Device, args: &Args) -> Result<()> {
             let access = device.option(&key, group.as_deref()).map(|o| o.access);
             if access.is_none_or(|a| !a.set) {
                 return Err(Error::Arg(format!(
-                    "Failed to set device option '{k}': not supported."
+                    "Failed to set device option '{k}': not applicable."
                 )));
             }
             device

@@ -56,13 +56,10 @@ emu_cases() {
     E="$N; /hantek-4032l: /!d; s/.*hantek-4032l: //"
     # The last stderr line, sigrok-cli's own.
     L='$!d'
-    # oxrok's wording of a refused option as sigrok-cli's: the detail
-    # after "invalid argument", and "not supported" for what its
-    # sr_strerror() calls "not applicable". Which option was refused, and
-    # that it was, stays compared. The second half hides a real difference
-    # of wording, src/cli/parse.rs:108 against sigrok-cli: that string is
-    # to change across all drivers, not in this port, and this goes with it.
-    W='s/(invalid argument).*$/\1./; s/: not supported\.$/: not applicable./'
+    # oxrok's wording of a refused option as sigrok-cli's: the detail after
+    # "invalid argument". Which option was refused, and that it was, stays
+    # compared.
+    W='s/(invalid argument).*$/\1./'
     # The address in --show.
     C='s/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/'
     # A few channels of each group, and what a capture of them is held

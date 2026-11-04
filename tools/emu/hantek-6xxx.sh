@@ -60,11 +60,10 @@ emu_cases() {
     L='$!d'
     # The tool's own line when the open fails; oxrok adds the reason.
     O='$!d; s/^(Failed to open device).*$/\1./'
-    # A refused option: oxrok says why after "invalid argument", and "not
-    # supported" for a key the device or group lacks, sigrok-cli's "not
-    # applicable". Only the wording goes: the option named stays, and which
-    # of the two refusals it was.
-    R='$!d; s/(invalid argument).*$/\1./; s/: not supported\.$/: not applicable./'
+    # A refused option: oxrok says why after "invalid argument". Only the
+    # wording goes: the option named stays, and which of the two refusals it
+    # was.
+    R='$!d; s/(invalid argument).*$/\1./'
 
     # EMU_USB is the address of the first attach, the flashed 6022BE of
     # EMU_OPTIONS: first, before other descriptors re-attach the device.

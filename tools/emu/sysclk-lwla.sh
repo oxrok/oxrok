@@ -88,7 +88,7 @@ emu_cases() {
     U="$X; /Failed to set USB configuration: LIBUSB_ERROR_NO_DEVICE/d"
     # A refused option: sr_strerror()'s wording for oxrok's errors. It
     # drops the reason oxrok adds, not the refusal.
-    A='s/invalid argument: samplerate\.$/invalid samplerate./; s/invalid argument: .*$/invalid argument./; s/: not supported\.$/: not applicable./'
+    A='s/invalid argument: samplerate\.$/invalid samplerate./; s/invalid argument: .*$/invalid argument./'
     # A conn= that selects nothing reads as no conn= at all.
     C='api.c:104 reads an empty conn_matches as no conn=, so a conn= that selects nothing lists every LWLA'
     # Ctrl-C: sigrok-cli has no SIGINT handler and dies (not a driver bug,

@@ -65,7 +65,7 @@ emu_cases() {
     N='s/^oxrok: [a-z]+: oxrok::drivers::kingst_la2016[a-z0-9_:]*: /sr: kingst-la2016: /; s/^oxrok: [a-z]+: oxrok::ezusb: /sr: ezusb: /'
     # The last line of stderr: the tool's own words for the failure, with
     # sr_strerror()'s wording for oxrok's errors.
-    L='$!d; s/(invalid argument).*$/\1./; s/: (not supported|unknown option)[^.]*(\.?)$/: not applicable\2/'
+    L='$!d; s/(invalid argument).*$/\1./; s/: unknown option[^.]*(\.?)$/: not applicable\1/'
     # Only the log lines that say what failed (the driver's sr_err and
     # sr_warn, not libusb's or the tool's).
     E="$N; /kingst-la2016: /!d; s/^.*kingst-la2016: //"
