@@ -26,6 +26,7 @@
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...
  *                 [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]
  *                 [--samples N] [--time T] [--frames N] [--stop-after N]
+ *                 [--stop-after-ms N]
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] --scan
  *
  * The options mean what they mean to sigrok-cli, and the common failures
@@ -49,6 +50,12 @@
  * its stop write goes out, and only the output is shorter. --stop-after 0
  * asks for the stop as soon as the session has started, at the header
  * packet, before any sample.
+ *
+ * --stop-after-ms N asks for the stop N ms after the session has started,
+ * from a timeout of the main loop, whatever came by then. It reaches a
+ * driver between its transfers, where --stop-after, which needs a packet,
+ * cannot: for a driver that polls, pick N in the middle of a quiet interval,
+ * or the poll it races with makes the run unstable.
  *
  * The output goes through libsigrok's output modules (default bits, as
  * sigrok-cli without -o), so it reads as sigrok-cli's would.
@@ -76,6 +83,7 @@ static char *opt_samples;
 static char *opt_time;
 static char *opt_frames;
 static char *opt_stop_after;
+static char *opt_stop_after_ms;
 static gboolean opt_scan;
 
 static struct sr_context *sr_ctx;
@@ -773,6 +781,8 @@ static void run_session(void)
 	sr_session_stopped_callback_set(session, (sr_session_stopped_callback)g_main_loop_quit, main_loop);
 	if (sr_session_start(session) != SR_OK)
 		g_critical("Failed to start session.");
+	if (opt_stop_after_ms)
+		g_timeout_add(strtoul(opt_stop_after_ms, NULL, 10), stop_idle, NULL);
 	g_main_loop_run(main_loop);
 	if (trigger)
 		sr_trigger_free(trigger);
@@ -785,7 +795,8 @@ static void usage(void)
 {
 	fprintf(stderr, "usage: libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...\n"
 		"         [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]\n"
-		"         [--samples N] [--time T] [--frames N] [--stop-after N] | --scan\n");
+		"         [--samples N] [--time T] [--frames N] [--stop-after N]\n"
+		"         [--stop-after-ms N] | --scan\n");
 	exit(2);
 }
 
@@ -819,6 +830,8 @@ int main(int argc, char **argv)
 			val = &opt_frames;
 		else if (!strcmp(a, "--stop-after"))
 			val = &opt_stop_after;
+		else if (!strcmp(a, "--stop-after-ms"))
+			val = &opt_stop_after_ms;
 		else if (!strcmp(a, "-c"))
 			g_ptr_array_add(opt_configs, argv[i + 1]);
 		else if (!strcmp(a, "-l"))

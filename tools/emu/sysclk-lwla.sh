@@ -155,6 +155,9 @@ emu_cases() {
     # "interrupt while sampling" for oxrok's.
     emu_case "interrupt while sampling" --interrupt in=6:9 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
     emu_case "lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
+    # From the status wait (protocol.c:293), halfway between the first poll
+    # at 100 ms and the second: the stop's first write alone.
+    emu_case "lib stop from the status wait" --libsigrok --no-output -- --stop-after-ms 150 -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
     emu_case "lib stop during the readout" --libsigrok --digest --filter "$B" -- --stop-after 100 -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     emu_case "trigger TRG rising" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=r --samples 64 -O bits
     emu_case "trigger TRG falling" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=f --samples 64 -O bits
@@ -294,6 +297,7 @@ emu_cases() {
     # The third poll's last reply: 4 of the open's and 9 of the polls'.
     emu_case "1016 trigger never fires" --interrupt in=6:13 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
     emu_case "1016 lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    emu_case "1016 lib stop from the status wait" --libsigrok --no-output -- --stop-after-ms 150 -d $F -C CH1,CH2 -c samplerate=1k --time 100s -O bits
     emu_case "1016 lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
     emu_case "1016 3M divides" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=3M:rle=0 --samples 100 -O bits
     lwla_options model=1016 short_transfers=1
