@@ -110,11 +110,13 @@ emu_cases() {
     emu_case "pwm1 enable" --no-output -- -d $K -g PWM1 --set -c enabled=on
     # sigrok-cli keeps the pairs of one -c in a GHashTable and sets them in
     # its order, g_hash_table_iter_next() at session.c:700-701 (frequency,
-    # enabled, duty); oxrok sets them as given. These two give them in
-    # that order; "pwm option order" pins the difference.
-    emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:enabled=on:output_duty_cycle=12.5
-    emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:enabled=on:output_duty_cycle=50
-    emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
+    # enabled, duty); oxrok sets enabled=on last and the others as given.
+    # These two give the others in that order; "pwm option order" pins the
+    # difference and "pwm stays off" what it is for.
+    emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5
+    emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:output_duty_cycle=50
+    emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok enabled=on last" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
+    emu_case "pwm stays off with a refused duty" --oracle-bug "it turns the output on, then refuses the duty (its hash table order, session.c:700-701)" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c enabled=on:output_duty_cycle=101
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0

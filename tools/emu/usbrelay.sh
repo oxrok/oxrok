@@ -26,6 +26,8 @@ emu_cases() {
     emu_case "relay set all on" --keep-header --no-output -- -d $R --set -c enabled=on
     emu_case "relay set all off" --keep-header --no-output -- -d $R --set -c enabled=off
     emu_case "relay set R1 off" --keep-header --no-output -- -d $R -g R1 --set -c enabled=off
+    # Off after on in an overlapping scope keeps its place: all but R1.
+    emu_case "relay all on but R1" --keep-header --no-output -- -d $R --set -c enabled=on -c channel_group=R1:enabled=off
     emu_case "relay by serial" --keep-header -- -d $R:conn=sn=ABCDE -g R2 --get enabled
     # The node the emulator got, as the READY line reported it.
     emu_case "relay by path" --keep-header -- -d $R:conn=$EMU_HIDRAW -g R1 --get enabled

@@ -37,7 +37,17 @@ fn pick_device(registry: &Registry, args: &Args) -> Result<Box<dyn Device>> {
 /// `--get`.
 pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     let mut device = pick_device(registry, args)?;
-    parse::apply_configs(device.as_mut(), args)?;
+    let plan = parse::plan_configs(device.as_ref(), args)?;
+    // A name nothing knows is found before `-c` reaches the device.
+    for get in &args.gets {
+        let parsed = parse::generic_args(get, false);
+        let group = parsed.scope.or_else(|| args.channel_group.clone());
+        for (name, _) in parsed.items {
+            parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
+        }
+    }
+    plan.send_settings(device.as_mut())?;
+    plan.send_enables(device.as_mut())?;
     for get in &args.gets {
         let parsed = parse::generic_args(get, false);
         let group = parsed.scope.or_else(|| args.channel_group.clone());
@@ -238,7 +248,11 @@ pub fn starts_without_limit(registry: &Registry, args: &Args) -> bool {
 #[allow(clippy::too_many_lines)]
 pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     let mut device = pick_device(registry, args)?;
-    parse::apply_configs(device.as_mut(), args)?;
+    // `-c` reaches the device before the rest, as in sigrok-cli, except what
+    // switches an output on: that waits until the rest of the command line
+    // was accepted, just before the capture.
+    let plan = parse::plan_configs(device.as_ref(), args)?;
+    plan.send_settings(device.as_mut())?;
     if let Some(spec) = &args.channels {
         parse::select_channels(device.as_mut(), spec)
             .map_err(|e| Error::Arg(format!("Failed to set channels: {e}")))?;
@@ -286,6 +300,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     let channels = device.channels().to_vec();
     let title = registry.find(device.info().driver).map_or("unknown", |d| d.long_name()).to_owned();
     let mut pipeline = Pipeline::new(args, &channels, samplerate, &title)?;
+    plan.send_enables(device.as_mut())?;
 
     let mut session = Session::new();
     session.add_device(device);
