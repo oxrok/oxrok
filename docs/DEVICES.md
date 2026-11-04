@@ -1688,6 +1688,13 @@ only the last match of a multi-channel trigger is used; a serial over
 
 ## Oracle
 
+The oracle is libsigrok 0bc24877 with one patch,
+`tools/oracle-patches/libsigrok-testo-sdi-driver.patch`. It restores the
+`sdi->driver = di;` that `b258c09f` (2017) removed from testo's scan:
+without it, `testo_probe_channels()` calls `sr_dev_open()` on an instance
+with no driver, which fails (`device.c:730`), so stock libsigrok finds no
+Testo and no capture is reachable. Apply it when building the oracle.
+
 The sigrok build that `tools/diffcli.sh` and the emulation work of
 phase 9 compare against, built from source under `~/work/sigrok` with
 its own prefix (`~/work/sigrok/install`; `. ~/work/sigrok/env.sh` puts
