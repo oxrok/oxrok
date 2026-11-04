@@ -233,10 +233,11 @@ emu_cases() {
         emu_case "lib fault $f hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
     done
     # A stop while the trigger wait is pending: --stop-after 0 asks for
-    # it as the session starts, on inputs that never fire the trigger.
-    # The stop writes the arm register, and the interrupt transfer's end
-    # finds the abort (recv_intr_transfer(), protocol.c:920-923).
-    ls_options flashed=1 still=1
+    # it as the session starts. How many status packets complete before
+    # the main loop gets to it depends on timing, so a board that sends
+    # none. The stop writes the arm register, and the interrupt transfer's
+    # timeout finds the abort (recv_intr_transfer(), protocol.c:920-923).
+    ls_options flashed=1 intr_silent=1
     emu_case "lib stop while waiting" --libsigrok --no-output -- -d $L -c samplerate=1M -t D3=r --stop-after 0 -O bits
     # The bitstream file missing, or of another size than the driver's
     # FPGA_FIRMWARE_SIZE (upload_fpga_bitstream(), protocol.c:433-445).

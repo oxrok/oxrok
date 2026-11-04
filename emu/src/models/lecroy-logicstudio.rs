@@ -222,7 +222,9 @@
 //! upload; `stale=N` sends the first N status packets after the arm
 //! with the previous acquisition id; `odd_state=0xNN` sends one packet
 //! in that state before the first; `intr_short=N` sends the status
-//! packets N bytes long; `bulk_short=N` makes the first transfer of the
+//! packets N bytes long; `intr_silent=1` sends none at all, so that a
+//! stop finds the interrupt transfer pending whenever it comes;
+//! `bulk_short=N` makes the first transfer of the
 //! fetch carry N bytes; `bulk_stall=1` STALLs every bulk IN of the
 //! fetch; `renum=0` is a firmware that never comes back after the FX2
 //! upload (the code runs but never renumerates: the device stays on the
@@ -240,7 +242,8 @@ pub const NAME: &str = "lecroy-logicstudio";
 pub const ABOUT: &str = "LeCroy LogicStudio 16 (05ff:a001, EZ-USB, renumerates as 05ff:a002, FPGA \
                          bitstream over bulk EP6, trigger-only captures); flashed=1, still=1; \
                          faults: stall=NAME[:N], verify=N, settle=N, stall_bitstream=N, stale=N, \
-                         odd_state=0xNN, intr_short=N, bulk_short=N, bulk_stall=1, renum=0";
+                         odd_state=0xNN, intr_short=N, intr_silent=1, bulk_short=N, bulk_stall=1, \
+                         renum=0";
 
 /// `LeCroy`'s vendor id (`api.c`).
 pub const VID: u16 = 0x05ff;
@@ -424,6 +427,7 @@ struct Faults {
     stale: u32,
     odd_state: Option<u8>,
     intr_short: Option<usize>,
+    intr_silent: bool,
     bulk_short: Option<usize>,
     bulk_stall: bool,
     no_renumeration: bool,
@@ -462,6 +466,7 @@ impl Faults {
                 self.bulk_short = Some(n);
             }
             "bulk_stall" => self.bulk_stall = flag(k, v)?,
+            "intr_silent" => self.intr_silent = flag(k, v)?,
             "renum" => self.no_renumeration = !flag(k, v)?,
             _ => return Ok(false),
         }
@@ -1410,6 +1415,9 @@ impl LogicStudio {
 
     /// A status packet, or NAK when there is nothing new to tell.
     fn status_packet(&mut self) -> Reply {
+        if self.faults.intr_silent {
+            return Reply::Nak;
+        }
         let short = self.faults.intr_short;
         let Some(c) = &mut self.fpga.capture else { return Reply::Nak };
         let Some(state) = c.states.pop() else { return Reply::Nak };
@@ -2075,6 +2083,16 @@ mod tests {
         assert!(build(&opts(&[("stall", "nothing")])).is_err());
         assert!(build(&opts(&[("intr_short", "32")])).is_err());
         assert!(build(&opts(&[("colour", "1")])).is_err());
+    }
+
+    #[test]
+    fn a_silent_board_sends_no_status_packet() {
+        let mut dev = board(&[("intr_silent", "1")]);
+        let mut v = Violations::default();
+        commit(&mut dev, 2, 0, &[rising(3)], &mut v);
+        sync(&mut dev, &arm_regs(2, 50, 0x00, 1), &mut v);
+        assert!(matches!(dev.transfer_in(1, 32, &mut v), Reply::Nak));
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
