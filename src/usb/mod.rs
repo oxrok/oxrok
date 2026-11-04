@@ -179,6 +179,7 @@ pub fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
 }
 
 impl Conn {
+    /// True when this spec names `d`.
     pub fn matches(self, d: &UsbDeviceInfo) -> bool {
         match self {
             Conn::Ids(vid, pid) => d.id() == UsbId { vendor: vid, product: pid },
