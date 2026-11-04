@@ -401,6 +401,11 @@ impl Server {
                     let found = held.iter().position(|u| u.seqnum == target);
                     let mut status = 0;
                     if let Some(i) = found {
+                        // Only the oldest of its endpoint has received
+                        // anything; nusb cancels the newest first.
+                        let (ep, dir) = (held[i].ep, held[i].direction);
+                        let oldest =
+                            held.iter().position(|u| u.ep == ep && u.direction == dir) == Some(i);
                         let u = held.remove(i);
                         self.event(&format!(
                             "unlink seq {target}: ep {:#04x} {} held",
@@ -410,7 +415,7 @@ impl Server {
                         status = ECONNRESET;
                         // Packets it holds already: its RET_SUBMIT with
                         // them goes first, so the unlink finds it completed.
-                        if self.complete_unlinked(&mut out, &u)? {
+                        if oldest && self.complete_unlinked(&mut out, &u)? {
                             status = 0;
                         }
                     } else {
@@ -864,6 +869,86 @@ mod tests {
             self.asked.lock().unwrap().push(("submitted", ep, max));
         }
         fn reset(&mut self) {}
+    }
+
+    /// Holds each bulk IN, and has 64 bytes for one that is unlinked.
+    struct Holder(crate::model::Descriptors);
+
+    impl crate::model::DeviceModel for Holder {
+        fn name(&self) -> &'static str {
+            "holder"
+        }
+        fn descriptors(&self) -> &crate::model::Descriptors {
+            &self.0
+        }
+        fn control(&mut self, _: Setup, _: &[u8], _: &mut Violations) -> Reply {
+            Reply::ack()
+        }
+        fn out(&mut self, _: u8, _: &[u8], _: &mut Violations) -> Reply {
+            Reply::ack()
+        }
+        fn in_transfer(&mut self, _: u8, _: usize, _: &mut Violations) -> Reply {
+            Reply::Nak
+        }
+        fn in_unlinked(&mut self, _: u8, _: usize) -> Option<Vec<u8>> {
+            Some(vec![0x5a; 64])
+        }
+        fn reset(&mut self) {}
+    }
+
+    /// What a held queue has received is in its oldest URB, whichever is
+    /// unlinked first: nusb cancels the newest first, libusb's timeouts
+    /// the oldest.
+    #[test]
+    fn only_the_oldest_held_urb_gets_what_the_device_holds() {
+        use crate::descriptor::{self, DeviceDescriptor};
+        let mut body = Vec::new();
+        body.extend_from_slice(&descriptor::interface(0, 0, 1, [0xff, 0, 0], 0));
+        body.extend_from_slice(&descriptor::endpoint(0x82, 2, 64, 0));
+        let device = DeviceDescriptor {
+            usb: 0x0200,
+            class: [0, 0, 0],
+            max_packet0: 64,
+            vendor: 0x1234,
+            product: 0x5678,
+            device: 0x0100,
+            strings: [0, 0, 0],
+            configurations: 1,
+        };
+        let model = Holder(crate::model::Descriptors {
+            speed: crate::model::Speed::Full,
+            device: device.bytes(),
+            configs: vec![descriptor::configuration(1, 0, 0x80, 50, &body)],
+            strings: Vec::new(),
+        });
+        let log = Arc::new(Mutex::new(TxLog::new(None, false).unwrap()));
+        let device = Arc::new(Mutex::new(Device::new(Box::new(model))));
+        let server = Server::new(Arc::clone(&device), Arc::clone(&log), "1-1", 1, 2);
+        let devid = server.devid();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = Arc::clone(&stop);
+        let handle = thread::spawn(move || server.run(&listener, &stop2));
+        let (mut s, _) = import(addr, "1-1").unwrap();
+        s.write_all(&cmd_submit(1, devid, DIR_OUT, 0, 0, Some(setup(0x00, 9, 1, 0, 0)), &[]))
+            .unwrap();
+        assert_eq!(read_ret(&mut s, false).unwrap().status, 0);
+        s.write_all(&cmd_submit(2, devid, DIR_IN, 2, 64, None, &[])).unwrap();
+        s.write_all(&cmd_submit(3, devid, DIR_IN, 2, 64, None, &[])).unwrap();
+        // The younger goes first and comes back with nothing.
+        s.write_all(&cmd_unlink(4, 3)).unwrap();
+        let r = read_ret(&mut s, false).unwrap();
+        assert_eq!((r.command, r.seqnum, r.status), (RET_UNLINK, 4, ECONNRESET));
+        // The oldest completes with the data, then its unlink.
+        s.write_all(&cmd_unlink(5, 2)).unwrap();
+        let r = read_ret(&mut s, true).unwrap();
+        assert_eq!((r.seqnum, r.status, r.data), (2, ECONNRESET, vec![0x5a; 64]));
+        let r = read_ret(&mut s, false).unwrap();
+        assert_eq!((r.command, r.seqnum, r.status), (RET_UNLINK, 5, 0));
+        drop(s);
+        stop.store(true, Ordering::Relaxed);
+        handle.join().unwrap().unwrap();
     }
 
     #[test]

@@ -228,6 +228,13 @@ pub trait Driver: Send + Sync {
         &[]
     }
 
+    /// The keys `-d DRIVER:KEY=VALUE` takes, which `--show` does not list
+    /// when they are not [`Driver::scan_options`]: for a port that accepts
+    /// what the driver it follows does not advertise.
+    fn accepted_scan_options(&self) -> &'static [Key] {
+        self.scan_options()
+    }
+
     /// What kind of instruments the driver serves.
     fn classes(&self) -> &'static [DeviceClass];
 

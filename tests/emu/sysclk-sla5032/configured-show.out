@@ -1,0 +1,39 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+sysclk-sla5032 - Sysclk SLA5032 with 32 channels: CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15 CH16 CH17 CH18 CH19 CH20 CH21 CH22 CH23 CH24 CH25 CH26 CH27 CH28 CH29 CH30 CH31
+Supported configuration options:
+    Maximum number of samples: 67108864
+    samplerate - supported samplerates:
+      500 MHz (current)
+      400 MHz
+      250 MHz
+      200 MHz
+      100 MHz
+      50 MHz
+      25 MHz
+      20 MHz
+      10 MHz
+      5 MHz
+      2 MHz
+      1 MHz
+      500 kHz
+      200 kHz
+      100 kHz
+      50 kHz
+      20 kHz
+      10 kHz
+      5 kHz
+      2 kHz
+    captureratio:  - supported values:
+      0
+      10
+      20
+      30
+      50 (current)
+      70
+      90
+      100
+    Supported triggers: 0 1 r f 
+    rle: on (current), off

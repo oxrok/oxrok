@@ -1,1 +1,2 @@
 Tried to read 2048 bytes, actually read 1020.
+The readout is cut short: the capture ends after 740 samples.
