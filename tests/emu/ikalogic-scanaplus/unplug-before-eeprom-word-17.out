@@ -1,3 +1,4 @@
 Failed to read EEPROM index 17 (-1): reading eeprom failed.
 Failed to get ScanaPLUS device ID: -1.
+Failed to close FTDI device (-1): reading eeprom failed.
 Failed to open device.

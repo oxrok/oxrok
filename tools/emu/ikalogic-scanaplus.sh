@@ -142,14 +142,15 @@ emu_cases() {
     # Unplugs, counted in the host's transfers. After one, libusb's
     # release fails and the C driver logs "Failed to close FTDI device
     # (-1): " with libftdi's stale error string, always in "unplug
-    # before EEPROM word 17" and "unplug mid capture". oxrok cannot show
-    # it: nusb's release cannot fail (nusb 0.2.8,
-    # linux_usbfs/device.rs:721-731), a real difference, so the line is
-    # not compared in those cases. In "unplug after the scan" the C
-    # driver logs it only when the removal gets ahead of the scan's
-    # release. The "unplug before write N" cases never log it: sigrok-cli
-    # exits at g_critical("Failed to start session.") (session.c:896-897,
-    # main.c:46-47), so dev_close never runs.
+    # before EEPROM word 17" and "unplug mid capture"; nusb's release
+    # cannot fail (nusb 0.2.8, linux_usbfs/device.rs:721-731), so the
+    # libftdi layer fails it once a transfer has seen the device gone.
+    # In "unplug after the scan" the C driver logs it only when the
+    # removal gets ahead of the scan's release. The "unplug before write
+    # N" cases never log it under sigrok-cli, which exits at
+    # g_critical("Failed to start session.") (session.c:896-897,
+    # main.c:46-47) so dev_close never runs; oxrok closes the device
+    # there and does log it, so the line is not compared in those cases.
     X='/^Failed to close FTDI device /d'
     # Endpoint 0's control OUTs: the scan's open sends 2, so the device
     # is gone when dev_open opens it again. Which step of
@@ -161,11 +162,11 @@ emu_cases() {
     emu_case "unplug after the scan" --unplug out=0:2 --stderr --expect-fail --filter "$GONE" -- -d $D --samples 10
     # Control reads: 2 string reads by the scan's open, 2 by dev_open's,
     # then EEPROM words 16 and 17.
-    emu_case "unplug before EEPROM word 17" --unplug in=0:5 --stderr --expect-fail --filter "$O; $X" -- -d $D --samples 10
+    emu_case "unplug before EEPROM word 17" --unplug in=0:5 --stderr --expect-fail --filter "$O" -- -d $D --samples 10
     # The first write of scanaplus_init() has no bulk OUT before it to
     # count: the unplug follows the 6th control read, EEPROM word 17,
     # the last transfer of dev_open.
-    emu_case "unplug before write 1" --unplug in=0:6 --stderr --expect-fail --filter "$S" -- -d $D --samples 10
+    emu_case "unplug before write 1" --unplug in=0:6 --stderr --expect-fail --filter "$S; $X" -- -d $D --samples 10
     # Each other write of scanaplus_init() and
     # scanaplus_start_acquisition() with its own error return: write N
     # fails after N-1 bulk OUTs (out=2:N-1).
@@ -173,8 +174,8 @@ emu_cases() {
     # the init's id, 123 its last, 124 and 125 the start's thresholds
     # and configuration, 126 to 128 the cleared id, 129 the id again.
     for n in 2 3 4 5 6 7 120 121 122 123 124 125 126 127 128 129; do
-        emu_case "unplug before write $n" --unplug out=2:$((n - 1)) --stderr --expect-fail --filter "$S" -- -d $D --samples 10
+        emu_case "unplug before write $n" --unplug out=2:$((n - 1)) --stderr --expect-fail --filter "$S; $X" -- -d $D --samples 10
     done
     # Mid capture: the third bulk IN of the dropped read.
-    emu_case "unplug mid capture" --unplug in=1:3 --stderr --filter "$N; $X" -- -d $D --samples 100 -O hex
+    emu_case "unplug mid capture" --unplug in=1:3 --stderr --filter "$N" -- -d $D --samples 100 -O hex
 }

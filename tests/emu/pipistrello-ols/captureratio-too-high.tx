@@ -24,26 +24,3 @@ ctl_out 40 00 0001 0002 - -> ok
 ctl_out 40 00 0002 0002 - -> ok
 ctl_out 40 0b 00ff 0002 - -> ok
 ctl_out 40 09 0010 0002 - -> ok
-bulk_out 04 c008000000 -> 5
-bulk_out 04 c108000000 -> 5
-bulk_out 04 c200000000 -> 5
-bulk_out 04 c300000000 -> 5
-bulk_out 04 c400000000 -> 5
-bulk_out 04 c500000000 -> 5
-bulk_out 04 c600000108 -> 5
-bulk_out 04 c700000000 -> 5
-bulk_out 04 c800000000 -> 5
-bulk_out 04 c900000000 -> 5
-bulk_out 04 ca00000300 -> 5
-bulk_out 04 cb00000000 -> 5
-bulk_out 04 cc00000000 -> 5
-bulk_out 04 cd00000000 -> 5
-bulk_out 04 ce00000300 -> 5
-bulk_out 04 cf00000000 -> 5
-bulk_out 04 807f969800 -> 5
-bulk_out 04 840f000000 -> 5
-bulk_out 04 83ffffffff -> 5
-bulk_out 04 823a000000 -> 5
-bulk_out 04 01 -> 1
-bulk_in 83 16384 -> 0160
-~ the last 1 lines repeat to the end (3 or more times)
