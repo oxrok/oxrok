@@ -964,7 +964,7 @@ flush()
                 rm -f "$TMP/rec.usb" "$TMP/rec.hid"
                 set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
             fi
-            timeout -k 5 "$case_timeout" "$@" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
+            timeout -k 5 "$case_timeout" "$@" </dev/null >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
             TOOLPID=$!
             shift $(($# - nargs))
             WATCHPID=""
