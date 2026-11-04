@@ -54,7 +54,9 @@ pub(crate) fn list() -> Result<Vec<UsbDeviceInfo>> {
         out.push(UsbDeviceInfo {
             vendor_id: desc.vendor_id(),
             product_id: desc.product_id(),
-            device_version: (u16::from(v.major()) << 8)
+            // BCD again: rusb's major is decimal, 11 for bcdDevice 0x1100.
+            device_version: (u16::from(v.major() / 10) << 12)
+                | (u16::from(v.major() % 10) << 8)
                 | (u16::from(v.minor()) << 4)
                 | u16::from(v.sub_minor()),
             bus: d.bus_number(),
@@ -116,6 +118,17 @@ impl Transport for Rusb {
             d.product_string_index().unwrap_or(0),
             d.serial_number_string_index().unwrap_or(0),
         ])
+    }
+
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        // libusb's op_release_interface attaches a driver on release
+        // whenever the handle auto-detaches, detached or not.
+        let _ = self.handle.set_auto_detach_kernel_driver(false);
+        // NotSupported off Linux. usbfs (another program) counts as none.
+        if self.handle.kernel_driver_active(interface).unwrap_or(false) {
+            self.handle.detach_kernel_driver(interface).map_err(map)?;
+        }
+        Ok(())
     }
 
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
