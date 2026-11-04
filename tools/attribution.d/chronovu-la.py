@@ -6,3 +6,9 @@ MAP["emu/src/models/chronovu-la.rs"] = (
      "readout order)",
      "libsigrok/src/hardware/chronovu-la/protocol.h (the memory and the trigger masks)"],
     INDEPENDENT)
+# The port of the driver (src/drivers/chronovu_la).
+MAP["src/drivers/chronovu_la/mod.rs"] = (
+    ["libsigrok/src/hardware/chronovu-la/api.c"], INDEPENDENT)
+MAP["src/drivers/chronovu_la/protocol.rs"] = (
+    ["libsigrok/src/hardware/chronovu-la/protocol.c",
+     "libsigrok/src/hardware/chronovu-la/protocol.h"], INDEPENDENT)

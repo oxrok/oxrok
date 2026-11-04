@@ -105,7 +105,7 @@ static TRIGGER_MATCHES: [TriggerMatch; 5] = [
 
 /// A `conn` spec as `sr_usb_split_conn()` reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Conn {
+pub(crate) enum Conn {
     /// `VID.PID`, four hex digits each.
     Ids(u16, u16),
     /// `BUS.ADDRESS` in decimal.
@@ -117,7 +117,7 @@ enum Conn {
 /// else decimal digits a `BUS.ADDRESS` with the bus at most 255 and the
 /// address at most 127. `Err` is the message `sr_usb_find()` logs; zero
 /// in either half, or no match, cannot name a device.
-fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
+pub(crate) fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
     const INVALID: &str = "Invalid input, or neither VID:PID nor bus.address specified.";
     const NEITHER: &str = "Could neither determine VID:PID nor bus.address numbers.";
     let Some((a, b)) = conn.split_once('.') else { return Err(NEITHER) };
@@ -144,7 +144,7 @@ fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
 }
 
 impl Conn {
-    fn matches(self, d: &UsbDeviceInfo) -> bool {
+    pub(crate) fn matches(self, d: &UsbDeviceInfo) -> bool {
         match self {
             Conn::Ids(vid, pid) => d.id() == UsbId { vendor: vid, product: pid },
             Conn::BusAddress(bus, addr) => d.bus == bus && d.address == addr,
