@@ -342,7 +342,9 @@ is how a driver is verified against sigrok-cli without the hardware
   `section NAME` marks the log, `reset` puts a fresh model behind the
   attached device (its initial state, for a second run; the kernel
   keeps seeing the device it enumerated), `detach` ends the run, as
-  does end of input or a termination signal. The exit status is 2 when
+  does end of input or a termination signal, and `sync` does nothing
+  but answer, after every input taken before it, a renumeration a run
+  asked for included. The exit status is 2 when
   a violation was logged. Without `--attach` it is a plain USB/IP
   server a `usbip` client can import `1-1` from. A device that never
   configures is detached before the server exits with an error.
@@ -417,12 +419,21 @@ the device detached and the lock released. The lock is the session's,
 not the server's (sudo closes inherited descriptors): a server left
 behind by a session that was killed outright keeps running until its
 end of input closes, but the `devid` check above keeps it away from
-the next session's device. The `READY`
-values are exported to the cases as `EMU_PORT`, `EMU_BUSID`, `EMU_USB`,
-`EMU_USBFS`, `EMU_NODES` (comma separated) and the first node of each
-kind as `EMU_HIDRAW`, `EMU_TTY` and `EMU_USBTMC`; a case that selects
-the device by path uses them (`conn=$EMU_HIDRAW`), never a fixed
-`/dev/hidraw0`.
+the next session's device. The values of the latest READY, REPLUGGED or
+RENUMERATED line are exported to the cases as `EMU_PORT`, `EMU_BUSID`,
+`EMU_USB`, `EMU_USBFS`, `EMU_NODES` (comma separated) and the first node
+of each kind as `EMU_HIDRAW`, `EMU_TTY` and `EMU_USBTMC`; a case that
+selects the device by path uses them (`conn=$EMU_HIDRAW`), never a fixed
+`/dev/hidraw0`. After each tool's run the harness sends `sync`, so a
+renumeration that run caused is reported before the outputs are compared
+and before the next case line is read. A case line expands them before
+its own reset, and a reset that re-attaches the device (it renumerated
+in the case before, or the options changed its descriptors) moves it
+once more: `conn=$EMU_USB` holds only on a board whose descriptors stay.
+`emu_reset` on the line before moves such a board first, so that the
+case line reads where it went. That is good for one run: a full case's
+two tools see different addresses on a board the first tool renumerates.
+A case that wants a stale address keeps the old value itself.
 
 Each case runs every tool against a fresh model (a `reset`) in its own
 log section. Its output first has the node numbers and the device
@@ -450,7 +461,11 @@ full case or oracle case. What else is checked depends on oxrok:
   and a sigrok-cli that starts succeeding fails the case ("no longer
   fails (WHY fixed?)"), so an upstream fix shows. In an `.oracle`
   golden a repeated stderr line counts once, since a driver looping on
-  an error repeats it as often as time allows.
+  an error repeats it as often as time allows. From a sigrok-cli the
+  timeout stopped, a last line without its newline, or a bare `sr: `,
+  is dropped first, as it was cut off in mid-print. The
+  `LIBUSB_ERROR_ACCESS` line of a retried open of a renumerated device
+  is dropped from any `.oracle`, as it comes at random.
 - `--oracle-differs WHY` marks a full case where sigrok-cli exits 0 but
   is wrong because of a libsigrok bug. sigrok-cli must exit 0 and its
   output or transactions must differ from oxrok's; its stdout, prepared
@@ -502,6 +517,40 @@ full case or oracle case. What else is checked depends on oxrok:
   still decides the outcome on the host: an answer longer than it
   completes with -EOVERFLOW (a babble), as the Linux host controller
   reports it, and the log says so.
+- `--libsigrok` marks a library-verified case, not a CLI-verified one,
+  for a driver sigrok-cli cannot drive: `tools/libsigrok-run.c` runs in
+  sigrok-cli's place and alone, whatever oxrok has. It takes
+  sigrok-cli's `-d`, `-c`, `-C`, `-t`, `-O`, `-l`, `--samples`,
+  `--time`, `--frames` and `--scan`, calls `sr_session_start()` itself
+  with or without a limit, and writes through libsigrok's output
+  modules. `--stop-after N` counts samples itself, cuts the output at N
+  and asks for the stop from the main loop, as a client's button would;
+  a driver that ends the capture in the callback that sends its samples
+  has finished by then, and `--stop-after 0` stops at the header, before
+  any sample. diffcli.sh builds it with `cc` against the oracle's prefix
+  (`LIBSIGROK_PREFIX` overrides it). That needs a C compiler and glib's
+  headers (glib2-devel, `pkg-config glib-2.0`), not the -devel packages
+  behind libsigrok.pc, and the build fails if the runner does not load
+  the `libsigrok.so` sigrok-cli loads, so `--gcov` counts its runs
+  alike. Without them a `--libsigrok` case fails, naming what is
+  missing. The case is held to its own goldens like any oracle case,
+  takes `--hangs`, `--timeout`, `--expect-fail` and events, not
+  `--oracle-bug`, `--oracle-differs` or `--record`, and `--no-oracle`
+  skips it. Such a case says what libsigrok does, not what sigrok-cli
+  does.
+- `--oracle-hangs` with `--oracle-bug` marks a full case where
+  sigrok-cli must be stopped by the timeout (status 124 or 137), so a
+  silent exit 1 fails. `--oracle-differs` does not require sigrok-cli to
+  print something: its `.oracle` golden pins an empty output, and the
+  two tools must still differ.
+- A model can say what a held IN transfer holds when the host cancels it
+  (`DeviceModel::in_unlinked`). The URB then completes with -ECONNRESET
+  and those bytes, as an HCD does, and libusb reports a timed out
+  transfer with data. This is how a device slower than a driver's
+  transfer timeout, or a last transfer with no short packet, is shown. A
+  case on it must end after few rounds: C's timeouts and resubmissions
+  interleave with the unlinks, so the transfer that gets the data
+  varies; only the logged bytes are stable.
 - `--digest` ends the compared output with the SHA-256 of the whole
   output before `--filter`, so a filter that thins a long output (the
   hantek-dso frames keep every 64th line) still compares every byte.

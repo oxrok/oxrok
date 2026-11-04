@@ -1194,22 +1194,35 @@ register meanings, the trigger semantics, the 0x1c pipeline delay and
 the trigger latency are assumed. Options: `flashed=1`, `still=1`, and
 the faults `stall=NAME[:N]`, `verify=N`, `settle=N`,
 `stall_bitstream=N`, `stale=N`, `odd_state=0xNN`, `intr_short=N`,
-`bulk_short=N`, `bulk_stall=1`, `renum=0`. 27 oracle cases (2026-11-03):
-scan with and without the FX2 firmware, show, the options, every way of
-asking for a capture, an interface claimed by another program, a
-firmware that never renumerates, and unplugs during the FX2 upload.
-gcov: api.c 84.2 % (154/183), protocol.c 2.1 % (10/479). sigrok-cli
-cannot start a capture with this driver: it runs a session only with
-`--samples`, `--time`, `--frames` or `--continuous`, and the driver
-offers none of their keys (api.c 44-48), so each fails before the
-acquisition. The capture side (bitstream, trigger, status packets,
-fetch) is held by the model's unit tests. It was checked once through
-libsigrok directly, with a small C program not kept in the tree: 45
-runs, no violations, protocol.c 94.6 %.
+`bulk_short=N`, `bulk_stall=1`, `intr_silent=1`, `renum=0`. 83 oracle
+cases: 27 through sigrok-cli (scan with and without the FX2 firmware,
+show, the options, every way of asking for a capture, an interface
+claimed by another program, a firmware that never renumerates, unplugs
+during the FX2 upload) and 56 library-verified, not CLI-verified,
+through `tools/libsigrok-run.c`, since sigrok-cli cannot start a capture
+with this driver (it runs a session only with `--samples`, `--time`,
+`--frames` or `--continuous`, and the driver offers none of their keys,
+api.c 44-48). The library cases cover the rate classes, 8 and 16
+channels, capture ratios, trigger stages, a wrapping memory, a stop
+while waiting for the trigger, the faults and the bitstream file. gcov:
+api.c 92.9 % (170/183), protocol.c 97.1 % (465/479). Not reached:
+OS-level failures, a NULL sdi, match or transfer data, unknown keys,
+more than 32 registers, another 05ff product or a second board, a status
+packet with no trigger programmed, a failed libusb submit, and a match
+on a disabled channel (sigrok-cli's trigger syntax refuses it).
 
 What the model found:
-- sigrok-cli has no way to capture with this driver (see above); only a
-  libsigrok client that calls `sr_session_start()` itself can.
+- sigrok-cli has no way to capture with this driver; only a libsigrok
+  client that calls `sr_session_start()` itself can
+  (`tools/libsigrok-run.c`).
+- `send_samples()` sends a logic packet of 0 bytes for any stretch of a
+  whole number of its 4096 sample chunks with 8 channels (protocol.c
+  980-989), and for an empty stretch with 16 (957-960, from 1062 when
+  the trigger is where the read starts). libsigrok's outputs do not take
+  it: bits, hex and ols loop to `length - unitsize`, which wraps (bits.c
+  158, hex.c 163, ols.c 121), and die of SIGSEGV; csv dies of SIGFPE.
+  Case "lib 8ch upper wraps bits crash"; the ascii output takes the same
+  capture.
 - `conn=` cannot select the board: the driver lists no scan options, so
   `sr_driver_scan()` returns no device (hwdriver.c 512-515, 583-586;
   case "conn refused").
@@ -1258,7 +1271,7 @@ model stops after `transfers=N` 16 KiB transfers. Faults, off by
 default: any command or its answer STALLed or short, bad status bytes,
 the chip's wake status, an FPGA that does not come up, a capture error,
 a halted or short sample endpoint, a boot loader refusing a part,
-unreadable strings. The 101 cases of `tools/emu/saleae-logic-pro.sh` log
+unreadable strings. The 102 cases of `tools/emu/saleae-logic-pro.sh` log
 no violation under sigrok-cli: every rate, 1 to 16 channels, selection
 by the board's real address (read from sysfs, as the session's address
 goes stale after an upload), the unflashed upload, every failing request
