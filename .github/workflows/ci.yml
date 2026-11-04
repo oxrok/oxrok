@@ -34,6 +34,10 @@ jobs:
         with:
           tool: cargo-deny@0.20.2
       - run: cargo deny --workspace --locked check licenses
+      # What the release generates, so that a new dependency that needs a
+      # line in tools/third-party shows here and not on the release tag.
+      - run: cargo install --locked --features cli --version 0.9.3 cargo-about
+      - run: make notices-all
 
   test:
     name: test (${{ matrix.os }})

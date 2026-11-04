@@ -12,6 +12,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_ABOUT_VERSION: 0.9.3
 
 jobs:
   build:
@@ -43,6 +44,10 @@ jobs:
       - name: Install make
         if: runner.os == 'Windows'
         run: command -v make || choco install make -y
+      # By cargo, since there is no binary release of this version for
+      # every runner here. Without --features cli it installs nothing and
+      # still succeeds.
+      - run: cargo install --locked --features cli --version "$CARGO_ABOUT_VERSION" cargo-about
       - run: make dist TARGET=${{ matrix.target }}
       - name: Smoke test the archive
         run: |

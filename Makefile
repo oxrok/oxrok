@@ -9,13 +9,19 @@
 #   make dist                  build and package for the host
 #   make dist TARGET=<triple>  for another target
 #   make dist FEATURES=        without the Python decoders
+#   make notices               only the third-party notices, for the target
+#   make notices-all           the same, for every target the release builds
 #   make clean-dist            remove dist/
+#
+# The notices need cargo-about, the version the release workflow pins:
+#   cargo install --locked --features cli --version 0.9.3 cargo-about
 
 CARGO    ?= cargo
 FEATURES ?= rustpython
 HOST     := $(shell rustc -vV | sed -n 's/^host: //p')
 VERSION  := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
 DIST     := dist
+PYTHON   ?= $(shell python3 -c '' 2>/dev/null && echo python3 || echo python)
 
 # The decoders oxrok is compared with: libsigrokdecode 0.5.3.
 SRD_VERSION := 0.5.3
@@ -57,7 +63,17 @@ STAGE    := $(DIST)/$(NAME)
 BIN      := target/$(TARGET)/release/oxrok$(EXE)
 SHA256   := $(shell command -v sha256sum >/dev/null 2>&1 && echo sha256sum || echo "shasum -a 256")
 
-.PHONY: build decoders dist clean-dist
+# THIRD-PARTY-NOTICES.txt, generated rather than committed. In a vendored
+# source tarball the one at its top is already there and covers every
+# release target, so building from it needs no cargo-about.
+NOTICES_NAME := THIRD-PARTY-NOTICES.txt
+NOTICES      := build/THIRD-PARTY-NOTICES-$(TARGET).txt
+
+# The matrix in .github/workflows/release.yml.
+RELEASE_TARGETS := x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+                   x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc
+
+.PHONY: build decoders notices notices-all dist clean-dist
 
 build:
 	rustup target add $(TARGET)
@@ -72,10 +88,24 @@ $(SRD_DIR)/COPYING:
 
 decoders: $(SRD_DIR)/COPYING
 
-dist: build $(if $(FEATURES),decoders)
+notices:
+	mkdir -p build
+ifeq (,$(wildcard $(NOTICES_NAME)))
+	$(PYTHON) tools/third-party/notices.py --target $(TARGET) --features "$(FEATURES)" --output $(NOTICES)
+else
+	cp $(NOTICES_NAME) $(NOTICES)
+endif
+
+notices-all:
+	mkdir -p build
+	$(PYTHON) tools/third-party/notices.py $(foreach t,$(RELEASE_TARGETS),--target $(t)) --features "$(FEATURES)" --output build/$(NOTICES_NAME)
+
+# The notices first: when they fail, there is no point in the build.
+dist: notices build $(if $(FEATURES),decoders)
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)
 	cp $(BIN) README.md LICENSE NOTICE CHANGELOG.md $(STAGE)/
+	cp $(NOTICES) $(STAGE)/$(NOTICES_NAME)
 ifneq (,$(FEATURES))
 	cp -R $(SRD_DIR)/decoders $(STAGE)/decoders
 	cp $(SRD_DIR)/COPYING $(STAGE)/decoders/COPYING

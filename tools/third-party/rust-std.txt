@@ -1,0 +1,20 @@
+Every oxrok binary links Rust's standard library statically: std, core,
+alloc, compiler_builtins and the crates they depend on, among them
+addr2line, cfg-if, gimli, hashbrown, libc, memchr, miniz_oxide, object,
+rustc-demangle and unicode-width. No crate declares them, so cargo-about
+does not list them.
+
+Copyright (c) The Rust Project Contributors. Licensed under the Apache
+License, Version 2.0, or the MIT license, at your option; both texts are
+in the crate list above. Some of the crates are also under other
+permissive terms; the toolchain's share/doc/rust/COPYRIGHT-library.html
+lists them all, for the toolchain the release was built with.
+
+The Linux musl binaries also link LLVM's libunwind, from Rust's own
+target libraries: Apache-2.0 WITH LLVM-exception, Copyright (c) the LLVM
+Project contributors. The exception's text is in the crate list above
+when a listed crate uses it, and at https://llvm.org/LICENSE.txt.
+
+The Windows binary links Microsoft's C runtime statically, as a system
+library of the platform, with no third-party licence text to reproduce
+here.

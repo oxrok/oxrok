@@ -1,0 +1,78 @@
+# cargo-about's configuration for THIRD-PARTY-NOTICES.txt, the file that
+# ships next to LICENSE and NOTICE in the release archives. It is
+# written by tools/third-party/notices.py (see docs/LICENSING.md); the
+# allowlist with the reasons is deny.toml, keep the two in step. A licence
+# missing here fails generation, and with it the release.
+
+# In order of preference: an "MIT OR Apache-2.0" crate takes the first.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Views",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "ISC",
+    "LGPL-3.0-only",
+    "MPL-2.0",
+    "PSF-2.0",
+    "Python-2.0.1",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]
+
+# Crates only used to build the binary do not end up in it. Proc macros
+# (syn, rustpython-derive and their dependencies) do not either, but
+# cargo-about cannot tell them apart, so they are listed: too much rather
+# than too little.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+[oxrok]
+accepted = ["GPL-3.0-or-later"]
+
+# Crates with no `license` field, with the file that says what they are
+# under. A changed file fails generation: read it and update this entry.
+
+[mt19937.clarify]
+license = "BSD-3-Clause"
+[[mt19937.clarify.files]]
+path = "LICENSE"
+license = "BSD-3-Clause"
+checksum = "d4621cb737ec5621a26bd9c3a49ef2955adf9502ecd0c4b868a2ffa572e99005"
+
+[rustpython-doc.clarify]
+license = "Python-2.0.1"
+[[rustpython-doc.clarify.files]]
+path = "LICENSE"
+license = "Python-2.0.1"
+checksum = "b0e25a78cffb43f4d92de8b61ccfa1f1f98ecbc22330b54b5251e7b6ba010231"
+
+[rustpython-pylib.clarify]
+license = "Python-2.0.1"
+[[rustpython-pylib.clarify.files]]
+path = "Lib/PSF-LICENSE"
+license = "Python-2.0.1"
+checksum = "b9a6d9320b8f2693e8d41e496ce56caadacaddcca9be2a64a61749278f425cf2"
+
+[syn-ext.clarify]
+license = "BSD-2-Clause"
+[[syn-ext.clarify.files]]
+path = "LICENSE"
+license = "BSD-2-Clause"
+checksum = "7ad81d71333ccd9e8057887a1d4a958007387497f4ce551b1d3c24a14d87181a"
+
+# The crate's own MIT OR Apache-2.0 is for its Rust; on Windows the
+# binary also links the libffi it bundles. This records libffi's licence
+# with its copyright line in place of the crate's generic text.
+[libffi-sys.clarify]
+license = "MIT"
+[[libffi-sys.clarify.files]]
+path = "libffi/LICENSE"
+license = "MIT"
+checksum = "d5699fa516968e3a1550e6c902b7441c78856f2603d61bedd0b0662a26655366"
