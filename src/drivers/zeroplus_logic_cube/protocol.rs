@@ -51,8 +51,6 @@
 //! - A short or failed bulk read delivers what it holds and ends the
 //!   capture. The C warns and sends its whole buffer, the bytes of the
 //!   previous read standing in for those missing (api.c:605-648).
-//! - No trigger marker in a capture with no trigger: api.c:639-640 does
-//!   not look at `devc->trigger`.
 //! - The trigger and its registers are worked out for each capture:
 //!   `analyzer_add_triggers()` leaves a former trigger in place when
 //!   there is none now (analyzer.c:515-516), and `devc->trigger` is never
@@ -731,16 +729,13 @@ pub enum Feed {
 #[derive(Clone, Debug)]
 pub struct Readout {
     plan: Plan,
-    /// `devc->trigger`: a capture with none gets no marker, where
-    /// api.c:639-640 does not ask.
-    trigger: bool,
     samples_read: u32,
 }
 
 impl Readout {
     /// A readout to that plan.
-    pub fn new(plan: Plan, trigger: bool) -> Self {
-        Readout { plan, trigger, samples_read: 0 }
+    pub fn new(plan: Plan) -> Self {
+        Readout { plan, samples_read: 0 }
     }
 
     /// The samples sent so far.
@@ -775,20 +770,17 @@ impl Readout {
             self.samples_read += before;
             start += bytes;
         }
-        if self.trigger && self.samples_read == offset {
+        // With no look at `devc->trigger`, as api.c:639-640: a capture with
+        // no trigger has a marker where the board reports one in its
+        // samples. Commit 4c1433d1 says it triggers at once then, so the
+        // marker is true, and only a recording could say otherwise.
+        if self.samples_read == offset {
             pieces.push(Piece::Trigger);
         }
         pieces.push(Piece::Samples(start..start + len as usize * UNIT_SIZE));
         self.samples_read += len;
         Feed::Send(pieces)
     }
-}
-
-/// One capture's settings, those not in [`Regs`].
-#[derive(Clone, Copy, Debug)]
-pub struct Capture {
-    /// `devc->trigger`.
-    pub trigger: bool,
 }
 
 /// How the wait for the data ended.
@@ -843,7 +835,6 @@ fn end(link: Link, slot: &mut dyn FnMut(Link), sink: &PacketSink) {
 pub fn run(
     mut link: Link,
     regs: &Regs,
-    capture: Capture,
     sink: &PacketSink,
     stop: &AtomicBool,
     give_back: &mut dyn FnMut(Link),
@@ -897,7 +888,7 @@ pub fn run(
     let wanted = regs.ramsize_trigger.wrapping_add(regs.triggerbar);
     let plan = plan(status, stop_address, now_address, trigger_address, memory_size, wanted);
     log::info!("Need to discard {} samples.", plan.discard);
-    let stopped = read_samples(&mut link, plan, capture, n, sink, stop);
+    let stopped = read_samples(&mut link, plan, n, sink, stop);
     link.read_stop();
     if stopped {
         link.reset();
@@ -909,12 +900,11 @@ pub fn run(
 fn read_samples(
     link: &mut Link,
     plan: Plan,
-    capture: Capture,
     memory_bytes: u32,
     sink: &PacketSink,
     stop: &AtomicBool,
 ) -> bool {
-    let mut readout = Readout::new(plan, capture.trigger);
+    let mut readout = Readout::new(plan);
     for _ in 0..memory_bytes as usize / PACKET_SIZE {
         if stop.load(Ordering::SeqCst) {
             return true;
@@ -1149,7 +1139,7 @@ mod tests {
     #[test]
     fn a_readout_skips_cuts_and_stops() {
         let plan = Plan { discard: 520, valid: 600, trigger_offset: 1000 };
-        let mut r = Readout::new(plan, false);
+        let mut r = Readout::new(plan);
         assert_eq!(r.feed(PACKET_SIZE), Feed::Skip);
         // 8 more to discard, 504 samples left of this read.
         assert_eq!(r.feed(PACKET_SIZE), Feed::Send(vec![Piece::Samples(32..2048)]));
@@ -1162,7 +1152,7 @@ mod tests {
     #[test]
     fn the_trigger_splits_a_read() {
         let plan = Plan { discard: 0, valid: 400, trigger_offset: 100 };
-        let mut r = Readout::new(plan, true);
+        let mut r = Readout::new(plan);
         assert_eq!(
             r.feed(PACKET_SIZE),
             Feed::Send(vec![Piece::Samples(0..400), Piece::Trigger, Piece::Samples(400..1600)])
@@ -1171,28 +1161,21 @@ mod tests {
 
     #[test]
     fn the_trigger_at_the_first_sample() {
+        // Whether a trigger was asked for or not, as api.c:639-640.
         let plan = Plan { discard: 0, valid: 10, trigger_offset: 0 };
-        let mut r = Readout::new(plan, true);
+        let mut r = Readout::new(plan);
         assert_eq!(r.feed(PACKET_SIZE), Feed::Send(vec![Piece::Trigger, Piece::Samples(0..40)]));
-    }
-
-    #[test]
-    fn no_marker_without_a_trigger() {
-        // api.c:639-640 sends it: offset 0 at full memory.
-        let plan = Plan { discard: 0, valid: 10, trigger_offset: 0 };
-        let mut r = Readout::new(plan, false);
-        assert_eq!(r.feed(PACKET_SIZE), Feed::Send(vec![Piece::Samples(0..40)]));
     }
 
     #[test]
     fn a_short_read_gives_only_what_came() {
         let plan = Plan { discard: 5, valid: 2000, trigger_offset: 5000 };
-        let mut r = Readout::new(plan, false);
+        let mut r = Readout::new(plan);
         // 255 whole samples of 1022 bytes, 5 of them discarded.
         assert_eq!(r.feed(1022), Feed::Send(vec![Piece::Samples(20..1020)]));
         assert_eq!(r.samples_read(), 250);
         // Nothing came at all.
-        let mut r = Readout::new(plan, false);
+        let mut r = Readout::new(plan);
         assert_eq!(r.feed(0), Feed::Done);
     }
 }

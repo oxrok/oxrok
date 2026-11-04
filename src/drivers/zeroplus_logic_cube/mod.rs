@@ -36,7 +36,7 @@ use crate::core::{
     PacketSink, Result, Trigger, TriggerFeatures, TriggerMatch, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, libusb_error_name, split_conn};
-use protocol::{Capture, Link, Profile, Regs};
+use protocol::{Link, Profile, Regs};
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -494,7 +494,6 @@ impl Device for ZeroplusDevice {
         log::debug!("triggerbar_address = {}(0x{bar:x})", bar.cast_signed());
         log::debug!("ramsize_triggerbar_address = {}(0x{ramsize:x})", ramsize.cast_signed());
         let regs = self.regs.clone();
-        let capture = Capture { trigger: trigger.any };
         let slot = Arc::clone(&self.link);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -504,7 +503,7 @@ impl Device for ZeroplusDevice {
                 let mut give_back = |link: Link| {
                     *slot.lock().expect("zeroplus-logic-cube lock") = Some(link);
                 };
-                protocol::run(link, &regs, capture, &sink, &stop2, &mut give_back);
+                protocol::run(link, &regs, &sink, &stop2, &mut give_back);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -895,7 +894,6 @@ mod tests {
         protocol::run(
             link,
             &regs,
-            Capture { trigger: false },
             &PacketSink::new(tx, 0),
             &stop,
             &mut give_back,
@@ -929,7 +927,6 @@ mod tests {
                 protocol::run(
                     link,
                     regs,
-                    Capture { trigger: false },
                     &PacketSink::new(tx, 0),
                     stop,
                     &mut give_back,
