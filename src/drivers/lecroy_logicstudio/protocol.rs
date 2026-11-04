@@ -705,7 +705,7 @@ impl Link {
         let mut size = FIRST_TRANSFER;
         let mut empty = 0;
         while memory.len() < SAMPLE_BUF_SIZE {
-            match self.t.bulk_in_partial(EP_BULK, size, USB_TIMEOUT) {
+            match self.t.bulk_in(EP_BULK, size, USB_TIMEOUT) {
                 Ok(d) if !d.is_empty() => {
                     empty = 0;
                     let room = SAMPLE_BUF_SIZE - memory.len();
