@@ -8,6 +8,13 @@ Not legal advice. The policy oxrok follows:
   under the GPL its author chose, and a binary that links them is GPL
   as a whole whatever the other crates said. One license keeps the
   provenance bookkeeping out of every manifest.
+- The zeroplus-logic-cube driver ports libsigrok's `analyzer.c`,
+  `analyzer.h` and `gl_usb.c`, which carry a BSD-style licence rather
+  than the GPL. It is compatible with the GPL, and the binary as a whole
+  stays GPL-3.0-or-later, but its binary clause requires reproducing the
+  notice with the distribution: it is in `NOTICE` at the top of the
+  repository, which the release archives ship next to `LICENSE`, and at
+  the head of `src/drivers/zeroplus_logic_cube/protocol.rs`.
 - Firmware loaded onto a device is a separate program; shipping it next
   to the binary is aggregation. Proprietary firmware is never shipped,
   the user installs it from the vendor. The bench firmware under `hil/`

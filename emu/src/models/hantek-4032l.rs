@@ -142,6 +142,12 @@
 //! ends the stream with another word than the end magic, as a stream
 //! cut or garbled inside the device would. `fill=N` (0 and up) and
 //! `fpga=VERSION` (decimal or 0x hex) are the board's options.
+//! `hold=N` sends N data transfers after the stream's first read and
+//! holds those behind them open with nothing, as a board whose stream
+//! stops. With it, `partial=BYTES` (whole packets) is what the oldest
+//! held transfer has received when it is cancelled, once per capture, the
+//! driver's timed out transfer with data; and `release=1` lets the stream
+//! go on after that first cancel, a slow board rather than a stopped one.
 //!
 //! Emulation artifacts, besides the one-shot STALL: the stream is ready
 //! the moment the get is taken and every bulk IN is answered at once,
@@ -155,12 +161,14 @@
 //! interface (294-295, 305-311), `dev_close()` without a handle (331),
 //! the threshold without a channel group, a `conn` get without a
 //! connection and unknown keys (352, 354, 375, 381-382, 426, 428,
-//! 445-446: sigrok-cli and `check_key()` refuse first), a second trigger
-//! stage and an unknown match (529-530, 581-583: sigrok-cli builds one
-//! stage of the listed matches); in protocol.c, transfers coming back
-//! after an abort (171-172, 225-226: the driver submits exactly the
-//! transfers the stream needs, and only `dev_acquisition_stop()`, which
-//! sigrok-cli never calls, aborts earlier), the callback in the idle
+//! 445-446: sigrok-cli and `check_key()` refuse first), an unknown match
+//! (581-583: sigrok-cli passes the listed matches alone; a second stage,
+//! `-t A0=01`, reaches 529-530 in the case "two trigger stages"); in
+//! protocol.c, a status or start read coming back after an abort
+//! (225-226: only `dev_acquisition_stop()` aborts, which sigrok-cli never
+//! calls; the runner's stop reaches a data transfer, 171-172, in "lib stop
+//! while held", and at the header it races the model's answer, which comes
+//! at once, so no case is stable), the callback in the idle
 //! state (235-237, 327: an idle transfer is freed, not resubmitted), fewer than 512
 //! samples left after the first transfer (376: at least 1921 are),
 //! submissions that fail at the start of the data or of the capture
@@ -180,7 +188,7 @@ pub const NAME: &str = "hantek-4032l";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Hantek 4032L logic analyzer (04b5:4032, 32 channels); fpga=VERSION \
      (default 0x4303, 0 the driver's old variant), fill=N; faults: stall=reset|out|in[@N], \
-     stale=N, end=HEX";
+     stale=N, end=HEX, hold=N, partial=BYTES, release=1";
 
 /// The USB vendor id.
 pub const VID: u16 = 0x04b5;
@@ -292,6 +300,13 @@ pub struct Faults {
     pub stale: u32,
     /// The word that ends the stream instead of [`END_MAGIC`].
     pub end: Option<u32>,
+    /// Data transfers sent before those behind them are held.
+    pub hold: Option<u32>,
+    /// What the oldest held transfer holds when cancelled, once per
+    /// capture, in bytes.
+    pub partial: u32,
+    /// The stream goes on after the first cancel of a held transfer.
+    pub release: bool,
 }
 
 impl Faults {
@@ -324,6 +339,16 @@ impl Faults {
                 self.stale = v.parse().map_err(|_| Error(format!("stale={v}: a count")))?;
             }
             "end" => self.end = Some(parse_u32(k, v)?),
+            "hold" => {
+                self.hold = Some(v.parse().map_err(|_| Error(format!("hold={v}: a count")))?);
+            }
+            "partial" => {
+                self.partial = v.parse().map_err(|_| Error(format!("partial={v}: bytes")))?;
+                if !(self.partial as usize).is_multiple_of(PACKET) {
+                    return Err(Error(format!("partial={v}: whole packets of {PACKET}")));
+                }
+            }
+            "release" => self.release = v == "1",
             _ => return Ok(false),
         }
         Ok(true)
@@ -358,6 +383,9 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "fill" => fill = v.parse().map_err(|_| Error(format!("fill={v}: a count")))?,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
+    }
+    if faults.hold.is_none() && (faults.partial > 0 || faults.release) {
+        return Err(Error("partial= and release= need hold=".to_owned()));
     }
     let mut model = H4032l::new(fpga);
     model.fill = fill;
@@ -483,6 +511,12 @@ pub struct H4032l {
     stale: u32,
     /// The first IN transfer of the stream is yet to come.
     first_stream_in: bool,
+    /// Data transfers sent since the stream's first read.
+    data_transfers: u32,
+    /// What the oldest held transfer still holds, in bytes.
+    partial: u32,
+    /// `hold=` in this capture, until `release=1` ends it.
+    hold: Option<u32>,
     seen: Vec<(What, u32)>,
 }
 
@@ -520,6 +554,9 @@ impl H4032l {
             ready: false,
             stale: 0,
             first_stream_in: false,
+            data_transfers: 0,
+            partial: 0,
+            hold: None,
             seen: Vec::new(),
         }
     }
@@ -615,6 +652,10 @@ impl H4032l {
                     cfg.value, cfg.mask
                 ));
             }
+            // The C driver would fail this on a second capture in one
+            // process, a level trigger after an edge trigger: api.c:533
+            // resets the edge type, not the signal. sigrok-cli runs one
+            // capture per process, so no case reaches it.
             if cfg.edge_type == EDGE_DISABLED && cfg.edge_signal != 0 {
                 v.report(format!(
                     "trigger 1 edge signal {} with the edge disabled",
@@ -680,6 +721,9 @@ impl H4032l {
                 let len = 4 * (2 + cfg.samples as usize);
                 self.state = State::Stream { at: 0, len, first };
                 self.first_stream_in = true;
+                self.data_transfers = 0;
+                self.partial = self.faults.partial;
+                self.hold = self.faults.hold;
                 self.capture = None;
                 self.ready = false;
             }
@@ -700,6 +744,28 @@ impl H4032l {
             // The counter, mod 2^32.
             (first + (w as u64 - 1)) as u32
         }
+    }
+
+    /// `n` bytes of the stream from `at`.
+    fn stream_bytes(&self, at: usize, n: usize, len: usize, first: u64) -> Vec<u8> {
+        let mut b = Vec::with_capacity(n);
+        let mut i = at;
+        while i < at + n {
+            let word = self.stream_word(i / 4, len, first).to_le_bytes();
+            let off = i % 4;
+            let take = (4 - off).min(at + n - i);
+            b.extend_from_slice(&word[off..off + take]);
+            i += take;
+        }
+        b
+    }
+
+    /// The stream's data transfers are held (`hold=N`).
+    fn holding(&self) -> bool {
+        matches!(self.state, State::Stream { .. })
+            && !self.first_stream_in
+            && self.stale == 0
+            && self.hold.is_some_and(|n| self.data_transfers >= n)
     }
 
     /// The status packet.
@@ -771,6 +837,9 @@ impl DeviceModel for H4032l {
             // Nothing in the FIFO: the host waits.
             return Reply::Nak;
         }
+        if self.holding() {
+            return Reply::Nak;
+        }
         let first = matches!(self.state, State::Status(_)) || self.first_stream_in;
         if first && max != PACKET {
             v.report(format!(
@@ -798,18 +867,12 @@ impl DeviceModel for H4032l {
                 Reply::Data(self.status_packet(status))
             }
             State::Stream { at, len, first } => {
-                self.first_stream_in = false;
+                if !std::mem::take(&mut self.first_stream_in) {
+                    self.data_transfers += 1;
+                }
                 // Whole packets up to what the host asks for.
                 let n = (max - max % PACKET).max(PACKET.min(max)).min(len - at);
-                let mut b = Vec::with_capacity(n);
-                let mut i = at;
-                while i < at + n {
-                    let word = self.stream_word(i / 4, len, first).to_le_bytes();
-                    let off = i % 4;
-                    let take = (4 - off).min(at + n - i);
-                    b.extend_from_slice(&word[off..off + take]);
-                    i += take;
-                }
+                let b = self.stream_bytes(at, n, len, first);
                 self.state =
                     if at + n == len { State::Idle } else { State::Stream { at: at + n, len, first } };
                 Reply::Data(b)
@@ -817,7 +880,30 @@ impl DeviceModel for H4032l {
         }
     }
 
+    /// `partial=` and `release=1`: the emulator offers this to the oldest
+    /// held transfer alone.
+    fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        if ep != EP_DATA || !self.holding() {
+            return None;
+        }
+        if self.faults.release {
+            self.hold = None;
+        }
+        let State::Stream { at, len, first } = self.state else { return None };
+        let n = (self.partial as usize).min(max).min(len - at);
+        self.partial = 0;
+        if n == 0 {
+            return None;
+        }
+        let b = self.stream_bytes(at, n, len, first);
+        self.state = if at + n == len { State::Idle } else { State::Stream { at: at + n, len, first } };
+        Some(b)
+    }
+
     fn reset(&mut self) {
+        self.data_transfers = 0;
+        self.partial = 0;
+        self.hold = None;
         self.state = State::Idle;
         self.armed = false;
         self.capture = None;
@@ -1141,6 +1227,67 @@ mod tests {
         p[2] = 35;
         dev.out(EP_CMD, &p, &mut v);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    /// Up to the stream's first read of a capture of 2048 samples.
+    fn up_to_the_stream(dev: &mut H4032l, v: &mut Violations) {
+        dev.control(reset_setup(), &RESET_DATA, v);
+        dev.out(EP_CMD, &configure(2048, 0), v);
+        let mut st = configure(2048, 0);
+        st[82..84].copy_from_slice(&CMD_STATUS.to_le_bytes());
+        for _ in 0..2 {
+            dev.out(EP_CMD, &st, v);
+            dev.in_transfer(EP_DATA, 512, v);
+            dev.in_transfer(EP_DATA, 512, v);
+        }
+        st[82..84].copy_from_slice(&CMD_GET.to_le_bytes());
+        dev.out(EP_CMD, &st, v);
+        assert_eq!(words(&data(dev.in_transfer(EP_DATA, 512, v)))[0], START_MAGIC);
+    }
+
+    #[test]
+    fn hold_holds_and_a_partial_comes_once_on_a_cancel() {
+        let mut v = Violations::default();
+        let mut dev = H4032l::new(FPGA_VERSION);
+        dev.faults.parse("hold", "1").unwrap();
+        dev.faults.parse("partial", "512").unwrap();
+        // Nothing to give before the hold.
+        assert_eq!(dev.in_unlinked(EP_DATA, 2048), None);
+        up_to_the_stream(&mut dev, &mut v);
+        assert_eq!(dev.in_unlinked(EP_DATA, 2048), None);
+        // The stream's first read holds the start word and samples 0 to 126.
+        assert_eq!(words(&data(dev.in_transfer(EP_DATA, 2048, &mut v)))[0], 127);
+        assert_eq!(dev.in_transfer(EP_DATA, 2048, &mut v), Reply::Nak);
+        let d = dev.in_unlinked(EP_DATA, 2048).unwrap();
+        assert_eq!((d.len(), words(&d)[0]), (512, 639));
+        assert_eq!(dev.in_unlinked(EP_DATA, 2048), None, "once");
+        assert_eq!(dev.in_transfer(EP_DATA, 2048, &mut v), Reply::Nak, "without release");
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn release_lets_the_stream_go_on_where_the_partial_ended() {
+        let mut v = Violations::default();
+        let mut dev = H4032l::new(FPGA_VERSION);
+        for (k, val) in [("hold", "0"), ("partial", "512"), ("release", "1")] {
+            dev.faults.parse(k, val).unwrap();
+        }
+        up_to_the_stream(&mut dev, &mut v);
+        assert_eq!(dev.in_transfer(EP_DATA, 2048, &mut v), Reply::Nak);
+        assert_eq!(words(&dev.in_unlinked(EP_DATA, 2048).unwrap())[0], 127);
+        assert_eq!(words(&data(dev.in_transfer(EP_DATA, 2048, &mut v)))[0], 255);
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn a_partial_is_whole_packets_and_needs_a_hold() {
+        let o = |l: &[(&str, &str)]| -> Vec<(String, String)> {
+            l.iter().map(|(k, val)| ((*k).to_owned(), (*val).to_owned())).collect()
+        };
+        assert!(build(&o(&[("hold", "1"), ("partial", "100")])).is_err());
+        assert!(build(&o(&[("partial", "512")])).is_err());
+        assert!(build(&o(&[("release", "1")])).is_err());
+        assert!(build(&o(&[("hold", "1"), ("partial", "512"), ("release", "1")])).is_ok());
     }
 
     #[test]

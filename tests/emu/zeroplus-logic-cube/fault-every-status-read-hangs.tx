@@ -119,4 +119,41 @@ ctl_out 41 0c 0083 0000 20 -> ok
 ctl_out 41 0c 0085 0000 44 -> ok
 ctl_out 41 0c 0083 0000 21 -> ok
 ctl_in 41 0c 0084 0000 1 -> err stall
-~ the last 2 lines repeat to the end (3 or more times)
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 21 -> ok
+ctl_in 41 0c 0084 0000 1 -> err stall
+ctl_out 41 0c 0083 0000 20 -> ok
+ctl_out 41 0c 0085 0000 c0 -> ok
+ctl_out 41 0c 0083 0000 20 -> ok
+ctl_out 41 0c 0085 0000 c1 -> ok
+ctl_in 00 06 0100 0000 64 -> 1201000200000040120c0e70000000000001
+ctl_in 00 06 0100 0000 18 -> 1201000200000040120c0e70000000000001
+ctl_in 00 06 0200 0000 25 -> 0902190001010080fa0904000001ff00000007058102000200
+ctl_out 00 09 0001 0000 - -> ok
