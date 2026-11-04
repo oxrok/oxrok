@@ -302,7 +302,12 @@ emu_cases() {
     sl2_options stale-sample=1
     emu_case "lib stop at header stale status" --libsigrok --no-output -- -d $S --samples 800 --stop-after 0 -O bits
     sl2_options
-    emu_case "lib stop during packets" --libsigrok -- -d $S -C 0 --samples 5000 --stop-after 100 -O bits
+    # Mid-capture, the stop comes from the datafeed callback: libusb can reap
+    # the next sample packets in the pass that delivered this one, ahead of
+    # any callback of the main loop (tools/libsigrok-run.c), and the .tx would
+    # hold 1 or 2 packets more, about once in 30 runs under load. The driver's
+    # stop only sets a flag (api.c:403-408), so it can run there.
+    emu_case "lib stop during packets" --libsigrok -- -d $S -C 0 --samples 5000 --stop-after 100 --stop-in-callback -O bits
     # The reset of a stop never recognized: for ever.
     sl2_options wait-trigger=never ignore-reset=never
     emu_case "lib stop never recognized" --libsigrok --hangs --timeout 3 --no-output -- -d $S -t 0=r --samples 800 --stop-after 0 -O bits
