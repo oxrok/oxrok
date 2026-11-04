@@ -9,7 +9,7 @@ EMU_GCOV=korad-kaxxxxp
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 emu_cases() {
-    K=korad-kaxxxxp:conn=$EMU_TTY
+    korad_conn
     # oxrok's log prefix, on its side only, and what it adds after the
     # error sigrok-cli names.
     L='s/^oxrok: err: oxrok::drivers::korad_kaxxxxp: /sr: korad-kaxxxxp: /'
@@ -222,6 +222,13 @@ emu_cases() {
 korad_options() {
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "korad-kaxxxxp: the emulator refused '$*'"
+    korad_conn
+}
+
+# Read again after anything that re-attaches (an unplug): the harness fails a
+# case whose tty moved after this.
+korad_conn() {
+    K=korad-kaxxxxp:conn=$EMU_TTY
 }
 
 # TEXT as hex, printf's backslash escapes included.

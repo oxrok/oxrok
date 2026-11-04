@@ -471,9 +471,7 @@ impl Serial for Supply {
     }
 
     fn changed(&mut self, event: LineEvent, port: &mut Port<'_>) {
-        if let LineEvent::Lines { dtr: true, .. } = event
-            && !self.pending.is_empty()
-        {
+        if event.opened() && !self.pending.is_empty() {
             port.violation(format!("'{}': a command left unfinished", show(&self.pending)));
             self.pending.clear();
         }
