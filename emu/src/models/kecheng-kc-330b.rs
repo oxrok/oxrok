@@ -5,7 +5,7 @@
 //   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Martin Ling,
 //   Soeren Apel, Daniel Elstner, Frank Stettner, Aurelien Jacobs
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty).
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! The Kecheng KC-330B sound level meter and data logger: a Silicon Labs
@@ -77,8 +77,8 @@
 //! `stored=N` (0 to 32000, default 100), `log-interval=I` (0 to 7; 7 is
 //! one the C refuses, as a corrupt EEPROM could hold),
 //! `log-time=0|1`, `log-freq=0|1`, `log-source=B`, `id-length=N` (the
-//! identify's length byte, whatever the model string is), `digest=1` (long
-//! answers logged as digests). The faults take a command in two hex
+//! identify's length byte, whatever the model string is), `digest=1` (log
+//! chunks logged as digests). The faults take a command in two hex
 //! digits and the Nth time it comes, or every time without `@N`:
 //! `stall-out=CC[@N]` STALLs the command (no effect), `silent=CC[@N]`
 //! takes it and does not answer, `stall-in=CC[@N]` STALLs the answer,
@@ -87,7 +87,6 @@
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
-use crate::txlog::HASH_ABOVE;
 use crate::{Error, Result};
 use std::collections::VecDeque;
 
@@ -117,6 +116,9 @@ pub const MODEL: &str = "KC-330B";
 pub const QUEUE: usize = 8;
 /// The `06` answer's stand-in: 2013-08-03 12:00:00.
 pub const LOG_START: [u8; 6] = [13, 8, 3, 12, 0, 0];
+/// With `digest=1`, data over this is logged as a digest: a chunk of 32 or
+/// more samples, the whole log's being many.
+pub const DIGEST_ABOVE: usize = 64;
 /// What an inactive meter reads, dB times 10 (`api.c:347`).
 pub const INACTIVE_LEVEL: u16 = 300;
 
@@ -521,7 +523,7 @@ impl DeviceModel for Kc330b {
     }
 
     fn log_digest_above(&self) -> Option<usize> {
-        self.digest.then_some(HASH_ABOVE)
+        self.digest.then_some(DIGEST_ABOVE)
     }
 }
 
@@ -726,7 +728,7 @@ mod tests {
         assert!(v.is_empty());
         assert_eq!(dev.log_digest_above(), None);
         let dev = build(&opts(&[("digest", "1")])).unwrap();
-        assert_eq!(dev.log_digest_above(), Some(HASH_ABOVE));
+        assert_eq!(dev.log_digest_above(), Some(DIGEST_ABOVE));
         for bad in [
             ("stored", "32001"),
             ("log-interval", "8"),
