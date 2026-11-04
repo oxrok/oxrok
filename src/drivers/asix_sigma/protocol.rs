@@ -281,7 +281,7 @@ const TRIG_CHECK: u64 = 8 * EVENTS_PER_CLUSTER;
 const SUBMIT_SAMPLES: usize = 4 * 1024 * 1024 / 2;
 /// Mode reads after a forced stop before giving up (the C driver reads
 /// for ever).
-pub const MAX_STOP_POLLS: u32 = 10_000;
+pub const MAX_STOP_POLLS: u32 = 1000;
 /// The same once a stop was asked for, so that Ctrl-C does not wait for
 /// the above: a forced stop that a stop itself began still gets this
 /// long to complete and be read.

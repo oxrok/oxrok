@@ -663,9 +663,8 @@ mod tests {
 
     #[test]
     fn a_short_write_goes_on_and_an_empty_one_fails() {
-        let steps = format!(
-            "{OPEN}bulk_out 02 010203 -> 2\nbulk_out 02 03 -> 1\nbulk_out 02 04 -> 0\n"
-        );
+        let steps =
+            format!("{OPEN}bulk_out 02 010203 -> 2\nbulk_out 02 03 -> 1\nbulk_out 02 04 -> 0\n");
         let mut ctx = Context::open(replay(&steps)).unwrap();
         assert_eq!(ctx.write_data(&[1, 2, 3]), Ok(3));
         assert_eq!(ctx.write_data(&[4]), Err(FtdiError::new(-1, "usb bulk write failed")));

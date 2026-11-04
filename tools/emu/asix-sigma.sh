@@ -211,7 +211,7 @@ s/^(Failed to open device).*$/\1./'
     emu_case "slow stop" -- -d $D -c samplerate=50m --samples 20 -O hex
     # A forced stop that takes longer than oxrok waits: sigrok-cli's poll
     # has no limit.
-    asix_sigma_options stop-polls=12000
+    asix_sigma_options stop-polls=1200
     emu_case "stop never seen" --oracle-differs "protocol.c:1995-2001 poll the mode register after a forced stop for ever" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
     # A late stop register in the middle of a cluster (the model's doc):
     # with no sample limit to hide it, both tools decode up to the
