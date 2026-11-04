@@ -1,0 +1,33 @@
+# oxrok usb fixture 1
+# emu ikalogic-scanalogic2: bits
+# arg: -d
+# arg: ikalogic-scanalogic2
+# arg: -c
+# arg: samplerate=1M
+# arg: --samples
+# arg: 64
+# arg: -O
+# arg: bits
+device vid=20a0 pid=4123 version=0100 manufacturer="ikalogic" product="SCANALOGIC" interfaces=0:03:00:00
+claim 0 -> ok
+ctl_out 21 09 0300 0000 0200{127} -> ok
+ctl_out 21 09 0300 0000 0a00{127} -> ok
+ctl_in 21 01 0300 0000 128 -> 0a9076bd51010300{121}
+ctl_out 21 09 0300 0000 029076bd51010300{121} -> ok
+ctl_out 21 09 0300 0000 079076bd51010300{121} -> ok
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=20a0 pid=4123 version=0100 manufacturer="ikalogic" product="SCANALOGIC" interfaces=0:03:00:00
+claim 0 -> ok
+ctl_out 21 09 0300 0000 0200{127} -> ok
+ctl_out 21 09 0300 0000 0700{127} -> ok
+ctl_out 21 09 0300 0000 01000000080004030100{119} -> ok
+ctl_in 21 01 0300 0000 128 -> 056000{126}
+ctl_in 21 01 0300 0000 128 -> 0500{4}9e3cda7817b55300{116}
+ctl_in 21 01 0300 0000 128 -> 050100008927c56302a03edc00{116}
+ctl_in 21 01 0300 0000 128 -> 0502000012b04eed8b29c76600{116}
+ctl_in 21 01 0300 0000 128 -> 050300009b39d87614b251ef00{116}
+ctl_in 21 01 0300 0000 128 -> 056300{126}
+ctl_in 21 01 0300 0000 128 -> 056300{126}
+ctl_out 21 09 0300 0000 07000000080004030100{119} -> ok
+release 0 -> ok
