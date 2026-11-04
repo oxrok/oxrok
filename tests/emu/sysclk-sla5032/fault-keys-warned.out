@@ -1,1 +1,1 @@
-sr: sysclk-sla5032: The FPGA's keys were not entered: device error: command 5 failed: LIBUSB_ERROR_PIPE.
+sr: sysclk-sla5032: The FPGA's key step failed: device error: command 5 failed: LIBUSB_ERROR_PIPE.

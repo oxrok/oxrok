@@ -27,7 +27,8 @@
 //! are summed in 64 bits and expanded in blocks, whatever they claim; a chunk
 //! that ends without a short packet is kept, not dropped at the timeout; a
 //! failure that ends a capture (exit 0, as in the C, which has no way to tell
-//! the session) and a failed key step get a warning, not only a debug line;
+//! the session), a chunk cut short and a failed key step get a warning, not
+//! only a debug line or nothing;
 //! and a stop does not wait out the 500 s a reply is given.
 
 #![forbid(unsafe_code)]
@@ -221,6 +222,12 @@ impl Sla5032Device {
             stop: Arc::new(AtomicBool::new(false)),
             worker: None,
         }
+    }
+
+    /// A capture is running: its thread has not given the link back.
+    fn busy(&self) -> bool {
+        self.worker.as_ref().is_some_and(|w| !w.is_finished())
+            && self.link.lock().expect("link lock").is_none()
     }
 
     /// A device on an already open transport (a replayed recording).
@@ -439,8 +446,17 @@ impl Device for Sla5032Device {
     }
 
     fn start(&mut self, sink: PacketSink) -> Result<()> {
-        if self.worker.is_some() {
+        if self.busy() {
             return Err(Error::Busy);
+        }
+        // The capture before this one is over, as in the C, which returns to
+        // idle. Its thread has at most its End left to send, so it is joined
+        // only once finished: with End unread and the queue full, a join
+        // here would wait for ever.
+        if let Some(w) = self.worker.take()
+            && w.is_finished()
+        {
+            let _ = w.join();
         }
         let link = self.link.lock().expect("link lock").take();
         let Some(mut link) = link else {
@@ -453,8 +469,11 @@ impl Device for Sla5032Device {
                 let handle = std::thread::Builder::new()
                     .name("sysclk-sla5032 acquisition".into())
                     .spawn(move || {
+                        sink.send(Packet::header());
                         acq.run(&mut link, &sink);
+                        // Back before End: a client may start again on it.
                         *slot.lock().expect("link lock") = Some(link);
+                        sink.send(Packet::End);
                     })
                     .map_err(Error::Io)?;
                 self.worker = Some(handle);
@@ -487,9 +506,7 @@ struct Acquisition {
 
 impl Acquisition {
     fn run(mut self, link: &mut Link, sink: &PacketSink) {
-        sink.send(Packet::header());
         self.capture(link, sink);
-        sink.send(Packet::End);
     }
 
     fn stopped(&self) -> bool {
@@ -550,7 +567,10 @@ impl Acquisition {
                 self.no_samples(link);
                 return;
             }
-            log::debug!("acquision done, rle_samples_count: {}.", data.len() / 6);
+            log::debug!(
+                "acquision done, rle_samples_count: {}.",
+                data.len() / protocol::RLE_SAMPLE_SIZE
+            );
             let (records, samples) = protocol::count_records(&data);
             log::debug!("acquision done, samples_count: {samples}.");
             if samples == 0 {
@@ -559,6 +579,14 @@ impl Acquisition {
                 return;
             }
             self.decode(&data, records, sink);
+            // The marker ends a capture and a full chunk goes on. Anything
+            // else was cut short, which the C takes for the end in silence.
+            if records != RLE_SAMPLES_COUNT && records == data.len() / protocol::RLE_SAMPLE_SIZE {
+                log::warn!(
+                    "The capture ended early: a chunk of {} bytes has no end marker.",
+                    data.len()
+                );
+            }
             if records != RLE_SAMPLES_COUNT || self.stopped() {
                 break;
             }
@@ -825,9 +853,7 @@ mod tests {
 
     #[test]
     fn an_open_takes_back_the_stop_of_a_close() {
-        let mut steps = vec!["config 1 -> ok".to_owned(), "claim 0 -> ok".to_owned()];
-        steps.extend(read_reg_steps(2, 0xa5a5_a5a1));
-        let mut d = Sla5032Device::from_transport(Box::new(replay(&steps))).unwrap();
+        let mut d = Sla5032Device::from_transport(Box::new(replay(&open_steps()))).unwrap();
         d.stop().unwrap();
         d.open().unwrap();
         assert!(!d.stop.load(Ordering::SeqCst));
@@ -845,6 +871,111 @@ mod tests {
     fn device() -> Sla5032Device {
         let r = replay(&[]);
         Sla5032Device::from_transport(Box::new(r)).unwrap()
+    }
+
+    /// A start's steps for a limit of 1024 at 500 MHz, register 5 from `r5`
+    /// (the C's order); the value register 5 holds after it.
+    fn start_steps(r5: &mut u32) -> Vec<String> {
+        let mut s: Vec<String> = [(7, 1), (6, 1), (0, 0), (1, 0), (2, 0), (4, 0)]
+            .iter()
+            .map(|&(reg, value)| write_reg_step(reg, value))
+            .collect();
+        let bit = |s: &mut Vec<String>, r5: &mut u32, bit: u32, set: bool| {
+            s.extend(read_reg_steps(5, *r5));
+            *r5 = if set { *r5 | 1 << bit } else { *r5 & !(1 << bit) };
+            s.push(write_reg_step(5, *r5));
+        };
+        bit(&mut s, r5, 0, true);
+        bit(&mut s, r5, 7, false);
+        for (reg, value) in [(9, 20_000_000 - 1), (10, 200_000 - 1), (11, 14), (12, 4), (14, 1)] {
+            s.push(write_reg_step(reg, value));
+        }
+        for (b, set) in [
+            (2, false),
+            (3, false),
+            (5, false),
+            (6, true),
+            (1, true),
+            (1, false),
+            (8, true),
+            (8, false),
+            (6, true),
+            (2, true),
+        ] {
+            bit(&mut s, r5, b, set);
+        }
+        s
+    }
+
+    fn open_steps() -> Vec<String> {
+        let mut s = vec!["config 1 -> ok".to_owned(), "claim 0 -> ok".to_owned()];
+        s.extend(read_reg_steps(2, 0xa5a5_a5a1));
+        s
+    }
+
+    /// Reads a session's packets up to End: the samples.
+    fn to_the_end(rx: &std::sync::mpsc::Receiver<(usize, Packet)>) -> usize {
+        let mut samples = 0;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(30)).expect("no End").1 {
+                Packet::Logic(l) => samples += l.len(),
+                Packet::End => return samples,
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_capture_runs_on_the_open_device() {
+        // Right after End, with no wait for the thread to finish.
+        let reply = format!("{}{MARKER}", records_hex(2, 1));
+        let mut steps = open_steps();
+        let mut r5 = 0;
+        for _ in 0..3 {
+            steps.extend(start_steps(&mut r5));
+            steps.extend(capture_steps(&reply));
+            steps.push(write_reg_step(14, 0));
+            r5 = 0x28;
+        }
+        let r = replay(&steps);
+        let mut d = Sla5032Device::from_transport(Box::new(r.clone())).unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(1024), None).unwrap();
+        d.open().unwrap();
+        for _ in 0..3 {
+            let (s, rx) = sink();
+            d.start(s).unwrap();
+            assert_eq!(to_the_end(&rx), 4);
+        }
+        d.close().unwrap();
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn a_start_during_a_capture_is_refused_and_a_stop_lets_the_next_one_in() {
+        let mut steps = open_steps();
+        let mut r5 = 0;
+        steps.extend(start_steps(&mut r5));
+        // Polls that say not done, for a machine slower than the first wait.
+        for _ in 0..100 {
+            steps.extend(read_reg_steps(1, 0));
+            steps.extend(read_reg_steps(0, 0));
+            steps.extend(read_reg_steps(2, 0xa5a5_a5a1));
+        }
+        let r = replay(&steps);
+        let mut d = Sla5032Device::from_transport(Box::new(r)).unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(1024), None).unwrap();
+        d.open().unwrap();
+        let (s, rx) = sink();
+        d.start(s).unwrap();
+        let (s2, _rx2) = sink();
+        assert!(matches!(d.start(s2), Err(Error::Busy)));
+        d.stop().unwrap();
+        to_the_end(&rx);
+        // The link is back: this start gets as far as the wire, not Busy.
+        let (s3, _rx3) = sink();
+        assert!(!matches!(d.start(s3), Err(Error::Busy)));
+        d.stop().unwrap();
+        d.close().unwrap();
     }
 
     #[test]

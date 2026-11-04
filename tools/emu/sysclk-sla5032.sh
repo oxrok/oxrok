@@ -73,7 +73,7 @@ emu_cases() {
     # open device"; only that last line maps, nothing a driver logs.)
     # What oxrok says and the C does not, in one line each, pinned by the
     # "warned" cases: dropped from the others' comparison and nothing else.
-    W="/sr: sysclk-sla5032: (The capture ended early|The FPGA's keys were not entered)/d"
+    W="/sr: sysclk-sla5032: (The capture ended early|The FPGA's key step failed)/d"
     # The driver's own messages, without the timestamps of -l 5. Dropped:
     # device.c's and hwdriver.c's lines, which are libsigrok's core tagged
     # with the driver's name, not the driver.
@@ -104,6 +104,7 @@ emu_cases() {
     V='protocol.c:782 sums records into an int: it goes negative and g_try_malloc() fails at protocol.c:795-801, so the capture has no samples, exit 0'
     # The C's silence.
     K='protocol.c:646 ignores la_cfg_fpga_done(), and only the debug log tells'
+    S='protocol.c:760-765 and 851 take a chunk that is empty or has no marker for the end of the data, and say nothing'
     F2='protocol.c:719-723, 733-737, 749-756 end a capture on an error with only the debug log, exit 0'
     # A capture is held to its first lines and the digest of the whole.
     B='1,4!d'
@@ -261,7 +262,7 @@ emu_cases() {
     done
     # The open stays good on oxrok as well, which says what went wrong.
     sla_options stall=read-mem
-    emu_case "fault keys warned" --oracle-differs "$K" --stderr --filter "$N; /keys were not entered/!d" -- -d $F --show
+    emu_case "fault keys warned" --oracle-differs "$K" --stderr --filter "$N; /key step failed/!d" -- -d $F --show
     # Assumed, not the C's: an FPGA without its keys never samples, so
     # register 2 repeats A5A5A5A0 and the capture never ends. oxrok is
     # stopped after the second poll's last reply. Replies: 2 of the open, the
@@ -341,6 +342,12 @@ emu_cases() {
     sla_options configured=1 period=258 no_zlp=1
     emu_case "fault chunk with no zlp" --oracle-differs "$Z" --digest --filter "$B" -- -d $F -C CH0 --samples 65536 -O bits
     emu_case "fault chunk with no zlp log" --oracle-differs "$Z" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 65536 -O bits
+    # What the C ends in silence: nothing at all (protocol.c:760-765), and a
+    # chunk neither full nor with a marker (protocol.c:851).
+    sla_options configured=1 data_short=0
+    emu_case "fault chunk empty warned" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
+    sla_options configured=1 data_short=600
+    emu_case "fault chunk short warned" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=0
     emu_case "fault chunk empty" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=601

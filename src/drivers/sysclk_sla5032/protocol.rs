@@ -85,7 +85,8 @@ const KEY_ADDRESS: u16 = 4000;
 
 /// A sample on the wire and in a logic packet.
 pub const UNIT_SIZE: usize = 4;
-const RLE_SAMPLE_SIZE: usize = 6;
+/// A record's bytes.
+pub const RLE_SAMPLE_SIZE: usize = 6;
 /// The records of a full chunk: another one follows.
 pub const RLE_SAMPLES_COUNT: usize = 0x10_0000;
 const RLE_BUF_SIZE: usize = RLE_SAMPLES_COUNT * RLE_SAMPLE_SIZE;
@@ -451,10 +452,12 @@ impl Link {
             self.send(&command)?;
         }
         // The C ignores this result (protocol.c:646) and the open succeeds.
+        // It covers the read of the keys, their writes and the read of
+        // register 2 after them, so it does not say the keys are missing.
         // Whether a design without its keys samples at all nothing shows, so
         // the open stays good and the user gets a warning.
         if let Err(e) = self.enter_keys() {
-            log::warn!("The FPGA's keys were not entered: {e}.");
+            log::warn!("The FPGA's key step failed: {e}.");
         }
         // Ignored in the C as well; a failure is in the debug log.
         let _ = self.reg14_zero();
@@ -731,7 +734,11 @@ mod tests {
         for _ in 0..0x1_0000 {
             data.extend(record(9, 65534));
         }
-        let out = run(Decoder::new(None, 1000), &data);
+        let mut d = Decoder::new(None, 1000);
+        let mut out = Vec::new();
+        // Not even one block fills, so nothing asks about a stop.
+        let never = || -> bool { panic!("a block was expanded") };
+        d.records(&data, 0x1_0000, &never, &mut |o| out.push(o));
         assert_eq!(out.len(), 1);
         assert_eq!(samples(&out).len(), 1000);
         // A block at a time when it lets more out.
@@ -774,11 +781,11 @@ mod tests {
 
     #[test]
     fn a_stop_ends_a_long_search() {
-        // A trigger that never fires over about 2^32 samples: a decoder that
-        // ignores the stop takes minutes and asks 16 Ki times.
+        // A trigger that never fires over 4 blocks: a decoder that ignores
+        // the stop asks 4 times.
         let stl = SoftTriggerLogic::new(vec![vec![(0, TriggerMatch::One)]], 4, 0);
         let mut data = Vec::new();
-        for _ in 0..0x1_0000 {
+        for _ in 0..16 {
             data.extend(record(0, 65534));
         }
         let mut d = Decoder::new(Some(stl), 100);
@@ -787,8 +794,63 @@ mod tests {
             asked.set(asked.get() + 1);
             asked.get() == 2
         };
-        d.records(&data, 0x1_0000, &stopped, &mut |_| panic!("no samples"));
+        d.records(&data, 16, &stopped, &mut |_| panic!("no samples"));
         assert_eq!(asked.get(), 2);
+    }
+
+    /// `n` samples of `value`, in records of the largest run.
+    fn run_of(value: u32, mut n: usize) -> Vec<u8> {
+        let mut data = Vec::new();
+        while n > 0 {
+            let run = n.min(65535);
+            data.extend(record(value, (run - 1) as u16));
+            n -= run;
+        }
+        data
+    }
+
+    /// The samples before the trigger and from it on, on CH0.
+    fn around_trigger(m: TriggerMatch, data: &[u8]) -> (Vec<u32>, Vec<u32>) {
+        let stl = SoftTriggerLogic::new(vec![vec![(0, m)]], 4, 2);
+        let out = run(Decoder::new(Some(stl), 1000), data);
+        let t = out.iter().position(|o| *o == Output::Trigger).expect("no trigger");
+        (samples(&out[..t]), samples(&out[t..]))
+    }
+
+    #[test]
+    fn an_edge_on_the_last_sample_of_a_block() {
+        let mut data = run_of(0, BLOCK_SAMPLES - 1);
+        data.extend(record(1, 0));
+        data.extend(record(3, 0));
+        let (pre, post) = around_trigger(TriggerMatch::Rising, &data);
+        assert_eq!(pre, [0, 0]);
+        assert_eq!(post, [1, 3]);
+    }
+
+    #[test]
+    fn an_edge_on_the_first_sample_of_a_block() {
+        // Against the last sample of the block before: rising from a zero
+        // that a fresh start would assume too, so falling shows it as well.
+        let mut data = run_of(0, BLOCK_SAMPLES);
+        data.extend(record(1, 0));
+        data.extend(record(3, 0));
+        let (pre, post) = around_trigger(TriggerMatch::Rising, &data);
+        assert_eq!(pre, [0, 0]);
+        assert_eq!(post, [1, 3]);
+        let mut data = run_of(1, BLOCK_SAMPLES);
+        data.extend(record(2, 0));
+        data.extend(record(4, 0));
+        let (pre, post) = around_trigger(TriggerMatch::Falling, &data);
+        assert_eq!(pre, [1, 1]);
+        assert_eq!(post, [2, 4]);
+    }
+
+    #[test]
+    fn a_limit_on_a_block_boundary() {
+        let data = run_of(5, 2 * BLOCK_SAMPLES);
+        let out = run(Decoder::new(None, BLOCK_SAMPLES as u64), &data);
+        assert_eq!(out.len(), 1);
+        assert_eq!(samples(&out).len(), BLOCK_SAMPLES);
     }
 
     #[test]
@@ -807,10 +869,28 @@ mod tests {
 
     #[test]
     fn a_stop_ends_the_wait_for_a_reply() {
-        let r = replay(&["bulk_out 04 030804 -> 3", "bulk_in 88 4 -> err timeout"]);
+        // An answer on offer: a wait that ignores the stop takes it.
+        let r = replay(&[
+            "bulk_out 04 030804 -> 3",
+            "bulk_in 88 4 -> err timeout",
+            "bulk_in 88 4 -> 12345678",
+        ]);
         let mut l = link(&r);
         l.stop.store(true, Ordering::SeqCst);
         assert!(matches!(l.read_reg(2), Err(Error::Timeout)));
+        assert_eq!(r.remaining(), 1);
+    }
+
+    #[test]
+    fn a_slice_with_no_answer_is_tried_again() {
+        let r = replay(&[
+            "bulk_out 04 030804 -> 3",
+            "bulk_in 88 4 -> err timeout",
+            "bulk_in 88 4 -> err timeout",
+            "bulk_in 88 4 -> 12345678",
+        ]);
+        let mut l = link(&r);
+        assert_eq!(l.read_reg(2).unwrap(), 0x1234_5678);
         r.finish().unwrap();
     }
 
