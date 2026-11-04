@@ -1,1 +1,1 @@
-sr: hantek-dso: Failed to send begincommand: LIBUSB_ERROR_NO_DEVICE.
+oxrok: err: oxrok::drivers::hantek_dso: Lost communication to USB device.
