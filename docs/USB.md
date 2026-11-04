@@ -164,7 +164,8 @@ the workspace (`cargo build -p oxrok-emu`), is that server, written
 here rather than taken from a crate so that the models, the checks on
 what the host sends and the transaction log are all in one place. It
 is how a driver is verified against sigrok-cli without the hardware
-(`docs/ROADMAP.md`, "Emulation plan").
+(`docs/ROADMAP.md`, "Emulation plan"). `oxrok-emu` also builds on
+Windows; attaching a device is Linux only.
 
 - A device is a `DeviceModel` (`emu/src/model.rs`): its descriptors,
   `control(setup, data)`, `out(ep, data)`, `in_transfer(ep, max)`
@@ -175,8 +176,9 @@ is how a driver is verified against sigrok-cli without the hardware
   the checks on every transfer.
 - Transport shells, in `emu/src/shells`, carry what every device of a
   kind shares, and a model fills in what its own protocol means.
-  `shells/hid.rs` is the first: the HID class descriptor, the report
-  descriptor fetch, `GET_REPORT`, `SET_REPORT`, idle and protocol, with
+  `shells/hid.rs` is the first (`HidInterface::with_version` sets a
+  `bcdHID` other than the default 1.11): the HID class descriptor, the
+  report descriptor fetch, `GET_REPORT`, `SET_REPORT`, idle and protocol, with
   the model answering the reports through `HidReports`.
   `shells/hidcable.rs` is what the serial over HID cable models share:
   the Pico emulator's descriptors, the packets they play, a stream
@@ -527,22 +529,48 @@ full case or oracle case. What else is checked depends on oxrok:
   and asks for the stop from the main loop, as a client's button would;
   a driver that ends the capture in the callback that sends its samples
   has finished by then, and `--stop-after 0` stops at the header, before
-  any sample. diffcli.sh builds it with `cc` against the oracle's prefix
-  (`LIBSIGROK_PREFIX` overrides it). That needs a C compiler and glib's
-  headers (glib2-devel, `pkg-config glib-2.0`), not the -devel packages
-  behind libsigrok.pc, and the build fails if the runner does not load
-  the `libsigrok.so` sigrok-cli loads, so `--gcov` counts its runs
-  alike. Without them a `--libsigrok` case fails, naming what is
-  missing. The case is held to its own goldens like any oracle case,
-  takes `--hangs`, `--timeout`, `--expect-fail` and events, not
+  any sample. The stop of `--stop-after` runs at `G_PRIORITY_HIGH`, ahead of the USB
+  source's events: at `g_idle_add()`'s priority a completion due in the
+  same iteration goes first, and how far the driver gets before the stop
+  is a race. `--stop-after-ms N` asks for the stop N ms after the session
+  has started, from a timeout of the main loop, for a stop between a
+  driver's transfers. Like `--stop-after`, it goes after the `--`.
+  `--continuous` is taken and means the session runs until the driver
+  ends it, with no any-key stop, so that a full case can give oxrok the
+  same arguments. diffcli.sh builds the runner with `cc` against the
+  oracle's prefix (`LIBSIGROK_PREFIX` overrides it). That needs a C
+  compiler and glib's headers (glib2-devel, `pkg-config glib-2.0`), not
+  the -devel packages behind libsigrok.pc, and the build fails if the
+  runner does not load the `libsigrok.so` sigrok-cli loads, so `--gcov`
+  counts its runs alike. Without them a `--libsigrok` case fails, naming
+  what is missing. The case is held to its own goldens like any oracle
+  case, takes `--hangs`, `--timeout`, `--expect-fail` and events, not
   `--oracle-bug`, `--oracle-differs` or `--record`, and `--no-oracle`
   skips it. Such a case says what libsigrok does, not what sigrok-cli
   does.
+- `--libsigrok --oxrok` is a full case with the runner in sigrok-cli's
+  place, for a driver sigrok-cli cannot drive once oxrok has it: same
+  arguments, oxrok held to the same goldens for output and transactions,
+  under `--no-oracle` too, and `--oracle-bug`, `--oracle-differs` and
+  `--record` work as for sigrok-cli.
+- `--tx-filter SED` is a `sed -E` script over each tool's transaction log
+  before it is compared, for an order the C driver's timing decides; the
+  case says what it hides.
+- `--no-oracle-only` marks a case that runs only under `--no-oracle`, for
+  what sigrok-cli cannot run first (a flag it lacks, an address its
+  upload would move). Its goldens are written by hand, as a bless does
+  not run it, and its slug counts in every mode, so that a bless keeps
+  them.
+- The tools run with stdin from `/dev/null`, whatever the harness was
+  launched from: sigrok-cli's `--continuous` stops on any key, and at
+  EOF it stops at once, so a driver's own stop is reached only through
+  `libsigrok-run`.
 - `--oracle-hangs` with `--oracle-bug` marks a full case where
   sigrok-cli must be stopped by the timeout (status 124 or 137), so a
   silent exit 1 fails. `--oracle-differs` does not require sigrok-cli to
   print something: its `.oracle` golden pins an empty output, and the
-  two tools must still differ.
+  two tools must still differ. An `--oracle-hangs` run keeps its gcov
+  counts, so turning a `--hangs` case into one loses no coverage.
 - A model can say what a held IN transfer holds when the host cancels it
   (`DeviceModel::in_unlinked`). The URB then completes with -ECONNRESET
   and those bytes, as an HCD does, and libusb reports a timed out
@@ -550,7 +578,10 @@ full case or oracle case. What else is checked depends on oxrok:
   transfer timeout, or a last transfer with no short packet, is shown. A
   case on it must end after few rounds: C's timeouts and resubmissions
   interleave with the unlinks, so the transfer that gets the data
-  varies; only the logged bytes are stable.
+  varies; only the logged bytes are stable. What a model says a held
+  transfer holds goes to the oldest held URB of its endpoint alone, since
+  a queue fills in order: nusb cancels the newest first, libusb's
+  timeouts the oldest.
 - `--digest` ends the compared output with the SHA-256 of the whole
   output before `--filter`, so a filter that thins a long output (the
   hantek-dso frames keep every 64th line) still compares every byte.
