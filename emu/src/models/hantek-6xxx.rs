@@ -108,7 +108,11 @@
 //! data, `stall_in=N` STALLs the N after those; `short=N` ends every
 //! bulk IN transfer after at most N bytes (even, not a multiple of 512:
 //! a short packet); `bcd=HEX` makes the firmware report another
-//! `bcdDevice`, as a firmware of another board would.
+//! `bcdDevice`, as a firmware of another board would; `slow=N` lets the
+//! first N bulk IN transfers of each acquisition complete and holds the
+//! later ones until the host cancels them, when they complete with what
+//! came by then, at most [`SLOW_BYTES`] (a transfer longer than the
+//! driver's 4 s timeout: 1 MiB takes 5.2 s at 100 kHz).
 //!
 //! What the model taught about the C driver (see `tools/emu/hantek-6xxx.sh`):
 //! a transfer that completes empty or fails after the flush is neither
@@ -138,7 +142,10 @@ pub const NAME: &str = "hantek-6xxx";
 pub const ABOUT: &str = "Hantek 6022BE/BL USB scope and relatives (EZ-USB, renumerates as 1d50:608e); \
                          profile=6022be (default), 6022be-04b5, dso2020, dds120, 6022bl, 6022bl-04b5, \
                          mdso, isds205b; flashed=1 starts with the firmware running; faults: \
-                         stall=NAME[/VALUE],..., empty=N, stall_in=N, short=N, bcd=HEX";
+                         stall=NAME[/VALUE],..., empty=N, stall_in=N, short=N, bcd=HEX, slow=N";
+
+/// What a transfer held by `slow=N` holds when it is cancelled.
+const SLOW_BYTES: usize = 512;
 
 /// A board the driver knows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -346,6 +353,9 @@ pub struct Faults {
     pub short: Option<usize>,
     /// The firmware's `bcdDevice`, when not the profile's.
     pub bcd: Option<u16>,
+    /// Bulk IN transfers of each acquisition that complete before the
+    /// rest are held until cancelled.
+    pub slow: Option<u32>,
 }
 
 impl Faults {
@@ -377,6 +387,7 @@ impl Faults {
             }
             "empty" => self.empty = count(v)?,
             "stall_in" => self.stall_in = count(v)?,
+            "slow" => self.slow = Some(count(v)?),
             "short" => {
                 let n = v.parse::<usize>().ok().filter(|n| {
                     *n > 0 && n.is_multiple_of(2) && !n.is_multiple_of(PACKET)
@@ -495,6 +506,8 @@ struct Acquisition {
     /// Faulty transfers still to come: empty ones, then stalled ones.
     empty: u32,
     stall_in: u32,
+    /// Transfers still to complete before `slow=N` holds them.
+    slow: Option<u32>,
 }
 
 /// The firmware's settings, and what the host sent since it came up.
@@ -760,6 +773,7 @@ impl Hantek {
                         ready: true,
                         empty: self.faults.empty,
                         stall_in: self.faults.stall_in,
+                        slow: self.faults.slow,
                     });
                 }
                 0 => {}
@@ -834,8 +848,15 @@ impl DeviceModel for Hantek {
                 "bulk IN transfer of {max} bytes; the driver asks for multiples of {PACKET}"
             ));
         }
+        if acq.slow == Some(0) {
+            // Held: see in_unlinked().
+            return Reply::Nak;
+        }
         let mut acq = acq.clone();
         acq.ready = false;
+        if let Some(n) = &mut acq.slow {
+            *n -= 1;
+        }
         // The faults, paced like the samples: one per submission.
         let reply = if acq.empty > 0 {
             acq.empty -= 1;
@@ -865,6 +886,28 @@ impl DeviceModel for Hantek {
         {
             acq.ready = true;
         }
+    }
+
+    /// A transfer `slow=N` holds completes with what came by the cancel.
+    fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        let Stage::Running(scope) = &self.stage else { return None };
+        let acq = scope.acq.as_ref()?;
+        if ep != EP_IN || acq.slow != Some(0) || !acq.ready {
+            return None;
+        }
+        let len = SLOW_BYTES.min(max) / 2;
+        let mut sample = acq.sample;
+        let mut data = Vec::with_capacity(len * 2);
+        for _ in 0..len {
+            data.push(self.code(scope, 0, sample));
+            data.push(self.code(scope, 1, sample));
+            sample += 1;
+        }
+        if let Stage::Running(Scope { acq: Some(acq), .. }) = &mut self.stage {
+            acq.sample = sample;
+            acq.ready = false;
+        }
+        Some(data)
     }
 
     fn reset(&mut self) {
@@ -1133,6 +1176,25 @@ mod tests {
         assert_eq!(got[..2], [Reply::Data(vec![]), Reply::Stall]);
         let Reply::Data(d) = &got[2] else { panic!() };
         assert_eq!(d.len(), 300);
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    /// `slow=N`: the first N transfers complete, the next is held until
+    /// the host cancels it, and comes with data once per submission.
+    #[test]
+    fn a_slow_transfer_holds_its_data_until_cancelled() {
+        let mut v = Violations::default();
+        let mut dev = flashed("6022be", &[("slow", "1")]);
+        start(&mut dev, 10, [1, 1], None, &mut v);
+        assert_eq!(dev.in_unlinked(6, 1024), None, "the first one is not held");
+        let Reply::Data(d) = dev.transfer_in(6, 1024, &mut v) else { panic!() };
+        assert_eq!(d.len(), 1024);
+        dev.in_submitted(6, 1024);
+        assert_eq!(dev.transfer_in(6, 1024, &mut v), Reply::Nak);
+        assert_eq!(dev.in_unlinked(6, 1024).map(|d| d.len()), Some(SLOW_BYTES));
+        assert_eq!(dev.in_unlinked(6, 1024), None, "one per submission");
+        dev.in_submitted(6, 1024);
+        assert_eq!(dev.in_unlinked(6, 1024).map(|d| d.len()), Some(SLOW_BYTES));
         assert!(v.is_empty(), "{v:?}");
     }
 }
