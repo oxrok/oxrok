@@ -1,2 +1,1 @@
-sr: hwdriver: Option 'limit_samples' not available for this device instance.
 Failed to configure time-based sample limit.

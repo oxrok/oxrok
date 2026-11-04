@@ -1,5 +1,4 @@
 sr: saleae-logic-pro: Found a Logic Pro 16 device.
-sr: device: saleae-logic-pro: Opening device instance.
 sr: saleae-logic-pro: fw-version: oxrok-emu Logic Pro 16 1.0
 sr: saleae-logic-pro: read serial
 sr: saleae-logic-pro: Failed to send request 0x81: LIBUSB_ERROR_PIPE.
