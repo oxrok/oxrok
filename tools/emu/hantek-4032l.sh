@@ -1,10 +1,11 @@
 # The Hantek 4032L logic analyzer (emu/src/models/hantek-4032l.rs): a
 # vendor USB device, 04b5:4032, with no firmware or bitstream to
 # upload. Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing
-# a device model". oxrok has no hantek-4032l driver: the cases are
-# oracle cases.
+# a device model".
 EMU_MODEL=hantek-4032l
 EMU_DRIVER=hantek-4032l
+# oxrok has the driver: its cases must run full.
+EMU_FULL=hantek-4032l
 EMU_GCOV_SHARED="src/usb.c"
 
 # The model's options for the cases that follow (see fx2lafw.sh).
@@ -16,6 +17,7 @@ h4032l_options() {
 # Claims interface 0 through usbfs as another program would, until
 # h4032l_release (as hantek_hold in hantek-dso.sh).
 h4032l_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]
@@ -45,11 +47,20 @@ h4032l_release() {
 
 emu_cases() {
     H=hantek-4032l
+    # oxrok's log prefix as sigrok-cli's: only the prefix goes, the text
+    # stays compared.
+    N='s/^oxrok: [a-z]+: oxrok::drivers::hantek_4032l[a-z0-9_:]*: /sr: hantek-4032l: /'
     # The driver's own messages on stderr, without sigrok-cli's prefix
-    # (and the timestamps of -l 5).
-    E='/hantek-4032l: /!d; s/.*hantek-4032l: //'
+    # (and the timestamps of -l 5). What else the tools print is dropped:
+    # that it fails is the exit status's to say.
+    E="$N; /hantek-4032l: /!d; s/.*hantek-4032l: //"
     # The last stderr line, sigrok-cli's own.
     L='$!d'
+    # oxrok's wording of a refused option as sigrok-cli's: the detail
+    # after "invalid argument", and "not supported" for what its
+    # sr_strerror() calls "not applicable". Which option was refused, and
+    # that it was, stays compared.
+    W='s/(invalid argument).*$/\1./; s/: not supported\.$/: not applicable./'
     # The address in --show.
     C='s/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/'
     # A few channels of each group, and what a capture of them is held
@@ -65,11 +76,11 @@ emu_cases() {
     emu_case "scan" --keep-header -- -d $H --scan
     emu_case "by address" --digest --filter "$B" -- -d $H:conn=$EMU_USB -C $CH --samples $S -O bits
     emu_case "by ids" --digest --filter "$B" -- -d $H:conn=04b5.4032 -C $CH --samples $S -O bits
-    emu_case "bad conn" --stderr -- -d $H:conn=nonsense --scan
+    emu_case "bad conn" --stderr --filter 's/^oxrok: [a-z]+: oxrok::drivers::hantek_4032l: /sr: usb: /' -- -d $H:conn=nonsense --scan
     emu_case "show" --keep-header --filter "$C" -- -d $H --show
     emu_case "show A" --keep-header --filter "$C" -- -d $H -g A --show
     emu_case "show B" --keep-header --filter "$C" -- -d $H -g B --show
-    emu_case "default capture" --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
+    emu_case "default capture" --record --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
     emu_case "all channels" --digest --filter '1,40!d' -- -d $H --samples $S -O hex
     emu_case "2048 samples 100M" --digest --filter '1~16!d' -- -d $H -C A0,B5 -c samplerate=100M --samples $S -O bits
     # sigrok-cli prints 3000; the driver asks for 3072 and reads them.
@@ -104,7 +115,7 @@ emu_cases() {
     emu_case "clock edge without external clock" --digest --filter '1,3!d' -- -d $H -c clock_edge=falling:external_clock_source=BCLK -C A0 --samples $S -O bits
     # Triggers on the counter the model plays: A0 is bit 0, B0 bit 1,
     # A1 bit 2, ... (channel n is A(n/2) or B(n/2)).
-    emu_case "trigger A1 rising" --digest --filter "$B" -- -d $H -C $CH -t A1=r --samples $S -O bits
+    emu_case "trigger A1 rising" --record --digest --filter "$B" -- -d $H -C $CH -t A1=r --samples $S -O bits
     emu_case "trigger B0 falling" --digest --filter "$B" -- -d $H -C $CH -t B0=f --samples $S -O bits
     emu_case "trigger A2 edge" --digest --filter "$B" -- -d $H -C $CH -t A2=e --samples $S -O bits
     emu_case "trigger levels" --digest --filter "$B" -- -d $H -C $CH -t A0=1,B0=0,A1=1 --samples $S -O bits
@@ -138,7 +149,9 @@ emu_cases() {
     # api.c:414-415 masks the rounded count with 0xfffffe00, a 32 bit
     # constant, so a count of 4 Gi samples and more loses its upper
     # bits: 2^32 + 2048 is taken as 2048 (a libsigrok bug, exit 0).
-    emu_case "get limit_samples 4G" -- -d $H -c limit_samples=4294969344 --get limit_samples
+    # oxrok keeps the count, which is past 64M, and refuses it; the
+    # .oracle golden holds the 2048 sigrok-cli prints.
+    emu_case "get limit_samples 4G" --oracle-differs "api.c:414-415: num_samples &= 0xfffffe00, a 32 bit mask on a 64 bit count" --expect-fail --stderr --filter "$N; /^[0-9]+\$|hantek-4032l: /!d; s/.*hantek-4032l: //" -- -d $H -c limit_samples=4294969344 --get limit_samples
     # Values the driver refuses.
     for kv in samplerate=3M limit_samples=1000 limit_samples=70M; do
         emu_case "set $kv" --expect-fail --stderr --filter "$E" -- -d $H -c $kv --samples $S
@@ -146,17 +159,24 @@ emu_cases() {
     # Names not in the lists: std_str_idx() fails, with no message of
     # the driver's own.
     for kv in external_clock_source=CCLK clock_edge=up; do
-        emu_case "set $kv" --expect-fail --stderr --filter "$L" -- -d $H -c $kv --samples $S
+        emu_case "set $kv" --expect-fail --stderr --filter "$L; $W" -- -d $H -c $kv --samples $S
     done
+    # sigrok-cli's and the generic checks, before the driver.
+    emu_case "samples below the minimum" --expect-fail --stderr --filter "$L" -- -d $H --samples 100
+    emu_case "samples above the maximum" --expect-fail --stderr --filter "$L" -- -d $H --samples 70M
+    emu_case "continuous refused" --expect-fail --stderr --filter "$L" -- -d $H --continuous
+    emu_case "get samplerate in a group" --expect-fail --stderr --filter "$L; $W" -- -d $H -g A --get samplerate
+    emu_case "set captureratio above 100" --expect-fail --stderr --filter "$L; $W" -- -d $H -c captureratio=150 --samples $S
+    emu_case "time limit" --digest --filter '1,3!d' -- -d $H -C A0 -c samplerate=1M --time 10 -O bits
     # The FPGA version in the driver's debug output.
-    emu_case "debug fpga version" --stderr --filter '/FPGA version/!d; s/.*hantek-4032l: //' -- -l 5 -d $H --show
+    emu_case "debug fpga version" --stderr --filter "$N; /FPGA version/!d; s/.*hantek-4032l: //" -- -l 5 -d $H --show
 
     # FPGA version 0: no external clock, one data transfer at a time.
     h4032l_options fpga=0
     emu_case "fpga 0 show" --keep-header --filter "$C" -- -d $H --show
     emu_case "fpga 0 capture" --digest --filter '1~16!d' -- -d $H -C A0,B3 --samples 8192 -O bits
     emu_case "fpga 0 trigger" --digest --filter "$B" -- -d $H -C $CH -t B1=r -c captureratio=20 --samples $S -O bits
-    emu_case "fpga 0 external clock" --expect-fail --stderr --filter "$L" -- -d $H -c external_clock=1 --samples $S
+    emu_case "fpga 0 external clock" --expect-fail --stderr --filter "$L; $W" -- -d $H -c external_clock=1 --samples $S
     # More status polls before the capture is complete, and none.
     h4032l_options fill=5
     emu_case "fill 5" --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
@@ -205,21 +225,30 @@ emu_cases() {
     h4032l_options stall=out@3
     emu_case "fault status command stall" --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
 
-    # What the driver never ends. The configure refused: the driver
-    # does not notice, and the board, never configured, answers status
-    # 0 for ever.
+    # What the C driver never ends and oxrok does.
+    IGNORED="protocol.c:229-230 logs a failed transfer at debug level and goes on, with no timeout on the capture"
+    # The configure refused: the C driver does not notice, and the
+    # board, never configured, answers status 0 for ever.
     h4032l_options stall=out@2
-    emu_case "fault configure stall hangs" --hangs --timeout 2 --stderr --no-output -- -d $H --samples $S
+    emu_case "fault configure stall" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # The get refused (OUT #5): the board goes on answering the status,
     # which the driver drops while it waits for the start word, for
     # ever.
     h4032l_options stall=out@5
-    emu_case "fault get stall hangs" --hangs --timeout 2 --stderr --no-output -- -d $H --samples $S
+    emu_case "fault get stall" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # A trigger the counter never meets (A0 high and B0 rising: B0 rises
-    # where A0 is low): status 1 for ever.
+    # where A0 is low): status 1 for ever, in libsigrok through the
+    # runner and in oxrok alike, a wait a stop must end. sigrok-cli has no
+    # way to stop it.
     h4032l_options
-    emu_case "trigger never fires hangs" --hangs --timeout 2 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
+    emu_case "trigger never fires hangs" --libsigrok --hangs --timeout 2 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
+    # Ctrl-C ends oxrok's wait. The status command refused makes the two
+    # reads after it time out (500 ms each), so that the signal lands on a
+    # known number of transfers: no read completes.
+    h4032l_options stall=out@3
+    emu_case "interrupt while polling" --interrupt out=2:3 --oracle-bug "sigrok-cli has no SIGINT handler" --no-output -- -d $H -t A0=1,B0=r --samples $S
 
+    h4032l_options
     # Unplugged while the driver polls the status (after IN #3), and in
     # the middle of the data (after IN #9 of a 64k sample capture).
     emu_case "unplug while polling" --stderr --filter "$E" --unplug in=6:3 -- -d $H --samples $S
