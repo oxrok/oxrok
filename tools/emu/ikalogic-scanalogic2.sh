@@ -39,7 +39,7 @@ signal.pause()
 ' "$EMU_BUSID" >"$TMP/sl2-hold" 2>&1 &
     HOLDPID=$!
     i=0
-    until grep -q '^held$' "$TMP/sl2-hold"; do
+    until grep -q '^held$' "$TMP/sl2-hold" 2>/dev/null; do
         i=$((i + 1))
         if [ $i -gt 100 ] || ! kill -0 $HOLDPID 2>/dev/null; then
             emu_fail "ikalogic-scanalogic2: could not claim the interface: $(cat "$TMP/sl2-hold")"
@@ -122,9 +122,11 @@ emu_cases() {
     emu_case "csv" -- -d $S -c samplerate=1M --samples 32 -O csv:header=false
     emu_case "vcd" -- -d $S -c samplerate=1M --samples 32 -O vcd
 
-    # Channels: the device always sends all four, the driver stops
-    # reading after the last enabled one. With channels left the status
-    # read finds a packet (05 CHANNEL ...), which makes it a RESET.
+    # Channels: the model sends all four (no channel mask in CMD_SAMPLE),
+    # the driver stops after the last enabled one and one read more. With a
+    # packet still left for the read after that, it finds 05 CHANNEL ...,
+    # which makes it a RESET; with none ("channels 0 1 2", one packet per
+    # channel) it finds 05 63 and goes straight to IDLE.
     emu_case "channel 0" -- -d $S -C 0 -c samplerate=1M --samples 32 -O bits
     emu_case "channel 1" -- -d $S -C 1 -c samplerate=1M --samples 32 -O bits
     emu_case "channel 2" -- -d $S -C 2 -c samplerate=1M --samples 32 -O bits
@@ -287,22 +289,22 @@ emu_cases() {
     sl2_options
 
     # libsigrok-run: what sigrok-cli cannot do. No limit: 0 bytes asked,
-    # and sample_packet %= num_sample_packets divides by 0
-    # (protocol.c:317).
+    # and sample_packet %= num_sample_packets divides by 0 (protocol.c:317).
+    # Library clients only, and only because the model answers a capture
+    # of 0 bytes with 05 60, its own choice (the model's doc): a device that
+    # never says data ready would make the driver poll for ever.
+    # --expect-fail takes any failure: only the .tx is pinned, not status 136.
     emu_case "lib no limit" --libsigrok --expect-fail --no-output -- -d $S -O bits
     # A stop, as a client's button (sigrok-cli stops only on a key with
-    # --continuous, which the driver does not offer). A stop at the header
-    # races the completion of CMD_SAMPLE (write 7), and one after the first
-    # packet races the next read (read 4): hold-set and hold-get make the
-    # stop win, so each case takes one path of the driver.
-    sl2_options hold-set=7
+    # --continuous, which the driver does not offer). libsigrok-run's stop
+    # runs at high priority, ahead of the next USB completion.
     emu_case "lib stop at header" --libsigrok --no-output -- -d $S --samples 800 --stop-after 0 -O bits
-    sl2_options hold-set=7 stale-sample=1
+    sl2_options stale-sample=1
     emu_case "lib stop at header stale status" --libsigrok --no-output -- -d $S --samples 800 --stop-after 0 -O bits
-    sl2_options hold-get=4
+    sl2_options
     emu_case "lib stop during packets" --libsigrok -- -d $S -C 0 --samples 5000 --stop-after 100 -O bits
     # The reset of a stop never recognized: for ever.
-    sl2_options hold-set=7 wait-trigger=never ignore-reset=never
+    sl2_options wait-trigger=never ignore-reset=never
     emu_case "lib stop never recognized" --libsigrok --hangs --timeout 3 --no-output -- -d $S -t 0=r --samples 800 --stop-after 0 -O bits
     sl2_options
 }

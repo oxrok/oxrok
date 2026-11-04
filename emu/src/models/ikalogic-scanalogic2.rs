@@ -16,7 +16,9 @@
 //!
 //! - Firmware or HDL source: looked for (sigrok-firmware, web searches,
 //!   the vendor's pages) and found none. The driver uploads nothing.
-//! - The sigrok wiki, `IKALOGIC_Scanalogic-2` ("Protocol"): the byte layout
+//! - The sigrok wiki, `IKALOGIC_Scanalogic-2` ("Protocol", written in 2013
+//!   by Marc Schink, the driver's author, as the page history shows): the
+//!   byte layout
 //!   of the commands, of a sample packet (`05 CHANNEL NUMBER 00`) and of
 //!   the info report (`0a`, the serial, the version), "sample packets are
 //!   received sequentially per channel", "if no more sample data is
@@ -26,15 +28,22 @@
 //!   device status can not be obtained in idle state", "an other status
 //!   \[after a reset\] indicates that the device did not recognize the
 //!   reset", the 262120 sample limit and the example serial 1371371152,
-//!   firmware 1.3. Second hand (the page names no source for it), and the
-//!   only description found.
+//!   firmware 1.3, and the packet number's wrap "if more than 253952 samples
+//!   (124 bytes per packet * 8 samples per byte * 256 packets) are
+//!   requested", which fits a number that restarts with each channel. The
+//!   driver author's own description, the only one found; not checked
+//!   against a device here.
 //! - The sigrok wiki, `IKALOGIC_Scanalogic-2/Info` (lsusb and dmesg of a
 //!   real device): every descriptor here, byte for byte: USB 1.10, HID
 //!   1.01, low speed, `bMaxPacketSize0` 8, the strings, the 22 byte report
 //!   descriptor, interrupt IN 0x81 of 8 bytes every 100 ms. Sure.
 //! - The C driver: the commands' use, `USB_TIMEOUT_MS`, the comments in
 //!   `sl2_receive_transfer_in` (a status that is not valid while the
-//!   device cannot take commands).
+//!   device cannot take commands). That the device sends all four channels
+//!   whichever are enabled is an inference from the driver, not something
+//!   the wiki says: `CMD_SAMPLE` has no channel mask, and
+//!   `buffer_sample_data` checks `devc->channels[devc->channel]->enabled`
+//!   (protocol.c:54) for channels it is handed.
 //!
 //! # The protocol as modelled
 //!
@@ -43,6 +52,11 @@
 //! samples, `05 60` once when the data is ready, then the packets: channel
 //! 0, 1, 2, 3, each of `(pre + post) / 124` packets rounded up, whichever
 //! channels the host enabled. After the last packet the status is ready.
+//! A driver that has read its last enabled channel reads once more, then
+//! looks at the next read: if a packet is still left for it, that is a valid
+//! status that is not ready, so it sends `CMD_RESET`; if the once more took
+//! the last packet (with one packet per channel, channels 0 to 2 enabled), or
+//! channel 3 was enabled, it reads ready and goes straight to `CMD_IDLE`.
 //! `CMD_RESET` makes it ready from anywhere; `CMD_IDLE` makes it idle;
 //! `CMD_INFO` makes the next read the info report.
 //!
@@ -70,9 +84,13 @@
 //!   its buffer, so the `CMD_RESET` and `CMD_IDLE` after the read carry
 //!   the serial and version; after a capture the same goes for the
 //!   `CMD_SAMPLE` fields behind `CMD_RESET` and `CMD_IDLE`.
-//! - A capture of 0 bytes is what the driver sends without a limit
-//!   (libsigrok-run only). What a real device answers is not known: the
-//!   model says data ready, then ready.
+//! - A capture of 0 bytes is what the driver sends without a limit (a
+//!   library client only: sigrok-cli starts no session without one). What a
+//!   real device answers is not known: the model says data ready, then
+//!   ready. The driver's division by zero (protocol.c:317) depends on that
+//!   choice: it needs a read in `STATE_RECEIVE_DATA`, so only after `05 60`.
+//!   A device that never said data ready would have the driver poll for
+//!   ever instead.
 //!
 //! # Emulation artifacts
 //!
@@ -89,14 +107,11 @@
 //!   model's choice.
 //! - The bytes the wiki says can be ignored (a status report's bytes 2 and
 //!   up, an info report's 7 and up) and the rest of a channel's last packet
-//!   are 0. The packet number restarts with each channel, which the wiki
-//!   does not say in so many words ("sequentially per channel").
+//!   are 0. The packet number restarts with each channel: the wiki says
+//!   "sequentially per channel" and its wrap figure (above) fits that, but
+//!   does not say so in so many words.
 //! - The real device resets itself after some seconds out of idle (the
 //!   wiki, `dev_open()`'s comment): on wall time, so not modelled.
-//! - `hold-get=N` and `hold-set=N` (below) exist only to order a host's
-//!   stop against a transfer: the server retries a transfer that got NAK on its
-//!   clock, so they are the one place wall time enters, and they change no
-//!   byte of the exchange.
 //! - The interrupt endpoint never answers: nothing in either source says
 //!   what it would send, and the driver never reads it.
 //!
@@ -114,8 +129,6 @@
 //! `stall-get=N`, `stall-set=N` (the request has no effect), `short-get=N`
 //! (the answer's first 4 bytes: a short control read, which any device can
 //! end early).
-//! `hold-get=N`, `hold-set=N` answer that read or write NAK for [`HOLD_OFFERS`]
-//! offers before answering it.
 //! Device behaviour named by the sources, counted in status reads:
 //! `stale-sample=N` (the first N reads after each `CMD_SAMPLE` answer the
 //! old buffer), `stale-info=1` (the read after `CMD_INFO` does),
@@ -135,8 +148,8 @@ pub const NAME: &str = "ikalogic-scanalogic2";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "IKALOGIC Scanalogic-2 (low speed HID, 20a0:4123, 128 byte feature \
      reports); serial=N, fw=MAJOR.MINOR, wait-trigger=N|never, sampling=N, digest=1; faults: \
-     stall-get=N, stall-set=N, short-get=N, hold-get=N, hold-set=N, stale-sample=N, stale-info=1, stale-reset=N, \
-     busy-reset=N, ignore-reset=N|never";
+     stall-get=N, stall-set=N, short-get=N, stale-sample=N, stale-info=1, stale-reset=N, busy-reset=N, \
+      ignore-reset=N|never";
 
 /// The USB vendor id (Clay Logic).
 pub const VENDOR_ID: u16 = 0x20a0;
@@ -177,10 +190,6 @@ const MAX_SAMPLE_BYTES: u32 = 32766;
 pub const SERIAL: u32 = 1_371_371_152;
 /// The default firmware version, the wiki's example.
 pub const FIRMWARE: (u8, u8) = (1, 3);
-
-/// Offers a `hold-get` or `hold-set` transfer gets NAK for: 20 ms server
-/// rounds each, ample for a host's main loop to run, within `USB_TIMEOUT_MS`.
-pub const HOLD_OFFERS: u32 = 5;
 
 /// A count of status reads or resets that can also be endless.
 const NEVER: u32 = u32::MAX;
@@ -235,8 +244,6 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "stall-get" => config.stall_get = nth(k, v)?,
             "stall-set" => config.stall_set = nth(k, v)?,
             "short-get" => config.short_get = nth(k, v)?,
-            "hold-get" => config.hold_get = nth(k, v)?,
-            "hold-set" => config.hold_set = nth(k, v)?,
             "stale-sample" => config.stale_sample = number(k, v)?,
             "stale-info" => config.stale_info = v == "1",
             "stale-reset" => config.stale_reset = number(k, v)?,
@@ -267,10 +274,6 @@ pub struct Config {
     pub stall_set: Option<u32>,
     /// This feature read answers its first 4 bytes.
     pub short_get: Option<u32>,
-    /// This feature read gets NAK for [`HOLD_OFFERS`] offers first.
-    pub hold_get: Option<u32>,
-    /// This feature write gets NAK for [`HOLD_OFFERS`] offers first.
-    pub hold_set: Option<u32>,
     /// Reads after each `CMD_SAMPLE` that answer the old buffer.
     pub stale_sample: u32,
     /// The read after `CMD_INFO` answers the old buffer.
@@ -296,8 +299,6 @@ impl Default for Config {
             stall_get: None,
             stall_set: None,
             short_get: None,
-            hold_get: None,
-            hold_set: None,
             stale_sample: 0,
             stale_info: false,
             stale_reset: 0,
@@ -421,9 +422,6 @@ struct Board {
     /// Feature reads and writes so far, for the faults.
     gets: u32,
     sets: u32,
-    /// Offers refused so far of the held read and write.
-    held_get: u32,
-    held_set: u32,
 }
 
 impl Board {
@@ -440,8 +438,6 @@ impl Board {
             capture_reset_seen: false,
             gets: 0,
             sets: 0,
-            held_get: 0,
-            held_set: 0,
         }
     }
 
@@ -644,10 +640,6 @@ impl HidReports for Board {
         if length != REPORT_BYTES {
             v.report(format!("GET_REPORT of {length} bytes; the report has {REPORT_BYTES}"));
         }
-        if self.config.hold_get == Some(self.gets + 1) && self.held_get < HOLD_OFFERS {
-            self.held_get += 1;
-            return Reply::Nak;
-        }
         self.gets += 1;
         if self.config.stall_get == Some(self.gets) {
             return Reply::Stall;
@@ -667,10 +659,6 @@ impl HidReports for Board {
         }
         if data.len() != REPORT_BYTES {
             v.report(format!("SET_REPORT of {} bytes; the report has {REPORT_BYTES}", data.len()));
-        }
-        if self.config.hold_set == Some(self.sets + 1) && self.held_set < HOLD_OFFERS {
-            self.held_set += 1;
-            return Reply::Nak;
         }
         self.sets += 1;
         if self.config.stall_set == Some(self.sets) {
@@ -1183,24 +1171,6 @@ mod tests {
     }
 
     #[test]
-    fn hold_naks_then_answers_once() {
-        let mut v = Violations::default();
-        let mut dev = board(Config { hold_set: Some(2), hold_get: Some(1), ..Config::default() });
-        assert_eq!(write(&mut dev, &cmd(CMD_RESET), &mut v), Reply::ack());
-        for _ in 0..HOLD_OFFERS {
-            assert_eq!(write(&mut dev, &cmd(CMD_INFO), &mut v), Reply::Nak);
-        }
-        assert_eq!(write(&mut dev, &cmd(CMD_INFO), &mut v), Reply::ack());
-        for _ in 0..HOLD_OFFERS {
-            assert_eq!(dev.control(GET, &[], &mut v), Reply::Nak);
-        }
-        assert_eq!(read(&mut dev, &mut v)[0], 0x0a, "the command was taken once");
-        assert_eq!(write(&mut dev, &cmd(CMD_RESET), &mut v), Reply::ack());
-        assert_eq!(status(&mut dev, &mut v), [5, 0x63]);
-        assert!(v.is_empty(), "{v:?}");
-    }
-
-    #[test]
     fn a_bus_reset_starts_over_with_the_options() {
         let mut dev = board(Config { stall_get: Some(1), ..Config::default() });
         let mut v = Violations::default();
@@ -1225,8 +1195,6 @@ mod tests {
             ("stall-get", "0"),
             ("stall-set", "x"),
             ("short-get", "0"),
-            ("hold-get", "0"),
-            ("hold-set", "x"),
             ("stale-sample", "x"),
             ("stale-reset", "x"),
             ("busy-reset", "x"),
