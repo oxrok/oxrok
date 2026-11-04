@@ -11,7 +11,7 @@
 
 use super::{Options, Output, OutputContext, OutputModule, OutputOption, meta_samplerate};
 use crate::core::analog::unit_string;
-use crate::core::util::{fmt_g, parse_boolstring, samplerate_string};
+use crate::core::util::{fmt_g, samplerate_string};
 use crate::core::{ChannelKind, Packet, Result};
 use std::fmt::Write as _;
 
@@ -77,7 +77,7 @@ pub(super) static MODULE: OutputModule = OutputModule {
     ],
     extensions: &["csv"],
     analog: true,
-    create: |ctx, options| Ok(Box::new(Csv::new(ctx, options))),
+    create: |ctx, options| Ok(Box::new(Csv::new(ctx, options)?)),
 };
 
 const XLABELS: [&str; 7] = [
@@ -138,18 +138,17 @@ struct Csv {
 }
 
 impl Csv {
-    fn new(ctx: &OutputContext, options: &Options) -> Self {
+    fn new(ctx: &OutputContext, options: &Options) -> Result<Self> {
         let get = |id: &str, default: &str| {
             options.get(id).cloned().unwrap_or_else(|| default.to_owned())
         };
-        let flag =
-            |id: &str, default: bool| options.get(id).map_or(default, |v| parse_boolstring(v));
+        let flag = |id: &str, default: bool| super::option_bool(options, id, default);
         let label = match get("label", "units").as_str() {
             "channel" => Label::Channel,
             "off" => Label::Off,
             _ => Label::Units,
         };
-        let time = flag("time", false);
+        let time = flag("time", false)?;
         let columns: Vec<Column> = ctx
             .channels
             .iter()
@@ -162,11 +161,11 @@ impl Csv {
             record: get("record", "\n"),
             frame: get("frame", "\n"),
             comment: get("comment", ";"),
-            header: flag("header", true),
+            header: flag("header", true)?,
             label,
             time,
-            trigger: flag("trigger", false),
-            dedup: flag("dedup", false) && time,
+            trigger: flag("trigger", false)?,
+            dedup: flag("dedup", false)? && time,
             columns,
             total_channels: ctx.channels.len(),
             title: ctx.title.clone(),
@@ -184,7 +183,7 @@ impl Csv {
             previous: None,
         };
         csv.set_samplerate(ctx.samplerate.unwrap_or(0));
-        csv
+        Ok(csv)
     }
 
     fn set_samplerate(&mut self, rate: u64) {
@@ -415,13 +414,32 @@ mod tests {
     }
 
     #[test]
+    fn a_flag_is_on_off_or_refused() {
+        let new = |value: &str| {
+            let chans = [Channel::logic(0)];
+            let opts = Options::from([("header".to_owned(), value.to_owned())]);
+            Csv::new(&ctx(&chans), &opts).map(|c| c.header)
+        };
+        assert!(new("yes").unwrap());
+        assert!(new("on").unwrap());
+        assert!(!new("no").unwrap());
+        assert!(!new("0").unwrap());
+        // No value: the default, as sigrok-cli for `-O csv:header`.
+        assert!(new("").unwrap());
+        for bad in ["maybe", "1x", "enable"] {
+            let e = new(bad).err().unwrap().to_string();
+            assert!(e.contains(&format!("Unable to convert '{bad}' to boolean!")), "{e}");
+        }
+    }
+
+    #[test]
     fn logic_rows_with_labels_time_and_trigger() {
         let chans = [Channel::logic(0), Channel::logic(1)];
         let mut opts = Options::new();
         opts.insert("header".into(), "false".into());
         opts.insert("time".into(), "true".into());
         opts.insert("trigger".into(), "true".into());
-        let mut c = Csv::new(&ctx(&chans), &opts);
+        let mut c = Csv::new(&ctx(&chans), &opts).unwrap();
         let mut out = Vec::new();
         c.receive(&Packet::Trigger, &mut out).unwrap();
         c.receive(&Packet::logic(1, vec![0b01, 0b10, 0b11]), &mut out).unwrap();
@@ -439,7 +457,7 @@ mod tests {
         opts.insert("header".into(), "false".into());
         opts.insert("label".into(), "off".into());
         let run = |opts: &Options| {
-            let mut c = Csv::new(&ctx(&chans), opts);
+            let mut c = Csv::new(&ctx(&chans), opts).unwrap();
             let mut out = Vec::new();
             for p in [
                 Packet::header(),
@@ -461,7 +479,7 @@ mod tests {
         assert_eq!(run(&opts), "--\n1\n0\n--\n1\n");
         // Rows still waiting for an analog column come after it.
         let chans = [Channel::logic(0), Channel::new(1, ChannelKind::Analog, "A0")];
-        let mut c = Csv::new(&ctx(&chans), &opts);
+        let mut c = Csv::new(&ctx(&chans), &opts).unwrap();
         let mut out = Vec::new();
         c.receive(&Packet::logic(1, vec![1]), &mut out).unwrap();
         c.receive(&Packet::FrameBegin, &mut out).unwrap();
@@ -473,7 +491,7 @@ mod tests {
         let chans = [Channel::new(0, ChannelKind::Analog, "A0")];
         let mut opts = Options::new();
         opts.insert("header".into(), "false".into());
-        let mut c = Csv::new(&ctx(&chans), &opts);
+        let mut c = Csv::new(&ctx(&chans), &opts).unwrap();
         let mut out = Vec::new();
         c.receive(
             &Packet::Analog(crate::core::AnalogData {

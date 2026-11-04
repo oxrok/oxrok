@@ -159,6 +159,18 @@ fn meta_samplerate(packet: &Packet) -> Option<u64> {
     }
 }
 
+/// Parses a boolean option with a default. Without a value (`-O csv:header`)
+/// it is the default, as in sigrok-cli; anything not clearly on or off is
+/// refused, as in sigrok-cli (parsers.c:469-475), which takes `true`, `yes`,
+/// `false` and `no` alone.
+fn option_bool(options: &Options, id: &str, default: bool) -> Result<bool> {
+    match options.get(id).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(v) => crate::core::util::parse_bool(v)
+            .ok_or_else(|| Error::Arg(format!("Unable to convert '{v}' to boolean!"))),
+    }
+}
+
 /// Parses an unsigned option with a default.
 fn option_u32(options: &Options, id: &str, default: u32) -> Result<u32> {
     match options.get(id) {

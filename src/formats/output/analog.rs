@@ -31,7 +31,7 @@ pub(super) static MODULE: OutputModule = OutputModule {
     extensions: &[],
     analog: true,
     create: |ctx, options| {
-        let meta = options.get("meta").is_none_or(|v| crate::core::util::parse_boolstring(v));
+        let meta = super::option_bool(options, "meta", true)?;
         Ok(Box::new(Analog::new(ctx, meta)))
     },
 };

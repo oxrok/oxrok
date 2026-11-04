@@ -180,6 +180,14 @@ pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
             let value = match (&v, key.kind()) {
                 (None, oxrok::core::ValueKind::Bool) => Value::Bool(true),
                 (None, _) => return Err(Error::Arg(format!("Option '{name}' needs a value."))),
+                (Some(v), oxrok::core::ValueKind::Bool) => {
+                    Value::parse(oxrok::core::ValueKind::Bool, v).map_err(|_| {
+                        Error::Arg(format!(
+                            "Invalid value: '{v}' for option '{name}': \
+                             it takes true, yes, on, 1, false, no, off or 0."
+                        ))
+                    })?
+                }
                 (Some(v), kind) => Value::parse(kind, v)?,
             };
             items.push(ConfigItem { name, key, value, group: group.clone(), config });
@@ -457,6 +465,36 @@ mod tests {
         let (sent, _) =
             run_configs(&["-g", "ch1", "-c", "enabled=off", "-c", "channel_group=CH1:enabled=on"]);
         assert_eq!(sent, ["CH1:enabled=true"]);
+    }
+
+    #[test]
+    fn a_boolean_must_be_clearly_on_or_off() {
+        for (text, sent) in [
+            ("on", "true"),
+            ("TRUE", "true"),
+            ("Yes", "true"),
+            ("1", "true"),
+            ("off", "false"),
+            ("FALSE", "false"),
+            ("no", "false"),
+            ("0", "false"),
+        ] {
+            let (got, result) = run_configs(&["-c", &format!("ocp_enabled={text}")]);
+            result.unwrap();
+            assert_eq!(got, [format!("ocp_enabled={sent}")], "{text}");
+        }
+        for text in ["1x", "enable", "", "onward", "2", " on", "disable"] {
+            for key in ["ocp_enabled", "enabled"] {
+                let (got, result) = run_configs(&["-c", &format!("voltage_target=5:{key}={text}")]);
+                let e = result.unwrap_err().to_string();
+                assert!(e.contains(&format!("Invalid value: '{text}' for option '{key}'")), "{e}");
+                assert_eq!(got, [] as [&str; 0], "{key}={text}");
+            }
+        }
+        // Without a value it stays true.
+        let (got, result) = run_configs(&["-c", "ocp_enabled"]);
+        result.unwrap();
+        assert_eq!(got, ["ocp_enabled=true"]);
     }
 
     #[test]

@@ -118,14 +118,20 @@ pub fn parse_timestring(text: &str) -> Option<u64> {
     }
 }
 
-/// Parses `true`, `yes`, `on` and `1` as true (case insensitive); anything
-/// else is false.
-pub fn parse_boolstring(text: &str) -> bool {
-    let t = text.trim();
-    t.eq_ignore_ascii_case("true")
-        || t.eq_ignore_ascii_case("yes")
-        || t.eq_ignore_ascii_case("on")
-        || t == "1"
+/// Parses a boolean that must be clearly on or off: `true`, `yes`, `on`,
+/// `1` or `false`, `no`, `off`, `0`, in any case. `sr_parse_boolstring()`
+/// takes an empty string as true, matches prefixes (`1x`, `onward`) and
+/// takes all else as false; a device must not be told `off` for a typo.
+pub fn parse_bool(text: &str) -> Option<bool> {
+    const ON: [&str; 4] = ["true", "yes", "on", "1"];
+    const OFF: [&str; 4] = ["false", "no", "off", "0"];
+    if ON.iter().any(|w| text.eq_ignore_ascii_case(w)) {
+        Some(true)
+    } else if OFF.iter().any(|w| text.eq_ignore_ascii_case(w)) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Parses a period like `10ms`, `2.5 us`, `1 s` into a rational number of
@@ -281,14 +287,24 @@ mod tests {
     }
 
     #[test]
-    fn parses_times_and_bools() {
+    fn parses_times() {
         assert_eq!(parse_timestring("100"), Some(100));
         assert_eq!(parse_timestring("100ms"), Some(100));
         assert_eq!(parse_timestring("2 s"), Some(2000));
         assert_eq!(parse_timestring("2h"), None);
-        assert!(parse_boolstring("yes"));
-        assert!(parse_boolstring("On"));
-        assert!(!parse_boolstring("no"));
+    }
+
+    #[test]
+    fn parses_only_clear_booleans() {
+        for on in ["true", "yes", "on", "1", "TRUE", "Yes", "oN"] {
+            assert_eq!(parse_bool(on), Some(true), "{on}");
+        }
+        for off in ["false", "no", "off", "0", "FALSE", "No", "oFf"] {
+            assert_eq!(parse_bool(off), Some(false), "{off}");
+        }
+        for neither in ["", " ", " on", "on ", "1x", "enable", "onward", "2", "00", "yes!", "t"] {
+            assert_eq!(parse_bool(neither), None, "{neither:?}");
+        }
     }
 
     #[test]
