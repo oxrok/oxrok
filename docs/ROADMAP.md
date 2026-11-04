@@ -237,9 +237,8 @@ each with where it belongs:
   `linux-modules-extra-$(uname -r)` if needed) and runs
   `tools/diffcli.sh --no-oracle`, which holds oxrok to the goldens of
   every model that has oxrok's driver, and skips with "skipped: no
-  vhci-hcd" when the runner's kernel cannot load the module. It is
-  untested until it is pushed: whether hosted runners get vhci-hcd and
-  the HID class drivers, and how long the run takes, are still open. A
+  vhci-hcd" when the runner's kernel cannot load the module. Its
+  `--no-oracle` step succeeded on GitHub's runners (run of `e86ce84`). A
   skipped job counts as satisfied for branch protection.
 - The harness follows the address through RENUMERATED, but a case line
   expands `$EMU_USB` before its own reset: `emu_reset` covers a case
