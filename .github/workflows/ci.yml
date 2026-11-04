@@ -132,6 +132,15 @@ jobs:
             sudo modprobe vhci-hcd
           fi
           test -d /sys/devices/platform/vhci_hcd.0
+      # The serial models' tty. Ubuntu's Azure kernels ship it in
+      # linux-modules or in the extras, depending on the version.
+      - name: Load cdc-acm
+        run: |
+          if ! sudo modprobe cdc-acm; then
+            sudo apt-get update -q
+            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sudo modprobe cdc-acm
+          fi
       - run: cargo build -p oxrok -p oxrok-emu
       # No sigrok-cli: full cases run oxrok alone against the committed
       # .out and .tx goldens, oracle-only cases are skipped and counted.

@@ -1811,6 +1811,7 @@ dependencies = [
  "nusb",
  "pyo3",
  "rusb",
+ "rustix",
  "rustpython-pylib",
  "rustpython-ruff_python_ast",
  "rustpython-ruff_python_parser",

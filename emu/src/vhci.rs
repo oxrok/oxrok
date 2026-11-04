@@ -158,7 +158,9 @@ pub fn wait_configured(busid: &str, timeout: Duration) -> Result<PathBuf> {
 }
 
 /// The device nodes the kernel created for the device: `/dev/hidrawN`,
-/// `/dev/ttyACMN`, `/dev/usbtmcN`. Waits up to `timeout` for the first.
+/// `/dev/ttyACMN`, `/dev/usbtmcN`. Waits up to `timeout` for the first
+/// only: a device with several functions may be reported with those that
+/// are there by then.
 pub fn device_nodes(dir: &Path, timeout: Duration) -> Vec<PathBuf> {
     let start = Instant::now();
     loop {
