@@ -9,7 +9,9 @@ use crate::cli::parse;
 use crate::cli::pipeline::Pipeline;
 use oxrok::core::session::Flow;
 use oxrok::core::util::{parse_sizestring, parse_timestring};
-use oxrok::core::{Device, DeviceClass, Error, Key, Registry, Result, Session, Value, ValueList};
+use oxrok::core::{
+    Device, DeviceClass, Error, Key, Registry, Result, Session, Value, ValueList, config_set,
+};
 use std::sync::atomic::Ordering;
 
 /// Scans and picks the one device to work with, the way sigrok-cli does:
@@ -206,13 +208,23 @@ fn has_option(device: &dyn Device, key: &Key) -> bool {
     device.option(key, None).is_some()
 }
 
+/// sigrok-cli's `maybe_config_set()` (main.c:87-97), which its `--samples` and
+/// `--frames` use: a key the device cannot set fails without `check_key()`'s
+/// message.
+fn maybe_config_set(device: &mut dyn Device, key: &Key, value: u64) -> Result<()> {
+    if device.option(key, None).is_some_and(|o| o.access.set) {
+        config_set(device, key, &Value::U64(value), None)
+    } else {
+        Err(Error::not_supported(key.id()))
+    }
+}
+
 fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
     let msec = parse_timestring(text)
         .filter(|t| *t > 0)
         .ok_or_else(|| Error::Arg(format!("Invalid time '{text}'")))?;
     if device.option(&Key::LimitMsec, None).is_some_and(|o| o.access.set) {
-        device
-            .set(&Key::LimitMsec, &Value::U64(msec), None)
+        config_set(device, &Key::LimitMsec, &Value::U64(msec), None)
             .map_err(|_| Error::arg("Failed to configure time limit."))?;
         return Ok(0);
     }
@@ -222,13 +234,7 @@ fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
         if samples == 0 {
             return Err(Error::arg("Not enough time at this samplerate."));
         }
-        if !has_option(&*device, &Key::LimitSamples) {
-            // sr_config_set()'s check_key(), which sigrok-cli's time limit
-            // goes through (its --samples asks the list first).
-            log::error!("Option 'limit_samples' not available for this device instance.");
-        }
-        device
-            .set(&Key::LimitSamples, &Value::U64(samples), None)
+        config_set(device, &Key::LimitSamples, &Value::U64(samples), None)
             .map_err(|_| Error::arg("Failed to configure time-based sample limit."))?;
         return Ok(samples);
     }
@@ -283,15 +289,13 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
                 )));
             }
         }
-        device
-            .set(&Key::LimitSamples, &Value::U64(limit_samples), None)
+        maybe_config_set(device.as_mut(), &Key::LimitSamples, limit_samples)
             .map_err(|_| Error::arg("Failed to configure sample limit."))?;
     }
     if let Some(f) = &args.frames {
         let frames =
             parse_sizestring(f).map_err(|_| Error::Arg(format!("Invalid frame limit '{f}'.")))?;
-        device
-            .set(&Key::LimitFrames, &Value::U64(frames), None)
+        maybe_config_set(device.as_mut(), &Key::LimitFrames, frames)
             .map_err(|_| Error::arg("Failed to configure frame limit."))?;
     }
 

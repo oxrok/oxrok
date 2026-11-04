@@ -441,7 +441,6 @@ impl Device for GreatfetDevice {
                 let rate = number()?;
                 // sr_config_set()'s check_key(), hwdriver.c:752.
                 if rate == 0 {
-                    log::error!("Cannot set 'samplerate' to 0.");
                     return Err(Error::arg("invalid argument"));
                 }
                 self.samplerate = rate;

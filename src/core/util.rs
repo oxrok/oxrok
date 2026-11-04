@@ -102,7 +102,16 @@ pub fn parse_sizestring(text: &str) -> Result<u64> {
         }
         value = value.checked_add((frac * multiplier as f64).round() as u64).ok_or_else(bad)?;
     }
-    Ok(value)
+    Ok(through_double(value))
+}
+
+/// C's `*size += frac_part` (strutil.c:1248-1250) takes the size through a
+/// double even with no fraction: what has more than 53 bits rounds, and what
+/// rounds to 2^64 is 0 on x86-64, where the cast is out of range. So
+/// sigrok-cli reads `--samples 18446744073709551615` as 0 and refuses it.
+fn through_double(value: u64) -> u64 {
+    let rounded = value as f64;
+    if rounded >= 18_446_744_073_709_551_616.0 { 0 } else { rounded as u64 }
 }
 
 /// Parses a duration as milliseconds: `100`, `100ms`, `2s`. Returns
@@ -284,6 +293,16 @@ mod tests {
         assert!(parse_sizestring("").is_err());
         assert!(parse_sizestring("12x").is_err());
         assert!(parse_sizestring("1.5").is_err());
+    }
+
+    /// As sigrok-cli reads them: `-c limit_samples=N --get limit_samples`.
+    #[test]
+    fn sizes_go_through_a_double_as_in_c() {
+        assert_eq!(parse_sizestring("9007199254740992").unwrap(), 9_007_199_254_740_992);
+        assert_eq!(parse_sizestring("9007199254740993").unwrap(), 9_007_199_254_740_992);
+        assert_eq!(parse_sizestring("18446744073709549568").unwrap(), 18_446_744_073_709_549_568);
+        assert_eq!(parse_sizestring("18446744073709551615").unwrap(), 0);
+        assert_eq!(parse_sizestring("18446744073709551000").unwrap(), 0);
     }
 
     #[test]

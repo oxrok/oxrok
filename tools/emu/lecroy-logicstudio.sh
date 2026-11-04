@@ -95,7 +95,7 @@ emu_cases() {
     # of a refused option, whose oxrok text names the rate or the range. No
     # line goes. sigrok-cli's and the runner's lines do not match.
     D='oxrok: err: oxrok::drivers::lecroy_logicstudio[a-z_:]*:'
-    X="s/^$D (Capture ratio)/sr: hwdriver: \\1/; s/^$D /sr: lecroy-logicstudio: /; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
+    X="s/^$D /sr: lecroy-logicstudio: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
     E="$X; /LIBUSB_ERROR_ACCESS/d; /^(Failed|This device|sr: |No devices)/!d"
 
     # Without firmware: every run uploads it in the scan, and dev_open()

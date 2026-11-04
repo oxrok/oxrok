@@ -484,7 +484,6 @@ impl Device for HantekDsoDevice {
                 // (hwdriver.c, check_key()).
                 let r = value.as_u64().ok_or_else(bad)?;
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(bad());
                 }
                 self.settings.capture_ratio = r;

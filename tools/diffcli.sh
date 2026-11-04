@@ -181,7 +181,9 @@ strip_header() {
 # nothing.
 to_cmp() {
     if [ "$which" = stderr ]; then
-        cp "$TMP/$1.err" "$TMP/$1.cmp"
+        # The core's refusals (oxrok::core::config_set) under libsigrok's
+        # name; drivers' filters read the one form.
+        sed -E 's/^oxrok: err: oxrok::core::hwdriver: /sr: hwdriver: /' "$TMP/$1.err" >"$TMP/$1.cmp"
     elif [ $strip = 1 ]; then
         strip_header <"$TMP/$1.out" >"$TMP/$1.cmp"
     else
@@ -255,6 +257,14 @@ case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic 
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
+# The core's refusals, hwdriver.c:746-765; the last line without oxrok's reason.
+R0='s/(invalid argument).*$/\1./'
+case_ "demo samples 0" --stderr -- -d demo --samples 0
+case_ "demo samples 2^64-1, read as 0" --stderr -- -d demo --samples 18446744073709551615
+case_ "demo limit_samples 0" --stderr --filter "$R0" -- -d demo -c limit_samples=0 --samples 5
+case_ "demo samplerate 0" --stderr --filter "$R0" -- -d demo -c samplerate=0 --set
+case_ "demo limit_time 0" --stderr --filter "$R0" -- -d demo -c limit_time=0 --set
+case_ "demo captureratio 101" --stderr --filter "$R0" -- -d demo -c captureratio=101 --set
 # Disabled channels: sigrok's demo masks by the count of enabled ones,
 # oxrok's by position (docs/CLI.md), so the selection stays contiguous.
 case_ "demo channels selection" -- -d $D8 -g Logic -c pattern=incremental -C D0,D1,D2 --samples 24 -O bits

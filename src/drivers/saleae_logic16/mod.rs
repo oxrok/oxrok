@@ -422,7 +422,6 @@ impl Device for Logic16Device {
                 // value, and above 100 the pre-trigger count of api.c:655
                 // would pass the sample limit.
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(Error::arg("capture ratio must be 0..100"));
                 }
                 self.settings.capture_ratio = r;

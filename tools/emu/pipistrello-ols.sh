@@ -163,7 +163,7 @@ emu_cases() {
     emu_case "samplerate too low" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=5 --samples 10
     emu_case "samplerate too high" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=300m --samples 10
     emu_case "too few samples" --stderr --expect-fail -- -d $D --samples 2
-    emu_case "captureratio too high" --stderr --expect-fail --filter "s/^oxrok: err: oxrok::drivers::pipistrello_ols: (Capture ratio)/sr: hwdriver: \\1/; s/^(Failed to set device option .captureratio.): invalid argument: .*/\\1: invalid argument./" -- -d $D -c captureratio=101 --samples 16
+    emu_case "captureratio too high" --stderr --expect-fail --filter "s/^(Failed to set device option .captureratio.): invalid argument: .*/\\1: invalid argument./" -- -d $D -c captureratio=101 --samples 16
     # The driver has no scan options and ignores any (api.c:90); oxrok's
     # command line refuses one the driver does not list, for any driver.
     emu_case "conn scan option" --oracle-differs "sigrok-cli passes a scan option the driver does not list and api.c:90 ignores it" --stderr --expect-fail -- -d $D:conn=1.2 --scan

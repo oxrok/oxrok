@@ -72,7 +72,6 @@ emu_cases() {
     # driver's error. The driver logged its cause itself, at debug in both.
     R="$N
 /^sr: session: /d
-/^sr: hwdriver: Cannot set /d
 s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # dev_close() configures when the settings are not dirty (api.c:190): the
     # last two lines of the C's --get. oxrok's close sends a configuration only

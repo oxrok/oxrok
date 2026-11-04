@@ -204,8 +204,7 @@ fn send_configs(device: &mut dyn Device, items: &[ConfigItem]) -> Result<()> {
         if access.is_none_or(|a| !a.set) {
             return Err(Error::Arg(format!("Failed to set device option '{k}': not applicable.")));
         }
-        device
-            .set(&item.key, &item.value, group)
+        oxrok::core::config_set(device, &item.key, &item.value, group)
             .map_err(|e| Error::Arg(format!("Failed to set device option '{k}': {e}.")))?;
     }
     Ok(())

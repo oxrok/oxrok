@@ -102,7 +102,7 @@ emu_cases() {
     # one, only for the pair each case can show (protocol.c:341 the count
     # 0x04 for the status 0x00, protocol.c:540 rsp[0] 0x00 for reg_val 0x55),
     # so another byte fails; oxrok's is pinned by unit tests.
-    N='s/ \[[0-9:.]+\]//; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^oxrok: [a-z]+: oxrok::drivers::saleae_logic_pro[a-z0-9_:]*: /sr: saleae-logic-pro: /; /^sr: saleae-logic-pro: firmware file not found/d; /^sr: device: saleae-logic-pro: Opening device instance/d; /^sr: (session|hwdriver|resource): /d; s/^Failed to open device.*/Failed to open device./; s/^(Unknown sample rate|device disconnected).*/Failed to start session./; s/(I2C wake read \()0x(04|00)/\1BYTE/; s/(read-back \()0x(00|55)/\1BYTE/'
+    N='s/ \[[0-9:.]+\]//; s/^oxrok: [a-z]+: oxrok::drivers::saleae_logic_pro[a-z0-9_:]*: /sr: saleae-logic-pro: /; /^sr: saleae-logic-pro: firmware file not found/d; /^sr: device: saleae-logic-pro: Opening device instance/d; /^sr: (session|hwdriver|resource): /d; s/^Failed to open device.*/Failed to open device./; s/^(Unknown sample rate|device disconnected).*/Failed to start session./; s/(I2C wake read \()0x(04|00)/\1BYTE/; s/(read-back \()0x(00|55)/\1BYTE/'
     # A renumerated device's address, in the text the harness's conn=
     # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'

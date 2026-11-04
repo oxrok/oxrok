@@ -313,7 +313,6 @@ impl Device for LogicStudioDevice {
                 // sr_config_set() refuses it before the driver sees it
                 // (hwdriver.c:757-764).
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(Error::arg("capture ratio must be 0..100"));
                 }
                 self.capture_ratio = r;
