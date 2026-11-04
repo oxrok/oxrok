@@ -6,12 +6,14 @@
 //! the meter packets they play, and the poll counted stream of the two
 //! cables that send without being asked.
 
+use crate::options::parse_hex_list;
+pub use crate::options::parse_number;
 use std::collections::VecDeque;
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, Reply, Speed, Violations};
 use crate::shells::hid::HidInterface;
-use crate::{Error, Result};
+use crate::Result;
 
 /// The serial number the emulator's cables report.
 pub const SERIAL: &str = "HIDCABLE1";
@@ -73,28 +75,13 @@ pub fn descriptors(
     }
 }
 
-/// Parses `packet=HEX[,HEX...]`: one or more meter packets, each of
-/// `min` to `max` bytes.
+/// Parses `packet=HEX[,HEX...]`: see [`parse_hex_list`].
 ///
 /// # Errors
 ///
 /// On a malformed hex string or a packet length out of range.
 pub fn parse_packets(value: &str, min: usize, max: usize) -> Result<Vec<Vec<u8>>> {
-    let mut out = Vec::new();
-    for hex in value.split(',') {
-        if !hex.len().is_multiple_of(2) || !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err(Error(format!("packet={hex}: an even number of hex digits")));
-        }
-        let bytes: Vec<u8> = (0..hex.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex digits"))
-            .collect();
-        if !(min..=max).contains(&bytes.len()) {
-            return Err(Error(format!("packet={hex}: {min} to {max} bytes")));
-        }
-        out.push(bytes);
-    }
-    Ok(out)
+    parse_hex_list("packet", value, min, max)
 }
 
 /// Parses `burst=N`, packets per start (0 to 1000).
@@ -104,19 +91,6 @@ pub fn parse_packets(value: &str, min: usize, max: usize) -> Result<Vec<Vec<u8>>
 /// When it is not a number in the range.
 pub fn parse_burst(value: &str) -> Result<Option<u32>> {
     parse_number("burst", value, 0..=1000).map(Some)
-}
-
-/// Parses a decimal option within `range`.
-///
-/// # Errors
-///
-/// When it is not a number in the range.
-pub fn parse_number(key: &str, value: &str, range: std::ops::RangeInclusive<u32>) -> Result<u32> {
-    value
-        .parse()
-        .ok()
-        .filter(|n| range.contains(n))
-        .ok_or_else(|| Error(format!("{key}={value}: {} to {}", range.start(), range.end())))
 }
 
 /// The meter's packets, played in turn and from the first again after

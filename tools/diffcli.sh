@@ -692,6 +692,22 @@ if [ $emu = 1 ]; then
         sudo -n rm -f "$EMU_MM_RULE"
         sudo -n udevadm control --reload
     }
+    # emu_options [KEY=VALUE...], in a scenario: the model's options for the
+    # cases that follow, none restoring EMU_OPTIONS. It then runs emu_conns,
+    # which a scenario on a node defines to set its conn= variables from
+    # $EMU_TTY and the like: a case fails if its tty moved after its line was
+    # read, so read them after anything that re-attaches (a scenario calls
+    # emu_conns itself first, and after an unplug this does).
+    emu_options() {
+        set -- options "$@"
+        emu_cmd "$*" >/dev/null || emu_fail "$EMU_MODEL: the emulator refused '$*'"
+        emu_conns
+    }
+    # emu_hex TEXT: TEXT as hex, printf's backslash escapes included, for a
+    # model's option: an option's value can hold no space.
+    emu_hex() {
+        printf "$1" | od -An -tx1 | tr -d ' \n'
+    }
     # emu_tty_closing_wait CENTISECONDS, in a scenario, before a case whose
     # device stops reading: how long the kernel holds a tool's close for
     # bytes still in flight (30 s by default), through TIOCSSERIAL as root.
@@ -1544,6 +1560,7 @@ flush()
         [ -f "$f" ] || continue
         EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
+        emu_conns() { :; }
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }
         if [ -n "$emu_models" ]; then
