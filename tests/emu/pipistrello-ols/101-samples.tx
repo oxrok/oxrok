@@ -35,3 +35,9 @@ bulk_out 04 8202000000 -> 5
 bulk_out 04 01 -> 1
 bulk_in 83 16384 -> @418:73507d91c04f8fab477460c2d52ed5058380265bc3b9f8596440543b900c372e
 bulk_in 83 16384 -> 0160
+bulk_in 83 16384 -> 0160
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1
+bulk_out 04 00 -> 1

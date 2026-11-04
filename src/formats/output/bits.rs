@@ -44,7 +44,8 @@ impl Bits {
         let channels = ctx.enabled_logic();
         let lines = channels.iter().map(|(_, n)| format!("{n}:")).collect();
         Bits {
-            width: width.max(1),
+            // Width 0: the C count never equals it, so no line ends.
+            width: if width == 0 { usize::MAX } else { width },
             count: 0,
             trigger: None,
             samplerate: ctx.samplerate,
@@ -155,6 +156,14 @@ mod tests {
                 crate::core::VERSION
             )
         );
+    }
+
+    #[test]
+    fn width_zero_never_wraps() {
+        let channels = [Channel::logic(0)];
+        let text = run(0, 1, &[0xff; 20], &channels);
+        assert_eq!(text.lines().count(), 3);
+        assert!(text.ends_with("D0:11111111 11111111 1111\n"));
     }
 
     #[test]

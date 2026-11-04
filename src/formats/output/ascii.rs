@@ -64,7 +64,8 @@ impl Ascii {
         let names: Vec<String> =
             channels.iter().map(|(_, n)| format!("{n:>name_width$}")).collect();
         Ascii {
-            width: width.max(1),
+            // Width 0: the C count never equals it, so no line ends.
+            width: if width == 0 { usize::MAX } else { width },
             count: 0,
             trigger: None,
             lines: names.iter().map(|n| format!("{n}:")).collect(),

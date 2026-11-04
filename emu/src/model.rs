@@ -268,6 +268,18 @@ pub trait DeviceModel: Send {
         let _ = (ep, max);
     }
 
+    /// The host cancelled a held IN transfer on endpoint number `ep`, of
+    /// up to `max` bytes (rounded as for [`DeviceModel::in_transfer`]).
+    /// What it holds already, if anything: the packets of a transfer the
+    /// device has not ended with a short packet. It completes with them
+    /// as a real host controller does, -ECONNRESET and the bytes, which
+    /// libusb reports as a timed out transfer with data. By default a
+    /// held transfer holds nothing.
+    fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        let _ = (ep, max);
+        None
+    }
+
     /// Data longer than this is logged as `@LEN:SHA256` rather than in
     /// hex (`crate::txlog::HASH_ABOVE` is the usual value); `None`, the
     /// default, logs every byte.

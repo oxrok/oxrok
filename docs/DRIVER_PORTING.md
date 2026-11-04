@@ -449,6 +449,129 @@ would have cost a user a long afternoon.
   acquisition) has only its scan and options under the oracle; its
   capture side rests on the model's unit tests until the harness can
   drive libsigrok directly.
+- A device that always dumps its whole memory still lets a port honour a
+  limit on the host. Keep the transactions identical and cut the output.
+  Then add cases whose limit equals the memory, so every sample of both
+  tools is still compared as a full case.
+- A driver whose readout is megabytes cannot record a capture fixture.
+  Record a fault case that ends early (`in-stall=N`) and say that replay
+  does not check samples.
+- A wall-clock deadline in the C driver cannot run as a full case: its
+  poll count varies from run to run. A port can count reads instead, but
+  a count alone is right only at one poll time. Pace each poll to a
+  minimum interval, make that interval injectable for tests, and state
+  what is left: a slower device stretches the wait.
+- A stop that joins an acquisition thread must never run on the thread
+  that empties the queue it blocks on. `Session` now drains while it
+  stops. A test for this has to make the queue really full (stop
+  reading, at a high rate), or it passes without the fix.
+- An `--oracle-bug` case must mean the C driver fails by itself. A
+  sigrok-cli that fails only because the case's timeout killed it is not
+  a bug, and an upstream fix would not flip the case.
+- An `--oracle-differs` case can differ on output size alone and pin
+  nothing about the behaviour it is named for. Check that the golden
+  shows it: hex prints `T:` only with a full 192-sample line.
+- `--oracle-bug` `.oracle` goldens keep sigrok-cli's raw stderr, so such
+  a case must not run at `-l 4`, whose timestamps change every run.
+- `--unplug out=EP:N` fires after the Nth transfer completes, so it
+  cannot fail that transfer. To fail the first bulk OUT, unplug after
+  the last control write before it (`out=0:5` here).
+- A sed `--filter` that normalises log prefixes and also folds repeated
+  lines with `N` must match `(^|\n)` with `g`, or the second line
+  reaches the comparison unnormalised.
+- Check C line numbers against the source before quoting them.
+- A model written from the C driver's comments cannot prove those
+  comments wrong. Before calling a C count a bug, ask what else could
+  make it right, and give the model an option for that reading. Here the
+  +1 looked right only because the model's stop register always sat on a
+  cluster boundary.
+- Don't refuse what the C driver sends when nothing shows the hardware
+  rejects it. Warn instead: a refusal can break a capture that works on
+  real hardware.
+- `--filter` is not additive in `emu_case`: only the last one applies,
+  so `--filter "$A" --filter '...'` silently drops the first. Join the
+  expressions with a newline.
+- A driver that uploads on every capture needs its firmware in the
+  replay: `tests/emu_replay.rs` writes the stand-ins itself. Check a
+  fixture's size before keeping it; a memory readout stores its answers
+  as hex, so record a sparse capture.
+- Scenario variables share one function scope. A new filter named R
+  would have been overwritten by the existing `R=captureratio=100`.
+- An `--unplug` case's replug rebinds kernel drivers before oxrok's run.
+  oxrok's reattach on release then adds control transfers, and unplugs
+  counted in transfers fire earlier. The harness unbinds before oxrok in
+  those cases.
+- A check of a cap in `sigrok-cli` (`maybe_config_get`) covers unlisted
+  keys too: use the whole condition, per scope.
+- A short-read fault needs a check beyond "differs from the oracle".
+  Comparing oxrok's output with the same capture without the fault shows
+  the fix restores the stream.
+- A `sed` `$` address in a scenario filter breaks if the tool's last
+  line varies. Match the final line by its text instead.
+- libftdi's `ftdi_usb_open_dev` leaves the error string "all fine",
+  which a later failed close prints.
+- A device's own firmware source outranks a model built from the driver:
+  look for it before accepting a model's assumed semantics. The model's
+  trigger timing made two `--oracle-differs` cases circular, since the
+  driver's "bug" was measured against assumptions in the model.
+- A fix in a shared layer changes other ports' results. The `close` fix
+  showed in scanaplus and chronovu, whose earlier matches relied on
+  nusb's release never failing.
+- sigrok-cli does not close the device after a refused start
+  (session.c:896-901) while oxrok does: filter that line and say why.
+- libftdi's `ftdi_usb_close` fails on a device that left, and keeps the
+  previous error's message; nusb's release reports success there. Track
+  the disconnect in the layer that mimics the library.
+- A driver's per-transfer timeout is protocol, not just error handling:
+  "a timeout is not fatal, take what arrived" needs a stream that gives
+  the partial data back (`bulk_in_stream_timed`). A transfer sized for
+  the fastest rate takes minutes at the slowest.
+- Run the same `-O format:width=` against sigrok-cli for edge widths: a
+  narrow hex width shows C's integer promotion.
+- `stop` must not join a thread that may still send packets; `close`
+  joins.
+- A golden case on an interrupt needs a known count: hold transfers
+  after N, or the number before the signal depends on timing.
+- A divider cast to a narrower type can truncate to 0 as well as to a
+  wrong value. Check whether the exact boundary value is reachable and
+  whether anything divides by the result: 800 MHz / 12207 is the one
+  such rate here.
+- A log line can be a transaction: libsigrok's spew-level register dump
+  reads the FPGA only at `-l 5`, so the port checks
+  `log_enabled!(Trace)` to send the same requests.
+- `--oracle-differs` compares sigrok-cli's stdout through the same
+  `--filter`, so a stderr filter must keep a stdout line or the case
+  fails with "no output from sigrok-cli".
+- Filters run after the emulator's sed: normalise oxrok's log prefix to
+  `sr: DRIVER: ` once and build the other filters on it, so an
+  unanchored match does not also catch the CLI's own final error line.
+- A driver that loads firmware on every open can only replay with the
+  same bytes: `tests/emu_replay.rs` writes the stand-ins itself.
+- A `--record` case keeps raw stdout, so it must use an output without
+  dates (bits or hex, not csv).
+- A wait with no model event point can still be interrupted
+  deterministically: `--interrupt out=0:N` on the last control write
+  before the wait, with no model change.
+- When a C driver loads the wrong thing and reports another, prefer a
+  fix that keeps the transactions. It keeps failing cases full, because
+  `--oracle-differs` needs sigrok-cli to exit 0.
+- `EMU_OPTIONS` needs `-o` before each option.
+- Read a device's header packet with a plain read rather than a stream
+  of one: the libusb backend's stream reads ahead on its own thread, so
+  samples are lost when it drops, silently with rc 0.
+- To check a libusb build, set `OXROK_USB_BACKEND=libusb`; `--features
+  libusb` alone still defaults to nusb.
+- A case's `--samples` must reach the fault it tests: the cut 3ch case
+  first stopped before the cut, and "oracle fixed?" caught it.
+- `--digest` on csv needs `csv:header=false`, because the header holds
+  the date. `-O binary` needs `--keep-header`, or the header strip
+  removes everything and the digest is that of nothing.
+- On an unflashed board, a stderr case must filter "Failed to open
+  device": a retried open logs it depending on timing, under both tools.
+- A C "bug" whose only ground is a model that implements the C's own
+  comment is not proven. Look for the device's firmware source first;
+  keep the C's behaviour until a recording says otherwise, and never
+  turn an inference into a refusal.
 
 ## Porting a decoder
 

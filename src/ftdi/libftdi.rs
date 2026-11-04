@@ -4,7 +4,8 @@
 //   ftdi_to_clkbits, ftdi_to_clkbits_AM and ftdi_convert_baudrate are ported
 //   (LGPL-2.1-only, taken under its section 3 as GPL-3.0-or-later).
 
-//! An FTDI port driven the way libftdi 1.5 drives it, for ports of
+//! An FTDI port (A, or B with [`Interface`]) driven the way libftdi 1.5
+//! drives it, for ports of
 //! libsigrok drivers that use libftdi (`ftdi-la`, and the other FTDI
 //! drivers after it): the same requests in the same order, with the
 //! same values, so the device sees under oxrok what it sees under
@@ -29,10 +30,10 @@
 //!   data, the rest of the last transfer kept for the next read, and a
 //!   failed transfer failing the read with what it had gathered.
 //!
-//! Opening ([`Context::open`]) is `ftdi_usb_open_dev`: claim port A,
+//! Opening ([`Context::open`]) is `ftdi_usb_open_dev`: claim the port,
 //! reset it, take the chip type from `bcdDevice`, the packet size from
-//! the endpoint, then 9600 Bd. Closing is dropping it: libftdi sends
-//! nothing either.
+//! the endpoint, then 9600 Bd. Closing ([`Context::close`], or dropping
+//! it) sends nothing, as in libftdi.
 //!
 //! One difference the device sees: libftdi detaches the kernel's
 //! `ftdi_sio` from port A and never attaches it again, while oxrok's
@@ -48,20 +49,58 @@ use crate::usb::{ControlRequest, Transport};
 use std::fmt;
 use std::time::Duration;
 
-/// libftdi's `INTERFACE_A` in `wIndex`.
-const INDEX_A: u16 = 1;
-/// The bulk IN endpoint of port A.
-const IN_EP: u8 = 0x81;
 /// `ftdi_init`'s `readbuffer_chunksize`.
 const READ_CHUNK: usize = 4096;
-/// The bulk OUT endpoint of port A (libftdi's `in_ep`, named from the
-/// chip's side).
-const OUT_EP: u8 = 0x02;
 /// `ftdi_init`'s `writebuffer_chunksize`.
 const WRITE_CHUNK: usize = 4096;
 /// The largest `readbuffer_chunksize` `ftdi_read_data_set_chunksize`
 /// takes on Linux (`MAX_BULK_BUFFER_LENGTH`).
 const MAX_READ_CHUNK: usize = 16384;
+
+/// libftdi's `enum ftdi_interface`: the port of a multi-port chip that
+/// `ftdi_set_interface` selects before the open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Interface {
+    /// Port A, libftdi's default.
+    #[default]
+    A,
+    /// Port B, of the two and four port chips.
+    B,
+}
+
+impl Interface {
+    /// `ftdi->index`: the port in `wIndex`.
+    fn index(self) -> u16 {
+        match self {
+            Interface::A => 1,
+            Interface::B => 2,
+        }
+    }
+
+    /// `ftdi->interface`: the USB interface number.
+    fn number(self) -> u8 {
+        match self {
+            Interface::A => 0,
+            Interface::B => 1,
+        }
+    }
+
+    /// The bulk IN endpoint (libftdi's `out_ep`).
+    fn in_ep(self) -> u8 {
+        match self {
+            Interface::A => 0x81,
+            Interface::B => 0x83,
+        }
+    }
+
+    /// The bulk OUT endpoint (libftdi's `in_ep`).
+    fn out_ep(self) -> u8 {
+        match self {
+            Interface::A => 0x02,
+            Interface::B => 0x04,
+        }
+    }
+}
 /// `ftdi_init`'s `usb_read_timeout` and `usb_write_timeout`.
 const TIMEOUT: Duration = Duration::from_millis(5000);
 
@@ -227,7 +266,8 @@ pub fn divisor(chip: ChipType, baud: u64) -> std::result::Result<(u16, u16, u64)
     Ok(((encoded & 0xffff) as u16, (encoded >> 16) as u16, best))
 }
 
-/// Port A of an FTDI chip, opened and driven as libftdi does.
+/// A port of an FTDI chip (port A unless opened with
+/// [`Context::open_interface`]), opened and driven as libftdi does.
 pub struct Context {
     t: Box<dyn Transport>,
     chip: ChipType,
@@ -236,8 +276,14 @@ pub struct Context {
     /// What the last transfer brought beyond what the last read took.
     buffer: Vec<u8>,
     pos: usize,
-    /// `readbuffer_chunksize`: the length of each bulk IN transfer.
+    port: Interface,
+    /// `readbuffer_chunksize`.
     chunk: usize,
+    /// `ftdi->error_str`: the message of the last error, which
+    /// `ftdi_usb_close` leaves as it is when it fails.
+    error: &'static str,
+    /// A transfer found the device gone.
+    gone: bool,
 }
 
 impl Context {
@@ -250,12 +296,25 @@ impl Context {
     ///
     /// libftdi's code and message for the step that failed; the
     /// transport is dropped then, as libftdi closes the device.
-    pub fn open(mut t: Box<dyn Transport>) -> std::result::Result<Self, FtdiError> {
+    pub fn open(t: Box<dyn Transport>) -> std::result::Result<Self, FtdiError> {
+        Self::open_interface(t, Interface::A)
+    }
+
+    /// `ftdi_set_interface` then `ftdi_usb_open_dev`: [`Context::open`]
+    /// on port `port`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Context::open`].
+    pub fn open_interface(
+        mut t: Box<dyn Transport>,
+        port: Interface,
+    ) -> std::result::Result<Self, FtdiError> {
         let info = t.info().clone();
         // libftdi asks libusb, which has the descriptor cached.
         let serial_index = t.string_indexes().map_or(u8::from(info.serial.is_some()), |i| i[2]);
-        if let Err(e) = t.claim_interface(0) {
-            log::debug!("claiming port A: {e}");
+        if let Err(e) = t.claim_interface(port.number()) {
+            log::debug!("claiming port {port:?}: {e}");
             return Err(FtdiError::new(
                 -5,
                 "unable to claim usb device. Make sure the default FTDI driver is not in use",
@@ -263,7 +322,7 @@ impl Context {
         }
         let chip = chip_type(info.device_version, serial_index);
         let default_packet = if chip.high_speed() { 512 } else { 64 };
-        let max_packet = t.max_packet_size(IN_EP).unwrap_or(default_packet).max(3);
+        let max_packet = t.max_packet_size(port.in_ep()).unwrap_or(default_packet).max(3);
         let mut ctx = Context {
             t,
             chip,
@@ -271,14 +330,19 @@ impl Context {
             bitbang: false,
             buffer: Vec::new(),
             pos: 0,
+            port,
             chunk: READ_CHUNK,
+            error: "",
+            gone: false,
         };
         if ctx.reset().is_err() {
-            return Err(FtdiError::new(-6, "ftdi_usb_reset failed"));
+            return Err(ctx.fail(-6, "ftdi_usb_reset failed"));
         }
         if ctx.set_baudrate(9600).is_err() {
-            return Err(FtdiError::new(-7, "set baudrate failed"));
+            return Err(ctx.fail(-7, "set baudrate failed"));
         }
+        // ftdi_usb_open_dev's last ftdi_error_return.
+        ctx.error = "all fine";
         Ok(ctx)
     }
 
@@ -298,7 +362,16 @@ impl Context {
     }
 
     fn out(&mut self, request: u8, value: u16, index: u16) -> Result<()> {
-        self.t.control_out(ControlRequest::vendor(request, value, index), &[], TIMEOUT)
+        let r = self.t.control_out(ControlRequest::vendor(request, value, index), &[], TIMEOUT);
+        self.gone |= matches!(r, Err(Error::Disconnected));
+        r
+    }
+
+    /// `ftdi_error_return`: the error, its message kept for
+    /// [`Context::close`].
+    fn fail(&mut self, code: i32, message: &'static str) -> FtdiError {
+        self.error = message;
+        FtdiError::new(code, message)
     }
 
     fn drop_buffer(&mut self) {
@@ -312,10 +385,10 @@ impl Context {
     ///
     /// `-1`, "FTDI reset failed".
     pub fn reset(&mut self) -> std::result::Result<(), FtdiError> {
-        self.out(req::RESET, 0, INDEX_A).map_err(|e| {
+        if let Err(e) = self.out(req::RESET, 0, self.port.index()) {
             log::debug!("reset: {e}");
-            FtdiError::new(-1, "FTDI reset failed")
-        })?;
+            return Err(self.fail(-1, "FTDI reset failed"));
+        }
         self.drop_buffer();
         Ok(())
     }
@@ -327,14 +400,14 @@ impl Context {
     ///
     /// The code above with the failing purge's message.
     pub fn tcioflush(&mut self) -> std::result::Result<(), FtdiError> {
-        self.out(req::RESET, 1, INDEX_A).map_err(|e| {
+        if let Err(e) = self.out(req::RESET, 1, self.port.index()) {
             log::debug!("purge from host: {e}");
-            FtdiError::new(-1, "FTDI purge of TX buffer failed")
-        })?;
-        self.out(req::RESET, 2, INDEX_A).map_err(|e| {
+            return Err(self.fail(-1, "FTDI purge of TX buffer failed"));
+        }
+        if let Err(e) = self.out(req::RESET, 2, self.port.index()) {
             log::debug!("purge to host: {e}");
-            FtdiError::new(-2, "FTDI purge of RX buffer failed")
-        })?;
+            return Err(self.fail(-2, "FTDI purge of RX buffer failed"));
+        }
         self.drop_buffer();
         Ok(())
     }
@@ -346,15 +419,12 @@ impl Context {
     ///
     /// `-1`, libftdi's message.
     pub fn set_bitmode(&mut self, mask: u8, mode: u8) -> std::result::Result<(), FtdiError> {
-        self.out(req::SET_BITMODE, (u16::from(mode) << 8) | u16::from(mask), INDEX_A).map_err(
-            |e| {
-                log::debug!("bit mode: {e}");
-                FtdiError::new(
-                    -1,
-                    "unable to configure bitbang mode. Perhaps not a BM/2232C type chip?",
-                )
-            },
-        )?;
+        let value = (u16::from(mode) << 8) | u16::from(mask);
+        if let Err(e) = self.out(req::SET_BITMODE, value, self.port.index()) {
+            log::debug!("bit mode: {e}");
+            return Err(self
+                .fail(-1, "unable to configure bitbang mode. Perhaps not a BM/2232C type chip?"));
+        }
         self.bitbang = mode != 0;
         Ok(())
     }
@@ -367,12 +437,13 @@ impl Context {
     /// [`divisor`]'s, and `-2` when the request fails.
     pub fn set_baudrate(&mut self, baud: u64) -> std::result::Result<u64, FtdiError> {
         let baud = if self.bitbang { baud * 4 } else { baud };
-        let (value, bits, best) = divisor(self.chip, baud)?;
-        let index = if self.chip.high_speed() { (bits << 8) | INDEX_A } else { bits };
-        self.out(req::SET_BAUD_RATE, value, index).map_err(|e| {
+        let (value, bits, best) =
+            divisor(self.chip, baud).map_err(|e| self.fail(e.code, e.message))?;
+        let index = if self.chip.high_speed() { (bits << 8) | self.port.index() } else { bits };
+        if let Err(e) = self.out(req::SET_BAUD_RATE, value, index) {
             log::debug!("baud rate: {e}");
-            FtdiError::new(-2, "Setting new baudrate failed")
-        })?;
+            return Err(self.fail(-2, "Setting new baudrate failed"));
+        }
         Ok(best)
     }
 
@@ -383,15 +454,16 @@ impl Context {
     ///
     /// `-1`, "set flow control failed".
     pub fn set_flow_ctrl(&mut self, flowctrl: u16) -> std::result::Result<(), FtdiError> {
-        self.out(req::SET_FLOW_CTRL, 0, flowctrl | INDEX_A).map_err(|e| {
+        if let Err(e) = self.out(req::SET_FLOW_CTRL, 0, flowctrl | self.port.index()) {
             log::debug!("flow control: {e}");
-            FtdiError::new(-1, "set flow control failed")
-        })
+            return Err(self.fail(-1, "set flow control failed"));
+        }
+        Ok(())
     }
 
     /// `ftdi_read_data`: fills `buf` from what the last transfer left,
     /// then from bulk transfers of 4096 bytes (or what
-    /// [`Context::set_read_chunksize`] set), their status bytes
+    /// [`Context::read_data_set_chunksize`] set), their status bytes
     /// stripped, until it is full or a transfer brings nothing. What
     /// does not fit stays for the next read. Returns the bytes read.
     ///
@@ -411,11 +483,12 @@ impl Context {
         let mut offset = left;
         self.drop_buffer();
         while offset < buf.len() {
-            let raw = match self.t.bulk_in(IN_EP, self.chunk, TIMEOUT) {
+            let raw = match self.t.bulk_in(self.port.in_ep(), self.chunk, TIMEOUT) {
                 Ok(raw) => raw,
                 Err(e) => {
                     log::debug!("bulk read: {e}");
-                    return Err(FtdiError::new(libusb_code(&e), "usb bulk read failed"));
+                    self.gone |= matches!(e, Error::Disconnected);
+                    return Err(self.fail(libusb_code(&e), "usb bulk read failed"));
                 }
             };
             if raw.len() <= 2 {
@@ -437,66 +510,105 @@ impl Context {
         Ok(offset)
     }
 
-    /// `ftdi_write_data`: bulk OUT transfers of at most 4096 bytes
-    /// (`writebuffer_chunksize`) to port A's OUT endpoint, each going on
-    /// from what the last one took, until all of `buf` is sent. Returns
-    /// the bytes sent.
+    /// `ftdi_read_data_set_chunksize`: the length of the bulk IN
+    /// transfers of [`Context::read_data`], at most 16 KiB as libftdi
+    /// has it on Linux (on every platform here, so that the device sees
+    /// one sequence). What the last transfer left is dropped. Sends
+    /// nothing.
+    pub fn read_data_set_chunksize(&mut self, size: usize) {
+        self.drop_buffer();
+        self.chunk = size.clamp(1, MAX_READ_CHUNK);
+    }
+
+    /// `ftdi_write_data`: bulk transfers of at most 4096 bytes to the
+    /// port's OUT endpoint. Returns the bytes written.
     ///
     /// # Errors
     ///
-    /// A failed transfer: `-1`, "usb bulk write failed", whatever
-    /// libusb said (libftdi passes no libusb code on here); what earlier
-    /// transfers sent is not reported. A transfer that takes nothing
-    /// fails the same way: libftdi would send it again for ever.
-    pub fn write_data(&mut self, buf: &[u8]) -> std::result::Result<usize, FtdiError> {
+    /// `-1`, "usb bulk write failed", when a transfer fails, also after
+    /// a partial one, or takes nothing.
+    pub fn write_data(&mut self, data: &[u8]) -> std::result::Result<usize, FtdiError> {
         let mut offset = 0;
-        while offset < buf.len() {
-            let end = (offset + WRITE_CHUNK).min(buf.len());
-            match self.t.bulk_out(OUT_EP, &buf[offset..end], TIMEOUT) {
-                Ok(0) => {
-                    log::debug!("bulk write: the transfer took nothing");
-                    return Err(FtdiError::new(-1, "usb bulk write failed"));
-                }
+        while offset < data.len() {
+            let end = (offset + WRITE_CHUNK).min(data.len());
+            match self.t.bulk_out(self.port.out_ep(), &data[offset..end], TIMEOUT) {
+                // libftdi would send it again for ever; a guard ends it.
+                Ok(0) => return Err(self.fail(-1, "usb bulk write failed")),
+                // A short take: the rest goes in the next transfer.
                 Ok(n) => offset += n,
                 Err(e) => {
                     log::debug!("bulk write: {e}");
-                    return Err(FtdiError::new(-1, "usb bulk write failed"));
+                    self.gone |= matches!(e, Error::Disconnected);
+                    return Err(self.fail(-1, "usb bulk write failed"));
                 }
             }
         }
         Ok(offset)
     }
-}
 
-/// The calls a sync FIFO driver adds (`ikalogic-scanaplus`): the
-/// latency timer, the read chunk size, EEPROM words, writes and the
-/// close.
-impl Context {
-    /// `ftdi_set_latency_timer`: `SET_LATENCY_TIMER` with `latency` ms.
+    /// `ftdi_set_latency_timer`, in ms (1 to 255).
     ///
     /// # Errors
     ///
-    /// `-1` for 0 (nothing sent), `-2` when the request fails.
+    /// `-1` for 0, `-2` when the request fails.
     pub fn set_latency_timer(&mut self, latency: u8) -> std::result::Result<(), FtdiError> {
         if latency < 1 {
-            return Err(FtdiError::new(-1, "latency out of range. Only valid for 1-255"));
+            return Err(self.fail(-1, "latency out of range. Only valid for 1-255"));
         }
-        self.out(req::SET_LATENCY_TIMER, u16::from(latency), INDEX_A).map_err(|e| {
+        if let Err(e) = self.out(req::SET_LATENCY_TIMER, u16::from(latency), self.port.index()) {
             log::debug!("latency timer: {e}");
-            FtdiError::new(-2, "unable to set latency timer")
-        })
+            return Err(self.fail(-2, "unable to set latency timer"));
+        }
+        Ok(())
     }
 
-    /// `ftdi_read_data_set_chunksize`: drops what is buffered and sets
-    /// the length of the bulk IN transfers of [`Context::read_data`],
-    /// at most 16 KiB, as libftdi has it on Linux (the platform the
-    /// emulator checks; libftdi elsewhere takes the size asked for).
-    /// Sends nothing.
-    pub fn set_read_chunksize(&mut self, chunksize: usize) {
-        self.drop_buffer();
-        self.chunk = chunksize.clamp(1, MAX_READ_CHUNK);
+    /// `ftdi_usb_close`: releases the port's interface and lets go of
+    /// the device. Nothing is sent.
+    ///
+    /// # Errors
+    ///
+    /// `-1` when the release fails, with the message of the last
+    /// error, which libftdi leaves as it was. On a device a transfer
+    /// found gone it always fails, as `libusb_release_interface` does
+    /// (`LIBUSB_ERROR_NO_DEVICE`), whatever the USB layer's own release
+    /// says: nusb's reports success there.
+    pub fn close(mut self) -> std::result::Result<(), FtdiError> {
+        let released = self.t.release_interface(self.port.number());
+        if let Err(e) = &released {
+            log::debug!("releasing port {:?}: {e}", self.port);
+        }
+        if released.is_err() || self.gone {
+            return Err(FtdiError::new(-1, self.error));
+        }
+        Ok(())
     }
+}
 
+/// The product string check `ftdi_usb_open_desc` makes on each device
+/// with the ids asked for, before opening it: `iProduct` read as
+/// `libusb_get_string_descriptor_ascii` reads it, then compared.
+///
+/// # Errors
+///
+/// `-8` when the string cannot be read, `-3` ("device not found") when
+/// it is another one; libftdi then tries the next device.
+pub fn check_product(t: &mut dyn Transport, product: &str) -> std::result::Result<(), FtdiError> {
+    let index = t.string_indexes().map_or(0, |i| i[1]);
+    match crate::usb::read_string_ascii(t, index) {
+        Ok(s) if s == product => Ok(()),
+        Ok(s) => {
+            log::debug!("The product string '{s}' is not '{product}'.");
+            Err(FtdiError::new(-3, "device not found"))
+        }
+        Err(e) => {
+            log::debug!("product string: {e}");
+            Err(FtdiError::new(-8, "unable to fetch product description"))
+        }
+    }
+}
+
+/// What a sync FIFO driver adds (`ikalogic-scanaplus`): EEPROM words.
+impl Context {
     /// `ftdi_read_eeprom_location`: EEPROM word `addr` (`READ_EEPROM`,
     /// `wIndex` the word's address, no port index).
     ///
@@ -505,29 +617,16 @@ impl Context {
     /// `-1`, "reading eeprom failed", when the request fails or brings
     /// other than 2 bytes.
     pub fn read_eeprom_location(&mut self, addr: u16) -> std::result::Result<u16, FtdiError> {
-        let bad = || FtdiError::new(-1, "reading eeprom failed");
-        let d = self
-            .t
-            .control_in(ControlRequest::vendor(req::READ_EEPROM, 0, addr), 2, TIMEOUT)
-            .map_err(|e| {
-                log::debug!("EEPROM word {addr}: {e}");
-                bad()
-            })?;
-        if d.len() != 2 {
-            return Err(bad());
-        }
+        let d = self.t.control_in(ControlRequest::vendor(req::READ_EEPROM, 0, addr), 2, TIMEOUT);
+        let d = match d {
+            Ok(d) if d.len() == 2 => d,
+            r => {
+                log::debug!("EEPROM word {addr}: {r:?}");
+                self.gone |= matches!(r, Err(Error::Disconnected));
+                return Err(self.fail(-1, "reading eeprom failed"));
+            }
+        };
         Ok(u16::from_le_bytes([d[0], d[1]]))
-    }
-
-    /// `ftdi_usb_close`: releases port A and closes the device.
-    ///
-    /// # Errors
-    ///
-    /// The release's, when it fails (the device is gone). libftdi
-    /// returns `-1` then and leaves its error string as the last
-    /// failing call set it, so the caller words the message.
-    pub fn close(mut self) -> Result<()> {
-        self.t.release_interface(0)
     }
 }
 
@@ -661,6 +760,79 @@ mod tests {
         assert_eq!(e, FtdiError::new(-9, "usb bulk read failed"));
     }
 
+    /// Port B through `ftdi_usb_open_dev`.
+    fn port_b(steps: &str) -> Context {
+        let text = format!(
+            "# oxrok usb fixture 1\ndevice vid=0403 pid=6010 version=0700 bus=0 addr=0 \
+             strings=1,2,0\nclaim 1 -> ok\nmps 83 -> 512\n\
+             ctl_out 40 00 0000 0002 - -> ok\nctl_out 40 03 04e2 0202 - -> ok\n{steps}"
+        );
+        Context::open_interface(Box::new(Replay::from_text(&text).unwrap()), Interface::B).unwrap()
+    }
+
+    #[test]
+    fn a_short_write_goes_on_from_what_was_taken() {
+        let mut ctx = port_b(
+            "bulk_out 04 01020304 -> 3\nbulk_out 04 04 -> 1\n\
+             bulk_out 04 05 -> 0\nbulk_out 04 06 -> err device \"endpoint stalled\"\n",
+        );
+        assert_eq!(ctx.write_data(&[1, 2, 3, 4]), Ok(4));
+        assert_eq!(ctx.write_data(&[5]).unwrap_err().code, -1);
+        assert_eq!(ctx.write_data(&[6]).unwrap_err().message, "usb bulk write failed");
+    }
+
+    #[test]
+    fn port_b_requests_and_endpoints() {
+        let mut ctx = port_b(
+            "ctl_out 40 00 0001 0002 - -> ok\nctl_out 40 00 0002 0002 - -> ok\n\
+             ctl_out 40 0b 00ff 0002 - -> ok\nctl_out 40 09 0010 0002 - -> ok\n\
+             bulk_out 04 c000000000 -> 5\n\
+             bulk_in 83 16384 -> 016031414c53\nrelease 1 -> ok\n",
+        );
+        ctx.tcioflush().unwrap();
+        ctx.set_bitmode(0xff, 0).unwrap();
+        ctx.set_latency_timer(16).unwrap();
+        assert_eq!(ctx.set_latency_timer(0).unwrap_err().code, -1);
+        // Asked for 64 KiB: 16 KiB, as libftdi on Linux.
+        ctx.read_data_set_chunksize(64 * 1024);
+        assert_eq!(ctx.write_data(&[0xc0, 0, 0, 0, 0]), Ok(5));
+        let mut id = [0u8; 4];
+        assert_eq!(ctx.read_data(&mut id), Ok(4));
+        assert_eq!(&id, b"1ALS");
+        ctx.close().unwrap();
+    }
+
+    #[test]
+    fn a_failed_close_keeps_the_last_message() {
+        // A device gone: the release fails whatever the layer below
+        // says, with the message of the write before it.
+        let mut ctx = port_b("bulk_out 04 00 -> err disconnected\nrelease 1 -> ok\n");
+        assert_eq!(ctx.write_data(&[0]).unwrap_err().message, "usb bulk write failed");
+        assert_eq!(ctx.close(), Err(FtdiError::new(-1, "usb bulk write failed")));
+        // A release that fails on a device that seems there.
+        let ctx = port_b("release 1 -> err device \"gone\"\n");
+        assert_eq!(ctx.close().unwrap_err().code, -1);
+    }
+
+    #[test]
+    fn the_product_string_decides() {
+        const STRINGS: &str = "ctl_in 00 06 0300 0000 4 -> 04030904\n\
+            ctl_in 00 06 0302 0409 255 -> 0a034100420043004400\n";
+        let strings = |steps: &str| -> Box<dyn Transport> {
+            let text = format!(
+                "# oxrok usb fixture 1\ndevice vid=0403 pid=6010 version=0700 bus=0 addr=0 \
+                 strings=1,2,0\n{steps}"
+            );
+            Box::new(Replay::from_text(&text).unwrap())
+        };
+        let mut t = strings(STRINGS);
+        assert_eq!(check_product(t.as_mut(), "ABCD"), Ok(()));
+        let mut t = strings(STRINGS);
+        assert_eq!(check_product(t.as_mut(), "Other").unwrap_err().code, -3);
+        let mut t = strings("ctl_in 00 06 0300 0000 4 -> err device \"endpoint stalled\"\n");
+        assert_eq!(check_product(t.as_mut(), "ABCD").unwrap_err().code, -8);
+    }
+
     #[test]
     fn writes_as_ftdi_write_data() {
         // 5000 bytes: 4096, then 904.
@@ -718,10 +890,11 @@ mod tests {
         assert_eq!(ctx.write_data(&[0x88, 0x41]), Ok(2));
         assert_eq!(ctx.write_data(&[0x88, 0x40]).unwrap_err().message, "usb bulk write failed");
         // 64 KiB asked for, 16 KiB transfers on Linux.
-        ctx.set_read_chunksize(64 * 1024);
+        ctx.read_data_set_chunksize(64 * 1024);
         let mut buf = vec![0u8; 100];
         assert_eq!(ctx.read_data(&mut buf), Ok(100));
-        ctx.close().unwrap();
+        // The write found the device gone: the release counts as failed.
+        assert_eq!(ctx.close().unwrap_err().code, -1);
     }
 
     #[test]

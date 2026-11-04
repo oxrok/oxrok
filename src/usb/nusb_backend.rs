@@ -1,7 +1,10 @@
 //! The `nusb` backend.
 
 use crate::core::Error;
-use crate::usb::{BulkStream, ControlRequest, Handle, Result, Transport, UsbDeviceInfo};
+use crate::usb::{
+    BulkStream, Completed, ControlRequest, Handle, Result, TransferQueue, Transport, UsbDeviceInfo,
+    timed_next,
+};
 use nusb::MaybeFuture;
 use nusb::transfer::{
     Buffer, Bulk, ControlIn, ControlOut, ControlType, In, Interrupt, Out, Recipient,
@@ -467,7 +470,30 @@ impl Transport for Nusb {
         for _ in 0..depth.max(1) {
             ep.submit(ep.allocate(size));
         }
-        Ok(Box::new(NusbStream { ep, size, owed: false }))
+        Ok(Box::new(NusbStream { ep, size, owed: false, depth: depth.max(1), timed: None }))
+    }
+
+    fn bulk_in_stream_timed(
+        &mut self,
+        endpoint: u8,
+        transfer_size: usize,
+        depth: usize,
+        transfer_timeout: Duration,
+    ) -> Result<Box<dyn BulkStream>> {
+        self.in_endpoint(endpoint)?;
+        let mut ep = self.in_endpoints.remove(&endpoint).expect("inserted");
+        let mps = ep.max_packet_size().max(1);
+        let size = transfer_size.div_ceil(mps).max(1) * mps;
+        for _ in 0..depth.max(1) {
+            ep.submit(ep.allocate(size));
+        }
+        Ok(Box::new(NusbStream {
+            ep,
+            size,
+            owed: false,
+            depth: depth.max(1),
+            timed: Some(transfer_timeout),
+        }))
     }
 
     fn bulk_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
@@ -515,10 +541,41 @@ struct NusbStream {
     size: usize,
     /// A transfer returned by the last `next`, not yet resubmitted.
     owed: bool,
+    depth: usize,
+    /// The transfer timeout of a timed stream.
+    timed: Option<Duration>,
+}
+
+impl TransferQueue for NusbStream {
+    fn submit(&mut self) {
+        self.ep.submit(self.ep.allocate(self.size));
+    }
+
+    fn wait(&mut self, timeout: Duration) -> Option<Completed> {
+        let c = self.ep.wait_next_complete(timeout)?;
+        let mut data = c.buffer.into_vec();
+        data.truncate(c.actual_len);
+        Some(Completed { data, status: c.status.map_err(transfer_error) })
+    }
+
+    fn cancel_all(&mut self) {
+        self.ep.cancel_all();
+    }
+
+    fn pending(&self) -> usize {
+        self.ep.pending()
+    }
 }
 
 impl BulkStream for NusbStream {
     fn next(&mut self, timeout: Duration) -> Result<Vec<u8>> {
+        if let Some(transfer_timeout) = self.timed {
+            let mut owed = std::mem::take(&mut self.owed);
+            let depth = self.depth;
+            let r = timed_next(self, depth, &mut owed, timeout, transfer_timeout);
+            self.owed = owed;
+            return r;
+        }
         // The transfer handed out last goes back into the queue once
         // the caller has dealt with it and asks for more, as libusb
         // drivers resubmit at the end of their callback: one that stops

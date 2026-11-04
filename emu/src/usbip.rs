@@ -399,6 +399,7 @@ impl Server {
                 }
                 Ok(Pdu::Unlink { seqnum, target }) => {
                     let found = held.iter().position(|u| u.seqnum == target);
+                    let mut status = 0;
                     if let Some(i) = found {
                         let u = held.remove(i);
                         self.event(&format!(
@@ -406,14 +407,16 @@ impl Server {
                             u.ep,
                             dir_word(u.direction)
                         ));
+                        status = ECONNRESET;
+                        // Packets it holds already: its RET_SUBMIT with
+                        // them goes first, so the unlink finds it completed.
+                        if self.complete_unlinked(&mut out, &u)? {
+                            status = 0;
+                        }
                     } else {
                         self.event(&format!("unlink seq {target}: already completed"));
                     }
-                    write_ret_unlink(
-                        &mut out,
-                        seqnum,
-                        if found.is_some() { ECONNRESET } else { 0 },
-                    )?;
+                    write_ret_unlink(&mut out, seqnum, status)?;
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -546,6 +549,34 @@ impl Server {
             device.transfer_out(urb.ep, &urb.data, &mut v)
         };
         (reply, v)
+    }
+
+    /// A held IN transfer just unlinked: when the model says it holds
+    /// data ([`crate::model::DeviceModel::in_unlinked`]), logs it and
+    /// completes the URB with it. Whether it did.
+    fn complete_unlinked(&mut self, out: &mut TcpStream, urb: &Urb) -> io::Result<bool> {
+        if urb.direction != DIR_IN || urb.ep == 0 {
+            return Ok(false);
+        }
+        let length = self.in_length(urb);
+        let Some(d) = self.device().in_unlinked(urb.ep, length) else { return Ok(false) };
+        let address = 0x80 | urb.ep;
+        let kind =
+            self.device().endpoint(address).map_or(0xff, crate::model::Endpoint::transfer_type);
+        let above = self.device().log_digest_above();
+        let d = &d[..d.len().min(urb.length)];
+        let line = transfer_line_undefined(
+            kind,
+            address,
+            length,
+            &urb.data,
+            &[],
+            &Reply::Data(d.to_vec()),
+            above,
+        );
+        self.log.lock().expect("log lock").transfer(&line);
+        write_ret_submit(out, urb.seqnum, ECONNRESET, d.len(), d)?;
+        Ok(true)
     }
 
     /// Logs the outcome and answers the client, or holds the URB;

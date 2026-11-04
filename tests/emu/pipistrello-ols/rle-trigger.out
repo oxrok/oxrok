@@ -47,7 +47,6 @@ Acquisition with 8/32 channels at 100 MHz
 13:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
 14:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
 15:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-T:             ^ 39
 8:00 00 00 00 00 00 00 00 00 01 ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
 9:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
 10:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 

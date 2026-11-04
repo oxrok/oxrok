@@ -113,6 +113,85 @@ Deliberate, and kept small:
   bytes a second (`-C 0 -c samplerate=1k`) with "Unable to sample at
   1000Hz.". libsigrok computes its transfer plan before it checks the
   rate, divides by zero (`api.c:544`), and sigrok-cli dies of SIGFPE.
+- `chronovu-la` honours `--samples` and `--time`: the device still sends
+  its whole memory, and oxrok outputs only what was asked. libsigrok
+  stores both limits, never reads them, and outputs all 8 Mi samples (4
+  Mi on the LA16).
+- `chronovu-la` on the LA16 marks the trigger at the sample that met it,
+  also for edge-only triggers. libsigrok compares single bytes against a
+  16 bit mask, so `-t 0=1` gives a 1 byte packet that crashes `hex` and
+  `bits` and shifts `csv`, and an edge-only trigger gives no marker. One
+  limit: an edge channel already at its new level on sample 0 counts as
+  the edge, so if the device kept samples before its trigger the marker
+  can land on sample 0, ahead of the real edge.
+- `chronovu-la` ends a capture whose device is unplugged, logging each
+  failure once. libsigrok recurses on the failed write until the stack
+  overflows.
+- `chronovu-la` waits for a trigger for 10 s plus the capture time at
+  the rate set, in reads at least 16 ms apart. libsigrok waits 10 s of
+  wall time at any rate, which on a real LA8 is shorter than a full
+  memory takes below about 833 kHz.
+- `chronovu-la` resets the sequencer and closes the chip on a stop, so
+  the next capture needs the device opened again. libsigrok only removes
+  its source and sends the end (`api.c:502-508`), leaving the device
+  mid-capture.
+- `chronovu-la` opens the device the scan found. libftdi opens the first
+  with those ids and that product string, so of two boards libsigrok
+  opens the first for both.
+- asix-sigma: a capture that wrapped the memory has the whole last row
+  more than sigrok-cli's: 448 samples for a dense signal at up to 50
+  MHz. At 100 and 200 MHz an event is 2 and 4 samples, and a sparse
+  signal repeats samples across gaps, so the number differs.
+- asix-sigma: a trigger in the first 28 events of the memory gets a
+  marker; sigrok-cli prints none.
+- asix-sigma: `external_clock_source=16` with `external_clock=1`
+  captures as sigrok-cli does, with a warning on stderr.
+- asix-sigma: a forced stop that never completes ends the capture with
+  "Could not poll for post-trigger state." after 1000 mode reads, or 100
+  once a stop was asked for; sigrok-cli keeps polling.
+- `ikalogic-scanaplus` ends a capture on whichever of `--time` and
+  `--samples` is reached first. libsigrok tests the sample limit first
+  on each decoded read (protocol.c:358-367), so `--time 1 --samples
+  300000` gives 300000 samples there and 100000 here.
+- `ikalogic-scanaplus` decodes the stream correctly after a short or odd
+  read. libsigrok's output is shifted or split then
+  (protocol.c:345-352).
+- `ikalogic-scanaplus` gives port A back to the kernel's serial driver
+  when it closes, at the scan's close too, like `ftdi-la`.
+- p-ols: captures that sigrok-cli crashes on or never ends (a limit not
+  a multiple of 4, 4 stages, `captureratio=100`) complete. All 32
+  channels at 200 MHz and a board without a memory size are refused with
+  a message.
+- p-ols: on a slow board `samplerate` reads the rate it starts at, not
+  0.
+- All drivers: a scan option the driver does not list is refused
+  ("Unknown scan option 'conn'.", exit 1); sigrok-cli prints nothing and
+  exits 0.
+- `-c a=1:b=2` sets the options in the order given. sigrok-cli sets them
+  in its hash table's order, which shows on a device where setting an
+  option talks to the hardware (the Kingst PWM outputs).
+- kingst-la2016 captures stop at `--samples`, and a rate whose divider
+  does not fit 16 bits is refused.
+- `dreamsourcelab-dslogic`: `--get clock_edge` answers the edge set;
+  sigrok-cli always prints `rising`.
+- `dreamsourcelab-dslogic`: on the first DSLogic, the threshold after
+  open reads `0.7-1.4`, the bitstream loaded; sigrok-cli reports
+  `1.4-3.6`.
+- `dreamsourcelab-dslogic`: `voltage_threshold` outside 0 to 5 V is
+  refused; sigrok-cli writes an out of range DAC value and exits 0.
+- `dreamsourcelab-dslogic`: a trigger position above about 10 % of a 256
+  Mibit board's memory is honoured up to 90 %; sigrok-cli caps it at
+  about 10 %.
+- `dreamsourcelab-dslogic`: a STALLed or short trigger packet logs
+  "Failed to read the trigger position" and ends the capture; sigrok-cli
+  hangs.
+- `dreamsourcelab-dslogic`: a trigger of more than one stage, `0=rf`
+  included, is refused ("Only 1 trigger stages are supported.");
+  sigrok-cli writes every stage to stage 0 and exits 0.
+- `dreamsourcelab-dslogic`: a trigger on the capture's last sample works
+  with `-O hex`; sigrok-cli dies of SIGSEGV.
+- `dreamsourcelab-dslogic`: a transfer cut inside an atom gives 0 for
+  the bits it lacks; sigrok-cli reads what the buffer held before.
 
 ## Not available yet
 

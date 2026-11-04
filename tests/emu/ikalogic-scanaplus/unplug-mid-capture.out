@@ -1,1 +1,2 @@
 Failed to read FTDI data (-4): usb bulk read failed.
+Failed to close FTDI device (-1): usb bulk read failed.

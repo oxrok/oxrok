@@ -4,4 +4,5 @@ sr: chronovu-la: Failed to read data (-4): usb bulk read failed.
 sr: chronovu-la: Failed to write data (-1): usb bulk write failed.
 sr: chronovu-la: Failed to purge FTDI buffers (-1): FTDI purge of TX buffer failed.
 sr: chronovu-la: Failed to reset FTDI device (-1): FTDI reset failed.
+sr: chronovu-la: Failed to close FTDI device (-1): FTDI reset failed.
 sr: chronovu-la: Failed to read data block: -1.

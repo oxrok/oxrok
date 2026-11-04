@@ -129,7 +129,15 @@
 //! date; `extra-packets=N` reports N packets more than the capture
 //! holds; `short-bitstream=1` takes half of the first bitstream chunk;
 //! `empty=N` and `stall-in=N` complete the first N bulk IN transfers
-//! after a bulk start with no data, or STALL them, one per submission.
+//! after a bulk start with no data, or STALL them, one per submission;
+//! `slow-in=1` holds every bulk IN transfer until the host cancels it,
+//! when it completes with one submission's data (a device slower than
+//! the driver's 500 ms timeout, or a last transfer with no short packet
+//! to end it); `in-limit=N` holds every bulk IN transfer after N with
+//! data, so that an interrupt lands on a known number of them.
+//!
+//! The event point (`arm interrupt model`): the first read of the run
+//! state during a capture.
 
 mod capture;
 
@@ -147,7 +155,7 @@ pub const ABOUT: &str = "Kingst LA series logic analyzer (77a1:01a2, EZ-USB, ren
                          mcu=1 starts with the firmware running, fpga=1 with the bitstream loaded; \
                          faults: stall=WHAT[@N], fpga-init=N, run-state=HEX, pwm=MASK, eeprom-id=HEX, \
                          date=HEX, extra-packets=N, short-bitstream=1, empty=N, stall-in=N, fw-dead=1, \
-                         extra-bytes=N, more-samples=N";
+                         extra-bytes=N, more-samples=N, slow-in=1, in-limit=N";
 
 /// The vendor id, `protocol.h`.
 pub const VID: u16 = 0x77a1;
@@ -375,6 +383,8 @@ pub struct Faults {
     short_bitstream: bool,
     empty: u32,
     stall_in: u32,
+    slow_in: bool,
+    in_limit: Option<u32>,
     fw_dead: bool,
     extra_bytes: u32,
     more_samples: u64,
@@ -449,6 +459,14 @@ impl Faults {
             "more-samples" => self.more_samples = u64::from(count(v)?),
             "empty" => self.empty = count(v)?,
             "stall-in" => self.stall_in = count(v)?,
+            "slow-in" => {
+                self.slow_in = match v {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err(Error(format!("slow-in={v}: 0 or 1"))),
+                }
+            }
+            "in-limit" => self.in_limit = Some(count(v)?),
             _ => return Ok(false),
         }
         Ok(true)
@@ -623,9 +641,12 @@ struct Bulk {
     ready: bool,
     empty: u32,
     stall_in: u32,
+    /// Transfers completed with data since the stream or window began.
+    done: u32,
 }
 
 /// The emulated device.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Kingst {
     profile: Profile,
     faults: Faults,
@@ -642,6 +663,10 @@ pub struct Kingst {
     captured: Option<Box<Capture>>,
     bulk: Bulk,
     counts: Vec<(Req, u32)>,
+    /// Whether a capture's run state was read, and the event point of the
+    /// first such read, not yet taken.
+    polled: bool,
+    point: bool,
 }
 
 impl Kingst {
@@ -677,6 +702,8 @@ impl Kingst {
             captured: None,
             bulk: Bulk::default(),
             counts: Vec::new(),
+            polled: false,
+            point: false,
             profile,
             faults,
         }
@@ -990,6 +1017,7 @@ impl Kingst {
     /// A read of `REG_RUN`: a capture samples on by a poll's worth.
     fn poll(&mut self) -> u16 {
         if let Run::Capturing(r) = &mut self.run {
+            self.point |= !std::mem::replace(&mut self.polled, true);
             r.sampled += r.per_poll;
             if r.done() {
                 let capture = Box::new(r.capture());
@@ -1308,6 +1336,9 @@ impl DeviceModel for Kingst {
                 "bulk IN transfer of {max} bytes; the driver asks for multiples of {EP6_PACKET}"
             ));
         }
+        if self.faults.slow_in || self.faults.in_limit.is_some_and(|n| self.bulk.done >= n) {
+            return Reply::Nak;
+        }
         let bulk = &mut self.bulk;
         if bulk.empty > 0 {
             bulk.empty -= 1;
@@ -1321,6 +1352,7 @@ impl DeviceModel for Kingst {
         }
         if let Run::Streaming(stream) = &mut self.run {
             bulk.ready = false;
+            bulk.done += 1;
             return Reply::Data(stream.take(STREAM_BYTES.min(max)));
         }
         let Some(data) = &bulk.data else {
@@ -1334,7 +1366,32 @@ impl DeviceModel for Kingst {
         let out = data[bulk.sent..bulk.sent + n].to_vec();
         bulk.sent += n;
         bulk.ready = false;
+        bulk.done += 1;
         Reply::Data(out)
+    }
+
+    fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        if ep != 6 || !self.faults.slow_in || !self.bulk.started || !self.bulk.ready {
+            return None;
+        }
+        let bulk = &mut self.bulk;
+        if let Run::Streaming(stream) = &mut self.run {
+            bulk.ready = false;
+            return Some(stream.take(STREAM_BYTES.min(max)));
+        }
+        let data = bulk.data.as_ref()?;
+        let n = (data.len() - bulk.sent).min(max);
+        if n == 0 {
+            return None;
+        }
+        let out = data[bulk.sent..bulk.sent + n].to_vec();
+        bulk.sent += n;
+        bulk.ready = false;
+        Some(out)
+    }
+
+    fn take_event_point(&mut self) -> bool {
+        std::mem::take(&mut self.point)
     }
 
     fn in_submitted(&mut self, ep: u8, _max: usize) {

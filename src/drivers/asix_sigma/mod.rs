@@ -51,7 +51,7 @@ use crate::core::{
     Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
 };
 use crate::ftdi::libftdi::{Context, FtdiError};
-use crate::usb::{Transport, UsbDeviceInfo};
+use crate::usb::{Transport, UsbDeviceInfo, split_conn};
 use protocol::{ClockEdge, Link, SAMPLERATES, TimeLimit, wmr, wreg};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -152,49 +152,6 @@ pub fn parse_serno(text: &str) -> Option<u64> {
         return None;
     }
     Some(if neg { value.wrapping_neg() } else { value })
-}
-
-/// A `conn` spec as `sr_usb_split_conn()` reads it (the same rules as
-/// the saleae-logic16 port's).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Conn {
-    Ids(u16, u16),
-    BusAddress(u8, u8),
-}
-
-/// `sr_usb_find()`'s reading of `conn`, or the message it logs.
-fn split_conn(conn: &str) -> std::result::Result<Conn, &'static str> {
-    const INVALID: &str = "Invalid input, or neither VID:PID nor bus.address specified.";
-    const NEITHER: &str = "Could neither determine VID:PID nor bus.address numbers.";
-    let Some((a, b)) = conn.split_once('.') else { return Err(NEITHER) };
-    let hex = |s: &str| s.len() == 4 && s.bytes().all(|c| c.is_ascii_hexdigit());
-    if hex(a) && hex(b) {
-        let (vid, pid) =
-            (u16::from_str_radix(a, 16).unwrap_or(0), u16::from_str_radix(b, 16).unwrap_or(0));
-        return if vid != 0 && pid != 0 { Ok(Conn::Ids(vid, pid)) } else { Err(NEITHER) };
-    }
-    let dec = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit());
-    if !(dec(a) && dec(b)) {
-        return Err(NEITHER);
-    }
-    let num = |s: &str| s.parse::<u64>().unwrap_or(u64::MAX);
-    let (bus, addr) = (num(a), num(b));
-    if bus > 255 || addr > 127 {
-        return Err(INVALID);
-    }
-    match (u8::try_from(bus), u8::try_from(addr)) {
-        (Ok(bus @ 1..), Ok(addr @ 1..)) => Ok(Conn::BusAddress(bus, addr)),
-        _ => Err(NEITHER),
-    }
-}
-
-impl Conn {
-    fn matches(self, d: &UsbDeviceInfo) -> bool {
-        match self {
-            Conn::Ids(vid, pid) => d.vendor_id == vid && d.product_id == pid,
-            Conn::BusAddress(bus, addr) => d.bus == bus && d.address == addr,
-        }
-    }
 }
 
 /// The serial number and model of an opened device, as the scan reads
@@ -709,16 +666,6 @@ mod tests {
         assert_eq!(parse_serno("1ffffffffffffffff"), None);
         assert_eq!(Model::from_serno(0xa603_0d52), Some(Model::Omega));
         assert_eq!(Model::from_serno(0xa604_0001), None);
-    }
-
-    #[test]
-    fn conn_specs_follow_sr_usb_split_conn() {
-        assert_eq!(split_conn("a600.a000"), Ok(Conn::Ids(0xa600, 0xa000)));
-        assert_eq!(split_conn("3.7"), Ok(Conn::BusAddress(3, 7)));
-        assert!(split_conn("300.1").is_err());
-        assert!(split_conn("1.200").is_err());
-        assert!(split_conn("0.0").is_err());
-        assert!(split_conn("nonsense").is_err());
     }
 
     /// The scan's and the open's reads of the serial number, libftdi's

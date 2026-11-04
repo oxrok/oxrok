@@ -538,3 +538,64 @@ fn flags_bitstream_chunks_and_early_register_reads() {
     assert_eq!(data(dev.control(rd(CMD_FPGA_INIT, 0, 1), &[], &mut v)), [1]);
     assert_eq!(v.drain().len(), 1, "chunks of 2048");
 }
+
+/// A stream started, one transfer submitted.
+fn stream_started(options: &[(&str, &str)], v: &mut Violations) -> Device {
+    let mut dev = device(options);
+    set_config(&mut dev, v);
+    setup(&mut dev, 1, &trigger(1, 0, 0, 0), &sampling(64, 0, 0x100, 200), v);
+    dev.control(wr(CMD_BULK_RESET, 0, 0), &[], v);
+    spi_write(&mut dev, REG_RUN, &[3], v);
+    dev.in_submitted(6, 512);
+    dev.control(wr(CMD_BULK_START, 0, 0), &[], v);
+    dev
+}
+
+#[test]
+fn a_slow_transfer_holds_its_data_until_cancelled() {
+    let mut v = Violations::default();
+    let mut dev = stream_started(&[("mcu", "1"), ("fpga", "1"), ("slow-in", "1")], &mut v);
+    assert_eq!(dev.transfer_in(6, 512, &mut v), Reply::Nak);
+    assert_eq!(dev.in_unlinked(6, 512).map(|d| d.len()), Some(512));
+    assert_eq!(dev.in_unlinked(6, 512), None, "one per submission");
+    dev.in_submitted(6, 512);
+    assert_eq!(dev.in_unlinked(6, 512).map(|d| d.len()), Some(512));
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn a_transfer_without_the_option_holds_nothing_when_cancelled() {
+    let mut v = Violations::default();
+    let mut dev = stream_started(&[("mcu", "1"), ("fpga", "1")], &mut v);
+    assert_eq!(dev.in_unlinked(6, 512), None);
+    assert_eq!(data(dev.transfer_in(6, 512, &mut v)).len(), 512);
+}
+
+#[test]
+fn the_in_limit_holds_what_follows() {
+    let mut v = Violations::default();
+    let mut dev = stream_started(&[("mcu", "1"), ("fpga", "1"), ("in-limit", "1")], &mut v);
+    assert_eq!(data(dev.transfer_in(6, 512, &mut v)).len(), 512);
+    dev.in_submitted(6, 512);
+    assert_eq!(dev.transfer_in(6, 512, &mut v), Reply::Nak);
+    assert!(v.is_empty(), "{v:?}");
+}
+
+#[test]
+fn the_first_poll_of_a_capture_is_the_event_point() {
+    let mut v = Violations::default();
+    let mut dev = device(&[("mcu", "1"), ("fpga", "1")]);
+    set_config(&mut dev, &mut v);
+    dev.arm(crate::model::Arm::parse("interrupt model").unwrap());
+    let reply = Reply::ack();
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    assert_eq!(dev.fired(0, true, &reply), None, "a run state outside a capture");
+    setup(&mut dev, 0, &trigger(1, 0, 0, 0), &sampling(10_000_000, 0, 0x100, 10_000), &mut v);
+    spi_write(&mut dev, REG_RUN, &[3], &mut v);
+    assert_eq!(dev.fired(0, false, &reply), None);
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    assert!(dev.fired(0, true, &reply).is_some());
+    dev.arm(crate::model::Arm::parse("interrupt model").unwrap());
+    spi_read(&mut dev, REG_RUN, 2, &mut v);
+    assert_eq!(dev.fired(0, true, &reply), None, "once");
+}

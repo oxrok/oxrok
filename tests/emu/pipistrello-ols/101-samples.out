@@ -1,1 +1,33 @@
-timeout: the monitored command dumped core
+Acquisition with 32/32 channels at 100 MHz
+0:aa aa aa aa aa aa aa aa aa aa aa aa a8 
+1:99 99 99 99 99 99 99 99 99 99 99 99 98 
+2:78 78 78 78 78 78 78 78 78 78 78 78 78 
+3:07 f8 07 f8 07 f8 07 f8 07 f8 07 f8 00 
+4:00 07 ff f8 00 07 ff f8 00 07 ff f8 00 
+5:00 00 00 07 ff ff ff f8 00 00 00 07 f8 
+6:00 00 00 00 00 00 00 07 ff ff ff ff f8 
+7:00 00 00 00 00 00 00 00 00 00 00 00 00 
+8:00 00 00 00 00 00 00 00 00 00 00 00 00 
+9:00 00 00 00 00 00 00 00 00 00 00 00 00 
+10:00 00 00 00 00 00 00 00 00 00 00 00 00 
+11:00 00 00 00 00 00 00 00 00 00 00 00 00 
+12:00 00 00 00 00 00 00 00 00 00 00 00 00 
+13:00 00 00 00 00 00 00 00 00 00 00 00 00 
+14:00 00 00 00 00 00 00 00 00 00 00 00 00 
+15:00 00 00 00 00 00 00 00 00 00 00 00 00 
+16:55 55 55 55 55 55 55 55 55 55 55 55 50 
+17:66 66 66 66 66 66 66 66 66 66 66 66 60 
+18:87 87 87 87 87 87 87 87 87 87 87 87 80 
+19:f8 07 f8 07 f8 07 f8 07 f8 07 f8 07 f8 
+20:ff f8 00 07 ff f8 00 07 ff f8 00 07 f8 
+21:ff ff ff f8 00 00 00 07 ff ff ff f8 00 
+22:ff ff ff ff ff ff ff f8 00 00 00 00 00 
+23:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+24:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+25:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+26:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+27:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+28:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+29:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+30:ff ff ff ff ff ff ff ff ff ff ff ff f8 
+31:ff ff ff ff ff ff ff ff ff ff ff ff f8 

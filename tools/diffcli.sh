@@ -752,7 +752,7 @@ flush()
 
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
-    #          [--oracle-bug WHY] [--oracle-differs WHY] [--unplug WHEN]
+    #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
     #          [--libsigrok] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
@@ -784,7 +784,8 @@ flush()
     #   gets the attach before the unplug), or the tool gets SIGINT.
     #   --timeout stops each tool after S seconds rather than
     #   EMU_CASE_TIMEOUT; a sigrok-cli under --oracle-bug that has to be
-    #   stopped so fails as the case wants. --hangs, an oracle case
+    #   stopped so fails as the case wants; with --oracle-hangs it must
+    #   be stopped so, not fail any other way. --hangs, an oracle case
     #   where the C driver never ends: it passes when sigrok-cli is
     #   stopped by the timeout (and fails when it ends on its own), its
     #   transactions cut where they start repeating (emu_hang_cut), runs
@@ -811,7 +812,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -824,6 +825,7 @@ flush()
                 --no-output) no_output=1 ;;
                 --driver) driver=$2; shift ;;
                 --oracle-bug) bug=$2; shift ;;
+                --oracle-hangs) oracle_hangs=1 ;;
                 --oracle-differs) differs=$2; shift ;;
                 --unplug) event="unplug $2"; shift ;;
                 --interrupt) event="interrupt $2"; shift ;;
@@ -949,6 +951,12 @@ flush()
             fi
             if [ -n "$bug" ] && [ $t = a ]; then
                 [ $st = 0 ] && why="$why; sigrok-cli no longer fails ($bug fixed?): make it an ordinary case"
+                if [ $oracle_hangs = 1 ]; then
+                    case $st in
+                        124 | 137) ;;
+                        *) why="$why; sigrok-cli exited $st before the timeout, where --oracle-hangs says it never ends" ;;
+                    esac
+                fi
             elif [ -n "$differs" ] && [ $t = a ]; then
                 [ $st = 0 ] || why="$why; sigrok-cli exited $st, where --oracle-differs says it exits 0"
             elif [ $hangs = 1 ]; then
@@ -1016,7 +1024,9 @@ flush()
             fi
             # Full or oracle, an empty output is a case that never got to
             # the device, unless --no-output asks for it.
-            if [ -n "$bug" ] && [ $t = a ]; then continue; fi
+            # (Under --oracle-differs an empty sigrok-cli output is what
+            # the .oracle golden holds, and oxrok's must differ from it.)
+            if { [ -n "$bug" ] || [ -n "$differs" ]; } && [ $t = a ]; then continue; fi
             if [ $no_output = 0 ] && ! [ -s "$TMP/$t.cmp" ]; then why="$why; no output from $tname"; fi
             if [ $no_output = 1 ] && [ -s "$TMP/$t.cmp" ]; then why="$why; output from $tname where none was expected"; fi
         done
