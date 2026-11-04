@@ -55,15 +55,18 @@ static DEV_OPTIONS: [OptionDesc; 3] = [
 
 /// How long a scan listens for a valid packet.
 const DETECT_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long one read waits for data.
-const READ_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long one read waits for data (`serial_source_add`'s 50 ms in
+/// `dev_acquisition_start`).
+const READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// The scan's receive buffer (api.c's `buf[128]`).
 const BUF_SIZE: usize = 128;
 /// The acquisition's receive buffer (protocol.h's `DMM_BUFSIZE`); when
 /// it is full of bytes that start no packet it is dropped.
 const DMM_BUFSIZE: usize = 256;
-/// The default wait for a requested packet before asking again.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+/// The default wait for a requested packet before asking again: none,
+/// as `req_packet` without a `req_timeout_ms` asks again at each read
+/// that timed out.
+const REQUEST_TIMEOUT: Duration = Duration::ZERO;
 
 /// The driver of one meter.
 pub struct SerialDmmDriver(pub &'static Model);
@@ -87,21 +90,6 @@ fn hid_conn(conn: &str) -> String {
         return format!("hid/{}", chip.name());
     }
     conn.to_owned()
-}
-
-/// Whether the port probed on keeps serving the device. sigrok's scan
-/// always ends in `serial_close`, whatever the transport, and
-/// `dev_open` opens the port again; `serial_open` sets the parameters
-/// and flushes the receive side each time. A UART stays open here
-/// instead, because reopening it would toggle the handshake lines
-/// again, which resets some adapters; [`DmmDevice`] flushes it when it
-/// takes it over, so what a streaming meter sent since the probe does
-/// not become the first samples, as sigrok's flush on reopen ensures.
-/// A serial over HID cable has no handshake lines, so it is closed and
-/// reopened as in sigrok, which also sends its line parameters again
-/// (a CH9325 or CP2110 feature report).
-fn keep_probed(conn: &str) -> bool {
-    !crate::serial::hid::is_hid_name(conn)
 }
 
 impl Driver for SerialDmmDriver {
@@ -171,8 +159,13 @@ impl Driver for SerialDmmDriver {
             return Ok(Vec::new());
         }
         log::info!("Found device on port {conn}.");
-        let port = keep_probed(&conn).then_some(port);
-        Ok(vec![Box::new(DmmDevice::new(self.0, conn, params, port))])
+        // The scan ends in `serial_close` whatever the transport, and
+        // `dev_open` opens the port again: `serial_open` sets the
+        // parameters and flushes the receive side each time. On a tty the
+        // close lowers DTR and RTS under HUPCL, as the emulator's
+        // transactions show.
+        drop(port);
+        Ok(vec![Box::new(DmmDevice::new(self.0, conn, params, None))])
     }
 }
 
@@ -369,9 +362,9 @@ impl Device for DmmDevice {
             return Ok(());
         }
         let port = match self.pending.take() {
-            // The probed port (or a replay): flushed as `serial_open`
-            // flushes a port it opens, so input from before the open
-            // is not taken for samples.
+            // A replay's port: flushed as `serial_open` flushes a port
+            // it opens, so input from before the open is not taken for
+            // samples.
             Some(mut p) => {
                 p.purge()?;
                 p
@@ -593,12 +586,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hid_cables_are_reopened_uarts_kept() {
-        assert!(keep_probed("/dev/ttyUSB0"));
-        assert!(keep_probed("COM3"));
-        assert!(!keep_probed("hid/ch9325/raw=/dev/hidraw0"));
-        assert!(!keep_probed("hid/cp2110/sn=0001"));
-        assert!(!keep_probed("hid"));
+    fn usb_ids_name_their_hid_cable() {
         assert_eq!(hid_conn("1a86.e008"), "hid/ch9325");
     }
 

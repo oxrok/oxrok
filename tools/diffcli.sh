@@ -77,6 +77,24 @@
 # whose descriptors stay, or after an emu_reset of its own on the line
 # before, for a case with one tool.
 #
+# A scenario that sets EMU_CDC=1 is a model on the CDC-ACM shell, which
+# the tools reach through /dev/ttyACMn, EMU_TTY: a session that gets no
+# such node fails. ModemManager, when it runs, is told to leave the
+# emulated device alone (emu_cdc_quiet). Before each tool's run the tty
+# is put back at 9600/8n1 and the model replaced (emu_tty_restore): the
+# kernel keeps termios and the line coding it last sent across closes, so
+# otherwise what a tool sends would depend on the tool before it. Its
+# .tx is normalised (emu_tx_tty): the consecutive bulk transfers of a
+# direction are one line, as their cut is the kernel's and the pace's;
+# and of a run of consecutive SET_LINE_CODING and SET_CONTROL_LINE_STATE
+# what stays is the last line coding, first, when it changes the line,
+# then the control line states that change the lines, in their order.
+# So a transient frame on the way to the last (the crate serialport's
+# cfmakeraw, under oxrok's Native), a repeat of the state the lines are
+# in (each open() raises them, and oxrok's Native opens twice), and the
+# order of a setting and an RTS change, which no UART can tell, do not
+# show; a DTR pulse does.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -528,6 +546,7 @@ if [ $emu = 1 ]; then
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
     }
     emu_start() {
+        [ "$EMU_CDC" != 1 ] || emu_cdc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
         rm -f "$TMP/emu.ctl"; mkfifo "$TMP/emu.ctl"
@@ -542,6 +561,14 @@ if [ $emu = 1 ]; then
         : >"$TMP/emu.sed"
         EMU_SEEN=0
         emu_track
+        if [ "$EMU_CDC" = 1 ]; then
+            case "$EMU_TTY" in
+                /dev/ttyACM*) ;;
+                *)
+                    echo "$EMU_MODEL: the device got no /dev/ttyACMn (nodes: $EMU_NODES); is the kernel's cdc_acm there? (modprobe cdc_acm)" >&2
+                    return 1 ;;
+            esac
+        fi
     }
     # emu_fields LINE: the EMU_* values from a READY, REPLUGGED or
     # RENUMERATED line, and the rules that make its node names and address generic
@@ -635,6 +662,97 @@ if [ $emu = 1 ]; then
             emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
             printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null || return 1
         done
+    }
+    # EMU_CDC=1, before attaching: a ModemManager whose filter lets a
+    # ttyACM through opens it and sends AT commands, which would land in
+    # the case's transactions. Version 1.24's default filter forbids the
+    # emulated device whatever its interface's protocol. For a version or
+    # a setting that does not, the rule is udev's own way to keep it off,
+    # in /run, for the emulated devices only.
+    emu_cdc_quiet() {
+        systemctl is-active -q ModemManager 2>/dev/null || return 0
+        sudo -n mkdir -p /run/udev/rules.d
+        printf '%s\n' 'SUBSYSTEMS=="usb", KERNELS=="vhci_hcd.0", ENV{ID_MM_DEVICE_IGNORE}="1"' \
+            | sudo -n tee /run/udev/rules.d/90-oxrok-emu-mm.rules >/dev/null
+        sudo -n udevadm control --reload
+    }
+    # EMU_CDC=1, before each tool's run: the tty back at the state a new
+    # attach has, then a fresh model that knows nothing of the opening
+    # and closing that took. In a section of its own, as an unbind is.
+    emu_tty_restore() {
+        emu_cmd "section tty restore before $1" >/dev/null || return 1
+        stty -F "$EMU_TTY" 9600 cs8 -parenb -cstopb -crtscts -ixon -ixoff clocal hupcl raw -echo \
+            || return 1
+        emu_cmd reset >/dev/null
+    }
+    # EMU_CDC=1: the transactions as a tty's, see the head of this file.
+    # Joined data longer than 1 KiB is its digest, as the fixtures have it.
+    emu_tx_tty() {
+        python3 -I -c '
+import hashlib, re, sys
+OUT = re.compile(r"bulk_out ([0-9a-f]{2}) ([0-9a-f]+|-) -> [0-9]+$")
+IN = re.compile(r"bulk_in ([0-9a-f]{2}) [0-9]+ -> ([0-9a-f]+|-)$")
+SETUP = re.compile(r"ctl_out 21 (20|22) ")
+key, data, setup = None, "", []
+line = "80250000000008 -> ok"
+lines = "0000"
+stalled = ""
+def flush_data():
+    global key, data
+    if key and data:
+        shown = data
+        size = len(shown) // 2
+        if size > 1024:
+            shown = "@%d:%s" % (size, hashlib.sha256(bytes.fromhex(data)).hexdigest())
+        if key[0] == "out":
+            print("bulk_out %s %s -> %d" % (key[1], shown, size))
+        else:
+            print("bulk_in %s %d -> %s" % (key[1], size, shown))
+    key, data = None, ""
+def flush_setup():
+    global setup, line, lines, stalled
+    coding = [l for l in setup if l.split()[2] == "20"]
+    if coding:
+        last = coding[-1].split(" ", 5)[5]
+        if last != line:
+            print(coding[-1])
+        line = last
+    for l in setup:
+        if l.split()[2] != "22":
+            continue
+        value = l.split()[3]
+        if "stall" in l:
+            if l != stalled:
+                print(l)
+            stalled = l
+        elif value != lines:
+            print(l)
+            lines = value
+    setup = []
+for text in sys.stdin:
+    text = text.rstrip("\n")
+    m = OUT.match(text)
+    k = ("out", m.group(1)) if m else None
+    if not m:
+        m = IN.match(text)
+        k = ("in", m.group(1)) if m else None
+    if m:
+        flush_setup()
+        if k != key:
+            flush_data()
+        key = k
+        if m.group(2) != "-":
+            data += m.group(2)
+        continue
+    flush_data()
+    if SETUP.match(text):
+        setup.append(text)
+        continue
+    flush_setup()
+    print(text)
+flush_data()
+flush_setup()
+'
     }
     emu_tx() {
         EMU_SECTION="# section $1" awk '$0 == ENVIRON["EMU_SECTION"] { on = 1; next }
@@ -947,6 +1065,9 @@ flush()
             if { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
                 emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
             fi
+            if [ "$EMU_CDC" = 1 ] && ! emu_tty_restore "$t $name"; then
+                emu_fail "$name: could not put the tty back"; return
+            fi
             if ! emu_cmd "section $t $name" >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
@@ -1037,6 +1158,9 @@ flush()
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
+            if [ "$EMU_CDC" = 1 ]; then
+                emu_tx_tty <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+            fi
             if [ -n "$tx_filter" ]; then
                 sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
@@ -1351,7 +1475,7 @@ flush()
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }

@@ -223,17 +223,85 @@ fn map_err(e: &serialport::Error) -> Error {
     }
 }
 
+fn data_bits(p: Params) -> serialport::DataBits {
+    use serialport::DataBits;
+    match p.data_bits {
+        5 => DataBits::Five,
+        6 => DataBits::Six,
+        7 => DataBits::Seven,
+        _ => DataBits::Eight,
+    }
+}
+
+fn parity(p: Params) -> serialport::Parity {
+    match p.parity {
+        Parity::None => serialport::Parity::None,
+        Parity::Even => serialport::Parity::Even,
+        Parity::Odd => serialport::Parity::Odd,
+    }
+}
+
+fn stop_bits(p: Params) -> serialport::StopBits {
+    if p.stop_bits == 2 { serialport::StopBits::Two } else { serialport::StopBits::One }
+}
+
+fn flow_control(p: Params) -> serialport::FlowControl {
+    match p.flow {
+        Flow::None => serialport::FlowControl::None,
+        Flow::RtsCts => serialport::FlowControl::Hardware,
+        Flow::XonXoff => serialport::FlowControl::Software,
+    }
+}
+
+/// Opens the tty `name` and clears `HUPCL`, as `sp_open` does: a close
+/// leaves DTR and RTS as they are, where the kernel would lower them, and
+/// some adapters reset their board on that. The crate has no call for
+/// it, but termios belongs to the tty, so this goes through a descriptor
+/// of its own. It comes first since the crate's open takes `TIOCEXCL`,
+/// which keeps a later open out; the caller keeps it until that open is
+/// done, so the tty stays open in between. Whatever fails here is the
+/// crate's open to report.
+#[cfg(unix)]
+fn clear_hupcl(name: &str) -> Option<std::fs::File> {
+    use rustix::fs::OFlags;
+    use rustix::termios::{ControlModes, OptionalActions, tcgetattr, tcsetattr};
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags((OFlags::NOCTTY | OFlags::NONBLOCK).bits().cast_signed())
+        .open(name)
+        .ok()?;
+    let mut termios = tcgetattr(&file).ok()?;
+    termios.control_modes.remove(ControlModes::HUPCL);
+    tcsetattr(&file, OptionalActions::Now, &termios).ok()?;
+    Some(file)
+}
+
 impl Native {
-    /// Opens `name` with `params`.
+    /// Opens `name` with `params`, as `serial_open` does: raw, without
+    /// `HUPCL`, the frame and speed set in one step (one
+    /// `SET_LINE_CODING` on a CDC-ACM port; the crate's `set_*` calls
+    /// after an open would each send theirs), then RTS and DTR when given,
+    /// then both buffers flushed. The crate's open takes `TIOCEXCL` and an
+    /// exclusive `flock`, as `sp_open` does. Unlike `sp_open` it goes
+    /// through `cfmakeraw`, which sets 8 bits without parity for a moment
+    /// on a port left in another frame; only the wire shows that.
     pub fn open(name: &str, params: Params) -> Result<Native> {
-        let builder = serialport::new(name, params.baud).timeout(Duration::from_millis(100));
-        let builder = match params.dtr {
-            Some(dtr) => builder.dtr_on_open(dtr),
-            None => builder.preserve_dtr_on_open(),
-        };
-        let port = builder.open().map_err(|e| map_err(&e))?;
+        #[cfg(unix)]
+        let _hupcl = clear_hupcl(name);
+        let port = serialport::new(name, params.baud)
+            .data_bits(data_bits(params))
+            .parity(parity(params))
+            .stop_bits(stop_bits(params))
+            .flow_control(flow_control(params))
+            .preserve_dtr_on_open()
+            .timeout(Duration::from_millis(100))
+            .open()
+            .map_err(|e| map_err(&e))?;
         let mut native = Native { name: name.to_owned(), port };
-        native.set_params(params)?;
+        native.set_handshake(params.rts, params.dtr)?;
+        native.port.clear(serialport::ClearBuffer::All).map_err(|e| map_err(&e))?;
         Ok(native)
     }
 }
@@ -244,30 +312,12 @@ impl Port for Native {
     }
 
     fn set_params(&mut self, p: Params) -> Result<()> {
-        use serialport::{DataBits, FlowControl, StopBits};
         let port = &mut self.port;
         port.set_baud_rate(p.baud).map_err(|e| map_err(&e))?;
-        port.set_data_bits(match p.data_bits {
-            5 => DataBits::Five,
-            6 => DataBits::Six,
-            7 => DataBits::Seven,
-            _ => DataBits::Eight,
-        })
-        .map_err(|e| map_err(&e))?;
-        port.set_parity(match p.parity {
-            Parity::None => serialport::Parity::None,
-            Parity::Even => serialport::Parity::Even,
-            Parity::Odd => serialport::Parity::Odd,
-        })
-        .map_err(|e| map_err(&e))?;
-        port.set_stop_bits(if p.stop_bits == 2 { StopBits::Two } else { StopBits::One })
-            .map_err(|e| map_err(&e))?;
-        port.set_flow_control(match p.flow {
-            Flow::None => FlowControl::None,
-            Flow::RtsCts => FlowControl::Hardware,
-            Flow::XonXoff => FlowControl::Software,
-        })
-        .map_err(|e| map_err(&e))?;
+        port.set_data_bits(data_bits(p)).map_err(|e| map_err(&e))?;
+        port.set_parity(parity(p)).map_err(|e| map_err(&e))?;
+        port.set_stop_bits(stop_bits(p)).map_err(|e| map_err(&e))?;
+        port.set_flow_control(flow_control(p)).map_err(|e| map_err(&e))?;
         self.set_handshake(p.rts, p.dtr)
     }
 
@@ -291,8 +341,10 @@ impl Port for Native {
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
-        std::io::Write::write_all(&mut self.port, data).map_err(Error::Io)?;
-        std::io::Write::flush(&mut self.port).map_err(Error::Io)
+        // No drain, as `serial_write_blocking` has none: `tcdrain` waits
+        // for the device to take the bytes, and a device that stopped
+        // reading then holds the driver past any limit.
+        std::io::Write::write_all(&mut self.port, data).map_err(Error::Io)
     }
 
     fn purge(&mut self) -> Result<()> {
