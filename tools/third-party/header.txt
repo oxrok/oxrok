@@ -1,0 +1,17 @@
+oxrok third-party notices
+=========================
+
+oxrok is GPL-3.0-or-later, see LICENSE, with the notice in NOTICE. This
+file lists the third-party code built into the oxrok binary it ships
+with, with each one's copyright and licence as the crate gives them. The
+decoders/ directory next to the binary is libsigrokdecode's, with its own
+decoders/COPYING.
+
+The complete corresponding source of this binary, its Rust dependencies
+included, is the oxrok-<version>-vendored.tar.xz asset of the same GitHub
+release as this archive: https://github.com/mangelajo/oxrok/releases
+
+This covers the source requirements of the GPL-3.0, of the LGPL-3.0 crates
+(malachite-*), whose text below reads together with the GPL-3.0 in LICENSE,
+and of the MPL-2.0 crate (serialport). You may replace any of them in a
+rebuilt binary from that tarball.

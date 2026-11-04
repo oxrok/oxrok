@@ -1,0 +1,83 @@
+# cargo deny check licenses: every crate that any feature on any platform
+# can pull in must be under a licence compatible with GPL-3.0-or-later,
+# the licence of the binary as a whole. Licences only: advisories and
+# bans are not this file's job. See docs/LICENSING.md.
+#
+# Not legal advice. What this reads is the `license` field and the
+# clarifications below, not the bundled sources; docs/LICENSING.md lists
+# the bundled C by hand.
+
+[graph]
+all-features = true
+
+[licenses]
+# Permissive licences the FSF lists as compatible with GPL-3.0, or which
+# only ask for their notice to be kept. Add one here only after reading
+# it; anything copyleft goes in `exceptions`, crate by crate.
+allow = [
+    "0BSD",
+    "Apache-2.0", # compatible with GPL-3.0, not with GPL-2.0
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Views",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "PSF-2.0",
+    "Python-2.0.1", # CPython's stack, PSF-2.0 on top
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "Zlib",
+]
+# A crate's bundled text has to look like what it declares to this degree.
+confidence-threshold = 0.8
+exceptions = [
+    # The workspace itself.
+    { allow = ["GPL-3.0-or-later"], crate = "oxrok" },
+    { allow = ["GPL-3.0-or-later"], crate = "oxrok-emu" },
+    { allow = ["GPL-3.0-or-later"], crate = "oxrok-hil" },
+    # Weak copyleft, through rustpython. The LGPL-3.0 is the GPL-3.0 with
+    # extra permissions, so these link into a GPL binary, whose source
+    # the release publishes in full. -only pins the binary to GPL-3.0 in
+    # practice, whatever the "or-later" of our own code.
+    { allow = ["LGPL-3.0-only"], crate = "malachite-base" },
+    { allow = ["LGPL-3.0-only"], crate = "malachite-bigint" },
+    { allow = ["LGPL-3.0-only"], crate = "malachite-nz" },
+    { allow = ["LGPL-3.0-only"], crate = "malachite-q" },
+    # File-level copyleft, a direct dependency. No "Incompatible With
+    # Secondary Licenses" notice, so MPL-2.0 section 3.3 allows combining
+    # it with the GPL. The source is in the vendored tarball.
+    { allow = ["MPL-2.0"], crate = "serialport" },
+]
+
+# Crates with no `license` field, their licence file read by hand. If
+# the file changes this stops applying and cargo-deny falls back on
+# recognising the text itself, with a warning, then the allowlist as
+# usual. The same four are in tools/third-party/about.toml. The hash is
+# XXH32 of the file with LF line ends.
+
+[[licenses.clarify]]
+crate = "mt19937"
+expression = "BSD-3-Clause"
+license-files = [{ path = "LICENSE", hash = 0xc4febd6d }]
+
+# CPython's licence stack, the full history included.
+[[licenses.clarify]]
+crate = "rustpython-doc"
+expression = "Python-2.0.1"
+license-files = [{ path = "LICENSE", hash = 0x89e6df3c }]
+
+[[licenses.clarify]]
+crate = "rustpython-pylib"
+expression = "Python-2.0.1"
+license-files = [{ path = "Lib/PSF-LICENSE", hash = 0xe5f4697b }]
+
+[[licenses.clarify]]
+crate = "syn-ext"
+expression = "BSD-2-Clause"
+license-files = [{ path = "LICENSE", hash = 0xcab66e35 }]

@@ -12,10 +12,63 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_ABOUT_VERSION: 0.9.3
 
 jobs:
+  # The source offer of the GPL and the MPL: the tagged tree with its crates
+  # vendored, the decoders and the notices. See docs/LICENSING.md.
+  source:
+    name: vendored source tarball
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo install --locked --features cli --version "$CARGO_ABOUT_VERSION" cargo-about
+      - run: make dist-src
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxrok-source
+          path: |
+            dist/*.tar.xz
+            dist/*.tar.xz.sha256
+          if-no-files-found: error
+          # Already xz.
+          compression-level: 0
+
+  # Published only once it builds with no network, and the binaries wait
+  # for this job, so no release has binaries without their source.
+  source-check:
+    name: vendored source tarball, built offline
+    needs: source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # All of rust-toolchain.toml's components: rustup would go and fetch
+      # the missing ones once the network is off.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+          components: rustfmt, clippy
+      - name: Install musl-gcc
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: actions/download-artifact@v4
+        with:
+          name: oxrok-source
+          path: dist
+      - name: Build it in a clean directory with the network off
+        run: |
+          make dist-src-check TARGET=x86_64-unknown-linux-musl \
+            SRC_CHECK="$RUNNER_TEMP/src-check" \
+            SRC_CHECK_WRAP="sudo unshare -n setpriv --reuid=$(id -u) --regid=$(id -g) --clear-groups env PATH=$PATH HOME=$HOME"
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.tar.xz dist/*.tar.xz.sha256 --clobber
+
   build:
     name: ${{ matrix.target }}
+    needs: source-check
     strategy:
       fail-fast: false
       matrix:
@@ -43,6 +96,10 @@ jobs:
       - name: Install make
         if: runner.os == 'Windows'
         run: command -v make || choco install make -y
+      # By cargo, since there is no binary release of this version for
+      # every runner here. Without --features cli it installs nothing and
+      # still succeeds.
+      - run: cargo install --locked --features cli --version "$CARGO_ABOUT_VERSION" cargo-about
       - run: make dist TARGET=${{ matrix.target }}
       - name: Smoke test the archive
         run: |

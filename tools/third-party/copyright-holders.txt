@@ -1,0 +1,19 @@
+# Who holds the copyright on the crates that ship no licence file, which
+# cargo-about renders with "Copyright (c) <year> <copyright holders>".
+# From the upstream repository's licence file where it has one, otherwise
+# the manifest's authors. Pattern :: text; the first match wins.
+# tools/third-party/notices.py stops on a crate that matches nothing.
+bitflagset :: the bitflagset authors, https://github.com/youknowone/bitflagset (no holder named in the package or a licence file upstream)
+blake2?_simd :: Copyright (c) 2018 Jack O'Connor
+block2 :: Mads Marquart and the objc2 contributors
+dispatch2 :: Mads Marquart, Mary and the objc2 contributors
+objc2* :: Mads Marquart and the objc2 contributors
+chrono :: Copyright (c) 2014, Kang Seonghoon, and the chrono contributors
+libffi :: Copyright (c) 2026 libffi-rs contributors; Jesse A. Tov
+libm :: the Rust compiler-builtins authors (Alex Crichton, Amanieu d'Antras, Jorge Aparicio and others); parts ported from musl, see musl's notice
+quote-use* :: Copyright (c) Roland Fredenhagen
+rustpython-ruff_* :: Copyright (c) 2022 Charles Marsh; RustPython's fork of Ruff
+rustpython-* :: Copyright (c) 2026 RustPython Team
+windows* :: Copyright (c) Microsoft Corporation
+xz-core :: no holder named in the package; transpiled from liblzma of XZ Utils (0BSD) with c2rust
+xz-sys :: no holder named in the package; the API layer over xz-core
