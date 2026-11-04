@@ -1,1 +1,18 @@
-g_variant_get_uint64: assertion 'g_variant_is_of_type (value, G_VARIANT_TYPE_UINT64)' failed
+Driver functions:
+    Sound level meter
+kecheng-kc-330b - Kecheng KC-330B with 1 channel: SPL
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    sample_interval:  - supported values:
+      125 (current)
+      500
+      1000
+      2000
+      5000
+      10000
+      60000
+    datalog: on, off
+    spl_weight_freq: A (current), C
+    spl_weight_time: F (current), S
+    data_source: Live (current), Memory

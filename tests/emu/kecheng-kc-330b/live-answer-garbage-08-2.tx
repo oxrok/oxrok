@@ -9,3 +9,9 @@ bulk_out 02 08 -> 1
 bulk_in 81 64 -> 88012c
 bulk_out 02 08 -> 1
 bulk_in 81 64 -> c80151
+bulk_out 02 08 -> 1
+bulk_in 81 64 -> 880176
+bulk_out 02 08 -> 1
+bulk_in 81 64 -> 88019b
+bulk_out 02 01002878000000 -> 7
+bulk_in 81 64 -> 81

@@ -1,17 +1,21 @@
 # The Kecheng KC-330B sound level meter (emu/src/models/kecheng-kc-330b.rs):
 # commands on bulk OUT 2, answers on bulk IN 1. Sourced by tools/diffcli.sh
-# --emu; see docs/USB.md, "Writing a device model". oxrok has no port of the
-# driver yet: every case is an oracle case.
+# --emu; see docs/USB.md, "Writing a device model". The port is
+# src/drivers/kecheng_kc_330b.
 #
 # The live path polls on wall time, 125 ms apart (api.c:42, the only interval
 # a client can have: see "set sample_interval"), so captures are short.
 #
 # The clock: the C has kecheng_kc_330b_set_date_time() (protocol.c:232) and
-# nothing calls it (api.c:141 is a TODO), so no C case can reach it and no
-# golden holds a wall time.
+# nothing calls it (api.c:141 is a TODO), so no C case can reach it. oxrok
+# sets it at the open with the scan option datetime=, the host's time only for
+# datetime=now, which no case uses (a unit test injects the time): the cases
+# give a date, so no golden holds a wall time.
 EMU_MODEL=kecheng-kc-330b
 EMU_DRIVER=kecheng-kc-330b
 EMU_GCOV_SHARED="src/usb.c"
+# oxrok has the driver: its cases must run full.
+EMU_FULL=kecheng-kc-330b
 
 # The model's options for the cases that follow; none restores them.
 kc_options() {
@@ -58,42 +62,70 @@ emu_cases() {
     D='s/^sr: \[[^]]*\] //;/^kecheng-kc-330b: /!d'
     # GLib's critical on api.c:367's tuple is what "log" below stops at.
     G=--survive-glib-critical
+    # oxrok's log lines as sigrok-cli's.
+    N='s/^oxrok: [a-z]+: oxrok::drivers::kecheng_kc_330b[a-z_:]*: /sr: kecheng-kc-330b: /'
+    # A refused start, however each tool puts it: sigrok-cli's two lines, of
+    # which the first names the session, oxrok's session's one with the
+    # driver's error. The driver logged its cause itself, at debug in both.
+    R="$N
+/^sr: session: /d
+/^sr: hwdriver: Cannot set /d
+s/^(Failed to start session\.|device error: .*)\$/start refused/"
+    # dev_close() configures when the settings are not dirty (api.c:190): the
+    # last two lines of the C's --get. oxrok's close sends a configuration only
+    # when dirty, so no --show or --get clears a log (api.c:430). This drops
+    # only that pair at the very end, and from the tool that sends it; a case
+    # without it ("set ...", "get sample_interval") shows the difference.
+    T='$!N; ${/^bulk_out 02 01[0-9a-f]{12} -> 7\nbulk_in 81 [0-9]+ -> 81$/d}; P; D'
+
+    CLOSE_BUG="dev_close() sends the configuration only when it is not dirty (api.c:190, against its comment at api.c:187): a set never reaches the meter"
+    TUPLE_GET="config_get() answers a tuple for a uint64 key (api.c:215, hwdriver.c:113)"
+    TUPLE_SHOW="$TUPLE_GET: show.c's g_variant_get_uint64() is a GLib critical, which ends sigrok-cli"
+    TUPLE_SET="config_set() reads a tuple from a uint64 key (api.c:259, hwdriver.c:113): a GLib critical, which ends sigrok-cli"
+    TUPLE_META="the log's meta packet holds a tuple for a uint64 key (api.c:367): session.c:365's g_variant_get_uint64() is a GLib critical, which ends sigrok-cli"
+    NO_CONN="NO_OPTS (api.c:296): libsigrok's check refuses conn=, so nothing is found"
+    WAITS="an answer that fails or does not parse leaves the state on LIVE_SPL_WAIT and nothing submits another transfer (protocol.c:149, protocol.c:153), so the capture never ends"
+    NO_INT="sigrok-cli has no SIGINT handler"
 
     # The scan: identify, on 5 ms and 10 ms timeouts.
     emu_case "scan" --keep-header -- -d $S --scan
-    # NO_OPTS (api.c:296): libsigrok's check refuses conn= before scan().
-    emu_case "scan by conn" --no-output -- -d $S:conn=$EMU_USB --scan
-    # api.c:215 answers a tuple for a key whose type is uint64 (hwdriver.c:113);
-    # show.c's g_variant_get_uint64() is a GLib critical, which ends sigrok-cli.
-    emu_case "show" --expect-fail --stderr -- -d $S --show
-    for k in limit_samples sample_interval spl_weight_freq spl_weight_time data_source; do
-        emu_case "get $k" --keep-header -- -d $S --get $k
+    emu_case "scan by conn" --oracle-differs "$NO_CONN" --keep-header -- -d $S:conn=$EMU_USB --scan
+    emu_case "scan by another conn" --keep-header --no-output -- -d $S:conn=99.99 --scan
+    emu_case "show" --oracle-bug "$TUPLE_SHOW" --keep-header -- -d $S --show
+    for k in limit_samples spl_weight_freq spl_weight_time data_source; do
+        emu_case "get $k" --keep-header --tx-filter "$T" -- -d $S --get $k
     done
+    emu_case "get sample_interval" --oracle-differs "$TUPLE_GET" --keep-header --tx-filter "$T" -- -d $S --get sample_interval
     # api.c:219: there is no way to tell, so the get fails.
-    emu_case "get datalog" --keep-header --expect-fail --stderr -- -d $S --get datalog
-    emu_case "get continuous" --keep-header --expect-fail --stderr -- -d $S --get continuous
-    emu_case "get samples" --keep-header -- -d $S -c limit_samples=7 --get limit_samples
-    emu_case "set then get weight freq" --keep-header -- -d $S -c spl_weight_freq=C --get spl_weight_freq
-    emu_case "set then get weight time" --keep-header -- -d $S -c spl_weight_time=S --get spl_weight_time
+    emu_case "get datalog" --keep-header --expect-fail --stderr --filter "$R" -- -d $S --get datalog
+    emu_case "get continuous" --keep-header --expect-fail --stderr --filter "$R" -- -d $S --get continuous
+    emu_case "get samples" --keep-header --tx-filter "$T" -- -d $S -c limit_samples=7 --get limit_samples
+    emu_case "set then get weight freq" --oracle-differs "$CLOSE_BUG" --keep-header -- -d $S -c spl_weight_freq=C --get spl_weight_freq
+    emu_case "set then get weight time" --oracle-differs "$CLOSE_BUG" --keep-header -- -d $S -c spl_weight_time=S --get spl_weight_time
+    # In memory mode oxrok's close holds it back too (api.c:430): no difference.
     emu_case "set then get source" --keep-header -- -d $S -c data_source=Memory --get data_source
-    # dev_close() sends the configuration only when it is not dirty
-    # (api.c:190), against its comment: these --set runs send nothing.
-    emu_case "set weight freq" --no-output -- -d $S --set -c spl_weight_freq=C
-    emu_case "set weight time" --no-output -- -d $S --set -c spl_weight_time=S
+    # These --set runs send nothing from the C; oxrok's goes out.
+    emu_case "set weight freq" --oracle-differs "$CLOSE_BUG" --no-output -- -d $S --set -c spl_weight_freq=C
+    emu_case "set weight time" --oracle-differs "$CLOSE_BUG" --no-output -- -d $S --set -c spl_weight_time=S
     emu_case "set source" --no-output -- -d $S --set -c data_source=Memory
-    emu_case "weight freq refused" --expect-fail --stderr -- -d $S -c spl_weight_freq=Z --samples 1
-    emu_case "weight time refused" --expect-fail --stderr -- -d $S -c spl_weight_time=X --samples 1
-    emu_case "source refused" --expect-fail --stderr -- -d $S -c data_source=Tape --samples 1
-    # api.c:259: std_u64_tuple_idx() takes a tuple, and sr_config_set() has
-    # checked for a uint64: a GLib critical for any value.
-    emu_case "set sample_interval" --expect-fail --stderr -- -d $S -c sample_interval=125 --samples 1
-    emu_case "time refused" --expect-fail --stderr -- -d $S --time 100ms
-    emu_case "frames refused" --expect-fail --stderr -- -d $S --frames 1
-    emu_case "samples refused" --expect-fail --stderr -- -d $S --samples x
+    emu_case "weight freq refused" --expect-fail --stderr --filter "$R" -- -d $S -c spl_weight_freq=Z --samples 1
+    emu_case "weight time refused" --expect-fail --stderr --filter "$R" -- -d $S -c spl_weight_time=X --samples 1
+    emu_case "source refused" --expect-fail --stderr --filter "$R" -- -d $S -c data_source=Tape --samples 1
+    # oxrok takes the interval in ms, the key's unit. So the other indices,
+    # which no C client can reach, go out here.
+    emu_case "set sample_interval" --oracle-bug "$TUPLE_SET" -- -d $S -c sample_interval=125 --samples 1
+    for i in 500 1000 2000 5000 10000 60000; do
+        emu_case "sample_interval $i" --oracle-bug "$TUPLE_SET" -- -d $S -c sample_interval=$i --samples 1
+    done
+    emu_case "sample_interval 500 paced" --oracle-bug "$TUPLE_SET" -- -d $S -c sample_interval=500 --samples 3
+    emu_case "sample_interval refused" --oracle-bug "$TUPLE_SET" --expect-fail --stderr --filter "$R" -- -d $S -c sample_interval=126 --samples 1
+    emu_case "time refused" --expect-fail --stderr --filter "$R" -- -d $S --time 100ms
+    emu_case "frames refused" --expect-fail --stderr --filter "$R" -- -d $S --frames 1
+    emu_case "samples refused" --expect-fail --stderr --filter "$R" -- -d $S --samples x
 
     # The live path: configure, status, then 08 at each interval.
     emu_case "samples 1" -- -d $S --samples 1
-    emu_case "samples 2" -- -d $S --samples 2
+    emu_case "samples 2" --record -- -d $S --samples 2
     emu_case "samples 5" -- -d $S --samples 5
     emu_case "A F" -- -d $S -c spl_weight_freq=A:spl_weight_time=F --samples 2
     emu_case "A S" -- -d $S -c spl_weight_freq=A:spl_weight_time=S --samples 2
@@ -102,19 +134,21 @@ emu_cases() {
     emu_case "output analog" -- -d $S --samples 2 -O analog
     emu_case "output csv" -- -d $S --samples 2 -O csv:header=false
     # hwdriver.c refuses a limit of 0.
-    emu_case "samples 0 refused" --expect-fail --stderr -- -d $S --samples 0
+    emu_case "samples 0 refused" --expect-fail --stderr --filter "$R" -- -d $S --samples 0
     # The stops a sigrok-cli without a key cannot reach. Live never ends by
     # itself, and a stop at the first sample lands in the 125 ms pause.
     emu_case "lib stop after 1" --libsigrok -- -d $S -O analog --stop-after 1
     emu_case "lib stop after 2" --libsigrok -- -d $S -O analog --stop-after 2
     emu_case "lib stop between requests" --libsigrok -- -d $S -O analog --stop-after-ms 60
     emu_case "lib continuous runs on" --libsigrok --hangs --timeout 2 --filter '2,$d' -- -d $S --continuous -O analog
+    # oxrok's stop, on the same pause: the signal lands at the second sample.
+    emu_case "interrupt between samples" --oracle-bug "$NO_INT" --interrupt in=1:5 -- -d $S --continuous
 
     # An inactive meter reads 30.0 and is logged at, and the capture goes on
     # (api.c:344-350).
     kc_options inactive=1
     emu_case "inactive" -- -d $S --samples 2
-    emu_case "inactive message" --stderr -- -d $S --samples 1
+    emu_case "inactive message" --stderr --filter "$R" -- -d $S --samples 1
     kc_options
 
     # The identify: the answer names the model.
@@ -123,11 +157,17 @@ emu_cases() {
     kc_options model=123456789012345678901234567890
     emu_case "model 30 bytes" --keep-header -- -d $S --scan
     kc_options model=1234567890123456789012345678901
-    emu_case "model 31 bytes" --keep-header --no-output -- -d $S --scan
+    # 33 bytes for the C's 32 byte read, a babble; nusb's read is a packet. Both
+    # refuse it, so this hides the host's note, not a transfer.
+    emu_case "model 31 bytes" --keep-header --no-output --tx-filter 's/ \(babble: .*\)$//' -- -d $S --scan
     kc_options id-length=0
     emu_case "model length 0" --keep-header -- -d $S --scan
     kc_options id-length=31
     emu_case "model length 31" --keep-header --no-output -- -d $S --scan
+    # A length past the answer: the C names bytes of its stack (api.c:97-98),
+    # masked here; oxrok only what came, in protocol.rs's unit test.
+    kc_options id-length=30
+    emu_case "model length past the answer" --keep-header --filter 's/^(kecheng-kc-330b - Kecheng ).* with 1 channel/\1MODEL with 1 channel/' -- -d $S --scan
     for f in stall-out=02 stall-in=02 silent=02 garbage=02; do
         kc_options $f
         emu_case "identify $f" --keep-header --no-output -- -d $S --scan
@@ -148,22 +188,26 @@ emu_cases() {
     # A status that fails refuses the start (api.c:342).
     for f in stall-out=04 stall-in=04 silent=04 garbage=04 short=04; do
         kc_options $f
-        emu_case "status $f" --expect-fail --stderr -- -d $S --samples 1
+        emu_case "status $f" --expect-fail --stderr --filter "$R" -- -d $S --samples 1
     done
 
     # The first request failing refuses the start (api.c:405), and a later one
     # ends the capture (protocol.c:68).
     kc_options stall-out=08@1
-    emu_case "first request fails" --expect-fail --stderr -- -d $S --samples 2
+    emu_case "first request fails" --expect-fail --stderr --filter "$R" -- -d $S --samples 2
     kc_options stall-out=08@2
     emu_case "second request fails" -- -d $S --samples 3
 
-    # An answer that fails or does not parse leaves the state on LIVE_SPL_WAIT
-    # and nothing submits another transfer (protocol.c:149, protocol.c:153):
-    # the capture never ends.
+    # An answer that fails or does not parse. oxrok asks again at the next
+    # interval and gets its samples.
     for f in stall-in=08@2 silent=08@2 garbage=08@2 short=08@2; do
         kc_options $f
-        emu_case "live answer $f" --hangs --timeout 2 -- -d $S --samples 3
+        emu_case "live answer $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 3 -- -d $S --samples 3
+    done
+    # Every answer bad: oxrok gives up after MAX_BAD_ANSWERS.
+    for f in stall-in=08 silent=08 garbage=08 short=08; do
+        kc_options $f
+        emu_case "live answers $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 3 --no-output -- -d $S --samples 3
     done
     kc_options
 
@@ -178,8 +222,7 @@ emu_cases() {
     # (protocol.c:68), and the close's configure fails too. The fourth IN is
     # the first sample's; the third is the status's, and the start fails.
     emu_case "unplug between samples" --unplug in=1:4 -- -d $S --samples 3
-    emu_case "unplug before the first request" --unplug in=1:3 --expect-fail --stderr -- -d $S --samples 3
-
+    emu_case "unplug before the first request" --unplug in=1:3 --expect-fail --stderr --filter "$R" -- -d $S --samples 3
     # Pulled out with the second request's read on its way: the callback sees
     # LIBUSB_TRANSFER_NO_DEVICE (protocol.c:137) and stops.
     emu_case "unplug during a read" --unplug out=2:5 -- -d $S --samples 3
@@ -191,11 +234,41 @@ emu_cases() {
     emu_case "log empty no limit" --no-output --libsigrok -- -d $M -O analog
     kc_options
 
-    # A log with samples. api.c:367 sends the interval as a tuple, while
-    # sigrok-cli's session.c:365 takes a uint64: a GLib critical, which ends it
-    # before the first request.
-    emu_case "log" --expect-fail --stderr -- -d $M --samples 5
-    emu_case "log no limit" --expect-fail --stderr -- -d $M --continuous
+    # A log with samples. sigrok-cli dies on the meta packet before the first
+    # request; oxrok reads them all.
+    emu_case "log" --oracle-bug "$TUPLE_META" -- -d $M --samples 5
+    emu_case "log no limit" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
+    for n in 1 2 62 63 200; do
+        emu_case "log limit $n" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --samples $n
+    done
+    for n in 1 62 63 64 126 127; do
+        kc_options stored=$n
+        emu_case "log stored $n" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
+    done
+    # The weightings are the log's, not what was asked for (api.c:354).
+    kc_options stored=2 log-time=0 log-freq=0
+    emu_case "log A F" --oracle-bug "$TUPLE_META" -- -d $M:spl_weight_freq=C:spl_weight_time=S --continuous
+    kc_options stored=2 log-time=1 log-freq=0
+    emu_case "log A S" --oracle-bug "$TUPLE_META" -- -d $M --continuous
+    kc_options stored=2 log-time=0 log-freq=1
+    emu_case "log C F" --oracle-bug "$TUPLE_META" -- -d $M --continuous
+    kc_options stored=2 log-time=1 log-freq=1
+    emu_case "log C S" --oracle-bug "$TUPLE_META" -- -d $M --continuous
+    kc_options stored=3
+    # No --record: the harness records no --oracle-bug case, so the log's replays
+    # are the unit tests in src/drivers/kecheng_kc_330b/mod.rs.
+    emu_case "log 3" --oracle-bug "$TUPLE_META" -- -d $M --continuous
+    kc_options stored=32000 digest=1
+    # 508 chunks: the requests stay in the .tx, every offset and count, and the
+    # answers are in the digest of the output.
+    emu_case "log full" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' --tx-filter '/^bulk_in 81 128 -> @127:/d' -- -d $M --continuous
+    # A chunk that fails: what came is kept, and the log is not cleared.
+    for f in stall-out=07@2 stall-in=07@2 silent=07@2 garbage=07@2 short=07@2; do
+        kc_options stored=100 $f
+        emu_case "log chunk $f" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
+    done
+    kc_options
+
     # The runner's analog output module stops at the same tuple, in analog.c,
     # so it needs $G to go on. Then api.c:405: buf_len is 4, the check is
     # len != 1, so the start fails on a request that went out. The chunk stays
@@ -216,14 +289,26 @@ emu_cases() {
     # The log info fails: the start is refused and the stop still configures.
     for f in stall-out=05 stall-in=05 silent=05 garbage=05 short=05; do
         kc_options $f
-        emu_case "log info $f" --expect-fail --stderr -- -d $M --samples 5
+        emu_case "log info $f" --expect-fail --stderr --filter "$R" -- -d $M --samples 5
     done
     kc_options log-interval=7
-    emu_case "log interval 7" --expect-fail --stderr -- -d $M --samples 5
+    emu_case "log interval 7" --expect-fail --stderr --filter "$R" -- -d $M --samples 5
     kc_options
 
     # The stop's configure fails: it logs, and that is all.
     kc_options stored=0 stall-out=01
     emu_case "log empty, no configure on the wire" --no-output -- -d $M --samples 5
+    kc_options
+
+    # The clock, which sigrok-cli has no way to set: oxrok alone, with a date
+    # on the command line, so the goldens hold no wall time.
+    C=20261104T123456
+    emu_case "clock" --no-oracle-only -- -d $S:datetime=$C --samples 1
+    emu_case "clock scan sends nothing" --no-oracle-only --keep-header -- -d $S:datetime=$C --scan
+    emu_case "clock bad date" --no-oracle-only --expect-fail --stderr --filter "$R" -- -d $S:datetime=20261304T123456 --scan
+    for f in stall-out=03 stall-in=03 silent=03 garbage=03 short=03; do
+        kc_options $f
+        emu_case "clock $f" --no-oracle-only --expect-fail --stderr --filter "$R" -- -d $S:datetime=$C --samples 1
+    done
     kc_options
 }

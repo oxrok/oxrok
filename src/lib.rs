@@ -88,6 +88,7 @@ pub mod drivers {
     pub mod hantek_6xxx;
     pub mod hantek_dso;
     pub mod ikalogic_scanaplus;
+    pub mod kecheng_kc_330b;
     pub mod kingst_la2016;
     pub mod lecroy_logicstudio;
     pub mod logicport;
@@ -118,6 +119,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
+    registry.register(Box::new(drivers::kecheng_kc_330b::Kc330bDriver));
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
