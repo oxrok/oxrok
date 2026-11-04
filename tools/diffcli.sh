@@ -248,6 +248,9 @@ case_ "demo hex graycode" -- -d $D8 -g Logic -c pattern=graycode --samples 100 -
 case_ "demo ascii" -- -d $D4 -g Logic -c pattern=walking-zero --samples 50 -O ascii
 case_ "demo analog sine" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=sine --samples 20 -O analog
 case_ "demo analog square amplitude" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=square:amplitude=5 --samples 10 -O analog
+case_ "demo null" -- -d $D4 --samples 10 -O null
+case_ "demo null with analog" -- -d demo:logic_channels=2:analog_channels=1 --samples 4 -O null
+case_ "null show" --keep-header -- -O null --show
 case_ "demo csv" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O csv:header=false:time=true
 case_ "demo csv dedup" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O csv:header=false:dedup=true:label=channel
 case_ "demo vcd" -- -d $D4 -g Logic -c pattern=walking-one --samples 10 -O vcd
@@ -257,6 +260,7 @@ case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic 
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
+case_ "demo scan option without a value" --stderr -- -d demo:logic_channels --scan
 case_ "demo option without a value" --stderr -- -d demo -c samplerate= --set
 case_ "demo option with an empty value" --stderr -- -d demo -c pattern= --set
 # The core's refusals, hwdriver.c:746-765; the last line without oxrok's reason.

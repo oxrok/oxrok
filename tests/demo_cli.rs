@@ -426,3 +426,15 @@ fn the_core_refuses_limits_of_zero() {
         assert!(err.contains(last), "{args:?}: {err}");
     }
 }
+
+#[test]
+fn the_null_output_discards_logic() {
+    let (out, err, ok) = oxrok(&["-d", DEMO4, "--samples", "10", "-O", "null"]);
+    assert!(ok, "{err}");
+    assert_eq!(out, "");
+    // Analog data takes the fallback, as in sigrok-cli.
+    let (out, _, ok) =
+        oxrok(&["-d", "demo:logic_channels=2:analog_channels=1", "--samples", "2", "-O", "null"]);
+    assert!(ok);
+    assert_eq!(out, "A0: -10.0000 V DC\nA0: -10.0000 V DC\n");
+}

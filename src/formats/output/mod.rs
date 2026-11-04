@@ -15,6 +15,7 @@ mod binary;
 mod bits;
 mod csv;
 mod hex;
+mod null;
 mod srzip;
 mod vcd;
 
@@ -112,13 +113,14 @@ impl OutputModule {
     }
 }
 
-static MODULES: [&OutputModule; 8] = [
+static MODULES: [&OutputModule; 9] = [
     &analog::MODULE,
     &ascii::MODULE,
     &binary::MODULE,
     &bits::MODULE,
     &csv::MODULE,
     &hex::MODULE,
+    &null::MODULE,
     &srzip::MODULE,
     &vcd::MODULE,
 ];
