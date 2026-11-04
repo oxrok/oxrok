@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! Device emulation over USB/IP.
 //!
 //! A device is a [`model::DeviceModel`]: descriptors, control

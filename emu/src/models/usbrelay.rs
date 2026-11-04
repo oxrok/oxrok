@@ -1,10 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/dcttech-usbrelay/protocol.c (the report layout),
-//   libsigrok/src/hardware/dcttech-usbrelay/protocol.h,
-//   Copyright (C) 2021 Gerhard Sittig <gerhard.sittig@gmx.net>
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The dcttech `USBRelay` board, as the C firmware of the Pico emulator
 //! plays it (`hil/pico-hidcable`, `MODE usbrelay`): a V-USB HID device

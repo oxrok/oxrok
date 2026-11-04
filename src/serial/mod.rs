@@ -193,6 +193,14 @@ pub trait Port: Send {
     fn write(&mut self, data: &[u8]) -> Result<()>;
     /// Discards pending input.
     fn purge(&mut self) -> Result<()>;
+    /// Waits until what was written has left, `serial_drain`, for at most
+    /// `timeout`: then [`Error::Timeout`]. A port with nothing to wait for
+    /// (a replay, a HID cable whose reports are gone once written) returns
+    /// at once. A recording has no step for it.
+    fn drain(&mut self, timeout: Duration) -> Result<()> {
+        let _ = timeout;
+        Ok(())
+    }
 }
 
 impl dyn Port {
@@ -214,7 +222,16 @@ impl dyn Port {
 pub struct Native {
     name: String,
     port: Box<dyn serialport::SerialPort>,
+    /// See [`termios_handle`].
+    #[cfg(unix)]
+    termios: Option<std::fs::File>,
 }
+
+/// How long a write may wait for room before it fails. It is per chunk the
+/// kernel takes, so a long write at a slow rate goes through, and a device
+/// that stopped reading does not hold a driver for ever, as `sp_blocking_write`
+/// without a timeout does.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn map_err(e: &serialport::Error) -> Error {
     match e.kind() {
@@ -223,18 +240,115 @@ fn map_err(e: &serialport::Error) -> Error {
     }
 }
 
+fn data_bits(p: Params) -> serialport::DataBits {
+    use serialport::DataBits;
+    match p.data_bits {
+        5 => DataBits::Five,
+        6 => DataBits::Six,
+        7 => DataBits::Seven,
+        _ => DataBits::Eight,
+    }
+}
+
+fn parity(p: Params) -> serialport::Parity {
+    match p.parity {
+        Parity::None => serialport::Parity::None,
+        Parity::Even => serialport::Parity::Even,
+        Parity::Odd => serialport::Parity::Odd,
+    }
+}
+
+fn stop_bits(p: Params) -> serialport::StopBits {
+    if p.stop_bits == 2 { serialport::StopBits::Two } else { serialport::StopBits::One }
+}
+
+fn flow_control(p: Params) -> serialport::FlowControl {
+    match p.flow {
+        Flow::None => serialport::FlowControl::None,
+        Flow::RtsCts => serialport::FlowControl::Hardware,
+        Flow::XonXoff => serialport::FlowControl::Software,
+    }
+}
+
+/// A descriptor of the tty for what the crate has no call for. It comes
+/// before the crate's open, whose `TIOCEXCL` keeps any later open out.
+/// The crate's `TTYPort` gives only a raw descriptor, and making a
+/// borrowed one of that is `unsafe`, which this module forbids; so the tty
+/// is opened twice, and on a CDC-ACM port each open sends its
+/// `SET_CONTROL_LINE_STATE`. `None` when it fails: then the crate's open
+/// reports why.
+#[cfg(unix)]
+fn termios_handle(name: &str) -> Option<std::fs::File> {
+    use rustix::fs::OFlags;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags((OFlags::NOCTTY | OFlags::NONBLOCK).bits().cast_signed())
+        .open(name)
+        .ok()
+}
+
+/// What `sp_open` and `sp_set_config` leave and the crate does not:
+/// - `HUPCL` off, so a close leaves DTR and RTS as they are, where the
+///   kernel would lower them;
+/// - `INPCK` off, which the crate's `set_parity` sets for odd and even.
+///   libsigrok has always sent the opposite parity (`serial.c:652-655`)
+///   with no check, so a table entry whose parity is wrong works there; a
+///   check would turn its bytes into errors or NULs here.
+#[cfg(unix)]
+fn as_libserialport(file: &std::fs::File) -> Result<()> {
+    use rustix::termios::{ControlModes, InputModes, OptionalActions, tcgetattr, tcsetattr};
+    let io = |e: rustix::io::Errno| Error::Io(e.into());
+    let mut termios = tcgetattr(file).map_err(io)?;
+    termios.control_modes.remove(ControlModes::HUPCL);
+    termios.input_modes.remove(InputModes::INPCK);
+    tcsetattr(file, OptionalActions::Now, &termios).map_err(io)
+}
+
 impl Native {
-    /// Opens `name` with `params`.
+    /// Opens `name` with `params`, as `serial_open` does: raw, without
+    /// `HUPCL` or `INPCK`, the frame and speed set in one step (one
+    /// `SET_LINE_CODING` on a CDC-ACM port; the crate's `set_*` calls
+    /// after an open would each send theirs), then RTS and DTR when given,
+    /// then both buffers flushed. The crate's open takes `TIOCEXCL` and an
+    /// exclusive `flock`, as `sp_open` does. Unlike `sp_open` it goes
+    /// through `cfmakeraw`, which sets 8 bits without parity for a moment
+    /// on a port left in another frame; only the wire shows that.
     pub fn open(name: &str, params: Params) -> Result<Native> {
-        let builder = serialport::new(name, params.baud).timeout(Duration::from_millis(100));
-        let builder = match params.dtr {
-            Some(dtr) => builder.dtr_on_open(dtr),
-            None => builder.preserve_dtr_on_open(),
+        #[cfg(unix)]
+        let termios = termios_handle(name);
+        let port = serialport::new(name, params.baud)
+            .data_bits(data_bits(params))
+            .parity(parity(params))
+            .stop_bits(stop_bits(params))
+            .flow_control(flow_control(params))
+            .preserve_dtr_on_open()
+            .timeout(Duration::from_millis(100))
+            .open()
+            .map_err(|e| map_err(&e))?;
+        let mut native = Native {
+            name: name.to_owned(),
+            port,
+            #[cfg(unix)]
+            termios,
         };
-        let port = builder.open().map_err(|e| map_err(&e))?;
-        let mut native = Native { name: name.to_owned(), port };
-        native.set_params(params)?;
+        native.settle_termios()?;
+        native.set_handshake(params.rts, params.dtr)?;
+        native.port.clear(serialport::ClearBuffer::All).map_err(|e| map_err(&e))?;
         Ok(native)
+    }
+
+    #[cfg(unix)]
+    fn settle_termios(&self) -> Result<()> {
+        self.termios.as_ref().map_or(Ok(()), as_libserialport)
+    }
+
+    /// Windows has neither flag.
+    #[cfg(not(unix))]
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn settle_termios(&self) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -244,30 +358,13 @@ impl Port for Native {
     }
 
     fn set_params(&mut self, p: Params) -> Result<()> {
-        use serialport::{DataBits, FlowControl, StopBits};
         let port = &mut self.port;
         port.set_baud_rate(p.baud).map_err(|e| map_err(&e))?;
-        port.set_data_bits(match p.data_bits {
-            5 => DataBits::Five,
-            6 => DataBits::Six,
-            7 => DataBits::Seven,
-            _ => DataBits::Eight,
-        })
-        .map_err(|e| map_err(&e))?;
-        port.set_parity(match p.parity {
-            Parity::None => serialport::Parity::None,
-            Parity::Even => serialport::Parity::Even,
-            Parity::Odd => serialport::Parity::Odd,
-        })
-        .map_err(|e| map_err(&e))?;
-        port.set_stop_bits(if p.stop_bits == 2 { StopBits::Two } else { StopBits::One })
-            .map_err(|e| map_err(&e))?;
-        port.set_flow_control(match p.flow {
-            Flow::None => FlowControl::None,
-            Flow::RtsCts => FlowControl::Hardware,
-            Flow::XonXoff => FlowControl::Software,
-        })
-        .map_err(|e| map_err(&e))?;
+        port.set_data_bits(data_bits(p)).map_err(|e| map_err(&e))?;
+        port.set_parity(parity(p)).map_err(|e| map_err(&e))?;
+        port.set_stop_bits(stop_bits(p)).map_err(|e| map_err(&e))?;
+        port.set_flow_control(flow_control(p)).map_err(|e| map_err(&e))?;
+        self.settle_termios()?;
         self.set_handshake(p.rts, p.dtr)
     }
 
@@ -291,8 +388,25 @@ impl Port for Native {
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
-        std::io::Write::write_all(&mut self.port, data).map_err(Error::Io)?;
-        std::io::Write::flush(&mut self.port).map_err(Error::Io)
+        // Its own timeout: the crate polls with whatever the last read set.
+        // No drain, as `serial_write_blocking` has none; see `drain`.
+        self.port.set_timeout(WRITE_TIMEOUT).map_err(|e| map_err(&e))?;
+        std::io::Write::write_all(&mut self.port, data).map_err(Error::Io)
+    }
+
+    /// `tcdrain` has no bound (a device that stopped reading held oxrok
+    /// past SIGTERM with it), so this polls the output queue instead. A
+    /// queue that is empty says the kernel's buffers are, not a chip's
+    /// FIFO behind them, which `tcdrain` covers only on some drivers.
+    fn drain(&mut self, timeout: Duration) -> Result<()> {
+        let start = std::time::Instant::now();
+        while self.port.bytes_to_write().map_err(|e| map_err(&e))? > 0 {
+            if start.elapsed() >= timeout {
+                return Err(Error::Timeout);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
     }
 
     fn purge(&mut self) -> Result<()> {
@@ -343,6 +457,32 @@ mod tests {
         assert_eq!(Params::parse("1200/7n2").unwrap().to_text(), "1200/7n2");
         for bad in ["", "abc", "9600/9n1", "9600/8x1", "9600/8n1/rts=2", "9600/8n1/foo=1"] {
             assert!(Params::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// A pty stands in for the tty: its master reads the slave's termios.
+    /// Its driver forces 8 bits without parity in `c_cflag`, so only these
+    /// flags can be seen here; `INPCK` is the crate's for odd and even
+    /// whatever the driver does with the rest.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_native_port_checks_no_parity_and_keeps_the_lines_at_close() {
+        use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+        use rustix::termios::{ControlModes, InputModes, tcgetattr};
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+        grantpt(&master).unwrap();
+        unlockpt(&master).unwrap();
+        let slave = ptsname(&master, Vec::new()).unwrap();
+        let slave = slave.to_str().unwrap();
+        for text in ["1200/7o1", "2400/7e2", "9600/8n1"] {
+            let mut port = Native::open(slave, Params::parse(text).unwrap()).unwrap();
+            let t = tcgetattr(&master).unwrap();
+            assert!(!t.input_modes.contains(InputModes::INPCK), "{text}");
+            assert!(!t.control_modes.contains(ControlModes::HUPCL), "{text}");
+            // set_params goes through the crate's set_parity again.
+            port.set_params(Params::parse("1200/7o1").unwrap()).unwrap();
+            let t = tcgetattr(&master).unwrap();
+            assert!(!t.input_modes.contains(InputModes::INPCK), "{text} set_params");
         }
     }
 }

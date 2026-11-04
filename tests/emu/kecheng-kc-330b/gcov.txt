@@ -1,0 +1,35 @@
+gcov kecheng-kc-330b (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        85.7%  192 of 224
+  protocol.c   71.2%  126 of 177
+  total        79.3%  318 of 401
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan_kecheng: 72
+    scan: 147
+    dev_open: 162, 165-166, 170-171
+    dev_close: 185
+    config_get: 238-239
+    config_set: 260-263, 284-285
+    config_list: 297-308, 313
+    dev_acquisition_start: 379, 414-415
+  protocol.c
+    kecheng_kc_330b_handle_events: 79-96
+    kecheng_kc_330b_receive_transfer: 167-184
+    kecheng_kc_330b_set_date_time: never called (232-268)
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   63.8%  146 of 229
+  total       63.8%  146 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 208, 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 352-373
+    sr_usb_find: 405-406, 409-410, 418-420, 429
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)

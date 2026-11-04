@@ -1,10 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/serial_hid_ch9325.c,
-//   Copyright (C) 2017-2019 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The WCH CH9325 UART to HID bridge of the UNI-T UT-D04 cable and
 //! others, as the Pico emulator plays it (`hil/pico-hidcable`,

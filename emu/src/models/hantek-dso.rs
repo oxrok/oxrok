@@ -1,16 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/hantek-dso/api.c (the profiles, the scan, the frame transfer),
-//   libsigrok/src/hardware/hantek-dso/protocol.c (the commands, the capture state),
-//   libsigrok/src/hardware/hantek-dso/protocol.h,
-//   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
-//   with protocol information from the hantekdso project,
-//   Copyright (C) 2008 Oleg Khudyakov <prcoder@gmail.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Philipp Marek,
-//   Daniel Elstner, Soeren Apel, Martin Ling, Gerhard Sittig,
-//   Valentin Ochs, Romain Tartière, Miroslav Sustek, Daniel Glöckner,
-//   Aurelien Jacobs, Alberto Scotta
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! A Hantek DSO-2090 USB oscilloscope (and its siblings DSO-2150,
 //! DSO-2250, DSO-5200 and DSO-5200A) as libsigrok's `hantek-dso` driver

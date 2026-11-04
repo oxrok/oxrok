@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Protocol decoding through the binary, compared with annotation
 //! output captured from sigrok-cli 0.8.0-git with libsigrokdecode on
 //! 2026-10-22. `uart-hi.vcd` is a synthetic 8N1 capture at 115200 baud,
@@ -45,6 +47,41 @@ fn uart_annotations_match_libsigrokdecode() {
     let (out, _, _) =
         oxrok(&["-i", VCD, "-P", "uart", "-A", "uart=rx-start", "--protocol-decoder-ann-class"]);
     assert_eq!(out.lines().next(), Some("uart-1: rx-start: Start bit"));
+}
+
+/// A frame sets the decoder's idle start past its own end. Reaching an edge
+/// before that sample must not underflow (a panic in a debug build).
+#[test]
+fn uart_idle_start_ahead_of_the_sample() {
+    let dir = tempfile_dir();
+    let cap = dir.join("cap.vcd");
+    let cap = cap.to_str().unwrap();
+    let (_, err, ok) = oxrok(&[
+        "-d",
+        "demo:logic_channels=2",
+        "-g",
+        "Logic",
+        "-c",
+        "pattern=walking-one",
+        "--samples",
+        "200",
+        "-O",
+        "vcd",
+        "-o",
+        cap,
+    ]);
+    assert!(ok, "{err}");
+    let (_, err, ok) =
+        oxrok(&["-i", cap, "-P", "uart:baudrate=115200:rx=D0", "-A", "uart=rx-data"]);
+    assert!(ok, "{err}");
+    assert!(!err.contains("panicked"), "{err}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn tempfile_dir() -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("oxrok-decode-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 #[test]

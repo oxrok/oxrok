@@ -1,9 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/ezusb.c (the upload sequence the checks expect),
-//   Copyright (C) 2010-2012 Bert Vermeulen <bert@biot.com>,
-//   with commits by Daniel Elstner, Uwe Hermann
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Cypress EZ-USB FX2 shell: the chip as it comes up without
 //! firmware, its boot loader's vendor request `0xa0`, and the checks on

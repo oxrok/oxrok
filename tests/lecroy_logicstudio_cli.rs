@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! `lecroy-logicstudio` through the command line, on a hand written replay:
 //! what a refused capture leaves behind.
 

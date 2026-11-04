@@ -1,14 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/pipistrello-ols/api.c (the scan, the trigger stages, the counts),
-//   libsigrok/src/hardware/pipistrello-ols/protocol.c (the commands, the metadata, the sample stream),
-//   libsigrok/src/hardware/pipistrello-ols/protocol.h (the opcodes and flags),
-//   Pipistrello_ols_verilog 2423ef3, github.com/magnuskarlsson/Pipistrello_ols_verilog (verilog/stage.v, trigger.v, controller.v, rle_enc.v, core.v: stage matching, RLE masks, count widths),
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, magnuskarlsson,
-//   Daniel Elstner, Soeren Apel, Gerhard Sittig, Martin Ling,
-//   Tilman Sauerbeck, Wolfram Sang, Marek Vasut
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Pipistrello LX45 running the Open Logic Sniffer bitstream, as
 //! libsigrok's `pipistrello-ols` driver (`p-ols`) sees it: an FT2232H

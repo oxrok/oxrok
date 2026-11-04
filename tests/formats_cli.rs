@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! File formats through the binary: session files, VCD, CSV and binary,
 //! compared with output captured from sigrok-cli 0.7.2 / libsigrok 0.5.2
 //! on 2026-10-22, and round trips through our own readers.

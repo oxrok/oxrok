@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/serial_hid_bu86x.c,
-//   libsigrok/src/dmm/bm86x.c (the packet request),
-//   Copyright (C) 2019 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   Copyright (C) 2014 Aurelien Jacobs <aurel@gnuage.org>,
-//   with commits by Uwe Hermann, François Revol
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Brymen BU-86X infrared cable of the `BM86x` meters, as the Pico
 //! emulator plays it (`hil/pico-hidcable`, `MODE bu86x`): a HID device

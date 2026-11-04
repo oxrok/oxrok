@@ -1,15 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/saleae-logic16/api.c (the ids, strings, rates, transfers),
-//   libsigrok/src/hardware/saleae-logic16/protocol.c (the EP1 commands, their scrambling, the FPGA register maps, the primer, the sample format),
-//   libsigrok/src/hardware/saleae-logic16/protocol.h,
-//   Copyright (C) 2013 Marcus Comstedt <marcus@mc.pp.se>,
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2012 Joel Holdsworth <joel@airwebreathe.org.uk>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
-//   Soeren Apel, Aurelien Jacobs, Martin Ling, Gerhard Sittig,
-//   Romain Tartière, Tilman Sauerbeck, Andreas Piesk, Peter Zotov, Tim Hatch
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Saleae Logic16 (`21a9:1001`) as libsigrok's `saleae-logic16`
 //! driver sees it, built on the EZ-USB shell ([`crate::shells::ezusb`]).

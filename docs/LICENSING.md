@@ -166,3 +166,23 @@ that would change without writing. A counterpart missing from the
 checkouts stops the run rather than dropping its credits (the
 LogicPort's sources are only in the fork, so `--all` needs that
 checkout).
+
+## Copyright of the original code
+
+A file that is original (not a port of a sigrok file) carries
+`Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>`
+instead of a `Counterpart in sigrok` comment: the `emu` framework, the
+`tools`, the `tests`, the `examples` and the `hil` bench firmware. The
+`emu` per-device models are original device-side reimplementations of
+the devices the sigrok drivers talk to; they share only the devices'
+protocol facts (constants, register maps, the clock table's values),
+which are not expression, so they are original too.
+
+`oxrok-emu` is a separate program: a standalone binary that links no
+part of the GPL `oxrok` library, reached over USB/IP. It is therefore
+aggregated with `oxrok`, not a combined work with it, and is
+dual-licensed GPL-3.0-or-later OR Apache-2.0 (`emu/LICENSE`,
+`emu/NOTICE`); the `SPDX-License-Identifier` on its files says so. The
+one part that was a port of LGPL-2.1 code (the FTDI shell's baud-rate
+divisor, from libfti) was re-implemented from the FTDI AN_120 spec so
+the crate can carry the Apache branch.

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! A USB device around a model: the standard requests addressed to the
 //! device, the configuration state, endpoint halts, and the checks on
 //! every transfer the host submits.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 # Differential check: runs the same command lines through sigrok-cli and
 # oxrok and diffs the output after the first header line.
 #
@@ -76,6 +77,30 @@
 # descriptors) moves it once more, so conn=$EMU_USB holds only on a board
 # whose descriptors stay, or after an emu_reset of its own on the line
 # before, for a case with one tool.
+#
+# A scenario that sets EMU_CDC=1 is a model on the CDC-ACM shell, which
+# the tools reach through /dev/ttyACMn, EMU_TTY: a session that gets no
+# such node fails. ModemManager, when it runs, is told to leave the
+# emulated device alone (emu_cdc_quiet). Before each tool's run the tty
+# is put back at 9600/8n1 and the model replaced (emu_tty_restore): the
+# kernel keeps termios and the line coding it last sent across closes, so
+# otherwise what a tool sends would depend on the tool before it. Its
+# .tx is normalised (emu_tx_tty): the consecutive bulk transfers of a
+# direction are one line, as their cut is the kernel's and the pace's;
+# and of a run of consecutive SET_LINE_CODING and SET_CONTROL_LINE_STATE
+# what stays is the last line coding, first, when it changes the line,
+# then the control line states that change the lines, in their order.
+# So a transient frame on the way to the last (the crate serialport's
+# cfmakeraw, under oxrok's Native), a repeat of the state the lines are
+# in (each open() raises them, and oxrok's Native opens twice), and the
+# order of a setting and an RTS change, which no UART can tell, do not
+# show; a DTR pulse does. libsigrok swaps odd and even (serial.c:652-655
+# passes libserialport's SP_PARITY_* to serial_libsp.c:253-258, which reads
+# 1 as even and 2 as odd), so in sigrok-cli's .tx alone bParityType 01 and
+# 02 are swapped back; oxrok sends what serialcomm says. A fixed libsigrok
+# fails the comparison, which is how that would show. A case whose tty
+# moves under the conn= the scenario read (a re-attach that got another
+# minor) fails rather than running against nothing.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -528,6 +553,7 @@ if [ $emu = 1 ]; then
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
     }
     emu_start() {
+        [ "$EMU_CDC" != 1 ] || emu_cdc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
         rm -f "$TMP/emu.ctl"; mkfifo "$TMP/emu.ctl"
@@ -542,6 +568,14 @@ if [ $emu = 1 ]; then
         : >"$TMP/emu.sed"
         EMU_SEEN=0
         emu_track
+        if [ "$EMU_CDC" = 1 ]; then
+            case "$EMU_TTY" in
+                /dev/ttyACM*) ;;
+                *)
+                    echo "$EMU_MODEL: the device got no /dev/ttyACMn (nodes: $EMU_NODES); is the kernel's cdc_acm there? (modprobe cdc_acm)" >&2
+                    return 1 ;;
+            esac
+        fi
     }
     # emu_fields LINE: the EMU_* values from a READY, REPLUGGED or
     # RENUMERATED line, and the rules that make its node names and address generic
@@ -603,6 +637,7 @@ if [ $emu = 1 ]; then
         fi
         [ "$EMU_DEAD" = 0 ] || [ $emu_status != 0 ] || emu_status=1
         EMUPID=""
+        [ "$EMU_CDC" != 1 ] || emu_cdc_unquiet
         sudo -n "$EMU" cleanup --locked >&2
         return $emu_status
     }
@@ -634,6 +669,145 @@ if [ $emu = 1 ]; then
             intf=$(basename "$intf")
             emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
             printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null || return 1
+        done
+    }
+    # EMU_CDC=1, before attaching: a ModemManager whose filter lets a
+    # ttyACM through opens it and sends AT commands, which would land in
+    # the case's transactions. Version 1.24's default filter forbids the
+    # emulated device whatever its interface's protocol. For a version or
+    # a setting that does not, the rule is udev's own way to keep it off,
+    # in /run, for the emulated devices only.
+    # DEVPATH: udev's SUBSYSTEMS and KERNELS must match one ancestor, and
+    # vhci_hcd.0 is a platform device. emu_stop removes the rule.
+    EMU_MM_RULE=/run/udev/rules.d/90-oxrok-emu-mm.rules
+    emu_cdc_quiet() {
+        systemctl is-active -q ModemManager 2>/dev/null || return 0
+        sudo -n mkdir -p /run/udev/rules.d
+        printf '%s\n' 'DEVPATH=="*/vhci_hcd.0/*", ENV{ID_MM_DEVICE_IGNORE}="1"' \
+            | sudo -n tee "$EMU_MM_RULE" >/dev/null
+        sudo -n udevadm control --reload
+    }
+    emu_cdc_unquiet() {
+        [ -e "$EMU_MM_RULE" ] || return 0
+        sudo -n rm -f "$EMU_MM_RULE"
+        sudo -n udevadm control --reload
+    }
+    # emu_tty_closing_wait CENTISECONDS, in a scenario, before a case whose
+    # device stops reading: how long the kernel holds a tool's close for
+    # bytes still in flight (30 s by default), through TIOCSSERIAL as root.
+    # It lasts until the next attach, so a scenario puts 3000 back after.
+    # serial_struct's closing_wait is at offset 40 on Linux.
+    emu_tty_closing_wait() {
+        [ "$EMU_DRY" = 0 ] || return 0
+        emu_cmd "section tty closing_wait $1" >/dev/null || return 1
+        sudo -n python3 -I -c '
+import fcntl, os, struct, sys
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+info = bytearray(128)
+fcntl.ioctl(fd, 0x541E, info)
+struct.pack_into("H", info, 40, int(sys.argv[2]))
+fcntl.ioctl(fd, 0x541F, info)
+' "$EMU_TTY" "$1" || emu_fail "$EMU_MODEL: could not set closing_wait"
+    }
+    # EMU_CDC=1, before each tool's run: the tty back at the state a new
+    # attach has, then a fresh model that knows nothing of the opening
+    # and closing that took. In a section of its own, as an unbind is.
+    emu_tty_restore() {
+        emu_cmd "section tty restore before $1" >/dev/null || return 1
+        stty -F "$EMU_TTY" 9600 cs8 -parenb -cstopb -crtscts -ixon -ixoff clocal hupcl raw -echo \
+            || return 1
+        emu_cmd reset >/dev/null
+    }
+    # EMU_CDC=1: the transactions as a tty's, see the head of this file.
+    # Joined data longer than 1 KiB is its digest, as the fixtures have it.
+    emu_tx_tty() {
+        python3 -I -c '
+import hashlib, re, sys
+OUT = re.compile(r"bulk_out ([0-9a-f]{2}) ([0-9a-f]+|-) -> [0-9]+$")
+IN = re.compile(r"bulk_in ([0-9a-f]{2}) [0-9]+ -> ([0-9a-f]+|-)$")
+SETUP = re.compile(r"ctl_out 21 (20|22) ")
+key, data, setup = None, "", []
+line = "80250000000008 -> ok"
+lines = "0000"
+stalled = ""
+def flush_data():
+    global key, data
+    if key and data:
+        shown = data
+        size = len(shown) // 2
+        if size > 1024:
+            shown = "@%d:%s" % (size, hashlib.sha256(bytes.fromhex(data)).hexdigest())
+        if key[0] == "out":
+            print("bulk_out %s %s -> %d" % (key[1], shown, size))
+        else:
+            print("bulk_in %s %d -> %s" % (key[1], size, shown))
+    key, data = None, ""
+def flush_setup():
+    global setup, line, lines, stalled
+    coding = [l for l in setup if l.split()[2] == "20"]
+    if coding:
+        last = coding[-1].split(" ", 5)[5]
+        if last != line:
+            print(coding[-1])
+        line = last
+    for l in setup:
+        if l.split()[2] != "22":
+            continue
+        value = l.split()[3]
+        if "stall" in l:
+            if l != stalled:
+                print(l)
+            stalled = l
+        elif value != lines:
+            print(l)
+            lines = value
+    setup = []
+def swap_parity(text):
+    w = text.split(" ")
+    if w[2] == "20" and len(w[5]) == 14 and w[5][10:12] in ("01", "02"):
+        w[5] = w[5][:10] + ("02" if w[5][10:12] == "01" else "01") + w[5][12:]
+    return " ".join(w)
+for text in sys.stdin:
+    text = text.rstrip("\n")
+    m = OUT.match(text)
+    k = ("out", m.group(1)) if m else None
+    if not m:
+        m = IN.match(text)
+        k = ("in", m.group(1)) if m else None
+    if m:
+        flush_setup()
+        if k != key:
+            flush_data()
+        key = k
+        if m.group(2) != "-":
+            data += m.group(2)
+        continue
+    flush_data()
+    if SETUP.match(text):
+        setup.append(swap_parity(text) if sys.argv[1] == "a" else text)
+        continue
+    flush_setup()
+    print(text)
+flush_data()
+flush_setup()
+' "$1"
+    }
+    # emu_case --bound DRV: binds DRV to the device's vendor interfaces, so that
+    # each tool starts as on a fresh plug in, not after the other's detach. Its
+    # probe is a section of its own. A kernel without DRV runs the case unbound,
+    # with a note, as the transactions then show nothing else.
+    emu_bind() {
+        [ -n "$EMU_BUSID" ] || return 0
+        if [ ! -d "/sys/bus/usb/drivers/$2" ]; then
+            echo "note: $1: no $2 in this kernel, the case runs unbound"
+            return 0
+        fi
+        for intf in /sys/bus/usb/devices/"$EMU_BUSID":*; do
+            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = ff ] || continue
+            [ ! -e "$intf/driver" ] || continue
+            intf=$(basename "$intf")
+            emu_cmd "section bind $2 to $intf before $1" >/dev/null || return 1
+            printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$2/bind" >/dev/null || return 1
         done
     }
     emu_tx() {
@@ -769,7 +943,7 @@ flush()
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
-    #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] -- ARGS...
+    #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] [--bound DRV] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -838,7 +1012,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -862,6 +1036,7 @@ flush()
                 --oxrok) libsig_full=1 ;;
                 --tx-filter) tx_filter=$2; shift ;;
                 --no-oracle-only) no_oracle_only=1 ;;
+                --bound) bound=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -931,6 +1106,7 @@ flush()
                 why="$why; --oracle-differs takes neither --oracle-bug, --hangs nor --record"
             fi
         fi
+        tty0=$EMU_TTY
         for t in $tools; do
             if [ $t = b ]; then tool=$OXROK; elif [ $libsig = 1 ]; then tool=$EMU_LIBSIGROK_RUN; else tool=$SIGROK_CLI; fi
             if ! emu_cmd reset >/dev/null; then
@@ -944,8 +1120,20 @@ flush()
             # (ftdi_sio's probe would land among oxrok's transactions).
             replugged=0
             case "$t: $event" in "b: unplug"*) replugged=1 ;; esac
-            if { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
+            if [ -z "$bound" ] && { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
                 emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
+            fi
+            if [ -n "$bound" ] && ! emu_bind "$name" "$bound"; then
+                emu_fail "$name: could not bind $bound"; return
+            fi
+            if [ "$EMU_CDC" = 1 ] && ! emu_tty_restore "$t $name"; then
+                emu_fail "$name: could not put the tty back"; return
+            fi
+            if [ "$EMU_CDC" = 1 ] && [ "$EMU_TTY" != "$tty0" ]; then
+                case " $* " in
+                    *"$tty0"[:\ ]*)
+                        emu_fail "$name: the tty moved from $tty0 to $EMU_TTY after the scenario read it"; return ;;
+                esac
             fi
             if ! emu_cmd "section $t $name" >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
@@ -1037,6 +1225,9 @@ flush()
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
             emu_case_v=$((emu_case_v + v))
+            if [ "$EMU_CDC" = 1 ]; then
+                emu_tx_tty "$t" <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+            fi
             if [ -n "$tx_filter" ]; then
                 sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
@@ -1354,7 +1545,7 @@ flush()
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }

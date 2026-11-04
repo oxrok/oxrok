@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The driver against a hand written session of a Saleae Logic clone
 //! with the firmware running: open (configuration, claim, version
 //! checks), a start command for 1 MHz and three transfers of samples.

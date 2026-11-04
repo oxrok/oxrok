@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 // LogicPort test signal generator for ESP32 DevKit V1 (Arduino framework).
 // Serial (921600 baud) line commands:
 //   PING                      -> PONG

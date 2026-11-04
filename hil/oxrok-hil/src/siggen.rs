@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Client for the `hil/esp32-siggen` firmware: a line protocol at 921600
 //! baud. Mask bits with the default map: 0 = D0 (GPIO25), 1 = D1
 //! (GPIO26), 2 = D2 (GPIO27), 3 = CLK1 (GPIO14).

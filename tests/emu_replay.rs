@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Replays of the sessions the emulator records: every
 //! `tests/fixtures/DRIVER/emu-*.txt` was written by an `emu_case
 //! --record` of `tools/diffcli.sh --emu` (docs/USB.md, "Record and
@@ -19,7 +21,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 22] = [
+const RECORDED: [&str; 28] = [
     "asix-sigma",
     "chronovu-la",
     "fx2lafw",
@@ -28,13 +30,16 @@ const RECORDED: [&str; 22] = [
     "saleae-logic16",
     "saleae-logic-pro",
     "ftdi-la",
+    "testo",
     "kingst-la2016",
     "p-ols",
     "microchip-pickit2",
     "dcttech-usbrelay",
     "brymen-bm86x",
     "uni-t-ut61e-ser",
+    "uni-t-ut61e",
     "victor-dmm",
+    "ikalogic-scanalogic2",
     "ikalogic-scanaplus",
     "hantek-6xxx",
     "sysclk-lwla",
@@ -42,6 +47,9 @@ const RECORDED: [&str; 22] = [
     "hantek-4032l",
     "zeroplus-logic-cube",
     "greatfet",
+    "lascar-el-usb",
+    "sysclk-sla5032",
+    "kecheng-kc-330b",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a
