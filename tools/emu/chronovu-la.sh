@@ -230,6 +230,6 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # A SIGINT while the samples go out: oxrok's stop must end the run
     # though the device's thread may be blocked on a full queue.
     # sigrok-cli has no SIGINT handler.
-    emu_case "interrupt after readout" --oracle-bug "sigrok-cli has no SIGINT handler" --interrupt in=1:2117 --no-output --stderr -- -d $D --samples 8388608 -O hex
+    emu_case "interrupt after readout" --oracle-bug "sigrok-cli has no SIGINT handler" --interrupt in=1:2117 --stderr --filter 's/sent [0-9]+ samples/sent N samples/' -- -d $D --samples 8388608 -O hex
     emu_case "unplug after readout" --oracle-differs "$LIMIT" --unplug in=1:2117 --digest --filter "$HEAD8" -- -d $D --samples 100 -O hex
 }
