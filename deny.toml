@@ -58,8 +58,8 @@ exceptions = [
 # Crates with no `license` field, their licence file read by hand. If
 # the file changes this stops applying and cargo-deny falls back on
 # recognising the text itself, with a warning, then the allowlist as
-# usual. The same four are in tools/third-party/about.toml, where a change
-# fails outright. The hash is XXH32 of the file with LF line ends.
+# usual. The same four are in tools/third-party/about.toml. The hash is
+# XXH32 of the file with LF line ends.
 
 [[licenses.clarify]]
 crate = "mt19937"

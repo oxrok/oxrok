@@ -26,7 +26,13 @@ Not legal advice. The policy oxrok follows:
   binary they are GPL, and the archive is an aggregate of the two.
 - The `rustpython` feature builds RustPython (MIT) and its standard
   library, which is CPython's (PSF License), into the binary; both are
-  compatible with the GPL.
+  compatible with the GPL. It also brings `malachite-*`, LGPL-3.0-only:
+  the LGPL-3.0 is the GPL-3.0 with extra permissions, so it links into a
+  GPL binary whose source is published whole, and as `-only` it pins that
+  binary to GPL-3.0 in practice.
+- `serialport` is MPL-2.0, without the notice that rules out secondary
+  licences, so section 3.3 lets it combine with the GPL. Its files stay
+  MPL, the notices say so and the source tarball has them.
 - "sigrok" is the name of another project. oxrok describes itself as
   sigrok compatible and never uses the name as its own.
 
@@ -78,6 +84,66 @@ which the GPL binary allows. libffi's `msvcc.sh`, `make_sunver.pl` and
 derived from or linked into libffi (its `LICENSE-BUILDTOOLS`); none of it
 is used by the crate's build script, and it reaches only the source
 tarball, as a separate program in the aggregate.
+
+## What the release publishes
+
+One archive per target (`make dist`), and one source tarball (`make
+dist-src`), each with a `.sha256`, as assets of the same GitHub release:
+
+| | Binary archive | `oxrok-<version>-vendored.tar.xz` |
+|---|---|---|
+| The program | `oxrok`, with the `rustpython` feature | the tagged tree from `git archive`, including `hil/`'s bench firmware sources; `GIT-COMMIT` names the commit |
+| Our licences | `LICENSE`, `NOTICE` | `LICENSE`, `NOTICE` |
+| Third parties | `THIRD-PARTY-NOTICES.txt`, for that target | `THIRD-PARTY-NOTICES.txt`, for all targets together, and `vendor/`, every crate of `Cargo.lock` for every platform with its own licence files |
+| Decoders | `decoders/`, with libsigrokdecode's `COPYING` | the same under `third_party/libsigrokdecode-0.5.3/` |
+| Other | `README.md`, `CHANGELOG.md` | `.cargo/config.toml`, pointing cargo at `vendor/` |
+
+No firmware is in either: the binary includes none, it looks firmware
+up at run time (`src/core/firmware.rs`), and the archives have only
+what the table says. `tools/emu/*.firmware` are lists of sizes for the
+emulator's stand-ins.
+
+### The source offer
+
+GPL-3.0 section 6(d) has the source available from the same place as the
+binary, and directions to it next to the binary: the tarball is an asset
+of the same release, and `THIRD-PARTY-NOTICES.txt` says so. It also
+serves the MPL-2.0 and LGPL-3.0 crates. `git archive` has none of the
+decoders, crates or notices, so `make dist-src` adds them; `make dist` in
+the extracted tarball then rebuilds the release archive with no network
+and no extra tools. The decoders are their own source, Python as
+libsigrokdecode publishes it, and the tarball carries them so that it
+stands alone.
+
+The release workflow's `source-check` job extracts the tarball in an empty
+directory and runs that with an empty `CARGO_HOME` and the network off
+(`unshare -n`), before attaching it. The binary jobs wait for that job,
+so a release cannot have binaries and no source.
+
+`vendor/` also holds what no release binary links and each with its own
+terms: the features' `libusb1-sys` and `pyo3`, the dev-dependencies, and
+the GPL-2.0 libffi tooling and pip wheel from above, unmodified in their
+crates.
+
+### Checks
+
+`deny.toml`: `cargo deny --workspace check licenses` in CI's `licenses`
+job fails on a licence that is not on its allowlist, for any feature on
+any platform. The LGPL and MPL crates are exceptions by name, each with
+the reason. It reads manifests and licence files, so it cannot see bundled
+C: when adding a `-sys` crate or a dependency with a vendored tree, read
+it and add it to the tables above. Licences only, no advisories or bans.
+
+`THIRD-PARTY-NOTICES.txt` is generated, not committed, by
+`tools/third-party/notices.py`, from `make dist` and `make dist-src`, whose
+failure stops the release. It runs cargo-about for the target and features
+(`about.toml`, `about.hbs`) and adds what cargo-about does not do: Apache
+`NOTICE` files, the copyright of crates that ship no licence file
+(`copyright-holders.txt`; one that is missing there is an error), the Rust
+standard library, musl on Linux and the notices of the frozen Python
+modules. CI's `licenses` job generates it too, so a dependency that needs
+a line there shows on the pull request. It needs cargo-about 0.9.3, and
+`--features cli`: without it `cargo install` installs nothing and exits 0.
 
 ## Attribution of the sigrok counterparts
 

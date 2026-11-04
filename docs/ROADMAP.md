@@ -308,7 +308,6 @@ each with where it belongs:
   it keeps one read in flight.
 - `fn shots/hit` is duplicated in 5 models: a candidate for a shared
   helper.
-- `make dist` carrying `NOTICE` has not been run for real.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).

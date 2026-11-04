@@ -37,7 +37,8 @@ ignore-dev-dependencies = true
 accepted = ["GPL-3.0-or-later"]
 
 # Crates with no `license` field, with the file that says what they are
-# under. A changed file fails generation: read it and update this entry.
+# under. If a file changes, cargo-about warns and recognises the text
+# itself instead: read it and update this entry.
 
 [mt19937.clarify]
 license = "BSD-3-Clause"
