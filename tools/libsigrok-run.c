@@ -43,9 +43,10 @@
  * and asks for the stop from an idle callback of the main loop, as a
  * client's key press or button would: sr_session_stop() from the
  * datafeed callback would run the driver's stop inside its transfer
- * callback, inside libusb's event handling. So a driver that ends the
- * capture in the same callback as its samples (lecroy-logicstudio) never
- * sees that stop, and the option only cuts its output. --stop-after 0
+ * callback, inside libusb's event handling, where its control write
+ * fails. A driver that ends the capture in the same callback as its
+ * samples (lecroy-logicstudio) has finished by the time that stop runs:
+ * its stop write goes out, and only the output is shorter. --stop-after 0
  * asks for the stop as soon as the session has started, at the header
  * packet, before any sample.
  *

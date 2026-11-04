@@ -197,8 +197,9 @@ emu_cases() {
     # The runner's own limit (--stop-after): the output cut at 1000
     # samples. The driver sends the samples and ends the acquisition in
     # one callback (recv_bulk_transfer()), so the stop asked from the
-    # main loop comes after that end: it stops nothing here, and stderr
-    # stays empty of the failed write a nested stop would log.
+    # main loop comes after that end: the capture is over, its write to
+    # the arm register goes out as the last transaction, and stderr stays
+    # empty of the failure a stop nested in that callback would log.
     emu_case "lib stop after 1000" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
     emu_case "lib stop after 1000 stderr" --libsigrok --no-output --stderr -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
     # The C driver never ends: with no trigger it arms nothing and waits
