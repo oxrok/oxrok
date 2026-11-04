@@ -1,0 +1,40 @@
+# oxrok usb fixture 1
+# emu uni-t-dmm: fs9721 samples 3
+# arg: -d
+# arg: uni-t-ut60e:conn=1a86.e008
+# arg: --samples
+# arg: 3
+device vid=1a86 pid=e008 version=1100 manufacturer="WCH.CN " product="USB to Serial" interfaces=0:03:00:00
+claim 0 -> ok
+ctl_out 21 09 0300 0000 6009000003 -> ok
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f2172000{5}
+int_in 82 8 -> f2354d00{5}
+int_in 82 8 -> f25b6100{5}
+int_in 82 8 -> f27f8200{5}
+int_in 82 8 -> f297a000{5}
+int_in 82 8 -> f2b0c000{5}
+int_in 82 8 -> f2d4e000{5}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f2172000{5}
+int_in 82 8 -> f2354d00{5}
+int_in 82 8 -> f25b6100{5}
+int_in 82 8 -> f27f8200{5}
+int_in 82 8 -> f297a000{5}
+int_in 82 8 -> f2b0c000{5}
+int_in 82 8 -> f2d0e100{5}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f2172800{5}
+int_in 82 8 -> f2354500{5}
+int_in 82 8 -> f25b6900{5}
+int_in 82 8 -> f27f8200{5}
+int_in 82 8 -> f297a200{5}
+int_in 82 8 -> f2b0c400{5}
+int_in 82 8 -> f2d0e000{5}
+release 0 -> ok

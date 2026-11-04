@@ -266,6 +266,17 @@ pub trait Transport: Send {
         Err(Error::not_supported("string descriptor indexes"))
     }
 
+    /// As `libusb_kernel_driver_active` and `libusb_detach_kernel_driver`:
+    /// detaches a kernel driver bound to the interface, if one is (not
+    /// `usbfs`, another program's claim), and leaves it detached, also
+    /// after a release, where [`Transport::claim_interface`]'s own detach
+    /// gives it back and the kernel's probe then shows on the wire. For a
+    /// driver that follows a C driver doing this. Nothing elsewhere than
+    /// on Linux.
+    fn detach_kernel_driver(&mut self, _interface: u8) -> Result<()> {
+        Ok(())
+    }
+
     /// Claims an interface. On Linux a kernel driver bound to it is
     /// detached first.
     fn claim_interface(&mut self, interface: u8) -> Result<()>;

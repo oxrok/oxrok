@@ -14,7 +14,7 @@ EMU_DRIVER=uni-t-ut61e-ser
 EMU_GCOV_SHARED="src/serial.c src/serial_hid.c src/serial_hid_ch9325.c"
 EMU_GCOV=serial-dmm
 # oxrok has the driver: its cases must run full.
-EMU_FULL=uni-t-ut61e-ser
+EMU_FULL="uni-t-ut61e-ser uni-t-ut61e"
 
 emu_cases() {
     SEARCH_BUG="libsigrok 0bc24877 converts a searched path twice (serial_hid.c ser_hid_chip_search)"
@@ -29,6 +29,13 @@ emu_cases() {
     # oxrok alone, against the goldens.
     emu_case "ut61e search chip" --oracle-bug "$SEARCH_BUG" -- -d uni-t-ut61e-ser:conn=hid/ch9325 --samples 1
     emu_case "ut61e search sn" --oracle-bug "$SEARCH_BUG" -- -d uni-t-ut61e-ser:conn=hid/sn=HIDCABLE1 --samples 1
+
+    # The ids of libsigrok's uni-t-dmm driver reach this cable through
+    # the HID layer too, which that driver has not (its conn= is USB alone;
+    # its own route is tools/emu/uni-t-dmm.sh's).
+    NOHID="libsigrok's uni-t-dmm takes no HID cable name, and finds nothing without conn= (api.c scan)"
+    emu_case "twin by node" --oracle-bug "$NOHID" -- -d uni-t-ut61e:conn=hid/ch9325/raw=$EMU_HIDRAW --samples 2
+    emu_case "twin by search" --oracle-bug "$NOHID" -- -d uni-t-ut61e --samples 1
 
     # The meter misbehaving, through the emulator's options. One that
     # never sends: the scan gives up after its 3 s.

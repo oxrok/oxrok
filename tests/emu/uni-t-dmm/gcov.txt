@@ -7,13 +7,13 @@ never reached, by function (line ranges hold no reached line):
     hid_chip_init: 109-111, 151-152
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/dmm/es519xx.c   60.1%  273 of 454
-  src/dmm/fs9721.c    71.6%  166 of 232
-  src/dmm/fs9922.c    90.6%  183 of 202
+  src/dmm/fs9721.c    73.3%  170 of 232
+  src/dmm/fs9922.c    91.6%  185 of 202
   src/dmm/ut372.c     95.6%  43 of 45
-  src/dmm/ut71x.c     83.7%  159 of 190
+  src/dmm/ut71x.c     88.4%  168 of 190
   src/dmm/vc870.c     95.2%  216 of 227
   src/usb.c           33.2%  76 of 229
-  total               70.7%  1116 of 1579
+  total               71.6%  1131 of 1579
 never reached, by function (line ranges hold no reached line):
   src/dmm/es519xx.c
     parse_range: 145-146, 162, 172, 180, 182, 185, 187, 189, 191
@@ -35,7 +35,7 @@ never reached, by function (line ranges hold no reached line):
   src/dmm/fs9721.c
     parse_digit: 46-47, 56-68
     flags_valid: 100-101, 119-120
-    parse_value: 158-161, 186-191
+    parse_value: 186-191
     handle_flags: 280-281, 293-294, 299
     sr_fs9721_parse: 359-360
     sr_fs9721_01_temp_c: never called (385-396)
@@ -44,14 +44,14 @@ never reached, by function (line ranges hold no reached line):
     sr_fs9721_max_c_min: never called (430-450)
   src/dmm/fs9922.c
     flags_valid: 46-47, 75-76, 81-82
-    parse_value: 96-100, 114-118, 138-139
+    parse_value: 99-100, 114-118, 138-139
     handle_flags: 281-282
     sr_fs9922_packet_valid: 334
     sr_fs9922_parse: 365-366
   src/dmm/ut372.c
     sr_ut372_packet_valid: 78, 84
   src/dmm/ut71x.c
-    parse_value: 67-69, 71-73, 75-76, 79-82, 97
+    parse_value: 79-82
     parse_range: 115-116, 121-122
     parse_flags: 189-191, 216-217
     handle_flags: 263-264

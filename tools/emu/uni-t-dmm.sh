@@ -12,6 +12,8 @@ EMU_MODEL=uni-t-dmm
 EMU_OPTIONS=""
 EMU_DRIVER=uni-t-ut61e
 EMU_GCOV=uni-t-dmm
+# oxrok has the driver: its cases must run full.
+EMU_FULL="tenma-72-7750 uni-t-ut60g uni-t-ut61e tecpel-dmm-8061 tenma-72-7745 uni-t-ut60a uni-t-ut60e voltcraft-vc820 voltcraft-vc840 uni-t-ut61b uni-t-ut61c uni-t-ut61d voltcraft-vc830 uni-t-ut372 tenma-72-7730 tenma-72-7732 tenma-72-9380a uni-t-ut71a uni-t-ut71b uni-t-ut71c uni-t-ut71d uni-t-ut71e uni-t-ut804 voltcraft-vc920 voltcraft-vc940 voltcraft-vc960 voltcraft-vc870"
 EMU_GCOV_SHARED="src/usb.c src/dmm/es519xx.c src/dmm/fs9721.c src/dmm/fs9922.c src/dmm/ut372.c src/dmm/ut71x.c src/dmm/vc870.c"
 
 # The model's options for the cases that follow; none restores
@@ -26,10 +28,17 @@ unit_options() {
 unit_hold() {
     [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: nothing to claim
     timeout 120 python3 -I -c '
-import fcntl, os, signal, struct, sys
+import array, fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]
 bus, dev = (int(open(d + f).read()) for f in ("/busnum", "/devnum"))
 fd = os.open("/dev/bus/usb/%03d/%03d" % (bus, dev), os.O_RDWR)
+# usbhid, when no capture has detached it yet (a -k run): USBDEVFS_IOCTL
+# with USBDEVFS_DISCONNECT, which sends nothing to the device.
+buf = array.array("B", struct.pack("iiQ", 0, 0x5516, 0))
+try:
+    fcntl.ioctl(fd, 0xc0105512, buf)
+except OSError:
+    pass  # no driver bound
 fcntl.ioctl(fd, 0x8004550f, struct.pack("I", 0))  # USBDEVFS_CLAIMINTERFACE
 print("held", flush=True)
 signal.pause()
@@ -81,6 +90,9 @@ emu_cases() {
     ut71() { unit_options "packet=$UT71" baud=2400 parity=odd; }
     vc870() { unit_options "packet=$VC870" baud=9600 parity=none; }
 
+    # oxrok's log prefix as libsigrok's; the message itself is compared.
+    N='s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: (Invalid input|Could neither)/sr: usb: \1/
+s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
     U=uni-t-ut61e:conn=$EMU_USB
     I=uni-t-ut61e:conn=1a86.e008
     # Selection.
@@ -88,24 +100,27 @@ emu_cases() {
     emu_case "scan by address" --keep-header -- -d $U --scan
     emu_case "scan by ids" --keep-header -- -d $I --scan
     emu_case "scan other ids" --keep-header --no-output -- -d uni-t-ut61e:conn=1a86.e009 --scan
-    emu_case "scan bad conn" --stderr -- -d uni-t-ut61e:conn=notusb --scan
+    emu_case "scan bad conn" --stderr --filter "$N" -- -d uni-t-ut61e:conn=notusb --scan
     emu_case "show" --keep-header --filter 's/^(    conn: )[0-9]+\.[0-9]+/\1BUS.ADDR/' -- -d $I --show
-    emu_case "get limit_samples" --expect-fail --stderr -- -d $I --get limit_samples
+    # oxrok's message says why after "invalid argument"; cut there.
+    emu_case "get limit_samples" --expect-fail --stderr --filter 's/(invalid argument).*/\1/' -- -d $I --get limit_samples
     emu_case "set limit_samples" --no-output -- -d $I --set -c limit_samples=5
-
-    # No conn=: nothing in the C (api.c:73).
-    emu_case "scan no conn" --keep-header --no-output -- -d uni-t-ut61e --scan
 
     # The captures of each chipset.
     es14
     emu_case "es519xx14 samples 1" -- -d $I --samples 1
-    emu_case "es519xx14 samples 4" -- -d $I --samples 4
+    emu_case "es519xx14 samples 4" --record -- -d $I --samples 4
     emu_case "es519xx14 csv" -- -d $I --samples 2 -O csv:header=false
     emu_case "es519xx14 by address" -- -d $U --samples 2
+    # No conn=: nothing in the C (api.c:73). oxrok looks for the cable
+    # through the HID layer, which the captures above have just taken
+    # away from it, so it finds nothing either. A cable with usbhid on it
+    # is tools/emu/ch9325.sh's.
+    emu_case "scan no conn" --keep-header --no-output -- -d uni-t-ut61e --scan
     es11
     emu_case "es519xx11 samples 2" -- -d uni-t-ut60g:conn=1a86.e008 --samples 2
     fs21
-    emu_case "fs9721 samples 3" -- -d uni-t-ut60e:conn=1a86.e008 --samples 3
+    emu_case "fs9721 samples 3" --record -- -d uni-t-ut60e:conn=1a86.e008 --samples 3
     fs22
     emu_case "fs9922 samples 3" -- -d uni-t-ut61b:conn=1a86.e008 --samples 3
     emu_case "fs9922 z1 diode" -- -d voltcraft-vc830:conn=1a86.e008 --samples 3
@@ -155,6 +170,15 @@ emu_cases() {
     unit_options packet=30333d3635373c353e363030303030303030303030303430310d0a,30333d3635373c353e363030303030303030303030303031310d0a,30333d3635373c353e363030303030303030303030303032310d0a,30333d3635373c353e363030303030303030303030303034310d0a,30333d3635373c353e363030303030303030303030303030320d0a,30333d3635373c353e363030303030303030303030303431320d0a baud=2400 parity=none idle=0
     emu_case "sweep ut372" -- -d uni-t-ut372:conn=1a86.e008 --samples 6
 
+    # Overloads, which leave the parsers early: "0.L" with a minus and a
+    # point byte that is none; "OL", and under-limit and 4000 count modes.
+    unit_options packet=2b3f303a3f203130000020000d0a,2d3f303a3f203130000020000d0a,2b3f303a3f203930000020000d0a,2d3f303a3f203130000080000d0a baud=2400 parity=none idle=0
+    emu_case "overload fs9922" -- -d uni-t-ut61b:conn=1a86.e008 --samples 4
+    unit_options packet=172030475d66788090a0b0c4d0e0,172830475d66788090a2b0c4d0e0 baud=2400 parity=none idle=0
+    emu_case "overload fs9721" -- -d uni-t-ut60a:conn=1a86.e008 --samples 2
+    unit_options packet=3a3a303c3a313430300d0a,3a3c303a3a313430300d0a,313233343a313132300d0a baud=2400 parity=odd idle=0
+    emu_case "overload ut71x" -- -d uni-t-ut71e:conn=1a86.e008 --samples 3
+
     # The chunks: a byte per report, and the C header's 1, 2 pattern.
     unit_options "packet=$ES14" baud=19200 parity=odd chunk=1
     emu_case "chunks of 1" -- -d $I --samples 2
@@ -194,25 +218,36 @@ emu_cases() {
     # Faults. Each ends the capture at the error, without a df_end from
     # the driver: the session stops as its last source goes.
     unit_options stall-report=1
-    emu_case "fault line setting stalled" --stderr -- -d $I --samples 1
+    emu_case "fault line setting stalled" --stderr --filter "$N" -- -d $I --samples 1
     emu_case "fault line setting stalled output" --no-output -- -d $I --samples 1
     unit_options stall-in=2
-    emu_case "fault in stalled" --stderr -- -d $I --samples 1
+    emu_case "fault in stalled" --stderr --filter "$N" -- -d $I --samples 1
     unit_options short-in=2
-    emu_case "fault in short" --stderr -- -d $I --samples 1
+    emu_case "fault in short" --stderr --filter "$N" -- -d $I --samples 1
     # After 2 samples the chip stops answering: a read times out after 1 s.
     unit_options idle=0 hold=4
-    emu_case "fault chip hangs" --stderr -- -d $I --samples 3
+    # oxrok's CLI adds a warning of its own, which the C has not.
+    emu_case "fault chip hangs" --stderr --filter "$N
+/Device only sent 2 samples/d" -- -d $I --samples 3
     emu_case "fault chip hangs output" -- -d $I --samples 3
+    # The C ends without a df_end there (protocol.c:282); its csv output
+    # loses nothing by it.
+    emu_case "fault chip hangs csv" -- -d $I --samples 3 -O csv:header=false
     # The cable pulled in mid capture.
     unit_options
-    emu_case "fault unplug" --unplug in=2:3 --stderr --filter 's/LIBUSB_ERROR_[A-Z_]+/LIBUSB_ERROR/' -- -d $I --samples 3
+    emu_case "fault unplug" --unplug in=2:3 --stderr --filter "$N" -- -d $I --samples 3
+
+    # A stop in mid capture. The chip then hangs, so the read in progress
+    # is what the stop has to wait for; the golden holds no "USB receive
+    # error", as a timeout after a stop is no error.
+    unit_options idle=0 hold=3
+    emu_case "stop during a read" --interrupt in=2:3 --oracle-bug "sigrok-cli has no SIGINT handler: it dies, and api.c's stop is never asked for" --stderr --filter "$N" -- -d $I --samples 100
 
     # Another program holds the interface: the claim fails (busy).
     unit_options
     emu_case "before the claim" -- -d $I --samples 1
     if unit_hold; then
-        emu_case "interface claimed by another program" --stderr -- -d $I --samples 1
+        emu_case "interface claimed by another program" --stderr --filter "$N" -- -d $I --samples 1
         unit_release
     fi
     # A client's stop, between polls: no USB in the C's stop. sigrok-cli

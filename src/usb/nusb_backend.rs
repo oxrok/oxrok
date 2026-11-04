@@ -299,6 +299,27 @@ impl Transport for Nusb {
         ])
     }
 
+    /// nusb has no `USBDEVFS_GETDRIVER`, and its detach would also take
+    /// the interface from another program's usbfs claim, so sysfs says
+    /// what is bound, as `libusb_kernel_driver_active` asks the kernel.
+    #[cfg(target_os = "linux")]
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        let config = self.device.active_configuration().map_or(1, |c| c.configuration_value());
+        let ports: Vec<String> = self.info.ports.iter().map(u8::to_string).collect();
+        let path = format!(
+            "/sys/bus/usb/devices/{}-{}:{config}.{interface}/driver",
+            self.info.bus,
+            ports.join(".")
+        );
+        let Ok(driver) = std::fs::read_link(path) else {
+            return Ok(());
+        };
+        if driver.file_name().is_some_and(|n| n == "usbfs") {
+            return Ok(());
+        }
+        self.device.detach_kernel_driver(interface).map_err(|e| map(&e, "detach kernel driver"))
+    }
+
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
         if self.interfaces.contains_key(&interface) {
             return Ok(());

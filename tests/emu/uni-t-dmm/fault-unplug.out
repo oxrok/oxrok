@@ -1,1 +1,1 @@
-sr: uni-t-dmm: USB receive error: LIBUSB_ERROR.
+sr: uni-t-dmm: USB receive error: LIBUSB_ERROR_NO_DEVICE.

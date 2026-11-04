@@ -71,8 +71,11 @@ pub struct SerialDmmDriver(pub &'static Model);
 /// Registers a driver for every supported meter, on serial and on HID
 /// cables, and the `UT32x` thermometer.
 pub fn register_all(registry: &mut crate::core::Registry) {
-    for model in models::MODELS.iter().chain(models::hid_models()) {
+    for model in models::MODELS {
         registry.register(Box::new(SerialDmmDriver(model)));
+    }
+    for model in models::hid_models() {
+        registry.register(Box::new(super::uni_t_dmm::UniTDmmDriver(model)));
     }
     registry.register(Box::new(ut32x::Ut32xDriver));
 }
@@ -177,7 +180,7 @@ impl Driver for SerialDmmDriver {
 }
 
 impl Model {
-    fn long_name(&self) -> &'static str {
+    pub(crate) fn long_name(&self) -> &'static str {
         // Built once per model: the table is static, the names are few.
         static NAMES: std::sync::OnceLock<std::sync::Mutex<Vec<(&'static str, &'static str)>>> =
             std::sync::OnceLock::new();
