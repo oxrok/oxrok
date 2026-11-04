@@ -480,8 +480,9 @@ impl Device for ZeroplusDevice {
         );
         self.regs.triggerbar = bar;
         self.regs.ramsize_trigger = ramsize;
-        log::debug!("triggerbar_address = {bar}(0x{bar:x})");
-        log::debug!("ramsize_triggerbar_address = {ramsize}(0x{ramsize:x})");
+        // %d and %x of the C's unsigned ints: a wrapped count prints -1.
+        log::debug!("triggerbar_address = {}(0x{bar:x})", bar.cast_signed());
+        log::debug!("ramsize_triggerbar_address = {}(0x{ramsize:x})", ramsize.cast_signed());
         let regs = self.regs.clone();
         let capture = Capture { trigger: trigger.any };
         let slot = Arc::clone(&self.link);

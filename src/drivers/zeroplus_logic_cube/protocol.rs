@@ -332,9 +332,12 @@ pub fn trigger_bar(limit: u64, code: u8, trigger: bool, ratio: u64) -> (u32, u32
     let memory = u64::from(memory_bytes(code)) / 4;
     let depth = if limit != 0 && limit < memory { limit } else { memory };
     let bar = if trigger { depth * ratio / 100 } else { 0 };
-    let ramsize = depth - bar;
-    let (bar, ramsize) = if bar > 2 { (bar - 2, ramsize) } else { (0, ramsize - 1) };
-    (u32::try_from(bar).unwrap_or(u32::MAX), u32::try_from(ramsize).unwrap_or(u32::MAX))
+    let ramsize = u32::try_from(depth - bar).unwrap_or(u32::MAX);
+    let bar = u32::try_from(bar).unwrap_or(u32::MAX);
+    // At a limit of 1 or 2 with a ratio of 100 nothing is left after the
+    // trigger and the C's unsigned count wraps to 0xffffffff
+    // (protocol.c:113-118). It runs on, and so does this.
+    if bar > 2 { (bar - 2, ramsize) } else { (0, ramsize.wrapping_sub(1)) }
 }
 
 /// The board's settings, all written by `analyzer_configure()`:
@@ -1033,6 +1036,15 @@ mod tests {
         assert_eq!(trigger_bar(1, 0, false, 0), (0, 0));
         // A limit past the memory is the memory.
         assert_eq!(trigger_bar(5000, 0, false, 0), (0, 2047));
+    }
+
+    #[test]
+    fn the_post_trigger_count_wraps_as_in_c() {
+        assert_eq!(trigger_bar(1, 0, true, 100), (0, u32::MAX));
+        assert_eq!(trigger_bar(2, 0, true, 100), (0, u32::MAX));
+        // One before the trigger and none left, or one left: no wrap at 3.
+        assert_eq!(trigger_bar(3, 0, true, 100), (1, 0));
+        assert_eq!(trigger_bar(2, 0, true, 50), (0, 0));
     }
 
     #[test]
