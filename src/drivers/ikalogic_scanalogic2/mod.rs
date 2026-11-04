@@ -11,11 +11,13 @@
 //! that does everything through feature reports ([`protocol`]).
 //!
 //! It reaches the device as the C driver does, with plain control
-//! transfers on a claimed interface, not through hidapi: the scan and the
-//! open detach usbhid if it is bound, and it stays detached after oxrok
+//! transfers on a claimed interface. [`crate::hid`] has a feature report
+//! path too, but it goes through hidraw, which is there only while usbhid
+//! holds the interface, and the C driver's detach outlasts it. The scan and
+//! the open detach usbhid if it is bound, and it stays detached after oxrok
 //! ends ([`crate::usb::Transport::detach_kernel_driver`]), as libusb leaves
-//! it. Hidraw would serve the reports, but usbhid's own requests then come
-//! between them.
+//! it. Where the system keeps a HID device for itself (macOS and Windows,
+//! not tried here) the claim can be expected to fail, as for the C driver.
 //!
 //! The scan resets the device, reads its info report, resets it and leaves
 //! it idle; the open resets it and leaves it idle; a capture asks for the
