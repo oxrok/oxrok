@@ -125,11 +125,13 @@ emu_cases() {
     emu_case "plus trigger one sample before the end" -- -d $D -C $C4 --samples 65 -t 0=1 -O hex
     # The packet of length 0 itself is harmless to an output whose loop
     # counts up to the length: the same capture in binary runs full.
-    emu_case "plus trigger on the last sample binary" --digest --filter 'd' -- -d $D -C $C4 --samples 64 -t 0=1 -O binary
+    emu_case "plus trigger on the last sample binary" --keep-header --digest --filter 'd' -- -d $D -C $C4 --samples 64 -t 0=1 -O binary
+    # (A try of the open during the renumeration may log that it failed,
+    # as often as the timing has it: that line goes.)
     # Two letters on a channel are two stages: libsigrok writes both to
     # stage 0 (rising and falling together, which the FPGA reads as
     # rising); oxrok refuses more than the one stage it can keep.
-    emu_case "plus trigger two stages" --oracle-differs "protocol.c:386-421 writes the matches of every stage to stage 0, so A then B becomes A and B" --expect-fail --stderr --filter 's/^oxrok: [a-z]+: [a-z0-9_:]+: //' -- -d $D -C $C4 -c samplerate=1M --samples 100 -t 0=rf -O hex
+    emu_case "plus trigger two stages" --oracle-differs "protocol.c:386-421 writes the matches of every stage to stage 0, so A then B becomes A and B" --expect-fail --stderr --filter '/Failed to open device/d; s/^oxrok: [a-z]+: [a-z0-9_:]+: //' -- -d $D -C $C4 -c samplerate=1M --samples 100 -t 0=rf -O hex
     # Stream mode: transfers sized for 10 ms at the rate, the trigger
     # position bounded by 10 % of the memory.
     emu_case "plus continuous" -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 10000 -O hex
