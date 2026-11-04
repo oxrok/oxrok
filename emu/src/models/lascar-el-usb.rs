@@ -85,7 +85,8 @@
 //! 20), `interval=S`, `unit=N` (0x2e), `co-high=F`, `co-low=F`,
 //! `logging=0|1`, `flag-bits=HEX` (byte 0x21), `config-size=N`,
 //! `memory=BYTES`, `block=BYTES`, `pattern=whole|half`, `invalid=K` (each
-//! Kth pair is raw 80, 0, which the C calls invalid).
+//! Kth pair is the one the C calls invalid: raw 80, 0, or 40, 0 with
+//! `unit=1`).
 //!
 //! Faults, off by default (N counts from 1): `cfg-silent=N`, `cfg-garbage=N`,
 //! `cfg-long=N`, `cfg-short-header=N`, `cfg-short=N`, `cfg-nobody=N` for the
@@ -612,7 +613,8 @@ fn sample(o: &Options, i: usize) -> [u8; 2] {
         return u16::try_from((60 + 17 * i) % 0x1_0000).unwrap_or(0).to_be_bytes();
     }
     if o.invalid.is_some_and(|k| i % k == k - 1) {
-        return [80, 0];
+        // What protocol.c:424-432 reads as 0 degrees and 0 %.
+        return [if o.unit == 1 { 40 } else { 80 }, 0];
     }
     let t = 120 + 2 * (i * 3 % 11);
     let h = 80 + 2 * (i % 37);
@@ -861,6 +863,8 @@ mod tests {
         let o = Options { invalid: Some(2), ..Options::default() };
         assert_eq!(sample(&o, 1), [80, 0]);
         assert_eq!(sample(&o, 2), [132, 84]);
+        let o = Options { invalid: Some(2), unit: 1, ..Options::default() };
+        assert_eq!(sample(&o, 1), [40, 0], "0 degrees Fahrenheit is raw 40");
         let o = Options { id: 9, ..Options::default() };
         assert_eq!(sample(&o, 0), [0, 60], "big endian");
         assert_eq!(sample(&o, 20), [1, 0x90]);

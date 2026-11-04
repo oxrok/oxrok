@@ -12,4 +12,4 @@ ctl_out 40 02 0002 0000 - -> ok
 ctl_out 40 02 0001 0000 - -> ok
 bulk_out 02 03ffff -> 3
 bulk_in 82 64 -> 020080
-bulk_in 82 4096 -> @512:fold=64:e11322e77c0a42821ad105ac1681391b715d15f93efaac37df5b9a1ab7bc3737
+bulk_in 82 4096 -> @512:fold=64:5030c2ade215c02583f572f8219c6b5b2014d5b5a39a90f219dfeef5ddc361d9
