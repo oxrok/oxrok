@@ -55,7 +55,7 @@ pub fn driver_spec<'a>(registry: &'a Registry, spec: &str) -> Result<DriverSpec<
     let mut options = Vec::new();
     for (k, v) in args.items {
         let key = driver
-            .scan_options()
+            .accepted_scan_options()
             .iter()
             .find(|key| key.id() == k)
             .cloned()

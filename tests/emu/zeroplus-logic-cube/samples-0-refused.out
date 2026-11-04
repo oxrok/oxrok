@@ -1,2 +1,2 @@
-sr: hwdriver: Cannot set 'limit_samples' to 0.
+Cannot set 'limit_samples' to 0.
 Failed to configure sample limit.
