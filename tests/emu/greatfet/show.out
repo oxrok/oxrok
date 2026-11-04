@@ -1,0 +1,29 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    probe_names
+greatfet:conn=BUS.ADDR - Great Scott Gadgets GreatFET v2021.2.1 [S/N: 000057cc67e630187657] with 16 channels: SGPIO0 SGPIO1 SGPIO2 SGPIO3 SGPIO4 SGPIO5 SGPIO6 SGPIO7 SGPIO8 SGPIO9 SGPIO10 SGPIO11 SGPIO12 SGPIO13 SGPIO14 SGPIO15
+Channel groups:
+    Logic: channels SGPIO0 SGPIO1 SGPIO2 SGPIO3 SGPIO4 SGPIO5 SGPIO6 SGPIO7 SGPIO8 SGPIO9 SGPIO10 SGPIO11 SGPIO12 SGPIO13 SGPIO14 SGPIO15
+Supported configuration options across all channel groups:
+    continuous: on (current), off
+    conn: BUS.ADDR (current)
+    samplerate - supported samplerates:
+      1 MHz
+      2 MHz
+      4 MHz
+      8.5 MHz
+      10.2 MHz
+      12 MHz
+      17 MHz
+      20.4 MHz
+      25.5 MHz
+      34 MHz (current)
+      40.8 MHz
+      51 MHz
+      68 MHz
+      102 MHz
+      204 MHz
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
