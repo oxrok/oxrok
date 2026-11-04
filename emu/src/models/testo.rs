@@ -86,7 +86,8 @@
 //!   instead of status-only packets. A real FT232R always answers within its
 //!   latency timer, so `mute-hold` is an artifact, for a capture whose stop
 //!   a case needs to find between transfers with a stable count.
-//! - `bad-crc=N`, `bad-prefix=N`: answer N damaged, as line noise would.
+//! - `bad-crc=N`: answer N damaged, as line noise would. `bad-prefix=N`: answer
+//!   N with another first byte and a CRC that matches it.
 //! - `out-stall=N`: the N-th write (from 0) and those after it STALL. A
 //!   real chip would rather NAK; the driver sees an error either way.
 //! - `stall-start=baud|data|flow-ctrl|modem-ctrl`: that request STALLs from
@@ -323,7 +324,12 @@ impl Mcu {
             a[last] ^= 0xff;
         }
         if self.b.bad_prefix == Some(n) {
+            // With a CRC that matches, so that the prefix check alone
+            // refuses it: an artifact, as noise would break the CRC as well.
             a[0] ^= 0xff;
+            let body = a.len() - 2;
+            let crc = crc(&a[..body]).to_le_bytes();
+            a[body..].copy_from_slice(&crc);
         }
         a
     }
@@ -673,7 +679,9 @@ mod tests {
         assert_eq!(crc(&a[..a.len() - 2]).to_le_bytes(), a[a.len() - 2..]);
         let a = read();
         assert_ne!(crc(&a[..a.len() - 2]).to_le_bytes(), a[a.len() - 2..]);
-        assert_ne!(read()[0], 0x21);
+        let a = read();
+        assert_ne!(a[0], 0x21);
+        assert_eq!(crc(&a[..a.len() - 2]).to_le_bytes(), a[a.len() - 2..], "the prefix alone");
         assert_eq!(read()[0], 0x21);
     }
 
