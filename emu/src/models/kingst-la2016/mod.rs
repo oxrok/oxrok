@@ -646,6 +646,7 @@ struct Bulk {
 }
 
 /// The emulated device.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Kingst {
     profile: Profile,
     faults: Faults,

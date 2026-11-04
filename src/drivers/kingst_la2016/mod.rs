@@ -27,6 +27,10 @@
 //! step, so that the device sees the same transactions as under
 //! sigrok-cli (checked with the emulator, `tools/emu/kingst-la2016.sh`).
 //!
+//! Bulk IN transfers have the C driver's 500 ms timeout
+//! ([`Transport::bulk_in_stream_timed`]): a slow stream's data comes as
+//! it arrives, not when 512 KiB have filled.
+//!
 //! Where the C driver is wrong the port does otherwise: a rate whose
 //! divider does not fit 16 bits is refused, a failed poll of the run
 //! state ends the capture (the C code takes it for an idle state and

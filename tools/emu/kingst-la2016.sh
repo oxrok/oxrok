@@ -168,8 +168,10 @@ emu_cases() {
 
     # Streaming: no compression, the enabled channels in turn.
     # stream_data() (protocol.c:1490-1518) passes on every sample of the
-    # transfer and only then checks the limit (1532): 100 samples asked,
-    # 256 printed. oxrok stops at the limit; the transactions are the same.
+    # transfer and only then checks the limit (1532): how far it overshoots
+    # is the transfer's size (here the model's 512 bytes per transfer, 256
+    # samples at 16 channels). oxrok stops at the limit; the transactions
+    # are the same.
     emu_case "stream" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=1M:continuous=on --samples 100 -O hex
     emu_case "stream three channels" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -C CH0,CH4,CH9 -c samplerate=1M:continuous=on --samples 400 -O hex
     emu_case "stream across transfers" --oracle-differs "protocol.c:1490-1518 passes on all of the transfer in which the limit falls" -- -d $K -c samplerate=200k:continuous=on --samples 1000 -O hex
