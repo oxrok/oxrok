@@ -160,9 +160,9 @@ ctl_out 41 0c 0085 0000 31 -> ok
 ctl_out 41 0c 0083 0000 58 -> ok
 ctl_out 41 0c 0085 0000 31 -> ok
 ctl_out 41 0c 0083 0000 60 -> ok
-ctl_out 41 0c 0085 0000 e7 -> ok
+ctl_out 41 0c 0085 0000 db -> ok
 ctl_out 41 0c 0083 0000 61 -> ok
-ctl_out 41 0c 0085 0000 03 -> ok
+ctl_out 41 0c 0085 0000 05 -> ok
 ctl_out 41 0c 0083 0000 62 -> ok
 ctl_out 41 0c 0085 0000 00 -> ok
 ctl_out 41 0c 0083 0000 63 -> ok
@@ -226,7 +226,7 @@ ctl_in 41 0c 0084 0000 1 -> 02
 ctl_out 41 0c 0083 0000 9d -> ok
 ctl_in 41 0c 0084 0000 1 -> 00
 ctl_out 41 0c 0083 0000 9c -> ok
-ctl_in 41 0c 0084 0000 1 -> 03
+ctl_in 41 0c 0084 0000 1 -> 05
 ctl_out 41 0c 0083 0000 9b -> ok
 ctl_in 41 0c 0084 0000 1 -> err stall
 ctl_in 00 06 0100 0000 64 -> 1201000200000040120c0e70000000000001

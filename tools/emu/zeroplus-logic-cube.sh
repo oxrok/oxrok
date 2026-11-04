@@ -65,37 +65,35 @@ emu_cases() {
     CH=A0,A1,A2,A7,B0,B1,B7
     B='1,7b; /^T:/b; d'
     # Why sigrok-cli differs or fails, with the C lines.
-    NOCONN="api.c:450 lists no scan option (NO_OPTS) and api.c:187 ignores any: libsigrok's check_options() refuses conn=, so a board cannot be selected, and no line names it"
-    MARK="api.c:639-640 sends the trigger with no look at devc->trigger: at full memory with no -t, api.c:556-557 and 591-592 make the offset 0 and the capture has a marker at sample 0"
+    NOCONN="api.c:450 lists no scan option (NO_OPTS) and api.c:187 ignores any: libsigrok's check_options() refuses conn=, so a board cannot be selected"
     RATE="zp_set_samplerate() loops on ARRAY_SIZE() (api.c:148), always true, and reads past samplerates_200[]"
-    ADDR="analyzer_get_stop_address() (analyzer.c:641-642) makes an address of the failed read's error code, and the capture delivers samples by it"
+    ADDR="analyzer_get_stop_address() (analyzer.c:641-642) makes an address of the failed read's error code, 0xfffffff7: at a limit of 1000 the discard it gives covers the readout, at 1500 samples go out by it"
     STALE="api.c:605-608 only warns of a short or failed bulk read and api.c:615-648 sends the buffer whole, the previous read's bytes where the new are missing"
     WAIT="analyzer_wait() (analyzer.c:411-415) has no bound and takes an error for a status: LIBUSB_ERROR_PIPE, -9, has the busy bit set"
     GONE="analyzer_wait() takes LIBUSB_ERROR_NO_DEVICE, -4, for a status with the busy bit clear, and the status and addresses read 0xfffffffc (analyzer.c:411-415, 629-655): no samples, exit 0"
     SIGINT="sigrok-cli has no SIGINT handler"
 
     zp_options
-    # The lines name conn=, where sigrok-cli's cannot; the rest is alike.
-    emu_case "scan" --oracle-differs "$NOCONN" --keep-header -- -d $Z --scan
+    emu_case "scan" --keep-header -- -d $Z --scan
     # The driver lists no scan option, so libsigrok refuses a conn=
     # (hwdriver.c check_options()) and the board cannot be selected by
-    # its address or ids. oxrok selects it, by each and only by those.
+    # its address or ids. oxrok takes conn= without listing it (--show
+    # is as sigrok-cli's) and then names it in the device line.
     emu_case "by address" --oracle-bug "$NOCONN" --digest --filter "$B" -- -d $Z:conn=$EMU_USB -C $CH --samples 1000 -O bits
     emu_case "by ids" --oracle-bug "$NOCONN" --digest --filter "$B" -- -d $Z:conn=0c12.700e -C $CH --samples 100 -O bits
+    emu_case "by ids scan" --oracle-differs "$NOCONN" --keep-header -- -d $Z:conn=0c12.700e --scan
     emu_case "by the ids of another board" --oracle-bug "$NOCONN" --expect-fail --stderr --filter "$L" -- -d $Z:conn=0c12.7009 --show
-    emu_case "show" --oracle-differs "$NOCONN" --keep-header --filter "$C" -- -d $Z --show
+    emu_case "show" --keep-header --filter "$C" -- -d $Z --show
     emu_case "default capture" --record --digest --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
     emu_case "default capture registers" --stderr --filter "$A" -- -l 5 -d $Z -C $CH --samples 1000 -O bits
-    emu_case "all channels" --oracle-differs "$MARK" --digest --filter '1,40!d' -- -d $Z --samples 2048 -O hex
+    # At full memory: with no -t, api.c:556-557 and 591-592 make the
+    # trigger offset 0 and api.c:639-640 sends the marker with no look at
+    # devc->trigger. Kept: commit 4c1433d1 says the board triggers at once.
+    emu_case "all channels" --digest --filter '1,40!d' -- -d $Z --samples 2048 -O hex
     # Sample counts: the memory size code and the post-trigger count
     # follow them (protocol.c set_limit_samples(), set_triggerbar()).
-    for n in 2 3 4 100 2047 2049 3000 16385; do
+    for n in 2 3 4 100 2047 2048 2049 3000 16384 16385 32768; do
         emu_case "samples $n" --digest --filter "$B" -- -d $Z -C $CH --samples $n -O bits
-    done
-    # The limit equal to the memory: the marker of a capture with no
-    # trigger is the difference, kept by the filter.
-    for n in 2048 16384 32768; do
-        emu_case "samples $n" --oracle-differs "$MARK" --digest --filter "$B" -- -d $Z -C $CH --samples $n -O bits
     done
     emu_case "samples 2049 registers" --stderr --filter "$A" -- -l 5 -d $Z -C A0 --samples 2049 -O bits
     # Three samples: stop - now underflows at api.c:582 and the discard
@@ -158,6 +156,11 @@ emu_cases() {
     # A ratio of 100: nothing after the trigger.
     emu_case "trigger ratio 100" --digest --filter "$B" -- -d $Z -C $CH -t A2=r -c captureratio=100 --samples 1000 -O bits
     emu_case "trigger ratio 100 registers" --stderr --filter "$A" -- -l 5 -d $Z -C A2 -t A2=r -c captureratio=100 --samples 1000 -O bits
+    # Nothing left after the trigger at limits 1 and 2: protocol.c:113-118
+    # wraps the count to -1(0xffffffff) and runs on, and so must the port.
+    for n in 1 2; do
+        emu_case "trigger ratio 100 samples $n" --stderr --filter "$A" -- -l 5 -d $Z -C A0 -t A0=1 -c captureratio=100 --samples $n -O bits
+    done
     # Two edges: the board has one edge register, the driver keeps the
     # last.
     emu_case "two edges" --stderr --filter "$A" -- -l 5 -d $Z -C $CH -t A0=r,A1=f --samples 1000 -O bits
@@ -197,22 +200,29 @@ emu_cases() {
     # with its error code for a status; oxrok warned first, sent the same
     # registers, and ends.
     emu_case "two levels warned" --oracle-differs "$GONE" --stderr --filter "$P; /high and low|Lost the board/!d; s/.*zeroplus-logic-cube: //" --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
+    # What sigrok-cli does there: no samples, exit 0, the same transactions.
+    emu_case "two levels unplugged output" --no-output --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
 
     # Other boards.
     zp_options pid=0x7009
-    emu_case "LAP-C(16064) show" --oracle-differs "$NOCONN" --keep-header --filter "$C" -- -d $Z --show
-    emu_case "LAP-C(16064) samples 65536" --oracle-differs "$MARK" --digest --filter "$B" -- -d $Z -C $CH --samples 65536 -O bits
+    emu_case "LAP-C(16064) show" --keep-header --filter "$C" -- -d $Z --show
+    emu_case "LAP-C(16064) samples 65536" --digest --filter "$B" -- -d $Z -C $CH --samples 65536 -O bits
     zp_options pid=0x700b
-    emu_case "LAP-C(32128) show" --oracle-differs "$NOCONN" --keep-header --filter "$C" -- -d $Z --show
-    emu_case "LAP-C(32128) all channels" --oracle-differs "$MARK" --digest --filter '1,40!d' -- -d $Z --samples 2048 -O hex
+    emu_case "LAP-C(32128) show" --keep-header --filter "$C" -- -d $Z --show
+    emu_case "LAP-C(32128) all channels" --digest --filter '1,40!d' -- -d $Z --samples 2048 -O hex
     emu_case "LAP-C(32128) trigger D0 rising" --stderr --filter "$A" -- -l 5 -d $Z -C D0 -t D0=r -c captureratio=50 --samples 1000 -O bits
     emu_case "LAP-C(32128) trigger C1 and D7" --digest --filter "$B" -- -d $Z -C C1,D7 -t C1=1,D7=0 -c captureratio=50 --samples 1000 -O bits
+    # A board of 200 MHz takes the two rates the others refuse.
+    zp_options pid=0x7002
+    for r in 150M 200M; do
+        emu_case "LAP-16128U samplerate $r" --stderr --filter "$A" -- -l 5 -d $Z -C A0 -c samplerate=$r --samples 100 -O bits
+    done
     zp_options pid=0x7100
-    emu_case "AKIP-9101 show" --oracle-differs "$NOCONN" --keep-header --filter "$C" -- -d $Z --show
-    emu_case "AKIP-9101 samples 262144" --oracle-differs "$MARK" --digest --filter '1,7b; /^T:/b; d' -- -d $Z -C A0 --samples 262144 -O bits
+    emu_case "AKIP-9101 show" --keep-header --filter "$C" -- -d $Z --show
+    emu_case "AKIP-9101 samples 262144" --digest --filter '1,7b; /^T:/b; d' -- -d $Z -C A0 --samples 262144 -O bits
     # With a serial number: the scan reads it.
     zp_options serial=ZP1234
-    emu_case "serial scan" --oracle-differs "$NOCONN" --keep-header -- -d $Z --scan
+    emu_case "serial scan" --keep-header -- -d $Z --scan
     # Its read refused: the board is skipped (and the handle leaks).
     zp_options serial=ZP1234 stall_string=1
     emu_case "serial refused" --stderr --filter "$E" -- -l 4 -d $Z --scan
@@ -258,18 +268,18 @@ emu_cases() {
     emu_case "fault poll" --digest --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
     zp_options stall=rdata:0x21@2
     emu_case "fault poll stderr" --stderr --filter "$E" -- -d $Z -C A0 --samples 100 -O bits
-    # An address read refused: the C's Stop address is 0xfffffff7 and it
-    # delivers samples by that; oxrok says so and delivers none. Its .out
-    # shows no such line; the output case's .oracle shows the samples.
+    # An address read refused: the C's Stop address is 0xfffffff7 (Need to
+    # discard 1089 at a limit of 1500) and it delivers samples by that,
+    # the output case's .oracle; oxrok says so, its .out, and delivers none.
     zp_options stall=rdata:0x9b@1
-    emu_case "fault stop address read" --oracle-differs "$ADDR" --stderr --filter "$A" -- -l 5 -d $Z -C A0 --samples 1000 -O bits
+    emu_case "fault stop address read" --oracle-differs "$ADDR" --stderr --filter "$E" -- -d $Z -C A0 --samples 1500 -O bits
     zp_options stall=rdata:0x9b@1
-    emu_case "fault stop address read output" --oracle-differs "$ADDR" --no-output --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
+    emu_case "fault stop address read output" --oracle-differs "$ADDR" --digest --filter "$B" -- -d $Z -C $CH --samples 1500 -O bits
     # The bulk read request refused: the bulk read that follows times
     # out (5 s) and the C uses its buffer all the same. oxrok ends the
-    # capture with what came, no read after that one: the .oracle holds
-    # the C's samples, sent again, and oxrok's are those of a clean
-    # capture up to the fault. Each stderr case's .oracle is empty (a
+    # capture with the samples of the reads that completed, no read after
+    # that one: the .oracle holds the C's samples, sent again, and oxrok's
+    # are those of a clean capture up to the fault. Each stderr case's .oracle is empty (a
     # stdout is all --oracle-differs keeps), its .out what oxrok says.
     zp_options stall=bulkreq@3
     emu_case "fault bulk request" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
@@ -293,14 +303,17 @@ emu_cases() {
     emu_case "interrupt during the readout" --oracle-bug "$SIGINT" --interrupt out=0:236 -- -d $Z -C $CH --samples 1000 -O bits
 
     # What the C never ends: every status read refused (an error with
-    # the busy bit set). oxrok gives up after protocol::MAX_FAILED_POLLS.
+    # the busy bit set). oxrok gives up after protocol::MAX_FAILED_POLLS,
+    # paced to about 1.6 s.
     zp_options stall=rdata:0x21
-    emu_case "fault every status read hangs" --oracle-bug "$WAIT" --oracle-hangs --timeout 2 --stderr --filter "$E" -- -d $Z -C A0 --samples 100 -O bits
+    emu_case "fault every status read hangs" --oracle-bug "$WAIT" --oracle-hangs --timeout 5 --stderr --filter "$E" -- -d $Z -C A0 --samples 100 -O bits
 
     # Unplugged while the driver polls (after control read #2, the
     # first poll), and in the middle of the data (after bulk IN #3).
     zp_options
-    emu_case "unplug while polling" --oracle-differs "$GONE" --stderr --filter "$A" --unplug in=0:2 -- -l 5 -d $Z -C A0 --samples 1000 -O bits
+    emu_case "unplug while polling" --oracle-differs "$GONE" --stderr --filter "$E" --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
+    # No samples and exit 0 under both tools; the C's garbage is its log.
+    emu_case "unplug while polling output" --no-output --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
     emu_case "unplug mid data" --oracle-differs "$STALE" --stderr --filter "$E" --unplug in=1:3 -- -d $Z -C A0 --samples 1000 -O bits
     emu_case "unplug mid data output" --oracle-differs "$STALE" --digest --filter "$B" --unplug in=1:3 -- -d $Z -C $CH --samples 1000 -O bits
     zp_options

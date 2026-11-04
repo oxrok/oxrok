@@ -1,6 +1,2 @@
-Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
-Setting voltage threshold to 1.500000V.
-Setting memory size to 8K.
-triggerbar_address = 0(0x0)
-ramsize_triggerbar_address = 999(0x3e7)
-Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
+gl_read_data: LIBUSB_ERROR_PIPE, val=0.
+Cannot read where the capture is (device error: endpoint stalled): no samples.
