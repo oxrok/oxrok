@@ -20,9 +20,10 @@
 //! thread, a stop ends the wait or the readout and sends the
 //! `analyzer_reset()` of `dev_acquisition_stop()`.
 //!
-//! Unlike libsigrok's driver, `conn=` selects a board (the C lists no scan
-//! option, api.c:187 and 450, and libsigrok refuses any), and a rate that
-//! is not listed is refused rather than read past the list (api.c:148).
+//! Unlike libsigrok's driver, `conn=` selects a board, though it is not
+//! listed (the C lists no scan option, api.c:187 and 450, and libsigrok
+//! refuses any), and a rate that is not listed is refused rather than read
+//! past the list (api.c:148).
 //! [`protocol`] lists the others. Each device has its own registers, where
 //! `analyzer.c` has one set for the process.
 
@@ -92,7 +93,9 @@ impl Driver for ZeroplusDriver {
         "ZEROPLUS Logic Cube LAP-C series"
     }
 
-    fn scan_options(&self) -> &'static [Key] {
+    /// `conn=` is taken, not listed: the C lists no scan option (api.c:450)
+    /// and `--show` follows it.
+    fn accepted_scan_options(&self) -> &'static [Key] {
         &SCAN_OPTIONS
     }
 
@@ -115,7 +118,7 @@ impl Driver for ZeroplusDriver {
                 return Ok(Vec::new());
             }
         };
-        let mut devices: Vec<Box<dyn Device>> = Vec::new();
+        let mut devices = Vec::new();
         for info in crate::usb::list_devices()? {
             if info.vendor_id != protocol::VENDOR {
                 continue;
@@ -134,9 +137,21 @@ impl Driver for ZeroplusDriver {
             };
             drop(t);
             log::info!("Found ZEROPLUS {}.", prof.name);
-            devices.push(Box::new(ZeroplusDevice::new(info, prof, serial, None)));
+            devices.push(ZeroplusDevice::new(info, prof, serial, None));
         }
-        Ok(devices)
+        name_conn(&mut devices, conn.is_some());
+        Ok(devices.into_iter().map(|d| Box::new(d) as Box<dyn Device>).collect())
+    }
+}
+
+/// The device lines name `conn=` when it was given, and when more boards
+/// than one were found, which is when a user has to select. A lone board's
+/// line is as sigrok-cli's, whose driver has no `conn`.
+fn name_conn(devices: &mut [ZeroplusDevice], given: bool) {
+    if given || devices.len() > 1 {
+        for d in devices {
+            d.info.conn = Some(d.usb.conn());
+        }
     }
 }
 
@@ -190,7 +205,7 @@ impl ZeroplusDevice {
                 model: prof.name.into(),
                 version: String::new(),
                 serial,
-                conn: Some(usb.conn()),
+                conn: None,
             },
             usb,
             prof,
@@ -985,6 +1000,25 @@ mod tests {
         assert!(matches!(rx.recv().unwrap().1, Packet::Header { .. }));
         assert!(matches!(d.set(&Key::CaptureRatio, &Value::U64(1), None), Err(Error::Busy)));
         assert!(rx.iter().map(|(_, p)| p).any(|p| matches!(p, Packet::End)));
+    }
+
+    #[test]
+    fn conn_is_named_when_given_or_when_there_is_a_choice() {
+        let board = || {
+            let t = Replay::from_text(&device_steps()).unwrap();
+            ZeroplusDevice::from_transport(Box::new(t)).unwrap()
+        };
+        let mut one = [board()];
+        name_conn(&mut one, false);
+        assert_eq!(one[0].info().conn, None);
+        name_conn(&mut one, true);
+        assert_eq!(one[0].info().conn.as_deref(), Some("1.2"));
+        let mut two = [board(), board()];
+        name_conn(&mut two, false);
+        assert_eq!(two[1].info().conn.as_deref(), Some("1.2"));
+        let driver = ZeroplusDriver;
+        assert!(driver.scan_options().is_empty());
+        assert_eq!(driver.accepted_scan_options(), [Key::Conn]);
     }
 
     #[test]
