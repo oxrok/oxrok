@@ -390,6 +390,8 @@ impl Device for Sla5032Device {
         t.claim_interface(USB_INTERFACE).inspect_err(|e| {
             log::error!("Failed to claim interface: {}.", libusb_error_name(e));
         })?;
+        // A close sets it, and a reply must not then count as stopped.
+        self.stop.store(false, Ordering::SeqCst);
         let mut link = Link::new(t, Arc::clone(&self.stop));
         link.apply_fpga_config()?;
         *self.link.lock().expect("link lock") = Some(link);
@@ -774,35 +776,61 @@ mod tests {
 
     #[test]
     fn a_stop_while_waiting_puts_nothing_on_the_wire() {
-        let r = replay(&[]);
+        // A whole capture on offer, none of it taken: a call that differs
+        // leaves a replay where it is, so finish() alone would not tell.
+        let steps = capture_steps(MARKER);
+        let r = replay(&steps);
         let mut acq = acquisition(100, true);
         let stop = Arc::clone(&acq.stop);
         let mut l = link(&r, &stop);
         let (s, rx) = sink();
         acq.capture(&mut l, &s);
-        r.finish().unwrap();
+        assert_eq!(r.remaining(), steps.len());
         assert_eq!(collect(&rx), (0, false, false));
     }
 
-    #[test]
-    fn a_stop_between_chunks_asks_for_no_more_and_writes_register_14() {
-        // A chunk with data on offer after this one: a port that ignored the
-        // stop would ask for it and fail the replay.
-        let full = "00{6291456}";
-        let mut steps = capture_steps(full);
-        steps.push(write_reg_step(14, 0));
-        let r = replay(&steps);
+    /// A capture whose consumer has gone after the first of its full chunks,
+    /// which is a stop; the steps as `steps` offers them. What is left.
+    fn stopped_after_a_chunk(steps: &[String]) -> usize {
+        let r = replay(steps);
         let stop = Arc::new(AtomicBool::new(false));
         let mut acq =
             Acquisition { decoder: Decoder::new(None, 8), stop: Arc::clone(&stop), sent: false };
         let mut l = link(&r, &stop);
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        // The consumer has gone: the sink says so, which is a stop.
         drop(rx);
-        let s = PacketSink::new(tx, 0);
-        acq.capture(&mut l, &s);
+        acq.capture(&mut l, &PacketSink::new(tx, 0));
         assert!(stop.load(Ordering::SeqCst));
-        r.finish().unwrap();
+        r.remaining()
+    }
+
+    #[test]
+    fn a_stop_between_chunks_asks_for_no_more() {
+        // The next chunk on offer, data and all, with register 14 only after
+        // it: nothing of it is taken.
+        let mut steps = capture_steps("00{6291456}");
+        let more = chunk_steps(MARKER);
+        let left = more.len() + 1;
+        steps.extend(more);
+        steps.push(write_reg_step(14, 0));
+        assert_eq!(stopped_after_a_chunk(&steps), left);
+    }
+
+    #[test]
+    fn a_stop_between_chunks_writes_register_14() {
+        let mut steps = capture_steps("00{6291456}");
+        steps.push(write_reg_step(14, 0));
+        assert_eq!(stopped_after_a_chunk(&steps), 0);
+    }
+
+    #[test]
+    fn an_open_takes_back_the_stop_of_a_close() {
+        let mut steps = vec!["config 1 -> ok".to_owned(), "claim 0 -> ok".to_owned()];
+        steps.extend(read_reg_steps(2, 0xa5a5_a5a1));
+        let mut d = Sla5032Device::from_transport(Box::new(replay(&steps))).unwrap();
+        d.stop().unwrap();
+        d.open().unwrap();
+        assert!(!d.stop.load(Ordering::SeqCst));
     }
 
     #[test]
