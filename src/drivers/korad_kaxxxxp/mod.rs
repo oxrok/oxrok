@@ -1,4 +1,16 @@
-//! Korad KAxxxxP power supplies and their badges (Tenma, Velleman, RND,
+// Counterpart in sigrok:
+//   libsigrok/src/hardware/korad-kaxxxxp/api.c,
+//   Copyright (C) 2015 Hannu Vuolasaho <vuokkosetae@gmail.com>,
+//   Copyright (C) 2018-2019 Frank Stettner <frank-stettner@gmx.net>,
+//   with commits by Gerhard Sittig, Uwe Hermann, Lars-Peter Clausen,
+//   Axel Hinrichs, Christian Fruth, David Sastre Medina, Dewelde Anthony,
+//   Elen Eisendle, Holger Müller, JD Steffen, Peter van der Perk,
+//   Peter Åstrand, Thomas Andres, Tim Van Helleputte, Walter Goossens,
+//   Wolfram Sang, motte
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
+// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+
+//! Korad `KAxxxxP` power supplies and their badges (Tenma, Velleman, RND,
 //! Stamos), one channel each, on a USB virtual COM port or RS232.
 //!
 //! `conn=` names the port, `serialcomm=` overrides 9600/8n1, and
@@ -601,8 +613,7 @@ mod tests {
                 b"*IDN?" => b"KORADKA3005PV2.0",
                 b"IOUT1?" => b"0.500",
                 b"ISET1?" => b"1.000K",
-                b"VOUT1?" => b"05.00",
-                b"VSET1?" => b"05.00",
+                b"VOUT1?" | b"VSET1?" => b"05.00",
                 b"STATUS?" => std::slice::from_ref(&self.status),
                 _ => b"",
             };

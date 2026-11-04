@@ -1,4 +1,18 @@
-//! The wire protocol of the Korad KAxxxxP family, and its table of models.
+// Counterpart in sigrok:
+//   libsigrok/src/hardware/korad-kaxxxxp/api.c,
+//   libsigrok/src/hardware/korad-kaxxxxp/protocol.c,
+//   libsigrok/src/hardware/korad-kaxxxxp/protocol.h,
+//   Copyright (C) 2015 Hannu Vuolasaho <vuokkosetae@gmail.com>,
+//   Copyright (C) 2018-2019 Frank Stettner <frank-stettner@gmx.net>,
+//   with commits by Gerhard Sittig, Uwe Hermann, Lars-Peter Clausen,
+//   Axel Hinrichs, Christian Fruth, David Sastre Medina, Dewelde Anthony,
+//   Elen Eisendle, Holger Müller, JD Steffen, Peter van der Perk,
+//   Peter Åstrand, Thomas Andres, Tim Van Helleputte, Walter Goossens,
+//   Wolfram Sang, motte, Aurelien Jacobs, Georg Hofmann
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
+// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+
+//! The wire protocol of the Korad `KAxxxxP` family, and its table of models.
 //!
 //! ASCII with no terminators, no echo and no checksum. A setting has no
 //! answer, `VSET1?`, `VOUT1?`, `ISET1?` and `IOUT1?` give five characters
@@ -274,6 +288,7 @@ const RETRIES_FIRST: u32 = 100;
 pub const ID_BUFFER: usize = 48;
 
 /// The port and what the driver knows of the device: `dev_context`.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Link {
     /// The port, while open.
     pub port: Option<Box<dyn Port>>,
