@@ -295,7 +295,10 @@ pub trait Transport: Send {
     fn bulk_out(&mut self, endpoint: u8, data: &[u8], timeout: Duration) -> Result<usize>;
 
     /// Reads up to `len` bytes from a bulk IN endpoint. `len` is rounded
-    /// up to a multiple of the packet size by the backend.
+    /// up to a multiple of the packet size by the backend. A timeout gives
+    /// what arrived before it as an `Ok` short read, and is
+    /// [`Error::Timeout`] only when nothing did; a STALL or a disconnect is
+    /// an error and gives no partial data.
     fn bulk_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>>;
 
     /// Writes one interrupt OUT transfer. Returns the number of bytes

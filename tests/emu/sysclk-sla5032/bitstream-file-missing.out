@@ -1,0 +1,2 @@
+sr: resource: Failed to open resource 'sysclk-sla5032.bit' (use loglevel 5/spew for details).
+Failed to open device.

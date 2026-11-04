@@ -1,3 +1,4 @@
 gl_read_bulk: libusb_control_transfer: LIBUSB_ERROR_PIPE.
 gl_read_bulk: libusb_bulk_transfer: LIBUSB_ERROR_TIMEOUT.
 Tried to read 2048 bytes, actually read 0.
+The readout is cut short: the capture ends after 0 samples.
