@@ -7,6 +7,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::time::{Duration, Instant};
 
+/// `bcdDevice` from what rusb's `Version::from_bcd` left of it: its major
+/// folds the two high nibbles into a decimal, 11 for 0x1100. That cannot
+/// be undone for a value that is not BCD: 0x0a00 and 0x1000 both give 10,
+/// and come back as 0x1000. nusb hands out the field itself.
+fn bcd_version(major: u8, minor: u8, sub_minor: u8) -> u16 {
+    (u16::from(major / 10) << 12)
+        | (u16::from(major % 10) << 8)
+        | (u16::from(minor) << 4)
+        | u16::from(sub_minor)
+}
+
 fn map(e: rusb::Error) -> Error {
     match e {
         rusb::Error::Timeout => Error::Timeout,
@@ -54,11 +65,7 @@ pub(crate) fn list() -> Result<Vec<UsbDeviceInfo>> {
         out.push(UsbDeviceInfo {
             vendor_id: desc.vendor_id(),
             product_id: desc.product_id(),
-            // BCD again: rusb's major is decimal, 11 for bcdDevice 0x1100.
-            device_version: (u16::from(v.major() / 10) << 12)
-                | (u16::from(v.major() % 10) << 8)
-                | (u16::from(v.minor()) << 4)
-                | u16::from(v.sub_minor()),
+            device_version: bcd_version(v.major(), v.minor(), v.sub_minor()),
             bus: d.bus_number(),
             address: d.address(),
             ports: d.port_numbers().unwrap_or_default(),
@@ -124,9 +131,14 @@ impl Transport for Rusb {
         // libusb's op_release_interface attaches a driver on release
         // whenever the handle auto-detaches, detached or not.
         let _ = self.handle.set_auto_detach_kernel_driver(false);
-        // NotSupported off Linux. usbfs (another program) counts as none.
+        // Only an answer of "yes" detaches, as the C's `== 1`: usbfs
+        // (another program) counts as none, and an error as none too.
         if self.handle.kernel_driver_active(interface).unwrap_or(false) {
             self.handle.detach_kernel_driver(interface).map_err(map)?;
+            log::info!(
+                "Detached the kernel driver from interface {interface}: it stays detached \
+                 until the device is plugged in again."
+            );
         }
         Ok(())
     }
@@ -376,5 +388,25 @@ impl BulkStream for RusbStream {
 impl Drop for RusbStream {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bcd_version;
+
+    /// Through rusb's own decoding, so the fold it does is the real one.
+    fn round_trip(bcd: u16) -> u16 {
+        let v = rusb::Version::from_bcd(bcd);
+        bcd_version(v.major(), v.minor(), v.sub_minor())
+    }
+
+    #[test]
+    fn bcd_device_survives_rusb() {
+        for bcd in [0x0000, 0x0100, 0x0200, 0x0912, 0x1100, 0x1200, 0x2345, 0x9999] {
+            assert_eq!(round_trip(bcd), bcd);
+        }
+        // Not BCD: the limit named at bcd_version.
+        assert_eq!(round_trip(0x0a00), 0x1000);
     }
 }

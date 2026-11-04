@@ -266,14 +266,18 @@ pub trait Transport: Send {
         Err(Error::not_supported("string descriptor indexes"))
     }
 
-    /// As `libusb_kernel_driver_active` and `libusb_detach_kernel_driver`:
-    /// detaches a kernel driver bound to the interface, if one is (not
-    /// `usbfs`, another program's claim), and leaves it detached, also
-    /// after a release, where [`Transport::claim_interface`]'s own detach
-    /// gives it back and the kernel's probe then shows on the wire. For a
-    /// driver that follows a C driver doing this. Nothing elsewhere than
-    /// on Linux.
-    fn detach_kernel_driver(&mut self, _interface: u8) -> Result<()> {
+    /// Detaches the kernel driver bound to an interface, if any, as
+    /// `libusb_kernel_driver_active` and `libusb_detach_kernel_driver` do:
+    /// another program's claim is left alone, and the driver stays detached
+    /// after a release, until the device is plugged in again or something
+    /// binds it. For a C driver that does this itself on an interface a
+    /// kernel driver binds, whose probe would otherwise send requests of
+    /// its own at every release. No transfer, so a recording has no line
+    /// for it. A no-op for nusb off Linux and on Windows; libusb on macOS
+    /// implements both calls (`darwin_usb.c`), and there the detach fails
+    /// with `LIBUSB_ERROR_ACCESS` without root or an entitlement.
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        let _ = interface;
         Ok(())
     }
 
