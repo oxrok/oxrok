@@ -1,7 +1,5 @@
-sr: device: sysclk-sla5032: Opening device instance.
 sr: sysclk-sla5032: FPGA not configured, send bitstream.
 sr: sysclk-sla5032: Downloading FPGA bitstream 'sysclk-sla5032.bit'.
 sr: sysclk-sla5032: send bitstream, reg2: 12FF9C97.
 sr: sysclk-sla5032: Failed to send command 5: LIBUSB_ERROR_PIPE.
 sr: sysclk-sla5032: FPGA bitstream download of 3151 bytes done.
-sr: device: sysclk-sla5032: Closing device instance.
