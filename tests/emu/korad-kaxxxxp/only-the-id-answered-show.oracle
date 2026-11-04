@@ -1,0 +1,20 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+    force_detect
+korad-kaxxxxp:conn=/dev/ttyACMN - Korad KA3005P with 2 channels: V I
+Supported configuration options:
+    conn: /dev/ttyACMN (current)
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    voltage: 0.000000 (current)
+    voltage_target: 0.000000 (current), 31.000000, 0.010000
+    current: 0.000000 (current)
+    current_limit: 0.000000 (current), 5.100000, 0.001000
+    enabled: on, off (current)
+    regulation: CC (current)
+    ocp_enabled: on, off (current)
+    ovp_enabled: on, off (current)

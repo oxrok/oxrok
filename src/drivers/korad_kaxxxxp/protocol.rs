@@ -26,7 +26,7 @@
 //! each reply answers another request. All of it is as in `protocol.c`.
 
 use crate::core::{Error, Result};
-use crate::serial::{Params, Parity, Port};
+use crate::serial::{Params, Port, read_blocking, serial_timeout};
 use std::time::{Duration, Instant};
 
 /// Min, max and step, as `api.c`'s tables.
@@ -208,24 +208,14 @@ pub fn split_serial(reply: &[u8]) -> (&[u8], Option<&[u8]>) {
     }
 }
 
-/// `serial_timeout`: 10 ms and the time `bytes` take on the line, in
-/// whole milliseconds.
-pub fn serial_timeout(params: &Params, bytes: u32) -> Duration {
-    let parity = u32::from(params.parity != Parity::None);
-    let bits = 1 + u32::from(params.data_bits) + parity + u32::from(params.stop_bits);
-    let line = 1000.0 / f64::from(params.baud) * f64::from(bits) * f64::from(bytes);
-    Duration::from_millis(10 + line as u64)
-}
-
 /// `sr_atof_ascii`: a whole reply as a number, or `None` for anything else
-/// (the caller keeps what it had). An empty reply reads as 0: `strtod`
-/// converts nothing and stops at the NUL, which `sr_atof_ascii` takes for
-/// the end of a number. Not as `strtod`: hexadecimal, which falls under
-/// "anything else".
+/// (the caller keeps what it had). Not as `strtod`: hexadecimal, which falls
+/// under "anything else"; and an empty reply, which `strtod` takes for 0.0.
+/// A missing reply is the caller's to see, see [`Link::get_value`].
 pub fn parse_reply(reply: &[u8]) -> Option<f32> {
     let text = c_string(reply);
     if text.is_empty() {
-        return Some(0.0);
+        return None;
     }
     let text = std::str::from_utf8(skip_spaces(text)).ok()?;
     let value: f64 = text.parse().ok()?;
@@ -259,8 +249,13 @@ pub enum Target {
     Voltage,
     /// `VSET1?`.
     VoltageTarget,
-    /// `STATUS?`.
+    /// `STATUS?`, for the regulation or in a capture: the long kind of
+    /// request on the slow model.
     Status,
+    /// `STATUS?`, for `enabled`, `ocp_enabled` or `ovp_enabled`: `config_get`
+    /// passes `KAXXXXP_OUTPUT` and the like, and `next_req_time` calls only
+    /// `KAXXXXP_STATUS` long.
+    StatusShort,
 }
 
 /// What a setting changes.
@@ -403,23 +398,8 @@ impl Link {
         })
     }
 
-    /// `serial_read_blocking`: up to `buf`'s size, until `timeout` passed.
     fn read_blocking(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-        let deadline = Instant::now() + timeout;
-        let port = self.port()?;
-        let mut got = 0;
-        while got < buf.len() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            let n = port.read(&mut buf[got..], left)?;
-            if n == 0 {
-                break;
-            }
-            got += n;
-        }
-        Ok(got)
+        read_blocking(self.port()?.as_mut(), buf, timeout)
     }
 
     /// `korad_kaxxxxp_read_chars`: up to `count` bytes. The first may take
@@ -459,34 +439,45 @@ impl Link {
         self.read_chars(ID_BUFFER)
     }
 
-    /// `korad_kaxxxxp_get_value`. A reply that makes no number leaves the
-    /// value as it was, one that is missing reads as 0: both as the C, as
-    /// this reports only a port that fails.
-    pub fn get_value(&mut self, target: Target) -> Result<()> {
+    /// `korad_kaxxxxp_get_value`: whether the device answered.
+    ///
+    /// A missing reading leaves the value as it was and gives `false`. C reads
+    /// it as 0 (`read_chars` counts no reply as no error, and
+    /// `sr_atof_ascii("")` is 0.0), which tells a script waiting for 0 V that
+    /// it has them. A reply that makes no number leaves the value too, and a
+    /// missing status reads as 0 as in C, since firmware is reported that
+    /// does not answer `STATUS?` with the output off.
+    ///
+    /// Bytes still on their way from an earlier request are dropped first,
+    /// which C does not do: without it one late reply, or a sixth byte that
+    /// missed its 10 ms, shifts every reading after it. This puts nothing on
+    /// the wire.
+    pub fn get_value(&mut self, target: Target) -> Result<bool> {
         self.give_device_time();
+        self.port()?.purge()?;
         let (command, count) = match target {
             Target::Current => ("IOUT1?", 5),
             Target::CurrentLimit => ("ISET1?", 5),
             Target::Voltage => ("VOUT1?", 5),
             Target::VoltageTarget => ("VSET1?", 5),
-            Target::Status => ("STATUS?", 1),
+            Target::Status | Target::StatusShort => ("STATUS?", 1),
         };
         self.send(command)?;
         self.pace(target == Target::Status);
         let reply = self.read_chars(count)?;
-        if reply.is_empty() {
+        let answered = !c_string(&reply).is_empty();
+        if !answered {
             log::warn!("No answer to {command}.");
         }
-        let value = parse_reply(&reply);
         let slot = match target {
             Target::Current => Some(&mut self.current),
             Target::CurrentLimit => Some(&mut self.current_limit),
             Target::Voltage => Some(&mut self.voltage),
             Target::VoltageTarget => Some(&mut self.voltage_target),
-            Target::Status => None,
+            Target::Status | Target::StatusShort => None,
         };
         if let Some(slot) = slot {
-            if let Some(v) = value {
+            if let Some(v) = parse_reply(&reply) {
                 *slot = v;
                 log::debug!("value: {v}");
             }
@@ -499,7 +490,7 @@ impl Link {
             let mut sixth = [0];
             let _ = self.read_blocking(&mut sixth, SIXTH_BYTE);
         }
-        Ok(())
+        Ok(answered)
     }
 
     fn take_status(&mut self, status: u8) {
@@ -521,7 +512,8 @@ impl Link {
         }
     }
 
-    /// `korad_kaxxxxp_get_all_values`, what a scan reads, in the C's order.
+    /// `korad_kaxxxxp_get_all_values`, what a scan reads, in the C's order. A
+    /// missing reply does not fail a scan, as in C: each read asks again.
     pub fn get_all_values(&mut self) -> Result<()> {
         for target in [
             Target::Current,
@@ -655,24 +647,14 @@ mod tests {
     }
 
     #[test]
-    fn the_timeouts_are_those_of_serial_timeout() {
-        let p = Params::parse("9600/8n1").unwrap();
-        for (bytes, ms) in [(1, 11), (3, 13), (5, 15), (48, 60)] {
-            assert_eq!(serial_timeout(&p, bytes), Duration::from_millis(ms));
-        }
-        let p = Params::parse("1200/7e2").unwrap();
-        assert_eq!(serial_timeout(&p, 1), Duration::from_millis(19));
-    }
-
-    #[test]
     fn replies_parse_as_sr_atof_ascii() {
         assert_eq!(parse_reply(b"12.34"), Some(12.34));
         assert_eq!(parse_reply(b"1."), Some(1.0));
         assert_eq!(parse_reply(b"1.5e1"), Some(15.0));
         assert_eq!(parse_reply(b" 1.5"), Some(1.5));
         assert_eq!(parse_reply(b"12\0.3"), Some(12.0));
-        assert_eq!(parse_reply(b""), Some(0.0), "silence");
-        assert_eq!(parse_reply(b"\0\0"), Some(0.0));
+        assert_eq!(parse_reply(b""), None, "silence is no reading");
+        assert_eq!(parse_reply(b"\0\0"), None);
         assert_eq!(parse_reply(b"xx.xx"), None);
         assert_eq!(parse_reply(b"1.2 x"), None);
         assert_eq!(parse_reply(b"     "), None);

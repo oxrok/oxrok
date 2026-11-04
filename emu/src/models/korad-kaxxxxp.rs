@@ -77,8 +77,9 @@
 //! `VSET1:  nan` and `ISET1:  nan`, as nothing.
 
 use crate::model::DeviceModel;
+use crate::options::{parse_hex_list, parse_number};
 use crate::shells::cdc::{Cdc, Faults, Identity, Line, LineEvent, Port, Serial};
-use crate::shells::hidcable::{self as cable, Packets};
+use crate::shells::hidcable::Packets;
 use crate::{Error, Result};
 
 /// The model name.
@@ -103,7 +104,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 }
 
 fn flag(key: &str, value: &str) -> Result<bool> {
-    Ok(cable::parse_number(key, value, 0..=1)? == 1)
+    Ok(parse_number(key, value, 0..=1)? == 1)
 }
 
 /// `VSET1:`'s five characters, in hundredths of a volt.
@@ -149,7 +150,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
         }
         match k.as_str() {
             "idn" if v == "none" => config.idn = None,
-            "idn" => config.idn = Some(cable::parse_packets(v, 1, 256)?.remove(0)),
+            "idn" => config.idn = Some(parse_hex_list(k, v, 1, 256)?.remove(0)),
             "vmax" => config.vmax = parse_limit(k, v)? / 10,
             "imax" => config.imax = parse_limit(k, v)?,
             "vset" => {
@@ -164,15 +165,15 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "ocp" => config.power_on.ocp = flag(k, v)?,
             "ovp" => config.power_on.ovp = flag(k, v)?,
             "beep" => config.power_on.beep = flag(k, v)?,
-            "load" => config.load = Some(cable::parse_number(k, v, 1..=1_000_000)?),
+            "load" => config.load = Some(parse_number(k, v, 1..=1_000_000)?),
             "vout" => config.vout = Some(answers_list(v)),
             "iout" => config.iout = Some(answers_list(v)),
             "status" => {
-                let list = cable::parse_packets(v, 1, 1)?;
+                let list = parse_hex_list(k, v, 1, 1)?;
                 config.status = Some(Packets::new(list));
             }
             "sixth" => config.sixth = flag(k, v)?,
-            "answers" => config.answers = Some(cable::parse_number(k, v, 0..=100_000)?),
+            "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = flag(k, v)?,
             "uart" => uart = Some(Line::parse(v)?),
             other => return Err(Error(format!("{NAME} has no option {other}"))),

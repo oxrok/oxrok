@@ -23,6 +23,10 @@
 //! after the last, and a sample counts at each `VOUT1?`. A setting during a
 //! capture goes out between two requests, as the C's `rw_mutex` has it.
 //!
+//! A silent device is not 0 V, where C reads it so: a reading with no reply
+//! fails `--get` and sends no sample, and a capture ends after
+//! [`MAX_SILENT_READINGS`] in a row.
+//!
 //! See [`protocol`].
 
 #![forbid(unsafe_code)]
@@ -62,6 +66,11 @@ static DEV_OPTIONS: [OptionDesc; 12] = [
 /// the last ran, from when it started, so it is the time from one request
 /// to the next unless a reply takes longer.
 const POLL_INTERVAL: Duration = Duration::from_millis(80);
+/// Readings in a row with no reply that end a capture. C needs no bound, as
+/// it makes up a sample for each, so its limits still end the run; without
+/// the bound a `--samples` capture of a silent device would never end.
+/// Each takes 1.5 s.
+pub const MAX_SILENT_READINGS: u32 = 5;
 /// How often a wait between two requests looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(5);
 
@@ -232,14 +241,18 @@ impl KoradDevice {
         self.link.lock().expect("link lock")
     }
 
-    /// A value `api.c`'s `config_get` asks the device for. It ignores how
-    /// that went and answers what it has.
-    fn read(&self, target: Target, value: fn(&Link) -> Value) -> Value {
+    /// A value `api.c`'s `config_get` asks the device for. That ignores how
+    /// it went and answers what it has; here a port that fails, or a reading
+    /// that did not come, is an error (see [`Link::get_value`]). A status
+    /// that did not come reads as C has it.
+    fn read(&self, target: Target, value: fn(&Link) -> Value) -> Result<Value> {
         let mut link = self.link();
-        if let Err(e) = link.get_value(target) {
-            log::debug!("Reading {target:?}: {e}.");
+        let answered = link.get_value(target)?;
+        let status = matches!(target, Target::Status | Target::StatusShort);
+        if !answered && !status {
+            return Err(Error::device("no answer from the device"));
         }
-        value(&link)
+        Ok(value(&link))
     }
 
     fn apply(&self, setting: Setting) -> Result<()> {
@@ -248,10 +261,12 @@ impl KoradDevice {
 }
 
 /// A value within `range`. A NaN passes `api.c`'s two comparisons and goes
-/// out as `VSET1:  nan` to a live output; here it is refused.
+/// out as `VSET1:  nan` to a live output; here it is refused. A -0.0 passes
+/// them too and goes out as `VSET1:-0.00`, which nothing says a supply
+/// parses; here it is 0.
 fn in_range(key: &Key, value: &Value, range: &protocol::Range) -> Result<f64> {
     match value.as_f64() {
-        Some(v) if (range[0]..=range[1]).contains(&v) => Ok(v),
+        Some(v) if (range[0]..=range[1]).contains(&v) => Ok(v + 0.0),
         _ => Err(Error::Arg(format!("{} out of range", key.id()))),
     }
 }
@@ -299,23 +314,23 @@ impl Device for KoradDevice {
             Key::LimitSamples => Value::U64(self.limit_samples),
             Key::LimitMsec => Value::U64(self.limit_msec),
             Key::Conn => Value::Str(self.conn.clone()),
-            Key::Voltage => self.read(Target::Voltage, |l| Value::F64(f64::from(l.voltage))),
+            Key::Voltage => self.read(Target::Voltage, |l| Value::F64(f64::from(l.voltage)))?,
             Key::VoltageTarget => {
-                self.read(Target::VoltageTarget, |l| Value::F64(f64::from(l.voltage_target)))
+                self.read(Target::VoltageTarget, |l| Value::F64(f64::from(l.voltage_target)))?
             }
-            Key::Current => self.read(Target::Current, |l| Value::F64(f64::from(l.current))),
+            Key::Current => self.read(Target::Current, |l| Value::F64(f64::from(l.current)))?,
             Key::CurrentLimit => {
-                self.read(Target::CurrentLimit, |l| Value::F64(f64::from(l.current_limit)))
+                self.read(Target::CurrentLimit, |l| Value::F64(f64::from(l.current_limit)))?
             }
-            Key::Enabled => self.read(Target::Status, |l| Value::Bool(l.output_enabled())),
+            Key::Enabled => self.read(Target::StatusShort, |l| Value::Bool(l.output_enabled()))?,
             Key::Regulation => {
-                self.read(Target::Status, |l| Value::from(if l.cc_mode[0] { "CC" } else { "CV" }))
+                self.read(Target::Status, |l| Value::from(if l.cc_mode[0] { "CC" } else { "CV" }))?
             }
             Key::OverCurrentProtectionEnabled => {
-                self.read(Target::Status, |l| Value::Bool(l.ocp_enabled()))
+                self.read(Target::StatusShort, |l| Value::Bool(l.ocp_enabled()))?
             }
             Key::OverVoltageProtectionEnabled => {
-                self.read(Target::Status, |l| Value::Bool(l.ovp_enabled()))
+                self.read(Target::StatusShort, |l| Value::Bool(l.ovp_enabled()))?
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         })
@@ -446,13 +461,14 @@ impl Capture {
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
         let mut samples = 0u64;
+        let mut silent = 0;
         let mut due = started + POLL_INTERVAL;
         loop {
             if !wait_until(due, stop) {
                 return;
             }
             due = Instant::now() + POLL_INTERVAL;
-            match self.step(sink) {
+            match self.step(sink, &mut silent) {
                 Step::Sample => samples += 1,
                 Step::Other => {}
                 Step::End => return,
@@ -470,16 +486,29 @@ impl Capture {
     /// One request and what it gives. C goes on after a port that failed
     /// and repeats the last values at full speed until a limit, for ever
     /// without one (`protocol.c:452`, its result is dropped): here it ends
-    /// the capture.
-    fn step(&self, sink: &PacketSink) -> Step {
+    /// the capture. A reading with no reply is no sample, where C sends a
+    /// made up 0 and counts it.
+    fn step(&self, sink: &PacketSink, silent: &mut u32) -> Step {
         let mut link = self.link.lock().expect("link lock");
         let target = link.acquisition_target;
-        if let Err(e) = link.get_value(target) {
-            log::error!("Acquisition failed: {e}.");
-            return Step::End;
+        let answered = match link.get_value(target) {
+            Ok(answered) => answered,
+            Err(e) => {
+                log::error!("Acquisition failed: {e}.");
+                return Step::End;
+            }
+        };
+        let reading = matches!(target, Target::Current | Target::Voltage);
+        if reading {
+            *silent = if answered { 0 } else { *silent + 1 };
+            if *silent >= MAX_SILENT_READINGS {
+                log::error!("Acquisition failed: {silent} readings with no answer.");
+                return Step::End;
+            }
         }
         let mut step = Step::Other;
         let sent = match target {
+            _ if reading && !answered => true,
             Target::Current => {
                 sink.send(analog(CHANNEL_I, link.current, Mq::Current, Unit::Ampere, 3))
             }
@@ -552,6 +581,13 @@ fn send_changes(link: &mut Link, sink: &PacketSink) -> bool {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::sync::mpsc::{Receiver, sync_channel};
+
+    /// How long a test waits for a capture before it fails: a stop or a limit
+    /// that does not bite must fail, not hang the run.
+    const CAPTURE_BOUND: Duration = Duration::from_secs(10);
+
+    type Received = Receiver<(usize, Packet)>;
 
     /// What the fake saw.
     #[derive(Default)]
@@ -560,13 +596,20 @@ mod tests {
         purges: usize,
     }
 
-    /// A supply that answers as the protocol says, the sixth byte
-    /// included, and notes each write and when.
+    /// When the bytes of an answer come: each entry is the pause before it,
+    /// and the bytes.
+    type Answer = Vec<(Duration, Vec<u8>)>;
+
+    /// A supply that answers as the protocol says, the sixth byte included,
+    /// and notes each write and when. A byte is there from its time on, so a
+    /// purge takes what has come and no more, as a tty's input queue.
     struct Fake {
         seen: Arc<Mutex<Seen>>,
-        input: VecDeque<u8>,
+        input: VecDeque<(Instant, u8)>,
         status: u8,
         fail_writes_after: Option<usize>,
+        /// The answer to the write of this number instead of the usual one.
+        scripted: Vec<(usize, Answer)>,
     }
 
     impl Fake {
@@ -577,8 +620,26 @@ mod tests {
                 input: VecDeque::new(),
                 status: 0x51,
                 fail_writes_after: None,
+                scripted: Vec::new(),
             };
             (fake, seen)
+        }
+
+        fn arrived(&self, now: Instant) -> usize {
+            self.input.iter().take_while(|(at, _)| *at <= now).count()
+        }
+
+        fn answer(&self, data: &[u8]) -> Vec<u8> {
+            let text: &[u8] = match data {
+                b"*IDN?" => b"KORADKA3005PV2.0",
+                b"IOUT1?" => b"0.500",
+                b"ISET1?" => b"1.000K",
+                b"VOUT1?" => b"04.99",
+                b"VSET1?" => b"05.00",
+                b"STATUS?" => std::slice::from_ref(&self.status),
+                _ => b"",
+            };
+            text.to_vec()
         }
     }
 
@@ -593,36 +654,49 @@ mod tests {
             Ok(())
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-            if self.input.is_empty() {
-                std::thread::sleep(timeout);
-                return Ok(0);
+            let deadline = Instant::now() + timeout;
+            loop {
+                let now = Instant::now();
+                let n = self.arrived(now).min(buf.len());
+                if n > 0 {
+                    for b in &mut buf[..n] {
+                        *b = self.input.pop_front().expect("counted").1;
+                    }
+                    return Ok(n);
+                }
+                if now >= deadline {
+                    return Ok(0);
+                }
+                let next = self.input.front().map_or(deadline, |(at, _)| *at);
+                std::thread::sleep(next.min(deadline).saturating_duration_since(now));
             }
-            let n = buf.len().min(self.input.len());
-            for b in &mut buf[..n] {
-                *b = self.input.pop_front().expect("counted");
-            }
-            Ok(n)
         }
         fn write(&mut self, data: &[u8]) -> Result<()> {
-            let mut seen = self.seen.lock().unwrap();
-            if self.fail_writes_after.is_some_and(|n| seen.writes.len() >= n) {
-                return Err(Error::device("Broken pipe"));
-            }
-            seen.writes.push((Instant::now(), data.to_vec()));
-            let answer: &[u8] = match data {
-                b"*IDN?" => b"KORADKA3005PV2.0",
-                b"IOUT1?" => b"0.500",
-                b"ISET1?" => b"1.000K",
-                b"VOUT1?" | b"VSET1?" => b"05.00",
-                b"STATUS?" => std::slice::from_ref(&self.status),
-                _ => b"",
+            let now = Instant::now();
+            let number = {
+                let mut seen = self.seen.lock().unwrap();
+                if self.fail_writes_after.is_some_and(|n| seen.writes.len() >= n) {
+                    return Err(Error::device("Broken pipe"));
+                }
+                seen.writes.push((now, data.to_vec()));
+                seen.writes.len() - 1
             };
-            self.input.extend(answer);
+            let answer = match self.scripted.iter().find(|(n, _)| *n == number) {
+                Some((_, answer)) => answer.clone(),
+                None => vec![(Duration::ZERO, self.answer(data))],
+            };
+            // A device answers in order: nothing overtakes what it owes.
+            let mut at = self.input.back().map_or(now, |(last, _)| (*last).max(now));
+            for (pause, bytes) in answer {
+                at += pause;
+                self.input.extend(bytes.into_iter().map(|b| (at, b)));
+            }
             Ok(())
         }
         fn purge(&mut self) -> Result<()> {
             self.seen.lock().unwrap().purges += 1;
-            self.input.clear();
+            let n = self.arrived(Instant::now());
+            self.input.drain(..n);
             Ok(())
         }
     }
@@ -637,24 +711,56 @@ mod tests {
         d
     }
 
+    fn link_on(fake: Fake) -> Link {
+        let params = Params::parse(SERIALCOMM).unwrap();
+        Link::new(Some(Box::new(fake)), params, model(b"KORADKA3005PV2.0"))
+    }
+
     fn writes(seen: &Arc<Mutex<Seen>>) -> Vec<String> {
         let seen = seen.lock().unwrap();
         seen.writes.iter().map(|(_, w)| String::from_utf8_lossy(w).into_owned()).collect()
     }
 
-    /// Runs a capture to its end and gives its packets.
-    fn capture(d: &mut KoradDevice) -> Vec<Packet> {
-        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
-        d.start(PacketSink::new(tx, 0)).unwrap();
+    /// The packets up to and with the first `until` says yes to, within the
+    /// bound, whether the capture still sends or has gone quiet.
+    fn packets_until(rx: &Received, until: fn(&Packet) -> bool) -> Vec<Packet> {
+        let deadline = Instant::now() + CAPTURE_BOUND;
         let mut out = Vec::new();
-        while let Ok((_, p)) = rx.recv() {
-            let end = matches!(p, Packet::End);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "still no such packet after {CAPTURE_BOUND:?}");
+            let (_, p) = rx.recv_timeout(left).expect("a packet in time");
+            let done = until(&p);
             out.push(p);
-            if end {
-                break;
+            if done {
+                return out;
             }
         }
-        out
+    }
+
+    fn is_end(p: &Packet) -> bool {
+        matches!(p, Packet::End)
+    }
+
+    fn is_analog(p: &Packet) -> bool {
+        matches!(p, Packet::Analog(_))
+    }
+
+    /// Runs a capture to its end and gives its packets.
+    fn capture(d: &mut KoradDevice) -> Vec<Packet> {
+        let (tx, rx) = sync_channel(1024);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        packets_until(&rx, is_end)
+    }
+
+    fn readings(packets: &[Packet]) -> Vec<(usize, f32)> {
+        packets
+            .iter()
+            .filter_map(|p| match p {
+                Packet::Analog(a) => Some((a.channels[0], a.samples[0])),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -666,7 +772,7 @@ mod tests {
         assert_eq!(writes(&seen), ["*IDN?", "IOUT1?", "ISET1?", "VOUT1?", "VSET1?", "STATUS?"]);
         assert!(found.link.port.is_none(), "closed, as the C's scan");
         // The sixth byte was dropped, or VSET1? and all after it slip.
-        assert_eq!(found.link.voltage, 5.0);
+        assert_eq!(found.link.voltage, 4.99);
         assert_eq!(found.link.voltage_target, 5.0);
         assert_eq!(found.link.current_limit, 1.0);
         assert!(found.link.output_enabled());
@@ -688,7 +794,7 @@ mod tests {
     fn the_slow_model_waits_530_ms_after_a_status_and_a_setting() {
         let (fake, seen) = Fake::new();
         let mut d = device(fake, b"VELLEMANPS3005DV1.3");
-        d.get(&Key::Enabled, None).unwrap();
+        d.get(&Key::Regulation, None).unwrap();
         d.get(&Key::Voltage, None).unwrap();
         d.set(&Key::Enabled, &Value::Bool(true), None).unwrap();
         d.get(&Key::Voltage, None).unwrap();
@@ -699,6 +805,25 @@ mod tests {
         assert!(gap(2) >= Duration::from_millis(530), "setting: {:?}", gap(2));
         assert!(gap(3) >= Duration::from_millis(80), "{:?}", gap(3));
         assert!(gap(3) < Duration::from_millis(530), "a reading is not long: {:?}", gap(3));
+    }
+
+    #[test]
+    fn on_the_slow_model_only_regulation_is_a_long_get() {
+        // config_get passes KAXXXXP_OUTPUT, _OCP and _OVP, which
+        // next_req_time does not call long, though they send STATUS?.
+        for key in
+            [Key::Enabled, Key::OverCurrentProtectionEnabled, Key::OverVoltageProtectionEnabled]
+        {
+            let (fake, seen) = Fake::new();
+            let d = device(fake, b"VELLEMANPS3005DV1.3");
+            d.get(&key, None).unwrap();
+            d.get(&Key::Voltage, None).unwrap();
+            let seen = seen.lock().unwrap();
+            let gap = seen.writes[1].0 - seen.writes[0].0;
+            assert_eq!(seen.writes[0].1, b"STATUS?");
+            assert!(gap >= Duration::from_millis(80), "{key:?}: {gap:?}");
+            assert!(gap < Duration::from_millis(530), "{key:?}: {gap:?}");
+        }
     }
 
     #[test]
@@ -722,14 +847,7 @@ mod tests {
             ["IOUT1?", "VOUT1?", "STATUS?", "IOUT1?", "VOUT1?"],
             "and nothing at the end"
         );
-        let analog: Vec<(usize, f32)> = packets
-            .iter()
-            .filter_map(|p| match p {
-                Packet::Analog(a) => Some((a.channels[0], a.samples[0])),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(analog, [(1, 0.5), (0, 5.0), (1, 0.5), (0, 5.0)]);
+        assert_eq!(readings(&packets), [(1, 0.5), (0, 4.99), (1, 0.5), (0, 4.99)]);
         assert!(matches!(packets[0], Packet::Header { .. }));
     }
 
@@ -750,14 +868,14 @@ mod tests {
     fn a_stop_ends_the_capture_while_the_device_still_answers() {
         let (fake, seen) = Fake::new();
         let mut d = device(fake, b"KORADKA3005PV2.0");
-        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let (tx, rx) = sync_channel(1024);
         d.start(PacketSink::new(tx, 0)).unwrap();
         // The first reading came, so data is on offer when it stops.
-        while !matches!(rx.recv().unwrap().1, Packet::Analog(_)) {}
+        packets_until(&rx, is_analog);
         d.stop().unwrap();
         let before = writes(&seen).len();
         let begun = Instant::now();
-        while !matches!(rx.recv().unwrap().1, Packet::End) {}
+        packets_until(&rx, is_end);
         assert!(begun.elapsed() < Duration::from_millis(500), "{:?}", begun.elapsed());
         d.close().unwrap();
         assert!(writes(&seen).len() <= before + 1, "at most the request under way");
@@ -767,12 +885,12 @@ mod tests {
     fn a_setting_during_a_capture_goes_out_between_requests() {
         let (fake, seen) = Fake::new();
         let mut d = device(fake, b"KORADKA3005PV2.0");
-        let (tx, rx) = std::sync::mpsc::sync_channel(1024);
+        let (tx, rx) = sync_channel(1024);
         d.start(PacketSink::new(tx, 0)).unwrap();
-        while !matches!(rx.recv().unwrap().1, Packet::Analog(_)) {}
+        packets_until(&rx, is_analog);
         d.set(&Key::VoltageTarget, &Value::F64(3.3), None).unwrap();
         d.stop().unwrap();
-        while !matches!(rx.recv().unwrap().1, Packet::End) {}
+        packets_until(&rx, is_end);
         d.close().unwrap();
         assert!(writes(&seen).contains(&"VSET1:03.30".to_owned()), "{:?}", writes(&seen));
     }
@@ -784,9 +902,180 @@ mod tests {
         let mut d = device(fake, b"KORADKA3005PV2.0");
         d.set(&Key::LimitSamples, &Value::U64(5), None).unwrap();
         let packets = capture(&mut d);
-        let analog = packets.iter().filter(|p| matches!(p, Packet::Analog(_))).count();
-        assert_eq!(analog, 2, "no reading from a device that left");
+        assert_eq!(readings(&packets).len(), 2, "no reading from a device that left");
         assert_eq!(writes(&seen).len(), 2);
+    }
+
+    /// A fake whose first `n` requests get no answer.
+    fn silent_for(n: usize) -> (Fake, Arc<Mutex<Seen>>) {
+        let (mut fake, seen) = Fake::new();
+        fake.scripted = (0..n).map(|i| (i, Answer::new())).collect();
+        (fake, seen)
+    }
+
+    #[test]
+    fn a_get_with_no_reply_fails_and_a_status_reads_as_c_has_it() {
+        for key in [Key::Voltage, Key::VoltageTarget, Key::Current, Key::CurrentLimit] {
+            let (fake, _seen) = silent_for(1);
+            let d = device(fake, b"KORADKA3005PV2.0");
+            assert!(d.get(&key, None).is_err(), "{key:?}");
+            assert!(d.get(&key, None).is_ok(), "{key:?} answers again");
+        }
+        let (fake, _seen) = silent_for(4);
+        let d = device(fake, b"KORADKA3005PV2.0");
+        assert_eq!(d.get(&Key::Enabled, None).unwrap(), Value::Bool(false));
+        assert_eq!(d.get(&Key::OverCurrentProtectionEnabled, None).unwrap(), Value::Bool(false));
+        assert_eq!(d.get(&Key::OverVoltageProtectionEnabled, None).unwrap(), Value::Bool(false));
+        assert_eq!(d.get(&Key::Regulation, None).unwrap(), Value::from("CC"));
+    }
+
+    #[test]
+    fn a_get_on_a_closed_port_fails() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake, b"KORADKA3005PV2.0");
+        d.close().unwrap();
+        assert!(d.get(&Key::Voltage, None).is_err());
+        assert!(d.get(&Key::Enabled, None).is_err());
+        assert_eq!(writes(&seen), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_reading_with_no_reply_is_no_sample_and_does_not_count() {
+        // IOUT1? silent, VOUT1? silent, then all well.
+        let (fake, seen) = silent_for(2);
+        let mut d = device(fake, b"KORADKA3005PV2.0");
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(readings(&packets), [(1, 0.5), (0, 4.99)], "no made up 0");
+        assert_eq!(writes(&seen), ["IOUT1?", "VOUT1?", "STATUS?", "IOUT1?", "VOUT1?"]);
+    }
+
+    #[test]
+    fn a_silent_device_ends_a_capture_with_no_limit() {
+        let (fake, seen) = silent_for(1000);
+        let mut d = device(fake, b"KORADKA3005PV2.0");
+        let (tx, rx) = sync_channel(1024);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut packets = Vec::new();
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let (_, p) = rx.recv_timeout(left).expect("the end, in time");
+            let end = is_end(&p);
+            packets.push(p);
+            if end {
+                break;
+            }
+        }
+        assert_eq!(readings(&packets), []);
+        let asked = writes(&seen);
+        let readings = asked.iter().filter(|w| *w != "STATUS?").count();
+        assert_eq!(readings as u32, MAX_SILENT_READINGS);
+    }
+
+    #[test]
+    fn one_answer_between_silences_starts_the_count_over() {
+        // Four silent readings and two statuses, a reading that comes, and
+        // then silence: five more, not one.
+        let mut silent: Vec<(usize, Answer)> = (0..6).map(|i| (i, Answer::new())).collect();
+        silent.extend((7..100).map(|i| (i, Answer::new())));
+        let (mut fake, seen) = Fake::new();
+        fake.scripted = silent;
+        let mut d = device(fake, b"KORADKA3005PV2.0");
+        let (tx, rx) = sync_channel(1024);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if is_end(&rx.recv_timeout(left).expect("the end, in time").1) {
+                break;
+            }
+        }
+        let n = writes(&seen).iter().filter(|w| *w != "STATUS?").count();
+        assert_eq!(n as u32, 4 + 1 + MAX_SILENT_READINGS, "{:?}", writes(&seen));
+    }
+
+    #[test]
+    fn a_first_byte_may_take_many_of_its_timeouts() {
+        // IOUT1?'s first read is 15 ms; this is about seven of them.
+        let (mut fake, _seen) = Fake::new();
+        fake.scripted = vec![(0, vec![(Duration::from_millis(100), b"0.125".to_vec())])];
+        let mut link = link_on(fake);
+        assert!(link.get_value(Target::Current).unwrap());
+        assert_eq!(link.current, 0.125);
+    }
+
+    #[test]
+    fn a_reply_with_a_short_gap_comes_whole() {
+        let (mut fake, _seen) = Fake::new();
+        fake.scripted = vec![(
+            0,
+            vec![(Duration::ZERO, b"12.".to_vec()), (Duration::from_millis(5), b"34".to_vec())],
+        )];
+        let mut link = link_on(fake);
+        assert!(link.get_value(Target::Voltage).unwrap());
+        assert_eq!(link.voltage, 12.34);
+    }
+
+    #[test]
+    fn a_long_gap_ends_a_reply_and_the_next_request_starts_clean() {
+        // A pause past the three bytes' time ends the reading, short, as in
+        // C; the rest has come by the next request and goes.
+        let (mut fake, _seen) = Fake::new();
+        fake.scripted = vec![(
+            0,
+            vec![(Duration::ZERO, b"12.".to_vec()), (Duration::from_millis(60), b"34".to_vec())],
+        )];
+        let mut link = link_on(fake);
+        assert!(link.get_value(Target::Voltage).unwrap());
+        assert_eq!(link.voltage, 12.0);
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(link.get_value(Target::VoltageTarget).unwrap());
+        assert_eq!(link.voltage_target, 5.0);
+    }
+
+    #[test]
+    fn one_late_reply_does_not_shift_the_readings_after_it() {
+        // 1.7 s late, past the 100 tries of 15 ms.
+        let (mut fake, _seen) = Fake::new();
+        fake.scripted = vec![(0, vec![(Duration::from_millis(1700), b"0.500".to_vec())])];
+        let mut link = link_on(fake);
+        assert!(!link.get_value(Target::Current).unwrap(), "it missed its time");
+        // What is owed comes together: this one may read the late one.
+        link.get_value(Target::Voltage).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        for _ in 0..3 {
+            link.get_value(Target::Current).unwrap();
+            assert_eq!(link.current, 0.5);
+            link.get_value(Target::Voltage).unwrap();
+            assert_eq!(link.voltage, 4.99);
+        }
+    }
+
+    #[test]
+    fn the_sixth_byte_is_read_with_its_reply() {
+        let (fake, _seen) = Fake::new();
+        let mut link = link_on(fake);
+        link.get_value(Target::CurrentLimit).unwrap();
+        let mut rest = [0];
+        let port = link.port.as_mut().unwrap().as_mut();
+        let left = crate::serial::read_blocking(port, &mut rest, Duration::from_millis(5));
+        assert_eq!(left.unwrap(), 0);
+    }
+
+    #[test]
+    fn a_late_sixth_byte_does_not_shift_the_next_reading() {
+        // 30 ms, past its 10 ms wait, and before the next request at 80 ms.
+        let (mut fake, _seen) = Fake::new();
+        fake.scripted = vec![(
+            1,
+            vec![(Duration::ZERO, b"1.000".to_vec()), (Duration::from_millis(30), b"K".to_vec())],
+        )];
+        let mut link = link_on(fake);
+        link.get_all_values().unwrap();
+        assert_eq!(link.current_limit, 1.0);
+        assert_eq!(link.voltage, 4.99);
+        assert_eq!(link.voltage_target, 5.0);
     }
 
     #[test]
@@ -833,6 +1122,15 @@ mod tests {
     }
 
     #[test]
+    fn a_negative_zero_goes_out_as_zero() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake, b"KORADKA3005PV2.0");
+        d.set(&Key::VoltageTarget, &Value::F64(-0.0), None).unwrap();
+        d.set(&Key::CurrentLimit, &Value::F64(-0.0), None).unwrap();
+        assert_eq!(writes(&seen), ["VSET1:00.00", "ISET1:0.000"]);
+    }
+
+    #[test]
     fn a_labps_ignores_bit_7_with_the_output_off() {
         let (mut fake, _seen) = Fake::new();
         fake.status = 0x80;
@@ -846,14 +1144,5 @@ mod tests {
         fake.status = 0x80;
         let d = device(fake, b"VELLEMANPS3005DV2.0");
         assert_eq!(d.get(&Key::OverVoltageProtectionEnabled, None).unwrap(), Value::Bool(true));
-    }
-
-    #[test]
-    fn a_closed_port_answers_what_is_known_as_the_c_does() {
-        let (fake, seen) = Fake::new();
-        let mut d = device(fake, b"KORADKA3005PV2.0");
-        d.close().unwrap();
-        assert_eq!(d.get(&Key::Voltage, None).unwrap(), Value::F64(0.0));
-        assert_eq!(writes(&seen), Vec::<String>::new());
     }
 }
