@@ -111,7 +111,12 @@
 //! equal words is stored as the word and a count word (the top bit of
 //! the word's top byte set, the rest the number of repeats), so the top
 //! channel of the enabled groups is lost; the counts count words, and
-//! a run still open when the capture ends loses its count.
+//! a run still open when the capture ends loses its count. In demux
+//! mode the firmware's `rle_enc.v` masks the top channel of both
+//! samples of a word (`7f7f`, `7fff7fff`) and does not compress a word
+//! whose two samples differ (`demux_mismatch`). A gap against
+//! `rle_enc.v`: it stores a run of two as the value twice, where the
+//! model stores the value and a count of 1; the samples are the same.
 //!
 //! **Time** is counted in the host's polls, never the clock: a capture
 //! takes no time until the host reads port B, and each read the chip
@@ -321,6 +326,20 @@ pub fn stimulus(t: u64) -> u32 {
     u32::from(low) | (u32::from(!low) << 16)
 }
 
+/// `rle_enc.v`'s `data_mask` and `demux_mismatch` on a compacted word
+/// of `width` bytes: the value stored, the top channel gone (of both
+/// samples in demux mode), and whether the two samples of a demux word
+/// differ, which stops it being compressed.
+fn rle_value(demux: bool, width: u32, word: u32) -> (u32, bool) {
+    let (mask, half) = match (demux, width) {
+        (true, 2) => (0x7f7f, 8),
+        (true, 4) => (0x7fff_7fff, 16),
+        _ => (!(1u32 << (8 * width - 1)), 0),
+    };
+    let v = word & mask;
+    (v, half != 0 && (v >> half) != (v & ((1 << half) - 1)))
+}
+
 /// A capture in progress, from a run.
 #[derive(Clone, Debug)]
 struct Capture {
@@ -422,9 +441,11 @@ impl Capture {
             return;
         }
         let flag = self.rle_flag();
-        let v = c & !flag;
+        let (v, mismatch) = rle_value(self.demux, self.width, c);
         match self.run {
-            Some((cur, n)) if cur == v && n < flag - 1 => self.run = Some((cur, n + 1)),
+            Some((cur, n)) if cur == v && !mismatch && n < flag - 1 => {
+                self.run = Some((cur, n + 1));
+            }
             run => {
                 if let Some((_, n)) = run
                     && n > 0
@@ -994,6 +1015,22 @@ mod tests {
         assert_eq!(words[31] & 0x10, 0x10);
         assert_eq!(words[30] & 0x10, 0);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn rle_masks_as_the_firmware() {
+        // Without demux, the top channel of the word.
+        assert_eq!(rle_value(false, 1, 0xff), (0x7f, false));
+        assert_eq!(rle_value(false, 2, 0xffff), (0x7fff, false));
+        assert_eq!(rle_value(false, 4, 0xffff_ffff), (0x7fff_ffff, false));
+        // In demux mode of both samples: equal samples compress.
+        assert_eq!(rle_value(true, 2, 0xffff), (0x7f7f, false));
+        assert_eq!(rle_value(true, 4, 0xffff_ffff), (0x7fff_7fff, false));
+        // Samples that differ after the mask do not.
+        assert_eq!(rle_value(true, 2, 0x0102), (0x0102, true));
+        assert_eq!(rle_value(true, 4, 0x8001_0002), (0x0001_0002, true));
+        // Differing only in the masked channel: equal.
+        assert_eq!(rle_value(true, 2, 0x8101), (0x0101, false));
     }
 
     #[test]

@@ -122,13 +122,13 @@ emu_cases() {
     emu_case "200 MHz" -- -d $D -c samplerate=200m -C 0-15 --samples 96 -O hex
     emu_case "150 MHz" -- -d $D -c samplerate=150m -C 0-7 --samples 64 -O hex
     emu_case "200 MHz rle" -- -d $D -c samplerate=200m:rle=on -C 8-15 --samples 1000 -O hex
-    # The pair's top bit, channel 7 of the older sample here, is the
-    # count flag. The C driver clears tmp_sample[num_bytes - 1]
-    # (protocol.c:490, 508), an unused byte for this group, so channel 7
-    # is real in every newer sample and 0 in every older one. oxrok
-    # reads the channel as lost, 0 in both, as with -C 8-15, where the
-    # C's clear lands on it.
-    emu_case "200 MHz rle lower group" --oracle-differs "protocol.c:490 clears a byte the sample does not use, so the lost channel alternates" -- -d $D -c samplerate=200m:rle=on -C 0-7 --samples 400 -O hex
+    # The firmware's rle_enc.v masks the top channel of both samples of
+    # a word (Pipistrello_ols_verilog 2423ef3, hand read, not known to be
+    # the bitstream on every board), so channel 7 here and channel 15
+    # below read 0; the driver's clear (protocol.c:490, 508) is a wrong
+    # index with no effect there.
+    emu_case "200 MHz rle lower group" -- -d $D -c samplerate=200m:rle=on -C 0-7 --samples 400 -O hex
+    emu_case "200 MHz rle channel 15" --digest --filter "$LONG" -- -d $D -c samplerate=200m:rle=on -C 0-15 --samples 70000 -O hex
     emu_case "200 MHz rle two groups" -- -d $D -c samplerate=200m:rle=on -C 0-15 --samples 64 -O hex
     # All 32 channels at 200 MHz: the driver takes each demux word for
     # one sample, gets half the samples it counts on and polls for ever.

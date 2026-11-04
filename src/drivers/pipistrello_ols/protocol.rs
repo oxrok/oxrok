@@ -42,10 +42,6 @@
 //! - four stages put the start bit on the last of them, as there is no
 //!   fifth for it (`set_trigger` in `api.c` sets it on stage
 //!   `num_stages`, which does not exist, so the board never starts);
-//! - in demux mode with RLE the channel that gives its top bit to the
-//!   count flag is 0 in both samples of a pair, whichever groups are on
-//!   (`protocol.c` 490 and 508 clear a byte of the expanded sample that
-//!   is that channel only for channels 8-15 alone);
 //! - the delay count is at least one unit (`captureratio=100` sends
 //!   0xffffffff);
 //! - a board that reports no memory size, a capture without a sample
