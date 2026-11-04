@@ -2,9 +2,11 @@
 # FX2 with its firmware in EEPROM, 2961:6689 and 2961:6688, relaying
 # word commands to an FPGA that takes its bitstream on every open.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". oxrok has no sysclk-lwla driver: the cases are oracle cases.
+# model". oxrok has the driver (src/drivers/sysclk_lwla): every case runs
+# both tools.
 EMU_MODEL=sysclk-lwla
 EMU_DRIVER=sysclk-lwla
+EMU_FULL=sysclk-lwla
 EMU_GCOV_SHARED="src/usb.c"
 
 # The model's options for the cases that follow (see fx2lafw.sh).
@@ -16,6 +18,7 @@ lwla_options() {
 # Claims interface 0 through usbfs as another program would, until
 # lwla_release (as h4032l_hold in hantek-4032l.sh).
 lwla_hold() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device, nothing to claim
     timeout 120 python3 -I -c '
 import fcntl, os, signal, struct, sys
 d = "/sys/bus/usb/devices/" + sys.argv[1]
@@ -46,6 +49,7 @@ lwla_release() {
 # Moves a bitstream stand-in away for a case (lwla_restore puts it
 # back), or writes a broken one: lwla_bitstream NAME empty|huge.
 lwla_bitstream() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: nothing to move
     cp "$SIGROK_FIRMWARE_DIR/$1" "$TMP/lwla-saved" || return 1
     case $2 in
         missing) rm -f "$SIGROK_FIRMWARE_DIR/$1" ;;
@@ -55,18 +59,37 @@ lwla_bitstream() {
 }
 
 lwla_restore() {
+    [ "$EMU_DRY" = 0 ] || return 0
     mv "$TMP/lwla-saved" "$SIGROK_FIRMWARE_DIR/$1" ||
         emu_fail "sysclk-lwla: could not put $1 back"
 }
 
 emu_cases() {
     F=sysclk-lwla
-    # The driver's own messages, without the timestamps of -l 5.
-    E='/sysclk-lwla:/!d; s/ *\[[0-9:.]+\]//'
-    # The driver's and sigrok-cli's errors (the open's failure).
-    O='/sysclk-lwla:|Failed/!d; s/ *\[[0-9:.]+\]//'
+    # oxrok's log prefix as libsigrok's, and the two messages libsigrok's
+    # own layers log (usb.c, resource.c) with their prefix; the tool's
+    # last line without oxrok's added reason. The filters below read this
+    # one form.
+    N='s/^oxrok: [a-z]+: oxrok::drivers::sysclk_lwla(::protocol)?: /sr: sysclk-lwla: /; s/^sr: sysclk-lwla: (Could neither|Invalid input)/sr: usb: \1/; s/^sr: sysclk-lwla: (Failed to open resource)/sr: resource: \1/; s/^Failed to open device: .*$/Failed to open device./'
+    # The driver's own messages, without the timestamps of -l 5. Dropped:
+    # device.c's "Opening/Closing device instance", which is libsigrok's
+    # core tagged with the driver's name, not the driver.
+    E="$N; /sysclk-lwla:/!d; s/ *\[[0-9:.]+\]//; /^sr: device: /d"
+    # The driver's and sigrok-cli's errors (the open's failure). Dropped
+    # as well: session.c's "Failed to commit", libsigrok's core saying what
+    # the driver said on the line before.
+    O="$N; /sysclk-lwla:|Failed/!d; s/ *\[[0-9:.]+\]//; /^sr: (session|device): /d"
     # The debug line of a failing request and the open's retries.
-    X='/sysclk-lwla: (Failed|Invalid|Downloading)/!d; s/ *\[[0-9:.]+\]//'
+    X="$N; /sysclk-lwla: (Failed|Invalid|Downloading)/!d; s/ *\[[0-9:.]+\]//"
+    # A refused option: sr_strerror()'s wording for oxrok's errors. It
+    # drops the reason oxrok adds, not the refusal.
+    A='s/invalid argument: samplerate\.$/invalid samplerate./; s/invalid argument: .*$/invalid argument./; s/: not supported\.$/: not applicable./'
+    # A conn= that selects nothing reads as no conn= at all.
+    C='api.c:104 reads an empty conn_matches as no conn=, so a conn= that selects nothing lists every LWLA'
+    # Ctrl-C: sigrok-cli has no SIGINT handler and dies (not a driver bug,
+    # but the form the harness has for it); oxrok ends the capture. The
+    # "lib" cases show what libsigrok's driver does there.
+    I='sigrok-cli has no SIGINT handler and dies where oxrok ends the capture'
     # A capture is held to its first lines and the digest of the whole.
     B='1,4!d'
 
@@ -76,14 +99,16 @@ emu_cases() {
     emu_case "by ids" -- -d $F:conn=2961.6689 --scan
     emu_case "by address" -- -d $F:conn=$EMU_USB --scan
     # sr_usb_find() matches nothing: no match list, so every LWLA is
-    # listed (api.c:104).
-    emu_case "conn matching nothing" -- -d $F:conn=9.99 --scan
+    # listed (api.c:104). oxrok lists what was selected: nothing.
+    emu_case "conn matching nothing" --oracle-differs "$C" --no-output -- -d $F:conn=9.99 --scan
     # sr_usb_find() refuses the spec; the scan lists the board all the
     # same.
-    emu_case "bad conn" --stderr --filter '/usb:|sysclk-lwla:/!d; s/ *\[[0-9:.]+\]//' -- -l 4 -d $F:conn=nonsense --scan
-    emu_case "bad conn lists" -- -d $F:conn=nonsense --scan
-    # The root hub of the emulator's bus: matched, and not an LWLA.
-    emu_case "conn another device" --stderr --filter "$E; s/device [0-9]+\.1 /device BUS.1 /" -- -l 4 -d $F:conn=${EMU_USB%.*}.1 --scan
+    emu_case "bad conn" --stderr --filter "$N; /usb:|sysclk-lwla:/!d; s/ *\[[0-9:.]+\]//" -- -l 4 -d $F:conn=nonsense --scan
+    emu_case "bad conn lists" --oracle-differs "$C" --no-output -- -d $F:conn=nonsense --scan
+    # The root hub of the emulator's bus: matched, and not an LWLA. Library
+    # only: nusb does not list root hubs, so oxrok finds nothing there, and
+    # this bus has no other device to name.
+    emu_case "lib conn another device" --libsigrok --stderr --filter "$E; s/device [0-9]+\.1 /device BUS.1 /" -- -l 4 -d $F:conn=${EMU_USB%.*}.1 --scan
     emu_case "show" --keep-header -- -d $F --show
     emu_case "open and close" --stderr --filter "$E" -- -l 5 -d $F --show
     for k in samplerate limit_samples limit_time external_clock clock_edge triggersource triggerslope; do
@@ -96,9 +121,9 @@ emu_cases() {
     emu_case "100 samples 125M" --digest --filter "$B" -- -d $F --samples 100 -O bits
     emu_case "100M" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3,CH4 -c samplerate=100M --samples 1000 -O bits
     emu_case "1M hex" --digest --filter "$B" -- -d $F -c samplerate=1M --samples 500 -O hex
-    emu_case "100 Hz" --digest -- -d $F -C CH1,CH2,CH3 -c samplerate=100 --samples 25 -O bits
+    emu_case "100 Hz" --record --digest -- -d $F -C CH1,CH2,CH3 -c samplerate=100 --samples 25 -O bits
     emu_case "time 300 ms" --digest --filter "$B" -- -l 5 -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
-    emu_case "time spew" --stderr --filter '/Sampling in progress|Time limit|words in capture|Acquisition/!d; s/ *\[[0-9:.]+\]//' -- -l 5 -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
+    emu_case "time spew" --stderr --filter "$N; /Sampling in progress|Time limit|words in capture|Acquisition/!d; s/ *\[[0-9:.]+\]//" -- -l 5 -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
     # A time limit shorter than a sample: samples_max is 0
     # (protocol.c:510), so the readout passes on nothing.
     emu_case "time shorter than a sample" --no-output -- -d $F -C CH1 -c samplerate=100 --time 5 -O bits
@@ -117,7 +142,20 @@ emu_cases() {
     emu_case "trigger rising" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3,CH4 -t CH4=r -c samplerate=1M --samples 64 -O bits
     emu_case "trigger falling and low" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3,CH4 -t CH2=f,CH4=0 -c samplerate=1M --samples 64 -O bits
     emu_case "trigger late" --digest --filter "$B" -- -d $F -C CH1,CH20 -t CH20=r -c samplerate=1M --samples 64 -O bits
-    emu_case "trigger never fires" --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    # Both wait for a trigger that never comes, until they are stopped.
+    # Oxrok's stop writes the whole stop sequence. The status polls of the
+    # hang are not cut: the interrupt comes after the third (replies 8-10).
+    emu_case "trigger never fires" --interrupt in=6:10 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    emu_case "lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    # One sequence of the trigger, as sigrok-cli hands it over: two stages.
+    emu_case "two trigger stages" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -t CH1=01 --samples 10 -O bits
+    # A stop: with the C driver, only the first write of each sequence
+    # goes out (protocol.c:341), here the long register's address and not
+    # the strobe, so the capture runs on; see "trigger never fires" and
+    # "interrupt while sampling" for oxrok's.
+    emu_case "interrupt while sampling" --interrupt in=6:9 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
+    emu_case "lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
+    emu_case "lib stop during the readout" --libsigrok --digest --filter "$B" -- --stop-after 100 -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     emu_case "trigger TRG rising" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=r --samples 64 -O bits
     emu_case "trigger TRG falling" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=f --samples 64 -O bits
     emu_case "trigger TRG and a level" --digest --filter "$B" -- -d $F -C CH1,CH12 -t CH12=1 -c samplerate=1M:triggersource=TRG:triggerslope=r --samples 64 -O bits
@@ -132,14 +170,14 @@ emu_cases() {
     emu_case "external clock time" --digest --filter "$B" -- -d $F -C CH1 -c external_clock=1 --time 100 -O bits
 
     lwla_options
-    emu_case "samplerate too low" --expect-fail --stderr -- -d $F -c samplerate=50 --samples 10
-    emu_case "samplerate too high" --expect-fail --stderr -- -d $F -c samplerate=200M --samples 10
+    emu_case "samplerate too low" --expect-fail --stderr --filter "$A" -- -d $F -c samplerate=50 --samples 10
+    emu_case "samplerate too high" --expect-fail --stderr --filter "$A" -- -d $F -c samplerate=200M --samples 10
     emu_case "time too long" --expect-fail --stderr -- -d $F --time 1000001s
     emu_case "samples too many" --expect-fail --stderr -- -d $F --samples 2T
-    emu_case "clock edge refused" --expect-fail --stderr -- -d $F -c clock_edge=x --samples 10
-    emu_case "trigger source refused" --expect-fail --stderr -- -d $F -c triggersource=x --samples 10
-    emu_case "trigger slope refused" --expect-fail --stderr -- -d $F -c triggerslope=x --samples 10
-    emu_case "rle refused" --expect-fail --stderr -- -d $F -c rle=1 --samples 10 -O bits
+    emu_case "clock edge refused" --expect-fail --stderr --filter "$A" -- -d $F -c clock_edge=x --samples 10
+    emu_case "trigger source refused" --expect-fail --stderr --filter "$A" -- -d $F -c triggersource=x --samples 10
+    emu_case "trigger slope refused" --expect-fail --stderr --filter "$A" -- -d $F -c triggerslope=x --samples 10
+    emu_case "rle refused" --expect-fail --stderr --filter "$A" -- -d $F -c rle=1 --samples 10 -O bits
     emu_case "continuous refused" --expect-fail --stderr -- -d $F --continuous
 
     # The FX2 firmware's short transfer quirk.
@@ -166,7 +204,7 @@ emu_cases() {
     lwla_options stall=read-reg:5
     emu_case "fault second test read" --stderr --filter "$X" -- -l 5 -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     lwla_options short_reply=read-reg:5
-    emu_case "fault short register read" --stderr --filter '/Invalid register|Downloading/!d; s/ *\[[0-9:.]+\]//' -- -l 5 -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
+    emu_case "fault short register read" --stderr --filter "$N; /Invalid register|Downloading/!d; s/ *\[[0-9:.]+\]//" -- -l 5 -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     lwla_options test_id=0x1
     emu_case "fault test word" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 --samples 10 -O bits
     # The second test read's other steps: its address write, its strobe
@@ -217,6 +255,12 @@ emu_cases() {
         lwla_options $f
         emu_case "fault capture $f" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
+    # The 100th of the 134 reads fails: the C has sent its first packet of
+    # 20000 samples and drops the 2000 or so decoded since (protocol.c:216-219),
+    # oxrok passes them on. The first line of the golden is the number of
+    # lines of the output, which shows it.
+    lwla_options stall=read-mem:100
+    emu_case "fault later read keeps the samples" --oracle-differs "protocol.c:216-219 returns with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     # Unplugged after the first status reply (the 8th reply).
     lwla_options
     emu_case "unplug while polling" --unplug in=6:8 --stderr --filter "$E" -- -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
@@ -243,11 +287,14 @@ emu_cases() {
     emu_case "1016 capture with no words" --no-output -- -d $F -C CH1 -c samplerate=100:rle=0 --time 1 -O bits
     lwla_options model=1016
     emu_case "1016 odd samples plain" --digest --filter "$B" -- -d $F -c samplerate=1M:rle=0 --samples 101 -O bits
-    emu_case "1016 rle runs" --digest --filter "$B" -- -d $F -C CH5,CH6 -c samplerate=1M --samples 300 -O bits
+    emu_case "1016 rle runs" --record --digest --filter "$B" -- -d $F -C CH5,CH6 -c samplerate=1M --samples 300 -O bits
     emu_case "1016 30000 samples" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=10M:rle=0 --samples 60000 -O bits
     emu_case "1016 time" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1k --time 300 -O bits
     emu_case "1016 trigger" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3 -t CH3=r -c samplerate=1M --samples 64 -O bits
-    emu_case "1016 trigger never fires" --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    # The third poll's last reply: 4 of the open's and 9 of the polls'.
+    emu_case "1016 trigger never fires" --interrupt in=6:13 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    emu_case "1016 lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
+    emu_case "1016 lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
     emu_case "1016 3M divides" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=3M:rle=0 --samples 100 -O bits
     lwla_options model=1016 short_transfers=1
     emu_case "1016 short transfers" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M --samples 100 -O bits
