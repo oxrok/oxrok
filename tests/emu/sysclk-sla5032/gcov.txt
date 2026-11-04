@@ -1,7 +1,7 @@
 gcov sysclk-sla5032 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        84.4%  200 of 237
+  api.c        85.7%  203 of 237
   protocol.c   94.7%  407 of 430
-  total        91.0%  607 of 667
+  total        91.5%  610 of 667
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_inst_new_matching: 121-123
@@ -11,8 +11,8 @@ never reached, by function (line ranges hold no reached line):
     config_get: 273, 278, 293-295
     config_set: 311, 316, 328, 334-336
     config_channel_set: 349, 354-355, 363
-    prepare_trigger_masks: 396-397, 405, 411-412, 418-419
-    config_commit: 445, 449-450
+    prepare_trigger_masks: 405, 411-412, 418-419
+    config_commit: 449-450
     config_list: 473, 475, 490-492
   protocol.c
     la_write_cmd_buf: 132-133, 180-181

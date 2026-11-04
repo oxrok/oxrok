@@ -99,6 +99,7 @@ pub mod drivers {
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
     pub mod sysclk_lwla;
+    pub mod sysclk_sla5032;
     pub mod zeroplus_logic_cube;
 }
 
@@ -127,4 +128,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::lecroy_logicstudio::LogicStudioDriver));
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
     registry.register(Box::new(drivers::zeroplus_logic_cube::ZeroplusDriver));
+    registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
 }

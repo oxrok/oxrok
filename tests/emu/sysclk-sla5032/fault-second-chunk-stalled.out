@@ -1,5 +1,3 @@
-sr: device: sysclk-sla5032: Opening device instance.
-sr: hwdriver: sysclk-sla5032: Starting acquisition.
 sr: sysclk-sla5032: start acquision, smp lim: 1500000, cap ratio: 50.
 sr: sysclk-sla5032: start acquision, pre: 750000, post: 750000.
 sr: sysclk-sla5032: start acquision, pre: b70, post: b70.
@@ -10,5 +8,4 @@ sr: sysclk-sla5032: acquision done, status: 1464.
 sr: sysclk-sla5032: acquision done, xfer_len: 6291456.
 sr: sysclk-sla5032: acquision done, rle_samples_count: 1048576.
 sr: sysclk-sla5032: acquision done, samples_count: 1048576.
-sr: hwdriver: sysclk-sla5032: Stopping acquisition.
 sr: sysclk-sla5032: acquision done, ret: -9.
