@@ -621,6 +621,7 @@ impl Context {
             Ok(d) if d.len() == 2 => d,
             r => {
                 log::debug!("EEPROM word {addr}: {r:?}");
+                self.gone |= matches!(r, Err(Error::Disconnected));
                 return Err(self.fail(-1, "reading eeprom failed"));
             }
         };
@@ -891,7 +892,8 @@ mod tests {
         ctx.read_data_set_chunksize(64 * 1024);
         let mut buf = vec![0u8; 100];
         assert_eq!(ctx.read_data(&mut buf), Ok(100));
-        ctx.close().unwrap();
+        // The write found the device gone: the release counts as failed.
+        assert_eq!(ctx.close().unwrap_err().code, -1);
     }
 
     #[test]

@@ -167,7 +167,7 @@
 //! capture with the default 32 channels takes each demux word for one
 //! sample and waits for the rest (`200 MHz 32 channels`);
 //! `captureratio=100` with a trigger sends a delay count of 0xffffffff
-//! (`api.c` 523, 562-565), which the device takes as 2^34 words to
+//! (`api.c` 523, 562-565), which the device takes as 2^28 words to
 //! capture, so at 10 Hz the driver polls for ever (`ratio 100`).
 //! sigrok-cli cannot capture without a sample limit
 //! (`main.c` 321 needs one, `--time` becomes one), so the driver's
