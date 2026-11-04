@@ -1,0 +1,3 @@
+Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
+Setting samplerate to 46Hz.
+Status = 0x2.

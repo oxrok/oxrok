@@ -1,0 +1,2 @@
+sr: sysclk-lwla: Downloading FPGA bitstream 'sysclk-lwla1034-int.rbf'.
+sr: sysclk-lwla: Failed to receive reply: LIBUSB_ERROR_NO_DEVICE.

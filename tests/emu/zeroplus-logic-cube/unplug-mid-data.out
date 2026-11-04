@@ -1,0 +1,5 @@
+gl_read_bulk: libusb_control_transfer: LIBUSB_ERROR_NO_DEVICE.
+gl_read_bulk: libusb_bulk_transfer: LIBUSB_ERROR_NO_DEVICE.
+Tried to read 2048 bytes, actually read 0.
+gl_write_address: LIBUSB_ERROR_NO_DEVICE.
+gl_write_address: LIBUSB_ERROR_NO_DEVICE.

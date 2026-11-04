@@ -1,0 +1,14 @@
+Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
+Setting voltage threshold to 1.500000V.
+Setting memory size to 8K.
+triggerbar_address = 198(0xc6)
+ramsize_triggerbar_address = 800(0x320)
+Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
+Status = 0x2.
+Stop address       = 0x424.
+Now address        = 0x425.
+Trigger address    = 0x105.
+Triggerbar address = 0xc6.
+Ramsize trigger    = 0x320.
+Memory size        = 0x800.
+Need to discard 1049 samples.
