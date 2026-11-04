@@ -1,0 +1,7 @@
+# Bitstream stand-in for the sysclk-sla5032 model (emu/src/models/sysclk-sla5032.rs):
+# the driver cuts the first 0x69 bytes, checks a Xilinx sync word after
+# them and sends the rest in chunks of 250 behind 256 bytes of FF. The
+# size is the model's (a unit test checks it), not the vendor file's; it
+# leaves a last chunk of 151 bytes. A plain stand-in has no sync word:
+# tools/emu/sysclk-sla5032.sh lays it over before its cases.
+sysclk-sla5032.bit 3000

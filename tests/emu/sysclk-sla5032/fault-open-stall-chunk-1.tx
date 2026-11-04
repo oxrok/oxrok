@@ -1,0 +1,7 @@
+ctl_out 00 09 0001 0000 - -> ok
+bulk_out 04 030804 -> 3
+bulk_in 88 512 -> b6ff9c97
+bulk_out 04 030804 -> 3
+bulk_in 88 512 -> 12ff9c97
+bulk_out 04 01 -> 1
+bulk_out 04 @252:17062c953977bc53c34e8b0f5f451c5e158a0327caf35f2dc56ce0e13a552448 -> err stall
