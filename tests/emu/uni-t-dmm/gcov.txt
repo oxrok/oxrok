@@ -1,0 +1,83 @@
+gcov uni-t-dmm (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c       100.0%  50 of 50
+  protocol.c   96.2%  100 of 104
+  total        97.4%  150 of 154
+never reached, by function (line ranges hold no reached line):
+  protocol.c
+    hid_chip_init: 109-111, 151-152
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/dmm/es519xx.c   60.1%  273 of 454
+  src/dmm/fs9721.c    71.6%  166 of 232
+  src/dmm/fs9922.c    90.6%  183 of 202
+  src/dmm/ut372.c     95.6%  43 of 45
+  src/dmm/ut71x.c     83.7%  159 of 190
+  src/dmm/vc870.c     95.2%  216 of 227
+  src/usb.c           33.2%  76 of 229
+  total               70.7%  1116 of 1579
+never reached, by function (line ranges hold no reached line):
+  src/dmm/es519xx.c
+    parse_range: 145-146, 162, 172, 180, 182, 185, 187, 189, 191
+    parse_flags: 215-218, 247-250, 259-262, 266-268, 270-273, 275-277, 289, 296-339, 372, 377, 385-392, 396-407, 417, 422, 429-430, 435-437
+    handle_flags: 472-473, 476-477, 489-490, 493-494, 536
+    flags_valid: 552-553, 567-568, 573-574
+    sr_es519xx_packet_valid: 588, 596
+    sr_es519xx_parse: 608
+    sr_es519xx_2400_11b_packet_valid: never called (629-637)
+    sr_es519xx_2400_11b_parse: never called (640-650)
+    sr_es519xx_2400_11b_altfn_packet_valid: never called (657-666)
+    sr_es519xx_2400_11b_altfn_parse: never called (669-680)
+    sr_es519xx_19200_11b_5digits_packet_valid: never called (687-696)
+    sr_es519xx_19200_11b_5digits_parse: never called (699-710)
+    sr_es519xx_19200_11b_clamp_packet_valid: never called (717-726)
+    sr_es519xx_19200_11b_clamp_parse: never called (729-740)
+    sr_es519xx_19200_14b_sel_lpf_packet_valid: never called (803-812)
+    sr_es519xx_19200_14b_sel_lpf_parse: never called (815-826)
+  src/dmm/fs9721.c
+    parse_digit: 46-47, 56-68
+    flags_valid: 100-101, 119-120
+    parse_value: 158-161, 186-191
+    handle_flags: 280-281, 293-294, 299
+    sr_fs9721_parse: 359-360
+    sr_fs9721_01_temp_c: never called (385-396)
+    sr_fs9721_10_temp_c: never called (398-409)
+    sr_fs9721_01_10_temp_f_c: never called (411-428)
+    sr_fs9721_max_c_min: never called (430-450)
+  src/dmm/fs9922.c
+    flags_valid: 46-47, 75-76, 81-82
+    parse_value: 96-100, 114-118, 138-139
+    handle_flags: 281-282
+    sr_fs9922_packet_valid: 334
+    sr_fs9922_parse: 365-366
+  src/dmm/ut372.c
+    sr_ut372_packet_valid: 78, 84
+  src/dmm/ut71x.c
+    parse_value: 67-69, 71-73, 75-76, 79-82, 97
+    parse_range: 115-116, 121-122
+    parse_flags: 189-191, 216-217
+    handle_flags: 263-264
+    flags_valid: 306-307, 312-313
+    sr_ut71x_packet_valid: 326
+    sr_ut71x_parse: 343, 348-349, 353
+  src/dmm/vc870.c
+    parse_value: 77-81
+    parse_range: 110-111, 126
+    handle_flags: 329-330
+    sr_vc870_packet_valid: 400
+    sr_vc870_parse: 417, 422-423
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)
