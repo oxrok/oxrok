@@ -126,7 +126,7 @@
 //! not recognized; `never` means none ever is).
 
 use crate::descriptor::{self, DeviceDescriptor};
-use crate::model::{Descriptors, DeviceModel, Reply, STANDARD, Setup, Speed, Violations};
+use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
 use crate::shells::hid::{self, HidInterface, HidReports};
 use crate::{Error, Result};
 
@@ -199,11 +199,6 @@ pub const REPORT_DESCRIPTOR: [u8; 22] = [
     0xb2, 0x02, 0x01, // feature, data, variable, absolute, buffered bytes
     0xc0, // end collection
 ];
-
-/// The HID class descriptor of the real device: HID 1.01, unlike the
-/// shell's 1.11.
-const HID_DESCRIPTOR: [u8; 9] =
-    [9, descriptor::HID, 0x01, 0x01, 0, 1, descriptor::HID_REPORT, REPORT_DESCRIPTOR.len() as u8, 0];
 
 /// A board from the `-o` options (see the module doc).
 ///
@@ -696,10 +691,11 @@ pub struct Scanalogic2 {
 impl Scanalogic2 {
     /// A board with these options.
     pub fn new(config: Config) -> Scanalogic2 {
-        let hid = HidInterface::new(INTERFACE, REPORT_DESCRIPTOR.to_vec());
+        // lsusb says HID 1.01.
+        let hid = HidInterface::new(INTERFACE, REPORT_DESCRIPTOR.to_vec()).with_version(0x0101);
         let mut body = Vec::new();
         body.extend_from_slice(&descriptor::interface(INTERFACE, 0, 1, [3, 0, 0], 0));
-        body.extend_from_slice(&HID_DESCRIPTOR);
+        body.extend_from_slice(&hid.descriptor());
         body.extend_from_slice(&descriptor::endpoint(0x81, 3, 8, 100));
         let device = DeviceDescriptor {
             usb: 0x0110,
@@ -734,10 +730,6 @@ impl DeviceModel for Scanalogic2 {
     }
 
     fn control(&mut self, setup: Setup, data: &[u8], v: &mut Violations) -> Reply {
-        // The shell's HID descriptor says 1.11; this device's says 1.01.
-        if setup.kind() == STANDARD && setup.value >> 8 == u16::from(descriptor::HID) {
-            return Reply::Data(descriptor::truncate(&HID_DESCRIPTOR, setup.length));
-        }
         if let Some(reply) = self.hid.control(&mut self.board, setup, data, v) {
             return reply;
         }
@@ -835,7 +827,7 @@ mod tests {
         let ep = Descriptors::endpoints(config)[0];
         assert_eq!((ep.address, ep.max_packet, ep.interval), (0x81, 8, 100));
         assert_eq!(REPORT_DESCRIPTOR.len(), 22);
-        assert_eq!(HID_DESCRIPTOR[2..4], [0x01, 0x01], "bcdHID 1.01");
+        assert_eq!(config[18..27], [9, 0x21, 0x01, 0x01, 0, 1, 0x22, 22, 0], "bcdHID 1.01");
         assert_eq!(d.strings, ["ikalogic", "SCANALOGIC"]);
     }
 
@@ -846,9 +838,28 @@ mod tests {
         let s = Setup { request_type: 0x81, request: 6, value: 0x2200, index: 0, length: 255 };
         assert_eq!(dev.control(s, &[], &mut v), Reply::Data(REPORT_DESCRIPTOR.to_vec()));
         let s = Setup { request_type: 0x81, request: 6, value: 0x2100, index: 0, length: 255 };
-        assert_eq!(dev.control(s, &[], &mut v), Reply::Data(HID_DESCRIPTOR.to_vec()));
+        assert_eq!(
+            dev.control(s, &[], &mut v),
+            Reply::Data(vec![9, 0x21, 0x01, 0x01, 0, 1, 0x22, 22, 0])
+        );
         assert_eq!(dev.in_transfer(1, 8, &mut v), Reply::Nak);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn flags_a_hid_descriptor_request_that_is_not_one() {
+        let mut v = Violations::default();
+        let mut dev = board(Config::default());
+        let good = Setup { request_type: 0x81, request: 6, value: 0x2100, index: 0, length: 255 };
+        for (bad, what) in [
+            (Setup { request_type: 0x80, ..good }, "to the device"),
+            (Setup { index: 1, ..good }, "another interface"),
+            (Setup { request: 7, ..good }, "not GET_DESCRIPTOR"),
+            (Setup { request_type: 0x01, ..good }, "OUT"),
+        ] {
+            assert_eq!(dev.control(bad, &[], &mut v), Reply::Stall, "{what}");
+            assert_eq!(v.drain().len(), 1, "{what}");
+        }
     }
 
     #[test]
