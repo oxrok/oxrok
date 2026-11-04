@@ -1,1 +1,2 @@
-sr: hantek-dso: Not yet supported.
+oxrok: err: oxrok::drivers::hantek_dso: Not yet supported.
+oxrok: err: oxrok::drivers::hantek_dso: 64 polls in a row answered the device's 9 bit samples, giving up.

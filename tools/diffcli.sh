@@ -953,7 +953,7 @@ flush()
                 interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
                 *) set -- "$tool" "$@" ;;
             esac
-            if [ $hangs = 1 ] && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
+            if { [ $hangs = 1 ] || [ $oracle_hangs = 1 ]; } && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
                 set -- env LD_PRELOAD="$EMU_TERM_EXIT" "$@"
             fi
             if [ $record = 1 ] && [ $t = b ]; then
