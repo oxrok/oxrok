@@ -2,7 +2,7 @@
 //   libsigrok/src/hardware/lascar-el-usb/protocol.c (the commands, the configuration block, the sample bytes),
 //   libsigrok/src/hardware/lascar-el-usb/protocol.h,
 //   libsigrok/src/hardware/lascar-el-usb/api.c (the log download),
-//   eltuxusb (Romain Aviolat), GPL-3.0-or-later, version 0.3,
+//   eltuxusb (Romain Aviolat), GPLv3, version 0.3,
 //   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
 //   Martin Ling, Soeren Apel, Aurelien Jacobs, Daniel Glöckner,

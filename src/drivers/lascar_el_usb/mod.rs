@@ -1,7 +1,7 @@
 // Counterpart in sigrok:
 //   libsigrok/src/hardware/lascar-el-usb/api.c,
 //   libsigrok/src/hardware/lascar-el-usb/protocol.c (the receive callback),
-//   eltuxusb (Romain Aviolat), GPL-3.0-or-later, version 0.3,
+//   eltuxusb (Romain Aviolat), GPLv3, version 0.3,
 //   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
 //   Frank Stettner, Martin Ling, Soeren Apel, Aurelien Jacobs,
