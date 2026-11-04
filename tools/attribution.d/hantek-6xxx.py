@@ -9,3 +9,11 @@ MAP["emu/src/models/hantek-6xxx.rs"] = (
      "libsigrok/src/hardware/hantek-6xxx/protocol.h",
      "sigrok-firmware-fx2lafw (include/scope.inc, include/dscr_scope.inc, hw/*/fw.c, hw/*/dscr.a51, Makefile.am)"],
     INDEPENDENT)
+# The port of the driver.
+MAP["src/drivers/hantek_6xxx/mod.rs"] = (
+    ["libsigrok/src/hardware/hantek-6xxx/api.c"],
+    INDEPENDENT)
+MAP["src/drivers/hantek_6xxx/protocol.rs"] = (
+    ["libsigrok/src/hardware/hantek-6xxx/protocol.c",
+     "libsigrok/src/hardware/hantek-6xxx/protocol.h"],
+    INDEPENDENT)

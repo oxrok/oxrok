@@ -344,6 +344,34 @@ impl Transport for Rusb {
             Err(e) => Err(map(e)),
         }
     }
+
+    /// rusb hands back the error alone when a transfer times out, so one
+    /// packet at a time, which a timeout cannot split.
+    fn bulk_in_partial(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        let mps = self.max_packet_size(endpoint)?.max(1);
+        let size = len.div_ceil(mps).max(1) * mps;
+        let deadline = Instant::now() + timeout;
+        let mut packet = vec![0u8; mps];
+        let mut buf = Vec::with_capacity(size);
+        while buf.len() < size {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match self.handle.read_bulk(endpoint, &mut packet, left) {
+                Ok(n) => {
+                    buf.extend_from_slice(&packet[..n]);
+                    if n < mps {
+                        return Ok(buf);
+                    }
+                }
+                Err(rusb::Error::Timeout) => break,
+                Err(_) if !buf.is_empty() => return Ok(buf),
+                Err(e) => return Err(map(e)),
+            }
+        }
+        if buf.is_empty() { Err(Error::Timeout) } else { Ok(buf) }
+    }
 }
 
 struct RusbStream {

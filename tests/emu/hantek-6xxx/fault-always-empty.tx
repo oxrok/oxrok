@@ -1,0 +1,72 @@
+ctl_out 40 e2 0000 0000 0a -> ok
+ctl_out 40 e2 0000 0000 0a -> ok
+ctl_out 40 e0 0000 0000 05 -> ok
+ctl_out 40 e1 0000 0000 05 -> ok
+ctl_out 40 e3 0000 0000 01 -> ok
+bulk_in 86 1024 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+bulk_in 86 512 -> -
+ctl_out 40 e3 0000 0000 00 -> ok
