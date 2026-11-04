@@ -57,8 +57,8 @@
 #
 # emu_case --libsigrok makes a case library-verified rather than
 # CLI-verified: tools/libsigrok-run.c, built here with cc against the
-# oracle's libsigrok (the pkg-config of the prefix sigrok-cli runs from,
-# LIBSIGROK_PREFIX to override; the libsigrok.so it loads must be the
+# oracle's libsigrok (the prefix sigrok-cli runs from, LIBSIGROK_PREFIX to
+# override, and glib's headers; the libsigrok.so it loads must be the
 # one sigrok-cli loads, so that --gcov counts its runs alike), takes
 # sigrok-cli's place, for drivers sigrok-cli cannot drive (no limit it
 # can set). It is always an oracle case, held to goldens of its own,
@@ -722,8 +722,8 @@ flush()
     }
 
     # Builds tools/libsigrok-run.c once per run against the oracle's
-    # libsigrok: the pkg-config of the prefix sigrok-cli runs from
-    # (LIBSIGROK_PREFIX overrides it), and the libsigrok.so sigrok-cli
+    # libsigrok: the prefix sigrok-cli runs from (LIBSIGROK_PREFIX
+    # overrides it), glib's headers, and the libsigrok.so sigrok-cli
     # loads, which the check after the build holds it to (the
     # --coverage build then counts the runner's runs in the same .gcda
     # files). Sets EMU_LIBSIGROK_RUN, or EMU_LIBSIGROK_ERR on failure.
@@ -734,15 +734,18 @@ flush()
         [ -z "$EMU_LIBSIGROK_ERR" ] || return 1
         cli=$(command -v "$SIGROK_CLI") || { EMU_LIBSIGROK_ERR="no $SIGROK_CLI on PATH"; return 1; }
         prefix=${LIBSIGROK_PREFIX:-$(dirname "$(dirname "$cli")")}
-        pc=$prefix/lib/pkgconfig
-        [ -f "$pc/libsigrok.pc" ] || pc=$prefix/lib64/pkgconfig
-        if ! flags=$(PKG_CONFIG_PATH=$pc pkg-config --cflags --libs libsigrok 2>"$TMP/lsr.err"); then
-            EMU_LIBSIGROK_ERR="pkg-config libsigrok in $pc: $(head -1 "$TMP/lsr.err")"; return 1
+        libdir=$prefix/lib
+        [ -e "$libdir/libsigrok.so" ] || libdir=$prefix/lib64
+        [ -e "$libdir/libsigrok.so" ] || { EMU_LIBSIGROK_ERR="no libsigrok.so under $prefix"; return 1; }
+        # Not libsigrok.pc: its Requires.private ask for the -devel
+        # package of every library libsigrok links, of which the runner
+        # uses none. libsigrok.h needs glib's headers alone.
+        if ! flags=$(pkg-config --cflags --libs glib-2.0 2>"$TMP/lsr.err"); then
+            EMU_LIBSIGROK_ERR="pkg-config glib-2.0 (the glib headers, glib2-devel): $(head -1 "$TMP/lsr.err")"; return 1
         fi
-        libdir=$(PKG_CONFIG_PATH=$pc pkg-config --variable=libdir libsigrok)
         # shellcheck disable=SC2086
-        if ! cc -std=gnu11 -O1 -o "$TMP/libsigrok-run" "$TOOLS/libsigrok-run.c" $flags \
-                -Wl,-rpath,"$libdir" 2>"$TMP/lsr.err"; then
+        if ! cc -std=gnu11 -O1 -o "$TMP/libsigrok-run" "$TOOLS/libsigrok-run.c" -I"$prefix/include" $flags \
+                -L"$libdir" -lsigrok -Wl,-rpath,"$libdir" -Wl,-rpath-link,"$libdir" 2>"$TMP/lsr.err"; then
             EMU_LIBSIGROK_ERR="cc failed: $(head -3 "$TMP/lsr.err" | tr '\n' ' ')"; return 1
         fi
         a=$(ldd "$cli" | sed -n 's/^[[:space:]]*libsigrok\.so[^ ]* => \([^ ]*\).*/\1/p')
