@@ -1,0 +1,43 @@
+gcov sysclk-sla5032 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        84.4%  200 of 237
+  protocol.c   93.5%  402 of 430
+  total        90.3%  602 of 667
+never reached, by function (line ranges hold no reached line):
+  api.c
+    dev_inst_new_matching: 121-123
+    scan: 174-178
+    dev_open: 210, 222-225
+    has_devopt: 262
+    config_get: 273, 278, 293-295
+    config_set: 311, 316, 328, 334-336
+    config_channel_set: 349, 354-355, 363
+    prepare_trigger_masks: 396-397, 405, 411-412, 418-419
+    config_commit: 445, 449-450
+    config_list: 473, 475, 490-492
+  protocol.c
+    la_write_cmd_buf: 132-133, 180-181
+    sla5032_set_samplerate: 347
+    load_bitstream: 541-543, 550-552, 564-565
+    sla5032_send_bitstream: 600
+    la_prepare_data: 741-743, 797-801, 814-815
+    sla5032_start_acquisition: 882-883, 892-893
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   35.4%  81 of 229
+  total       35.4%  81 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: 453-455, 461-463, 472-474
+    usb_source_add: never called (496-511)
+    usb_source_remove: never called (514-516)
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)
