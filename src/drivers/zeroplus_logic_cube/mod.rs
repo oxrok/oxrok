@@ -41,6 +41,7 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 const USB_CONFIGURATION: u8 = 1;
 const USB_INTERFACE: u8 = 0;
@@ -172,6 +173,7 @@ pub struct ZeroplusDevice {
     ext_falling: bool,
     trigger: Option<Trigger>,
     regs: Regs,
+    failed_poll_pause: Duration,
     pending: Option<Box<dyn Transport>>,
     link: Arc<Mutex<Option<Link>>>,
     worker: Option<Worker>,
@@ -222,6 +224,7 @@ impl ZeroplusDevice {
             ext_falling: false,
             trigger: None,
             regs: Regs::default(),
+            failed_poll_pause: protocol::FAILED_POLL_PAUSE,
             pending: transport,
             link: Arc::new(Mutex::new(None)),
             worker: None,
@@ -494,6 +497,7 @@ impl Device for ZeroplusDevice {
         log::debug!("triggerbar_address = {}(0x{bar:x})", bar.cast_signed());
         log::debug!("ramsize_triggerbar_address = {}(0x{ramsize:x})", ramsize.cast_signed());
         let regs = self.regs.clone();
+        let pause = self.failed_poll_pause;
         let slot = Arc::clone(&self.link);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -503,7 +507,7 @@ impl Device for ZeroplusDevice {
                 let mut give_back = |link: Link| {
                     *slot.lock().expect("zeroplus-logic-cube lock") = Some(link);
                 };
-                protocol::run(link, &regs, &sink, &stop2, &mut give_back);
+                protocol::run(link, &regs, &sink, &stop2, pause, &mut give_back);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -524,6 +528,7 @@ impl Device for ZeroplusDevice {
 mod tests {
     use super::*;
     use crate::core::Packet;
+    use crate::usb::ControlRequest;
     use crate::usb::record::Replay;
     use std::sync::mpsc::sync_channel;
 
@@ -618,6 +623,7 @@ mod tests {
     fn device(steps: &str) -> ZeroplusDevice {
         let t = Replay::from_text(steps).unwrap();
         let mut d = ZeroplusDevice::from_transport(Box::new(t)).unwrap();
+        d.failed_poll_pause = Duration::ZERO;
         d.open().unwrap();
         d
     }
@@ -863,6 +869,25 @@ mod tests {
     }
 
     #[test]
+    fn only_failed_polls_are_paced() {
+        let mut s = device_steps();
+        start_steps(&mut s, &regs_1000());
+        for _ in 0..protocol::MAX_FAILED_POLLS {
+            let _ = writeln!(s, "ctl_out 41 0c 0083 0000 21 -> ok");
+            let _ = writeln!(s, "ctl_in 41 0c 0084 0000 1 -> err device \"endpoint stalled\"");
+        }
+        w(&mut s, 0x20, 0xc0);
+        w(&mut s, 0x20, 0xc1);
+        let mut d = device(&s);
+        d.failed_poll_pause = Duration::from_millis(5);
+        d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
+        let started = std::time::Instant::now();
+        capture(&mut d);
+        // A pause after each failure but the last.
+        assert!(started.elapsed() >= Duration::from_millis(75), "{:?}", started.elapsed());
+    }
+
+    #[test]
     fn an_unplug_while_polling_ends_at_once() {
         let mut s = device_steps();
         start_steps(&mut s, &regs_1000());
@@ -891,56 +916,109 @@ mod tests {
         let regs = regs_1000();
         let mut back = None;
         let mut give_back = |l: Link| back = Some(l);
-        protocol::run(
-            link,
-            &regs,
-            &PacketSink::new(tx, 0),
-            &stop,
-            &mut give_back,
-        );
+        protocol::run(link, &regs, &PacketSink::new(tx, 0), &stop, Duration::ZERO, &mut give_back);
         assert!(back.is_some());
         let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
         assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
     }
 
+    /// A replay that raises the stop when it answers its Nth bulk read,
+    /// so that a test knows which read a stop comes with.
+    struct StopAtRead {
+        inner: Replay,
+        left: usize,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Transport for StopAtRead {
+        fn info(&self) -> &UsbDeviceInfo {
+            self.inner.info()
+        }
+        fn set_configuration(&mut self, c: u8) -> Result<()> {
+            self.inner.set_configuration(c)
+        }
+        fn claim_interface(&mut self, i: u8) -> Result<()> {
+            self.inner.claim_interface(i)
+        }
+        fn release_interface(&mut self, i: u8) -> Result<()> {
+            self.inner.release_interface(i)
+        }
+        fn reset(&mut self) -> Result<()> {
+            self.inner.reset()
+        }
+        fn max_packet_size(&mut self, ep: u8) -> Result<usize> {
+            self.inner.max_packet_size(ep)
+        }
+        fn interfaces(&mut self) -> Result<Vec<crate::usb::InterfaceDesc>> {
+            self.inner.interfaces()
+        }
+        fn control_out(&mut self, r: ControlRequest, d: &[u8], t: Duration) -> Result<()> {
+            self.inner.control_out(r, d, t)
+        }
+        fn control_in(&mut self, r: ControlRequest, n: usize, t: Duration) -> Result<Vec<u8>> {
+            self.inner.control_in(r, n, t)
+        }
+        fn bulk_out(&mut self, ep: u8, d: &[u8], t: Duration) -> Result<usize> {
+            self.inner.bulk_out(ep, d, t)
+        }
+        fn bulk_in(&mut self, ep: u8, n: usize, t: Duration) -> Result<Vec<u8>> {
+            self.left -= 1;
+            if self.left == 0 {
+                self.stop.store(true, Ordering::SeqCst);
+            }
+            self.inner.bulk_in(ep, n, t)
+        }
+        fn interrupt_out(&mut self, ep: u8, d: &[u8], t: Duration) -> Result<usize> {
+            self.inner.interrupt_out(ep, d, t)
+        }
+        fn interrupt_in(&mut self, ep: u8, n: usize, t: Duration) -> Result<Vec<u8>> {
+            self.inner.interrupt_in(ep, n, t)
+        }
+        fn bulk_in_stream(
+            &mut self,
+            ep: u8,
+            size: usize,
+            depth: usize,
+        ) -> Result<Box<dyn crate::usb::BulkStream>> {
+            self.inner.bulk_in_stream(ep, size, depth)
+        }
+    }
+
     #[test]
     fn a_stop_during_the_readout_ends_at_the_next_read() {
-        let mut s = device_steps();
+        // Stopped with the third read of four, the first with samples: it
+        // is delivered, then read_stop, then the reset, then the end.
+        let mut s = String::from(
+            "# oxrok usb fixture 1\n\
+             device vid=0c12 pid=700e version=0000 bus=1 addr=2 strings=0,0,0\n",
+        );
         start_steps(&mut s, &regs_1000());
         addresses_1000(&mut s);
         read_start(&mut s);
-        for _ in 0..4 {
+        for _ in 0..3 {
             bulk(&mut s, &stream_of(2048));
         }
-        let mut d = device(&s);
-        d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
-        let link = d.lock().take().unwrap();
-        // A queue of none holds the thread at each packet.
-        let (tx, rx) = sync_channel(0);
-        let stop = AtomicBool::new(false);
-        let regs = regs_1000();
-        let rest = std::thread::scope(|scope| {
-            let stop = &stop;
-            let regs = &regs;
-            let worker = scope.spawn(move || {
-                let mut give_back = |_: Link| {};
-                protocol::run(
-                    link,
-                    regs,
-                    &PacketSink::new(tx, 0),
-                    stop,
-                    &mut give_back,
-                );
-            });
-            assert!(matches!(rx.recv().unwrap().1, Packet::Header { .. }));
-            assert!(matches!(rx.recv().unwrap().1, Packet::Logic(_)));
-            stop.store(true, Ordering::SeqCst);
-            let rest: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
-            worker.join().unwrap();
-            rest
-        });
-        assert!(rest.len() <= 2, "at most the packet in hand and the end: {}", rest.len());
-        assert!(matches!(rest.last(), Some(Packet::End)));
+        w(&mut s, 0x20, 0xe0);
+        w(&mut s, 0x20, 0xc0);
+        w(&mut s, 0x20, 0xc0);
+        w(&mut s, 0x20, 0xc1);
+        let replay = Replay::from_text(&s).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let t = StopAtRead { inner: replay.clone(), left: 3, stop: Arc::clone(&stop) };
+        let (tx, rx) = sync_channel(16);
+        let mut give_back = |_: Link| {};
+        protocol::run(
+            Link::new(Box::new(t)),
+            &regs_1000(),
+            &PacketSink::new(tx, 0),
+            &stop,
+            Duration::ZERO,
+            &mut give_back,
+        );
+        replay.finish().unwrap();
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        assert_eq!(samples(&packets), 512 - 27);
+        assert!(matches!(packets.last(), Some(Packet::End)));
     }
 
     #[test]

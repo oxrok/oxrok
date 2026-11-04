@@ -48,9 +48,14 @@
 //!   (analyzer.c:411-415; `LIBUSB_ERROR_PIPE` polled for ever,
 //!   `LIBUSB_ERROR_NO_DEVICE` read as "not busy"), and a failed address
 //!   read made an address of its bits (analyzer.c:639-655).
-//! - A short or failed bulk read delivers what it holds and ends the
-//!   capture. The C warns and sends its whole buffer, the bytes of the
-//!   previous read standing in for those missing (api.c:605-648).
+//! - A short or failed bulk read ends the capture, with the samples of the
+//!   reads that completed: a read cut short by a timeout or a short packet
+//!   gives what it holds, one ended by a STALL or a disconnect gives
+//!   nothing, as the backends return no partial data then. The C warns and
+//!   sends its whole buffer, the bytes of the previous read standing in for
+//!   those missing (api.c:605-648).
+//! - A threshold of 0 V stays 0 V when the device is opened again; the C
+//!   takes it for none set and makes it 1.5 V (api.c:341).
 //! - The trigger and its registers are worked out for each capture:
 //!   `analyzer_add_triggers()` leaves a former trigger in place when
 //!   there is none now (analyzer.c:515-516), and `devc->trigger` is never
@@ -108,6 +113,11 @@ pub const UNIT_SIZE: usize = 4;
 /// has no bound (analyzer.c:411-415); one refused poll must not end a
 /// capture, as it does not in C.
 pub const MAX_FAILED_POLLS: u32 = 16;
+/// The pause after a failed status poll, and only after one: the polls
+/// the C counts are untouched, and a failure gets about 1.6 s to pass
+/// rather than the tens of ms 16 polls last, as giving up loses a capture
+/// that may have taken minutes.
+pub const FAILED_POLL_PAUSE: Duration = Duration::from_millis(100);
 
 // The registers (analyzer.c:40-109).
 const START_STATUS: u8 = 0x20;
@@ -791,8 +801,8 @@ enum Wait {
 }
 
 /// `analyzer_wait_data()`, bounded and stoppable. It polls as fast as the
-/// transfers go, as the C does.
-fn wait_data(link: &mut Link, stop: &AtomicBool) -> Wait {
+/// transfers go, as the C does, but for the `pause` after a failed poll.
+fn wait_data(link: &mut Link, stop: &AtomicBool, pause: Duration) -> Wait {
     let mut failed = 0;
     loop {
         if stop.load(Ordering::SeqCst) {
@@ -807,6 +817,7 @@ fn wait_data(link: &mut Link, stop: &AtomicBool) -> Wait {
                 if failed >= MAX_FAILED_POLLS {
                     return Wait::Failed { gone: false };
                 }
+                std::thread::sleep(pause);
             }
         }
     }
@@ -837,12 +848,13 @@ pub fn run(
     regs: &Regs,
     sink: &PacketSink,
     stop: &AtomicBool,
+    failed_poll_pause: Duration,
     give_back: &mut dyn FnMut(Link),
 ) {
     link.configure(regs);
     link.start();
     log::info!("Waiting for data.");
-    match wait_data(&mut link, stop) {
+    match wait_data(&mut link, stop, failed_poll_pause) {
         Wait::Data => {}
         Wait::Stopped => {
             link.reset();
