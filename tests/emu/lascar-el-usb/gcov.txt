@@ -1,0 +1,37 @@
+gcov lascar-el-usb (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        92.0%  172 of 187
+  protocol.c   95.0%  324 of 341
+  total        93.9%  496 of 528
+never reached, by function (line ranges hold no reached line):
+  api.c
+    dev_open: 100-101
+    dev_close: 114
+    config_get: 136, 142, 150-151
+    config_set: 176-177
+    lascar_proc_config: 250-251
+    dev_acquisition_start: 302, 330-332
+  protocol.c
+    lascar_open: 64-66
+    lascar_get_config: 105, 126
+    lascar_save_config: 221, 245-246
+    lascar_identify: 341
+    lascar_scan: 366, 374
+    lascar_el_usb_dispatch: 481, 491-493
+    lascar_el_usb_receive_transfer: 561-565
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   72.1%  165 of 229
+  total       72.1%  165 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 208, 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 360, 369
+    sr_usb_find: 405-406, 418-420
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)

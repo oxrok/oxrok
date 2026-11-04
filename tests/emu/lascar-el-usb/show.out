@@ -1,0 +1,10 @@
+Driver functions:
+    Thermometer
+    Hygrometer
+Scan options:
+    conn
+lascar-el-usb:conn=BUS.ADDR - Lascar EL-USB-2 v2.0 with 2 channels: Temp Hum
+Supported configuration options:
+    conn: BUS.ADDR (current)
+    limit_samples: 0 (current)
+    datalog: on, off (current)

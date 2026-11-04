@@ -1,0 +1,4 @@
+found EL-USB-2 with firmware version v2.0 serial 62329
+unexpected response after transfer
+Started internal logging.
+Failed to set device option 'datalog': generic/unspecified error.
