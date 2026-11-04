@@ -13,4 +13,32 @@ ctl_out 40 02 0001 0000 - -> ok
 bulk_out 02 03ffff -> 3
 bulk_in 82 64 -> 020080
 bulk_in 82 4096 -> err stall
-~ the last 1 lines repeat to the end (3 or more times)
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall
+bulk_in 82 4096 -> err stall

@@ -21,6 +21,8 @@ EMU_MODEL=lascar-el-usb
 EMU_DRIVER=lascar-el-usb
 EMU_GCOV_SHARED="src/usb.c"
 EMU_TX_FOLD=1
+# oxrok has the driver: its cases must run full.
+EMU_FULL=lascar-el-usb
 
 # The model's options for the cases that follow (see fx2lafw.sh).
 el_options() {
@@ -68,7 +70,10 @@ emu_cases() {
     # The driver's and sigrok-cli's own lines at -l 4 and below: hwdriver.c's
     # lines under the driver's name go (no driver logs them), and session.c's
     # with its time stamp, whose failure "Failed to start session." repeats.
-    E="/ lascar[-_]el[-_]usb[a-z_:]*: |^(Failed|Device|No |This|Unable|Error)/!d; /: (Opening device instance|Starting acquisition|Stopping acquisition)[.]/d; s/^.* lascar[-_]el[-_]usb[a-z_:]*: //"
+    # oxrok's reason for a refusal becomes sr_strerror()'s words; the driver's
+    # own line says what went wrong.
+    D='(^| |::)lascar[-_]el[-_]usb[a-z_:]*: '
+    E="/$D|^(Failed|Device|device |No |This|Unable|Error)/!d; /: (Opening device instance|Starting acquisition|Stopping acquisition)[.]/d; s/^.*$D//; s/^(Failed to get 'datalog'): .*\$/\\1: generic\\/unspecified error/; s/^(Failed to set device option 'datalog'): .*\$/\\1: generic\\/unspecified error./; s/^(Failed to open device): .*\$/\\1./; s/^device error: (Failed to open device).*\$/\\1./; s/^(device error: .*|device disconnected)\$/Failed to start session./"
     # A long log: the first lines, and the digest of all of it.
     H="1,10!d"
 
@@ -105,7 +110,7 @@ emu_cases() {
     el_options logging=1 cfg-silent=2
     emu_case "set datalog off cfg-silent" --expect-fail --stderr --filter "$E" -- -d $C -l 4 --set -c datalog=off
     el_options
-    emu_case "set datalog on" --no-output -- -d $C --set -c datalog=on
+    emu_case "set datalog on" --record --no-output -- -d $C --set -c datalog=on
     emu_case "set datalog off when off" --no-output -- -d $C --set -c datalog=off
     # protocol.c:591 clears the top three bits of byte 0x21 and keeps the rest.
     el_options flag-bits=fe
@@ -115,7 +120,7 @@ emu_cases() {
     el_options
 
     # Captures, each profile.
-    emu_case "capture" -- -d $C --samples 100
+    emu_case "capture" --record -- -d $C --samples 100
     for el_id in 9 11 12 13 16; do
         el_options model=$el_id
         emu_case "capture model $el_id" -- -d $C --samples 100
@@ -133,7 +138,7 @@ emu_cases() {
     emu_case "temp only" -- -d $C -C Temp --samples 100
     emu_case "hum only" -- -d $C -C Hum --samples 100
     el_options model=9
-    emu_case "co channel" -- -d $C -C CO --samples 100
+    emu_case "co channel" --record -- -d $C -C CO --samples 100
     el_options
 
     # Outputs.
@@ -142,11 +147,13 @@ emu_cases() {
     emu_case "co csv" --filter "/^;/d" -- -d $C --samples 100 -O csv
     el_options
 
-    # Limits: a limit the C stores and does not use (api.c:174, no reader).
-    emu_case "limit 5" -- -d $C --samples 5
+    # Limits: a limit the C stores and does not use (api.c:174, no reader);
+    # oxrok cuts the output and reads the memory all the same.
+    N="api.c:174 stores the limit and nothing reads it, so it gives all the samples"
+    emu_case "limit 5" --oracle-differs "$N" -- -d $C --samples 5
     emu_case "limit 20" -- -d $C --samples 20
     el_options model=9
-    emu_case "limit 5 co" -- -d $C --samples 5
+    emu_case "limit 5 co" --oracle-differs "$N" -- -d $C --samples 5
     el_options
     emu_case "time refused" --expect-fail --stderr --filter "$E" -- -d $C --time 100
     emu_case "frames refused" --expect-fail --stderr --filter "$E" -- -d $C --frames 1
@@ -175,12 +182,16 @@ emu_cases() {
     emu_case "blocks fill the read" -- -d $C --samples 100
     el_options logged=2000 block=64 memory=8192
     emu_case "64 byte blocks" --digest --filter "$H" -- -d $C --samples 2000
-    # Half steps: protocol.c:426, 430 divide integers.
+    # Half steps: "temp[j] = buf[i * 2] / 2 - 40" and "rh[j] = buf[i * 2 + 1] /
+    # 2" (protocol.c:426, 430) divide integers, under the comment "Celsius is
+    # stored in half-degree increments" and with one digit declared; eltuxusb
+    # keeps the halves (el_parse.py:65, 147).
+    N="protocol.c:426,430 divide integers, losing the half degrees and percents"
     el_options pattern=half
-    emu_case "half steps" -- -d $C --samples 100
-    emu_case "half steps csv" --filter "/^;/d" -- -d $C --samples 100 -O csv
+    emu_case "half steps" --oracle-differs "$N" -- -d $C --samples 100
+    emu_case "half steps csv" --oracle-differs "$N" --filter "/^;/d" -- -d $C --samples 100 -O csv
     el_options pattern=half unit=1
-    emu_case "half steps fahrenheit" -- -d $C --samples 100
+    emu_case "half steps fahrenheit" --oracle-differs "$N" -- -d $C --samples 100
     # protocol.c:432: 0 degrees and 0 % is skipped.
     el_options invalid=3
     emu_case "invalid samples" -- -d $C --samples 100
@@ -239,9 +250,11 @@ emu_cases() {
     emu_case "tail 2" -- -d $C --samples 100
     el_options tail=64
     emu_case "tail 64" -- -d $C --samples 100
-    # 256 runs over the stack frame: sigrok-cli dies of it.
+    # "resp[4]", then libusb_bulk_transfer(usb->devhdl, LASCAR_EP_IN, resp,
+    # 256, &ret, 5) (api.c:272, 312): 256 bytes run over the stack frame and
+    # sigrok-cli dies of a segmentation fault.
     el_options tail=256
-    emu_case "tail 256" --expect-fail --no-output -- -d $C --samples 100
+    emu_case "tail 256" --oracle-bug "api.c:312 reads 256 bytes into resp[4]" -- -d $C --samples 100
     el_options
 
     # The log's answers. Answer 5 is the log header: 2 for the scan's
@@ -282,11 +295,16 @@ emu_cases() {
     emu_case "save no answer" --expect-fail --stderr --filter "$E" -- -d $C -l 4 --set -c datalog=on
     el_options
 
-    # Never ends: resubmits for ever (protocol.c:558-566).
+    # protocol.c:558-566 resubmits for ever, on timeouts and on a halted
+    # endpoint. oxrok gives up after 30 reads: 3 s of timeouts.
+    N="protocol.c:558-566 resubmits for ever"
     el_options log-stop=0
-    emu_case "device stops mid log" --hangs --timeout 2 --no-output -- -d $C --samples 10
+    emu_case "device stops sending" --oracle-bug "$N" --oracle-hangs --timeout 8 --stderr --filter "$E" -- -d $C --samples 10
     el_options halt-in=6
-    emu_case "endpoint halted mid log" --hangs --timeout 2 --no-output -- -d $C --samples 10
+    emu_case "endpoint halted" --oracle-bug "$N" --oracle-hangs --timeout 4 --stderr --filter "$E" -- -d $C --samples 10
+    # sigrok-cli has no SIGINT handler. Held, so that the signal lands first.
+    el_options log-stop=0
+    emu_case "interrupted download" --oracle-bug "sigrok-cli has no SIGINT handler" --interrupt in=2:5 --no-output -- -d $C --samples 10
     el_options
 
     # Unplugs.
@@ -297,7 +315,8 @@ emu_cases() {
     emu_case "unplug at the save" --unplug out=2:3 --expect-fail --stderr --filter "$E" -- -d $C -l 4 --set -c datalog=on
 
     emu_case "unplug at the config header" --unplug in=2:1 --no-output -- -d $C --scan
-    emu_case "unplug after the scan" --unplug in=2:2 --expect-fail --stderr --filter "$E" -- -d $C --samples 100
+    # Which line says so depends on how soon the detach shows in the device list.
+    emu_case "unplug after the scan" --unplug in=2:2 --expect-fail --no-output -- -d $C --samples 100
     emu_case "unplug before the log mode setup" --unplug out=0:6 --expect-fail --no-output -- -d $C --samples 100
     emu_case "unplug before the save" --unplug in=2:4 --expect-fail --stderr --filter "$E" -- -d $C -l 4 --set -c datalog=on
 

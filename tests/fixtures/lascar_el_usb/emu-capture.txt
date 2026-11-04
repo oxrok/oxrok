@@ -1,0 +1,94 @@
+# oxrok usb fixture 1
+# emu lascar-el-usb: capture
+# arg: -d
+# arg: lascar-el-usb:conn=10c4.0002
+# arg: --samples
+# arg: 100
+device vid=10c4 pid=0002 version=0100 manufacturer="Silicon Labs" product="USB API" serial="1" interfaces=0:00:00:00
+ctl_out 40 00 ffff 0000 - -> ok
+ctl_out 40 02 0002 0000 - -> ok
+ctl_out 40 02 0001 0000 - -> ok
+claim 0 -> ok
+bulk_in 82 256 -> err timeout
+bulk_out 02 00ffff -> 3
+bulk_in 82 256 -> 028000
+bulk_in 82 128 -> 03006f78726f6b00{11}1008290e010a100e00003c00140004008c500000003f000020c200{4}76322e3079f300{74}
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=10c4 pid=0002 version=0100 manufacturer="Silicon Labs" product="USB API" serial="1" interfaces=0:00:00:00
+claim 0 -> ok
+bulk_in 82 256 -> err timeout
+bulk_out 02 00ffff -> 3
+bulk_in 82 256 -> 028000
+bulk_in 82 128 -> 03006f78726f6b00{11}1008290e010a100e00003c00140004008c500000003f000020c200{4}76322e3079f300{74}
+ctl_out 40 00 ffff 0000 - -> ok
+ctl_out 40 02 0002 0000 - -> ok
+ctl_out 40 02 0001 0000 - -> ok
+bulk_in 82 256 -> err timeout
+bulk_out 02 03ffff -> 3
+bulk_in 82 4 -> 020080
+bulk_in 82 4096 -> 78507e5284548a567a58805a865c8c5e7c608262886478667e68846a8a6c7a6e807086728c747c76ff{472}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+bulk_in 82 4096 -> ff{512}
+release 0 -> ok

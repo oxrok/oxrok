@@ -19,14 +19,14 @@ never reached, by function (line ranges hold no reached line):
     lascar_el_usb_dispatch: 481, 491-493
     lascar_el_usb_receive_transfer: 561-565
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/usb.c   68.1%  156 of 229
-  total       68.1%  156 of 229
+  src/usb.c   72.1%  165 of 229
+  total       72.1%  165 of 229
 never reached, by function (line ranges hold no reached line):
   src/usb.c
     usb_source_prepare: 69, 79-82, 87
     usb_source_dispatch: 138-139, 148
     usb_pollfd_added: 183
-    usb_pollfd_removed: never called (199-221)
+    usb_pollfd_removed: 208, 221
     usb_source_new: 266-267, 278-279
     sr_usb_split_conn: 337, 346, 360, 369
     sr_usb_find: 405-406, 418-420
