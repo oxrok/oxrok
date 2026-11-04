@@ -1,5 +1,11 @@
 // Counterpart in sigrok:
-//   libsigrok/src/usb.c.
+//   libsigrok/src/usb.c,
+//   Copyright (C) 2012 Uwe Hermann <uwe@hermann-uwe.de>,
+//   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
+//   Copyright (C) 2015 Daniel Elstner <daniel.kitta@gmail.com>,
+//   with commits by Gerhard Sittig, Aurelien Jacobs, Joel Holdsworth,
+//   Martin Ling, Soeren Apel, Uffe Jakobsen, Vincent Palatin
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! USB access for oxrok drivers.
