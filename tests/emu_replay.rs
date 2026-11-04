@@ -19,7 +19,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 21] = [
+const RECORDED: [&str; 22] = [
     "asix-sigma",
     "chronovu-la",
     "fx2lafw",
@@ -28,6 +28,7 @@ const RECORDED: [&str; 21] = [
     "saleae-logic16",
     "saleae-logic-pro",
     "ftdi-la",
+    "testo",
     "kingst-la2016",
     "p-ols",
     "microchip-pickit2",

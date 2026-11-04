@@ -14,5 +14,3 @@ ctl_out 40 04 0008 0000 - -> ok
 ctl_out 40 02 0008 0000 - -> ok
 ctl_out 40 01 0303 0000 - -> ok
 bulk_out 02 12000000010155d1b7 -> err stall
-bulk_in 81 128 -> 0160
-~ the last 1 lines repeat to the end (3 or more times)

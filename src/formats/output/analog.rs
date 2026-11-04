@@ -100,7 +100,13 @@ pub fn format_value(
 ) -> String {
     let prefix = if unit.si_prefix_friendly() { si_prefix(&mut value, &mut digits) } else { "" };
     let decimals = digits.max(0) as usize;
-    format!("{value:.decimals$} {prefix}{}", unit_string(unit, flags))
+    let unit = unit_string(unit, flags);
+    // printf's spelling; Rust's is "NaN", without a sign.
+    if value.is_nan() {
+        let sign = if value.is_sign_negative() { "-" } else { "" };
+        return format!("{sign}nan {prefix}{unit}");
+    }
+    format!("{value:.decimals$} {prefix}{unit}")
 }
 
 impl Output for Analog {
@@ -163,6 +169,12 @@ mod tests {
         // A UT61E overload on the 220 MOhm range: sigrok prints "inf MΩ".
         assert_eq!(format_value(f32::INFINITY, -4, Unit::Ohm, MqFlags::empty()), "inf M\u{2126}");
         assert_eq!(format_value(f32::NEG_INFINITY, 2, Unit::Volt, MqFlags::empty()), "-inf V");
+    }
+
+    #[test]
+    fn nan_reads_as_printf_has_it() {
+        assert_eq!(format_value(f32::NAN, 2, Unit::Celsius, MqFlags::empty()), "nan \u{b0}C");
+        assert_eq!(format_value(-f32::NAN, 2, Unit::Celsius, MqFlags::empty()), "-nan \u{b0}C");
     }
 
     #[test]

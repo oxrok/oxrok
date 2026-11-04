@@ -1,4 +1,4 @@
-gcov testo (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty): executable lines reached
+gcov testo (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        86.7%  157 of 181
   protocol.c   96.8%  149 of 154
   total        91.3%  306 of 335
@@ -14,7 +14,7 @@ never reached, by function (line ranges hold no reached line):
     testo_request_packet: 160-162
     testo_check_packet_prefix: 177
     crc16_mcrf4xx: 194
-gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty): executable lines the session reached
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/usb.c   66.4%  152 of 229
   total       66.4%  152 of 229
 never reached, by function (line ranges hold no reached line):
