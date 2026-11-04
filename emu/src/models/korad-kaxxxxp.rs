@@ -1,15 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/korad-kaxxxxp/api.c (the supported models),
-//   libsigrok/src/hardware/korad-kaxxxxp/protocol.c (the commands and the status byte),
-//   Copyright (C) 2015 Hannu Vuolasaho <vuokkosetae@gmail.com>,
-//   Copyright (C) 2018-2019 Frank Stettner <frank-stettner@gmx.net>,
-//   with commits by Gerhard Sittig, Uwe Hermann, Lars-Peter Clausen,
-//   Axel Hinrichs, Christian Fruth, David Sastre Medina, Dewelde Anthony,
-//   Elen Eisendle, Holger Müller, JD Steffen, Peter van der Perk,
-//   Peter Åstrand, Thomas Andres, Tim Van Helleputte, Walter Goossens,
-//   Wolfram Sang, motte, Aurelien Jacobs, Georg Hofmann
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! A Korad `KAxxxxP` power supply and its many badges on the CDC-ACM shell:
 //! one channel, ASCII commands without terminators, fixed width answers.
@@ -30,15 +20,16 @@
 //! - The status byte: `protocol.c`'s reading, as this model serves that
 //!   driver: bit 0 CH1 CV, bit 1 CH2 CV, bit 4 beep, bit 5 OCP, bit 6
 //!   output, bit 7 OVP. The sources disagree on the rest: RND's document
-//!   has bit 5 as "Lock" and bit 7 as N/A, the wiki 0x20 as "OVP and/or
-//!   OCP" and only three bits reliable, tspi.at bit 4 as OCP and bit 7 as
-//!   OVP, both "somewhat unreliable". `status=` plays any other byte.
+//!   has bit 5 as the panel lock and bit 7 unused, the wiki 0x20 as either
+//!   protection and only three bits to be trusted, tspi.at bit 4 as OCP
+//!   and bit 7 as OVP, neither to be trusted. `status=` plays any other
+//!   byte.
 //!   Bit 1 reads 0 and beep 1, from the 0x51 a poster on `EEVblog` saw with
 //!   the output on.
-//! - The sixth byte of `ISET1?`: "the sixth character of the `*IDN?`
-//!   reply, if `*IDN?` was queried earlier in the same power cycle", on
-//!   V2.0 and not on V2.1 (sigrok wiki; ARTIQ's driver reads the K of
-//!   `KORAD`). `sixth=0` leaves it out.
+//! - The sixth byte of `ISET1?`: once `*IDN?` has been asked since power
+//!   on, this answer ends in that reply's byte at index 5, on V2.0 and not
+//!   on V2.1 (sigrok wiki; ARTIQ's driver reads the K of `KORAD`).
+//!   `sixth=0` leaves it out.
 //! - The ID strings the scenario plays are those of `api.c`'s table up to
 //!   libsigrok commit d241cc2, which listed them literally. 72-2705's is
 //!   made from its name, as its commit gave none in the table.
