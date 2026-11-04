@@ -145,7 +145,9 @@
 //! then waits for a last one it never submits);
 //! `endpoints=bad` puts the firmware's IN endpoint at 2, `swapped`
 //! lists IN 6 before OUT 2, `one` leaves out IN 6 (firmwares the driver
-//! does not know, which `dso_getmps()` refuses).
+//! does not know, which `dso_getmps()` refuses); `in-limit=N` NAKs every
+//! IN after the Nth on the data endpoint, an emulation artifact so that an
+//! interrupt lands on a known number of transfers (docs/USB.md).
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, VENDOR, Violations};
@@ -159,7 +161,7 @@ pub const ABOUT: &str = "Hantek DSO-2090 USB scope (EZ-USB, renumerates 04b4 -> 
                          profile=dso-2090 (default), dso-2150, dso-2250, dso-5200, dso-5200a, \
                          flashed=1, speed=full, ext=1, fill=N, wrap=N; faults: \
                          stall=load|eeprom|begin|offset|relays|out|state[@N], state=V@N, empty=N, \
-                         endpoints=bad|swapped|one";
+                         endpoints=bad|swapped|one, in-limit=N";
 
 /// The command family a board speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -359,6 +361,8 @@ pub struct Faults {
     empty: Vec<u32>,
     /// The firmware's endpoints, when not the driver's.
     endpoints: Endpoints,
+    /// NAK every IN on the data endpoint after this many.
+    in_limit: Option<u32>,
 }
 
 /// The firmware's endpoint layout.
@@ -417,6 +421,11 @@ impl Faults {
                 for item in v.split(',').filter(|i| !i.is_empty()) {
                     self.empty.push(nth(item)?);
                 }
+            }
+            "in-limit" => {
+                self.in_limit = Some(
+                    v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")))?,
+                );
             }
             "endpoints" => {
                 self.endpoints = match v {
@@ -648,6 +657,8 @@ pub struct HantekDso {
     state_polls: u32,
     /// Channel data transfers completed, for `empty=N`.
     data_transfers: u32,
+    /// INs answered on the data endpoint, for `in-limit=N`.
+    in_transfers: u32,
     eeprom: [u8; 256],
     eeprom_read: bool,
     begun: bool,
@@ -677,6 +688,7 @@ impl HantekDso {
             seen: Vec::new(),
             state_polls: 0,
             data_transfers: 0,
+            in_transfers: 0,
             eeprom_read: false,
             begun: false,
             settings: Settings::default(),
@@ -1316,6 +1328,10 @@ impl DeviceModel for HantekDso {
             v.report(format!("IN transfer from endpoint {ep}; the answers come from {in_ep}"));
             return Reply::Stall;
         }
+        if self.faults.in_limit.is_some_and(|n| self.in_transfers >= n) {
+            return Reply::Nak;
+        }
+        self.in_transfers += 1;
         match &mut self.pending {
             Pending::Nothing => Reply::Nak,
             Pending::State => {
@@ -1699,6 +1715,13 @@ mod tests {
         assert_eq!(lens[40], 512, "the frame's last packet comes 41st");
         assert_eq!(lens[41], usize::MAX, "then nothing");
         assert!(v.is_empty(), "{v:?}");
+        // in-limit: answers up to the Nth IN, NAKs after it.
+        let mut dev = running(&[("in-limit", "1")]);
+        init(&mut dev, &mut v);
+        bulk(&mut dev, &[3, 0], &mut v);
+        assert_eq!(poll(&mut dev, &mut v).0, 1);
+        bulk(&mut dev, &[6, 0], &mut v);
+        assert_eq!(dev.transfer_in(6, 512, &mut v), Reply::Nak);
         let mut dev = running(&[("stall", "eeprom")]);
         assert_eq!(dev.control(vendor(0xc0, 0xa2, 8, 72), &[], &mut v), Reply::Stall);
         let dev = running(&[("endpoints", "bad"), ("speed", "full")]);

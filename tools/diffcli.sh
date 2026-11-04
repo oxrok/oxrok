@@ -61,8 +61,11 @@
 # override, and glib's headers; the libsigrok.so it loads must be the
 # one sigrok-cli loads, so that --gcov counts its runs alike), takes
 # sigrok-cli's place, for drivers sigrok-cli cannot drive (no limit it
-# can set). It is always an oracle case, held to goldens of its own,
-# and --no-oracle skips it.
+# can set). It is an oracle case, held to goldens of its own, and
+# --no-oracle skips it. With --oxrok it is a full case with the runner in
+# sigrok-cli's place: oxrok is held to the same goldens, under --no-oracle
+# too, and --oracle-bug, --oracle-differs and --record work as for
+# sigrok-cli.
 #
 # EMU_USB, EMU_USBFS and the node variables follow the device: each
 # READY, REPLUGGED and RENUMERATED line replaces them (emu_track), and
@@ -766,7 +769,7 @@ flush()
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
-    #          [--libsigrok] [--tx-filter SED] -- ARGS...
+    #          [--libsigrok [--oxrok]] [--tx-filter SED] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -812,7 +815,10 @@ flush()
     #   and alone, whatever oxrok has, held to the case's goldens like
     #   any oracle case; it takes --hangs, --timeout, --expect-fail,
     #   events and --gcov, not --oracle-bug, --oracle-differs or
-    #   --record, and --no-oracle skips it.
+    #   --record, and --no-oracle skips it. --oxrok, with --libsigrok:
+    #   a full case whose oracle is libsigrok-run, not sigrok-cli, for a
+    #   driver sigrok-cli cannot drive once oxrok has it: same arguments,
+    #   same goldens, and every flag of a full case.
     #   --record records oxrok's
     #   run of a full case with OXROK_USB_RECORD and OXROK_HID_RECORD
     #   (the USB one kept when both wrote) as the replay fixture
@@ -827,7 +833,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; tx_filter=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -848,6 +854,7 @@ flush()
                 --record) record=1 ;;
                 --hangs) hangs=1 ;;
                 --libsigrok) libsig=1 ;;
+                --oxrok) libsig_full=1 ;;
                 --tx-filter) tx_filter=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
@@ -868,9 +875,14 @@ flush()
         esac
         emu_slugs="$emu_slugs $slug"
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
-        # A library case is the runner's alone, whatever oxrok has.
+        # A library case is the runner's alone, whatever oxrok has,
+        # unless it says --oxrok.
         label=$mode
-        if [ $libsig = 1 ]; then mode=oracle; tools=a; label=library; fi
+        if [ $libsig = 1 ]; then
+            if [ $libsig_full = 1 ]; then label="$mode, library"; else mode=oracle; tools=a; label=library; fi
+        elif [ $libsig_full = 1 ]; then
+            emu_fail "$name: --oxrok goes with --libsigrok"; return
+        fi
         if [ "$EMU_DRY" = 1 ]; then
             # A case of a driver EMU_FULL lists counts as full even when
             # oxrok -L lacks it: the model then gets its session, where
@@ -881,7 +893,7 @@ flush()
         why=""
         # A driver the scenario says oxrok has must not quietly fall
         # back to an oracle case.
-        if [ $mode = oracle ] && [ $libsig = 0 ]; then
+        if [ $mode = oracle ] && { [ $libsig = 0 ] || [ $libsig_full = 1 ]; }; then
             case " $EMU_FULL " in *" $driver "*) why="; oxrok -L lacks $driver, which EMU_FULL lists" ;; esac
         fi
         # --no-oracle: oxrok alone, and no case without it.
@@ -893,10 +905,11 @@ flush()
             tools=b
         fi
         if [ $libsig = 1 ]; then
-            if [ -n "$bug" ] || [ -n "$differs" ] || [ $record = 1 ]; then
-                emu_fail "$name (library): --libsigrok takes neither --oracle-bug, --oracle-differs nor --record"; return
+            if [ $libsig_full = 0 ] && { [ -n "$bug" ] || [ -n "$differs" ] || [ $record = 1 ]; }; then
+                emu_fail "$name (library): --libsigrok without --oxrok takes neither --oracle-bug, --oracle-differs nor --record"; return
             fi
-            if ! emu_libsigrok_run; then
+            # Only when it will run: --no-oracle has no sigrok to build on.
+            if [ "$tools" != b ] && ! emu_libsigrok_run; then
                 emu_fail "$name (library): no libsigrok runner: $EMU_LIBSIGROK_ERR [$*]"; return
             fi
         fi
@@ -944,7 +957,7 @@ flush()
                 interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
                 *) set -- "$tool" "$@" ;;
             esac
-            if [ $hangs = 1 ] && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
+            if { [ $hangs = 1 ] || [ $oracle_hangs = 1 ]; } && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
                 set -- env LD_PRELOAD="$EMU_TERM_EXIT" "$@"
             fi
             if [ $record = 1 ] && [ $t = b ]; then

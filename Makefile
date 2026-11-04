@@ -75,7 +75,7 @@ decoders: $(SRD_DIR)/COPYING
 dist: build $(if $(FEATURES),decoders)
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)
-	cp $(BIN) README.md LICENSE CHANGELOG.md $(STAGE)/
+	cp $(BIN) README.md LICENSE NOTICE CHANGELOG.md $(STAGE)/
 ifneq (,$(FEATURES))
 	cp -R $(SRD_DIR)/decoders $(STAGE)/decoders
 	cp $(SRD_DIR)/COPYING $(STAGE)/decoders/COPYING

@@ -271,10 +271,8 @@ impl Transport for Rusb {
         Ok(Box::new(RusbStream { rx, stop }))
     }
 
-    /// libusb's synchronous call drops what a timed out read received
-    /// (rusb gives the error alone), and the unsafe-free crate reaches
-    /// nothing else, so the thread reads one packet at a time, which a
-    /// timeout cannot split, and hands on what it has at each
+    /// The thread reads one packet at a time, so a stop is seen within
+    /// 100 ms whatever `transfer_timeout` is, and hands on what it has at each
     /// `transfer_timeout`, at a short packet, or when `transfer_size` is
     /// full. Lossless but slower than whole transfers: a device that
     /// cannot pause (a fast stream) may overflow on this backend.
@@ -306,7 +304,8 @@ impl Transport for Rusb {
                         deadline = Instant::now() + transfer_timeout;
                         continue;
                     }
-                    let wait = left.min(Duration::from_millis(100));
+                    // Whole milliseconds at least: libusb takes 0 as no timeout.
+                    let wait = left.min(Duration::from_millis(100)).max(Duration::from_millis(1));
                     match handle.read_bulk(endpoint, &mut packet, wait) {
                         Ok(n) => {
                             buf.extend_from_slice(&packet[..n]);

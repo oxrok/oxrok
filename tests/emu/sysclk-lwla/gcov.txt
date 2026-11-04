@@ -1,10 +1,10 @@
 gcov sysclk-lwla (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        87.0%  287 of 330
+  api.c        88.5%  292 of 330
   lwla.c       85.2%  75 of 88
   lwla1016.c   96.7%  175 of 181
   lwla1034.c   97.4%  226 of 232
-  protocol.c   86.4%  260 of 301
-  total        90.4%  1023 of 1132
+  protocol.c   87.4%  263 of 301
+  total        91.1%  1031 of 1132
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_inst_new_matching: 109-111
@@ -15,10 +15,9 @@ never reached, by function (line ranges hold no reached line):
     config_get: 339, 344, 366, 372, 378, 381-383
     config_set: 399, 404, 448-450
     config_channel_set: 463, 468-469, 477
-    prepare_trigger_masks: 505-506, 518, 524-525, 531-532
-    config_commit: 558-559, 564
+    prepare_trigger_masks: 518, 524-525, 531-532
+    config_commit: 558-559
     config_list: 592, 594, 610-612
-    dev_acquisition_stop: 634-635
   lwla.c
     load_bitstream: 54-56, 67-69
     lwla_send_bitstream: 87, 106-108
@@ -33,8 +32,8 @@ never reached, by function (line ranges hold no reached line):
   protocol.c
     submit_request: 107-108
     handle_length_response: 167-168
-    transfer_event: 279, 287-288, 293
-    transfer_out_completed: 354, 360, 366, 371-374
+    transfer_event: 279, 287-288
+    transfer_out_completed: 366, 371-374
     transfer_in_completed: 396-399, 419, 425, 432-435
     init_acquisition_state: 450-451, 454-455, 460, 464-465, 469-471
     lwla_start_acquisition: 538-539, 546, 558-559, 567-568

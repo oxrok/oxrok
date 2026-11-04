@@ -212,12 +212,26 @@ fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
         if samples == 0 {
             return Err(Error::arg("Not enough time at this samplerate."));
         }
+        if !has_option(&*device, &Key::LimitSamples) {
+            // sr_config_set()'s check_key(), which sigrok-cli's time limit
+            // goes through (its --samples asks the list first).
+            log::error!("Option 'limit_samples' not available for this device instance.");
+        }
         device
             .set(&Key::LimitSamples, &Value::U64(samples), None)
             .map_err(|_| Error::arg("Failed to configure time-based sample limit."))?;
         return Ok(samples);
     }
     Err(Error::arg("This device does not support time limits."))
+}
+
+/// Whether the command line asks for a capture of a driver that ends each
+/// one itself ([`oxrok::core::Driver::ends_captures_itself`]): its output or
+/// its trigger, with no limit, which such a driver has no key for.
+pub fn starts_without_limit(registry: &Registry, args: &Args) -> bool {
+    let driver = args.driver.as_deref().and_then(|d| registry.find(d.split(':').next()?));
+    driver.is_some_and(oxrok::core::Driver::ends_captures_itself)
+        && (args.output_format.is_some() || args.output_file.is_some() || args.triggers.is_some())
 }
 
 /// A capture run: `--samples`, `--time`, `--frames` or `--continuous`.
@@ -267,6 +281,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
             .map_err(|_| Error::arg("Failed to configure frame limit."))?;
     }
 
+    device.check_capture(trigger.as_ref())?;
     let samplerate = device.get(&Key::Samplerate, None).ok().and_then(|v| v.as_u64());
     let channels = device.channels().to_vec();
     let title = registry.find(device.info().driver).map_or("unknown", |d| d.long_name()).to_owned();
@@ -282,7 +297,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
         session.run(|_, packet| if pipeline.handle(packet) { Flow::Continue } else { Flow::Stop });
     let devices = session.into_devices();
     for mut d in devices {
-        let _ = d.close();
+        let _ = d.close_after_capture();
     }
     result?;
     pipeline.check_limit(limit_samples);
@@ -292,6 +307,26 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_driver_that_ends_captures_itself_starts_with_output_or_trigger() {
+        use clap::Parser as _;
+        let mut registry = Registry::new();
+        oxrok::register_all(&mut registry);
+        let starts = |argv: &[&str]| {
+            let args = Args::try_parse_from([&["oxrok"], argv].concat()).unwrap();
+            starts_without_limit(&registry, &args)
+        };
+        assert!(starts(&["-d", "lecroy-logicstudio", "-O", "bits"]));
+        assert!(starts(&["-d", "lecroy-logicstudio", "-t", "D3=r"]));
+        assert!(starts(&["-d", "lecroy-logicstudio", "-o", "x.sr"]));
+        // As sigrok-cli without an action: the help.
+        assert!(!starts(&["-d", "lecroy-logicstudio"]));
+        assert!(!starts(&["-d", "lecroy-logicstudio", "-c", "samplerate=1M"]));
+        // Any other driver, and no driver.
+        assert!(!starts(&["-d", "demo", "-O", "bits"]));
+        assert!(!starts(&["-O", "bits"]));
+    }
 
     /// Every expectation below is what `g_variant_print` printed for
     /// the same value (`GLib` 2.88, a small C program).

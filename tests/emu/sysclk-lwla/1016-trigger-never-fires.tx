@@ -29,4 +29,18 @@ bulk_out 02 01007010 -> 4
 bulk_in 86 1024 -> 00000200
 bulk_out 02 01001010 -> 4
 bulk_in 86 1024 -> 00000000
-~ the last 6 lines repeat to the end (3 or more times)
+bulk_out 02 0100b810 -> 4
+bulk_in 86 1024 -> 00004400
+bulk_out 02 01007010 -> 4
+bulk_in 86 1024 -> 00000200
+bulk_out 02 01001010 -> 4
+bulk_in 86 1024 -> 00000000
+bulk_out 02 0100b810 -> 4
+bulk_in 86 1024 -> 00004400
+bulk_out 02 01007010 -> 4
+bulk_in 86 1024 -> 00000200
+bulk_out 02 01001010 -> 4
+bulk_in 86 1024 -> 00000000
+interrupt
+bulk_out 02 0200b81000000000 -> 8
+bulk_out 02 0200bc1000000000 -> 8

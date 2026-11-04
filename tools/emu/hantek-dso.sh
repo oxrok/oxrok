@@ -2,10 +2,11 @@
 # without firmware (04b4:2090) that takes the upload and renumerates as
 # 04b5:2090, and its siblings DSO-2150, DSO-2250, DSO-5200 and 5200A.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". oxrok has no hantek-dso driver: the cases are oracle cases.
+# model".
 EMU_MODEL=hantek-dso
 EMU_OPTIONS="-o profile=dso-2090"
 EMU_DRIVER=hantek-dso
+EMU_FULL=hantek-dso
 EMU_GCOV_SHARED="src/usb.c src/ezusb.c"
 
 # The model's options for the cases that follow (see fx2lafw.sh).
@@ -102,9 +103,10 @@ emu_cases() {
         emu_case "2090 get $k" -- -d $H --get $k
     done
     # config_get() fills in NUM_HDIV and NUM_VDIV, then goes on to the
-    # keys of a device and returns SR_ERR_NA for them (api.c:430-483).
-    emu_case "2090 get num_hdiv" --expect-fail --stderr --filter "$E" -- -d $H --get num_hdiv
-    emu_case "2090 get num_vdiv" --expect-fail --stderr --filter "$E" -- -d $H --get num_vdiv
+    # keys of a device and returns SR_ERR_NA for them; oxrok answers.
+    ND="api.c:430-435 fills the value in, 482-483 returns SR_ERR_NA for the key"
+    emu_case "2090 get num_hdiv" --oracle-bug "$ND" -- -d $H --get num_hdiv
+    emu_case "2090 get num_vdiv" --oracle-bug "$ND" -- -d $H --get num_vdiv
     emu_case "2090 get conn" --filter "s/^'[0-9]+\.[0-9]+'\$/'BUS.ADDR'/" -- -d $H --get conn
     emu_case "2090 get triggersource set" -- -d $H -c triggersource=CH2 --get triggersource
     emu_case "2090 CH1 show" --keep-header -- -d $H -g CH1 --show
@@ -122,6 +124,12 @@ emu_cases() {
         emu_case "2090 get CH2 $k" -- -d $H -g CH2 --get $k
     done
     emu_case "2090 trigger level bad" --expect-fail --stderr --filter "$E" -- -d $H -c triggerlevel=1.5 --frames 1
+    # What the driver has no key for, and --set alone.
+    emu_case "2090 hardware trigger refused" --expect-fail --stderr --filter "$E" -- -d $H -t CH1=r --frames 1
+    emu_case "2090 sample limit refused" --expect-fail --stderr --filter "$E" -- -d $H --samples 16
+    emu_case "2090 time limit refused" --expect-fail --stderr --filter "$E" -- -d $H --time 10
+    emu_case "2090 set samplerate alone" --no-output -- -d $H -c samplerate=1M --set
+    emu_case "2090 conn names nothing" --no-output -- -d $H:conn=9.99 --scan
 
     # A ring position on a transfer boundary (two transfers of 256
     # samples), and none at all.
@@ -130,9 +138,9 @@ emu_cases() {
     # A trigger offset of 0: receive_transfer() sends every chunk as it
     # comes and, at the frame's end, the pre-trigger buffer of 0 samples
     # (api.c:782), an analog packet without data, on which sigrok-cli
-    # aborts.
+    # aborts. oxrok sends no such packet.
     hantek_options profile=dso-2090 wrap=0 flashed=1
-    emu_case "2090 trigger offset 0" --expect-fail --stderr --filter '/double free/!d' -- -d $H --frames 1
+    emu_case "2090 trigger offset 0" --oracle-bug "api.c:782 sends an analog packet of 0 samples, on which output/analog.c frees its buffer twice" --digest --filter "$HD_FRAME" -- -d $H --frames 1
     # A longer fill, and a signal on EXT.
     hantek_options profile=dso-2090 fill=4
     emu_case "2090 fill 4" --digest --filter "$HD_FRAME" -- -d $H --frames 1
@@ -144,6 +152,8 @@ emu_cases() {
     emu_case "flashed 2090 scan" --keep-header --filter "$C" -- -d $H --scan
     emu_case "flashed 2090 by ids" --digest --filter "$HD_FRAME" -- -d $H:conn=04b5.2090 --frames 1
     emu_case "flashed 2090 by address" --digest --filter "$HD_FRAME" -- -d $H:conn=$EMU_USB --frames 1
+    # The recording tests/emu_replay.rs plays: one channel, for its size.
+    emu_case "flashed 2090 CH1" --record -- -d $H -C CH1 -c triggersource=CH1:captureratio=50 --frames 1
     # Another program holds the interface: the claim fails.
     if hantek_hold; then
         emu_case "interface claimed by another program" --expect-fail --stderr --filter "$E" -- -d $H --frames 1
@@ -161,7 +171,10 @@ emu_cases() {
     emu_case "2250 scan" --keep-header -- -d $H --scan
     emu_case "2250 show" --keep-header --filter "$C" -- -d $H --show
     emu_case "2250 one frame" --digest --filter "$HD_FRAME" -- -d $H --frames 1
-    emu_case "2250 trigger CH2 1M" --digest --filter "$HD_FRAME" -- -d $H -C CH2 -c triggersource=CH2:triggerslope=f:samplerate=1M:captureratio=30 --frames 1
+    # The samplerate last: setting it sends the settings so far, and
+    # sigrok-cli sets the pairs of -c in its hash table's order
+    # (session.c:700-701), which has it last, oxrok as given.
+    emu_case "2250 trigger CH2 1M" --digest --filter "$HD_FRAME" -- -d $H -C CH2 -c triggersource=CH2:triggerslope=f:captureratio=30:samplerate=1M --frames 1
     emu_case "2250 trigger CH1 100M" --digest --filter "$HD_FRAME" -- -d $H -C CH1 -c triggersource=CH1:samplerate=100M --frames 1
     # CH2's range on the 2250: the driver's header 0x08 is CH2's bit 3
     # (see the model's voltage()); the 5 V, 500 mV and 50 mV codes read
@@ -170,6 +183,8 @@ emu_cases() {
     for vd in 10mV 20mV 50mV 200mV 1V 5V; do
         emu_case "2250 CH2 $vd" --digest --filter "$HD_FRAME" -- -d $H -g CH2 -c vdiv=$vd --frames 1
     done
+    # Every 1024th line, for the golden's size; the digest covers the rest.
+    emu_case "2250 large frame" --digest --filter '1~1024!d' -- -d $H -c buffersize=524288:captureratio=30 --frames 1
     emu_case "2250 125M" --expect-fail --stderr --filter "$E" -- -d $H -c samplerate=125M --frames 1
     hantek_options profile=dso-2250 ext=1
     emu_case "2250 trigger EXT" --digest --filter "$HD_FRAME" -- -d $H -c triggersource=EXT --frames 1
@@ -220,28 +235,47 @@ emu_cases() {
         hantek_options profile=dso-2090 flashed=1 $f
         emu_case "fault capture $f" --digest --filter "$HD_FRAME" -- -d $H --frames 1
     done
-    # Faults no capture recovers from: the driver ends on none of them,
-    # and sigrok-cli runs until the harness stops it (--hangs). A
-    # channel data transfer that completes empty leaves the frame one
-    # packet short, and the driver waits for the transfer it never
-    # submitted; no transfer after.
+    # Faults the C driver never ends on, sigrok-cli running until the
+    # harness stops it. A channel data transfer that completes empty
+    # leaves the frame one packet short, and the driver waits for the
+    # transfer it never submitted; oxrok reads on, and on this model,
+    # which keeps the bytes for the next transfer, has the frame.
     hantek_options profile=dso-2090 flashed=1 empty=3
-    emu_case "fault empty data transfer hangs" --hangs --timeout 5 --stderr --no-output -- -d $H --frames 1
+    emu_case "fault empty data transfer hangs" --oracle-bug "api.c:719-721 returns for an empty transfer, and protocol.c:917-927 submitted one per packet of the frame: it never ends" --oracle-hangs --timeout 5 --digest --filter "$HD_FRAME" -- -d $H --frames 1
     # Unplugged in the middle of the frame (the 20th IN of endpoint 6:
     # six state polls, then the data): the rest of the transfers fail
     # empty, as above. Unplugged while it polls (the 3rd): every poll
-    # fails from then on and is tried again each millisecond.
+    # fails from then on and is tried again each millisecond. oxrok ends
+    # on the disconnect, with what it sent of the frame.
     hantek_options profile=dso-2090 flashed=1
-    emu_case "unplug mid frame hangs" --hangs --timeout 5 --stderr --no-output --unplug in=6:20 -- -d $H --frames 1
-    emu_case "unplug while polling hangs" --hangs --timeout 5 --stderr --unplug in=6:3 -- -d $H --frames 1
+    emu_case "unplug mid frame hangs" --oracle-bug "api.c:719-721 waits for ever for the transfers that fail empty" --oracle-hangs --timeout 5 --digest --filter "$HD_FRAME" --unplug in=6:20 -- -d $H --frames 1
+    emu_case "unplug while polling hangs" --oracle-bug "api.c:853-854 polls for ever a device that is gone" --oracle-hangs --timeout 5 --stderr --filter '/Lost communication/!d' --unplug in=6:3 -- -d $H --frames 1
     # A trigger that never fires (EXT with nothing on it): the driver
     # polls, restarts the capture without a force every third empty
-    # state, and polls on. The transactions are cut after one period.
-    emu_case "trigger never fires hangs" --hangs --timeout 5 --stderr --no-output -- -d $H -c triggersource=EXT --frames 1
+    # state, and polls on, as a scope should, until it is stopped. The
+    # transactions are cut after one period. sigrok-cli's session cannot
+    # be stopped (no SIGINT handler), so this is libsigrok's run alone...
+    emu_case "trigger never fires hangs" --libsigrok --hangs --timeout 5 --stderr --no-output -- -d $H -c triggersource=EXT --frames 1
+    # ...and oxrok's a Ctrl-C at the seventh poll, past a restart, the
+    # device then holding its answers so that the signal lands there.
+    I="sigrok-cli has no SIGINT handler"
+    hantek_options profile=dso-2090 flashed=1 in-limit=7
+    emu_case "interrupt waiting for the trigger" --interrupt in=6:7 --oracle-bug "$I" --no-output -- -d $H -c triggersource=EXT --frames 1
+    # A Ctrl-C in a frame, the rest of its transfers held: what came went
+    # out, the pre-trigger samples are dropped.
+    hantek_options profile=dso-2090 flashed=1 in-limit=20
+    emu_case "interrupt in a frame" --interrupt in=6:20 --oracle-bug "$I" --digest --filter "$HD_FRAME" -- -d $H --frames 1
+    # The same, its stderr: the stop ends the frame, it does not read on
+    # to the failure bound, whose output would be the same.
+    emu_case "interrupt in a frame stderr" --interrupt in=6:20 --oracle-bug "$I" --stderr --no-output -- -d $H --frames 1
+    # No frame limit: two frames, and a Ctrl-C at the poll after them (six
+    # polls and 40 transfers, then two polls and 40 transfers).
+    hantek_options profile=dso-2090 flashed=1 in-limit=88
+    emu_case "interrupt continuous" --interrupt in=6:88 --oracle-bug "$I" --digest --filter "$HD_FRAME" -- -d $H --continuous
     # A DSO-5200's ready frame (state 7, 9 bit samples): "Not yet
-    # supported." at each poll, for ever.
+    # supported." at each poll, for ever. oxrok gives up.
     hantek_options profile=dso-5200 flashed=1
-    emu_case "5200 capture hangs" --hangs --timeout 5 --stderr -- -d $H --frames 1
+    emu_case "5200 capture hangs" --oracle-bug "api.c:898-901 polls for ever a frame it cannot read" --oracle-hangs --timeout 5 --stderr -- -d $H --frames 1
     # The begin or a command of a capture restart refused: the next poll
     # finds the device still empty, three times, and restarts again.
     # (The begins: 1 to 5 dso_init() and the start, 6 to 9 the polls,

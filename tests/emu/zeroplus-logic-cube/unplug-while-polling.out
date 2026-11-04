@@ -1,14 +1,2 @@
-Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
-Setting voltage threshold to 1.500000V.
-Setting memory size to 8K.
-triggerbar_address = 0(0x0)
-ramsize_triggerbar_address = 999(0x3e7)
-Setting samplerate regs (freq=1, scale=2): reg0: 5, reg1: 5, reg2: 2, reg3: 16.
-Status = 0xfffffffc.
-Stop address       = 0xfffffffc.
-Now address        = 0xfffffffc.
-Trigger address    = 0xfffffffc.
-Triggerbar address = 0x0.
-Ramsize trigger    = 0x3e7.
-Memory size        = 0x800.
-Need to discard 0 samples.
+gl_write_address: LIBUSB_ERROR_NO_DEVICE.
+Lost the board while waiting for the data: no samples.

@@ -1,4 +1,3 @@
 sr: lecroy-logicstudio: CTRL_IN failed: -9.
 sr: lecroy-logicstudio: Firmware not accepted by device.
-sr: session: Failed to commit lecroy-logicstudio device usb/PORT settings before starting acquisition.
-Failed to start session.
+start refused
