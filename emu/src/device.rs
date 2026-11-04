@@ -107,6 +107,11 @@ impl Device {
         self.model.in_submitted(ep & 0x0f, max);
     }
 
+    /// See [`DeviceModel::in_unlinked`].
+    pub fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        self.model.in_unlinked(ep & 0x0f, max)
+    }
+
     /// The descriptors.
     pub fn descriptors(&self) -> &Descriptors {
         &self.descriptors

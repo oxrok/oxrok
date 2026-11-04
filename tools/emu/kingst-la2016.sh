@@ -110,10 +110,11 @@ emu_cases() {
     emu_case "pwm1 enable" --no-output -- -d $K -g PWM1 --set -c enabled=on
     # sigrok-cli keeps the pairs of one -c in a GHashTable and sets them in
     # its order, g_hash_table_iter_next() at session.c:700-701 (frequency,
-    # enabled, duty); oxrok sets them as given. The device ends up alike;
-    # the steps differ.
-    emu_case "pwm2 frequency and duty" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5:enabled=on
-    emu_case "pwm1 20 MHz" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
+    # enabled, duty); oxrok sets them as given. These two give them in
+    # that order; "pwm option order" pins the difference.
+    emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:enabled=on:output_duty_cycle=12.5
+    emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:enabled=on:output_duty_cycle=50
+    emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok as given" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0
@@ -360,6 +361,35 @@ emu_cases() {
     kingst_options mcu=1 stall=read:0x00@2
     # oxrok ends the capture there, halting the device.
     emu_case "fault poll run state" --oracle-differs "protocol.c:912 returns the failed read as a run state, whose idle bit starts a download" --no-output -- -d $K --samples 8 -O hex
+    # A transfer that does not fill in the 500 ms timeout: the device
+    # sends less than a transfer and no short packet ends it. Both tools
+    # cancel it at the timeout and take what it holds ("A USB transfer
+    # timeout is not fatal here", protocol.c:1564-1568). One transfer's
+    # data, then the limit; "two rounds" goes through a resubmission.
+    kingst_options mcu=1 slow-in=1
+    emu_case "slow stream" -- -d $K -c samplerate=1M:continuous=on --samples 256 -O hex
+    emu_case "slow stream two rounds" -- -d $K -c samplerate=1M:continuous=on --samples 512 -O hex
+    emu_case "slow download" -- -d $K --samples 8 -O hex
+    # Bulk IN that fails for ever: the C driver resubmits for ever (its
+    # receive_transfer() takes a stall as empty, protocol.c:1570-1585);
+    # oxrok gives up after 64 in a row and says the data is incomplete.
+    kingst_options mcu=1 stall-in=2000000000
+    emu_case "bulk in stalls for ever" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "stream bulk in stalls for ever" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    # Ctrl-C. sigrok-cli has no SIGINT handler and dies; oxrok halts.
+    # During a capture, at the first poll of the run state: the next poll
+    # halts it, and what it holds is downloaded. The harness's signal lands
+    # in the 50 ms before that poll.
+    I="sigrok-cli has no SIGINT handler"
+    kingst_options mcu=1
+    emu_case "interrupt during a capture" --interrupt model --oracle-bug "$I" -- -d $K -C CH0,CH1 -c samplerate=20k --samples 5000 -O hex
+    # In a stream and a download, the device holding what follows the Nth
+    # transfer, so that the signal lands on a known number of them. A
+    # stream ends there; a download ends with the transfers it has.
+    kingst_options mcu=1 in-limit=2
+    emu_case "interrupt during a stream" --interrupt in=6:2 --oracle-bug "$I" -- -d $K -c samplerate=1M:continuous=on --samples 100000 -O hex
+    kingst_options mcu=1 in-limit=1
+    emu_case "interrupt during a download" --interrupt in=6:1 --oracle-bug "$I" --filter '1,/^CH15/!d' -- -d $K -c samplerate=100M --samples 2000000 -O hex
     # Unplugged once the first of two download transfers has come.
     kingst_options mcu=1
     emu_case "unplug during download" --filter '1,/^CH15/!d' --unplug in=6:1 -- -d $K -c samplerate=100M --samples 2000000 -O hex
