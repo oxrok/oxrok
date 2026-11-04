@@ -164,10 +164,11 @@
 //! 445-446: sigrok-cli and `check_key()` refuse first), an unknown match
 //! (581-583: sigrok-cli passes the listed matches alone; a second stage,
 //! `-t A0=01`, reaches 529-530 in the case "two trigger stages"); in
-//! protocol.c, transfers coming back
-//! after an abort (171-172, 225-226: the driver submits exactly the
-//! transfers the stream needs, and only `dev_acquisition_stop()`, which
-//! sigrok-cli never calls, aborts earlier), the callback in the idle
+//! protocol.c, a status or start read coming back after an abort
+//! (225-226: only `dev_acquisition_stop()` aborts, which sigrok-cli never
+//! calls; the runner's stop reaches a data transfer, 171-172, in "lib stop
+//! while held", and at the header it races the model's answer, which comes
+//! at once, so no case is stable), the callback in the idle
 //! state (235-237, 327: an idle transfer is freed, not resubmitted), fewer than 512
 //! samples left after the first transfer (376: at least 1921 are),
 //! submissions that fail at the start of the data or of the capture
