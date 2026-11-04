@@ -1,4 +1,3 @@
 sr: greatfet: USB in transfer failed: LIBUSB_ERROR_NO_DEVICE (-4)
 sr: greatfet: Cannot configure logic analyzer mode.
-sr: session: Could not start greatfet device BUS.ADDR acquisition.
 Failed to start session.

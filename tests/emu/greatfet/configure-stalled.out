@@ -1,4 +1,3 @@
 sr: greatfet: USB out transfer failed: LIBUSB_ERROR_PIPE (-9)
 sr: greatfet: Cannot configure logic analyzer mode.
-sr: session: Could not start greatfet device BUS.ADDR acquisition.
 Failed to start session.

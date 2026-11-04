@@ -1210,6 +1210,9 @@ flush()
                 sed -i -E '${/^sr: *$/d;}' "$TMP/a.err" ;;
         esac
         sed -i '/LIBUSB_ERROR_ACCESS/d' "$TMP/a.err"
+        # The core's line on a refused start, for a driver whose connection
+        # id is the address that changes with each attach (greatfet).
+        sed -i -E 's/( device )[0-9]+\.[0-9]+( acquisition\.)$/\1BUS.ADDR\2/' "$TMP/a.err"
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
         blessed=""
         if [ "$EMU_BLESS" = 1 ]; then

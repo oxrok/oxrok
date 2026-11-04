@@ -37,8 +37,8 @@ never reached, by function (line ranges hold no reached line):
     greatfet_process_receive_data: 1281, 1284, 1297, 1299, 1317, 1322-1323, 1375
     greatfet_receive_data: 1395, 1398, 1401
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/usb.c   69.4%  159 of 229
-  total       69.4%  159 of 229
+  src/usb.c   70.3%  161 of 229
+  total       70.3%  161 of 229
 never reached, by function (line ranges hold no reached line):
   src/usb.c
     usb_source_prepare: 69, 79-82, 87
@@ -47,7 +47,7 @@ never reached, by function (line ranges hold no reached line):
     usb_pollfd_removed: never called (199-221)
     usb_source_new: 266-267, 278-279
     sr_usb_split_conn: 337, 346, 360, 369
-    sr_usb_find: 405-406, 409-410, 418-420
+    sr_usb_find: 405-406, 418-420
     sr_usb_open: 453-455, 461-463, 472-474
     usb_source_add: 504
     usb_get_port_path: never called (519-555)

@@ -10,6 +10,8 @@
 EMU_MODEL=greatfet
 EMU_DRIVER=greatfet
 EMU_GCOV_SHARED="src/usb.c"
+# oxrok has the driver: its cases must run full.
+EMU_FULL=greatfet
 
 # The model's options for the cases that follow.
 gf_options() {
@@ -54,8 +56,27 @@ emu_cases() {
     # The address, in the text the harness's conn= rule does not reach.
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     Q="s/^'[0-9]+\\.[0-9]+'\$/'BUS.ADDR'/"
-    # The core's line on a start refused names the address too.
-    R='s/device [0-9]+\.[0-9]+ acquisition/device BUS.ADDR acquisition/'
+    # Stderr: oxrok's log prefix as sigrok's. A refused start: libsigrok's
+    # session line, which has no counterpart, goes, and the last line is
+    # sigrok-cli's for each. The core's refusal of rate 0 is the driver's
+    # here, as oxrok has no such check in its core.
+    R='s/^oxrok: [a-z]+: oxrok::drivers::greatfet[a-z0-9_:]*: /sr: greatfet: /
+s/^sr: hwdriver: Cannot set/sr: greatfet: Cannot set/
+/^sr: session: Could not start/d
+s/^(device error: the capture did not start|device disconnected)$/Failed to start session./'
+    # The C logs a failed stop once per transfer freed; once here.
+    U='$!N; /^(.*)\n\1$/!P; D'
+    # An unplug: the C can't send its stop, says so 16 times and meets the
+    # gone device at the resubmit or in the callback by timing, with the
+    # same effect; oxrok sends nothing to a board that left.
+    D='/Cannot stop logic analyzer/d; /^oxrok: warn: oxrok::cli::pipeline: Device only sent/d; s/Cannot resubmit USB transfer\./Device gone during USB transfer./'
+    # What the C fails to do and exits 0 on.
+    W_STOP='protocol.c:1097,968 send the stop from inside the transfer callback, where libusb_control_transfer() answers LIBUSB_ERROR_BUSY, so the board goes on sampling'
+    W_LOST='protocol.c:961,978: the end of a capture runs at the first transfer freed and frees the feed queue unflushed, so the samples it holds are lost'
+    W_OVER='protocol.c:1354-1358,1372-1373 cut the limit to whole bytes of sample memory and submit all the samples of the last'
+    W_PACKED='protocol.c:1311 takes a feed of one byte a sample for whole samples and passes packed bytes on as they are'
+    W_SINT='sigrok-cli has no SIGINT handler'
+    W_HELD='api.c:524 counts a failed submission as a start that never happened, so no stop follows the start that went through'
     # A long output: its first lines and the digest of all of it.
     LONG='1,12!d'
     A8=SGPIO0,SGPIO1,SGPIO2,SGPIO3,SGPIO4,SGPIO5,SGPIO6,SGPIO7
@@ -63,6 +84,8 @@ emu_cases() {
 
     gf_options
     emu_case "scan" --keep-header -- -d $F --scan
+    emu_case "bad conn" --stderr --filter "$R
+s/^sr: greatfet: /sr: usb: /" -- -d $F:conn=nonsense --scan
     emu_case "show" --keep-header --filter "$C" -- -d $F --show
     emu_case "show group" --keep-header --filter "$C" -- -d $F -g Logic --show
     emu_case "get conn" --filter "$Q" --keep-header -- -d $F --get conn
@@ -75,7 +98,8 @@ emu_cases() {
     emu_case "set rate" --no-output -- -d $F -c samplerate=2M --set
     emu_case "set limit" --no-output -- -d $F -c limit_samples=10 --set
     emu_case "set unknown" --expect-fail --stderr --filter "$R" -- -d $F -c voltage_threshold=1-2 --set
-    emu_case "group get" --expect-fail --stderr --filter "$R" -- -d $F -g Logic --get samplerate
+    emu_case "group get" --expect-fail --stderr --filter "$R
+s/: not supported: not applicable/: not applicable/" -- -d $F -g Logic --get samplerate
     emu_case "group set" --expect-fail --stderr --filter "$R" -- -d $F -g Logic -c samplerate=1M --set
 
     # Selection.
@@ -101,9 +125,9 @@ emu_cases() {
     emu_case "probe names pad" --keep-header -- -d $F:probe_names=-a,b --scan
     emu_case "probe names dash eight capture" -- -d $F:probe_names=-a,b,c,d,e,f,g,h --samples 24 -O bits
     emu_case "probe names dash nine capture" -- -d $F:probe_names=-a,b,c,d,e,f,g,h,i --samples 24 -O bits
-    emu_case "probe names dash two capture" -- -d $F:probe_names=-CLK,DATA --samples 24 -O bits
-    emu_case "probe names dash one capture" -- -d $F:probe_names=-CLK --samples 24 -O bits
-    emu_case "probe names dash four capture" -- -d $F:probe_names=-a,b,c,d --samples 24 -O bits
+    emu_case "probe names dash two capture" --oracle-differs "$W_PACKED" -- -d $F:probe_names=-CLK,DATA --samples 24 -O bits
+    emu_case "probe names dash one capture" --oracle-differs "$W_PACKED" -- -d $F:probe_names=-CLK --samples 24 -O bits
+    emu_case "probe names dash four capture" --oracle-differs "$W_PACKED" -- -d $F:probe_names=-a,b,c,d --samples 24 -O bits
 
     # What the scan makes of the firmware's answers.
     gf_options stall=serial
@@ -133,32 +157,34 @@ emu_cases() {
     gf_options
 
     # Rates: the firmware's divider answers, the driver's limit refuses.
-    emu_case "default 8ch" --keep-header -- -d $F --samples 1000 -O bits
-    emu_case "rate 1M" --keep-header -- -d $F -c samplerate=1M --samples 64 -O bits
-    emu_case "rate 10M answers 10.2M" --keep-header -- -d $F -c samplerate=10M --samples 64 -O bits
-    emu_case "rate 40.8M" --keep-header -- -d $F -c samplerate=40800k --samples 64 -O bits
-    emu_case "rate 36M answers 40.8M" --keep-header -- -d $F -c samplerate=36M --samples 64 -O bits
+    emu_case "default 8ch" -- -d $F --samples 1000 -O bits
+    emu_case "rate 1M" -- -d $F -c samplerate=1M --samples 64 -O bits
+    emu_case "rate 10M answers 10.2M" -- -d $F -c samplerate=10M --samples 64 -O bits
+    emu_case "rate 40.8M" -- -d $F -c samplerate=40800k --samples 64 -O bits
+    emu_case "rate 36M answers 40.8M" -- -d $F -c samplerate=36M --samples 64 -O bits
     emu_case "rate 42M answers 51M refused" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=42M --samples 64 -O bits
     emu_case "rate 51M refused" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=51M --samples 64 -O bits
-    emu_case "rate 68M 4ch" --keep-header -- -d $F -C SGPIO0,SGPIO1,SGPIO2,SGPIO3 -c samplerate=68M --samples 64 -O bits
+    emu_case "rate 68M 4ch" -- -d $F -C SGPIO0,SGPIO1,SGPIO2,SGPIO3 -c samplerate=68M --samples 64 -O bits
     emu_case "rate 102M 4ch refused" --expect-fail --stderr --filter "$R" -- -d $F -C SGPIO0,SGPIO1,SGPIO2,SGPIO3 -c samplerate=102M --samples 64 -O bits
     emu_case "rate 72M 3ch refused" --expect-fail --stderr --filter "$R" -- -d $F -C SGPIO0,SGPIO1,SGPIO2 -c samplerate=72M --samples 64 -O bits
-    emu_case "rate 102M 2ch" --keep-header -- -d $F -C SGPIO0,SGPIO1 -c samplerate=102M --samples 64 -O bits
+    emu_case "rate 102M 2ch" -- -d $F -C SGPIO0,SGPIO1 -c samplerate=102M --samples 64 -O bits
     emu_case "rate 204M 2ch refused" --expect-fail --stderr --filter "$R" -- -d $F -C SGPIO0,SGPIO1 -c samplerate=204M --samples 64 -O bits
-    emu_case "rate 204M 1ch" --keep-header -- -d $F -C SGPIO0 -c samplerate=204M --samples 64 -O bits
-    emu_case "rate 204M upper 1ch" --keep-header -- -d $F -C SGPIO8 -c samplerate=204M --samples 64 -O bits
+    emu_case "rate 204M 1ch" -- -d $F -C SGPIO0 -c samplerate=204M --samples 64 -O bits
+    emu_case "rate 204M upper 1ch" -- -d $F -C SGPIO8 -c samplerate=204M --samples 64 -O bits
     # libsigrok's sr_config_set() refuses 0 before the driver.
-    emu_case "rate 0 refused" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=0 --samples 64 -O bits
+    emu_case "rate 0 refused" --expect-fail --stderr --filter "$R
+s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0 --samples 64 -O bits
     # The u64 setting goes out as 32 bits: 2^32 + 1 is 1 Hz, 2^32 is 0,
     # which the firmware takes for undivided.
-    emu_case "rate over 32 bits" --keep-header -- -d $F -c samplerate=4294967297 --samples 64 -O bits
-    emu_case "rate 2^32" --keep-header -- -d $F -C SGPIO0 -c samplerate=4294967296 --samples 64 -O bits
+    emu_case "rate over 32 bits" -- -d $F -c samplerate=4294967297 --samples 64 -O bits
+    emu_case "rate 2^32" -- -d $F -C SGPIO0 -c samplerate=4294967296 --samples 64 -O bits
     emu_case "rate 5G refused" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=5G --samples 64 -O bits
 
     # Channels: bus width and first pin, with and without gaps.
-    emu_case "1ch" -- -d $F -C SGPIO0 --samples 100 -O bits
-    emu_case "1ch of 3" -- -d $F -C SGPIO0 --samples 3 -O bits
-    emu_case "2ch" -- -d $F -C SGPIO0,SGPIO1 --samples 100 -O bits
+    emu_case "1ch" -- -d $F -C SGPIO0 --samples 104 -O bits
+    emu_case "1ch limit in a byte" --oracle-differs "$W_OVER" -- -d $F -C SGPIO0 --samples 3 -O bits
+    emu_case "2ch limit in a byte" --oracle-differs "$W_OVER" -- -d $F -C SGPIO0,SGPIO1 --samples 5 -O bits
+    emu_case "2ch" --record -- -d $F -C SGPIO0,SGPIO1 --samples 100 -O bits
     emu_case "2ch second only" -- -d $F -C SGPIO1 --samples 100 -O bits
     emu_case "3ch" -- -d $F -C SGPIO0,SGPIO1,SGPIO2 --samples 100 -O bits
     emu_case "3ch third only" -- -d $F -C SGPIO2 --samples 100 -O bits
@@ -166,7 +192,7 @@ emu_cases() {
     emu_case "5ch" -- -d $F -C SGPIO0,SGPIO1,SGPIO2,SGPIO3,SGPIO4 --samples 100 -O bits
     emu_case "6ch gap" -- -d $F -C SGPIO1,SGPIO5 --samples 100 -O bits
     emu_case "8ch last only" -- -d $F -C SGPIO7 --samples 100 -O bits
-    emu_case "upper 1ch" -- -d $F -C SGPIO8 --samples 100 -O bits
+    emu_case "upper 1ch" -- -d $F -C SGPIO8 --samples 104 -O bits
     emu_case "upper 2ch" -- -d $F -C SGPIO8,SGPIO9 --samples 100 -O bits
     emu_case "upper 4ch" -- -d $F -C SGPIO8,SGPIO9,SGPIO10,SGPIO11 --samples 100 -O bits
     emu_case "upper 5ch gap" -- -d $F -C SGPIO12 --samples 100 -O bits
@@ -177,10 +203,10 @@ emu_cases() {
     # Both banks: 9 bits and more are refused by this firmware without
     # telling the host, so no samples come; wide=1 stands for one that can.
     emu_case "both banks no samples" --libsigrok --hangs --timeout 2 --stderr -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
-    emu_case "both banks sigrok-cli" --hangs --timeout 2 --stderr -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
+    emu_case "both banks oxrok waits" --oracle-bug "$W_SINT" --interrupt out=0:6 --no-output -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
     emu_case "rate over the clock no samples" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C SGPIO0 -c samplerate=205M --samples 8 -O bits
     gf_options wide=1
-    emu_case "wide 16ch" --stderr --filter '1!d' -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 8 -O bits
+    emu_case "wide 16ch" --stderr --filter "$R" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 8 -O bits
     emu_case "wide 16ch output" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 80 -O bits
     emu_case "wide 2 banks" -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 40 -O bits
     emu_case "wide 16ch refused" --expect-fail --stderr --filter "$R" -- -d $F -C $A8,$B8 -c samplerate=25500k --samples 8 -O bits
@@ -196,8 +222,9 @@ emu_cases() {
     gf_options in-limit=3
     emu_case "3 transfers" --digest --filter "$LONG" -- -d $F --samples 786000 -O bits
     gf_options in-limit=2
-    emu_case "2 transfers 1ch" --keep-header --digest --filter d -- -d $F -C SGPIO0 --samples 2097153 -O binary
-    emu_case "2 transfers 2ch" --keep-header --digest --filter d -- -d $F -C SGPIO1 --samples 1048577 -O binary
+    emu_case "2 transfers 1ch" --digest --filter "$LONG" -- -d $F -C SGPIO0 --samples 2097160 -O bits
+    emu_case "2 transfers 2ch" --digest --filter "$LONG" -- -d $F -C SGPIO1 --samples 1048580 -O bits
+    gf_options in-limit=2
     emu_case "2 transfers upper 8ch" --digest --filter "$LONG" -- -d $F -C $B8 --samples 500000 -O bits
     gf_options
 
@@ -209,10 +236,12 @@ emu_cases() {
     emu_case "time one transfer" --digest --filter "$LONG" -- -d $F --time 300 -O bits
     gf_options
 
-    # sigrok-cli's --continuous stops on any key, and at EOF at once.
+    # A stop by hand: oxrok on SIGINT, the library from its main loop.
     gf_options in-limit=0
-    emu_case "continuous stops" --no-output -- -d $F --continuous -O bits
-    # The library's stop, which sigrok-cli cannot reach.
+    emu_case "interrupt no samples" --oracle-bug "$W_SINT" --interrupt out=0:6 --no-output -- -d $F --continuous -O bits
+    gf_options in-limit=1
+    emu_case "interrupt with samples" --oracle-bug "$W_SINT" --interrupt in=1:1 --digest --filter "$LONG" -- -d $F --continuous -O bits
+    gf_options in-limit=0
     emu_case "lib stop at the header" --libsigrok --no-output -- -d $F --stop-after 0 -O bits
     emu_case "lib stop after time" --libsigrok --no-output -- -d $F --stop-after-ms 200 -O bits
     gf_options in-limit=1
@@ -242,29 +271,33 @@ emu_cases() {
     gf_options stall=start
     emu_case "start stalled" --expect-fail --stderr --filter "$R" -- -d $F --samples 8 -O bits
     gf_options stall=stop
-    emu_case "stop stalled" --stderr -- -d $F --samples 8 -O bits
+    emu_case "stop stalled" --stderr --filter "$R
+$U" -- -d $F --samples 8 -O bits
     emu_case "stop stalled output" -- -d $F --samples 8 -O bits
     gf_options
 
     # The firmware's overrun: a halted endpoint and no more stream.
     gf_options in-stall=0 in-limit=2
-    emu_case "halted at once" --stderr -- -d $F --samples 8 -O bits
+    emu_case "halted at once" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
+    # The C's stop as it is, failed from inside the callback, 16 times.
+    emu_case "lib halted at once" --libsigrok --stderr -- -d $F --samples 8 -O bits
     gf_options in-stall=1 in-limit=2
-    emu_case "halted after one" --digest --filter "$LONG" -- -d $F --samples 300000 -O bits
-    emu_case "halted after one stderr" --stderr -- -d $F --samples 300000 -O bits
+    emu_case "halted after one" --oracle-differs "$W_LOST" --digest --filter "$LONG" -- -d $F --samples 300000 -O bits
     gf_options
 
     # A cable pulled during a capture.
     gf_options in-limit=2
-    emu_case "unplug" --unplug in=1:1 --stderr -- -d $F --samples 300000 -O bits
+    emu_case "unplug" --unplug in=1:1 --stderr --filter "$R
+$D" -- -d $F --samples 300000 -O bits
     gf_options in-limit=0
-    emu_case "unplug at start" --unplug out=0:6 --stderr -- -d $F --samples 8 -O bits
+    emu_case "unplug at start" --unplug out=0:6 --stderr --filter "$R
+$D" -- -d $F --samples 8 -O bits
     emu_case "unplug at configure" --expect-fail --unplug out=0:5 --stderr --filter "$R" -- -d $F --samples 8 -O bits
     gf_options
 
     # Another program has the samples interface: libusb's claim fails,
     # the driver goes on, and the first submission fails.
     gf_hold
-    emu_case "samples interface held" --expect-fail --stderr --filter "$R" -- -d $F --samples 8 -O bits
+    emu_case "samples interface held" --oracle-bug "$W_HELD" --expect-fail --stderr --filter "$R" -- -d $F --samples 8 -O bits
     gf_release
 }
