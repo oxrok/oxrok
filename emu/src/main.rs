@@ -47,7 +47,6 @@
 
 use std::io::{self, BufRead};
 use std::net::TcpListener;
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -348,7 +347,7 @@ impl Attachment<'_> {
             Some(p) if free(p) => p,
             _ => vhci::free_port(speed)?,
         };
-        vhci::attach(port, socket.as_raw_fd(), self.devid, speed)?;
+        vhci::attach(port, &socket, self.devid, speed)?;
         // The controller took its own reference to the socket; ours is
         // kept until the device is detached.
         self.socket = Some(socket);
