@@ -512,5 +512,3 @@ bulk_out 02 0701f93f -> 4
 bulk_out 02 0701fa3f -> 4
 bulk_out 02 0701fb3b -> 4
 bulk_in 81 128 -> @119:1a9a233b9469d7c68f675a8b0fc30e68e2f65dbdd89987fa7d7bfa07f7ca8ca6
-bulk_out 02 01002878010101 -> 7
-bulk_in 81 64 -> 81

@@ -15,7 +15,6 @@
 //! |---|---|---|
 //! | `01` configure | 7 | `81` |
 //! | `02` identify | 1 | `82`, length, ASCII model |
-//! | `03` set date and time | 7 | `83` |
 //! | `04` status | 1 | `84` activated, `a4` not |
 //! | `05` log info | 1 | `85`, the six configuration bytes, count (BE) |
 //! | `07` log data | 4 | `87`, then 2 BE bytes per sample |
@@ -23,12 +22,15 @@
 //!
 //! `01` carries the interval index, the alarm's low and high thresholds,
 //! the time weighting (0 F, 1 S), the frequency weighting (0 A, 1 C) and
-//! the data source (0 live, 1 memory, as the C sends it; the sigrok wiki
-//! says the reverse, and nothing shows which is right). `03` carries the
-//! year in the century, month, day, hours, minutes and seconds. `07` asks
-//! at an offset in blocks of 63 samples for a count, 63 until the last
-//! chunk. The C's comment says a configure clears the log. `06`, the log's
-//! start time, is the wiki's and no C uses it.
+//! the data source. The C writes its own enum there, 0 live and 1 memory
+//! (bc7be4a9), while the wiki's "0=memory, 1=real time" looks observed: if the
+//! wiki is right, a live configure, which sends 0 for parity with the C's
+//! working live path, says "memory". That is unproven. The log path sends no
+//! configure before `05` and `07`, so the byte only affects a later configure.
+//! `07` asks at an offset in blocks of 63 samples for a count, 63 until the
+//! last chunk. The C's comment says a configure clears the log. `03` (set date
+//! and time) is in the C and nothing calls it; `06` (the log's start time) is
+//! the wiki's and no C uses it: neither is here.
 //!
 //! Sources: the C driver and the wiki's protocol table. No firmware source
 //! or recording was found.
@@ -48,14 +50,18 @@ pub const INTERFACE: u8 = 0;
 /// The configuration the open selects.
 pub const CONFIGURATION: u8 = 1;
 
-/// Every command's write (`api.c:75`, `protocol.c:210`).
-pub const OUT_TIMEOUT: Duration = Duration::from_millis(5);
-/// A short answer's read: identify, status, log info, date.
-pub const ANSWER_TIMEOUT: Duration = Duration::from_millis(10);
-/// The configure ack's read, "about 32ms" in coming (`protocol.c:216`).
-pub const CONFIGURE_TIMEOUT: Duration = Duration::from_millis(40);
-/// A level's or a chunk's read (`api.c:412`).
-pub const DATA_TIMEOUT: Duration = Duration::from_millis(15);
+/// Every command's write. The C's is 5 ms (`api.c:75`), which a loaded host
+/// misses. A longer ceiling changes no transfer that succeeds.
+pub const OUT_TIMEOUT: Duration = Duration::from_millis(100);
+/// A short answer's read: identify, status, log info. The C's is 10 ms.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_millis(100);
+/// The configure ack's read, "about 32ms" in coming (`protocol.c:216`). The
+/// C's is 40 ms.
+pub const CONFIGURE_TIMEOUT: Duration = Duration::from_millis(250);
+/// A level's or a chunk's read. The C's is 15 ms (`api.c:412`), and no
+/// successful C run has carried a chunk: 126 bytes from a 24LC512 take about
+/// 11 ms at 100 kHz, before the firmware's own time.
+pub const DATA_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// The identify's read.
 pub const IDENTIFY_READ: usize = 32;
@@ -75,8 +81,6 @@ pub const ALARM_HIGH: u8 = 120;
 pub const CONFIGURE: u8 = 0x01;
 /// The identify command.
 pub const IDENTIFY: u8 = 0x02;
-/// The set date and time command.
-pub const SET_DATE_TIME: u8 = 0x03;
 /// The status command.
 pub const STATUS: u8 = 0x04;
 /// The log info command.
@@ -129,39 +133,6 @@ impl Settings {
             u8::from(self.slow),
             u8::from(self.c_weight),
             u8::from(self.source == Source::Memory),
-        ]
-    }
-}
-
-/// A date and time as the meter takes it: 2000 to 2099.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Clock {
-    /// Four digits.
-    pub year: u32,
-    /// 1 to 12.
-    pub month: u32,
-    /// 1 to 31.
-    pub day: u32,
-    /// 0 to 23.
-    pub hour: u32,
-    /// 0 to 59.
-    pub minute: u32,
-    /// 0 to 59.
-    pub second: u32,
-}
-
-impl Clock {
-    /// The set date and time command. The C writes `year - 2000` to a byte
-    /// (`protocol.c:245`); [`Clock`] holds what fits.
-    pub fn command(&self) -> [u8; 7] {
-        [
-            SET_DATE_TIME,
-            (self.year.saturating_sub(2000) & 0xff) as u8,
-            self.month as u8,
-            self.day as u8,
-            self.hour as u8,
-            self.minute as u8,
-            self.second as u8,
         ]
     }
 }
@@ -331,11 +302,5 @@ mod tests {
         assert_eq!(log_request(31941, 32000), [7, 1, 251, 59]);
         assert_eq!(log_answer_len(&[7, 0, 0, 63]), 127);
         assert_eq!(log_answer_len(&[7, 0, 0, 1]), 3);
-    }
-
-    #[test]
-    fn clock_is_the_cs_bytes() {
-        let c = Clock { year: 2026, month: 11, day: 4, hour: 12, minute: 34, second: 56 };
-        assert_eq!(c.command(), [3, 26, 11, 4, 12, 34, 56]);
     }
 }

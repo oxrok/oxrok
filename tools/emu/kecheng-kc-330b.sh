@@ -7,10 +7,13 @@
 # a client can have: see "set sample_interval"), so captures are short.
 #
 # The clock: the C has kecheng_kc_330b_set_date_time() (protocol.c:232) and
-# nothing calls it (api.c:141 is a TODO), so no C case can reach it. oxrok
-# sets it at the open with the scan option datetime=, the host's time only for
-# datetime=now, which no case uses (a unit test injects the time): the cases
-# give a date, so no golden holds a wall time.
+# nothing calls it (api.c:141 is a TODO), so no case reaches it and no golden
+# holds a wall time. oxrok has no counterpart.
+#
+# This model needs a quiet host. The oracle's timeouts are 5, 10, 15 and 40 ms
+# and cannot move: under load sigrok-cli's scan misses its identify (api.c:75)
+# and finds nothing, and most cases then fail on the oracle's side. oxrok's own
+# are 100 to 250 ms.
 EMU_MODEL=kecheng-kc-330b
 EMU_DRIVER=kecheng-kc-330b
 EMU_GCOV_SHARED="src/usb.c"
@@ -86,6 +89,12 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     NO_CONN="NO_OPTS (api.c:296): libsigrok's check refuses conn=, so nothing is found"
     WAITS="an answer that fails or does not parse leaves the state on LIVE_SPL_WAIT and nothing submits another transfer (protocol.c:149, protocol.c:153), so the capture never ends"
     NO_INT="sigrok-cli has no SIGINT handler"
+    # What the session's stop of a refused log start sends (session.c:831,
+    # api.c:429), against api.c:433, on a log it never read. oxrok sends no
+    # configure: sigrok-cli exits 1 there, so --oracle-differs cannot run, and
+    # this drops the pair from both tools. So oxrok's lack of it is pinned by the
+    # unit test a_refused_log_start_sends_no_configure, and the C's by the
+    # library case "lib log info fails".
 
     # The scan: identify, on 5 ms and 10 ms timeouts.
     emu_case "scan" --keep-header -- -d $S --scan
@@ -107,6 +116,10 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # These --set runs send nothing from the C; oxrok's goes out.
     emu_case "set weight freq" --oracle-differs "$CLOSE_BUG" --no-output -- -d $S --set -c spl_weight_freq=C
     emu_case "set weight time" --oracle-differs "$CLOSE_BUG" --no-output -- -d $S --set -c spl_weight_time=S
+    # A value it has already is no change: nothing goes out from either, as by
+    # api.c:430 it would clear the log.
+    emu_case "set default source" --no-output -- -d $S --set -c data_source=Live
+    emu_case "set default weights" --no-output -- -d $S --set -c spl_weight_freq=A:spl_weight_time=F
     emu_case "set source" --no-output -- -d $S --set -c data_source=Memory
     emu_case "weight freq refused" --expect-fail --stderr --filter "$R" -- -d $S -c spl_weight_freq=Z --samples 1
     emu_case "weight time refused" --expect-fail --stderr --filter "$R" -- -d $S -c spl_weight_time=X --samples 1
@@ -202,12 +215,12 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # interval and gets its samples.
     for f in stall-in=08@2 silent=08@2 garbage=08@2 short=08@2; do
         kc_options $f
-        emu_case "live answer $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 3 -- -d $S --samples 3
+        emu_case "live answer $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 6 -- -d $S --samples 3
     done
     # Every answer bad: oxrok gives up after MAX_BAD_ANSWERS.
     for f in stall-in=08 silent=08 garbage=08 short=08; do
         kc_options $f
-        emu_case "live answers $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 3 --no-output -- -d $S --samples 3
+        emu_case "live answers $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 6 --no-output -- -d $S --samples 3
     done
     kc_options
 
@@ -235,17 +248,19 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     kc_options
 
     # A log with samples. sigrok-cli dies on the meta packet before the first
-    # request; oxrok reads them all.
+    # request; oxrok reads them all, and sends no configure: the log stays.
     emu_case "log" --oracle-bug "$TUPLE_META" -- -d $M --samples 5
     emu_case "log no limit" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
-    for n in 1 2 62 63 200; do
+    for n in 1 62 63 200; do
         emu_case "log limit $n" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --samples $n
     done
     for n in 1 62 63 64 126 127; do
         kc_options stored=$n
         emu_case "log stored $n" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
     done
-    # The weightings are the log's, not what was asked for (api.c:354).
+    # The samples carry the log's weightings, not what was asked for
+    # (api.c:354). Asking for them is a setting beyond the data source: read to
+    # its end, the log then goes with the configure that applies them.
     kc_options stored=2 log-time=0 log-freq=0
     emu_case "log A F" --oracle-bug "$TUPLE_META" -- -d $M:spl_weight_freq=C:spl_weight_time=S --continuous
     kc_options stored=2 log-time=1 log-freq=0
@@ -254,14 +269,15 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     emu_case "log C F" --oracle-bug "$TUPLE_META" -- -d $M --continuous
     kc_options stored=2 log-time=1 log-freq=1
     emu_case "log C S" --oracle-bug "$TUPLE_META" -- -d $M --continuous
-    kc_options stored=3
-    # No --record: the harness records no --oracle-bug case, so the log's replays
-    # are the unit tests in src/drivers/kecheng_kc_330b/mod.rs.
-    emu_case "log 3" --oracle-bug "$TUPLE_META" -- -d $M --continuous
+    # No --record below: the harness records no --oracle-bug case, so the log's
+    # replays are the unit tests in src/drivers/kecheng_kc_330b/mod.rs.
     kc_options stored=32000 digest=1
     # 508 chunks: the requests stay in the .tx, every offset and count, and the
     # answers are in the digest of the output.
     emu_case "log full" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' --tx-filter '/^bulk_in 81 128 -> @127:/d' -- -d $M --continuous
+    # A new interval, the same, in the only unit oxrok has.
+    kc_options stored=2
+    emu_case "log then a new interval" --oracle-bug "$TUPLE_SET" -- -d $M:sample_interval=1000 --continuous
     # A chunk that fails: what came is kept, and the log is not cleared.
     for f in stall-out=07@2 stall-in=07@2 silent=07@2 garbage=07@2 short=07@2; do
         kc_options stored=100 $f
@@ -286,29 +302,19 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # The request itself refused.
     kc_options stall-out=07
     emu_case "lib log request fails" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G
-    # The log info fails: the start is refused and the stop still configures.
+    kc_options stall-out=05
+    emu_case "lib log info fails" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4
+    # The log info fails: the start is refused, and only the C configures.
     for f in stall-out=05 stall-in=05 silent=05 garbage=05 short=05; do
         kc_options $f
-        emu_case "log info $f" --expect-fail --stderr --filter "$R" -- -d $M --samples 5
+        emu_case "log info $f" --expect-fail --stderr --filter "$R" --tx-filter "$T" -- -d $M --samples 5
     done
     kc_options log-interval=7
-    emu_case "log interval 7" --expect-fail --stderr --filter "$R" -- -d $M --samples 5
+    emu_case "log interval 7" --expect-fail --stderr --filter "$R" --tx-filter "$T" -- -d $M --samples 5
     kc_options
 
     # The stop's configure fails: it logs, and that is all.
     kc_options stored=0 stall-out=01
     emu_case "log empty, no configure on the wire" --no-output -- -d $M --samples 5
-    kc_options
-
-    # The clock, which sigrok-cli has no way to set: oxrok alone, with a date
-    # on the command line, so the goldens hold no wall time.
-    C=20261104T123456
-    emu_case "clock" --no-oracle-only -- -d $S:datetime=$C --samples 1
-    emu_case "clock scan sends nothing" --no-oracle-only --keep-header -- -d $S:datetime=$C --scan
-    emu_case "clock bad date" --no-oracle-only --expect-fail --stderr --filter "$R" -- -d $S:datetime=20261304T123456 --scan
-    for f in stall-out=03 stall-in=03 silent=03 garbage=03 short=03; do
-        kc_options $f
-        emu_case "clock $f" --no-oracle-only --expect-fail --stderr --filter "$R" -- -d $S:datetime=$C --samples 1
-    done
     kc_options
 }

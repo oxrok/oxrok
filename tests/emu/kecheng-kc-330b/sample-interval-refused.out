@@ -1,1 +1,1 @@
-Failed to set device option 'sample_interval': invalid argument.
+Failed to set device option 'sample_interval': invalid argument: sample_interval is in ms, one of [125, 500, 1000, 2000, 5000, 10000, 60000].
