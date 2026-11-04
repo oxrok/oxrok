@@ -230,7 +230,7 @@ fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
 /// its trigger, with no limit, which such a driver has no key for.
 pub fn starts_without_limit(registry: &Registry, args: &Args) -> bool {
     let driver = args.driver.as_deref().and_then(|d| registry.find(d.split(':').next()?));
-    driver.is_some_and(|d| d.ends_captures_itself())
+    driver.is_some_and(oxrok::core::Driver::ends_captures_itself)
         && (args.output_format.is_some() || args.output_file.is_some() || args.triggers.is_some())
 }
 

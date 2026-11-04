@@ -250,7 +250,7 @@ fn encode_regs(regs: &[(u8, u16)]) -> Vec<u8> {
 /// `transform_sample_count()`.
 fn transform_sample_count(samples: u32, groups: u32) -> u32 {
     let d = 8 / groups;
-    (samples + 0x1c + d + d - 1) / d
+    (samples + 0x1c + d).div_ceil(d)
 }
 
 /// `calc_unk0()`, both of its results.
@@ -287,7 +287,7 @@ pub fn completion_window(p: &[u8], rate: RateInfo, groups: u32, thousands: u32) 
     let divider = 1_000_000_000 / rate.rate;
     let latest = align2_down(be48(0x06) * 8 / divider, u64::from(8 / groups));
     let earliest = latest.saturating_sub(u64::from(thousands) * 1000);
-    let mut trigger = i128::from(be48(0x0c) * 8 | u64::from(p[0x13] & 7));
+    let mut trigger = i128::from((be48(0x0c) * 8) | u64::from(p[0x13] & 7));
     trigger += i128::from(rate.trigger_offset);
     if groups > 1 {
         trigger -= 8;
@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn transformed_counts() {
         assert_eq!(transform_sample_count(10000, 2), 2508);
-        assert_eq!(transform_sample_count(0, 1), (0x1c + 8 + 7) / 8);
+        assert_eq!(transform_sample_count(0, 1), 5);
     }
 
     /// The last packet of that capture: the trigger 10004 samples in.
@@ -894,7 +894,7 @@ mod tests {
         assert_eq!(low[0][..2], [0xa5, 0]);
         let high = logic_payloads(&data[..3], 0xff00);
         assert_eq!(high, [vec![0, 0xa5, 0, 0xa5, 0, 0xa5]]);
-        assert!(logic_payloads(&[], 0xff00).is_empty());
+        assert_eq!(logic_payloads(&[], 0xff00), Vec::<Vec<u8>>::new());
         assert_eq!(logic_payloads(&[1, 2], 0xffff), [vec![1, 2]]);
     }
 

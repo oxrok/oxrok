@@ -608,7 +608,7 @@ mod tests {
     fn stages_ignore_disabled_channels() {
         let c = |channel, matches| TriggerCondition { channel, matches, value: 0.0 };
         let mut d = device();
-        assert!(d.stages().is_empty());
+        assert_eq!(d.stages(), []);
         d.enable_channel(3, false).unwrap();
         d.trigger = Some(Trigger {
             stages: vec![
