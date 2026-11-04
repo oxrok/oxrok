@@ -121,7 +121,7 @@ emu_cases() {
     # A trigger on the last sample: libsigrok sends a logic packet of
     # length 0 after it, on which the hex output's length - unitsize
     # wraps and sigrok-cli dies of SIGSEGV; one sample more is a full case.
-    emu_case "plus trigger on the last sample" --oracle-bug "protocol.c:861-862 sends a logic packet of length 0, on which output/hex.c:163 wraps" -- -d $D -C $C4 --samples 64 -t 0=1 -O hex
+    emu_case "plus trigger on the last sample" --oracle-bug "protocol.c:861-862 sends a logic packet of length 0, on which output/hex.c:163 wraps" --filter '/Failed to open device/d' -- -d $D -C $C4 --samples 64 -t 0=1 -O hex
     emu_case "plus trigger one sample before the end" -- -d $D -C $C4 --samples 65 -t 0=1 -O hex
     # The packet of length 0 itself is harmless to an output whose loop
     # counts up to the length: the same capture in binary runs full.

@@ -1144,7 +1144,7 @@ impl DeviceModel for Dslogic {
     fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
         let Stage::Running(fw) = &mut self.stage else { return None };
         let acq = fw.acq.as_mut()?;
-        if ep != 6 || acq.partial == 0 || !self.faults.hold.is_some_and(|n| acq.transfers >= n) {
+        if ep != 6 || acq.partial == 0 || self.faults.hold.is_none_or(|n| acq.transfers < n) {
             return None;
         }
         let channels = acq.channels();
