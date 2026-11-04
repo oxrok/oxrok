@@ -278,8 +278,8 @@ impl GreatfetDevice {
         self.worker.as_ref().is_some_and(|w| !w.handle.is_finished())
     }
 
-    /// `greatfet_start_acquisition()`. The claim's result does not count,
-    /// as in the C: the submissions then fail if it matters.
+    /// `greatfet_start_acquisition()`. A failed claim does not stop the start,
+    /// as in the C.
     fn begin(&mut self, link: &mut Link, plan: &Plan) -> Result<Box<dyn BulkStream>> {
         let configured = link.configure(plan, self.samplerate)?;
         let rate = configured.rate;
@@ -294,10 +294,16 @@ impl GreatfetDevice {
             log::error!("Configuration exceeds bandwidth limit. Aborting.");
             return Err(Error::device(START_REFUSED));
         }
-        if let Err(e) = link.transport().claim_interface(SAMPLES_INTERFACE) {
-            log::debug!("Cannot claim the samples interface: {e}.");
-        }
+        let claim = link.transport().claim_interface(SAMPLES_INTERFACE);
         link.start()?;
+        // A claim that failed fails the C's submissions after the start. The
+        // backends differ in when a stream on an unclaimed interface says
+        // so (the libusb one at its first transfer), so it stops here.
+        if let Err(e) = claim {
+            log::debug!("Cannot claim the samples interface: {e}.");
+            link.stop();
+            return Err(e);
+        }
         // Submitted after the start: the C's comment says the other order
         // gives libusb IO errors. The endpoint is the firmware's to name.
         link.transport()
@@ -598,7 +604,8 @@ mod tests {
     impl BulkStream for Endless {
         fn next(&mut self, _timeout: Duration) -> Result<Vec<u8>> {
             self.answers += 1;
-            assert!(self.answers < 100, "the capture went on");
+            // Under the test channel's 64 packets, or the send blocks for ever.
+            assert!(self.answers < 32, "the capture went on");
             if self.answers == 3 {
                 self.stop.store(true, Ordering::SeqCst);
             }
