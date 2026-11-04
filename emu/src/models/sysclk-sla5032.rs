@@ -222,9 +222,11 @@
 //!   733-737,749-756`): only the log tells, and the chunk is lost.
 //! - The depths have a minimum of 512 samples each and are whole units of
 //!   256 (`protocol.c:904-910`), and the driver sends all the memory holds.
-//!   The rounding goes both ways: a limit of 512 yields 1024 samples, of
-//!   which only sigrok-cli's own limit cuts the excess, and a limit of 5000
-//!   yields 4608, fewer than asked for. Disabled channels are sent as well (`channel_mask` is
+//!   The rounding goes both ways: a limit of 512 yields 1024 samples, which
+//!   sigrok-cli writes whole (it counts its limit for decoders and for
+//!   "Device only sent", `session.c:406-423`, but gives the output the whole
+//!   packet, `session.c:464`), and a limit of 5000 yields 4608, fewer than
+//!   asked for. Disabled channels are sent as well (`channel_mask` is
 //!   written at `api.c:363,365` and read nowhere).
 //! - T goes on the first match in memory, whatever the depth; the distance
 //!   from the hardware's trigger is unknown. `protocol.c:834` scans from the
