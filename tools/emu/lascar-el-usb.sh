@@ -138,6 +138,8 @@ emu_cases() {
     emu_case "temp only" -- -d $C -C Temp --samples 100
     emu_case "hum only" -- -d $C -C Hum --samples 100
     el_options model=9
+    # The metadata sigrok-cli prints without -O, the header kept.
+    emu_case "capture with its meta" --keep-header -- -d $C --samples 100
     emu_case "co channel" --record -- -d $C -C CO --samples 100
     el_options
 
