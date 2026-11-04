@@ -2,6 +2,7 @@
 //   libsigrok/src/hardware/pipistrello-ols/api.c (the scan, the trigger stages, the counts),
 //   libsigrok/src/hardware/pipistrello-ols/protocol.c (the commands, the metadata, the sample stream),
 //   libsigrok/src/hardware/pipistrello-ols/protocol.h (the opcodes and flags),
+//   Pipistrello_ols_verilog 2423ef3, github.com/magnuskarlsson/Pipistrello_ols_verilog (verilog/stage.v, trigger.v, controller.v, rle_enc.v, core.v: stage matching, RLE masks, count widths),
 //   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, magnuskarlsson,
 //   Daniel Elstner, Soeren Apel, Gerhard Sittig, Martin Ling,
@@ -98,8 +99,19 @@
 //! word before) fires once: a stage with the start bit starts the
 //! capture there, any other raises the level by one from the next word.
 //! So the driver's stage after the last one (mask 0, start) fires one
-//! word after the user's last stage, which is what its `trigger_at`
-//! takes off (`- devc->num_stages`). Without a trigger the driver
+//! word after the user's last stage, and with the start stage's word
+//! counted first the word `delay` words from the newest is the match. A
+//! start bit on a stage with a mask (only oxrok's four stages send it)
+//! counts from the word after its match, as the firmware does at every
+//! rate. This is an idealisation: the firmware's pipeline (`stage.v`,
+//! `trigger.v`, `controller.v`, `delay_fifo.v`) takes more words, and a
+//! hand reading gives, for the word at `trigger_at` with `n` user
+//! stages, a place after the last match of 3 at 100 MHz, 2 at 50 MHz, 1
+//! at 33 MHz or less, less `n - 1`. Level rises and the start stage's
+//! firing cost the same whatever `n`, so the driver's `- num_stages`
+//! is not an exact correction, but it lands nearer the match than one
+//! fixed offset would. The model's timing does not carry this; a bench
+//! would have to confirm it. Without a trigger the driver
 //! configures stage 0 alone (mask 0, start), which fires at word 0.
 //! These semantics are the OLS's as the driver's configuration implies
 //! them (assumed). In demux mode a stage matches when either half of
@@ -140,9 +152,7 @@
 //! buffer, and without RLE the driver takes the excess off `rle_count`,
 //! 0, which wraps (`protocol.c` 557-563), so its copy loop (597-600)
 //! runs off the buffer: sigrok-cli dies of SIGSEGV (cases `101 samples`,
-//! `200 MHz 100 samples`). With two or more stages the trigger marker
-//! is `num_stages - 1` samples early, since the driver's start stage
-//! follows the last match by one sample, not by `num_stages`. With two
+//! `200 MHz 100 samples`). With two
 //! or more stages and `captureratio=0` (the default), `trigger_at` is
 //! `-num_stages` (`api.c` 524), which `protocol.c` 620 only tests
 //! against -1, so 642-645 send `num_stages` samples from before the
@@ -151,14 +161,14 @@
 //! 0, so the read and delay counts go out as 0xffffffff and the driver
 //! sends a logic packet of length 0 that sigrok-cli's output dies on
 //! (case `no memory capture`). The driver never ends (cases with
-//! `--hangs`): a 4-stage trigger (`3=1010`) gets no start bit
+//! `--oracle-hangs`): a 4-stage trigger (`3=1010`) gets no start bit
 //! (`set_trigger` sets it on stage `num_stages`, 4, which does not
-//! exist), so the capture never starts (`four stages hangs`); a 200 MHz
+//! exist), so the capture never starts (`four stages`); a 200 MHz
 //! capture with the default 32 channels takes each demux word for one
-//! sample and waits for the rest (`200 MHz 32 channels hangs`);
+//! sample and waits for the rest (`200 MHz 32 channels`);
 //! `captureratio=100` with a trigger sends a delay count of 0xffffffff
 //! (`api.c` 523, 562-565), which the device takes as 2^34 words to
-//! capture, so at 10 Hz the driver polls for ever (`ratio 100 hangs`).
+//! capture, so at 10 Hz the driver polls for ever (`ratio 100`).
 //! sigrok-cli cannot capture without a sample limit
 //! (`main.c` 321 needs one, `--time` becomes one), so the driver's
 //! read count of 0xffffffff and `g_try_malloc(0)` for a missing limit
@@ -348,6 +358,9 @@ pub fn stimulus(t: u64) -> u32 {
     u32::from(low) | (u32::from(!low) << 16)
 }
 
+/// The bits of the read and delay counts the firmware keeps.
+const COUNT_MASK: u32 = 0x03ff_ffff;
+
 /// `rle_enc.v`'s `data_mask` and `demux_mismatch` on a compacted word
 /// of `width` bytes: the value stored, the top channel gone (of both
 /// samples in demux mode), and whether the two samples of a demux word
@@ -427,7 +440,7 @@ impl Capture {
             self.mem.pop_front();
         }
         self.written += 1;
-        if self.mark.is_some_and(|m| self.written - m >= self.delay_words) {
+        if self.mark.is_some_and(|m| self.written.saturating_sub(m) >= self.delay_words) {
             self.done = true;
         }
     }
@@ -451,7 +464,12 @@ impl Capture {
                 }
             }
             if start {
-                self.mark = Some(self.written);
+                // A start stage with a mask of its own counts from the
+                // next word; the driver's follows a match by one word.
+                let own = self.stages.iter().zip(self.fired).any(|(st, fired)| {
+                    fired && st.config & START != 0 && st.mask != 0
+                });
+                self.mark = Some(self.written + u64::from(own));
             } else if bump {
                 self.level += 1;
             }
@@ -650,8 +668,9 @@ impl Fpga {
         }
         let groups = (!(self.flags & flag::GROUPS) >> 2) as u8 & 0xf;
         let width = groups.count_ones();
-        let read_words = (u64::from(read) + 1) * 4;
-        let delay_words = (u64::from(self.delay) + 1) * 4;
+        // controller.v's fwd and bwd have 26 bits.
+        let read_words = (u64::from(read & COUNT_MASK) + 1) * 4;
+        let delay_words = (u64::from(self.delay & COUNT_MASK) + 1) * 4;
         let stored = u64::from(if width == 3 { 4 } else { width });
         let capacity = u64::from(self.board.memory) / stored.max(1);
         self.out.clear();
@@ -943,6 +962,11 @@ mod tests {
         write(dev, &long(cmd::SET_FLAGS, u32::from(flags)), v);
     }
 
+    /// The capture of the board's FPGA.
+    fn dev_capture(dev: &PipistrelloOls) -> &Capture {
+        dev.fpga.capture.as_ref().unwrap()
+    }
+
     #[test]
     fn scan_answers() {
         let mut dev = board();
@@ -1037,6 +1061,42 @@ mod tests {
         // The driver's trigger_at: (16 - 8) * 4 - 1 = 31, the rising edge.
         assert_eq!(words[31] & 0x10, 0x10);
         assert_eq!(words[30] & 0x10, 0);
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn a_start_bit_on_a_stage_with_a_mask_counts_from_the_next_word() {
+        let mut dev = board();
+        let mut v = Violations::default();
+        // Channel 4 high (first at t = 16) with the start bit: half of
+        // the 64 words from t = 17 on, so word 31 is the match.
+        for (op, arg) in [(0xc0, 0x10), (0xc1, 0x10), (0xc2, START), (0xc3, 0)] {
+            write(&mut dev, &long(op, arg), &mut v);
+        }
+        write(&mut dev, &long(cmd::SET_DIVIDER, 0), &mut v);
+        write(&mut dev, &long(cmd::READCOUNT, 15), &mut v);
+        write(&mut dev, &long(cmd::DELAYCOUNT, 7), &mut v);
+        write(&mut dev, &long(cmd::SET_FLAGS, u32::from(flag::FILTER)), &mut v);
+        write(&mut dev, &[cmd::RUN], &mut v);
+        let d = read(&mut dev, &mut v);
+        let words: Vec<u32> =
+            d.chunks(4).rev().map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        assert_eq!(words[31], stimulus(16));
+        assert_eq!(words[32], stimulus(17));
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn counts_keep_26_bits_as_the_firmware() {
+        // 0xffffffff is 2^28 words, not 2^34: done after 168 polls of
+        // 1.6 M words at 100 MHz.
+        let mut dev = board();
+        let mut v = Violations::default();
+        configure(&mut dev, flag::FILTER, 0, 3, &mut v);
+        write(&mut dev, &long(cmd::DELAYCOUNT, 0xffff_ffff), &mut v);
+        write(&mut dev, &[cmd::RUN], &mut v);
+        let capture = dev_capture(&dev);
+        assert_eq!(capture.delay_words, 1 << 28);
         assert!(v.is_empty(), "{v:?}");
     }
 
