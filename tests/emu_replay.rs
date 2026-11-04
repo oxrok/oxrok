@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 12] = [
+const RECORDED: [&str; 13] = [
     "asix-sigma",
     "chronovu-la",
     "fx2lafw",
