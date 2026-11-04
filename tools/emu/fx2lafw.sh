@@ -57,8 +57,8 @@ fx2lafw_release() {
 emu_cases() {
     F=fx2lafw
     D8=D0,D1,D2,D3,D4,D5,D6,D7
-    # A device that renumerated has an address the READY line did not
-    # report, and a different one for each tool.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get), and a different one for each tool.
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
 
     # The bare Cypress FX2: every run uploads the firmware first, in the

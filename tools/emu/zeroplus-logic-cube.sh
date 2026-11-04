@@ -43,15 +43,6 @@ zp_release() {
     HOLDPID=""
 }
 
-# The board's address now, from sysfs: $EMU_USB is the address of the
-# session's first attach and is not updated when a case's reset
-# re-attaches the board with other descriptors (as logicpro_addr in
-# saleae-logic-pro.sh).
-zp_addr() {
-    d=/sys/bus/usb/devices/$EMU_BUSID
-    echo "$(cat $d/busnum).$(cat $d/devnum)"
-}
-
 emu_cases() {
     Z=zeroplus-logic-cube
     # The driver's own messages on stderr, without sigrok-cli's prefix

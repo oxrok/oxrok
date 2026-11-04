@@ -59,8 +59,8 @@ dslogic_release() {
 
 emu_cases() {
     D=dreamsourcelab-dslogic
-    # A device that renumerated has an address the READY line did not
-    # report, and a different one for each run.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get), and a different one for each run.
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     C4=0,1,2,3
     # The CSV comments hold the date.

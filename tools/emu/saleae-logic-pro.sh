@@ -73,15 +73,6 @@ signal.pause()
     done
 }
 
-# The board's address now, from sysfs: $EMU_USB is the address of the
-# session's first attach and is not updated when the board re-attaches
-# (a renumeration, or a case's reset that changes its descriptors), so
-# after the first upload it names no device.
-logicpro_addr() {
-    d=/sys/bus/usb/devices/$EMU_BUSID
-    echo "$(cat $d/busnum).$(cat $d/devnum)"
-}
-
 logicpro_release() {
     kill $HOLDPID 2>/dev/null
     wait $HOLDPID 2>/dev/null
@@ -97,7 +88,8 @@ logicpro_options() {
 emu_cases() {
     F=saleae-logic-pro
     logicpro_fx3_standin || emu_fail "saleae-logic-pro: could not write the FX3 stand-in"
-    # A renumerated device has an address the READY line did not report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     # Each transfer of 16 KiB holds 131072 samples of one channel, 8192
     # of sixteen: the goldens keep the first line of each channel and the
@@ -106,6 +98,9 @@ emu_cases() {
     B4='1,/^3:/!d'
     B16='1,/^15:/!d'
     D4=0,1,2,3
+    # The address of the session's first attach, the board without its
+    # firmware: the uploads below move it elsewhere (EMU_USB follows).
+    A0=$EMU_USB
 
     # Without firmware: every run uploads it in the scan, sleeps 500 ms
     # and lists the renumerated device (scan(), api.c:213-218): the
@@ -119,7 +114,7 @@ emu_cases() {
     # the upload.
     logicpro_options
     L='/saleae-logic-pro:/!d; s/ \[[0-9:.]+\]//'
-    emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$EMU_USB --scan
+    emu_case "by address unflashed" --stderr --filter "$L" -- -l 4 -d $F:conn=$A0 --scan
     emu_case "scan" --keep-header --filter "$C" -- -d $F --scan
     # sr_usb_find() refuses the spec, and the driver lists the board all
     # the same (the stdout case below shows it).
@@ -135,24 +130,34 @@ emu_cases() {
     logicpro_options boot_strings=Saleae/Bootloader
     emu_case "boot strings other product" --keep-header --filter "$C" -- -d $F --scan
 
-    # The firmware running: no upload, and the scan reads the strings.
+    # By its real address on a board just attached again: back to the
+    # boot stage, then the firmware running, whose descriptors differ, so
+    # without emu_reset the case's own reset would move the board after
+    # the case line read EMU_USB. libsigrok's debug line shows
+    # sr_usb_find() matching it. (Without firmware no conn= can match:
+    # the upload moves the board before sr_usb_find() runs.)
+    logicpro_options
+    emu_reset
     logicpro_options flashed=1
+    emu_reset
+    emu_case "by address after a reset" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$EMU_USB --scan
+    # The firmware running: no upload, and the scan reads the strings.
     emu_case "flashed scan" --keep-header --filter "$C" -- -d $F --scan
     # An address no device has, and a bus and an address out of range
     # (sr_usb_split_conn() refuses them): listed all the same.
     emu_case "conn matching nothing" --keep-header --filter "$C" -- -d $F:conn=9.99 --scan
     emu_case "conn bus out of range" --keep-header --filter "$C" -- -d $F:conn=300.1 --scan
     emu_case "conn address out of range" --keep-header --filter "$C" -- -d $F:conn=1.200 --scan
-    # A conn= that names no device any more: $EMU_USB is the address of
-    # the session's first attach, which the uploads above moved the board
+    # A conn= that names no device any more: A0 is the address of the
+    # session's first attach, which the uploads above moved the board
     # away from, so sr_usb_find() matches nothing and the board is
     # captured only because such a conn selects every Logic Pro.
-    emu_case "stale address captures all the same" --digest --filter "$B4" -- -d $F:conn=$EMU_USB -C $D4 --continuous -O bits
-    # Selected by its real address: the previous case left the board
-    # with these descriptors, so the next case's reset does not
-    # re-attach it and the address read now still holds. libsigrok's
-    # debug line shows sr_usb_find() matching it.
-    A=$(logicpro_addr)
+    emu_case "stale address captures all the same" --digest --filter "$B4" -- -d $F:conn=$A0 -C $D4 --continuous -O bits
+    # Selected by its real address (EMU_USB, the board as it is now):
+    # the previous case left the board with these descriptors, so the
+    # next case's reset does not re-attach it and the address still
+    # holds. libsigrok's debug line shows sr_usb_find() matching it.
+    A=$EMU_USB
     emu_case "by address" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$A --scan
     emu_case "by address capture" --digest --filter "$B4" -- -d $F:conn=$A -C $D4 --continuous -O bits
     emu_case "get conn" --filter "s/'[0-9]+[.][0-9]+'/'BUS.ADDR'/" -- -d $F --get conn
@@ -295,9 +300,11 @@ emu_cases() {
     logicpro_options stall_load=2
     emu_case "fault boot loader refuses" --expect-fail --stderr --filter "$U" -- -l 4 -d $F -C 0 --continuous -O bits
     # Unplugged during the upload (the Nth control write after the
-    # SET_CONFIGURATION).
+    # SET_CONFIGURATION). The second pass finds the board or not as the
+    # kernel's removal goes, and libusb's own line then says which error
+    # it met (1 run in 5): only the driver's and sigrok-cli's lines count.
     logicpro_options
-    emu_case "unplug during the upload" --unplug out=0:3 --expect-fail --stderr --filter "$U" -- -l 4 -d $F -C 0 --continuous -O bits
+    emu_case "unplug during the upload" --unplug out=0:3 --expect-fail --stderr --filter "$U; /^sr: usb: Failed to open device/d" -- -l 4 -d $F -C 0 --continuous -O bits
 
     # Unplugged during saleae_logic_pro_prepare(), after the write of
     # register 0x15 (the 61st command): the prepare ignores the failing

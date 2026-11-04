@@ -12,10 +12,14 @@
 //! `section NAME` starts a section of the transaction log, `reset`
 //! puts a fresh model behind the attached device (its initial state,
 //! for a second run), `detach` (or end of input, or a termination
-//! signal) detaches the device and exits. `READY port=N busid=B
+//! signal) detaches the device and exits, and `sync` does nothing
+//! but answer, after every input taken before it (a renumeration the
+//! model asked for included). `READY port=N busid=B
 //! usb=BUS.ADDR usbfs=/dev/bus/usb/BBB/DDD nodes=...` is printed once
-//! the kernel has configured the device. The exit status is 2 when any
-//! violation was logged.
+//! the kernel has configured the device, and `RENUMERATED port=...`
+//! with the same fields each time it is attached again after a
+//! renumeration or a `reset` that changed its descriptors. The exit
+//! status is 2 when any violation was logged.
 //!
 //! `arm EVENT WHEN` arms a mid-run event for the run that follows (the
 //! next `reset` disarms it): `EVENT` is `unplug` or `interrupt`, `WHEN`
@@ -674,6 +678,11 @@ fn serve(args: &Serve) -> Result<usize> {
                 }
                 Err(e) => break Err(e),
             },
+            // Nothing to do: its OK comes after whatever the main loop
+            // took in before it, a renumeration the run before asked
+            // for included, so the harness knows the address it reads
+            // is current.
+            "sync" => println!("OK {line}"),
             "detach" | "quit" => {
                 println!("OK {line}");
                 break Ok(());

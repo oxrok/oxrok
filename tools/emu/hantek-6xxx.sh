@@ -51,8 +51,8 @@ hantek_release() {
 
 emu_cases() {
     H=hantek-6xxx
-    # A device that renumerated has an address the READY line did not
-    # report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     A="s/'[0-9]+\\.[0-9]+'/'BUS.ADDR'/"
     # The last line of stderr, for a failure both tools word their own way.

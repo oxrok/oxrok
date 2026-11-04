@@ -57,8 +57,8 @@ kingst_release() {
 
 emu_cases() {
     K=kingst-la2016
-    # A device that renumerated has an address the READY line did not
-    # report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     # oxrok's log prefix ("oxrok: LEVEL: MODULE: ") as libsigrok's, so
     # that the filters below read one form.
