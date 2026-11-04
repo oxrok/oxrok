@@ -74,4 +74,10 @@ bulk_out 04 030004 -> 3
 bulk_in 88 512 -> 00000000
 bulk_out 04 030804 -> 3
 bulk_in 88 512 -> a5a5a5a0
-~ the last 6 lines repeat to the end (3 or more times)
+bulk_out 04 030404 -> 3
+bulk_in 88 512 -> 00000000
+bulk_out 04 030004 -> 3
+bulk_in 88 512 -> 00000000
+bulk_out 04 030804 -> 3
+bulk_in 88 512 -> a5a5a5a0
+interrupt

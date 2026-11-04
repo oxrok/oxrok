@@ -127,8 +127,8 @@
 //! as firmware that drops one request does (a real STALL on endpoint 0 ends
 //! with the transfer anyway):
 //! `stall-get=N`, `stall-set=N` (the request has no effect), `short-get=N`
-//! (the answer's first 4 bytes: a short control read, which any device can
-//! end early).
+//! (the answer's first `short-len=` bytes, default 4: a short control read,
+//! which any device can end early).
 //! Device behaviour named by the sources, counted in status reads:
 //! `stale-sample=N` (the first N reads after each `CMD_SAMPLE` answer the
 //! old buffer), `stale-info=1` (the read after `CMD_INFO` does),
@@ -148,7 +148,7 @@ pub const NAME: &str = "ikalogic-scanalogic2";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "IKALOGIC Scanalogic-2 (low speed HID, 20a0:4123, 128 byte feature \
      reports); serial=N, fw=MAJOR.MINOR, wait-trigger=N|never, sampling=N, digest=1; faults: \
-     stall-get=N, stall-set=N, short-get=N, stale-sample=N, stale-info=1, stale-reset=N, busy-reset=N, \
+     stall-get=N, stall-set=N, short-get=N, short-len=N, stale-sample=N, stale-info=1, stale-reset=N, busy-reset=N, \
       ignore-reset=N|never";
 
 /// The USB vendor id (Clay Logic).
@@ -244,6 +244,13 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "stall-get" => config.stall_get = nth(k, v)?,
             "stall-set" => config.stall_set = nth(k, v)?,
             "short-get" => config.short_get = nth(k, v)?,
+            "short-len" => {
+                config.short_len = v
+                    .parse()
+                    .ok()
+                    .filter(|n| *n <= REPORT_BYTES)
+                    .ok_or_else(|| Error(format!("{k}={v}: 0 to {REPORT_BYTES}")))?;
+            }
             "stale-sample" => config.stale_sample = number(k, v)?,
             "stale-info" => config.stale_info = v == "1",
             "stale-reset" => config.stale_reset = number(k, v)?,
@@ -274,6 +281,8 @@ pub struct Config {
     pub stall_set: Option<u32>,
     /// This feature read answers its first 4 bytes.
     pub short_get: Option<u32>,
+    /// How many bytes that short answer has.
+    pub short_len: usize,
     /// Reads after each `CMD_SAMPLE` that answer the old buffer.
     pub stale_sample: u32,
     /// The read after `CMD_INFO` answers the old buffer.
@@ -299,6 +308,7 @@ impl Default for Config {
             stall_get: None,
             stall_set: None,
             short_get: None,
+            short_len: 4,
             stale_sample: 0,
             stale_info: false,
             stale_reset: 0,
@@ -645,7 +655,8 @@ impl HidReports for Board {
             return Reply::Stall;
         }
         let answer = self.read(v);
-        let n = if self.config.short_get == Some(self.gets) { 4 } else { REPORT_BYTES };
+        let short = self.config.short_get == Some(self.gets);
+        let n = if short { self.config.short_len } else { REPORT_BYTES };
         Reply::Data(answer[..n].to_vec())
     }
 
@@ -1167,6 +1178,9 @@ mod tests {
         let mut dev = board(Config { short_get: Some(1), ..Config::default() });
         assert_eq!(read(&mut dev, &mut v).len(), 4);
         assert_eq!(read(&mut dev, &mut v).len(), 128);
+        let mut dev = board(Config { short_get: Some(1), short_len: 0, ..Config::default() });
+        assert_eq!(read(&mut dev, &mut v).len(), 0);
+        assert_eq!(read(&mut dev, &mut v).len(), 128);
         assert!(v.is_empty(), "{v:?}");
     }
 
@@ -1195,6 +1209,8 @@ mod tests {
             ("stall-get", "0"),
             ("stall-set", "x"),
             ("short-get", "0"),
+            ("short-len", "129"),
+            ("short-len", "x"),
             ("stale-sample", "x"),
             ("stale-reset", "x"),
             ("busy-reset", "x"),

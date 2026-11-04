@@ -159,6 +159,13 @@ fn claim_or_detach<T, E>(
     }
 }
 
+/// The sysfs link naming the driver bound to an interface.
+#[cfg(target_os = "linux")]
+fn interface_driver_link(bus: u8, ports: &[u8], config: u8, interface: u8) -> String {
+    let ports: Vec<String> = ports.iter().map(u8::to_string).collect();
+    format!("/sys/bus/usb/devices/{bus}-{}:{config}.{interface}/driver", ports.join("."))
+}
+
 impl Nusb {
     /// `WinUSB` sends no control transfer without a claimed interface:
     /// one is claimed for it, the request's own for an interface
@@ -297,6 +304,31 @@ impl Transport for Nusb {
             i(d.product_string_index()),
             i(d.serial_number_string_index()),
         ])
+    }
+
+    /// nusb's detach is a bare `USBDEVFS_DISCONNECT`, while libusb first
+    /// asks for the driver and leaves one called `usbfs`, another program's
+    /// claim, alone (`op_detach_kernel_driver`); so this looks first. nusb's
+    /// detach and claim would attach the driver again on the release.
+    #[cfg(target_os = "linux")]
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        let config = self.device.active_configuration().map(|c| c.configuration_value());
+        let Ok(config) = config else { return Ok(()) };
+        let path = interface_driver_link(self.info.bus, &self.info.ports, config, interface);
+        let driver = std::fs::read_link(path).ok();
+        let Some(name) = driver.as_deref().and_then(std::path::Path::file_name) else {
+            return Ok(());
+        };
+        if name == "usbfs" {
+            return Ok(());
+        }
+        self.device.detach_kernel_driver(interface).map_err(|e| map(&e, "detach"))?;
+        log::info!(
+            "Detached kernel driver {} from interface {interface}: it stays detached until \
+             the device is plugged in again.",
+            name.to_string_lossy()
+        );
+        Ok(())
     }
 
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
@@ -615,6 +647,13 @@ impl Drop for NusbStream {
 mod tests {
     use super::claim_or_detach;
     use std::cell::Cell;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_driver_link_is_the_interface_s_in_sysfs() {
+        let link = super::interface_driver_link(3, &[1, 2], 1, 0);
+        assert_eq!(link, "/sys/bus/usb/devices/3-1.2:1.0/driver");
+    }
 
     #[derive(Debug, PartialEq)]
     enum E {

@@ -1,0 +1,2 @@
+sr: uni-t-dmm: Failed to claim interface 0: LIBUSB_ERROR_BUSY.
+sr: uni-t-dmm: HID chip init failed: -1.

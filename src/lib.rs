@@ -87,7 +87,9 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
+    pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
+    pub mod kecheng_kc_330b;
     pub mod kingst_la2016;
     pub mod lascar_el_usb;
     pub mod lecroy_logicstudio;
@@ -100,6 +102,9 @@ pub mod drivers {
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
     pub mod sysclk_lwla;
+    pub mod sysclk_sla5032;
+    pub mod testo;
+    pub mod uni_t_dmm;
     pub mod zeroplus_logic_cube;
 }
 
@@ -116,9 +121,12 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
     registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
+    registry.register(Box::new(drivers::testo::TestoDriver));
+    registry.register(Box::new(drivers::ikalogic_scanalogic2::Scanalogic2Driver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
+    registry.register(Box::new(drivers::kecheng_kc_330b::Kc330bDriver));
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
@@ -129,4 +137,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
     registry.register(Box::new(drivers::zeroplus_logic_cube::ZeroplusDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
+    registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
 }
