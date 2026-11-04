@@ -58,7 +58,17 @@
 //! - The position registers point after the last event written
 //!   (`READ_STOP_POS`) and after the trigger event (`READ_TRIGGER_POS`),
 //!   as `sigma_read_pos`'s decrement implies; the trigger pipeline's
-//!   latency is not modelled.
+//!   latency is not modelled. That reading comes from the C comment at
+//!   `protocol.c` 371-377, itself a later reading of an older line, and
+//!   the model implements it, so it proves nothing about the hardware:
+//!   `protocol.c` 1433-1435 calls these registers late. By default the
+//!   stop register sits on a cluster boundary and every event before it
+//!   holds data, so the C driver's dropped last event looks like a bug
+//!   here; with `stop-mid=N` the register is late instead (below), and
+//!   the same count is what keeps the driver out of an unwritten
+//!   cluster. A hardware recording could settle it: capture a counter
+//!   with `--time` and check whether the last sample continues the
+//!   count.
 //! - `WRITE_POST_TRIGGER` (`capture_ratio * 255 / 100`): the model
 //!   takes it as the share of the memory before the trigger, in 256ths,
 //!   and stops the capture (`RMR_POSTTRIGGERED`) once `256 - value`
@@ -89,6 +99,12 @@
 //!   field 0 (`api.c`, `div = clock_pin + 1` against `CLKSEL_PINMASK`).
 //!   A known habit of the driver, not flagged; the model's external
 //!   clock ignores the pin anyway.
+//! - `stop-mid=N` (1 to 6, off by default): a stop in the middle of a
+//!   cluster, with a late register. Once stopped, `READ_STOP_POS` reads
+//!   `N` events before the end of the last stored cluster, and only the
+//!   events before the decremented position were written; the rest of
+//!   that cluster reads 0, and all of it, timestamp included, for
+//!   `N` = 6.
 //! - Memory beyond what a capture wrote reads 0.
 
 use std::collections::VecDeque;
@@ -229,11 +245,14 @@ pub struct FpgaFaults {
     /// Mode register reads after `WMR_FORCESTOP` before
     /// `RMR_POSTTRIGGERED`.
     pub stop_polls: u32,
+    /// Events the stop register reads before the end of the last stored
+    /// cluster, 0 to 6.
+    pub stop_mid: u64,
 }
 
 impl Default for FpgaFaults {
     fn default() -> FpgaFaults {
-        FpgaFaults { id: ID, scratch_stuck: 0, stop_polls: 0 }
+        FpgaFaults { id: ID, scratch_stuck: 0, stop_polls: 0, stop_mid: 0 }
     }
 }
 
@@ -307,6 +326,8 @@ struct Capture {
     /// Mode register reads left before `RMR_POSTTRIGGERED` after a
     /// forced stop.
     stop_left: Option<u32>,
+    /// `stop-mid=N`.
+    stop_mid: u64,
     /// `RMR_POSTTRIGGERED`.
     over: bool,
 }
@@ -340,6 +361,12 @@ impl Capture {
 
     fn events(&self) -> u64 {
         self.slots.len() as u64 * EVENTS_PER_CLUSTER
+    }
+
+    /// The event count `READ_STOP_POS` tells.
+    fn stop_events(&self) -> u64 {
+        let events = self.events();
+        if self.running { events } else { events.saturating_sub(self.stop_mid) }
     }
 
     /// Samples ticks up to `until`, slot by slot, as long as it runs.
@@ -418,10 +445,20 @@ impl Capture {
             }
             // The latest pass over the memory.
             let g = base + (total - 1 - base) / per_memory * per_memory;
+            // `stop-mid=N`: the last cluster holds only what comes before
+            // the decremented position.
+            let kept = if self.stop_mid > 0 && g == total - 1 {
+                EVENTS_PER_CLUSTER - 1 - self.stop_mid
+            } else {
+                EVENTS_PER_CLUSTER
+            };
+            if kept == 0 {
+                continue;
+            }
             let start = self.slots[g as usize];
             let at = c as usize * 16;
             out[at..at + 2].copy_from_slice(&(start as u16).to_le_bytes());
-            for i in 0..EVENTS_PER_CLUSTER {
+            for i in 0..kept {
                 let w = self.word(start + i);
                 let o = at + 2 + 2 * i as usize;
                 out[o..o + 2].copy_from_slice(&w.to_le_bytes());
@@ -629,7 +666,7 @@ impl Fpga {
                     }
                 }
                 let trig = pos(&self.capture, &|c| c.trig.map_or(0, |t| Capture::position(t + 1)));
-                let stop = pos(&self.capture, &|c| Capture::position(c.events()));
+                let stop = pos(&self.capture, &|c| Capture::position(c.stop_events()));
                 let (value, shift) = if reg < rreg::STOP_POS_LOW {
                     (trig, (reg - 1) * 8)
                 } else {
@@ -925,6 +962,7 @@ impl Fpga {
             last: 0,
             trig: None,
             stop_left: None,
+            stop_mid: self.faults.stop_mid,
             over: false,
         };
         c.last = c.sample(0);
@@ -1104,6 +1142,7 @@ mod tests {
             last: 0,
             trig: None,
             stop_left: None,
+            stop_mid: 0,
             over: false,
         };
         c.poll();
@@ -1142,6 +1181,7 @@ mod tests {
             last: 0,
             trig: None,
             stop_left: None,
+            stop_mid: 0,
             over: false,
         };
         // Tick 0 holds samples 0, 1, 2, 3: channel i of sample k at
@@ -1215,6 +1255,43 @@ mod tests {
         check(&mut f, &[0x43], "a read moving down");
         let mut f = Fpga::new(Netlist::Mhz100, FpgaFaults::default(), 2);
         check(&mut f, &write_reg(0, &[0, 0, 0, 0]), "the 50 MHz clock select at 100 MHz");
+    }
+
+    #[test]
+    fn a_mid_cluster_stop_leaves_the_rest_unwritten() {
+        for (mid, stop_low, kept) in [(6u8, 1u8, 0usize), (3, 4, 3)] {
+            let faults = FpgaFaults { stop_mid: u64::from(mid), ..FpgaFaults::default() };
+            let mut f = Fpga::new(Netlist::Mhz100, faults, 2);
+            let mut v = Violations::default();
+            f.commands(&write_reg(3, &[0x80]), &mut v);
+            f.commands(&write_reg(2, &[0x20]), &mut v);
+            f.commands(&write_reg(2, &[0x81]), &mut v);
+            f.commands(&write_reg(6, &[0x08, 0x40]), &mut v);
+            f.commands(&write_reg(2, &[0x80]), &mut v);
+            f.commands(&write_reg(0, &[0]), &mut v);
+            f.commands(&write_reg(5, &[127]), &mut v);
+            f.commands(&write_reg(3, &[0x05]), &mut v);
+            // Running: the register as ever, on a cluster boundary.
+            let (_, stop, _) = positions(&mut f, &mut v);
+            assert_eq!((stop & 0x1ff) % 7, 0, "{stop}");
+            f.commands(&write_reg(3, &[0x11]), &mut v);
+            f.commands(&[0x07, 0x10, 0x40], &mut v);
+            let _ = f.take(1);
+            f.commands(&write_reg(3, &[0x02]), &mut v);
+            let (_, stopped, _) = positions(&mut f, &mut v);
+            assert_eq!((stopped & 0x1ff) % 7, u32::from(stop_low), "{stopped}");
+            let c = f.capture.as_ref().unwrap();
+            let last = c.slots.len() - 1;
+            let row = c.row(last as u64 / CLUSTERS_PER_ROW);
+            let at = (last % CLUSTERS_PER_ROW as usize) * 16;
+            if kept == 0 {
+                assert_eq!(&row[at..at + 16], &[0; 16], "wholly unwritten");
+            } else {
+                assert_ne!(&row[at + 2..at + 2 + 2 * kept], &vec![0; 2 * kept][..]);
+                assert_eq!(&row[at + 2 + 2 * kept..at + 16], &vec![0; 14 - 2 * kept][..]);
+            }
+            assert!(v.is_empty(), "{v:?}");
+        }
     }
 
     #[test]

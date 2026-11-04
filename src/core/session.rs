@@ -10,7 +10,7 @@ use crate::core::packet::Packet;
 use crate::core::trigger::Trigger;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 use std::time::Duration;
 
 /// How many packets may wait between the devices and the consumer.
@@ -109,10 +109,8 @@ impl Session {
         }
         drop(tx);
         if let Some(e) = start_err {
-            for dev in self.devices.iter_mut().take(started) {
-                let _ = dev.stop();
-            }
             // Drain what the started devices send, so their threads end.
+            let _ = stop_draining(&mut self.devices[..started], &rx, |_, _| {});
             while rx.recv().is_ok() {}
             return Err(e);
         }
@@ -134,11 +132,189 @@ impl Session {
             }
             if !stopping && self.stop_flag.load(Ordering::SeqCst) {
                 stopping = true;
-                for dev in &mut self.devices {
-                    dev.stop()?;
-                }
+                stop_draining(&mut self.devices, &rx, |dev, packet| {
+                    // Already stopping: what the consumer answers no
+                    // longer matters.
+                    let _ = consumer(dev, &packet);
+                    if matches!(packet, Packet::End) {
+                        ended += 1;
+                    }
+                })?;
             }
         }
         Ok(())
+    }
+}
+
+/// Stops `devices` while `each` takes what they still send.
+///
+/// A device's stop joins its acquisition thread, which may be blocked
+/// on a full queue: stopping from the loop that empties the queue would
+/// wait for ever. So the stops run on a thread of their own until they
+/// return, and the caller's thread goes on emptying the queue.
+fn stop_draining(
+    devices: &mut [Box<dyn Device>],
+    rx: &Receiver<(usize, Packet)>,
+    mut each: impl FnMut(usize, Packet),
+) -> Result<()> {
+    std::thread::scope(|scope| {
+        let stopper = scope.spawn(move || -> Result<()> {
+            for dev in devices.iter_mut() {
+                dev.stop()?;
+            }
+            Ok(())
+        });
+        while !stopper.is_finished() {
+            match rx.recv_timeout(Duration::from_millis(10)) {
+                Ok((dev, packet)) => each(dev, packet),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        stopper.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::channel::{Channel, ChannelKind};
+    use crate::core::device::{DeviceClass, DeviceInfo};
+    use crate::core::key::Key;
+    use crate::core::option::{OptionDesc, ValueList};
+    use crate::core::value::Value;
+    use std::sync::mpsc::channel;
+    use std::thread::JoinHandle;
+
+    /// More packets than the queue holds.
+    const BURST: usize = QUEUE_DEPTH * 4;
+
+    /// A driver whose thread sends its whole burst before it looks at
+    /// the stop flag, and whose stop joins that thread, as a capture
+    /// sent from a memory image does.
+    struct Bursting {
+        info: DeviceInfo,
+        channels: Vec<Channel>,
+        fail_start: bool,
+        stop: Arc<AtomicBool>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    impl Bursting {
+        fn new(fail_start: bool) -> Box<Self> {
+            Box::new(Bursting {
+                info: DeviceInfo::default(),
+                channels: vec![Channel::new(0, ChannelKind::Logic, "D0")],
+                fail_start,
+                stop: Arc::new(AtomicBool::new(false)),
+                worker: None,
+            })
+        }
+    }
+
+    impl Device for Bursting {
+        fn info(&self) -> &DeviceInfo {
+            &self.info
+        }
+        fn classes(&self) -> &[DeviceClass] {
+            &[]
+        }
+        fn channels(&self) -> &[Channel] {
+            &self.channels
+        }
+        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn options(&self, _: Option<&str>) -> Result<Vec<OptionDesc>> {
+            Ok(Vec::new())
+        }
+        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn set(&mut self, key: &Key, _: &Value, _: Option<&str>) -> Result<()> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn list(&self, key: &Key, _: Option<&str>) -> Result<ValueList> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn start(&mut self, sink: PacketSink) -> Result<()> {
+            if self.fail_start {
+                return Err(Error::device("refused"));
+            }
+            self.worker = Some(std::thread::spawn(move || {
+                for _ in 0..BURST {
+                    if !sink.send(Packet::logic(1, vec![0])) {
+                        return;
+                    }
+                }
+                sink.send(Packet::End);
+            }));
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(w) = self.worker.take() {
+                w.join().expect("worker");
+            }
+            Ok(())
+        }
+    }
+
+    /// Runs `body` with a limit, so that a deadlock fails the test
+    /// rather than holding the suite.
+    fn within_limit<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(body());
+        });
+        rx.recv_timeout(Duration::from_secs(20)).expect("the session deadlocked")
+    }
+
+    #[test]
+    fn a_stop_with_a_full_queue_ends_and_delivers_everything() {
+        let packets = within_limit(|| {
+            let mut session = Session::new();
+            session.add_device(Bursting::new(false));
+            let mut packets = 0;
+            session
+                .run(|_, _| {
+                    packets += 1;
+                    // Stop at once: the thread is blocked on the queue.
+                    std::thread::sleep(Duration::from_millis(1));
+                    Flow::Stop
+                })
+                .unwrap();
+            packets
+        });
+        assert_eq!(packets, BURST + 1, "every packet and the end");
+    }
+
+    #[test]
+    fn a_stop_flag_with_a_full_queue_ends() {
+        within_limit(|| {
+            let mut session = Session::new();
+            session.add_device(Bursting::new(false));
+            let flag = session.stop_flag();
+            session
+                .run(|_, _| {
+                    flag.store(true, Ordering::SeqCst);
+                    Flow::Continue
+                })
+                .unwrap();
+        });
+    }
+
+    #[test]
+    fn a_failed_start_stops_a_device_with_a_full_queue() {
+        let e = within_limit(|| {
+            let mut session = Session::new();
+            session.add_device(Bursting::new(false));
+            session.add_device(Bursting::new(true));
+            session.run(|_, _| Flow::Continue).unwrap_err().to_string()
+        });
+        assert!(e.contains("refused"), "{e}");
     }
 }

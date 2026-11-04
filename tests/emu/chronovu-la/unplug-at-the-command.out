@@ -1,0 +1,5 @@
+sr: chronovu-la: Failed to write data (-1): usb bulk write failed.
+sr: chronovu-la: Failed to purge FTDI buffers (-1): FTDI purge of TX buffer failed.
+sr: chronovu-la: Failed to reset FTDI device (-1): FTDI reset failed.
+sr: chronovu-la: Acquisition failed to start.
+device error: acquisition failed to start

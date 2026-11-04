@@ -1,1 +1,10 @@
-sr: chronovu-la: Failed to close FTDI device (-1): all fine.
+Acquisition with 8/8 channels at 100 MHz
+0:55 55 55 55 55 55 55 55 55 55 55 55 50 
+1:33 33 33 33 33 33 33 33 33 33 33 33 30 
+2:0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 00 
+3:00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 
+4:00 00 ff ff 00 00 ff ff 00 00 ff ff 00 
+5:00 00 00 00 ff ff ff ff 00 00 00 00 f0 
+6:00 00 00 00 00 00 00 00 ff ff ff ff f0 
+7:00 00 00 00 00 00 00 00 00 00 00 00 00 
+b5296c4fb728e964046728954400db03cff8fff80edd771a62321d447dd767e9  -

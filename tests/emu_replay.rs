@@ -10,13 +10,16 @@
 //! logic runs in `cargo test` on every platform, without the emulator
 //! or root.
 
+use sha2::{Digest as _, Sha256};
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 8] = [
+const RECORDED: [&str; 11] = [
+    "asix-sigma",
+    "chronovu-la",
     "fx2lafw",
     "saleae-logic16",
     "ftdi-la",
@@ -25,12 +28,48 @@ const RECORDED: [&str; 8] = [
     "brymen-bm86x",
     "uni-t-ut61e-ser",
     "victor-dmm",
+    "ikalogic-scanaplus",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a
 /// replay that went astray (the `PICkit2` waits for its trigger until it
 /// is stopped) fails then rather than holding the test.
 const LIMIT: Duration = Duration::from_secs(60);
+
+/// The firmware stand-ins of `tools/emu/*.firmware`, written as
+/// `tools/emu-firmware.sh` writes them into a directory of their own: a
+/// driver that uploads a file on every capture (asix-sigma) loads it in
+/// the replay too, and the fixture holds the digest of what it sends.
+fn firmware_standins() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let out = Path::new(env!("CARGO_TARGET_TMPDIR")).join("emu-firmware");
+    std::fs::create_dir_all(&out).unwrap();
+    for list in std::fs::read_dir(root.join("tools").join("emu")).unwrap() {
+        let list = list.unwrap().path();
+        if list.extension().is_none_or(|e| e != "firmware") {
+            continue;
+        }
+        for line in std::fs::read_to_string(&list).unwrap().lines() {
+            let line = line.split('#').next().unwrap_or("");
+            let mut fields = line.split_whitespace();
+            let (Some(name), Some(size)) = (fields.next(), fields.next()) else { continue };
+            let size = match size.strip_prefix("0x") {
+                Some(hex) => usize::from_str_radix(hex, 16).unwrap(),
+                None => size.parse().unwrap(),
+            };
+            let mut data = Vec::with_capacity(size + 32);
+            for i in 0.. {
+                if data.len() >= size {
+                    break;
+                }
+                data.extend_from_slice(&Sha256::digest(format!("{name}:{i}").as_bytes()));
+            }
+            data.truncate(size);
+            std::fs::write(out.join(name), data).unwrap();
+        }
+    }
+    out
+}
 
 fn fixtures() -> Vec<PathBuf> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures");
@@ -64,7 +103,7 @@ fn driver(args: &[String]) -> Option<String> {
 }
 
 /// Runs oxrok on one fixture: its output, or why it failed.
-fn replay(path: &Path) -> Result<(), String> {
+fn replay(path: &Path, firmware: &Path) -> Result<(), String> {
     // Git may check text out with CRLF on Windows.
     let fixture = std::fs::read_to_string(path).map_err(|e| e.to_string())?.replace("\r\n", "\n");
     let var = match fixture.lines().next() {
@@ -79,6 +118,7 @@ fn replay(path: &Path) -> Result<(), String> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_oxrok"))
         .args(args(&fixture))
         .env(var, path)
+        .env("OXROK_FIRMWARE_DIR", firmware)
         .env_remove(if var == "OXROK_USB_REPLAY" { "OXROK_HID_REPLAY" } else { "OXROK_USB_REPLAY" })
         .env_remove("OXROK_USB_RECORD")
         .env_remove("OXROK_HID_RECORD")
@@ -131,6 +171,7 @@ fn replay(path: &Path) -> Result<(), String> {
 #[test]
 fn emulator_recordings_replay() {
     let paths = fixtures();
+    let firmware = firmware_standins();
     let mut failures = Vec::new();
     let mut drivers = Vec::new();
     // In parallel: each is a process of its own.
@@ -138,7 +179,8 @@ fn emulator_recordings_replay() {
         .iter()
         .map(|p| {
             let p = p.clone();
-            std::thread::spawn(move || replay(&p))
+            let firmware = firmware.clone();
+            std::thread::spawn(move || replay(&p, &firmware))
         })
         .collect();
     for (path, run) in paths.iter().zip(runs) {

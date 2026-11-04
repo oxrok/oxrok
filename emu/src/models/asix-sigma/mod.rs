@@ -77,7 +77,8 @@
 //! and stays unconfigured), `id=N` (what `READ_ID` answers, 0xa6),
 //! `scratch=stuck` (the scratch register reads 0xff, as libsigrok saw
 //! unused registers read) or `scratch=bit0` (its bit 0 stuck at 1), `stop-polls=N` (mode reads before a forced
-//! stop is over), and the FTDI shell's `stall=`, `in-stall=`, `idle=`.
+//! stop is over), `stop-mid=N` (a late stop register in the middle of a
+//! cluster, see [`fpga`]), and the FTDI shell's `stall=`, `in-stall=`, `idle=`.
 //!
 //! What the cases (`tools/emu/asix-sigma.sh`) leave unreached in the C
 //! driver (`tests/emu/asix-sigma/gcov.txt`), and why:
@@ -132,7 +133,7 @@ pub const NAME: &str = "asix-sigma";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "ASIX SIGMA/SIGMA2 (FT245BM and an FPGA configured over bit-bang); \
      variant=sigma|sigma2|omega, serial= (empty: none), product=N, step=N; faults: \
-     init-busy=N, config=fail, id=N, scratch=stuck|bit0, stop-polls=N, the FTDI shell's stall=, in-stall=, idle=";
+     init-busy=N, config=fail, id=N, scratch=stuck|bit0, stop-polls=N, stop-mid=N, the FTDI shell's stall=, in-stall=, idle=";
 
 /// ASIX's vendor id.
 pub const VENDOR: u16 = 0xa600;
@@ -221,6 +222,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             }
             "init-busy" => board.init_busy = number(k, v)? as u32,
             "stop-polls" => board.fpga.stop_polls = number(k, v)? as u32,
+            "stop-mid" => {
+                board.fpga.stop_mid = number(k, v)?;
+                if board.fpga.stop_mid > 6 {
+                    return Err(Error(format!("stop-mid={v}: 0 to 6")));
+                }
+            }
             "id" => {
                 board.fpga.id = u8::try_from(number(k, v)?)
                     .map_err(|_| Error(format!("id={v}: one byte")))?;

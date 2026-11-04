@@ -1,0 +1,2 @@
+sr: chronovu-la: Failed to write data (-1): usb bulk write failed.
+sr: timeout: the monitored command dumped core

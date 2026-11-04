@@ -1,0 +1,11 @@
+Acquisition with 8/8 channels at 1 MHz
+0:55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 aa aa aa aa aa aa aa aa 
+1:33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 33 
+2:0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 0f 
+3:00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 00 ff 
+4:00 00 ff ff 00 00 ff ff 00 00 ff ff 00 00 ff ff 00 00 ff ff 00 00 ff ff 
+5:00 00 00 00 ff ff ff ff 00 00 00 00 ff ff ff ff 00 00 00 00 ff ff ff ff 
+6:00 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff 00 00 00 00 00 00 00 00 
+7:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 00 00 00 00 00 00 00 00 
+T:^ 0
+1e61d165e3be2fd91833934009f096f7dabd2c07294cc7f9eda449d740d42366  -

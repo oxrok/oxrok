@@ -346,3 +346,38 @@ fn time_limit_and_output_file() {
     assert_eq!(text.lines().count(), 2 + 11, "{text}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// The reader of the output goes away mid-capture (`| head -2`): the
+/// run ends, rather than waiting for the device, whose thread is
+/// blocked on a full queue, to stop.
+#[test]
+fn a_pipe_closing_mid_capture_ends_the_run() {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(env!("CARGO_BIN_EXE_oxrok"))
+        .args(["-d", DEMO8, "-c", "samplerate=10m", "--samples", "1000000000", "-O", "hex"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("run oxrok");
+    let mut stdout = child.stdout.take().expect("stdout");
+    let mut some = [0u8; 256];
+    stdout.read_exact(&mut some).expect("the capture's first output");
+    // Reading no more, the pipe and then the session's queue fill up,
+    // so the device's thread is blocked when the pipe closes.
+    std::thread::sleep(Duration::from_secs(2));
+    drop(stdout);
+    let limit = Instant::now() + Duration::from_secs(20);
+    loop {
+        if child.try_wait().expect("wait").is_some() {
+            return;
+        }
+        if Instant::now() > limit {
+            child.kill().expect("kill");
+            let _ = child.wait();
+            panic!("oxrok still runs 20 s after its output closed");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
