@@ -1,0 +1,9 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+testo - Testo 435/635/735 with 2 channels: Temperature Humidity
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

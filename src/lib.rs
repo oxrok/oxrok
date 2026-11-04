@@ -99,6 +99,7 @@ pub mod drivers {
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
     pub mod sysclk_lwla;
+    pub mod testo;
     pub mod uni_t_dmm;
     pub mod zeroplus_logic_cube;
 }
@@ -116,6 +117,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
     registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
+    registry.register(Box::new(drivers::testo::TestoDriver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
