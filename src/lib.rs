@@ -86,6 +86,7 @@ pub mod drivers {
     pub mod fx2lafw;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
+    pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod microchip_pickit2;
     pub mod pipistrello_ols;
@@ -113,4 +114,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
+    registry.register(Box::new(drivers::lecroy_logicstudio::LogicStudioDriver));
 }

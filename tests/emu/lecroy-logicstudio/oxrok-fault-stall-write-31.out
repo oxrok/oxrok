@@ -1,0 +1,2 @@
+sr: lecroy-logicstudio: write_registers_sync(18/5444) failed.
+sr: lecroy-logicstudio: Failed to ask for the samples: LIBUSB_ERROR_PIPE.

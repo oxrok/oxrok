@@ -2,8 +2,7 @@
 # FX2 without firmware (05ff:a001) that takes it in the scan and
 # renumerates as 05ff:a002; the FPGA bitstream, the trigger and the
 # capture follow at the first acquisition. Sourced by tools/diffcli.sh
-# --emu; see docs/USB.md, "Writing a device model". oxrok has no port
-# of the driver: every case is an oracle case.
+# --emu; see docs/USB.md, "Writing a device model".
 #
 # sigrok-cli cannot start a capture with this driver: it runs a session
 # only with --samples, --time, --frames or --continuous, and the driver
@@ -17,8 +16,19 @@
 # (tools/libsigrok-run.c) starts the session without a limit, the
 # driver ends it after one capture, and the samples go through
 # libsigrok's bits output module.
+#
+# oxrok's port (src/drivers/lecroy_logicstudio) starts a capture with -O,
+# -o or -t alone, so a capture takes the same arguments under both. A "lib"
+# case with --oxrok is a full case against the runner: oxrok is held to its
+# goldens, output and transactions, and --no-oracle runs oxrok against them.
+# Where the C driver cannot be the oracle (it hangs or dies), an "oxrok"
+# case keeps the runner's failure in SLUG.oracle and pins oxrok's own output
+# and transactions in SLUG.out and SLUG.tx; its "lib" case stays, library
+# only, for what the C driver does. No --oracle-differs: nothing here has
+# the C driver ending well with another result.
 EMU_MODEL=lecroy-logicstudio
 EMU_DRIVER=lecroy-logicstudio
+EMU_FULL=lecroy-logicstudio
 EMU_GCOV_SHARED="src/usb.c src/ezusb.c"
 
 # The model's options for the cases that follow (see fx2lafw.sh).
@@ -78,7 +88,17 @@ emu_cases() {
     # The driver's and sigrok-cli's own lines, without the open of the
     # renumerated device that libusb may refuse with LIBUSB_ERROR_ACCESS
     # before udev opens its node (docs/USB.md; api.c:226-229 retries).
-    E='/LIBUSB_ERROR_ACCESS/d; /^(Failed|This device|sr: |No devices)/!d'
+    #
+    # X names oxrok's log lines as libsigrok names them, and gives its last
+    # lines sigrok-cli's words: the reason off "Failed to open device" (the
+    # driver's own line says it), and sr_strerror()'s words for the reason
+    # of a refused option, whose oxrok text names the rate or the range. No
+    # line goes, and what follows the prefix of a log line must be the C's
+    # text. sigrok-cli's and the runner's lines do not match, so the goldens
+    # are theirs.
+    D='oxrok: err: oxrok::drivers::lecroy_logicstudio[a-z_:]*:'
+    X="s/^$D (Failed to commit|Could not start)/sr: session: \\1/; s/^$D (Failed to open resource)/sr: resource: \\1/; s/^$D (Capture ratio)/sr: hwdriver: \\1/; s/^$D /sr: lecroy-logicstudio: /; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
+    E="$X; /LIBUSB_ERROR_ACCESS/d; /^(Failed|This device|sr: |No devices)/!d"
 
     # Without firmware: every run uploads it in the scan, and dev_open()
     # waits (300 ms, then up to 3 s) for the renumerated device.
@@ -89,7 +109,9 @@ emu_cases() {
     # check_options() fails without a word and sr_driver_scan() returns
     # no device (hwdriver.c:513-516, 583-586): conn= cannot select the
     # board, and the scan it is given finds nothing.
-    emu_case "conn refused" --expect-fail --stderr --filter "$E" -- -d $L:conn=$EMU_USB --get samplerate
+    # oxrok says which option it refuses, where libsigrok says nothing and
+    # finds no device; the filter gives that one line sigrok-cli's words.
+    emu_case "conn refused" --expect-fail --stderr --filter "s/^Unknown scan option 'conn'\\.\$/No devices found./; $E" -- -d $L:conn=$EMU_USB --get samplerate
     emu_case "show" --keep-header -- -d $L --show
     emu_case "get samplerate" -- -d $L --get samplerate
     emu_case "get captureratio" -- -d $L --get captureratio
@@ -151,36 +173,36 @@ emu_cases() {
     HI=D8,D9,D10,D11,D12,D13,D14,D15
     # A failure: libsigrok's log lines and the runner's own, the board's
     # port path made generic.
-    P='s#usb/[0-9][0-9.-]*#usb/PORT#'
+    P="$X; s#usb/[0-9][0-9.-]*#usb/PORT#"
     ls_options flashed=1
     # The runner's --scan against sigrok-cli's: this golden must equal
     # flashed-scan.out.
-    emu_case "lib flashed scan" --libsigrok --keep-header -- -d $L --scan
+    emu_case "lib flashed scan" --libsigrok --oxrok --keep-header -- -d $L --scan
     # The rate classes of lls_set_samplerate() (samplerates[]: the
     # trigger latency differs between them) with 16 channels.
     for r in 1G 500M 250M 100M 10M 1M 1k; do
-        emu_case "lib 16ch $r D3 rising" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=$r -t D3=r -O bits
+        emu_case "lib 16ch $r D3 rising" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=$r -t D3=r -O bits
     done
-    emu_case "lib 16ch 100M ratio 30 D4 falling" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=100M:captureratio=30 -t D4=f -O bits
+    emu_case "lib 16ch 100M ratio 30 D4 falling" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=100M:captureratio=30 -t D4=f -O bits
     # Capture ratios at the ends: the trigger first, and after the last
     # sample (no marker).
-    emu_case "lib 16ch ratio 0" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=0 -t D3=r -O bits
-    emu_case "lib 16ch ratio 100" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=100 -t D3=r -O bits
+    emu_case "lib 16ch ratio 0" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=0 -t D3=r -O bits
+    emu_case "lib 16ch ratio 100" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M:captureratio=100 -t D3=r -O bits
     # D13's first rise once armed is at sample 24576, so the capture
     # goes round the 20480 sample memory.
-    emu_case "lib 16ch memory wraps" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D13=r -O bits
+    emu_case "lib 16ch memory wraps" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D13=r -O bits
     # Two stages (D0 high, then D0 rising), a level with an edge in one
     # stage, and several levels with an edge.
-    emu_case "lib two stages" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D0=1r -O bits
-    emu_case "lib D15 level and D0 edge" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D15=1,D0=e -O bits
-    emu_case "lib levels and an edge" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D2=1,D4=0,D1=e -O bits
+    emu_case "lib two stages" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D0=1r -O bits
+    emu_case "lib D15 level and D0 edge" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D15=1,D0=e -O bits
+    emu_case "lib levels and an edge" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D2=1,D4=0,D1=e -O bits
     # Three stages: the driver has two (transform_trigger(),
     # protocol.c:604-606), and the session does not start.
-    emu_case "lib three stages" --libsigrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D0=rfr -O bits
+    emu_case "lib three stages" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D0=rfr -O bits
     # 8 channels: the lower group, and the upper one (register 0x21),
     # whose memory wraps.
-    emu_case "lib 8ch lower 1M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=1M -t D3=r -O bits
-    emu_case "lib 8ch lower 500M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=500M -t D3=r -O bits
+    emu_case "lib 8ch lower 1M" --libsigrok --oxrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=1M -t D3=r -O bits
+    emu_case "lib 8ch lower 500M" --libsigrok --oxrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=500M -t D3=r -O bits
     # send_samples() sends a logic packet of 0 bytes for any stretch of
     # a whole number of its 4096 sample chunks in the 8 channel path
     # (protocol.c:980-989; 8192 bytes here, after the wrap, before the
@@ -192,8 +214,8 @@ emu_cases() {
     # datafeed_in() hands the empty packet on the same way. The ascii
     # output counts samples (ascii.c:219), so it takes the whole capture.
     emu_case "lib 8ch upper wraps bits crash" --libsigrok --expect-fail --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
-    emu_case "lib 8ch upper wraps ascii" --libsigrok --digest --filter '1,/^D15:/b; /T/{=;b;}; d' -- -d $L -C $HI -c samplerate=1M -t D14=r -O ascii
-    emu_case "lib 8ch upper 1G ratio 20" --libsigrok --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1G:captureratio=20 -t D9=r -O bits
+    emu_case "lib 8ch upper wraps ascii" --libsigrok --oxrok --digest --filter '1,/^D15:/b; /T/{=;b;}; d' -- -d $L -C $HI -c samplerate=1M -t D14=r -O ascii
+    emu_case "lib 8ch upper 1G ratio 20" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1G:captureratio=20 -t D9=r -O bits
     # The runner's own limit (--stop-after): the output cut at 1000
     # samples. The driver sends the samples and ends the acquisition in
     # one callback (recv_bulk_transfer()), so the stop asked from the
@@ -208,6 +230,15 @@ emu_cases() {
     emu_case "lib no trigger hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -O bits
     emu_case "lib unplug mid fetch hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
     emu_case "lib unplug while waiting hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
+    # Where the C driver never ends, oxrok does, or refuses; --oracle-hangs
+    # holds the runner to its hang. The errors are oxrok's own lines.
+    H='recv_intr_transfer() submits no transfer after a failure or a short packet, protocol.c:926-933'
+    emu_case "oxrok no trigger" --libsigrok --oxrok --oracle-bug "without a trigger nothing arms the board and nothing reads its packets, protocol.c:331,1119" --oracle-hangs --timeout 3 --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -O bits
+    emu_case "oxrok unplug mid fetch" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok unplug while waiting" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
+    # The same capture with bits as "lib 8ch upper wraps ascii", which the
+    # C driver's packet of no bytes crashes.
+    emu_case "oxrok 8ch upper wraps bits" --libsigrok --oxrok --oracle-bug "send_samples() sends a logic packet of 0 bytes, protocol.c:980-989, and bits.c:158 wraps" --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
     # Faults that end the session before it starts: the Nth register
     # write (1 the stop, 2 and 5 the thresholds, 8 the channel group,
     # 9 the trigger, up to the arm at 30), the upload, a bitstream
@@ -217,13 +248,18 @@ emu_cases() {
              stall=write:28 stall=write:29 stall=write:30 stall=upload stall_bitstream=5 verify=4 \
              stall=verify stall=read:3 stall=read:5 settle=100 stall=status; do
         ls_options flashed=1 $f
-        emu_case "lib fault $f" --libsigrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+        # oxrok names the error of a refused 0xb3, a STALL's
+        # LIBUSB_ERROR_PIPE; the C names a variable that holds SR_ERR
+        # whatever happened (protocol.c:452-454), LIBUSB_ERROR_IO. The
+        # filter drops that one word, in that line, from oxrok's run.
+        U3="s/^(oxrok: .*Failed to initiate firmware upload: )LIBUSB_ERROR_PIPE/\\1LIBUSB_ERROR_IO/; $P"
+        emu_case "lib fault $f" --libsigrok --oxrok --expect-fail --stderr --filter "$U3" -- -d $L -c samplerate=1M -t D3=r -O bits
     done
     # Faults the driver rides out: a slow verify, slow settling, stale
     # and odd status packets, a short first sample transfer.
     for f in verify=3 settle=99 stale=2 odd_state=0x05 bulk_short=1000; do
         ls_options flashed=1 $f
-        emu_case "lib fault $f" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r -O bits
+        emu_case "lib fault $f" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r -O bits
     done
     # And those it never gets out of: the last register write (the
     # fetch's), short status packets, a halted sample endpoint, and
@@ -232,6 +268,26 @@ emu_cases() {
         ls_options flashed=1 $f
         emu_case "lib fault $f hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
     done
+    # The same under oxrok, each pinned to its own end: the failed fetch
+    # write, the short packet, the halted endpoint.
+    ls_options flashed=1 stall=write:31
+    emu_case "oxrok fault stall=write:31" --libsigrok --oxrok --oracle-bug "handle_fetch_samples_done() ignores the status of its write, protocol.c:244-264, and resubmits for ever" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    ls_options flashed=1 intr_short=16
+    emu_case "oxrok fault intr_short=16" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    ls_options flashed=1 bulk_stall=1
+    emu_case "oxrok fault bulk_stall=1" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    # Ctrl-C. Neither sigrok-cli nor the runner has a SIGINT handler, and
+    # a trigger that does not fire is waited for until then; the stop
+    # writes the arm register (as "lib stop while waiting"), on a board
+    # that told its state before, and on one that says nothing, right after
+    # the arm (the 32nd control write here, bitstream and FX2 requests
+    # included). The latter's transactions are "lib stop while waiting"'s
+    # with the harness's interrupt line among them.
+    I="the runner has no SIGINT handler, like sigrok-cli"
+    ls_options flashed=1 still=1
+    emu_case "oxrok interrupt while waiting" --libsigrok --oxrok --oracle-bug "$I" --interrupt in=1:2 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
+    ls_options flashed=1 intr_silent=1
+    emu_case "oxrok interrupt on a silent board" --libsigrok --oxrok --oracle-bug "$I" --interrupt out=0:32 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
     # A stop while the trigger wait is pending: --stop-after 0 asks for
     # it as the session starts. How many status packets complete before
     # the main loop gets to it depends on timing, so a board that sends
@@ -243,12 +299,17 @@ emu_cases() {
     # FPGA_FIRMWARE_SIZE (upload_fpga_bitstream(), protocol.c:433-445).
     ls_options flashed=1
     ls_bitstream missing
-    emu_case "lib bitstream missing" --libsigrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "lib bitstream missing" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_bitstream short
-    emu_case "lib bitstream short" --libsigrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "lib bitstream short" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_bitstream good
+    # Replay fixtures: a capture with each bitstream, of few channels to
+    # keep their output small.
+    ls_options flashed=1
+    emu_case "lib recorded 16ch" --libsigrok --oxrok --record -- -d $L -C D3,D8 -c samplerate=1M -t D3=r -O bits
+    emu_case "lib recorded 8ch upper" --libsigrok --oxrok --record -- -d $L -C D9 -c samplerate=100M:captureratio=20 -t D9=f -O bits
     # Without the FX2 firmware: the scan uploads it, the open waits for
     # the renumerated board, then the capture.
     ls_options
-    emu_case "lib unflashed capture" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "lib unflashed capture" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r -O bits
 }

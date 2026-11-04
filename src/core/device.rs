@@ -231,6 +231,14 @@ pub trait Driver: Send + Sync {
     /// What kind of instruments the driver serves.
     fn classes(&self) -> &'static [DeviceClass];
 
+    /// Whether a capture ends by itself, with no limit to set: the driver
+    /// offers none of the keys `--samples`, `--time`, `--frames` and
+    /// `--continuous` need, so `-O`, `-o` or `-t` alone starts a capture
+    /// (where sigrok-cli prints its help).
+    fn ends_captures_itself(&self) -> bool {
+        false
+    }
+
     /// Finds devices. `options` are scan options, e.g. a connection.
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>>;
 }

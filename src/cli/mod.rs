@@ -77,6 +77,8 @@ pub fn main() -> ExitCode {
         || args.continuous
     {
         run::session(&registry, &args)
+    } else if run::starts_without_limit(&registry, &args) {
+        run::session(&registry, &args)
     } else {
         show::help();
         Ok(())
