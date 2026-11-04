@@ -75,6 +75,9 @@ emu_cases() {
 
     # By the address of the session's first attach, the flashed board:
     # the first case, before other options attach it again elsewhere.
+    # Without firmware there is no such case: the first tool's upload
+    # renumerates the device, which the second tool then cannot reach at
+    # EMU_USB, so a full case cannot name it by address.
     emu_case "flashed plus by address" -- -d $D:conn=$EMU_USB --samples 8 -O hex
 
     # The DSLogic Plus without firmware: every run uploads the FX2
@@ -96,10 +99,15 @@ emu_cases() {
     emu_case "plus 4ch" -- -d $D -C $C4 -c samplerate=2M --samples 300 -O hex
     emu_case "plus sparse channels" -- -d $D -C 0,5,9,15 -c samplerate=5M --samples 200 -O bits
     emu_case "plus one channel" -- -d $D -C 7 -c samplerate=50k --samples 1000 -O hex
+    # A high channel toggles slowly, so samples lost off the front of the
+    # stream show: the first sample transfer must follow the trigger
+    # packet, on every USB backend.
+    emu_case "plus high channel" -- -d $D -C 13 --samples 16384 -O hex
     # Three transfers of 40960 bytes (16 channels, 20480 samples each):
     # the header line, samples 20478 to 20481 across the first boundary
-    # (sample k is line k + 6 of the CSV) and the last sample.
-    emu_case "plus three transfers" --filter '5b; 20484,20487b; $b; d' -- -d $D -c samplerate=20M --samples 50000 -O csv
+    # (sample k is line k + 2 of the CSV without its header, which holds
+    # the date) and the last sample; the digest covers all of it.
+    emu_case "plus three transfers" --digest --filter '1b; 20480,20483b; $b; d' -- -d $D -c samplerate=20M --samples 50000 -O csv:header=false
     emu_case "plus time limit" -- -d $D -c samplerate=10k --time 10 -O hex
     # Triggers: stage 0 of the setting packet; the FPGA keeps the
     # trigger position's samples (64 at least) before the match.
@@ -110,12 +118,21 @@ emu_cases() {
     emu_case "plus trigger edge" --filter "$V" -- -d $D -C $C4 -c samplerate=1M --samples 100 -t 2=e -O csv:trigger=true
     emu_case "plus trigger two matches" --filter "$V" -- -d $D -C $C4 -c samplerate=1M --samples 100 -t 0=0,3=r -O csv:trigger=true
     emu_case "plus trigger ratio" --filter "$V" -- -d $D -C $C4 -c samplerate=1M:captureratio=50 --samples 400 -t 1=r -O csv:trigger=true
+    # A trigger on the last sample: libsigrok sends a logic packet of
+    # length 0 after it, on which the hex output's length - unitsize
+    # wraps and sigrok-cli dies of SIGSEGV; one sample more is a full case.
+    emu_case "plus trigger on the last sample" --oracle-bug "protocol.c:861-862 sends a logic packet of length 0, on which output/hex.c:163 wraps" -- -d $D -C $C4 --samples 64 -t 0=1 -O hex
+    emu_case "plus trigger one sample before the end" -- -d $D -C $C4 --samples 65 -t 0=1 -O hex
+    # Two letters on a channel are two stages: libsigrok writes both to
+    # stage 0 (rising and falling together, which the FPGA reads as
+    # rising); oxrok refuses more than the one stage it can keep.
+    emu_case "plus trigger two stages" --oracle-differs "protocol.c:386-421 writes the matches of every stage to stage 0, so A then B becomes A and B" --expect-fail --stderr --filter 's/^oxrok: [a-z]+: [a-z0-9_:]+: //' -- -d $D -C $C4 -c samplerate=1M --samples 100 -t 0=rf -O hex
     # Stream mode: transfers sized for 10 ms at the rate, the trigger
     # position bounded by 10 % of the memory.
     emu_case "plus continuous" -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 10000 -O hex
     # 24576 bytes (12288 samples) a transfer at 1 MHz: the first
     # boundary and the last sample.
-    emu_case "plus continuous 16ch" --filter '5b; 12292,12295b; $b; d' -- -d $D -c samplerate=1M:continuous=on --samples 30000 -O csv
+    emu_case "plus continuous 16ch" --digest --filter '1b; 12288,12291b; $b; d' -- -d $D -c samplerate=1M:continuous=on --samples 30000 -O csv:header=false
     emu_case "plus continuous trigger" --filter "$V" -- -d $D -C $C4 -c samplerate=100k:continuous=on:captureratio=20 --samples 500 -t 2=r -O csv:trigger=true
     # The external clock and its edge only change the mode bits.
     emu_case "plus external clock" -- -d $D -C $C4 -c external_clock=on --samples 64 -O hex
@@ -143,7 +160,7 @@ emu_cases() {
     emu_case "plus bad rate" --expect-fail --stderr --filter "$F" -- -d $D -c samplerate=7M --samples 8 -O hex
     # Deeper than 16 Msamples at up to 100 MHz: the driver sets RLE
     # mode. One channel, 58 transfers of 282624 samples.
-    emu_case "plus rle" --filter '3,$d' -- -d $D -C 0 -c samplerate=100M --samples 16000016 -O hex
+    emu_case "plus rle" --digest --filter '3,$d' -- -d $D -C 0 -c samplerate=100M --samples 16000016 -O hex
     # 95 % of 30 Msamples before the trigger, under the 90 % bound of
     # the 256 Mibit memory: libsigrok computes that bound in 32 bits,
     # which wraps to about 10 % (26843520 samples); oxrok keeps 28499968.
@@ -156,8 +173,8 @@ emu_cases() {
     emu_case "basic scan" --keep-header --filter "$C" -- -d $D --scan
     emu_case "basic 10M" -- -d $D -C $C4 -c samplerate=10M --samples 100 -O hex
     # 95 % of 300000 is bounded by 90 % of the memory: 235904 samples
-    # before the trigger (line 235910 of the CSV).
-    emu_case "basic trigger far" --filter '/^;/d; 5b; 235908,235912b; $b; d' -- -d $D -C 0 -c samplerate=1M:captureratio=95 --samples 300000 -t 0=r -O csv:trigger=true
+    # before the trigger (line 235906 of the CSV without its header).
+    emu_case "basic trigger far" --digest --filter '1b; 235904,235908b; $b; d' -- -d $D -C 0 -c samplerate=1M:captureratio=95 --samples 300000 -t 0=r -O csv:header=false:trigger=true
 
     # The DSLogic Pro and the DSCope: their own firmware and bitstream.
     dslogic_options profile=pro
@@ -236,6 +253,12 @@ emu_cases() {
     # sigrok-cli has no SIGINT handler and dies.
     dslogic_options profile=plus flashed=1
     emu_case "interrupt waiting for the trigger" --interrupt out=0:5 --oracle-bug "sigrok-cli has no SIGINT handler, so nothing stops the session" --no-output -- -d $D -C $C4 --samples 16 -t 0=1,3=r -O hex
+    # The FPGA stops short of the limit: two transfers, then nothing. Both
+    # tools give up after 65 timeouts (libsigrok in about 0.9 s, its queued
+    # transfers timing out together; oxrok in about 8.5 s, see the module
+    # documentation) with what came.
+    dslogic_options profile=plus flashed=1 hold=2
+    emu_case "fault capture stops short" -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 20000 -O hex
     # Sample transfers that complete empty, or STALL, count as empty
     # ones; one more than MAX_EMPTY_TRANSFERS (64) in a row and the
     # acquisition ends with no samples.
@@ -248,9 +271,16 @@ emu_cases() {
     dslogic_options profile=plus flashed=1 empty=30 stall_in=35
     emu_case "fault 65 empty or stalled" --no-output -- -d $D -C $C4 --samples 16 -O hex
     # A transfer cut mid-atom: libsigrok logs "Invalid transfer
-    # length!" and takes the whole words it has.
+    # length!" and counts the samples by the bytes it has (4 more bytes
+    # are 32 samples of the one channel).
     dslogic_options profile=plus flashed=1 short_in=2
     emu_case "fault sample transfer cut" -- -d $D -C 6 -c samplerate=10k:continuous=on --samples 10000 -O hex
+    # With three channels those 4 bytes of channel 0 count as 10 samples,
+    # and libsigrok reads channels 1 and 2 of them from what the buffer
+    # held, here the transfer before (one transfer is queued at this rate);
+    # oxrok has them 0.
+    dslogic_options profile=plus flashed=1 short_in=2
+    emu_case "fault sample transfer cut 3ch" --oracle-differs "protocol.c:732-748 reads the rest of a cut atom from the old buffer" -- -d $D -C 0,1,2 -c samplerate=10k:continuous=on --samples 5000 -O hex
     # The boot loader STALLs the upload: the scan logs it and lists the
     # device all the same; the open then asks the FX2 without firmware
     # for its version, which the boot loader STALLs.

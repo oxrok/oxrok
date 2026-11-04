@@ -41,6 +41,14 @@
 //!   (`api.c:355-366`, `protocol.c:242-245`); oxrok reports the range of
 //!   the bitstream it loaded, 0.7-1.4, and writes the threshold register
 //!   as the C driver does.
+//! - A trigger on the capture's last sample leaves no samples after it,
+//!   and `receive_transfer()` sends a logic packet of length 0
+//!   (`protocol.c:861-862`), on which the hex output's
+//!   `logic->length - logic->unitsize` wraps (`output/hex.c:163`) and
+//!   sigrok-cli dies of SIGSEGV. oxrok sends no empty packet.
+//! - `0=rf` makes two stages, both written to stage 0 (`protocol.c:386-
+//!   421`), so sigrok-cli waits for "rising and falling", which is
+//!   rising. oxrok refuses more than one stage.
 //! - A trigger packet that STALLs or comes short completes into
 //!   `trigger_receive()`, which has no branch for it (`protocol.c:1010-
 //!   1026`): the capture never ends and a later abort cancels the freed
@@ -52,6 +60,25 @@
 //!   (`protocol.c:732-748`); oxrok takes those bits as 0.
 //! - Handles leak in `scan()` when a string read fails, and in
 //!   `dslogic_dev_open()` on each failed try; Rust closes them.
+//!
+//! Where it stays different without being a bug of either: the sample
+//! count of the setting packet saturates at 32 bits where the C code
+//! truncates (above 64 Gsamples), a version or REVID answer short of
+//! its length is refused where the C code takes any answer that is no
+//! error and reads what its variable held, and a reopen of the first
+//! DSLogic loads the bitstream of the range reported, where the C
+//! driver's second open loads the 5 V one. Whether the first DSLogic has
+//! the threshold register the open writes is unknown (no source here
+//! says, and the model takes the write on every profile).
+//!
+//! A known limit: [`crate::usb::BulkStream::next`] with no transfer complete in time
+//! leaves the transfers queued and gives no partial data, where a libusb
+//! transfer that times out delivers what it holds (`protocol.c:802`). So
+//! a buffered capture whose FPGA stops partway through a transfer loses
+//! that part (libsigrok has it after about 131 ms), and when nothing
+//! comes the capture gives up after 65 timeouts, about 8.5 s, where
+//! libsigrok's queued transfers take about 0.9 s. The emulator cannot
+//! show the partial data; `hold=N` compares the give-up.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::doc_markdown)]
@@ -99,8 +126,11 @@ static DEV_OPTIONS: [OptionDesc; 9] = [
     OptionDesc::new(Key::ExternalClock, Access::GET_SET),
     OptionDesc::new(Key::ClockEdge, Access::GET_SET_LIST),
 ];
-/// The FPGA's trigger: one stage of level and edge matches (the C
-/// driver puts every match in stage 0).
+/// The FPGA's trigger as the driver uses it: one stage of level and
+/// edge matches. The C driver writes the matches of every stage to
+/// stage 0 (`protocol.c:386-421`), so "A then B" would become "A and B",
+/// and 17 stages would overflow into the channel count: oxrok refuses
+/// more than one.
 const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatures {
     count: false,
     consecutive: false,
@@ -108,7 +138,7 @@ const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatu
     range: false,
     or: false,
     and: false,
-    max_stages: 0,
+    max_stages: 1,
 };
 static TRIGGER_MATCHES: [TriggerMatch; 5] = [
     TriggerMatch::Zero,
@@ -375,6 +405,15 @@ impl DslogicDevice {
             Error::Device(msg)
         })?;
         link.upload_bitstream(self.bitstream())?;
+        self.open_threshold(&mut link)?;
+        Ok(link)
+    }
+
+    /// The end of `dev_open()`: the first open writes the default to the
+    /// register (whether the first DSLogic has that register is unknown;
+    /// the C driver writes it there too), a later one nothing, unless a
+    /// threshold was set while the device was closed.
+    fn open_threshold(&mut self, link: &mut Link) -> Result<()> {
         let by_bitstream = self.profile.threshold_by_bitstream();
         match self.settings.threshold {
             None => {
@@ -386,7 +425,7 @@ impl DslogicDevice {
             Some(_) => {}
         }
         self.settings.threshold_pending = false;
-        Ok(link)
+        Ok(())
     }
 
     /// `dslogic_acquisition_start()` up to the trigger transfer: the stop
@@ -853,34 +892,30 @@ impl Acquisition {
         drop(stream);
     }
 
-    /// The trigger transfer of `dslogic_acquisition_start()`: one
-    /// transfer of `struct dslogic_trigger_pos` that waits as long as
-    /// the trigger does, and `trigger_receive()`.
+    /// The trigger transfer of `dslogic_acquisition_start()`: a read of
+    /// `struct dslogic_trigger_pos` for as long as the trigger takes,
+    /// repeated every [`TRIGGER_POLL`] to look at the stop flag (the C
+    /// transfer has no timeout), and `trigger_receive()`.
     fn trigger_packet(link: &mut Link, stop: &AtomicBool) -> TriggerPacket {
-        let mut stream =
-            match link.transport().bulk_in_stream(ENDPOINT_IN, protocol::TRIGGER_POS_LEN, 1) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("Failed to request trigger: {}.", protocol::libusb_name(&e));
-                    return TriggerPacket::Over;
-                }
-            };
+        // A plain read rather than a stream of one: the libusb backend's
+        // stream reads ahead on its own thread, so it would take the
+        // first sample transfer as well, and lose it when dropped.
         let packet = loop {
             if stop.load(Ordering::SeqCst) {
                 // dslogic_acquisition_stop(): the stop command, then the
                 // transfer cancelled.
                 let _ = link.stop();
-                drop(stream);
                 log::debug!("Trigger transfer canceled.");
                 return TriggerPacket::Over;
             }
-            match stream.next(TRIGGER_POLL) {
+            let read =
+                link.transport().bulk_in(ENDPOINT_IN, protocol::TRIGGER_POS_LEN, TRIGGER_POLL);
+            match read {
                 Err(Error::Timeout) => {}
                 Ok(p) => break Ok(p),
                 Err(e) => break Err(e),
             }
         };
-        drop(stream);
         match packet {
             Ok(p) if p.len() == protocol::TRIGGER_POS_LEN => {
                 let word = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
@@ -1081,6 +1116,69 @@ mod tests {
     #[test]
     fn a_stop_while_waiting_for_the_trigger_sends_the_stop_command() {
         assert_eq!(run(STOP, true), []);
+    }
+
+    #[test]
+    fn a_trigger_on_the_last_sample_sends_no_empty_packet() {
+        // libsigrok sends a logic packet of length 0 here (protocol.c:861-
+        // 862), which kills its hex output.
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        let a = acquisition(64);
+        let mut s = State { sent: 0, empty: 0, trigger_pos: 64 };
+        assert_eq!(a.transfer(Ok(vec![0xff; 8]), &mut s, &sink), Next::End);
+        assert_eq!(collect(&rx), [Packet::logic(2, bits(u64::MAX, 64)), Packet::Trigger]);
+    }
+
+    #[test]
+    fn a_transfer_cut_inside_an_atom_of_three_channels_has_zeros_for_the_rest() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        let mut a = acquisition(0);
+        a.mask = 0b111;
+        let mut s = State { sent: 0, empty: 0, trigger_pos: 0 };
+        // Four bytes of channel 0 and nothing of 1 and 2: 10 samples
+        // (64 * 4 / 24), where libsigrok reads 1 and 2 from the old buffer.
+        assert_eq!(a.transfer(Ok(vec![0xff; 4]), &mut s, &sink), Next::Continue);
+        let want: Vec<u8> = (0..10).flat_map(|_| [1, 0]).collect();
+        assert_eq!(collect(&rx), [Packet::logic(2, want)]);
+        assert_eq!(s.sent, 10);
+    }
+
+    #[test]
+    fn triggers_of_more_than_one_stage_are_refused() {
+        let cond = |channel| crate::core::trigger::TriggerCondition {
+            channel,
+            matches: TriggerMatch::One,
+        };
+        let stage = |channel| crate::core::trigger::TriggerStage {
+            conditions: vec![cond(channel)],
+            ..crate::core::trigger::TriggerStage::default()
+        };
+        let mut d = device(0x0020);
+        let one = Trigger { stages: vec![stage(0)], ..Trigger::default() };
+        d.set_trigger(Some(one)).unwrap();
+        let two = Trigger { stages: vec![stage(0), stage(1)], ..Trigger::default() };
+        let e = d.set_trigger(Some(two)).unwrap_err().to_string();
+        assert!(e.contains("Only 1 trigger stages"), "{e}");
+        assert_eq!(d.trigger.as_ref().map(|t| t.stages.len()), Some(1));
+    }
+
+    #[test]
+    fn a_reopen_writes_no_default_threshold() {
+        let text = "# oxrok usb fixture 1\n\
+                    device vid=2a0e pid=0001\n\
+                    ctl_out 40 b8 0000 0000 4778 -> ok\n";
+        let r = crate::usb::record::Replay::from_text(text).unwrap();
+        let check = r.clone();
+        let mut link = Link::new(Box::new(r));
+        let mut d = device(0x0001);
+        d.open_threshold(&mut link).unwrap();
+        assert_eq!(d.get(&Key::VoltageThreshold, None).unwrap(), Value::RangeF64(0.7, 1.4));
+        // No second write, and the same bitstream as the first open's.
+        d.open_threshold(&mut link).unwrap();
+        check.finish().unwrap();
+        assert_eq!(d.bitstream(), "dreamsourcelab-dslogic-fpga-3v3.fw");
     }
 
     fn device(pid: u16) -> DslogicDevice {

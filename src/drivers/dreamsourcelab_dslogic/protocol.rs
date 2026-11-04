@@ -23,7 +23,8 @@
 //! The FPGA is SRAM based: every open loads its bitstream (one per
 //! model; the first DSLogic has one per threshold range, and choosing
 //! the range loads it again) in one bulk transfer, then the threshold
-//! register gets `threshold / 5 V * 255`. A capture sends the stop
+//! register gets `threshold / 5 V * 255` (whether the first DSLogic has
+//! that register is unknown; the C driver writes it). A capture sends the stop
 //! command, the 360 byte setting packet ([`FpgaConfig`]: mode bits,
 //! divider of 100 MHz, sample count / 16, trigger position, global
 //! trigger word, channel mask and 16 trigger stages, all in
@@ -288,7 +289,8 @@ pub struct FpgaConfig {
 /// 90 % bound in 32 bits, which wraps on the boards with 256 Mibit of
 /// memory and gives about 10 % (`protocol.c:374-376`); this does not.
 pub fn trigger_position(capture: &Capture, mem_depth: u64) -> u32 {
-    let point = (capture.capture_ratio * capture.limit_samples / 100).max(ATOMIC_SAMPLES);
+    let point =
+        (capture.capture_ratio.saturating_mul(capture.limit_samples) / 100).max(ATOMIC_SAMPLES);
     let max =
         if capture.continuous { mem_depth * 10 / 100 } else { mem_depth * MAX_TRIG_PERCENT / 100 };
     let point = point.min(max) & !(ATOMIC_SAMPLES - 1);
@@ -367,6 +369,7 @@ impl FpgaConfig {
         }
         cfg.divider =
             u32::try_from(MAX_LOGIC_SAMPLERATE.div_ceil(capture.samplerate.max(1))).unwrap_or(0);
+        // Saturates where the C code's WL32 truncates (above 64 Gsamples).
         cfg.count = u32::try_from(capture.limit_samples / 16).unwrap_or(u32::MAX);
         cfg
     }
@@ -526,6 +529,8 @@ impl Link {
         self.transport.control_out(ControlRequest::vendor(request, 0, 0), data, USB_TIMEOUT)
     }
 
+    /// An IN request whose answer must be whole: the C code takes any
+    /// answer that is no error and reads what its variable held.
     fn vendor_in(&mut self, request: u8, len: usize) -> Result<Vec<u8>> {
         let req = ControlRequest::vendor(request, 0, 0);
         let data = self.transport.control_in(req, len, USB_TIMEOUT)?;
@@ -738,6 +743,11 @@ mod tests {
         assert_eq!(trigger_position(&c, 256 << 20), 241_591_872);
         c.continuous = true;
         assert_eq!(trigger_position(&c, 256 << 20), 26_843_520);
+        // The ratio's share must not overflow: bounded like the others.
+        c.continuous = false;
+        c.capture_ratio = 50;
+        c.limit_samples = 1_000_000_000_000_000_000;
+        assert_eq!(trigger_position(&c, 256 << 20), 241_591_872);
     }
 
     #[test]
