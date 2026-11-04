@@ -1413,6 +1413,10 @@ flush()
                 sed -i -E '${/^sr: *$/d;}' "$TMP/a.err" ;;
         esac
         sed -i '/LIBUSB_ERROR_ACCESS/d' "$TMP/a.err"
+        # A crash: whether timeout(1) says "dumped core" depends on the
+        # host's core pattern and limit. libsigrok may have written its
+        # "sr: " first. The exit status has shown it failed.
+        sed -i -E '/timeout: the monitored command dumped core$/d; ${/^sr: *$/d;}' "$TMP/a.err"
         # The core's line on a refused start, for a driver whose connection
         # id is the address that changes with each attach (greatfet).
         sed -i -E 's/( device )[0-9]+\.[0-9]+( acquisition\.)$/\1BUS.ADDR\2/' "$TMP/a.err"

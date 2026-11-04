@@ -3,4 +3,3 @@ sr: kingst-la2016: Cannot write 1 bytes to USB: LIBUSB_ERROR_PIPE.
 sr: kingst-la2016: Cannot configure run mode 3.
 sr: kingst-la2016: Cannot set 'runmode' to 'run'.
 sigrok-cli: ../../libusb/os/threads_posix.h:46: usbi_mutex_lock: Assertion `pthread_mutex_lock(mutex) == 0' failed.
-timeout: the monitored command dumped core
