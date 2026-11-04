@@ -1,4 +1,2 @@
-sr: resource: Failed to open resource 'lecroy-logicstudio16-16.bitstream' (use loglevel 5/spew for details).
 sr: lecroy-logicstudio: Firmware not accepted by device.
-sr: session: Failed to commit lecroy-logicstudio device usb/PORT settings before starting acquisition.
-Failed to start session.
+start refused

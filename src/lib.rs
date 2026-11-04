@@ -87,6 +87,7 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
+    pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod microchip_pickit2;
     pub mod pipistrello_ols;
@@ -117,6 +118,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
     registry.register(Box::new(drivers::sysclk_lwla::LwlaDriver));
+    registry.register(Box::new(drivers::lecroy_logicstudio::LogicStudioDriver));
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
     registry.register(Box::new(drivers::zeroplus_logic_cube::ZeroplusDriver));
 }
