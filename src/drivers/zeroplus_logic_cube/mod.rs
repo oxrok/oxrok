@@ -390,14 +390,9 @@ impl Device for ZeroplusDevice {
         Ok(match key {
             Key::Samplerate => ValueList::U64(self.prof.samplerates()),
             Key::TriggerMatch => ValueList::TriggerMatches(TRIGGER_MATCHES.to_vec()),
-            Key::VoltageThreshold => ValueList::RangeF64(
-                (-60..=60)
-                    .map(|i| {
-                        let v = f64::from(i) / 10.0;
-                        (v, v)
-                    })
-                    .collect(),
-            ),
+            Key::VoltageThreshold => {
+                ValueList::RangeF64(crate::core::option::min_max_step_thresholds(-6.0, 6.0, 0.1))
+            }
             Key::LimitSamples => ValueList::MinMaxU64(0, self.prof.max_samples()),
             Key::ClockEdge => ValueList::Str(CLOCK_EDGES.iter().map(|s| (*s).to_owned()).collect()),
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -662,6 +657,20 @@ mod tests {
         assert_eq!(d.list(&Key::LimitSamples, None).unwrap(), ValueList::MinMaxU64(0, 32768));
         assert!(d.get(&Key::LimitSamples, None).is_err());
         assert_eq!(d.get(&Key::ClockEdge, None).unwrap(), Value::Str("rising".into()));
+    }
+
+    #[test]
+    fn the_threshold_list_accumulates_as_in_c() {
+        let d = device(&device_steps());
+        let ValueList::RangeF64(list) = d.list(&Key::VoltageThreshold, None).unwrap() else {
+            panic!("a list of ranges");
+        };
+        assert_eq!(list.len(), 121);
+        assert_eq!(list[0], (-6.0, -6.0));
+        assert_eq!(list[60], (0.0, 0.0));
+        // No entry is 1.5, so --show marks none current.
+        assert!(!list.iter().any(|&(low, _)| (low - 1.5).abs() < 1e-15));
+        assert!((list[75].0 - 1.5).abs() < 1e-9);
     }
 
     #[test]
