@@ -1,0 +1,12 @@
+diff --git a/src/hardware/testo/api.c b/src/hardware/testo/api.c
+index 43a5f251..4d12e730 100644
+--- a/src/hardware/testo/api.c
++++ b/src/hardware/testo/api.c
+@@ -128,6 +128,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 		devc->model = &models[0];
+ 		sr_sw_limits_init(&devc->sw_limits);
+ 		sdi->priv = devc;
++		sdi->driver = di;
+ 		if (testo_probe_channels(sdi) != SR_OK)
+ 			continue;
+ 		devices = g_slist_append(devices, sdi);

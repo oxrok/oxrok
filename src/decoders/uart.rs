@@ -604,7 +604,9 @@ impl Uart {
             return;
         }
         let start = *self.lines[rxtx].idle_start.get_or_insert(s);
-        if s - start < self.frame_len {
+        // A frame sets idle_start past its own end, so it can be ahead of s;
+        // the Python decoder's difference is negative there.
+        if s < start || s - start < self.frame_len {
             return;
         }
         ctx.put_python(
