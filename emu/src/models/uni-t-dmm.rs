@@ -22,10 +22,14 @@
 //! falling back to 2400, byte 5 of the setting the data bits, and the
 //! setting being required before the chip works. The driver's side is
 //! `hardware/uni-t-dmm/protocol.c`, the framing `serial_hid_ch9325.c`.
-//! Not known: the bus speed (`lsusb` does not say; a bInterval of 5 is
-//! too short for low speed, so this is full speed), what a real chip
-//! answers before the setting beyond "must be sent", and any firmware
-//! or datasheet: none was found. No cable was on the bench.
+//! Not known: the bus speed. `lsusb` does not say, and bMaxPacketSize0
+//! 8, wMaxPacketSize 8 and bcdUSB 1.00 fit low speed too; this is full
+//! speed on the word of a sibling's datasheet (WCH's CH9326, V1.6: "12Mbps
+//! full-speed"), an assumption no golden depends on. That datasheet
+//! differs in what it offers (other rates, a 9600 default), so it says
+//! nothing else about this chip. Nor is known what a real chip answers
+//! before the setting, beyond "must be sent". No CH9325 datasheet or
+//! firmware was found. No cable was on the bench.
 //!
 //! Unlike `ch9325` (the Pico emulator's stand-in, endpoint 1, 64 bytes,
 //! paced by NAKs so that a hidraw reader sees whole packets) this one
