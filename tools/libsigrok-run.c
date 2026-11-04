@@ -26,6 +26,7 @@
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...
  *                 [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]
  *                 [--samples N] [--time T] [--frames N] [--stop-after N]
+ *                 [--stop-after-ms N]
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] --scan
  *
  * The options mean what they mean to sigrok-cli, and the common failures
@@ -40,8 +41,8 @@
  * --stop-after N is a sample limit for a driver that has none. The runner
  * counts the samples itself (logic ones, else those of the first analog
  * channel), cuts the packet that reaches N and drops what comes after,
- * and asks for the stop from an idle callback of the main loop, as a
- * client's key press or button would: sr_session_stop() from the
+ * and asks for the stop from a callback of the main loop at the next
+ * iteration, as a client's key press or button would: sr_session_stop() from the
  * datafeed callback would run the driver's stop inside its transfer
  * callback, inside libusb's event handling, where its control write
  * fails. A driver that ends the capture in the same callback as its
@@ -49,6 +50,12 @@
  * its stop write goes out, and only the output is shorter. --stop-after 0
  * asks for the stop as soon as the session has started, at the header
  * packet, before any sample.
+ *
+ * --stop-after-ms N asks for the stop N ms after the session has started,
+ * from a timeout of the main loop, whatever came by then. It reaches a
+ * driver between its transfers, where --stop-after, which needs a packet,
+ * cannot: for a driver that polls, pick N in the middle of a quiet interval,
+ * or the poll it races with makes the run unstable.
  *
  * The output goes through libsigrok's output modules (default bits, as
  * sigrok-cli without -o), so it reads as sigrok-cli's would.
@@ -76,6 +83,7 @@ static char *opt_samples;
 static char *opt_time;
 static char *opt_frames;
 static char *opt_stop_after;
+static char *opt_stop_after_ms;
 static gboolean opt_scan;
 
 static struct sr_context *sr_ctx;
@@ -542,7 +550,11 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 	return o;
 }
 
-/* The stop --stop-after asks for, out of the datafeed callback. */
+/*
+ * The stop --stop-after asks for, out of the datafeed callback. It runs ahead
+ * of the USB source: at g_idle_add()'s priority, a completion due in the same
+ * iteration goes first, and how far the driver gets before the stop is a race.
+ */
 static gboolean stop_idle(gpointer data)
 {
 	(void)data;
@@ -556,7 +568,7 @@ static void request_stop(void)
 
 	if (!requested) {
 		requested = TRUE;
-		g_idle_add(stop_idle, NULL);
+		g_idle_add_full(G_PRIORITY_HIGH, stop_idle, NULL, NULL);
 	}
 }
 
@@ -769,6 +781,8 @@ static void run_session(void)
 	sr_session_stopped_callback_set(session, (sr_session_stopped_callback)g_main_loop_quit, main_loop);
 	if (sr_session_start(session) != SR_OK)
 		g_critical("Failed to start session.");
+	if (opt_stop_after_ms)
+		g_timeout_add(strtoul(opt_stop_after_ms, NULL, 10), stop_idle, NULL);
 	g_main_loop_run(main_loop);
 	if (trigger)
 		sr_trigger_free(trigger);
@@ -781,7 +795,8 @@ static void usage(void)
 {
 	fprintf(stderr, "usage: libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] [-c KEY=VALUE[:...]]...\n"
 		"         [-C CHANNELS] [-t TRIGGER] [-O FORMAT[:KEY=VALUE...]]\n"
-		"         [--samples N] [--time T] [--frames N] [--stop-after N] | --scan\n");
+		"         [--samples N] [--time T] [--frames N] [--stop-after N]\n"
+		"         [--stop-after-ms N] | --scan\n");
 	exit(2);
 }
 
@@ -815,6 +830,8 @@ int main(int argc, char **argv)
 			val = &opt_frames;
 		else if (!strcmp(a, "--stop-after"))
 			val = &opt_stop_after;
+		else if (!strcmp(a, "--stop-after-ms"))
+			val = &opt_stop_after_ms;
 		else if (!strcmp(a, "-c"))
 			g_ptr_array_add(opt_configs, argv[i + 1]);
 		else if (!strcmp(a, "-l"))

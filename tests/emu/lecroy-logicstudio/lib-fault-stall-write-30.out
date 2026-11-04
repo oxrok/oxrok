@@ -1,3 +1,2 @@
 sr: lecroy-logicstudio: write_registers_sync(18/5444) failed.
-sr: session: Could not start lecroy-logicstudio device usb/PORT acquisition.
-Failed to start session.
+start refused

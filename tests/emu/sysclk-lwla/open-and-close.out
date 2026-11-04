@@ -1,6 +1,4 @@
-sr: device: sysclk-lwla: Opening device instance.
 sr: sysclk-lwla: Downloading FPGA bitstream 'sysclk-lwla1034-int.rbf'.
 sr: sysclk-lwla: FPGA bitstream download of 10004 bytes done.
-sr: device: sysclk-lwla: Closing device instance.
 sr: sysclk-lwla: Downloading FPGA bitstream 'sysclk-lwla1034-off.rbf'.
 sr: sysclk-lwla: FPGA bitstream download of 3004 bytes done.

@@ -9,6 +9,22 @@
 use crate::core::key::Key;
 use crate::core::trigger::TriggerMatch;
 
+/// `std_gvar_min_max_step_thresholds()`: point ranges from `min` to `max`.
+/// The steps accumulate as in the C code, so that a value near 1.5 is
+/// `1.4999999999999958`, a device's current 1.5 equals no entry and
+/// `--show` marks none current, as sigrok-cli does. Only values next to
+/// zero are made exactly 0.
+pub fn min_max_step_thresholds(min: f64, max: f64, step: f64) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    let mut d = min;
+    while d <= max + step / 2.0 {
+        let v = if d > -step / 2.0 && d < step / 2.0 { 0.0 } else { d };
+        out.push((v, v));
+        d += step;
+    }
+    out
+}
+
 /// What a device allows for a key.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Access {

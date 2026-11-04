@@ -153,15 +153,7 @@ pub const DEFAULT_THRESHOLD: f64 = 1.4;
 /// steps accumulate as in the C code, so 1.4 is `1.4000000000000001`
 /// and `--show` marks no entry current, as sigrok-cli does.
 pub fn threshold_steps() -> Vec<(f64, f64)> {
-    let (min, max, step) = (0.0f64, 5.0f64, 0.1f64);
-    let mut out = Vec::new();
-    let mut d = min;
-    while d <= max + step / 2.0 {
-        let v = if d > -step / 2.0 && d < step / 2.0 { 0.0 } else { d };
-        out.push((v, v));
-        d += step;
-    }
-    out
+    crate::core::option::min_max_step_thresholds(0.0, 5.0, 0.1)
 }
 
 /// `std_double_tuple_idx()`: the range of the table within 0.1 V of

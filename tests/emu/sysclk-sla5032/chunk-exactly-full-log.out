@@ -1,0 +1,11 @@
+sr: sysclk-sla5032: start acquision, smp lim: 1048576, cap ratio: 50.
+sr: sysclk-sla5032: start acquision, pre: 524288, post: 524288.
+sr: sysclk-sla5032: start acquision, pre: 7ff, post: 7ff.
+sr: sysclk-sla5032: acquision done, status: 1023.
+sr: sysclk-sla5032: acquision done, xfer_len: 6291456.
+sr: sysclk-sla5032: acquision done, rle_samples_count: 1048576.
+sr: sysclk-sla5032: acquision done, samples_count: 1048576.
+sr: sysclk-sla5032: acquision done, xfer_len: 6.
+sr: sysclk-sla5032: acquision done, rle_samples_count: 1.
+sr: sysclk-sla5032: acquision done, samples_count: 0.
+sr: sysclk-sla5032: acquision done, no samples.

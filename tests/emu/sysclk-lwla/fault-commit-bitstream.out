@@ -1,4 +1,3 @@
 sr: sysclk-lwla: Failed to transfer bitstream: LIBUSB_ERROR_PIPE.
 sr: sysclk-lwla: Failed to apply FPGA configuration.
-sr: session: Failed to commit sysclk-lwla device (null) settings before starting acquisition.
 Failed to start session.

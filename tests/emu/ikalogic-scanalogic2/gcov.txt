@@ -1,0 +1,37 @@
+gcov ikalogic-scanalogic2 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        86.7%  156 of 180
+  protocol.c   89.7%  295 of 329
+  total        88.6%  451 of 509
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 77, 91-94, 98-102
+    dev_open: 182, 185-189, 194-196
+    dev_close: 237
+    config_get: 263-264
+    config_set: 290-291
+    dev_acquisition_start: 389-390
+  protocol.c
+    ikalogic_scanalogic2_receive_data: 196, 199, 215-218
+    sl2_receive_transfer_in: 267-269, 372-373
+    sl2_receive_transfer_out: 398-401, 422-423
+    sl2_set_limit_samples: 454-456, 460
+    sl2_convert_trigger: 499
+    sl2_set_after_trigger_delay: never called (531-549)
+    sl2_get_device_info: 616, 619, 626-629, 705-708
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   64.2%  147 of 229
+  total       64.2%  147 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 337, 346, 352-373
+    sr_usb_find: 405-406, 409-410, 418-420, 429
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: never called (519-555)
+    usb_match_manuf_prod: never called (565-599)
