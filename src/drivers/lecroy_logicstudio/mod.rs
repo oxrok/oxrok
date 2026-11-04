@@ -53,8 +53,6 @@ const FX2_FIRMWARE: &str = "lecroy-logicstudio16-fx2lp.fw";
 const CONFIGURATION: u8 = 0;
 const INTERFACE: u8 = 0;
 const MAX_RENUM_DELAY: Duration = Duration::from_secs(3);
-/// What a failed start ends with, as sigrok's session reports it.
-const START_FAILED: &str = "Failed to start session.";
 
 /// `samplerates[]` of `api.c`: `--show` lists these. [`protocol::RATES`]
 /// takes 1 GHz as well.
@@ -137,9 +135,7 @@ fn upload(info: &UsbDeviceInfo) -> Result<()> {
         FX2_FIRMWARE,
         "extract the firmware with sigrok-util, see docs/DEVICES.md",
     )
-    .inspect_err(|_| {
-        log::error!("Failed to open resource '{FX2_FIRMWARE}' (use loglevel 5/spew for details).");
-    })?;
+    .inspect_err(|e| log::error!("{e}"))?;
     log::info!("uploading firmware to device on {}.{}", info.bus, info.address);
     let mut t = crate::usb::open(info).inspect_err(|e| {
         log::error!("failed to open device: {}.", crate::usb::libusb_error_name(e));
@@ -148,15 +144,6 @@ fn upload(info: &UsbDeviceInfo) -> Result<()> {
         log::error!("Unable to set configuration: {}", crate::usb::libusb_error_name(e));
     })?;
     crate::ezusb::upload_firmware_logged(t.as_mut(), FX2_FIRMWARE, &image)
-}
-
-/// `usb_get_port_path()`'s text, sigrok's `connection_id`.
-fn connection_id(usb: &UsbDeviceInfo) -> String {
-    if usb.ports.is_empty() {
-        return format!("usb/{}.{}", usb.bus, usb.address);
-    }
-    let ports: Vec<String> = usb.ports.iter().map(u8::to_string).collect();
-    format!("usb/{}-{}", usb.bus, ports.join("."))
 }
 
 /// One board.
@@ -222,9 +209,9 @@ impl LogicStudioDevice {
 
     /// `configure_trigger()`'s stages: those with a match on an enabled
     /// channel. A condition on a disabled channel is ignored.
-    fn stages(&self) -> Vec<StageConfig> {
+    fn stages(&self, trigger: Option<&Trigger>) -> Vec<StageConfig> {
         let enabled = |ch: usize| self.channels.iter().any(|c| c.index == ch && c.enabled);
-        let Some(t) = &self.trigger else { return Vec::new() };
+        let Some(t) = trigger else { return Vec::new() };
         t.stages
             .iter()
             .filter(|s| s.conditions.iter().any(|c| enabled(c.channel)))
@@ -412,9 +399,20 @@ impl Device for LogicStudioDevice {
         Ok(())
     }
 
-    /// `config_commit()` and `dev_acquisition_start()`. A capture without
-    /// a trigger is refused: nothing arms the board and nothing looks at
-    /// its packets (protocol.c:331, 1119), so it could never end.
+    /// A capture without a trigger is refused: nothing arms the board and
+    /// nothing looks at its packets (protocol.c:331, 1119), so it could
+    /// never end.
+    fn check_capture(&self, trigger: Option<&Trigger>) -> Result<()> {
+        if self.stages(trigger).is_empty() {
+            return Err(Error::arg(
+                "This driver captures on its trigger alone: give one with -t on an enabled \
+                 channel.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// `config_commit()` and `dev_acquisition_start()`.
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         if let Some(w) = self.worker.take() {
             if !w.handle.is_finished() {
@@ -423,37 +421,23 @@ impl Device for LogicStudioDevice {
             }
             let _ = w.handle.join();
         }
-        let stages = self.stages();
-        if stages.is_empty() {
-            return Err(Error::arg(
-                "This device captures on its trigger alone: give one with -t on an enabled \
-                 channel.",
-            ));
-        }
+        self.check_capture(self.trigger.as_ref())?;
+        let stages = self.stages(self.trigger.as_ref());
         let Some(mut link) = self.link.lock().expect("link lock").take() else {
             return Err(Error::device("device is not open"));
         };
-        let conn = connection_id(&self.usb);
-        let begun = link
-            .setup_acquisition(self.channel_mask(), &stages)
-            .inspect_err(|_| {
-                log::error!(
-                    "Failed to commit {DRIVER} device {conn} settings before starting acquisition."
-                );
+        let begun = link.setup_acquisition(self.channel_mask(), &stages).and_then(|()| {
+            link.start_acquisition(self.rate, self.capture_ratio).inspect_err(|_| {
+                // libsigrok's session stops a device whose start failed
+                // as well (session.c:831-835).
+                if let Err(e) = link.stop_acquisition() {
+                    log::debug!("Stopping after a failed start: {e}.");
+                }
             })
-            .and_then(|()| {
-                link.start_acquisition(self.rate, self.capture_ratio).inspect_err(|_| {
-                    log::error!("Could not start {DRIVER} device {conn} acquisition.");
-                    // libsigrok's session stops a device whose start
-                    // failed as well (session.c:831-835).
-                    if let Err(e) = link.stop_acquisition() {
-                        log::debug!("Stopping after a failed start: {e}.");
-                    }
-                })
-            });
-        if begun.is_err() {
+        });
+        if let Err(e) = begun {
             *self.link.lock().expect("link lock") = Some(link);
-            return Err(Error::arg(START_FAILED));
+            return Err(e);
         }
         let slot = Arc::clone(&self.link);
         let stop = Arc::new(AtomicBool::new(false));
@@ -608,16 +592,19 @@ mod tests {
     fn stages_ignore_disabled_channels() {
         let c = |channel, matches| TriggerCondition { channel, matches, value: 0.0 };
         let mut d = device();
-        assert_eq!(d.stages(), []);
+        assert_eq!(d.stages(None), []);
         d.enable_channel(3, false).unwrap();
-        d.trigger = Some(Trigger {
+        let t = Trigger {
             stages: vec![
                 stage(vec![c(3, TriggerMatch::Rising)]),
                 stage(vec![c(3, TriggerMatch::One), c(4, TriggerMatch::Falling)]),
             ],
             ..Trigger::default()
-        });
-        assert_eq!(d.stages(), [StageConfig { falling: 1 << 4, ..StageConfig::default() }]);
+        };
+        assert_eq!(d.stages(Some(&t)), [StageConfig { falling: 1 << 4, ..StageConfig::default() }]);
+        // A trigger on disabled channels alone is no trigger.
+        let t = Trigger { stages: vec![stage(vec![c(3, TriggerMatch::Rising)])], ..t };
+        assert!(d.check_capture(Some(&t)).is_err());
     }
 
     /// A capture with no trigger is refused before anything is sent: the
@@ -639,12 +626,6 @@ mod tests {
         assert!(
             LogicStudioDevice::from_transport(Box::new(Replay::from_text(text).unwrap())).is_err()
         );
-    }
-
-    #[test]
-    fn the_connection_id_is_the_port_path() {
-        let usb = UsbDeviceInfo { bus: 3, ports: vec![1, 2], ..UsbDeviceInfo::default() };
-        assert_eq!(connection_id(&usb), "usb/3-1.2");
     }
 
     #[test]

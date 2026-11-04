@@ -105,7 +105,10 @@ const CONV_CHUNK_SAMPLES: usize = 4096;
 const FIRST_TRANSFER: usize = 17 << 10;
 const NEXT_TRANSFER: usize = 16 << 10;
 /// Empty sample transfers in a row after which the fetch is given up.
-/// The C driver resubmits for ever (protocol.c:1019-1027).
+/// The C driver resubmits for ever (protocol.c:1019-1027). A timed out
+/// transfer costs its 100 ms, so about 6.4 s of silence; a zero length
+/// packet costs nothing, so 64 of those end a fetch at once, a device that
+/// has stopped sending as surely as a silent one.
 const MAX_EMPTY_TRANSFERS: usize = 64;
 
 /// A rate of `samplerates[]` in `protocol.c`.
@@ -277,7 +280,8 @@ pub struct Window {
 /// subtracts in 64 bits with a `FIXME: Underflow` (protocol.c:388-392), and
 /// its earliest sample has no guard either (373-374): a value below what is
 /// subtracted wraps to a place in the memory unrelated to the capture. Here
-/// it stops at sample 0. Nothing else differs.
+/// the earliest sample stops at 0, and the trigger at 0 before the C's
+/// closing increment, so at 1. Nothing else differs.
 pub fn completion_window(p: &[u8], rate: RateInfo, groups: u32, thousands: u32) -> Window {
     let be48 = |at: usize| {
         let mut v = [0u8; 8];
@@ -376,6 +380,8 @@ pub struct Link {
     magic_arm_trigger: u8,
     magic_fetch_samples: u8,
     acquisition_id: u16,
+    /// Reads a bitstream; tests give their own.
+    bitstream: fn(&str) -> Result<Vec<u8>>,
 }
 
 /// What a status packet says.
@@ -398,6 +404,7 @@ impl Link {
             magic_arm_trigger: 0,
             magic_fetch_samples: 0,
             acquisition_id: 0,
+            bitstream: |name| firmware::read(name, FIRMWARE_HINT),
         }
     }
 
@@ -449,9 +456,7 @@ impl Link {
     /// `SR_ERR` there, rather than `r` (protocol.c:452-454), so it reads
     /// `LIBUSB_ERROR_IO` whatever the device answered.
     fn upload_bitstream(&mut self, name: &str) -> Result<()> {
-        let image = firmware::read(name, FIRMWARE_HINT).inspect_err(|_| {
-            log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
-        })?;
+        let image = (self.bitstream)(name)?;
         if image.len() != FPGA_FIRMWARE_SIZE {
             log::error!("Invalid FPGA firmware file size: {} bytes.", image.len());
             return Err(Error::device("wrong size of the FPGA firmware"));
@@ -673,6 +678,16 @@ impl Link {
         self
     }
 
+    /// Whether the replay was played to its end, for tests.
+    #[cfg(test)]
+    fn t_finish(&mut self) {
+        // One more call of any kind must find nothing left.
+        assert!(
+            self.t.control_out(Self::request(0xff, 0), &[], USB_TIMEOUT).is_err(),
+            "the replay has steps left or takes anything"
+        );
+    }
+
     /// Asks for the sample memory.
     pub fn fetch_samples(&mut self, earliest: u64) -> Result<()> {
         let regs = self.fetch_regs(earliest);
@@ -680,30 +695,30 @@ impl Link {
     }
 
     /// The sample memory: one transfer at a time of 17 KiB, then 16 KiB
-    /// at most, each taking what arrived within its timeout, as
-    /// `recv_bulk_transfer()`. A transfer that holds nothing goes on;
-    /// `give_up` ends such a fetch when it is asked to stop, and so does
-    /// a long silence.
+    /// at most whatever became of the one before (protocol.c:1023), each
+    /// taking what arrived within its timeout, as `recv_bulk_transfer()`.
+    /// A transfer that holds nothing is followed by the next; `give_up`
+    /// ends such a fetch when it is asked to stop, and so does a long
+    /// silence.
     pub fn read_memory(&mut self, give_up: impl Fn() -> bool) -> Result<Vec<u8>> {
         let mut memory = Vec::with_capacity(SAMPLE_BUF_SIZE);
         let mut size = FIRST_TRANSFER;
         let mut empty = 0;
         while memory.len() < SAMPLE_BUF_SIZE {
-            let mut stream = self.t.bulk_in_stream_timed(EP_BULK, size, 1, USB_TIMEOUT)?;
-            let data = loop {
-                match stream.next(USB_TIMEOUT) {
-                    Ok(d) if !d.is_empty() => break d,
-                    Ok(_) | Err(Error::Timeout) => {}
-                    Err(e) => return Err(e),
+            match self.t.bulk_in_partial(EP_BULK, size, USB_TIMEOUT) {
+                Ok(d) if !d.is_empty() => {
+                    empty = 0;
+                    let room = SAMPLE_BUF_SIZE - memory.len();
+                    memory.extend_from_slice(&d[..d.len().min(room)]);
                 }
-                empty += 1;
-                if empty > MAX_EMPTY_TRANSFERS || give_up() {
-                    return Err(Error::Timeout);
+                Ok(_) | Err(Error::Timeout) => {
+                    empty += 1;
+                    if empty > MAX_EMPTY_TRANSFERS || give_up() {
+                        return Err(Error::Timeout);
+                    }
                 }
-            };
-            empty = 0;
-            let room = SAMPLE_BUF_SIZE - memory.len();
-            memory.extend_from_slice(&data[..data.len().min(room)]);
+                Err(e) => return Err(e),
+            }
             size = NEXT_TRANSFER.min(SAMPLE_BUF_SIZE - memory.len());
         }
         Ok(memory)
@@ -722,6 +737,7 @@ impl Link {
 mod tests {
     use super::*;
     use crate::usb::record::Replay;
+    use std::fmt::Write as _;
 
     fn hex(s: &str) -> Vec<u8> {
         (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap()).collect()
@@ -828,9 +844,10 @@ mod tests {
         assert_eq!(l.status(&q, rate(1_000_000)), Status::Waiting);
     }
 
-    /// Where the C code's 64 bit subtractions wrap, the sample is 0.
+    /// Where the C code's 64 bit subtractions wrap: the earliest sample is
+    /// 0, the trigger 1 after the C's increment.
     #[test]
-    fn early_times_stop_at_sample_zero() {
+    fn early_times_do_not_wrap() {
         let mut p = vec![0u8; INTR_BUF_SIZE];
         p[0x1f] = 0x04;
         for r in [1_000_000_000, 1_000_000, 1_000] {
@@ -926,7 +943,10 @@ mod tests {
     /// on: the C driver resubmits for ever.
     #[test]
     fn a_silent_memory_is_given_up_on() {
-        let steps = "bulk_in 82 17408 -> err timeout\n".repeat(MAX_EMPTY_TRANSFERS + 1);
+        let steps = format!(
+            "bulk_in 82 17408 -> err timeout\n{}",
+            "bulk_in 82 16384 -> err timeout\n".repeat(MAX_EMPTY_TRANSFERS)
+        );
         let mut l = link(&steps);
         assert!(matches!(l.read_memory(|| false), Err(Error::Timeout)));
         // And at once when stopping.
@@ -934,10 +954,304 @@ mod tests {
         assert!(matches!(l.read_memory(|| true), Err(Error::Timeout)));
     }
 
+    /// After an empty first transfer the next asks for 16 KiB, as the C
+    /// sets the length in every callback, and zero length packets count.
+    #[test]
+    fn an_empty_transfer_is_followed_by_the_next_size() {
+        let mut l = link(
+            "bulk_in 82 17408 -> err timeout\n\
+             bulk_in 82 16384 -> -\n\
+             bulk_in 82 16384 -> 11{16384}\n\
+             bulk_in 82 16384 -> 22{16384}\n\
+             bulk_in 82 8192 -> 33{8192}\n",
+        );
+        assert_eq!(l.read_memory(|| false).unwrap().len(), SAMPLE_BUF_SIZE);
+        l.t_finish();
+    }
+
     #[test]
     fn a_failed_transfer_ends_the_fetch() {
         let mut l = link("bulk_in 82 17408 -> err disconnected\n");
         assert!(matches!(l.read_memory(|| false), Err(Error::Disconnected)));
+    }
+
+    // --- Setup, the bitstream and a second capture on one open device.
+
+    const STOP_0: &str = "ctl_out 40 b1 0012 1544 070000070002 -> ok\n";
+    const STOP_C: &str = "ctl_out 40 b1 0012 1544 07000c07000e -> ok\n";
+
+    fn image_of(size: usize) -> Vec<u8> {
+        vec![0; size]
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
+    fn good_image(_: &str) -> Result<Vec<u8>> {
+        Ok(image_of(FPGA_FIRMWARE_SIZE))
+    }
+
+    fn ctl_regs(regs: &[(u8, u16)]) -> String {
+        format!("ctl_out 40 b1 0012 1544 {} -> ok\n", crate::usb::record::hex(&encode_regs(regs)))
+    }
+
+    /// The bitstream's steps: `0xb3`, the chunks, a verify that says yes.
+    fn upload_steps() -> String {
+        let mut s = String::from("ctl_out 40 b3 0007 1544 - -> ok\n");
+        for _ in 0..FPGA_FIRMWARE_SIZE / FPGA_FIRMWARE_CHUNK_SIZE {
+            s.push_str("bulk_out 06 00{2048} -> 2048\n");
+        }
+        let rest = FPGA_FIRMWARE_SIZE % FPGA_FIRMWARE_CHUNK_SIZE;
+        let _ = writeln!(s, "bulk_out 06 00{{{rest}}} -> {rest}");
+        s.push_str("ctl_in 40 b4 0007 1544 1 -> 01\n");
+        s
+    }
+
+    /// One read of the four registers, each answering `v`.
+    fn reg_reads(v: u16) -> String {
+        let mut s = String::new();
+        for r in 0x0f..=0x12 {
+            let _ = writeln!(s, "ctl_in 40 b1 {r:04x} 1544 2 -> {v:04x}");
+        }
+        s
+    }
+
+    fn settle_steps() -> String {
+        reg_reads(0) + &reg_reads(0)
+    }
+
+    fn trigger_steps(stages: &[StageConfig]) -> String {
+        let empty = StageConfig::default();
+        let mut s = String::new();
+        for (i, offset) in [0x00, 0x40].into_iter().enumerate() {
+            let bytes = stages.get(i).unwrap_or(&empty).encode(i == 1);
+            for regs in trigger_transfers(&bytes, offset) {
+                s.push_str(&ctl_regs(&regs));
+            }
+        }
+        let op = if stages.len() > 1 { TRIGGER_OP_A_AND_B } else { TRIGGER_OP_A };
+        s + &ctl_regs(&[(REG_TRIGGER_COMBINE_OP, op)])
+    }
+
+    /// The rest of a setup after the channel group: trigger, thresholds.
+    fn after_group(stages: &[StageConfig]) -> String {
+        trigger_steps(stages)
+            + "ctl_out 40 b1 0012 1544 2300c3 -> ok\n"
+            + "ctl_out 40 b1 0012 1544 2400c2 -> ok\n"
+    }
+
+    const STATUS: &str = "ctl_out 40 b2 0012 1544 01000708090a0b0c0d0e010203040506 -> ok\n";
+
+    /// A setup that loads a bitstream, `stop` being the stop it starts with.
+    fn loading_setup(stop: &str, select: u16, stages: &[StageConfig]) -> String {
+        format!(
+            "{stop}\
+             ctl_out 40 b1 0000 0000 2300c3 -> ok\n\
+             ctl_out 40 b1 0000 0000 2400c2 -> ok\n\
+             ctl_out 40 b1 0000 0000 22003e -> ok\n\
+             {}{}\
+             ctl_out 40 b1 0012 1544 2300c3 -> ok\n\
+             ctl_out 40 b1 0012 1544 2400c2 -> ok\n\
+             ctl_out 40 b1 0012 1544 22003e -> ok\n\
+             {}{}{STATUS}",
+            upload_steps(),
+            settle_steps(),
+            ctl_regs(&[(REG_SELECT_CHANNELS, select)]),
+            after_group(stages),
+        )
+    }
+
+    fn fake(steps: &str) -> Link {
+        let mut l = link(steps);
+        l.bitstream = good_image;
+        l
+    }
+
+    const D3: StageConfig = StageConfig { rising: 8, falling: 0, any: 0, ones: 0, zeroes: 0 };
+
+    /// The first arm and fetch use the magic values 0, the next ones those
+    /// the C driver leaves behind, and the id counts.
+    #[test]
+    fn a_second_capture_on_one_open_device() {
+        let id = |n: u16| ctl_regs(&[(REG_ACQUISITION_ID, n)]);
+        assert_eq!(id(1), "ctl_out 40 b1 0012 1544 000001 -> ok\n");
+        let arm = |first: &str, n: &str| {
+            format!(
+                "ctl_out 40 b1 0012 1544 {first}1300001400001513ff1600000f000010000011000012\
+                 0000000{n}02000b0309cc0400000509cc06000007000d -> ok\n"
+            )
+        };
+        let steps = [
+            arm("070000070002", "001"),
+            "ctl_out 40 b1 0012 1544 0900090a00000800000800020900000a00000b13ff0c00000d13c00e0000080002080003 -> ok\n".to_owned(),
+            arm("07000c07000e", "002"),
+            "ctl_out 40 b1 0012 1544 0900090a00000800010800030900000a00000b13ff0c00000d13c00e0000080002080003 -> ok\n".to_owned(),
+        ]
+        .concat();
+        let mut l = link(&steps).with_capture();
+        let r = rate(1_000_000);
+        l.start_acquisition(r, 50).unwrap();
+        assert_eq!(l.acquisition_id, 1);
+        l.fetch_samples(36).unwrap();
+        l.start_acquisition(r, 50).unwrap();
+        assert_eq!(l.acquisition_id, 2);
+        // A status packet of the first capture says nothing of the second.
+        let done = hex("000000010000000000263a9f00000013265b0000000000000000000000000004");
+        assert_eq!(l.status(&done, r), Status::Waiting);
+        l.fetch_samples(36).unwrap();
+        l.t_finish();
+    }
+
+    /// 16 channels, the lower group alone (another bitstream, the magic
+    /// values back to 0), the upper group alone (the same bitstream, group
+    /// register 1), and a second setup with nothing to load.
+    #[test]
+    fn setups_load_a_bitstream_when_the_groups_change() {
+        let steps = [
+            loading_setup(STOP_0, 0, &[D3]),
+            // After a capture, the stop has the magic value of the arm.
+            loading_setup(STOP_C, 0, &[D3]),
+            ctl_regs(&[(REG_SELECT_CHANNELS, 1)]),
+            after_group(&[D3]),
+            ctl_regs(&[(REG_SELECT_CHANNELS, 0)]),
+            after_group(&[D3, D3]),
+        ]
+        .concat();
+        let mut l = fake(&steps);
+        l.setup_acquisition(0xffff, &[D3]).unwrap();
+        assert_eq!((l.groups, l.thousands), (2, 20));
+        l.magic_arm_trigger = 0x0c;
+        l.magic_fetch_samples = 0x01;
+        l.setup_acquisition(0x00ff, &[D3]).unwrap();
+        assert_eq!((l.groups, l.thousands), (1, 40));
+        assert_eq!((l.magic_arm_trigger, l.magic_fetch_samples), (0, 0));
+        l.magic_arm_trigger = 0x0c;
+        l.setup_acquisition(0xff00, &[D3]).unwrap();
+        assert_eq!(l.magic_arm_trigger, 0x0c, "no bitstream, no reset");
+        assert_eq!(l.mask(), 0xff00);
+        l.setup_acquisition(0x0001, &[D3, D3]).unwrap();
+        l.t_finish();
+    }
+
+    /// The bitstream's name follows the channel groups.
+    #[test]
+    fn the_bitstream_of_the_groups() {
+        fn only_8(name: &str) -> Result<Vec<u8>> {
+            assert_eq!(name, FPGA_FIRMWARE_8);
+            good_image(name)
+        }
+        fn only_16(name: &str) -> Result<Vec<u8>> {
+            assert_eq!(name, FPGA_FIRMWARE_16);
+            good_image(name)
+        }
+        let mut l = link(&loading_setup(STOP_0, 1, &[D3]));
+        l.bitstream = only_8;
+        l.setup_acquisition(0xff00, &[D3]).unwrap();
+        let mut l = link(&loading_setup(STOP_0, 0, &[D3]));
+        l.bitstream = only_16;
+        l.setup_acquisition(0x0101, &[D3]).unwrap();
+    }
+
+    /// Three stages fail after the channel group, before any trigger write.
+    #[test]
+    fn three_stages_fail_after_the_channel_group() {
+        let mut l = fake(&loading_prefix());
+        assert!(l.setup_acquisition(0xffff, &[D3, D3, D3]).is_err());
+        l.t_finish();
+        assert_eq!(l.groups, 0, "nothing committed");
+    }
+
+    /// `loading_setup()` up to and including the channel group.
+    fn loading_prefix() -> String {
+        format!(
+            "{STOP_0}\
+             ctl_out 40 b1 0000 0000 2300c3 -> ok\n\
+             ctl_out 40 b1 0000 0000 2400c2 -> ok\n\
+             ctl_out 40 b1 0000 0000 22003e -> ok\n\
+             {}{}\
+             ctl_out 40 b1 0012 1544 2300c3 -> ok\n\
+             ctl_out 40 b1 0012 1544 2400c2 -> ok\n\
+             ctl_out 40 b1 0012 1544 22003e -> ok\n\
+             {}",
+            upload_steps(),
+            settle_steps(),
+            ctl_regs(&[(REG_SELECT_CHANNELS, 0)]),
+        )
+    }
+
+    /// A setup cut short commits nothing: the next one loads again.
+    #[test]
+    fn a_failed_setup_commits_nothing() {
+        let steps = format!(
+            "{STOP_0}ctl_out 40 b1 0000 0000 2300c3 -> err device \"stalled\"\n{}",
+            loading_setup(STOP_0, 0, &[D3])
+        );
+        let mut l = fake(&steps);
+        assert!(l.setup_acquisition(0xffff, &[D3]).is_err());
+        l.setup_acquisition(0xffff, &[D3]).unwrap();
+        l.t_finish();
+    }
+
+    #[test]
+    fn a_bitstream_of_another_size_sends_nothing() {
+        let mut l = link("");
+        l.bitstream = |_| Ok(image_of(FPGA_FIRMWARE_SIZE - 1));
+        assert!(l.upload_bitstream("x").is_err());
+        l.t_finish();
+    }
+
+    /// The real error of a missing file, with its hint, comes back.
+    #[test]
+    fn a_missing_bitstream_is_the_error_returned() {
+        let mut l = link("");
+        l.bitstream = |name| firmware::read(name, FIRMWARE_HINT);
+        let e = l.upload_bitstream("no-such-lecroy.bitstream").unwrap_err();
+        assert!(e.to_string().contains("sigrok-util"), "{e}");
+    }
+
+    #[test]
+    fn a_refused_upload_and_a_refused_chunk_stop_it() {
+        let mut l = fake("ctl_out 40 b3 0007 1544 - -> err device \"stalled\"\n");
+        assert!(l.upload_bitstream("x").is_err());
+        l.t_finish();
+        let mut l = fake(
+            "ctl_out 40 b3 0007 1544 - -> ok\n\
+             bulk_out 06 00{2048} -> 2048\n\
+             bulk_out 06 00{2048} -> 100\n",
+        );
+        assert!(l.upload_bitstream("x").is_err());
+        l.t_finish();
+    }
+
+    /// `upload_steps()` without its verify.
+    fn chunks_only() -> String {
+        let all = upload_steps();
+        all.strip_suffix("ctl_in 40 b4 0007 1544 1 -> 01\n").unwrap().to_owned()
+    }
+
+    /// Four verifies: the fourth may say yes, none means no.
+    #[test]
+    fn the_verify_is_asked_four_times() {
+        let no = "ctl_in 40 b4 0007 1544 1 -> 00\n";
+        let yes = "ctl_in 40 b4 0007 1544 1 -> 01\n";
+        let steps = format!("{}{}{yes}", chunks_only(), no.repeat(3));
+        let mut l = fake(&steps);
+        l.upload_bitstream("x").unwrap();
+        l.t_finish();
+        let steps = format!("{}{}", chunks_only(), no.repeat(4));
+        let mut l = fake(&steps);
+        assert!(l.upload_bitstream("x").is_err());
+        l.t_finish();
+    }
+
+    /// Two reads of the four registers that agree; 101 reads at most.
+    #[test]
+    fn settling() {
+        let mut l = link(&format!("{}{}{}", reg_reads(1), reg_reads(2), reg_reads(2)));
+        l.wait_to_settle().unwrap();
+        l.t_finish();
+        let steps: String = (0..=100).map(reg_reads).collect();
+        let mut l = link(&steps);
+        assert!(l.wait_to_settle().is_err());
+        l.t_finish();
     }
 
     #[test]

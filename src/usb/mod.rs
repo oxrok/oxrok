@@ -301,6 +301,14 @@ pub trait Transport: Send {
     /// an error and gives no partial data.
     fn bulk_in(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>>;
 
+    /// [`Transport::bulk_in`] for a read the caller expects to outlast
+    /// `timeout`: what arrived by then is the answer, on every backend.
+    /// The libusb backend cannot get that from one transfer and reads
+    /// packet by packet here, so it is for slow streams only.
+    fn bulk_in_partial(&mut self, endpoint: u8, len: usize, timeout: Duration) -> Result<Vec<u8>> {
+        self.bulk_in(endpoint, len, timeout)
+    }
+
     /// Writes one interrupt OUT transfer. Returns the number of bytes
     /// the device took, which is less than `data.len()` only on a
     /// timeout.

@@ -187,6 +187,14 @@ pub trait Device: Send {
         }
     }
 
+    /// Whether a capture with `trigger` can start at all, asked before the
+    /// output is opened: a refusal here leaves an existing output file
+    /// alone. [`Device::start`] may refuse later for other reasons.
+    fn check_capture(&self, trigger: Option<&Trigger>) -> Result<()> {
+        let _ = trigger;
+        Ok(())
+    }
+
     /// Starts acquiring. Packets go to `sink` from the device's own
     /// thread, starting with [`Packet::Header`] and ending with
     /// [`Packet::End`].

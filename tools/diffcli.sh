@@ -904,7 +904,8 @@ flush()
             if [ $libsig_full = 0 ] && { [ -n "$bug" ] || [ -n "$differs" ] || [ $record = 1 ]; }; then
                 emu_fail "$name (library): --libsigrok without --oxrok takes neither --oracle-bug, --oracle-differs nor --record"; return
             fi
-            if ! emu_libsigrok_run; then
+            # Only when it will run: --no-oracle has no sigrok to build on.
+            if [ "$tools" != b ] && ! emu_libsigrok_run; then
                 emu_fail "$name (library): no libsigrok runner: $EMU_LIBSIGROK_ERR [$*]"; return
             fi
         fi

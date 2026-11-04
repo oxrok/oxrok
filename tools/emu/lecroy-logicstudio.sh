@@ -93,11 +93,9 @@ emu_cases() {
     # lines sigrok-cli's words: the reason off "Failed to open device" (the
     # driver's own line says it), and sr_strerror()'s words for the reason
     # of a refused option, whose oxrok text names the rate or the range. No
-    # line goes, and what follows the prefix of a log line must be the C's
-    # text. sigrok-cli's and the runner's lines do not match, so the goldens
-    # are theirs.
+    # line goes. sigrok-cli's and the runner's lines do not match.
     D='oxrok: err: oxrok::drivers::lecroy_logicstudio[a-z_:]*:'
-    X="s/^$D (Failed to commit|Could not start)/sr: session: \\1/; s/^$D (Failed to open resource)/sr: resource: \\1/; s/^$D (Capture ratio)/sr: hwdriver: \\1/; s/^$D /sr: lecroy-logicstudio: /; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
+    X="s/^$D (Capture ratio)/sr: hwdriver: \\1/; s/^$D /sr: lecroy-logicstudio: /; s/^oxrok: err: oxrok::cli::run: /sr: hwdriver: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
     E="$X; /LIBUSB_ERROR_ACCESS/d; /^(Failed|This device|sr: |No devices)/!d"
 
     # Without firmware: every run uploads it in the scan, and dev_open()
@@ -109,9 +107,8 @@ emu_cases() {
     # check_options() fails without a word and sr_driver_scan() returns
     # no device (hwdriver.c:513-516, 583-586): conn= cannot select the
     # board, and the scan it is given finds nothing.
-    # oxrok says which option it refuses, where libsigrok says nothing and
-    # finds no device; the filter gives that one line sigrok-cli's words.
-    emu_case "conn refused" --expect-fail --stderr --filter "s/^Unknown scan option 'conn'\\.\$/No devices found./; $E" -- -d $L:conn=$EMU_USB --get samplerate
+    # oxrok says which option it refuses, and pins that.
+    emu_case "conn refused" --oracle-bug "check_options() refuses a scan option without a word and the scan finds no device, hwdriver.c:513-516, 583-586" --expect-fail --stderr --filter "$X" -- -d $L:conn=$EMU_USB --get samplerate
     emu_case "show" --keep-header -- -d $L --show
     emu_case "get samplerate" -- -d $L --get samplerate
     emu_case "get captureratio" -- -d $L --get captureratio
@@ -171,9 +168,14 @@ emu_cases() {
     T8L='1,/^D7:/b; /^T:/{=;b;}; d'
     LO=D0,D1,D2,D3,D4,D5,D6,D7
     HI=D8,D9,D10,D11,D12,D13,D14,D15
-    # A failure: libsigrok's log lines and the runner's own, the board's
-    # port path made generic.
-    P="$X; s#usb/[0-9][0-9.-]*#usb/PORT#"
+    # A start that fails. libsigrok's core lines ("sr: session: ..." and
+    # "sr: resource: ...") have no counterpart: oxrok's session hands back
+    # the driver's error, and the last line of either tool is reduced to
+    # where it failed, as in ikalogic-scanaplus, pipistrello-ols and
+    # saleae-logic16. The driver's own lines are compared.
+    F="/^sr: (session|resource): /d; $X; \$ { /^sr: lecroy-logicstudio: /! s/.*/start refused/; }"
+    # oxrok's run alone, its lines named as above; nothing goes.
+    P="$X"
     ls_options flashed=1
     # The runner's --scan against sigrok-cli's: this golden must equal
     # flashed-scan.out.
@@ -198,7 +200,7 @@ emu_cases() {
     emu_case "lib levels and an edge" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D2=1,D4=0,D1=e -O bits
     # Three stages: the driver has two (transform_trigger(),
     # protocol.c:604-606), and the session does not start.
-    emu_case "lib three stages" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D0=rfr -O bits
+    emu_case "lib three stages" --libsigrok --oxrok --expect-fail --stderr --filter "$F" -- -d $L -c samplerate=1M -t D0=rfr -O bits
     # 8 channels: the lower group, and the upper one (register 0x21),
     # whose memory wraps.
     emu_case "lib 8ch lower 1M" --libsigrok --oxrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=1M -t D3=r -O bits
@@ -234,7 +236,7 @@ emu_cases() {
     # holds the runner to its hang. The errors are oxrok's own lines.
     H='recv_intr_transfer() submits no transfer after a failure or a short packet, protocol.c:926-933'
     emu_case "oxrok no trigger" --libsigrok --oxrok --oracle-bug "without a trigger nothing arms the board and nothing reads its packets, protocol.c:331,1119" --oracle-hangs --timeout 3 --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -O bits
-    emu_case "oxrok unplug mid fetch" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok unplug mid fetch" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() takes no status, and its resubmit to the gone device fails unchecked, protocol.c:1017-1026, so nothing more completes" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
     emu_case "oxrok unplug while waiting" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
     # The same capture with bits as "lib 8ch upper wraps ascii", which the
     # C driver's packet of no bytes crashes.
@@ -245,16 +247,15 @@ emu_cases() {
     # chunk, the verify, the settle reads (the first pass and a later
     # one) and the status write.
     for f in stall=write:1 stall=write:2 stall=write:5 stall=write:8 stall=write:9 stall=write:27 \
-             stall=write:28 stall=write:29 stall=write:30 stall=upload stall_bitstream=5 verify=4 \
+             stall=write:28 stall=write:29 stall=write:30 stall_bitstream=5 verify=4 \
              stall=verify stall=read:3 stall=read:5 settle=100 stall=status; do
         ls_options flashed=1 $f
-        # oxrok names the error of a refused 0xb3, a STALL's
-        # LIBUSB_ERROR_PIPE; the C names a variable that holds SR_ERR
-        # whatever happened (protocol.c:452-454), LIBUSB_ERROR_IO. The
-        # filter drops that one word, in that line, from oxrok's run.
-        U3="s/^(oxrok: .*Failed to initiate firmware upload: )LIBUSB_ERROR_PIPE/\\1LIBUSB_ERROR_IO/; $P"
-        emu_case "lib fault $f" --libsigrok --oxrok --expect-fail --stderr --filter "$U3" -- -d $L -c samplerate=1M -t D3=r -O bits
+        emu_case "lib fault $f" --libsigrok --oxrok --expect-fail --stderr --filter "$F" -- -d $L -c samplerate=1M -t D3=r -O bits
     done
+    # A refused 0xb3: oxrok names the STALL, LIBUSB_ERROR_PIPE, where the C
+    # reads LIBUSB_ERROR_IO whatever happened (kept in the .oracle).
+    ls_options flashed=1 stall=upload
+    emu_case "lib fault stall=upload" --libsigrok --oxrok --oracle-bug "names ret, not r, protocol.c:452-454" --expect-fail --stderr --filter "$F" -- -d $L -c samplerate=1M -t D3=r -O bits
     # Faults the driver rides out: a slow verify, slow settling, stale
     # and odd status packets, a short first sample transfer.
     for f in verify=3 settle=99 stale=2 odd_state=0x05 bulk_short=1000; do
@@ -299,9 +300,9 @@ emu_cases() {
     # FPGA_FIRMWARE_SIZE (upload_fpga_bitstream(), protocol.c:433-445).
     ls_options flashed=1
     ls_bitstream missing
-    emu_case "lib bitstream missing" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "lib bitstream missing" --libsigrok --oxrok --expect-fail --stderr --filter "$F" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_bitstream short
-    emu_case "lib bitstream short" --libsigrok --oxrok --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "lib bitstream short" --libsigrok --oxrok --expect-fail --stderr --filter "$F" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_bitstream good
     # Replay fixtures: a capture with each bitstream, of few channels to
     # keep their output small.

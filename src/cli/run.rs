@@ -281,6 +281,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
             .map_err(|_| Error::arg("Failed to configure frame limit."))?;
     }
 
+    device.check_capture(trigger.as_ref())?;
     let samplerate = device.get(&Key::Samplerate, None).ok().and_then(|v| v.as_u64());
     let channels = device.channels().to_vec();
     let title = registry.find(device.info().driver).map_or("unknown", |d| d.long_name()).to_owned();
