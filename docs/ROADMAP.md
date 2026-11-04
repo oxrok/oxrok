@@ -23,8 +23,8 @@
 | 9a | transport shells: vendor bulk and interrupt, FTDI, EZ-USB renumeration, HID, CDC-ACM with modem lines, USBTMC | the six Pico roles, the LogicPort and fx2lafw re-run on the host; `tools/diffcli.sh --emu` needs no hardware. 2026-11-03: HID (relay, PICkit2, the BU-86X, CH9325 and Victor cables, all full cases) and FTDI shells done |
 | 9b | oracle instrumentation: libsigrok built with `--coverage`, a per driver gcov report of the lines the scenarios reach, transaction log diff in `diffcli.sh` | each emulated driver has a coverage figure and a list of C paths not emulated. Harness done 2026-11-02: models found by `emu/build.rs`, one scenario file per model with goldens (oracle-only cases before a port exists), a host-wide session lock, firmware stand-ins, `tools/emu-gcov.sh` and `diffcli.sh --gcov` (`docs/USB.md`). 2026-11-03: the shared sources (`usb.c`, `ezusb.c`, `serial*.c`) reported too, fault options in the shells and models, unplug and interrupt events; drivers at 60% to 86% |
 | 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%), ported in batch 4 (46 cases, all full) over `src/ftdi/libftdi.rs`, whose divisor matches the libftdi 1.5 binary on every chip type. Batch 3 modelled the rest; batch 5 (2026-11-03) ported them over `src/ftdi/libftdi.rs`: `chronovu-la` (52 cases, gcov 87.0%), `asix-sigma` (110, 89.4%), `ikalogic-scanaplus` (53, 93.8%), `pipistrello-ols` (107, 97.0%, its model checked against the author's firmware source). All of 9c is ported and emulator-verified; none on hardware, and the chips are inferred from the C drivers |
-| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%). Ported: `saleae-logic16` (87 cases, batch 4), `kingst-la2016` (151) and `dreamsourcelab-dslogic` (94, batch 5); `hantek-6xxx` and `hantek-dso` ready for their ports. Batch 4: `lecroy-logicstudio` modelled (83 oracle cases, 56 of them library-verified through `tools/libsigrok-run.c`, as sigrok-cli cannot capture with it; gcov 95.9%) |
-| 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified. Batch 4 (2026-11-03): `saleae-logic-pro` (102 oracle cases, gcov 97.0%) and `hantek-4032l` (121, 90.7%) modelled, ready for their ports. Batch 5: `zeroplus-logic-cube` (121, 87.6%) and `sysclk-lwla` (130, 90.4%) modelled |
+| 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%). Ported: `saleae-logic16` (87 cases, batch 4), `kingst-la2016` (151) and `dreamsourcelab-dslogic` (94, batch 5); Batch 4: `lecroy-logicstudio` modelled (83 oracle cases, 56 of them library-verified through `tools/libsigrok-run.c`, as sigrok-cli cannot capture with it; gcov 95.9%). Batch 6 (2026-11-04) ported the rest: `lecroy-logicstudio` (94 cases, gcov 95.9%, its captures full against `tools/libsigrok-run.c`), `hantek-dso` (148, 96.2%), `hantek-6xxx` (102, 90.8%). All of 9d is ported and emulator-verified; none on hardware |
+| 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified. Batch 4 (2026-11-03): `saleae-logic-pro` (102 oracle cases, gcov 97.0%) and `hantek-4032l` (121, 90.7%) modelled. Batch 5: `zeroplus-logic-cube` (121, 87.6%) and `sysclk-lwla` (130, 90.4%) modelled. Batch 6 (2026-11-04) ported `hantek-4032l` (135 cases, gcov 91.4%), `sysclk-lwla` (141, 91.1%), `zeroplus-logic-cube` (134, 87.6%) and `saleae-logic-pro` (107, 97.1%), none on hardware, and modelled `sysclk-sla5032` (142 oracle cases, 91.0%) and `ikalogic-scanalogic2` (134, 88.6%), ready for their ports |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host |
 | 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
 | 9h | the odd transports: GPIB shim, parallel port shim, sysfs root, vendor CLI stub, BLE on the ESP32 | each driver either emulator-verified or listed as hardware-only with the reason |
@@ -263,18 +263,22 @@ each with where it belongs:
   and asix-sigma (2.1 MB to 0.98 MB) with `EMU_TX_FOLD`. What remains
   in asix-sigma is inline bulk OUT payloads, which folding does not
   cover.
-- The libusb backend gets no emulator run: the gates use nusb, which
-  is how a stream reading ahead lost samples unseen (dslogic). Its
-  timed stream reads packet by packet, so its `.tx` differs and a fast
+- The libusb backend has no regular emulator run: the gates use nusb,
+  which is how a stream reading ahead lost samples unseen (dslogic). In
+  batch 6, lecroy-logicstudio passed 83/83 on it and hantek-6xxx was
+  run, differing only by string reads. String reads at listing, which
+  only libusb makes, make other models fail on transactions. Its timed
+  stream still reads packet by packet, so its `.tx` differs and a fast
   stream may overflow. Wanted: one `OXROK_USB_BACKEND=libusb` run per
   batch, comparing output only.
 - `--oracle-bug` accepts any non-zero exit, and `--oracle-hangs` now
   pins a real hang (pipistrello-ols); dslogic's two trigger-fault cases
   still have an empty `.oracle`, which pins nothing.
-- Rare flakes seen in full runs, not yet explained: `lib fault still=1
+- Rare flake seen in full runs, not yet explained: `lib fault still=1
   hangs` (lecroy-logicstudio: the runner exited 1 about 38 transactions
-  early, once in 12 runs) and `fault halt after one`
-  (saleae-logic-pro: two `bulk_in` lines reordered, once).
+  early, once in 12 runs). `fault halt after one` (saleae-logic-pro) is
+  explained: `protocol.c:909`'s resubmit lands inside the start's OUT or
+  IN wait; a submit-order shim over 40 runs matched the log order.
 - Device firmware sources may settle what models assume: the
   Pipistrello's overturned three of them. Look for the others'
   (DreamSourceLab's FPGA sources, for one).
@@ -289,10 +293,27 @@ each with where it belongs:
 - `tools/attribution.py --check` would rewrite the headers of
   `emu/src/models/hantek-dso.rs` and `src/drivers/fx2lafw/mod.rs`
   (a hand-added "hantekdso project" credit is not in the generator's
-  sources); the credit belongs in `tools/attribution.d`.
+  sources); the credit belongs in `tools/attribution.d`. Add
+  `emu/src/models/hantek-6xxx.rs` to this list; `--check` would rewrite
+  it too.
 - `tools/attribution.py` credits files only: facts taken from a
   firmware source tree (the fx2lafw and hantek-6xxx models use
   sigrok-firmware-fx2lafw) are credited by hand in the model's header.
+- A failed capture exits 0 on every port. Consider a sink-level failure.
+- `Session`'s `End` is sent before the link goes back in its slot, so
+  `start()` right after `End` can get Busy (lecroy-logicstudio,
+  saleae-logic16, kingst-la2016).
+- The rusb stream thread exits on any non-timeout error, so one
+  transient error loses the rest of a capture; it is not joined on drop;
+  it keeps one read in flight.
+- `fn shots/hit` is duplicated in 5 models: a candidate for a shared
+  helper.
+- `make dist` carrying `NOTICE` has not been run for real.
+- `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
+  Linux-specific.
+- saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).
+- The vendor ISO for sysclk-sla5032 (`sla5032_2015_1_24.iso`) has not
+  been examined; it may settle what that model assumes.
 
 ### Risks
 

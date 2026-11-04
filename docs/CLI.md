@@ -166,7 +166,8 @@ Deliberate, and kept small:
   0.
 - All drivers: a scan option the driver does not list is refused
   ("Unknown scan option 'conn'.", exit 1); sigrok-cli prints nothing and
-  exits 0.
+  exits 0, as libsigrok finds no device. `zeroplus-logic-cube` takes
+  `conn=` without listing it.
 - `-c a=1:b=2` sets the options in the order given. sigrok-cli sets them
   in its hash table's order, which shows on a device where setting an
   option talks to the hardware (the Kingst PWM outputs).
@@ -192,6 +193,88 @@ Deliberate, and kept small:
   with `-O hex`; sigrok-cli dies of SIGSEGV.
 - `dreamsourcelab-dslogic`: a transfer cut inside an atom gives 0 for
   the bits it lacks; sigrok-cli reads what the buffer held before.
+- hantek-4032l: `-c limit_samples=N` with N of 2^32 or more is refused,
+  where sigrok-cli takes the lower 32 bits.
+- hantek-4032l: a failed configure or get command ends the capture with
+  a logged error, where sigrok-cli runs until killed.
+- hantek-4032l: a device gone during the data logs one line, where
+  sigrok-cli logs one per transfer in flight.
+- hantek-4032l: two trigger stages are refused with "Only 1 trigger
+  stages are supported." where sigrok-cli says "Only one trigger stage
+  supported for now."
+- hantek-4032l: a Ctrl-C ends the capture.
+- `sysclk-lwla`: a `conn=` that matches nothing or is invalid lists no
+  device, where sigrok-cli lists every LWLA.
+- `sysclk-lwla`: a read that fails during a capture still passes on the
+  samples decoded so far, where sigrok-cli drops those not yet in a full
+  packet.
+- `sysclk-lwla`: a rate the divider cannot reach logs a warning, which
+  fails under `--strict`.
+- `sysclk-lwla`: Ctrl-C ends the capture with the device's whole stop
+  sequence and passes on the samples decoded so far.
+- zeroplus-logic-cube: `conn=` is accepted, not listed. `--show` lists
+  no scan option, as sigrok-cli. The device line names `conn=` only when
+  it was given or more than one board is found.
+- zeroplus-logic-cube: a samplerate not listed fails with "Unsupported
+  samplerate", where sigrok-cli crashes or takes it.
+- zeroplus-logic-cube: a failed or short read ends the capture rather
+  than repeating samples.
+- zeroplus-logic-cube: warnings for a second edge, and for a channel
+  asked high and low.
+- zeroplus-logic-cube: Ctrl-C stops a capture, which sigrok-cli cannot.
+- A driver that ends each capture itself and has no limit keys
+  (lecroy-logicstudio) starts a capture with -O, -o or -t alone;
+  sigrok-cli prints its help there and cannot capture with this driver
+  at all. --samples, --time, --frames and --continuous are refused
+  alike.
+- `lecroy-logicstudio` without a trigger refuses the capture, leaving
+  the output file alone; libsigrok would wait for ever.
+- hantek-dso: `--get num_hdiv` and `--get num_vdiv` print 10 and 8;
+  sigrok-cli fails.
+- hantek-dso: a frame with a trigger offset of 0 is written normally;
+  sigrok-cli aborts on a double free.
+- hantek-dso: the paths on which sigrok-cli never ends (an empty data
+  transfer, an unplug, a DSO-5200's 9 bit frames) end. After an empty
+  transfer oxrok reads on: on the model that gives the whole frame; on a
+  device where an empty packet means no more, the frame ends with an
+  error.
+- hantek-dso: `-c` pairs are set as given; the order changes only the
+  interim commands, and a capture resends all settings.
+- `saleae-logic-pro`: a `conn=` that names no board selects none, where
+  libsigrok then selects every Logic Pro (`api.c:219-236`), and the
+  firmware goes only to boards the conn names (`api.c:194-212`). A short
+  transfer gives only its own samples, where libsigrok converts all 16
+  KiB of the buffer, stale bytes included (`protocol.c:906`). The
+  messages "Failed to do I2C wake read" and "Failed FPGA register
+  read-back" print the byte they check (`protocol.c:341`, `540`).
+- `saleae-logic-pro`: the first failed transfer ends the capture, with a
+  warning; libsigrok drops that transfer and goes on until its idle
+  timeout. Running out of transfers (1 s) and a failed authentication
+  also warn where libsigrok is silent at the default log level, so
+  `--strict` fails those runs. A firmware file whose last part isn't
+  flagged final is a failed upload here, where libsigrok logs "Missing
+  final part." and calls it a success (`api.c:111-116`); the board is
+  listed either way.
+- `saleae-logic-pro --continuous` stops on Ctrl-C, not on any key: oxrok
+  doesn't read stdin. sigrok-cli stops at once when stdin is at EOF.
+- hantek-6xxx: `--samples N` gives N samples; sigrok-cli passes on the
+  whole transfer: 256 for 8, 1,048,576 for 1,000,000.
+- hantek-6xxx: a rate, range or coupling the scope refuses fails the
+  start; sigrok-cli logs it and goes on, with samples labelled at the
+  setting it asked for.
+- hantek-6xxx: a rate off the list reads back as the 100 kHz it runs at;
+  sigrok-cli says the rate asked for, and its csv time column follows
+  it.
+- hantek-6xxx: with CH1 disabled, CH2 keeps its name; sigrok-cli calls
+  it CH1.
+- hantek-6xxx: `coupling=DC` on a DC-only board reads back DC;
+  sigrok-cli says AC.
+- hantek-6xxx: `--get num_vdiv` answers; sigrok-cli says not applicable.
+- hantek-6xxx: `vdiv=1.28V`, `57.6mV` and `17.6mV` work on the ISDS205B;
+  sigrok-cli cannot parse them.
+- hantek-6xxx: a capture whose transfers come back empty or fail ends,
+  where sigrok-cli waits for ever.
+- hantek-6xxx: Ctrl-C ends the capture, where sigrok-cli dies.
 
 ## Not available yet
 

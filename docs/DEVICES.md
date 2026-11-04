@@ -812,11 +812,38 @@ precision (20000001 Hz is 2e7).
 ## Hantek 6022BE/BL and relatives (hantek-6xxx)
 
 `hantek-6xxx`: the Hantek 6022BE and 6022BL, Voltcraft DSO-2020,
-Sainsmart DDS120, YiXingDianZi MDSO and Instrustar ISDS205B, two
-channel USB scopes on an FX2LP with sigrok's own firmware
-(sigrok-firmware-fx2lafw). oxrok has no port yet.
+Sainsmart DDS120, YiXingDianZi MDSO and Instrustar ISDS205B, two channel
+USB scopes on an FX2LP with sigrok's own firmware
+(sigrok-firmware-fx2lafw): `fx2lafw-hantek-6022be.fw`,
+`fx2lafw-hantek-6022bl.fw`, `fx2lafw-sainsmart-dds120.fw`,
+`fx2lafw-yixingdianzi-mdso.fw`, `fx2lafw-instrustar-isds205b.fw`.
 
-Emulated (2026-11-03), oracle cases only: model `hantek-6xxx`, options
+Ported (2026-11-04), `src/drivers/hantek_6xxx`. The 102 cases of
+`tools/emu/hantek-6xxx.sh`: 80 full, 12 `--oracle-bug`, 10
+`--oracle-differs`, no violation under either tool; replay fixtures of
+flashed boards (a replay cannot follow the id change of an upload). Not
+verified on hardware. Like the C driver it keeps one transfer in flight,
+throws away the first 1024 bytes, and sizes transfers from what the
+limits leave. What a transfer holds when its 4 s timeout runs out is
+data, as a transfer can outlast it (1 MiB at 100 kHz). The port cuts the
+output at the sample limit, with the same transfers, where the C driver
+passes on all a transfer holds (`--samples 8` gives 256 samples). A
+rate, range or coupling the scope refuses fails the start, where the C
+driver logs it and labels the samples with the setting it asked for. It
+labels CH2 as CH2 with CH1 disabled; takes an empty or failed transfer
+again and gives up after 64 in a row, where the C driver waits for ever;
+ends after 4 s of silence or on an unplug; does not hang on a limit past
+2^31 bytes; reports 100 kHz for a rate off the list, which is what the C
+driver sends for it, and sizes transfers for 100 kHz where the C driver
+sizes them for the rate asked for; reads back `coupling` as set; answers
+`num_vdiv`. A firmware reporting another board's `bcdDevice` after an
+upload opens, with a warning. Ctrl-C ends the capture within the
+transfer in flight, up to 4 s. At 8 MHz and up with no limit, the
+session's queue of 64 packets of 24 MiB could hold about 1.5 GiB behind
+a slow output. New model option: `slow=N` holds bulk IN transfers after
+the first N until the host cancels them.
+
+Emulated (2026-11-03): model `hantek-6xxx`, options
 `profile=6022be|6022be-04b5|dso2020|dds120|6022bl|6022bl-04b5|mdso|isds205b`
 and `flashed=0|1`. It follows the firmware source (0.1.7-10-g0f2d324:
 `scope.inc`, `hw/*/fw.c`, `dscr_scope.inc`): the scope renumerates as
@@ -829,19 +856,16 @@ and ISDS205B) the coupling are sent before every start. Inputs are
 invented: a 1 kHz square wave on CH1, a 10 kHz triangle on CH2; the
 gains are the driver's own V/div table. Faults, off by default: each
 configuration request and each upload step STALLed, empty or stalled
-transfers, short packets, another board's firmware. The 86 cases of
-`tools/emu/hantek-6xxx.sh` (all eight profiles flashed or not, every
-rate from 100 kHz to 48 MHz, every range, coupling, single channels,
-get and set, faults, a claimed interface, an unplug) log no violation
-under sigrok-cli, plus two `--hangs` cases. gcov: 91.0%;
-`ezusb.c` 82.6%, `usb.c` 63.8%. Not emulated: the end of a capture by
-a plain `--time` limit (wall time), a continuous capture.
+transfers, short packets, another board's firmware. The cases cover all eight profiles flashed or not, every rate from 100
+kHz to 48 MHz, every range, coupling, single channels, get and set,
+faults, a claimed interface and an unplug. gcov: 90.8%; `ezusb.c` 82.6%,
+`usb.c` 64.6%. Not emulated: the end of a capture by a plain `--time`
+limit (wall time), a continuous capture.
 
 What the model taught: with CH1 disabled, CH2's samples come out
 labelled CH1; a bulk transfer that completes empty or fails after the
 flush is neither resubmitted nor ends the capture, so it hangs for
-ever (two `--hangs` cases: an empty and a stalled transfer after the
-flush); `coupling=DC` on a DC-only board
+ever; `coupling=DC` on a DC-only board
 reads back AC; `num_vdiv` cannot be read; a rate off the list is sent
 as 100 kHz while the output is labelled with it; configuration errors
 are logged and the capture goes on with the old settings; three
@@ -851,10 +875,30 @@ with another board's firmware opens.
 
 ## Hantek DSO-2090 family (hantek-dso)
 
-`hantek-dso`: the Hantek DSO-2090, 2150, 2250, 5200 and 5200A. oxrok
-has no port yet.
+`hantek-dso`: the Hantek DSO-2090, 2150, 2250, 5200 and 5200A.
 
-Emulated (2026-11-03), oracle cases only: model `hantek-dso`, options
+Ported (2026-11-04): `src/drivers/hantek_dso`, emulator-verified, no
+hardware. The 148 cases of `tools/emu/hantek-dso.sh` are 136 full, 11
+`--oracle-bug` and one `--libsigrok`, with no violation; gcov 96.2% as
+before. The port sends the C driver's transactions, reading a frame one
+packet at a time. It answers `num_hdiv` and `num_vdiv` and sends no
+empty analog packet. It reads again after an empty or timed out data
+transfer: on the model, which keeps the bytes for the next transfer, the
+frame completes; on a device where an empty packet means no more, it
+ends the frame with an error after 64 such reads (about 2.56 s if they
+time out). A capture ends on a disconnect, after 64 failures in a row of
+one kind, a DSO-5200's 9 bit frames included (those are still not read),
+and after 2112 unknown capture states in a row, enough to drain the
+largest frame a stopped run left unread. It waits with no bound in state
+0 (a trigger that never fires), state 1 (filling) and state 127 (the
+device's timeout, which C says does not matter), until a stop; 64 states
+127 in a row give one warning. The DSO-2250's voltage header stays as
+the C driver sends it: that CH2 reads five times too large at 5 V, 500
+mV and 50 mV rests on the model alone, so whether it is a bug is open.
+The firmware is not available here (stand-ins); no real scope has run
+this.
+
+Emulated (2026-11-03): model `hantek-dso`, options
 `profile=dso-2090|dso-2150|dso-2250|dso-5200|dso-5200a`, `flashed=1`,
 `speed=full`, `ext=1`, `fill=N`, `wrap=N`. The FX2 takes
 `hantek-dso-*.fw` and renumerates from 04b4 to 04b5; the model follows
@@ -863,28 +907,27 @@ state polls, triggers, timebases, ranges, coupling and filters, the
 EEPROM calibration, and a Gray-coded trigger position in the state
 answer. Faults, off by default: each request STALLed
 (`stall=WHAT[@N]`), capture states (`state=V@N`), endpoint layouts the
-driver refuses. The 132 cases of `tools/emu/hantek-dso.sh` (frames with
-every trigger source, slope, ratio, timebase branch, range, coupling
-and filter, full speed, the DSO-2250's own commands and each of CH2's
-range groups, the upload and every step of the init and capture loop
-failing) log no violation under sigrok-cli; frame outputs keep every
-64th line plus a digest of the whole output (`--digest`). Five `--hangs` cases cover the paths that never end
-(the driver retries capture errors for ever): an empty data transfer
-(fault `empty=N`), an unplug mid frame and while polling, an external
-trigger that never fires, and the DSO-5200's 9-bit frames ("Not yet
-supported." at every poll). gcov: 96.2% (`ezusb.c` 82.6%, `usb.c`
-67.7%). Not emulated: a second device. Known flake source: the driver submits a
-frame's transfers at once with a 40 ms timeout each, and a timeout
-hangs sigrok-cli; no run has hit it.
+driver refuses. The cases cover frames with every trigger source, slope, ratio, timebase
+branch, range, coupling and filter, full speed, the DSO-2250's own
+commands and each of CH2's range groups, the upload and every step of
+the init and capture loop failing; frame outputs keep every 64th line
+plus a digest of the whole output (`--digest`). They also cover the
+paths on which the C driver never ends (it retries capture errors for
+ever): an empty data transfer (fault `empty=N`), an unplug mid frame and
+while polling, an external trigger that never fires, and the DSO-5200's
+9-bit frames ("Not yet supported." at every poll). gcov: 96.2%
+(`ezusb.c` 82.6%, `usb.c` 67.7%). Not emulated: a second device. Known
+flake source: the C driver submits a frame's transfers at once with a 40
+ms timeout each, and a timeout hangs sigrok-cli; no run has hit it.
 
 What the model taught: `--get num_hdiv` and `num_vdiv` always fail
 (`config_get()` fills the value, then returns `SR_ERR_NA`); a frame
 whose trigger offset is 0 sends an empty analog packet, on which
 `output/analog.c` frees its buffer twice and sigrok-cli aborts;
-capture errors are retried for ever; probably, the DSO-2250's voltage
-header bit 0x08 overlaps CH2's range bit, so CH2 at 5 V, 500 mV and
-50 mV reads as 1 V, 100 mV and 10 mV; and the capture-state answer's
-length is never checked.
+capture errors are retried for ever; on the model alone, so whether
+it is a bug is open, the DSO-2250's voltage header bit 0x08 overlaps
+CH2's range bit, so CH2 at 5 V, 500 mV and 50 mV reads five times too
+large; and the capture-state answer's length is never checked.
 
 ## ChronoVu LA8 / LA16 (chronovu-la)
 
@@ -1179,9 +1222,23 @@ sample count.
 
 ## LeCroy LogicStudio 16 (lecroy-logicstudio)
 
-`lecroy-logicstudio`: oxrok has no port yet.
+`lecroy-logicstudio`: ported to oxrok (src/drivers/lecroy_logicstudio),
+checked with the emulator only, never on a board. A capture takes -O, -o
+or -t with no limit, and needs a trigger. 94 cases: 26 full against
+sigrok-cli, 46 full against `tools/libsigrok-run.c` (`emu_case
+--libsigrok --oxrok`), 11 `--oracle-bug`, 11 library-only. "lib recorded
+16ch" and "lib recorded 8ch upper" are recorded to
+tests/fixtures/lecroy_logicstudio. Where oxrok differs from libsigrok: a
+capture with no trigger is refused before the output is opened; a failed
+transfer, a short status packet, a failed fetch write or a silent sample
+endpoint (64 empty transfers) ends the capture with an error, exit
+status 0; a status timeout polls again; no logic packet of 0 bytes; a
+refused 0xb3 names the real error; where the C's subtractions would
+wrap, the earliest sample is 0 and the trigger sample 1; `conn=` is
+refused with "Unknown scan option 'conn'.". The whole model passes on
+the libusb backend as well (83 cases under `--no-oracle`).
 
-Emulated (2026-11-03), oracle cases only: model `lecroy-logicstudio`
+Emulated (2026-11-03): model `lecroy-logicstudio`
 (emu/src/models/lecroy-logicstudio.rs, EZ-USB shell): an FX2LP that
 enumerates as `05ff:a001`, takes `lecroy-logicstudio16-fx2lp.fw` in the
 scan and renumerates as `05ff:a002`. Behind it is an FPGA that is loaded
@@ -1194,16 +1251,15 @@ register meanings, the trigger semantics, the 0x1c pipeline delay and
 the trigger latency are assumed. Options: `flashed=1`, `still=1`, and
 the faults `stall=NAME[:N]`, `verify=N`, `settle=N`,
 `stall_bitstream=N`, `stale=N`, `odd_state=0xNN`, `intr_short=N`,
-`bulk_short=N`, `bulk_stall=1`, `intr_silent=1`, `renum=0`. 83 oracle
-cases: 27 through sigrok-cli (scan with and without the FX2 firmware,
-show, the options, every way of asking for a capture, an interface
-claimed by another program, a firmware that never renumerates, unplugs
-during the FX2 upload) and 56 library-verified, not CLI-verified,
-through `tools/libsigrok-run.c`, since sigrok-cli cannot start a capture
-with this driver (it runs a session only with `--samples`, `--time`,
-`--frames` or `--continuous`, and the driver offers none of their keys,
-api.c 44-48). The library cases cover the rate classes, 8 and 16
-channels, capture ratios, trigger stages, a wrapping memory, a stop
+`bulk_short=N`, `bulk_stall=1`, `intr_silent=1`, `renum=0`. The
+sigrok-cli cases cover the scan with and without the FX2 firmware, show,
+the options, every way of asking for a capture, an interface claimed by
+another program, a firmware that never renumerates and unplugs during
+the FX2 upload. Captures run against `tools/libsigrok-run.c`, since
+sigrok-cli cannot start a capture with this driver (it runs a session
+only with `--samples`, `--time`, `--frames` or `--continuous`, and the
+driver offers none of their keys, api.c 44-48): the rate classes, 8 and
+16 channels, capture ratios, trigger stages, a wrapping memory, a stop
 while waiting for the trigger, the faults and the bitstream file. gcov:
 api.c 92.9 % (170/183), protocol.c 97.1 % (465/479). Not reached:
 OS-level failures, a NULL sdi, match or transfer data, unknown keys,
@@ -1245,10 +1301,44 @@ the device "Logic Pro 16"): 16 digital channels at 1, 2, 2.5, 10, 25 or
 50 MHz. The driver has no analog input and no sample or time limit, so
 sigrok-cli captures only with `--continuous`. It needs
 `saleae-logicpro16-fx3.fw` (Cypress FX3 firmware: a list of parts, each
-with a 7-byte header) and `saleae-logicpro16-fpga.bitstream`. oxrok has
-no port yet.
+with a 7-byte header) and `saleae-logicpro16-fpga.bitstream`.
 
-Emulated (2026-11-03), oracle cases only: model `saleae-logic-pro`,
+Ported (2026-11-04): `src/drivers/saleae_logic_pro`, on model
+`saleae-logic-pro`, options as before. The 107 cases of
+`tools/emu/saleae-logic-pro.sh`: 99 full (one, `lib idle stop`, against
+`libsigrok-run`), 7 `--oracle-differs`, 1 `--oracle-bug` (Ctrl-C); 2
+more run only under `--no-oracle` (a board named by address, followed
+through its upload; `--strict` on a failed authentication). gcov: 97.1%
+(`api.c` 94.3%, `protocol.c` 98.4%); `usb.c` 76-79%, varying from run to
+run, perhaps with the unplug cases' timing. Not emulated: argument
+checks, libusb open failures, sigrok-cli-unreachable config branches.
+The driver's 1 s idle stop (`api.c:391`) is reached only through
+`libsigrok-run`, because sigrok-cli's any-key stop fires at once on the
+harness's `/dev/null`.
+
+A capture ends on Ctrl-C, when the device leaves, on the first failed
+transfer, or after 1 s without a transfer; the last three warn. A failed
+authentication warns and the capture goes on as in the C driver, since
+nothing shows whether a real board refuses to capture without one.
+
+Firmware: `saleae-logicpro16-fx3.fw` and
+`saleae-logicpro16-fpga.bitstream` come from
+`sigrok-fwextract-saleae-logic16`, run on Logic 1.2.10 for Linux (per
+the sigrok wiki).
+
+libusb backend: one synchronous read at a time with a 100 ms read
+timeout. One channel at 1 MHz takes 131 ms per transfer; unmeasured at
+50 MHz. Outputs matched there at review time (105 cases).
+
+Not verified on hardware. Device facts beyond the C driver's are the
+model's assumptions. No public HDL or FX3 source is known.
+`eisbaw/saleae_logic_reversed` documents the protocol from static
+analysis of Saleae's v2.4.40 software (tested on a Logic Pro 8), newer
+firmware than the 1.2.10 files: it gives `07 00` as the answer to 0x01
+and 0x02, which no tool here checks. Which FPGA the board has is
+unresolved.
+
+Emulated (2026-11-03): model `saleae-logic-pro`,
 options `flashed=0|1`, `fpga=0|1`, `boot_strings=MANUFACTURER/PRODUCT`
 and `transfers=N`. The FX3 boot loader takes the parts through vendor
 request 0xa0 with a 32-bit address in wValue/wIndex, an empty part
@@ -1271,17 +1361,11 @@ model stops after `transfers=N` 16 KiB transfers. Faults, off by
 default: any command or its answer STALLed or short, bad status bytes,
 the chip's wake status, an FPGA that does not come up, a capture error,
 a halted or short sample endpoint, a boot loader refusing a part,
-unreadable strings. The 102 cases of `tools/emu/saleae-logic-pro.sh` log
-no violation under sigrok-cli: every rate, 1 to 16 channels, selection
-by the board's real address (read from sysfs, as the session's address
-goes stale after an upload), the unflashed upload, every failing request
-of the open, each authentication step, broken firmware files and a
-missing bitstream, a claimed interface, unplugs during the upload,
-prepare and mid capture. gcov: 97.0% (`api.c` 93.9%, `protocol.c`
-98.4%); `usb.c` 79.9%. Not emulated: argument checks, libusb open
-failures, sigrok-cli-unreachable config branches, and the driver's own 1
-s idle stop (`api.c:391`; unreached only because the harness gives
-sigrok-cli /dev/null on stdin, so its 'any key' stop fires at once).
+unreadable strings. The cases cover every rate, 1 to 16 channels, selection by the board's
+real address (read from sysfs, as the session's address goes stale after
+an upload), the unflashed upload, every failing request of the open,
+each authentication step, broken firmware files and a missing bitstream,
+a claimed interface, unplugs during the upload, prepare and mid capture.
 Device facts beyond the ids, strings, endpoints and the driver's packets
 are assumed: the boot stage's lack of strings, the firmware version,
 temperature, EEPROM, the chip's random values and signature, the
@@ -1293,16 +1377,34 @@ an unflashed board's address changes, so `conn=BUS.ADDR` always falls
 into this; `receive_data()` converts all 16 KiB whatever the transfer's
 length (`protocol.c:906`), so short transfers come out as stale or
 never-written samples; two error messages print the wrong byte
-(`protocol.c:340-341`, `539-540`); `prepare()` ignores a failed
-authentication; `transact()` leaks every scrambled request
+(`protocol.c:340-341`, `539-540`); `transact()` leaks every scrambled request
 (`protocol.c:107`), and the stop leaves the 512 transfers submitted.
 
 ## Hantek 4032L (hantek-4032l)
 
-`hantek-4032l`: the Hantek 4032L, 32 channels in groups A and B. oxrok
-has no port yet.
+`hantek-4032l`: the Hantek 4032L, 32 channels in groups A and B, no
+firmware to upload. Ported 2026-11-04 from `api.c` and `protocol.c`; the
+device sees the same transactions as under sigrok-cli. Emulator only,
+not verified on hardware. The 135 cases of `tools/emu/hantek-4032l.sh`:
+127 full, 5 `--oracle-bug`, 1 `--oracle-differs`, 2 library; gcov 91.4%.
+The model's new options `hold=N`, `partial=BYTES` and `release=1` show a
+stream that stops, a transfer that times out with data, and a slow
+board. Differences: a refused configure or get ends the capture with an
+error, where libsigrok polls for ever; 64 failed transfers in a row end
+it, and from the get on so do 64 timeouts; a status command gets 10
+reads and is then sent again; a sample count of 4 Gi and more is refused
+(api.c:415 loses its upper half); the end word is only checked if it
+arrived (protocol.c:194); trigger 1 is rebuilt at each start, where
+api.c:521-523 clears only the enable flags. Kept unbounded, as in
+libsigrok: the wait for status 2, including silent reads, so a trigger
+that never fires waits until stopped; and the packets dropped before the
+start word, so a board that never sends one also waits until stopped.
+Kept from the C driver because nothing disproves them: a capture ratio
+of 100 gives no trigger marker, a threshold of -8.2 V or below sends PWM
+4096, the trigger marker comes at the pre-trigger position even without
+a trigger. Replay fixtures: `tests/fixtures/hantek_4032l/`.
 
-Emulated (2026-11-03), oracle cases only: model `hantek-4032l`
+Emulated (2026-11-03): model `hantek-4032l`
 (`emu/src/models/hantek-4032l.rs`, a plain vendor device with no shell),
 options `fpga=VERSION` (default 0x4303; 0 is the driver's old variant,
 with one data transfer at a time and no external clock) and `fill=N`
@@ -1318,19 +1420,17 @@ samples). Triggers combine levels with one edge, the capture starts
 counter never meets keeps the status at 1. Pacing is counted in status
 commands, not time. Faults, off by default: `stall=reset|out|in[@N]`,
 `stale=N` (leftover packets before each answer), `end=HEX` (a garbled
-end word). The 121 cases of `tools/emu/hantek-4032l.sh` log no violation
-under sigrok-cli: every rate code, sizes up to 256k samples, thresholds
+end word). The cases cover every rate code, sizes up to 256k samples, thresholds
 (including the -9 V that sends PWM 4096), external clock sources and
 edges, every trigger kind and position (a capture ratio of 100
 included), every get and refused value, FPGA version 0, a claimed
 interface, the open's and the capture's STALLs, stale packets, an unplug
-while polling and mid data. Three `--hangs` cases (2 s each) cover the
-paths that never end: a refused configure, a refused get, and a trigger
-that never fires. gcov: 90.7% (`usb.c` 68.1%). Not emulated: submissions
-that fail (their timing against an unplug is not deterministic),
-transfers after an abort (only `dev_acquisition_stop()` causes them, and
-sigrok-cli never calls it), a second device, and refusals sigrok-cli
-makes before the driver.
+while polling and mid data, and the paths on which the C driver never
+ends: a refused configure, a refused get, and a trigger that never
+fires. `usb.c` gcov: 68.1%. Not emulated: submissions that fail (their
+timing against an unplug is not deterministic), transfers after an abort
+(only `dev_acquisition_stop()` causes them, and sigrok-cli never calls
+it), a second device, and refusals sigrok-cli makes before the driver.
 
 What the model taught: the driver ignores failed transfers (`sr_dbg`
 only), so a refused configure or get keeps sigrok-cli running for ever,
@@ -1347,11 +1447,26 @@ own (not the model's layout).
 
 ## ZEROPLUS Logic Cube (zeroplus-logic-cube)
 
-`zeroplus-logic-cube`: oxrok has no port yet.
+`zeroplus-logic-cube`: ported (`src/drivers/zeroplus_logic_cube`), all
+13 boards of the C's table. 134 cases: 111 full, 7 `--oracle-bug`, 15
+`--oracle-differs`, 1 on libsigrok alone; gcov unchanged, 87.6%. Scan,
+open and capture send what the C sends. `conn=` selects a board,
+accepted but not listed, as libsigrok refuses it. A rate not listed is
+refused. A failed status or address read is not used as a value, and the
+wait is bounded (16 failed polls, about 1.6 s) and can be stopped. A
+short or failed bulk read ends the capture with the samples of the reads
+that completed. A second edge, or a channel asked high and low, is sent
+as in C with a warning. Kept as in C until a recording says otherwise:
+the address arithmetic (a limit of 1000 delivers 996 samples), limits 1
+to 4 delivering nothing, the wrapped post-trigger count at limits 1 and
+2 with ratio 100, the bogus words at full memory, no marker at
+captureratio=100, and the marker at sample 0 of a capture with no
+trigger at full memory (commit 4c1433d1: "we trigger immediately").
+Nothing here has run on a real board.
 
-Emulated (2026-11-03), oracle cases only: model `zeroplus-logic-cube`
+Emulated (2026-11-03): model `zeroplus-logic-cube`
 (`emu/src/models/zeroplus-logic-cube.rs`, default LAP-C(16032),
-0c12:700e; `pid=` any of the driver's 13 boards), 121 oracle cases. gcov
+0c12:700e; `pid=` any of the driver's 13 boards). gcov
 87.6% (550 of 628); src/usb.c 10.0%, the driver calling only
 `sr_usb_open()` and `usb_get_port_path()`. Options: `pid=`,
 `serial=TEXT`, `warm=1`, `fill=N`; faults
@@ -1409,9 +1524,43 @@ What the model taught:
 `sysclk-lwla`: the LWLA1034 (2961:6689, 34 channels, up to 125 MHz) and
 LWLA1016 (2961:6688, 16 channels, up to 100 MHz). The driver needs
 `sysclk-lwla1034-{off,int,extpos,extneg}.rbf` or
-`sysclk-lwla1016-{100,100-ts}.rbf`. oxrok has no port yet.
+`sysclk-lwla1016-{100,100-ts}.rbf`.
 
-Emulated (2026-11-03), oracle cases only: model `sysclk-lwla`
+Ported (2026-11-04) in `src/drivers/sysclk_lwla`, with the 141 cases of
+`tools/emu/sysclk-lwla.sh`: 126 full, 4 `--oracle-differs`, 3
+`--oracle-bug` (interrupts: sigrok-cli has no SIGINT handler), 8
+`--libsigrok` for what sigrok-cli cannot show (a stop, a root hub, the
+wait for a trigger). gcov 91.1%. Not on hardware.
+
+The port keeps the C's integer divider and the rate asked for, with a
+warning when they differ. `close()` always sends the shut-down
+bitstream, as `sr_dev_close()` does for a libsigrok client
+(`device.c:779`). Only the CLI's capture path skips it, through
+`Device::close_after_capture()`, for wire parity with sigrok-cli, whose
+`sr_exit()` closes the device still active (`std.c:427-428`).
+
+The port does not copy:
+
+- A `conn=` selecting nothing listing every board (`api.c:104`).
+- A stop that writes only the first register of each sequence
+  (`protocol.c:341`). This is a regression from `be64f90b` (2015-11-22):
+  before it the five writes all went out with no cancel check, and
+  `protocol.c:292-293` and `354` still submit all five on a cancel. The
+  `lib stop` cases show it on the wire. On the LWLA1034 only the long
+  register's address goes out, with no strobe, which would leave the
+  capture running if the strobe is what latches a long register
+  (`lwla1034.c:72` reads so; no device has confirmed it). On the
+  LWLA1016 the first write is `REG_CAP_CTRL=0`, which does stop it, and
+  only `DIV_COUNT=0` is skipped.
+- Samples lost when a capture ends early: on a reply of the wrong size
+  (`protocol.c:216-219`), on a failed transfer (`protocol.c:325-330`,
+  then `299-309`) and on a stop (`protocol.c:237`).
+- Trigger masks kept from an earlier session (`api.c:501-502`).
+
+A capture waiting for a trigger that never fires polls until it is
+stopped, in both (the model counts from the trigger; not on hardware).
+
+Emulated (2026-11-03): model `sysclk-lwla`
 (`emu/src/models/sysclk-lwla/`, a plain vendor device with no shell; the
 FX2's firmware is not uploaded), options `model=1034|1016`, `period=N`,
 `tick=MS`, `ext_clock=HZ`, `ext_trg=N`, `short_transfers=1`, `stale=N`.
@@ -1428,17 +1577,16 @@ order are held to the driver's, and on the LWLA1016 a second memory read
 is required after the first one following a memory reset
 (`lwla1016.c:281`). Faults, off by default: any command or its reply
 STALLed, a reply one word short, a wrong test word, a halted reply
-endpoint, stale reply bytes. The 130 cases of `tools/emu/sysclk-lwla.sh`
-log no violation under sigrok-cli: both boards, rates, limits, every
-trigger kind, the external clock and TRG input, the 64-byte quirk, every
-step of the open with its three tries, the capture's requests, a capture
-with no words (LWLA1016), broken bitstream files, a claimed interface,
-unplugs while polling and in the quirk checks, and two `--hangs` cases
-(2 s) for a trigger that never fires. gcov: 90.4% (`usb.c` 74.2%). Not
-emulated: cancelling and a close during an acquisition (sigrok-cli does
-neither), a capture with no words on the LWLA1034 (it would take a
-fault), a failing submission of the start, and refusals sigrok-cli makes
-before the driver. Device facts beyond the ids, endpoints, commands,
+endpoint, stale reply bytes. The cases cover both boards, rates, limits, every trigger kind, the
+external clock and TRG input, the 64-byte quirk, every step of the open
+with its three tries, the capture's requests, a capture with no words
+(LWLA1016), broken bitstream files, a claimed interface, unplugs while
+polling and in the quirk checks, and two `--libsigrok --hangs` cases (2
+s) for a trigger that never fires. `usb.c` gcov: 74.2%. Not emulated: a
+close during an acquisition, a capture with no words on the LWLA1034 (it
+would take a fault), a failing submission of the start, and refusals
+sigrok-cli makes before the driver.
+Device facts beyond the ids, endpoints, commands,
 registers and formats are assumed: no strings, the encoder's choices,
 the status timing, the first test read returning 0, the capture count
 reading the last address written, and the time counters running from the
@@ -1467,6 +1615,76 @@ on after a capture and the shut-down bitstream goes out only after
 `libusb_set_configuration()` with BUSY (`api.c:238`), before the
 driver's own claim. Read only: `prepare_trigger_masks()` returns early
 without a trigger (`api.c:501-502`), keeping an earlier session's masks.
+
+## Sysclk SLA5032 (sysclk-sla5032)
+
+`sysclk-sla5032`: oxrok has no port yet.
+
+Emulated (2026-11-04), oracle cases only: model `sysclk-sla5032` (FX2LP,
+Spartan-6 with bitstream upload and EEPROM keys, RLE sample memory),
+options `period=`, `wait=`, `configured=1`, `fw_size=` and the faults
+`stall=`, `stall_reply=`, `short_reply=`, `hold_reply=`, `data_stall=`,
+`data_hold=`, `data_short=`, `no_marker=1`, `overcount=1`. 142 oracle
+cases; gcov 91.0% (api.c 84.4%, protocol.c 94.7%), usb.c 35.4%. Not
+emulated: allocation and libusb list failures other than
+protocol.c:797-801, a partly taken OUT, an open failing between scan and
+open, what sigrok-cli or the driver's config_set checks first;
+protocol.c:814-815 and 882-883 are dead code. Descriptors come from the
+sigrok wiki's lsusb. No firmware or HDL source was found, which does not
+mean none exists: the vendor ISO the wiki links
+(`sla5032_2015_1_24.iso`, with the real `top.bit`) was not examined. So
+the trigger's position in memory, register 5's initial value, "no keys,
+no sampling", a depth independent of RLE (256 MiB is about 44.7 Mi
+records) and a capture over 64 Mi samples kept whole are assumptions,
+and the signal and register 0's value while triggered are invented.
+Whether the firmware sends a ZLP is unknown: without one, a capture
+whose records end on a packet boundary (about 1 in 256) would hit the 2
+s timeout, and protocol.c:749 drops the chunk with exit 0. What the
+driver shows: it ignores a failed key step (protocol.c:646), has no time
+limit on a trigger that never fires, ends a capture with exit 0 on
+errors, and rounds depths both ways (a limit of 512 gives 1024 samples,
+5000 gives 4608). T goes on the first match in memory, whatever the
+depth; the distance from the hardware's trigger is unknown. It sums
+device records into an `int` unchecked (protocol.c:782): a total from
+2^31 up to 2^32 goes negative and fails the allocation, and one that
+wraps to a small number under-allocates and overruns the heap (read from
+the C, no case).
+
+## IKALOGIC Scanalogic-2 (ikalogic-scanalogic2)
+
+`ikalogic-scanalogic2`: oxrok has no port yet.
+
+Emulated (2026-11-04), oracle cases only: model `ikalogic-scanalogic2`
+(`emu/src/models/ikalogic-scanalogic2.rs`), a low speed HID device,
+`20a0:4123`, whose every command and answer is a 128 byte feature report
+on endpoint 0. No firmware source was found; descriptors come from the
+sigrok wiki's lsusb of a real device, the protocol from its Protocol
+section (by the driver's author) and the C driver. Options: `serial=`,
+`fw=`, `wait-trigger=N|never`, `sampling=N`, `digest=1`; faults
+`stall-get=`, `stall-set=`, `short-get=`, `stale-sample=`,
+`stale-info=1`, `stale-reset=`, `busy-reset=`, `ignore-reset=N|never`.
+134 oracle cases (5 through libsigrok-run: the stops and the no-limit
+crash). gcov 88.6% of the driver, src/usb.c 64.2%. Not emulated:
+allocation failures, a kernel driver returning or refusing to detach,
+the device vanishing between scan and open or between a callback and its
+resubmit (races only), a stop during the 1.5 s status poll
+(libsigrok-run cannot time one), and `sl2_set_after_trigger_delay`,
+which nothing calls.
+
+What the model taught: `CMD_SAMPLE` has no channel mask, so the model
+sends all four channels (an inference from the driver), and data packets
+begin `05 CHANNEL`, so a capture ends through a RESET only when a packet
+is left over for the read after the driver's extra read; otherwise it
+reads `05 63` and goes straight to IDLE. Without a limit a library
+client's capture asks for 0 bytes, and if the device then says data
+ready, as the model chooses to, the driver divides by zero
+(protocol.c:317); a device that never said so would make it poll
+forever; sigrok-cli cannot reach this, and the case pins only the `.tx`,
+not the status. A short async read goes unnoticed and repeats old
+samples; a two-stage trigger logs an error and captures untriggered;
+only the last match of a multi-channel trigger is used; a serial over
+2^31 prints negative; `samplerate=2.5M` parses as 2
+(`sr_parse_sizestring`), so 2.5 MHz is written 2500000.
 
 ## Oracle
 
