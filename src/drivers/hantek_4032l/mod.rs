@@ -1153,7 +1153,7 @@ mod tests {
         assert!(a.stream_start(&mut link, &stop).is_err());
         drop(tx);
         check.finish().unwrap();
-        assert!(packets(&rx).is_empty());
+        assert_eq!(packets(&rx), Vec::<Packet>::new());
     }
 
     #[test]
