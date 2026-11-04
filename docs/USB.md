@@ -564,7 +564,8 @@ full case or oracle case. What else is checked depends on oxrok:
 - The tools run with stdin from `/dev/null`, whatever the harness was
   launched from: sigrok-cli's `--continuous` stops on any key, and at
   EOF it stops at once, so a driver's own stop is reached only through
-  `libsigrok-run`.
+  `libsigrok-run`. A case with `--interrupt` gets a FIFO that stays
+  quiet instead, or a `--continuous` capture would end before the signal.
 - `--oracle-hangs` with `--oracle-bug` marks a full case where
   sigrok-cli must be stopped by the timeout (status 124 or 137), so a
   silent exit 1 fails. `--oracle-differs` does not require sigrok-cli to

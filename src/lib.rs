@@ -85,8 +85,8 @@ pub mod drivers {
     pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod hantek_4032l;
-    pub mod hantek_dso;
     pub mod hantek_6xxx;
+    pub mod hantek_dso;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
     pub mod lecroy_logicstudio;

@@ -971,7 +971,18 @@ flush()
                 rm -f "$TMP/rec.usb" "$TMP/rec.hid"
                 set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
             fi
-            timeout -k 5 "$case_timeout" "$@" </dev/null >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
+            # stdin is /dev/null, whatever the harness was launched with,
+            # as sigrok-cli stops a capture at any key or at EOF. A case
+            # that interrupts it gets a FIFO that stays quiet instead, or
+            # a --continuous capture would be over before the signal.
+            stdin=/dev/null
+            case $event in
+                interrupt*)
+                    stdin=$TMP/quiet-stdin
+                    [ -p "$stdin" ] || mkfifo "$stdin"
+                    ;;
+            esac
+            timeout -k 5 "$case_timeout" "$@" <>"$stdin" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
             TOOLPID=$!
             shift $(($# - nargs))
             WATCHPID=""
