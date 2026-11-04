@@ -22,8 +22,9 @@
 //!
 //! Where this differs from the C (`docs/DEVICES.md`): a `conn=` that matches
 //! nothing selects nothing, a stop writes its whole sequence, samples
-//! decoded before a failure or a stop are passed on, and a rate the divider
-//! cannot reach gets a warning.
+//! decoded before a failure or a stop are passed on, a rate the divider
+//! cannot reach gets a warning, and a trigger match other than 0, 1, r and
+//! f is refused when it is set.
 
 #![forbid(unsafe_code)]
 
@@ -172,12 +173,6 @@ pub struct LwlaDevice {
     pending: Option<Box<dyn Transport>>,
     link: Arc<Mutex<Option<Link>>>,
     worker: Option<Worker>,
-    /// A capture was started since the open. libsigrok's close then finds
-    /// the device still active, from `sr_exit()` through `std_dev_clear()`
-    /// (`std.c:427-428`; only `sr_dev_close()` sets it inactive,
-    /// `device.c:779`), so no shut-down bitstream goes out: the FPGA stays
-    /// on after a capture. The port sends the same.
-    started: bool,
 }
 
 struct Worker {
@@ -255,7 +250,6 @@ impl LwlaDevice {
             pending: transport,
             link: Arc::new(Mutex::new(None)),
             worker: None,
-            started: false,
         }
     }
 
@@ -318,6 +312,25 @@ impl LwlaDevice {
         std::thread::sleep(Duration::from_millis(30));
         let ready = link.apply_config(self.bitstream(true)).and_then(|()| link.init_check());
         Ok(ready.map(|()| link))
+    }
+
+    /// The end of a close: the thread joined, the bitstream `shut_down` if
+    /// any, the interface released.
+    fn finish(&mut self, shut_down: Option<&'static str>) -> Result<()> {
+        self.stop()?;
+        if let Some(w) = self.worker.take() {
+            let _ = w.handle.join();
+        }
+        if let Some(mut link) = self.link.lock().expect("link lock").take() {
+            // A failure only warns, and sigrok-cli's exit stays 0.
+            if link.apply_config(shut_down).is_err() {
+                log::warn!("Unable to shut down device.");
+            }
+            if let Err(e) = link.transport().release_interface(protocol::INTERFACE) {
+                log::debug!("Releasing the interface: {e}.");
+            }
+        }
+        Ok(())
     }
 
     /// `config_commit()` and `lwla_start_acquisition()` up to the first
@@ -525,7 +538,6 @@ impl Device for LwlaDevice {
                         log::warn!("Short transfer quirk detected! Memory reads will be slow.");
                     }
                     *self.link.lock().expect("link lock") = Some(link);
-                    self.started = false;
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -534,22 +546,18 @@ impl Device for LwlaDevice {
         Err(last)
     }
 
+    /// `dev_close()` as `sr_dev_close()` calls it: the device inactive, so
+    /// the shut-down bitstream goes out.
     fn close(&mut self) -> Result<()> {
-        self.stop()?;
-        if let Some(w) = self.worker.take() {
-            let _ = w.handle.join();
-        }
         let name = self.bitstream(false);
-        if let Some(mut link) = self.link.lock().expect("link lock").take() {
-            // A failure only warns, and sigrok-cli's exit stays 0.
-            if !self.started && link.apply_config(name).is_err() {
-                log::warn!("Unable to shut down device.");
-            }
-            if let Err(e) = link.transport().release_interface(protocol::INTERFACE) {
-                log::debug!("Releasing the interface: {e}.");
-            }
-        }
-        Ok(())
+        self.finish(name)
+    }
+
+    /// `dev_close()` as `sr_exit()` calls it after sigrok-cli's capture:
+    /// the device still active and its bitstream unchanged, so that the
+    /// FPGA stays on.
+    fn close_after_capture(&mut self) -> Result<()> {
+        self.finish(None)
     }
 
     fn trigger_features(&self) -> crate::core::TriggerFeatures {
@@ -559,6 +567,22 @@ impl Device for LwlaDevice {
     fn set_trigger(&mut self, trigger: Option<Trigger>) -> Result<()> {
         if let Some(t) = &trigger {
             t.check(&TRIGGER_FEATURES)?;
+            // api.c:527-533 refuses these at the commit, for enabled
+            // channels; a match that cannot be set is refused whatever the
+            // channel, since it may be enabled later. The CLI's parser
+            // goes by TRIGGER_MATCHES and never sends one.
+            let bad = t
+                .stages
+                .iter()
+                .flat_map(|s| &s.conditions)
+                .find(|c| !TRIGGER_MATCHES.contains(&c.matches));
+            if let Some(c) = bad {
+                log::error!("Unsupported trigger match for CH{}.", c.channel + 1);
+                return Err(Error::Arg(format!(
+                    "Unsupported trigger match for CH{}.",
+                    c.channel + 1
+                )));
+            }
         }
         self.trigger = trigger;
         Ok(())
@@ -572,7 +596,6 @@ impl Device for LwlaDevice {
         let Some(mut link) = link else {
             return Err(Error::device("device is not open"));
         };
-        self.started = true;
         match self.begin(&mut link) {
             Ok(acq) => {
                 let slot = Arc::clone(&self.link);
@@ -662,10 +685,15 @@ impl Acquisition {
         self.stop.load(Ordering::SeqCst)
     }
 
-    /// A sequence of register writes. A stop always writes all of it: the
+    /// A sequence of register writes. A stop always writes all of it. The
     /// C skips the rest of a sequence once a cancel is asked
-    /// (protocol.c:341), so that its stop on the LWLA1034 is only the long
-    /// register's address, and the capture runs on.
+    /// (protocol.c:341, since be64f90b; protocol.c:292-293 and 354 still
+    /// submit the whole stop). Its stop on the LWLA1034 is then only the long
+    /// register's address, with no strobe, which would leave the capture
+    /// running if the strobe is what latches a long register
+    /// (lwla1034.c:72 reads so; no device has confirmed it). On the LWLA1016
+    /// the first write already stops the capture and only `DIV_COUNT` = 0 is
+    /// skipped.
     fn write_seq(link: &mut Link, state: u32, regs: &[(u16, u32)]) -> Step {
         for &(reg, value) in regs {
             link.send_async(&protocol::write_reg_command(reg, value))
@@ -796,24 +824,31 @@ impl Acquisition {
             }
         };
         let mut emit = send;
-        loop {
-            let got = Self::read_block(&mut readout, link, &|| self.cancelled(), &mut emit);
-            if got.is_err() {
-                // The C loses the samples not yet in a sent packet
-                // (protocol.c:216-219); they were read all right.
-                if let Some(p) = readout.flush() {
-                    emit(p);
-                }
-                return got;
+        Self::read_blocks(&mut readout, link, &|| self.cancelled(), &mut emit)?;
+        Self::write_seq(link, STATE_READ_FINISH, &finish)
+    }
+
+    /// The memory reads, until the limit, the end or a stop. What was
+    /// decoded goes out however they end. The C loses the samples not yet
+    /// in a sent packet: on a wrong reply size (protocol.c:216-219), on a
+    /// failed transfer (protocol.c:325-330, then 299-309) and on a stop
+    /// (protocol.c:237); they were read all right.
+    fn read_blocks(
+        readout: &mut Readout,
+        link: &mut Link,
+        cancelled: &dyn Fn() -> bool,
+        emit: &mut dyn FnMut(Vec<u8>),
+    ) -> Step {
+        let got = loop {
+            let got = Self::read_block(readout, link, cancelled, emit);
+            if got.is_err() || cancelled() || !readout.more() {
+                break got;
             }
-            if self.cancelled() || !readout.more() {
-                break;
-            }
-        }
+        };
         if let Some(p) = readout.flush() {
             emit(p);
         }
-        Self::write_seq(link, STATE_READ_FINISH, &finish)
+        got
     }
 
     /// One memory read (`STATE_READ_REQUEST`).
@@ -838,6 +873,180 @@ impl Acquisition {
 mod tests {
     use super::*;
     use crate::core::trigger::{TriggerCondition, TriggerStage};
+    use crate::usb::record::Replay;
+    use std::cell::Cell;
+
+    fn hex(b: &[u8]) -> String {
+        use std::fmt::Write as _;
+        b.iter().fold(String::new(), |mut s, x| {
+            let _ = write!(s, "{x:02x}");
+            s
+        })
+    }
+
+    /// A replay of `steps` after a fixture's device line.
+    fn replay(model: Model, steps: &[String]) -> Replay {
+        let pid = if model == Model::Lwla1034 { 6689 } else { 6688 };
+        let mut text = format!(
+            "# oxrok usb fixture 1\ndevice vid=2961 pid={pid} version=0000 interfaces=0:ff:ff:ff\n"
+        );
+        for s in steps {
+            text.push_str(s);
+            text.push('\n');
+        }
+        Replay::from_text(&text).unwrap()
+    }
+
+    /// The steps of a sequence of register writes.
+    fn writes(regs: &[(u16, u32)]) -> Vec<String> {
+        regs.iter()
+            .map(|&(r, v)| format!("bulk_out 02 {} -> 8", hex(&protocol::write_reg_command(r, v))))
+            .collect()
+    }
+
+    /// A device whose link runs on `r`, with `load` for its bitstreams.
+    fn open_on(r: &Replay, model: Model, load: protocol::LoadBitstream) -> LwlaDevice {
+        let d = device(model);
+        let mut link = Link::new(Box::new(r.clone()), model);
+        link.load = load;
+        *d.link.lock().unwrap() = Some(link);
+        d
+    }
+
+    fn no_bitstream(name: &str) -> Result<Vec<u8>> {
+        panic!("{name} loaded");
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // Must be a LoadBitstream.
+    fn one_byte(_: &str) -> Result<Vec<u8>> {
+        Ok(vec![0xaa])
+    }
+
+    #[test]
+    fn close_sends_the_shut_down_bitstream() {
+        let steps = ["bulk_out 04 00000005aa -> 5".to_owned(), "release 0 -> ok".to_owned()];
+        let r = replay(Model::Lwla1034, &steps);
+        open_on(&r, Model::Lwla1034, one_byte).close().unwrap();
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn the_lwla1016_has_no_shut_down_bitstream() {
+        let r = replay(Model::Lwla1016, &["release 0 -> ok".to_owned()]);
+        open_on(&r, Model::Lwla1016, no_bitstream).close().unwrap();
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn close_after_capture_leaves_the_fpga_on() {
+        let r = replay(Model::Lwla1034, &["release 0 -> ok".to_owned()]);
+        open_on(&r, Model::Lwla1034, no_bitstream).close_after_capture().unwrap();
+        r.finish().unwrap();
+    }
+
+    fn acquisition(model: Model, stop: bool) -> Acquisition {
+        Acquisition {
+            model,
+            capture: device(model).capture(),
+            samples_max: 1000,
+            duration_max: 1000,
+            first: Ok(()),
+            start: protocol::start_regs(model, 0),
+            stop: Arc::new(AtomicBool::new(stop)),
+        }
+    }
+
+    fn sink() -> (PacketSink, std::sync::mpsc::Receiver<(usize, Packet)>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(64);
+        (PacketSink::new(tx, 0), rx)
+    }
+
+    #[test]
+    fn a_stop_in_the_status_wait_writes_the_whole_sequence() {
+        for model in [Model::Lwla1034, Model::Lwla1016] {
+            let start = protocol::start_regs(model, 0);
+            let mut steps = writes(&start[1..]);
+            steps.extend(writes(&protocol::stop_regs(model)));
+            let r = replay(model, &steps);
+            let mut link = Link::new(Box::new(r.clone()), model);
+            let (sink, rx) = sink();
+            assert!(acquisition(model, true).capture(&mut link, &sink).is_ok());
+            r.finish().unwrap();
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn a_stop_after_the_length_writes_the_whole_finish() {
+        let model = Model::Lwla1016;
+        let mut steps = vec![
+            format!("bulk_out 02 {} -> 4", hex(&protocol::read_reg_command(0x10b0))),
+            "bulk_in 86 1024 -> 00000800".to_owned(),
+        ];
+        steps.extend(writes(&protocol::read_finish_regs(model)));
+        let r = replay(model, &steps);
+        let mut link = Link::new(Box::new(r.clone()), model);
+        let (sink, _rx) = sink();
+        assert!(acquisition(model, true).read_out(&mut link, &sink).is_ok());
+        r.finish().unwrap();
+    }
+
+    #[test]
+    fn a_stop_during_the_readout_ends_the_reads_and_keeps_the_samples() {
+        // Two blocks wanted; the stop comes after the first was decoded,
+        // leaving a packet partly filled, which protocol.c:237 would drop.
+        let model = Model::Lwla1016;
+        let mut readout = Readout::new(model, false, false, 1000, (2, 300));
+        let command = protocol::read_mem_command(3, 2, 250);
+        let steps = [
+            format!("bulk_out 02 {} -> 10", hex(&command)),
+            format!("bulk_in 86 1024 -> {}", hex(&[0x11; 1000])),
+        ];
+        let r = replay(model, &steps);
+        let mut link = Link::new(Box::new(r.clone()), model);
+        let asked = Cell::new(0);
+        let cancelled = || {
+            asked.set(asked.get() + 1);
+            asked.get() > 1
+        };
+        let mut packets = Vec::new();
+        assert!(
+            Acquisition::read_blocks(&mut readout, &mut link, &cancelled, &mut |p| packets.push(p))
+                .is_ok()
+        );
+        r.finish().unwrap();
+        assert_eq!(packets, vec![vec![0x11; 1000]]);
+    }
+
+    #[test]
+    fn a_failed_read_keeps_the_samples() {
+        let model = Model::Lwla1016;
+        let mut readout = Readout::new(model, false, false, 1000, (2, 300));
+        let steps = [
+            format!("bulk_out 02 {} -> 10", hex(&protocol::read_mem_command(3, 2, 250))),
+            format!("bulk_in 86 1024 -> {}", hex(&[0x11; 1000])),
+            format!("bulk_out 02 {} -> 10", hex(&protocol::read_mem_command(3, 252, 48))),
+            "bulk_in 86 1024 -> 0011".to_owned(),
+        ];
+        let r = replay(model, &steps);
+        let mut link = Link::new(Box::new(r.clone()), model);
+        let mut packets = Vec::new();
+        assert!(
+            Acquisition::read_blocks(&mut readout, &mut link, &|| false, &mut |p| packets.push(p))
+                .is_err()
+        );
+        r.finish().unwrap();
+        assert_eq!(packets, vec![vec![0x11; 1000]]);
+    }
+
+    #[test]
+    fn a_match_the_device_lacks_is_refused() {
+        let mut d = device(Model::Lwla1034);
+        assert!(d.set_trigger(Some(trigger(&[(0, TriggerMatch::Edge)]))).is_err());
+        for m in TRIGGER_MATCHES {
+            d.set_trigger(Some(trigger(&[(0, m)]))).unwrap();
+        }
+    }
 
     fn device(model: Model) -> LwlaDevice {
         LwlaDevice::new(UsbDeviceInfo::default(), model, None)

@@ -282,7 +282,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
         session.run(|_, packet| if pipeline.handle(packet) { Flow::Continue } else { Flow::Stop });
     let devices = session.into_devices();
     for mut d in devices {
-        let _ = d.close();
+        let _ = d.close_after_capture();
     }
     result?;
     pipeline.check_limit(limit_samples);

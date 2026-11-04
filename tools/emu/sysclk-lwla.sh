@@ -81,6 +81,11 @@ emu_cases() {
     O="$N; /sysclk-lwla:|Failed/!d; s/ *\[[0-9:.]+\]//; /^sr: (session|device): /d"
     # The debug line of a failing request and the open's retries.
     X="$N; /sysclk-lwla: (Failed|Invalid|Downloading)/!d; s/ *\[[0-9:.]+\]//"
+    # The two unplug cases of the open: the second try can still open the
+    # device while the kernel removes it, then fails at the configuration
+    # (api.c:238-243) rather than at the open (api.c:234-236), under either
+    # tool. Only that line goes, and the transactions are the same.
+    U="$X; /Failed to set USB configuration: LIBUSB_ERROR_NO_DEVICE/d"
     # A refused option: sr_strerror()'s wording for oxrok's errors. It
     # drops the reason oxrok adds, not the refusal.
     A='s/invalid argument: samplerate\.$/invalid samplerate./; s/invalid argument: .*$/invalid argument./; s/: not supported\.$/: not applicable./'
@@ -151,8 +156,11 @@ emu_cases() {
     emu_case "two trigger stages" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -t CH1=01 --samples 10 -O bits
     # A stop: with the C driver, only the first write of each sequence
     # goes out (protocol.c:341), here the long register's address and not
-    # the strobe, so the capture runs on; see "trigger never fires" and
-    # "interrupt while sampling" for oxrok's.
+    # the strobe. That leaves the capture running if the strobe is what
+    # latches a long register (lwla1034.c:72 reads so; no device has
+    # confirmed it). See "trigger never fires" and "interrupt while
+    # sampling" for oxrok's five writes. On the LWLA1016 the first write
+    # is REG_CAP_CTRL=0, which does stop it, and only DIV_COUNT=0 is skipped.
     emu_case "interrupt while sampling" --interrupt in=6:9 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
     emu_case "lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
     # From the status wait (protocol.c:293), halfway between the first poll
@@ -222,7 +230,7 @@ emu_cases() {
     # 7th reply transfer): the drain of its tail fails, and the open's
     # second try finds no device (api.c:234-236).
     lwla_options short_transfers=1
-    emu_case "unplug in the quirk check" --unplug in=6:7 --expect-fail --stderr --filter "$X" -- -l 5 -d $F -C CH1 --samples 10 -O bits
+    emu_case "unplug in the quirk check" --unplug in=6:7 --expect-fail --stderr --filter "$U" -- -l 5 -d $F -C CH1 --samples 10 -O bits
     lwla_options stall=read-lregs:1
     emu_case "fault quirk check" --stderr --filter "$X" -- -l 5 -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     lwla_options short_reply=read-lregs:1
@@ -259,11 +267,14 @@ emu_cases() {
         emu_case "fault capture $f" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
     # The 100th of the 134 reads fails: the C has sent its first packet of
-    # 20000 samples and drops the 2000 or so decoded since (protocol.c:216-219),
-    # oxrok passes them on. The first line of the golden is the number of
-    # lines of the output, which shows it.
+    # 20000 samples and drops the 2000 or so decoded since, oxrok passes them
+    # on. The first line of the golden is the number of lines of the output,
+    # which shows it. A STALLed command OUT ends through the callback's
+    # error, a reply of the wrong size in the decoding loop.
     lwla_options stall=read-mem:100
-    emu_case "fault later read keeps the samples" --oracle-differs "protocol.c:216-219 returns with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
+    emu_case "fault later read keeps the samples" --oracle-differs "protocol.c:325-330 sets transfer_error and 299-309 ends the capture with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
+    lwla_options short_reply=read-mem:100
+    emu_case "fault later short read keeps the samples" --oracle-differs "protocol.c:216-219 returns with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     # Unplugged after the first status reply (the 8th reply).
     lwla_options
     emu_case "unplug while polling" --unplug in=6:8 --stderr --filter "$E" -- -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
@@ -322,7 +333,7 @@ emu_cases() {
     # Unplugged after the first 64 bytes of the first test read (the 3rd
     # reply transfer).
     lwla_options model=1016 short_transfers=1
-    emu_case "1016 unplug in the quirk check" --unplug in=6:3 --expect-fail --stderr --filter "$X" -- -l 5 -d $F -C CH1 --samples 10 -O bits
+    emu_case "1016 unplug in the quirk check" --unplug in=6:3 --expect-fail --stderr --filter "$U" -- -l 5 -d $F -C CH1 --samples 10 -O bits
     lwla_options model=1016 short_reply=read-mem:1
     emu_case "1016 fault quirk check short" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     lwla_options model=1016 short_transfers=1 short_reply=read-mem:1

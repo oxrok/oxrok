@@ -3,8 +3,8 @@ gcov sysclk-lwla (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lin
   lwla.c       85.2%  75 of 88
   lwla1016.c   96.7%  175 of 181
   lwla1034.c   97.4%  226 of 232
-  protocol.c   87.0%  262 of 301
-  total        91.0%  1030 of 1132
+  protocol.c   87.4%  263 of 301
+  total        91.1%  1031 of 1132
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_inst_new_matching: 109-111
@@ -32,7 +32,7 @@ never reached, by function (line ranges hold no reached line):
   protocol.c
     submit_request: 107-108
     handle_length_response: 167-168
-    transfer_event: 279, 287-288, 293
+    transfer_event: 279, 287-288
     transfer_out_completed: 366, 371-374
     transfer_in_completed: 396-399, 419, 425, 432-435
     init_acquisition_state: 450-451, 454-455, 460, 464-465, 469-471

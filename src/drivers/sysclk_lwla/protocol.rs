@@ -518,6 +518,27 @@ pub fn transfer_status_name(e: &Error) -> &'static str {
     }
 }
 
+/// Reads a bitstream file, the file's size checked.
+pub(super) type LoadBitstream = fn(&str) -> Result<Vec<u8>>;
+
+/// `load_bitstream()`: the file, if it is there and of a sane size.
+fn load_bitstream(name: &str) -> Result<Vec<u8>> {
+    let Some(path) = crate::core::firmware::find_file(name) else {
+        log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
+        return Err(Error::Firmware(name.to_owned()));
+    };
+    let size = std::fs::metadata(&path)?.len();
+    if size == 0 || size > BITSTREAM_MAX_SIZE {
+        log::error!("Refusing to load bitstream of unreasonable size ({size} bytes).");
+        return Err(Error::Firmware(name.to_owned()));
+    }
+    std::fs::read(&path)
+        .inspect_err(|_| {
+            log::error!("Failed to read bitstream '{name}'.");
+        })
+        .map_err(Error::from)
+}
+
 /// The transport, the board and what the open found out.
 pub struct Link {
     transport: Box<dyn Transport>,
@@ -526,12 +547,14 @@ pub struct Link {
     active: Option<&'static str>,
     /// Replies come in 64 bytes at most.
     pub short_transfer_quirk: bool,
+    /// Where bitstreams come from; tests give their own.
+    pub(super) load: LoadBitstream,
 }
 
 impl Link {
     /// A link over an open transport whose interface is claimed.
     pub fn new(transport: Box<dyn Transport>, model: Model) -> Self {
-        Link { transport, model, active: None, short_transfer_quirk: false }
+        Link { transport, model, active: None, short_transfer_quirk: false, load: load_bitstream }
     }
 
     /// The board.
@@ -572,18 +595,7 @@ impl Link {
     /// `lwla_send_bitstream()`: the file, checked and sent whole in one
     /// transfer behind its length, then the 30 ms the C found necessary.
     fn send_bitstream(&mut self, name: &str) -> Result<()> {
-        let Some(path) = crate::core::firmware::find_file(name) else {
-            log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
-            return Err(Error::Firmware(name.to_owned()));
-        };
-        let size = std::fs::metadata(&path)?.len();
-        if size == 0 || size > BITSTREAM_MAX_SIZE {
-            log::error!("Refusing to load bitstream of unreasonable size ({size} bytes).");
-            return Err(Error::Firmware(name.to_owned()));
-        }
-        let bits = std::fs::read(&path).inspect_err(|_| {
-            log::error!("Failed to read bitstream '{name}'.");
-        })?;
+        let bits = (self.load)(name)?;
         let length = bits.len() + BITSTREAM_HEADER_SIZE;
         let mut stream = Vec::with_capacity(length);
         // Fits: the size was checked above.
