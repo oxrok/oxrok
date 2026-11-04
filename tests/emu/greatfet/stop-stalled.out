@@ -1,0 +1,2 @@
+sr: greatfet: USB out transfer failed: LIBUSB_ERROR_PIPE (-9)
+sr: greatfet: Cannot stop logic analyzer capture in the device.

@@ -1,0 +1,3 @@
+sr: greatfet: USB out transfer failed: LIBUSB_ERROR_PIPE (-9)
+sr: greatfet: Cannot configure alt pin mapping.
+Failed to start session.

@@ -84,6 +84,7 @@ pub mod drivers {
     pub mod dreamsourcelab_dslogic;
     pub mod ftdi_la;
     pub mod fx2lafw;
+    pub mod greatfet;
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
@@ -132,6 +133,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
     registry.register(Box::new(drivers::hantek_dso::HantekDsoDriver));
     registry.register(Box::new(drivers::hantek_6xxx::Hantek6xxxDriver));
+    registry.register(Box::new(drivers::greatfet::GreatfetDriver));
     registry.register(Box::new(drivers::sysclk_lwla::LwlaDriver));
     registry.register(Box::new(drivers::lecroy_logicstudio::LogicStudioDriver));
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
