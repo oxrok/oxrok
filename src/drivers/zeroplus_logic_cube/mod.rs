@@ -1092,7 +1092,7 @@ mod tests {
         name_conn(&mut two, false);
         assert_eq!(two[1].info().conn.as_deref(), Some("1.2"));
         let driver = ZeroplusDriver;
-        assert!(driver.scan_options().is_empty());
+        assert_eq!(driver.scan_options().len(), 0);
         assert_eq!(driver.accepted_scan_options(), [Key::Conn]);
     }
 
