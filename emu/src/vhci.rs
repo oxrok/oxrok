@@ -13,7 +13,7 @@
 //! again for its new bus id.
 
 use std::fs;
-use std::os::fd::RawFd;
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -90,11 +90,19 @@ pub fn free_port(speed: Speed) -> Result<u8> {
 }
 
 /// Hands the connected socket to the controller.
-pub fn attach(port: u8, sockfd: RawFd, devid: u32, speed: Speed) -> Result<()> {
-    let line = format!("{port} {sockfd} {devid} {}", speed as u32);
+#[cfg(unix)]
+pub fn attach(port: u8, socket: &TcpStream, devid: u32, speed: Speed) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let line = format!("{port} {} {devid} {}", socket.as_raw_fd(), speed as u32);
     fs::write(Path::new(SYSFS).join("attach"), &line).map_err(|e| {
         Error(format!("attach '{line}': {e} (root needed; dmesg has the kernel's reason)"))
     })
+}
+
+/// There is no `vhci-hcd` here, and no file descriptor to hand it.
+#[cfg(not(unix))]
+pub fn attach(_port: u8, _socket: &TcpStream, _devid: u32, _speed: Speed) -> Result<()> {
+    Err(Error("attaching a device needs Linux's vhci-hcd".into()))
 }
 
 /// Takes the port back; the device disappears from the bus.
@@ -196,6 +204,7 @@ fn collect_nodes(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
 
 /// Makes the nodes readable and writable by everyone, so the tools
 /// under test run without root.
+#[cfg(unix)]
 pub fn open_nodes(nodes: &[PathBuf]) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     for n in nodes {
@@ -203,6 +212,25 @@ pub fn open_nodes(nodes: &[PathBuf]) -> Result<()> {
             .map_err(|e| Error(format!("chmod {}: {e}", n.display())))?;
     }
     Ok(())
+}
+
+/// There are no such nodes, nor their modes, here.
+#[cfg(not(unix))]
+pub fn open_nodes(_nodes: &[PathBuf]) -> Result<()> {
+    Err(Error("opening device nodes needs Linux".into()))
+}
+
+/// Whether `node` is no longer readable and writable by everyone.
+#[cfg(unix)]
+fn lost_open_mode(node: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(node).is_ok_and(|m| m.permissions().mode() & 0o666 != 0o666)
+}
+
+/// Never reached: [`open_nodes`] fails first here.
+#[cfg(not(unix))]
+fn lost_open_mode(_node: &Path) -> bool {
+    false
 }
 
 /// The usbfs node of the device in sysfs directory `dir`,
@@ -275,7 +303,6 @@ impl DeviceNodes {
 ///
 /// When a node cannot be changed, or keeps losing its mode.
 pub fn open_device(dir: &Path, open: bool, timeout: Duration) -> Result<DeviceNodes> {
-    use std::os::unix::fs::PermissionsExt;
     udev_settle(timeout);
     let wait = if expects_class_node(dir) { timeout } else { Duration::ZERO };
     let nodes = device_nodes(dir, wait);
@@ -292,10 +319,7 @@ pub fn open_device(dir: &Path, open: bool, timeout: Duration) -> Result<DeviceNo
     for round in 0..3 {
         open_nodes(&all)?;
         udev_settle(timeout);
-        let lost: Vec<&PathBuf> = all
-            .iter()
-            .filter(|n| fs::metadata(n).is_ok_and(|m| m.permissions().mode() & 0o666 != 0o666))
-            .collect();
+        let lost: Vec<&PathBuf> = all.iter().filter(|n| lost_open_mode(n)).collect();
         if lost.is_empty() {
             return Ok(found);
         }
