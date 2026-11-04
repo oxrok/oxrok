@@ -1,0 +1,4 @@
+ctl_out 40 00 ffff 0000 - -> ok
+ctl_out 40 02 0002 0000 - -> ok
+ctl_out 40 02 0001 0000 - -> ok
+bulk_out 02 00ffff -> err stall
