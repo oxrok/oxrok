@@ -59,7 +59,9 @@ emu_cases() {
     # oxrok's wording of a refused option as sigrok-cli's: the detail
     # after "invalid argument", and "not supported" for what its
     # sr_strerror() calls "not applicable". Which option was refused, and
-    # that it was, stays compared.
+    # that it was, stays compared. The second half hides a real difference
+    # of wording, src/cli/parse.rs:108 against sigrok-cli: that string is
+    # to change across all drivers, not in this port, and this goes with it.
     W='s/(invalid argument).*$/\1./; s/: not supported\.$/: not applicable./'
     # The address in --show.
     C='s/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/'
@@ -130,6 +132,11 @@ emu_cases() {
     # The trigger past the first transfer (127 samples), in a data
     # transfer.
     emu_case "trigger ratio 30" --digest --filter '1,3b; /^T:/b; d' -- -d $H -C A0,A3 -t A3=r -c captureratio=30 --samples $S -O bits
+    # Two stages: sigrok-cli reaches api.c:529-530, oxrok's Trigger::check
+    # refuses before the driver. Only the wording of that one message is
+    # made the same; that it is refused stays compared, by the exit status,
+    # and that nothing is sent, by the transactions.
+    emu_case "two trigger stages" --expect-fail --stderr --filter "$N; s/.*Only (one trigger stage|1 trigger stages are) supported.*/Only one trigger stage supported./; /^Only one/!d" -- -d $H -t A0=01 --samples $S
     # A second edge is refused, whichever kind it is.
     for t in A0=r,B0=r A0=r,B0=f A0=f,B0=e; do
         emu_case "two edges $t" --expect-fail --stderr --filter "$E" -- -d $H -t $t --samples $S
@@ -211,11 +218,11 @@ emu_cases() {
     emu_case "fault end word" --stderr --filter "$E" -- -d $H --samples $S
     # IN transfers refused during the capture (the open reads #1; the
     # capture's status reads are #2 to #5, the stream's start #6, the
-    # data from #7). The driver logs a failed transfer at debug level
+    # data from #7; a start word refused is read again). The driver logs a failed transfer at debug level
     # only and goes on: a status read refused counts as an answer (its
     # buffer holds the previous one), a data transfer refused is
     # submitted again.
-    for f in in@2 in@3 in@4 in@5 in@7 in@8; do
+    for f in in@2 in@3 in@4 in@5 in@6 in@7 in@8; do
         h4032l_options stall=$f
         emu_case "fault capture stall $f" --digest --filter "$B" -- -d $H -C $CH --samples 8192 -O bits
     done
@@ -237,21 +244,49 @@ emu_cases() {
     h4032l_options stall=out@5
     emu_case "fault get stall" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # A trigger the counter never meets (A0 high and B0 rising: B0 rises
-    # where A0 is low): status 1 for ever, in libsigrok through the
-    # runner and in oxrok alike, a wait a stop must end. sigrok-cli has no
-    # way to stop it.
+    # where A0 is low): status 1 for ever. This runs libsigrok alone, through
+    # the runner, as sigrok-cli has no way to stop it. oxrok waits the same
+    # way until stopped; its unit test status_answers_of_1_wait_until_a_stop
+    # shows that, as the model answers status polls at once and so cannot
+    # pace a signal among status 1 answers.
     h4032l_options
     emu_case "trigger never fires hangs" --libsigrok --hangs --timeout 2 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
-    # Ctrl-C ends oxrok's wait. The status command refused makes the two
-    # reads after it time out (500 ms each), so that the signal lands on a
-    # known number of transfers: no read completes.
+    # Ctrl-C ends oxrok while it polls, here before any status answer: the
+    # status command refused makes the two reads after it time out (500 ms
+    # each), so that the signal lands on a known number of transfers: no
+    # read completes.
     h4032l_options stall=out@3
     emu_case "interrupt while polling" --interrupt out=2:3 --oracle-bug "sigrok-cli has no SIGINT handler" --no-output -- -d $H -t A0=1,B0=r --samples $S
+
+    # A slow board: the stream holds after its first data transfer (IN #7),
+    # the oldest held transfer times out with one packet, the
+    # stream goes on, both tools take the data ("partial then release", also
+    # with one transfer at a time).
+    h4032l_options hold=1 partial=512 release=1
+    emu_case "partial then release" --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
+    h4032l_options hold=1 partial=512 release=1 fpga=0
+    emu_case "partial then release fpga 0" --digest --filter "$B" -- -d $H -C $CH --samples $S -O bits
+    # Ctrl-C during the data, the device holding what follows IN #7, so that
+    # the signal lands on a known number of transfers: oxrok ends with what
+    # came. With a partial, what the cancel gives counts too.
+    h4032l_options hold=1
+    emu_case "interrupt while held" --interrupt in=6:7 --oracle-bug "sigrok-cli has no SIGINT handler" --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits
+    h4032l_options hold=1 partial=512
+    emu_case "interrupt while held with a partial" --interrupt in=6:7 --oracle-bug "sigrok-cli has no SIGINT handler" --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits
+    # dev_acquisition_stop() in libsigrok, on the samples that came before
+    # the hold (127 and 512): the transfers held come back to the abort.
+    h4032l_options hold=1
+    emu_case "lib stop while held" --libsigrok --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits --stop-after 639
 
     h4032l_options
     # Unplugged while the driver polls the status (after IN #3), and in
     # the middle of the data (after IN #9 of a 64k sample capture).
     emu_case "unplug while polling" --stderr --filter "$E" --unplug in=6:3 -- -d $H --samples $S
-    emu_case "unplug mid data" --stderr --filter "$E" --unplug in=6:9 -- -d $H -C A0 --samples 64k -O bits
+    # In the data the C driver logs one line per transfer in flight (32
+    # here, resubmit_transfer() failing for each) and oxrok, whose stream
+    # reports the device gone once, one. The filter keeps the first of the C's
+    # and words it as oxrok's; only those repeats and that wording go.
+    D="$E; /^resubmit_transfer: /{x; /seen/{x;d}; s/.*/seen/; x; s/^resubmit_transfer: (LIBUSB_ERROR_NO_DEVICE)\$/Data transfer failed: \1./}"
+    emu_case "unplug mid data" --stderr --filter "$D" --unplug in=6:9 -- -d $H -C A0 --samples 64k -O bits
     h4032l_options
 }

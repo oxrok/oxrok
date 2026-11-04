@@ -38,9 +38,11 @@
 //! - Failed transfers are counted: [`MAX_FAILURES`] in a row end the
 //!   capture, and from the get on so do timeouts, as the stream is
 //!   complete in the board's memory by then. While the status is polled a
-//!   timeout is only a wait, since nothing says the board answers while
-//!   it waits for its trigger; a trigger that never comes waits until the
-//!   capture is stopped, as in the C driver.
+//!   timeout is only a wait: `protocol.c` asks again on any status other
+//!   than 2, which is how it waits for a trigger, and has no bound on
+//!   silence either, and whether a board can fall silent during that wait
+//!   is not known. A trigger that never comes waits until the capture is
+//!   stopped, as in the C driver.
 //! - A count of 4 Gi samples and more is refused (`api.c` loses its upper
 //!   half), and the end word is only looked for in the data that came
 //!   (`protocol.c` reads past them when the last transfer is full).
@@ -77,7 +79,9 @@ const NUM_CHANNELS: usize = 32;
 const TIMEOUT: Duration = Duration::from_millis(500);
 /// The wait after the reset request (`h4032l_start()`).
 const RESET_WAIT: Duration = Duration::from_millis(20);
-/// The reads `h4032l_get_fpga_version()` gives the status's magic.
+/// The reads `h4032l_get_fpga_version()` gives the status's magic. A
+/// status command gets as many here, where the C driver reads on for ever,
+/// before it is sent again: the open has refused more leftovers already.
 const VERSION_READS: usize = 10;
 /// Failed transfers in a row after which the capture ends. The C driver
 /// has no limit; fx2lafw's `MAX_EMPTY_TRANSFERS` is the size taken.
@@ -309,18 +313,18 @@ impl Hantek4032lDevice {
     }
 
     /// The packet of a capture, from the settings and the trigger, as
-    /// `dev_acquisition_start()` fills it. Trigger 1 is built anew, where
-    /// the C driver leaves the last capture's edge channel in the packet;
-    /// `Err` is the message to log.
+    /// `dev_acquisition_start()` fills it. Trigger 1 is built anew: the C
+    /// driver clears only the enable flags (api.c:521-523), so a capture
+    /// with no trigger after a triggered one sends the old `trigger[0]`
+    /// again, and a level trigger after an edge trigger the old edge
+    /// channel. A second stage does not get here ([`Trigger::check`] in
+    /// `set_trigger`); `Err` is the message to log.
     fn capture_packet(&self) -> std::result::Result<CmdPacket, &'static str> {
         let s = &self.settings;
         let samples = self.packet.samples;
-        let trigger = match self.trigger.as_ref().filter(|t| !t.stages.is_empty()) {
+        let trigger = match self.trigger.as_ref().and_then(|t| t.stages.first()) {
             None => None,
-            Some(t) => {
-                let [stage] = t.stages.as_slice() else {
-                    return Err("Only one trigger stage supported for now.");
-                };
+            Some(stage) => {
                 let conditions = stage.conditions.iter().map(|c| (c.channel, c.matches));
                 Some(HwTrigger::from_conditions(conditions)?)
             }
@@ -690,12 +694,18 @@ impl Acquisition {
                     }
                 }
             }
-            loop {
+            let mut answered = false;
+            for _ in 0..VERSION_READS {
                 checked(stop)?;
                 self.status_read(link)?;
                 if word_at(&link.buf, 0) == STATUS_MAGIC {
+                    answered = true;
                     break;
                 }
+            }
+            if !answered {
+                log::debug!("No status answer, asking again.");
+                continue;
             }
             let complete = word_at(&link.buf, 2) == STATUS_COMPLETE;
             checked(stop)?;
@@ -755,16 +765,14 @@ impl Acquisition {
     }
 
     /// `h4032l_start_data_transfers()` and the data transfers' callback.
-    /// `submitted` follows `devc->submitted_transfers`, for the messages
-    /// of a device that goes away.
     fn stream_data(
         &mut self,
         link: &mut Link,
         sink: &PacketSink,
         stop: &AtomicBool,
     ) -> std::result::Result<(), Over> {
-        let mut submitted = protocol::data_transfers(self.remaining, self.fpga_version);
-        let stream = link.transport.bulk_in_stream_timed(EP_IN, DATA_TRANSFER, submitted, TIMEOUT);
+        let depth = protocol::data_transfers(self.remaining, self.fpga_version);
+        let stream = link.transport.bulk_in_stream_timed(EP_IN, DATA_TRANSFER, depth, TIMEOUT);
         let mut stream: Box<dyn BulkStream> = stream.map_err(|e| {
             log::error!("Failed to submit transfer: {}.", crate::usb::libusb_error_name(&e));
             log::error!("Can not start data transfers: -1");
@@ -775,11 +783,7 @@ impl Acquisition {
             let data = match stream.next(TIMEOUT) {
                 Ok(data) if !data.is_empty() => data,
                 Err(Error::Disconnected) => {
-                    // Each transfer in flight comes back empty and fails
-                    // to go in again.
-                    for _ in 0..submitted {
-                        log::error!("resubmit_transfer: LIBUSB_ERROR_NO_DEVICE");
-                    }
+                    log::error!("Data transfer failed: LIBUSB_ERROR_NO_DEVICE.");
                     return Err(Over);
                 }
                 other => {
@@ -798,10 +802,6 @@ impl Acquisition {
             self.send_samples(&data[..count * 4], sink)?;
             if self.remaining == 0 {
                 check_end_word(&data, count);
-            } else if (submitted - 1) * DATA_TRANSFER >= self.remaining as usize * 4 {
-                // The C driver frees this transfer here; the stream keeps
-                // it queued and empty (see the module documentation).
-                submitted -= 1;
             }
         }
         Ok(())
@@ -1104,6 +1104,108 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(bytes, samples(0, 2048));
+    }
+
+    /// A replay that sets the stop flag after a number of reads, as a
+    /// stop arrives while the status is polled.
+    struct StopAfter {
+        replay: Replay,
+        reads: usize,
+        stop: Arc<AtomicBool>,
+    }
+
+    impl Transport for StopAfter {
+        fn info(&self) -> &UsbDeviceInfo {
+            self.replay.info()
+        }
+        fn set_configuration(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn claim_interface(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn release_interface(&mut self, _: u8) -> Result<()> {
+            unreachable!()
+        }
+        fn reset(&mut self) -> Result<()> {
+            unreachable!()
+        }
+        fn max_packet_size(&mut self, _: u8) -> Result<usize> {
+            unreachable!()
+        }
+        fn interfaces(&mut self) -> Result<Vec<crate::usb::InterfaceDesc>> {
+            unreachable!()
+        }
+        fn control_out(&mut self, _: ControlRequest, _: &[u8], _: Duration) -> Result<()> {
+            unreachable!()
+        }
+        fn control_in(&mut self, _: ControlRequest, _: usize, _: Duration) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+        fn bulk_out(&mut self, ep: u8, data: &[u8], t: Duration) -> Result<usize> {
+            self.replay.bulk_out(ep, data, t)
+        }
+        fn bulk_in(&mut self, ep: u8, len: usize, t: Duration) -> Result<Vec<u8>> {
+            self.reads -= 1;
+            if self.reads == 0 {
+                self.stop.store(true, Ordering::SeqCst);
+            }
+            self.replay.bulk_in(ep, len, t)
+        }
+        fn interrupt_out(&mut self, _: u8, _: &[u8], _: Duration) -> Result<usize> {
+            unreachable!()
+        }
+        fn interrupt_in(&mut self, _: u8, _: usize, _: Duration) -> Result<Vec<u8>> {
+            unreachable!()
+        }
+        fn bulk_in_stream(&mut self, _: u8, _: usize, _: usize) -> Result<Box<dyn BulkStream>> {
+            unreachable!()
+        }
+    }
+
+    const NO_STEPS: &str = "# oxrok usb fixture 1\ndevice vid=04b5 pid=4032\n";
+
+    #[test]
+    fn status_answers_of_1_wait_until_a_stop() {
+        let st = hex(&capture_packet_2048(), CMD_STATUS);
+        let mut text = NO_STEPS.to_owned();
+        for _ in 0..3 {
+            let answer = status(1);
+            let _ = write!(
+                text,
+                "bulk_out 02 {st} -> 84\nbulk_in 86 512 -> {answer}\nbulk_in 86 512 -> {answer}\n"
+            );
+        }
+        let replay = Replay::from_text(&text).unwrap();
+        let check = replay.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopper = StopAfter { replay, reads: 6, stop: Arc::clone(&stop) };
+        let mut link = Link { transport: Box::new(stopper), buf: [0; POLL_SIZE] };
+        let mut a = Acquisition::new(capture_packet_2048(), 1);
+        assert!(a.wait_for_capture(&mut link, &stop).is_err());
+        // All three rounds were asked and no get, which is not in the fixture.
+        check.finish().unwrap();
+    }
+
+    #[test]
+    fn a_refused_status_command_and_silent_reads_reach_the_limit() {
+        // The buffer holds no magic, as after an earlier capture's stream,
+        // so the reads never end by themselves.
+        let st = hex(&capture_packet_2048(), CMD_STATUS);
+        let refused = format!("bulk_out 02 {st} -> err device \"endpoint stalled\"\n");
+        let silent = "bulk_in 86 512 -> err timeout\n".repeat(VERSION_READS);
+        let mut text = NO_STEPS.to_owned();
+        for _ in 1..MAX_FAILURES {
+            text.push_str(&refused);
+            text.push_str(&silent);
+        }
+        text.push_str(&refused);
+        let replay = Replay::from_text(&text).unwrap();
+        let check = replay.clone();
+        let mut link = Link { transport: Box::new(replay), buf: [0; POLL_SIZE] };
+        let mut a = Acquisition::new(capture_packet_2048(), 1);
+        assert!(a.wait_for_capture(&mut link, &AtomicBool::new(false)).is_err());
+        check.finish().unwrap();
     }
 
     /// Status 2 at once, the get, and a first read of 127 samples.
