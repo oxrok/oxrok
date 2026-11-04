@@ -1,1 +1,1 @@
-oxrok: err: oxrok::drivers::hantek_6xxx::protocol: Failed to control transfer: 0xe3: LIBUSB_ERROR_NO_DEVICE.
+oxrok: err: oxrok::drivers::hantek_6xxx: 64 transfers without data, the data is incomplete.

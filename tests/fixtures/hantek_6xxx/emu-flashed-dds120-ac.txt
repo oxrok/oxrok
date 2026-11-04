@@ -7,7 +7,7 @@
 # arg: -c
 # arg: coupling=AC
 # arg: --samples
-# arg: 50
+# arg: 256
 # arg: -O
 # arg: analog
 device vid=1d50 pid=608e version=0002 manufacturer="sigrok" product="fx2lafw" serial="SainSmart DDS120" interfaces=0:ff:00:00

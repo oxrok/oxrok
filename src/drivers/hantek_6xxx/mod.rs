@@ -20,17 +20,21 @@
 //! [`protocol`]). Scan, open, settings and transfer sizes follow `api.c`
 //! and `protocol.c` step by step, so that the device sees the same
 //! transactions as under sigrok-cli (checked with the emulator,
-//! `tools/emu/hantek-6xxx.sh`). A failed setting is logged and the
-//! capture goes on with what the scope had, as in the C driver.
+//! `tools/emu/hantek-6xxx.sh`).
 //!
 //! Where it does not follow the C driver, each with its case:
 //! - a disabled CH1 does not make CH2's samples CH1's;
+//! - a capture is cut at the sample limit, in the output only;
+//! - a rate, range or coupling the scope refuses at the start fails it,
+//!   where the C driver goes on and labels what comes with the setting
+//!   it asked for;
 //! - a transfer that comes back empty or fails is taken again, a bounded
 //!   number of times, and a silent scope or a vanished one ends the
 //!   capture; the C driver neither resubmits nor stops;
 //! - no wrap in the size of a transfer, whose rounding never ends in C;
 //! - a rate off the list runs at the 100 kHz the C driver sends for it,
-//!   and reads back as such;
+//!   and reads back as such, and transfers are sized for 100 kHz where
+//!   the C driver sizes them for the rate asked for;
 //! - `coupling` reads back what was set, and `num_vdiv` can be read.
 
 #![forbid(unsafe_code)]
@@ -54,7 +58,8 @@ use std::time::{Duration, Instant};
 
 /// `MAX_RENUM_DELAY_MS`.
 const RENUM_TIMEOUT: Duration = Duration::from_secs(3);
-/// Empty or failed transfers in a row after which the capture ends.
+const RENUM_RETRY: Duration = Duration::from_millis(100);
+/// Transfers without data in a row after which the capture ends.
 /// fx2lafw's `MAX_EMPTY_TRANSFERS`; a transfer that times out with
 /// nothing ends it at once, as 4 s of silence is no stream.
 const MAX_EMPTY_TRANSFERS: usize = 64;
@@ -271,16 +276,21 @@ fn same_device(d: &UsbDeviceInfo, usb: &UsbDeviceInfo, after_upload: bool) -> bo
 /// `hantek_6xxx_open()`: the device with the firmware's ids at the
 /// scanned port. Like the C code it looks at no `bcdDevice`: a firmware
 /// file that reports another board's still opens.
+///
+/// `level` is that of a failed open: a retry after an upload races the
+/// device coming up (`LIBUSB_ERROR_ACCESS` until udev has set the node's
+/// permissions), which is no error unless it was the last attempt.
 fn try_open(
     usb: &UsbDeviceInfo,
     after_upload: bool,
+    level: log::Level,
 ) -> Result<(UsbDeviceInfo, Box<dyn Transport>)> {
     let found = crate::usb::find_devices(&[FIRMWARE_ID])?
         .into_iter()
         .find(|d| same_device(d, usb, after_upload));
     let info = found.ok_or_else(|| Error::device("device not found"))?;
     let t = crate::usb::open(&info).inspect_err(|e| {
-        log::error!("Failed to open device: {}.", crate::usb::libusb_error_name(e));
+        log::log!(level, "Failed to open device: {}.", crate::usb::libusb_error_name(e));
     })?;
     log::info!("Opened device on {} interface {INTERFACE}.", info.conn());
     Ok((info, t))
@@ -378,7 +388,11 @@ impl Device for Hantek6xxxDevice {
                     let idx = protocol::vdiv_index(self.profile.vdivs, value).ok_or_else(bad)?;
                     self.settings.voltage[ch] = idx;
                     let voltage = self.settings.voltage;
-                    self.with_link(|l| l.update_vdiv(voltage));
+                    self.with_link(|l| {
+                        // Logged; the next capture sends it again, and
+                        // fails if the scope still refuses it.
+                        let _ = l.update_vdiv(voltage);
+                    });
                 }
                 Key::Coupling => {
                     let s = value.as_str().ok_or_else(bad)?;
@@ -388,7 +402,11 @@ impl Device for Hantek6xxxDevice {
                     self.settings.coupling[ch] =
                         if s == "AC" { Coupling::Ac } else { Coupling::Dc };
                     let (has, coupling) = (self.profile.has_coupling, self.settings.coupling);
-                    self.with_link(|l| l.update_coupling(has, coupling));
+                    self.with_link(|l| {
+                        // Logged; the next capture sends it again, and
+                        // fails if the scope still refuses it.
+                        let _ = l.update_coupling(has, coupling);
+                    });
                 }
                 other => return Err(Error::UnknownKey(other.id().to_owned())),
             }
@@ -400,15 +418,20 @@ impl Device for Hantek6xxxDevice {
                 // samplerate_to_reg() sends the last register for a rate
                 // off the list, and the C driver keeps saying the rate
                 // that was asked for over samples taken at 100 kHz. The
-                // same goes out here, and 100 kHz is what is reported.
+                // same goes out here, and 100 kHz is what is reported,
+                // and what transfers are sized for.
                 self.settings.samplerate = if protocol::samplerate_reg(rate).is_some() {
                     rate
                 } else {
-                    log::error!("Failed to convert samplerate: {rate}.");
+                    log::error!("Failed to convert samplerate: {rate}. It runs at 100 kHz.");
                     FALLBACK_SAMPLERATE
                 };
                 let rate = self.settings.samplerate;
-                self.with_link(|l| l.update_samplerate(rate));
+                self.with_link(|l| {
+                    // Logged; the next capture sends it again, and
+                    // fails if the scope still refuses it.
+                    let _ = l.update_samplerate(rate);
+                });
             }
             Key::LimitMsec => self.settings.limits.limit_msec = value.as_u64().ok_or_else(bad)?,
             Key::LimitSamples => {
@@ -454,10 +477,13 @@ impl Device for Hantek6xxxDevice {
             log::info!("Waiting for device to reset.");
             std::thread::sleep(Duration::from_millis(300));
             let found = loop {
-                match try_open(&self.usb, true) {
+                // The loop's check comes 100 ms after the attempt.
+                let last = uploaded.elapsed() + RENUM_RETRY >= RENUM_TIMEOUT;
+                let level = if last { log::Level::Error } else { log::Level::Debug };
+                match try_open(&self.usb, true, level) {
                     Ok(found) => break found,
                     Err(e) => {
-                        std::thread::sleep(Duration::from_millis(100));
+                        std::thread::sleep(RENUM_RETRY);
                         if uploaded.elapsed() >= RENUM_TIMEOUT {
                             log::debug!("Last attempt: {e}.");
                             return Err(unable(e));
@@ -478,7 +504,7 @@ impl Device for Hantek6xxxDevice {
             }
             found
         } else {
-            try_open(&self.usb, false).map_err(unable)?
+            try_open(&self.usb, false, log::Level::Error).map_err(unable)?
         };
         claim(&mut t).map_err(unable)?;
         self.info.conn = Some(info.conn());
@@ -511,15 +537,19 @@ impl Device for Hantek6xxxDevice {
         let Some(mut link) = link else {
             return Err(Error::device("device is not open"));
         };
-        // hantek_6xxx_init(): a failure is logged and nothing more. The
-        // scope then has the older setting while the samples say the new
-        // one; that is the C driver's choice, kept, as a setting the
-        // firmware does not take may still leave a capture worth having.
+        // hantek_6xxx_init(), each one sent whatever became of the others.
+        // protocol.c:242-247 ignores them all, and the samples then say a
+        // rate or a range the scope is not on. A refusal on the wire is an
+        // observation: the start fails, with nothing started to stop.
         log::debug!("Initializing");
         let s = self.settings;
-        link.update_samplerate(s.samplerate);
-        link.update_vdiv(s.voltage);
-        link.update_coupling(self.profile.has_coupling, s.coupling);
+        let rate = link.update_samplerate(s.samplerate);
+        let vdiv = link.update_vdiv(s.voltage);
+        let coupling = link.update_coupling(self.profile.has_coupling, s.coupling);
+        if let Err(e) = rate.and(vdiv).and(coupling) {
+            *self.link.lock().expect("link lock") = Some(link);
+            return Err(Error::Device(format!("the scope refused a setting: {e}")));
+        }
         let scales = [
             Scale::new(self.profile.vdivs[s.voltage[0]]),
             Scale::new(self.profile.vdivs[s.voltage[1]]),
@@ -616,15 +646,19 @@ impl Acquisition {
             // One byte is no sample either.
             if data.len() < 2 {
                 failures += 1;
-                if failures > MAX_EMPTY_TRANSFERS {
+                if failures >= MAX_EMPTY_TRANSFERS {
                     log::error!("{failures} transfers without data, the data is incomplete.");
                     return;
                 }
                 continue;
             }
             failures = 0;
-            received += (data.len() / 2) as u64;
-            if !self.send_chunk(&data, sink) {
+            let samples = (data.len() / 2) as u64;
+            // api.c:651-652 sends it all. The count stays uncut, so the
+            // sizes follow the C driver's.
+            let keep = self.limits.room(received).min(samples) as usize;
+            received += samples;
+            if !self.send_chunk(&data[..keep * 2], sink) {
                 return;
             }
             if self.limits.reached(received, elapsed()) {
@@ -708,10 +742,45 @@ mod tests {
         assert_eq!(packets.len(), 2);
         assert_eq!(packets[0].channels, [0]);
         assert_eq!(packets[1].channels, [1]);
-        assert_eq!(packets[0].samples.len(), 256, "past the limit of 8, as api.c:651-652");
+        assert_eq!(packets[0].samples.len(), 8, "cut, where api.c:651-652 sends 256");
+        assert_eq!(packets[1].samples.len(), 8, "both channels alike");
         assert_eq!(packets[0].samples[0], -5.0);
         assert_eq!(packets[0].digits, 2);
         assert_eq!(packets[1].digits, 3);
+    }
+
+    /// The second transfer is cut to what the limit leaves, and sized from
+    /// the samples received, cut or not.
+    #[test]
+    fn the_cut_is_on_the_last_transfer_only() {
+        let steps = format!(
+            "bulk_in 86 1024 -> -\nbulk_in 86 1024 -> {}\nbulk_in 86 512 -> {}\n{STOP}",
+            data(400),
+            data(512)
+        );
+        let packets = analog(&run(&acquisition(300), &steps));
+        let lens: Vec<usize> = packets.iter().map(|p| p.samples.len()).collect();
+        assert_eq!(lens, [200, 200, 100, 100]);
+    }
+
+    /// A STALL at the start: every setting is sent, the start is not, and
+    /// the device can be used again.
+    #[test]
+    fn a_refused_setting_fails_the_start() {
+        let text = "# oxrok usb fixture 1\n\
+                    device vid=1d50 pid=608e version=0001\n\
+                    config 1 -> ok\n\
+                    claim 0 -> ok\n\
+                    ctl_out 40 e2 0000 0000 08 -> err device \"endpoint stalled\"\n\
+                    ctl_out 40 e0 0000 0000 05 -> ok\n\
+                    ctl_out 40 e1 0000 0000 05 -> ok\n";
+        let t = Replay::from_text(text).unwrap();
+        let mut d = Hantek6xxxDevice::from_transport(Box::new(t)).unwrap();
+        d.open().unwrap();
+        let (tx, rx) = sync_channel(16);
+        assert!(d.start(PacketSink::new(tx, 0)).is_err());
+        assert_eq!(rx.try_iter().count(), 0, "no header");
+        assert!(d.link.lock().unwrap().is_some());
     }
 
     /// What api.c:647-649 hangs on: an empty transfer is taken again.
@@ -739,7 +808,7 @@ mod tests {
     #[test]
     fn failures_in_a_row_are_bounded() {
         let mut steps = "bulk_in 86 1024 -> -\n".to_owned();
-        for _ in 0..=MAX_EMPTY_TRANSFERS {
+        for _ in 0..MAX_EMPTY_TRANSFERS {
             steps.push_str("bulk_in 86 512 -> -\n");
         }
         steps.push_str(STOP);

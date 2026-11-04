@@ -3,7 +3,7 @@
 # arg: -d
 # arg: hantek-6xxx:conn=1d50.608e
 # arg: --samples
-# arg: 8
+# arg: 256
 # arg: -O
 # arg: analog
 device vid=1d50 pid=608e version=0001 manufacturer="sigrok" product="fx2lafw" serial="Hantek 6022BE" interfaces=0:ff:00:00

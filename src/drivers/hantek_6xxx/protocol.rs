@@ -24,8 +24,9 @@
 //! The driver keeps one transfer in flight with a 4 s timeout. The first
 //! one, 1024 bytes, is thrown away for a glitch the firmware's start
 //! leaves; the later ones are sized from what the limits leave, rounded
-//! up to a power of two. All a transfer holds is passed on, also what
-//! lies past the sample limit.
+//! up to a power of two. The C driver passes on all a transfer holds;
+//! the port cuts it at the sample limit, and sizes the next one as if it
+//! had not.
 
 use crate::core::{Result, Value};
 use crate::usb::{ControlRequest, Transport, UsbId};
@@ -208,6 +209,12 @@ pub struct Limits {
 }
 
 impl Limits {
+    /// How many samples may still go out after `received`: all without a
+    /// sample limit.
+    pub fn room(self, received: u64) -> u64 {
+        if self.limit_samples > 0 { self.limit_samples.saturating_sub(received) } else { u64::MAX }
+    }
+
     /// The checks of `receive_transfer()` after a transfer: whether the
     /// samples or the time are through.
     pub fn reached(self, received: u64, elapsed_ms: u64) -> bool {
@@ -280,8 +287,8 @@ pub fn vdiv_index(vdivs: &[(u64, u64)], value: &Value) -> Option<usize> {
 }
 
 /// The transport with the firmware's commands. A failed command is
-/// logged as `write_control()` does; the C driver goes on after a failed
-/// setting, and so does [`super`].
+/// logged as `write_control()` does, and the setting commands say whether
+/// the scope took them.
 pub struct Link {
     t: Box<dyn Transport>,
 }
@@ -304,32 +311,34 @@ impl Link {
     }
 
     /// `hantek_6xxx_update_samplerate()`.
-    pub fn update_samplerate(&mut self, rate: u64) {
+    pub fn update_samplerate(&mut self, rate: u64) -> Result<()> {
         // A rate off the list never gets here: the set makes it the
         // fallback (see the driver), so samplerate_to_reg()'s error is
         // logged there.
         let reg = samplerate_reg(rate).unwrap_or(SAMPLERATE_REGS[SAMPLERATE_REGS.len() - 1]);
         log::debug!("update samplerate {reg}");
-        let _ = self.write_control(SAMPLERATE_REG, reg);
+        self.write_control(SAMPLERATE_REG, reg)
     }
 
     /// `hantek_6xxx_update_vdiv()`: both channels, whichever changed.
-    pub fn update_vdiv(&mut self, voltage: [usize; 2]) {
+    pub fn update_vdiv(&mut self, voltage: [usize; 2]) -> Result<()> {
         let reg = |i: usize| VDIV_REGS[i.min(VDIV_REGS.len() - 1)];
         let (ch1, ch2) = (reg(voltage[0]), reg(voltage[1]));
         log::debug!("update vdiv {ch1} {ch2}");
-        let _ = self.write_control(VDIV_CH1_REG, ch1);
-        let _ = self.write_control(VDIV_CH2_REG, ch2);
+        let first = self.write_control(VDIV_CH1_REG, ch1);
+        let second = self.write_control(VDIV_CH2_REG, ch2);
+        first.and(second)
     }
 
     /// `hantek_6xxx_update_coupling()`, on a board that has the request.
-    pub fn update_coupling(&mut self, has_coupling: bool, coupling: [Coupling; 2]) {
+    pub fn update_coupling(&mut self, has_coupling: bool, coupling: [Coupling; 2]) -> Result<()> {
         if has_coupling {
             let byte = coupling_byte(coupling);
             log::debug!("update coupling 0x{byte:x}");
-            let _ = self.write_control(COUPLING_REG, byte);
+            self.write_control(COUPLING_REG, byte)
         } else {
             log::debug!("coupling not supported");
+            Ok(())
         }
     }
 
@@ -417,6 +426,15 @@ mod tests {
     }
 
     #[test]
+    fn room_is_what_the_sample_limit_leaves() {
+        let samples = Limits { limit_samples: 300, ..NONE };
+        assert_eq!(samples.room(200), 100);
+        assert_eq!(samples.room(300), 0);
+        assert_eq!(samples.room(400), 0);
+        assert_eq!(NONE.room(1 << 40), u64::MAX);
+    }
+
+    #[test]
     fn volts_and_digits_follow_send_chunk() {
         let s = Scale::new((250, 1000));
         assert_eq!(s.digits, 3, "9.8 mV a step");
@@ -477,10 +495,10 @@ mod tests {
                     ctl_out 40 e3 0000 0000 01 -> ok\n\
                     ctl_out 40 e3 0000 0000 00 -> ok\n";
         let mut l = Link::new(Box::new(Replay::from_text(text).unwrap()));
-        l.update_samplerate(8_000_000);
-        l.update_vdiv([2, 3]);
-        l.update_coupling(false, [Coupling::Ac, Coupling::Dc]);
-        l.update_coupling(true, [Coupling::Ac, Coupling::Dc]);
+        l.update_samplerate(8_000_000).unwrap();
+        l.update_vdiv([2, 3]).unwrap();
+        l.update_coupling(false, [Coupling::Ac, Coupling::Dc]).unwrap();
+        l.update_coupling(true, [Coupling::Ac, Coupling::Dc]).unwrap();
         l.start().unwrap();
         l.stop().unwrap();
     }

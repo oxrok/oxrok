@@ -68,5 +68,4 @@ bulk_in 86 512 -> err stall
 bulk_in 86 512 -> err stall
 bulk_in 86 512 -> err stall
 bulk_in 86 512 -> err stall
-bulk_in 86 512 -> err stall
 ctl_out 40 e3 0000 0000 00 -> ok
