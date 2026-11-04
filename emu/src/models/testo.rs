@@ -5,7 +5,7 @@
 //   Copyright (C) 2014 Bert Vermeulen <bert@biot.com>,
 //   with commits by Uwe Hermann, Lars-Peter Clausen, Soeren Apel,
 //   Daniel Elstner, Martin Ling, Romain Tartière, Richard
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877-dirty).
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! A Testo 435 (435/635/735) as sigrok's `testo` driver reaches it: a
@@ -86,9 +86,9 @@
 //!   One-shot behaviour like this is an artifact.
 //! - The FTDI shell's own: `stall=REQUEST[/WVALUE]`, `in-stall=N`, `idle=N`.
 //!
-//! Nothing here sends a zero length IN transfer: the C would `memcpy(..., len
-//! - 2)` with a `len` of 0 (`protocol.c:95`), but an FT232R always sends its
-//! status bytes.
+//! Nothing here sends a zero length IN transfer: `protocol.c:95` would copy
+//! `len - 2` bytes with a `len` of 0, but an FT232R always sends its status
+//! bytes.
 
 use crate::descriptor;
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, StandardFault, Violations};
