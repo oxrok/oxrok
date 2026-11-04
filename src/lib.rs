@@ -87,6 +87,7 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
+    pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
     pub mod lecroy_logicstudio;
@@ -115,6 +116,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
     registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
+    registry.register(Box::new(drivers::ikalogic_scanalogic2::Scanalogic2Driver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));

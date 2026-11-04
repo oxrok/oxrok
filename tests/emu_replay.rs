@@ -35,6 +35,7 @@ const RECORDED: [&str; 21] = [
     "brymen-bm86x",
     "uni-t-ut61e-ser",
     "victor-dmm",
+    "ikalogic-scanalogic2",
     "ikalogic-scanaplus",
     "hantek-6xxx",
     "sysclk-lwla",

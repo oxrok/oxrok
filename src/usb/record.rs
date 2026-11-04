@@ -682,6 +682,10 @@ impl Transport for Recorder {
         r
     }
 
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        self.inner.detach_kernel_driver(interface)
+    }
+
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
         let r = self.inner.claim_interface(interface);
         self.log(Call::Claim(interface), r, |()| Outcome::Ok)

@@ -1,14 +1,14 @@
 # The IKALOGIC Scanalogic-2 (emu/src/models/ikalogic-scanalogic2.rs): a
 # low speed HID device that does everything through 128 byte feature
 # reports on endpoint 0. Sourced by tools/diffcli.sh --emu; see
-# docs/USB.md, "Writing a device model". oxrok has no port of the driver
-# yet: every case is an oracle case.
+# docs/USB.md, "Writing a device model". oxrok's port runs every case.
 #
 # After a status that is not "data ready" the driver waits 1.5 s of wall
 # time for the next read (WAIT_DATA_READY_INTERVAL), so few cases use
 # wait-trigger=, sampling= or stale-sample=.
 EMU_MODEL=ikalogic-scanalogic2
 EMU_DRIVER=ikalogic-scanalogic2
+EMU_FULL=ikalogic-scanalogic2
 EMU_GCOV_SHARED="src/usb.c"
 # digest=1's runs of `@128:SHA256` packets fold into one line.
 EMU_TX_FOLD=1

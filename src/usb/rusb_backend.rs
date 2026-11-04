@@ -118,6 +118,20 @@ impl Transport for Rusb {
         ])
     }
 
+    /// libusb's own check (the driver `usbfs` is no kernel driver) and
+    /// detach. With the handle's auto-detach, which [`open`] sets, the
+    /// release would attach the driver again.
+    fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
+        if self.handle.set_auto_detach_kernel_driver(false).is_err() {
+            return Ok(());
+        }
+        match self.handle.kernel_driver_active(interface) {
+            Ok(true) => self.handle.detach_kernel_driver(interface).map_err(map),
+            Ok(false) | Err(rusb::Error::NotSupported | rusb::Error::NotFound) => Ok(()),
+            Err(e) => Err(map(e)),
+        }
+    }
+
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
         if self.claimed.contains(&interface) {
             return Ok(());
