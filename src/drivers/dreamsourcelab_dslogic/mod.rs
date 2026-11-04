@@ -1147,19 +1147,13 @@ mod tests {
 
     #[test]
     fn triggers_of_more_than_one_stage_are_refused() {
-        let cond = |channel| crate::core::trigger::TriggerCondition {
-            channel,
-            matches: TriggerMatch::One,
-        };
-        let stage = |channel| crate::core::trigger::TriggerStage {
-            conditions: vec![cond(channel)],
-            ..crate::core::trigger::TriggerStage::default()
-        };
         let mut d = device(0x0020);
-        let one = Trigger { stages: vec![stage(0)], ..Trigger::default() };
-        d.set_trigger(Some(one)).unwrap();
-        let two = Trigger { stages: vec![stage(0), stage(1)], ..Trigger::default() };
-        let e = d.set_trigger(Some(two)).unwrap_err().to_string();
+        let mut t = Trigger::new();
+        t.add(0, 0, TriggerMatch::One);
+        d.set_trigger(Some(t.clone())).unwrap();
+        // "A then B": the C driver would make it "A and B" in stage 0.
+        t.add(1, 1, TriggerMatch::Zero);
+        let e = d.set_trigger(Some(t)).unwrap_err().to_string();
         assert!(e.contains("Only 1 trigger stages"), "{e}");
         assert_eq!(d.trigger.as_ref().map(|t| t.stages.len()), Some(1));
     }

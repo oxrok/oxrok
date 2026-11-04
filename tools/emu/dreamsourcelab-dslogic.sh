@@ -280,7 +280,7 @@ emu_cases() {
     # held, here the transfer before (one transfer is queued at this rate);
     # oxrok has them 0.
     dslogic_options profile=plus flashed=1 short_in=2
-    emu_case "fault sample transfer cut 3ch" --oracle-differs "protocol.c:732-748 reads the rest of a cut atom from the old buffer" -- -d $D -C 0,1,2 -c samplerate=10k:continuous=on --samples 5000 -O hex
+    emu_case "fault sample transfer cut 3ch" --oracle-differs "protocol.c:732-748 reads the rest of a cut atom from the old buffer" -- -d $D -C 0,1,2 -c samplerate=10k:continuous=on --samples 8000 -O hex
     # The boot loader STALLs the upload: the scan logs it and lists the
     # device all the same; the open then asks the FX2 without firmware
     # for its version, which the boot loader STALLs.
