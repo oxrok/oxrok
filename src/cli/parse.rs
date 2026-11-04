@@ -5,7 +5,7 @@
 //! Parsers for the sigrok-cli argument syntaxes.
 
 use crate::cli::args::Args;
-use oxrok::core::{Device, Driver, Error, Key, Registry, Result, Trigger, Value};
+use oxrok::core::{Device, Driver, Error, Key, Registry, Result, Trigger, Value, ValueKind};
 
 /// A `key=value:key=value` list. `first_key` names a key whose first
 /// element may appear without a value and selects a scope, e.g. the
@@ -44,6 +44,24 @@ pub fn generic_args(text: &str, first_is_scope: bool) -> GenericArgs {
     GenericArgs { scope, items }
 }
 
+/// An option's value from `-c` or `-d`, as sigrok-cli's `opt_to_gvar()`:
+/// only a boolean goes without one, and is true.
+fn option_value(name: &str, text: Option<&str>, kind: ValueKind) -> Result<Value> {
+    if kind == ValueKind::Bool {
+        let Some(v) = text else { return Ok(Value::Bool(true)) };
+        return Value::parse(kind, v).map_err(|_| {
+            Error::Arg(format!(
+                "Invalid value: '{v}' for option '{name}': \
+                 it takes true, yes, on, 1, false, no, off or 0."
+            ))
+        });
+    }
+    match text {
+        None | Some("") => Err(Error::Arg(format!("Option '{name}' needs a value."))),
+        Some(v) => Value::parse(kind, v),
+    }
+}
+
 /// The driver named by `-d`, with its scan options.
 /// A driver and the scan options parsed for it.
 pub type DriverSpec<'a> = (&'a dyn Driver, Vec<(Key, Value)>);
@@ -60,8 +78,7 @@ pub fn driver_spec<'a>(registry: &'a Registry, spec: &str) -> Result<DriverSpec<
             .find(|key| key.id() == k)
             .cloned()
             .ok_or_else(|| Error::Arg(format!("Unknown scan option '{k}'.")))?;
-        let v = v.ok_or_else(|| Error::Arg(format!("Scan option '{k}' needs a value.")))?;
-        options.push((key.clone(), Value::parse(key.kind(), &v)?));
+        options.push((key.clone(), option_value(&k, v.as_deref(), key.kind())?));
     }
     Ok((driver, options))
 }
@@ -183,19 +200,7 @@ pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
         let group = parsed.scope.clone().or_else(|| args.channel_group.clone());
         for (name, v) in parsed.items {
             let key = resolve_key(device, &name, group.as_deref())?;
-            let value = match (&v, key.kind()) {
-                (None, oxrok::core::ValueKind::Bool) => Value::Bool(true),
-                (None, _) => return Err(Error::Arg(format!("Option '{name}' needs a value."))),
-                (Some(v), oxrok::core::ValueKind::Bool) => {
-                    Value::parse(oxrok::core::ValueKind::Bool, v).map_err(|_| {
-                        Error::Arg(format!(
-                            "Invalid value: '{v}' for option '{name}': \
-                             it takes true, yes, on, 1, false, no, off or 0."
-                        ))
-                    })?
-                }
-                (Some(v), kind) => Value::parse(kind, v)?,
-            };
+            let value = option_value(&name, v.as_deref(), key.kind())?;
             items.push(ConfigItem { name, key, value, group: group.clone(), config });
         }
     }
@@ -307,6 +312,25 @@ mod tests {
         let (d, o) =
             driver_spec(&r, &format!("demo:logic_channels={logic}:analog_channels=1")).unwrap();
         d.scan(&o).unwrap().remove(0)
+    }
+
+    #[test]
+    fn an_option_without_a_value_is_worded_as_in_c() {
+        let mut r = Registry::new();
+        r.register(Box::new(oxrok::drivers::demo::DemoDriver));
+        for spec in ["demo:logic_channels", "demo:logic_channels="] {
+            let e = driver_spec(&r, spec).err().unwrap();
+            assert!(
+                matches!(&e, Error::Arg(m) if m == "Option 'logic_channels' needs a value."),
+                "{spec}: {e}"
+            );
+        }
+        for (text, kind) in [(None, ValueKind::U64), (Some(""), ValueKind::Str)] {
+            let e = option_value("x", text, kind).unwrap_err();
+            assert!(matches!(&e, Error::Arg(m) if m == "Option 'x' needs a value."), "{e}");
+        }
+        assert_eq!(option_value("x", None, ValueKind::Bool).unwrap(), Value::Bool(true));
+        assert!(option_value("x", Some(""), ValueKind::Bool).is_err());
     }
 
     #[test]

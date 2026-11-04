@@ -257,6 +257,8 @@ case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic 
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
+case_ "demo option without a value" --stderr -- -d demo -c samplerate= --set
+case_ "demo option with an empty value" --stderr -- -d demo -c pattern= --set
 # The core's refusals, hwdriver.c:746-765; the last line without oxrok's reason.
 R0='s/(invalid argument).*$/\1./'
 case_ "demo samples 0" --stderr -- -d demo --samples 0
