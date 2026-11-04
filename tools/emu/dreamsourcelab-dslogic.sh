@@ -253,12 +253,17 @@ emu_cases() {
     # sigrok-cli has no SIGINT handler and dies.
     dslogic_options profile=plus flashed=1
     emu_case "interrupt waiting for the trigger" --interrupt out=0:5 --oracle-bug "sigrok-cli has no SIGINT handler, so nothing stops the session" --no-output -- -d $D -C $C4 --samples 16 -t 0=1,3=r -O hex
-    # The FPGA stops short of the limit: two transfers, then nothing. Both
-    # tools give up after 65 timeouts (libsigrok in about 0.9 s, its queued
-    # transfers timing out together; oxrok in about 8.5 s, see the module
-    # documentation) with what came.
-    dslogic_options profile=plus flashed=1 hold=2
-    emu_case "fault capture stops short" -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 20000 -O hex
+    # The FPGA stops short of the limit: one transfer of 282624 samples,
+    # then nothing. The queue of 10 times out every 125 ms and counts 10
+    # empty transfers, so both tools give up after 7 timeouts, with what
+    # came. High channels, so that where the data ends shows.
+    dslogic_options profile=plus flashed=1 hold=1
+    emu_case "fault capture stops short" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
+    # The same with a last transfer partly filled, 4096 bytes when it times
+    # out: a libusb transfer delivers what it holds (protocol.c:802), 32768
+    # samples more.
+    dslogic_options profile=plus flashed=1 hold=1 partial=4096
+    emu_case "fault capture stops in a partial transfer" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
     # Sample transfers that complete empty, or STALL, count as empty
     # ones; one more than MAX_EMPTY_TRANSFERS (64) in a row and the
     # acquisition ends with no samples.

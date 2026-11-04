@@ -71,14 +71,12 @@
 //! the threshold register the open writes is unknown (no source here
 //! says, and the model takes the write on every profile).
 //!
-//! A known limit: [`crate::usb::BulkStream::next`] with no transfer complete in time
-//! leaves the transfers queued and gives no partial data, where a libusb
-//! transfer that times out delivers what it holds (`protocol.c:802`). So
-//! a buffered capture whose FPGA stops partway through a transfer loses
-//! that part (libsigrok has it after about 131 ms), and when nothing
-//! comes the capture gives up after 65 timeouts, about 8.5 s, where
-//! libsigrok's queued transfers take about 0.9 s. The emulator cannot
-//! show the partial data; `hold=N` compares the give-up.
+//! Sample transfers have the C driver's timeout (`get_timeout()`, with
+//! [`Transport::bulk_in_stream_timed`]): a transfer that times out
+//! delivers what it holds (`protocol.c:802`), so a buffered capture whose
+//! FPGA stops partway through a transfer still has that part, and a queue
+//! that times out with nothing counts as that many empty transfers, so
+//! the capture gives up after as many timeouts as libsigrok's does.
 
 #![forbid(unsafe_code)]
 #![allow(clippy::doc_markdown)]
@@ -862,7 +860,9 @@ impl Acquisition {
         for i in 0..self.depth {
             log::info!("submitting transfer: {i}");
         }
-        let mut stream = match link.transport().bulk_in_stream(ENDPOINT_IN, self.size, self.depth) {
+        let stream =
+            link.transport().bulk_in_stream_timed(ENDPOINT_IN, self.size, self.depth, self.timeout);
+        let mut stream = match stream {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to submit transfer: {}.", protocol::libusb_name(&e));
@@ -950,19 +950,20 @@ impl Acquisition {
     /// One sample transfer, completed (`Ok`) or failed, as
     /// `receive_transfer()` takes it.
     fn transfer(&self, transfer: Result<Vec<u8>>, s: &mut State, sink: &PacketSink) -> Next {
-        // A timeout counts as an empty transfer, any other failure as a
-        // failed one.
-        let (data, failed) = match transfer {
-            Ok(d) => (d, false),
-            Err(Error::Timeout) => (Vec::new(), false),
+        // A timeout with nothing is every queued transfer back empty,
+        // each counted as receive_transfer() counts it; any other failure
+        // is one failed transfer.
+        let (data, count) = match transfer {
+            Ok(d) => (d, 1),
+            Err(Error::Timeout) => (Vec::new(), self.depth),
             Err(e) => {
                 log::debug!("Transfer failed: {e}.");
-                (Vec::new(), true)
+                (Vec::new(), 1)
             }
         };
         log::debug!("receive_transfer(): received {} bytes.", data.len());
-        if data.is_empty() || failed {
-            s.empty += 1;
+        if data.is_empty() {
+            s.empty += count;
             // Past the limit the FX2 gave up.
             return if s.empty > MAX_EMPTY_TRANSFERS { Next::End } else { Next::Continue };
         }
@@ -1061,6 +1062,15 @@ mod tests {
             assert_eq!(a.transfer(Ok(Vec::new()), &mut s, &sink), Next::Continue);
         }
         assert_eq!(a.transfer(Err(Error::device("stall")), &mut s, &sink), Next::End);
+        // A queue of 10 timing out: 7 timeouts make 70 empty transfers.
+        let mut a = acquisition(0);
+        a.depth = 10;
+        let mut s = State { sent: 0, empty: 0, trigger_pos: 0 };
+        for _ in 0..6 {
+            assert_eq!(a.transfer(Err(Error::Timeout), &mut s, &sink), Next::Continue);
+        }
+        assert_eq!(a.transfer(Err(Error::Timeout), &mut s, &sink), Next::End);
+        let a = acquisition(0);
         let mut s = State { sent: 0, empty: 10, trigger_pos: 0 };
         assert_eq!(a.transfer(Ok(vec![0; 8]), &mut s, &sink), Next::Continue);
         assert_eq!(s.empty, 0);

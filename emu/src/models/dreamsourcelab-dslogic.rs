@@ -152,9 +152,11 @@
 //! bytes (the rest of the cut atom is lost, the next transfer goes on
 //! at the next atom); `hold=N` sends N sample transfers of each
 //! acquisition and then holds the next ones open with nothing, as an FPGA
-//! that stopped short of the limit (a transfer that completes part of
-//! its data on the host's timeout is not modelled: the emulator has no
-//! partial answer); `load=cpucs|chunk|release` STALLs the boot
+//! that stopped short of the limit; with it, `partial=BYTES` gives the
+//! first of those transfers that many bytes (whole atoms) when the host
+//! cancels it, what a libusb transfer that times out delivers
+//! ([`DeviceModel::in_unlinked`]), once in each acquisition;
+//! `load=cpucs|chunk|release` STALLs the boot
 //! loader's first `CPUCS` write (the reset hold), every firmware chunk,
 //! or the `CPUCS` write that releases the reset, so the upload fails. The
 //! C driver then opens the FX2 without firmware all the same and asks
@@ -176,7 +178,7 @@ pub const ABOUT: &str = "DreamSourceLab DSLogic (EZ-USB, renumerates, FPGA bitst
                          flashed=1 starts with the firmware running; faults: version=MAJOR.MINOR, \
                          stall=version,revid,start,stop,config,setting,wr_reg, \
                          stall_out=fpga,setting, short_out=fpga,setting, \
-                         trigger=stall|short|never, empty=N, stall_in=N, short_in=N, hold=N, \
+                         trigger=stall|short|never, empty=N, stall_in=N, short_in=N, hold=N, partial=BYTES, \
                          load=cpucs|chunk|release";
 
 /// DreamSourceLab's vendor id.
@@ -307,6 +309,8 @@ pub struct Faults {
     pub short_in: u32,
     /// Sample transfers with data after which the rest stay open.
     pub hold: Option<u32>,
+    /// Bytes the first transfer held open has when it is cancelled.
+    pub partial: u32,
     /// The boot loader writes that STALL.
     pub load: Option<LoadFault>,
 }
@@ -388,6 +392,7 @@ impl Faults {
             "stall_in" => self.stall_in = count(v)?,
             "short_in" => self.short_in = count(v)?,
             "hold" => self.hold = Some(count(v)?),
+            "partial" => self.partial = count(v)?,
             "load" => {
                 self.load = Some(match v {
                     "cpucs" => LoadFault::Hold,
@@ -691,6 +696,32 @@ struct Acquisition {
     stall_in: u32,
     /// Sample transfers completed with data.
     transfers: u32,
+    /// Bytes a cancelled transfer still holds, see [`Faults::partial`].
+    partial: u32,
+}
+
+impl Acquisition {
+    /// The channels enabled, in index order.
+    fn channels(&self) -> Vec<u32> {
+        (0..16).filter(|c| self.setting.ch_en & (1 << c) != 0).collect()
+    }
+
+    /// The next `atoms` atoms of the counter on `channels`.
+    fn atoms(&mut self, channels: &[u32], atoms: usize) -> Vec<u8> {
+        let mut data = Vec::with_capacity(atoms * 8 * channels.len());
+        for _ in 0..atoms {
+            let first = self.base + self.sent;
+            for &c in channels {
+                let mut word = 0u64;
+                for b in 0..64 {
+                    word |= u64::from((sample(first + b) >> c) & 1) << b;
+                }
+                data.extend_from_slice(&word.to_le_bytes());
+            }
+            self.sent += 64;
+        }
+        data
+    }
 }
 
 /// The firmware's state.
@@ -1006,6 +1037,7 @@ fn start(s: Setting, faults: &Faults) -> Acquisition {
         empty: faults.empty,
         stall_in: faults.stall_in,
         transfers: 0,
+        partial: faults.partial,
     }
 }
 
@@ -1078,7 +1110,7 @@ impl DeviceModel for Dslogic {
         if self.faults.hold.is_some_and(|n| acq.transfers >= n) {
             return Reply::Nak;
         }
-        let channels: Vec<u32> = (0..16).filter(|c| acq.setting.ch_en & (1 << c) != 0).collect();
+        let channels = acq.channels();
         let atom = 8 * channels.len().max(1);
         if !max.is_multiple_of(64 * channels.len().max(1)) || max == 0 {
             v.report(format!(
@@ -1097,18 +1129,7 @@ impl DeviceModel for Dslogic {
             acq.stall_in -= 1;
             return Reply::Stall;
         }
-        let mut data = Vec::with_capacity(max);
-        for _ in 0..max / atom {
-            let first = acq.base + acq.sent;
-            for &c in &channels {
-                let mut word = 0u64;
-                for b in 0..64 {
-                    word |= u64::from((sample(first + b) >> c) & 1) << b;
-                }
-                data.extend_from_slice(&word.to_le_bytes());
-            }
-            acq.sent += 64;
-        }
+        let mut data = acq.atoms(&channels, max / atom);
         acq.transfers += 1;
         if acq.transfers == self.faults.short_in {
             // Half the atoms and 4 bytes of the next; the rest of that
@@ -1118,6 +1139,18 @@ impl DeviceModel for Dslogic {
             acq.sent -= (max / atom - atoms - 1) as u64 * 64;
         }
         Reply::Data(data)
+    }
+
+    fn in_unlinked(&mut self, ep: u8, max: usize) -> Option<Vec<u8>> {
+        let Stage::Running(fw) = &mut self.stage else { return None };
+        let acq = fw.acq.as_mut()?;
+        if ep != 6 || acq.partial == 0 || !self.faults.hold.is_some_and(|n| acq.transfers >= n) {
+            return None;
+        }
+        let channels = acq.channels();
+        let atoms = (acq.partial as usize).min(max) / (8 * channels.len().max(1));
+        acq.partial = 0;
+        Some(acq.atoms(&channels, atoms))
     }
 
     fn in_submitted(&mut self, ep: u8, _max: usize) {
@@ -1304,6 +1337,32 @@ mod tests {
         assert!(matches!(dev.transfer_in(6, 512, &mut v), Reply::Data(_)));
         dev.in_submitted(6, 512);
         assert_eq!(dev.transfer_in(6, 512, &mut v), Reply::Nak);
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn a_held_transfer_gives_its_partial_data_once_when_cancelled() {
+        let mut model = Dslogic::new(PROFILES[0], true);
+        model.faults.hold = Some(1);
+        model.faults.partial = 20;
+        let mut dev = Device::new(Box::new(model));
+        let mut v = Violations::default();
+        dev.control(SET_CONFIG, &[], &mut v);
+        // Nothing before an acquisition.
+        assert_eq!(dev.in_unlinked(6, 512), None);
+        open(&mut dev, 0, &mut v);
+        let packet = setting(100, 1024, 1, None, 0);
+        assert!(matches!(acquire(&mut dev, &packet, &mut v), Reply::Data(_)));
+        // Nothing before the hold.
+        assert_eq!(dev.in_unlinked(6, 512), None);
+        dev.in_submitted(6, 512);
+        assert!(matches!(dev.transfer_in(6, 512, &mut v), Reply::Data(_)));
+        // 512 bytes at one channel are 64 atoms, so the data goes on at
+        // sample 4096; 20 bytes are 2 whole atoms.
+        let d = dev.in_unlinked(6, 512).unwrap();
+        assert_eq!(d.len(), 16);
+        assert_eq!(u64::from_le_bytes(d[0..8].try_into().unwrap()), 0xaaaa_aaaa_aaaa_aaaa);
+        assert_eq!(dev.in_unlinked(6, 512), None);
         assert!(v.is_empty(), "{v:?}");
     }
 
