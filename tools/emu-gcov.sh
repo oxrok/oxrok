@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 # Line coverage of a libsigrok driver, from the oracle built with
 # --coverage (docs/DEVICES.md, "Oracle"; docs/ROADMAP.md, criterion 4
 # of "What counts as emulator-verified").

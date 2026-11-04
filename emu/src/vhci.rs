@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! Attaching a USB/IP socket to the Linux `vhci-hcd` virtual host
 //! controller through its sysfs files, as the `usbip attach` tool
 //! does: a free port is picked from `status`, and `port sockfd devid

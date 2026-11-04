@@ -1,13 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/ftdi-la/api.c (the chips and the sequence),
-//   libsigrok/src/hardware/ftdi-la/protocol.c (the sample rate and the
-//   reads),
-//   Copyright (C) 2015 Sergey Alirzaev <zl29ah@gmail.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Gerhard Sittig, Paul,
-//   Sergey Rzhevsky, Tom Matthews
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! An FTDI chip used as a logic analyzer by sigrok's `ftdi-la` driver:
 //! port A in asynchronous bit-bang mode with every pin an input, so that

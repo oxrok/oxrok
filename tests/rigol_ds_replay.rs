@@ -1,4 +1,5 @@
 #![allow(clippy::format_collect)]
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 
 //! The driver against a hand written SCPI fixture of a DS1102E: the
 //! configuration readback at open, one live frame of CH1 and the key

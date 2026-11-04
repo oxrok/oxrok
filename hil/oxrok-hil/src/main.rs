@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Hardware in the loop checks for the LogicPort driver.
 //!
 //! Runs captures through the library against a LogicPort while the ESP32

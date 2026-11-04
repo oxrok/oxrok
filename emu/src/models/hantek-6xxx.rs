@@ -1,20 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/hantek-6xxx/api.c (the profiles, the scan, the transfers),
-//   libsigrok/src/hardware/hantek-6xxx/protocol.c (the requests),
-//   libsigrok/src/hardware/hantek-6xxx/protocol.h,
-//   sigrok-firmware-fx2lafw (include/scope.inc, include/dscr_scope.inc, hw/*/fw.c, hw/*/dscr.a51, Makefile.am),
-//   Copyright (C) 2015 Christer Ekholm <christerekholm@gmail.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Benjamin Larsson,
-//   Gerhard Sittig, Chriter, Aurelien Jacobs, Erik Montnemery,
-//   Markus Siegert, Mike Meyer, Romain Tartière, Sebastian Tabares Amaya,
-//   Sebastian Zagrodzki, Sergey Alirzaev, Thomas Emmert, litospain, majekw,
-//   waka, Timo Rothenpieler
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877),
-//   sigrok-firmware-fx2lafw: Copyright (C) 2009 Ubixum, Inc.,
-//   Copyright (C) 2015 Jochen Hoenicke,
-//   Copyright (C) 2018 Marek Wodzinski (hw/yixingdianzi-mdso/fw.c)
-//   (sigrok-firmware-fx2lafw-0.1.7-10-g0f2d324).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Hantek 6022BE/6022BL USB oscilloscopes and their relatives
 //! (Voltcraft DSO-2020, Sainsmart DDS120, `YiXingDianZi` MDSO, Instrustar

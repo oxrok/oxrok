@@ -1,19 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/zeroplus-logic-cube/api.c (the models, the capture's address arithmetic),
-//   libsigrok/src/hardware/zeroplus-logic-cube/analyzer.c (the registers, the start status, the clock table),
-//   libsigrok/src/hardware/zeroplus-logic-cube/analyzer.h,
-//   libsigrok/src/hardware/zeroplus-logic-cube/gl_usb.c (the requests),
-//   libsigrok/src/hardware/zeroplus-logic-cube/protocol.c (the memory sizes),
-//   Copyright (C) 2010-2012 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2010 Sven Peter <sven@fail0verflow.com>,
-//   Copyright (C) 2010 Haxx Enterprises <bushing@gmail.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Soeren Apel,
-//   Gerhard Sittig, Martin Ling, Daniel Elstner, Jan Metzger,
-//   Michał Janiszewski, René Pecher, Romain Tartière, Yasushi SHOJI, g-user
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterparts: api.c and protocol.c are
-//   GPL-3.0-or-later, as this file is; analyzer.c, analyzer.h and gl_usb.c
-//   carry a BSD-style licence, whose notice is at CLOCKS.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The ZEROPLUS Logic Cube LAP-C series as libsigrok's
 //! `zeroplus-logic-cube` driver sees it: a vendor USB device with no

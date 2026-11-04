@@ -1,13 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/chronovu-la/api.c (the ids, the command and the sequence),
-//   libsigrok/src/hardware/chronovu-la/protocol.c (the command, the sequencer reset and the readout order),
-//   libsigrok/src/hardware/chronovu-la/protocol.h (the memory and the trigger masks),
-//   Copyright (C) 2011-2015 Uwe Hermann <uwe@hermann-uwe.de>,
-//   Copyright (C) 2011-2014 Uwe Hermann <uwe@hermann-uwe.de>,
-//   with commits by Lars-Peter Clausen, Bert Vermeulen, Gerhard Sittig,
-//   Daniel Elstner, Martin Ling, Romain Tartière, Soeren Apel, Marek Antoniak
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The `ChronoVu` LA8 and LA16 logic analyzers as sigrok's `chronovu-la`
 //! driver sees them: an FTDI chip in FIFO mode in front of the

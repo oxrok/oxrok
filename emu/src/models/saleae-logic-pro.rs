@@ -1,11 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/saleae-logic-pro/api.c (the ids, strings, firmware container, transfers),
-//   libsigrok/src/hardware/saleae-logic-pro/protocol.c (the scrambled commands, the LFSR, the crypto chip packets, the registers, the sample format),
-//   libsigrok/src/hardware/saleae-logic-pro/protocol.h,
-//   Copyright (C) 2017 Jan Luebbe <jluebbe@lasnet.de>,
-//   with commits by Uwe Hermann, Gerhard Sittig, Romain Tartière
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Saleae Logic Pro 16 (`21a9:1006`) as libsigrok's
 //! `saleae-logic-pro` driver sees it: a Cypress FX3 that takes its

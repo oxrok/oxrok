@@ -1,15 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/asix-sigma/api.c (the clock select, trigger select 2 and post trigger values of dev_acquisition_start),
-//   libsigrok/src/hardware/asix-sigma/protocol.c (the FPGA commands, registers, trigger table and sample memory layout),
-//   libsigrok/src/hardware/asix-sigma/protocol.h,
-//   Copyright (C) 2010-2012 Håvard Espeland <gus@ping.uio.no>,
-//   Copyright (C) 2010 Martin Stensgård <mastensg@ping.uio.no>,
-//   Copyright (C) 2010 Carl Henrik Lunde <chlunde@ping.uio.no>,
-//   Copyright (C) 2020 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Niklas Thorne, jry,
-//   Daniel Trnka
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The SIGMA's FPGA once a logic analyzer netlist runs in it: the
 //! command bytes the host writes through the FTDI FIFO, the register

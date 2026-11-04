@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! The transaction log: one line per completed transfer, in the
 //! dialect of oxrok's USB fixtures (`docs/USB.md`), `# section NAME`
 //! markers between the phases of a run, and `! violation: ...` lines

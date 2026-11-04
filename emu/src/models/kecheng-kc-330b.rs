@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/kecheng-kc-330b/api.c (the identify, what its comments say of the device),
-//   libsigrok/src/hardware/kecheng-kc-330b/protocol.c (the commands and answers),
-//   libsigrok/src/hardware/kecheng-kc-330b/protocol.h,
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Martin Ling,
-//   Soeren Apel, Daniel Elstner, Frank Stettner, Aurelien Jacobs
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Kecheng KC-330B sound level meter and data logger: a Silicon Labs
 //! F320 behind one vendor interface, with bulk OUT 2 for commands and

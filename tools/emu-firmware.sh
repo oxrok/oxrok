@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 # Firmware stand-ins for the emulated devices.
 #
 #   tools/emu-firmware.sh [DIR]

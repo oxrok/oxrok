@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The FTDI layer against a recorded (here hand written) session.
 
 use oxrok::ftdi::{BitMode, ChipType, Ftdi, Port};

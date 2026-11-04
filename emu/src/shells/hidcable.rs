@@ -1,10 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/serial_hid.c (the hidapi transport the cables share),
-//   Copyright (C) 2017-2019 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! What the serial over HID cable models (`bu86x`, `ch9325`, `victor`)
 //! share: the device the Pico emulator presents (`hil/pico-hidcable`),

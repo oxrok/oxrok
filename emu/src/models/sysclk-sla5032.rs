@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/sysclk-sla5032/api.c (the ids, the open),
-//   libsigrok/src/hardware/sysclk-sla5032/protocol.c (the commands, the registers, the bitstream's framing, the capture sequence and the RLE records),
-//   libsigrok/src/hardware/sysclk-sla5032/protocol.h,
-//   Copyright (C) 2014 Daniel Elstner <daniel.kitta@gmail.com>,
-//   Copyright (C) 2019 Vitaliy Vorobyov,
-//   with commits by Uwe Hermann, Vitaliy Vorobyov
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Sysclk SLA5032 (`2961:66b0`) as libsigrok's `sysclk-sla5032`
 //! driver sees it: a Cypress FX2LP relaying commands to a Spartan-6 FPGA

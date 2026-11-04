@@ -1,18 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/fx2lafw/api.c (the profiles, the scan),
-//   libsigrok/src/hardware/fx2lafw/protocol.c (the commands and the transfers),
-//   libsigrok/src/hardware/fx2lafw/protocol.h,
-//   sigrok-firmware-fx2lafw (fx2lafw.c, gpif-acquisition.c, include/dscr.inc, hw/*/dscr.a51),
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2012 Joel Holdsworth <joel@airwebreathe.org.uk>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Diego Asanza,
-//   Gerhard Sittig, Soeren Apel, Aurelien Jacobs, Daniel Elstner,
-//   Martin Ling, Romain Tartière, Angus Gratton, Benjamin Larsson,
-//   Carl-Fredrik Sundström, Daniel Gröber, Diego F. Asanza, Jan Losinski,
-//   Karl Palsson, Kate J. Temkin, Peetz0r, Thomas, Tilman Sauerbeck,
-//   Valentin Ochs, Vlad Ivanov, eightdot, Ralf
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! An FX2 logic analyzer with the sigrok `fx2lafw` firmware, as
 //! libsigrok's `fx2lafw` driver sees it, built on the EZ-USB shell

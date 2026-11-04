@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 """Write THIRD-PARTY-NOTICES.txt: what a release binary links, and under what.
 
     tools/third-party/notices.py --target TRIPLE [--target TRIPLE...] \

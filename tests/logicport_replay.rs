@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The driver against USB sessions recorded on an Intronix LA1034 with
 //! `OXROK_USB_RECORD`, 2026-10-22, macOS, nusb. The ESP32 signal
 //! generator drove CLK1 with a square wave. The expected output is what

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! The HID interface shell: the class descriptor, the report
 //! descriptor fetch and the class requests (`GET_REPORT`,
 //! `SET_REPORT`, idle, protocol). A model implements [`HidReports`]

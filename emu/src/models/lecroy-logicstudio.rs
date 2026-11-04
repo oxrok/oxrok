@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/lecroy-logicstudio/api.c (the ids, the firmware, the renumeration wait),
-//   libsigrok/src/hardware/lecroy-logicstudio/protocol.c (the requests, registers, bitstream upload, trigger layout, status packets, sample memory),
-//   libsigrok/src/hardware/lecroy-logicstudio/protocol.h,
-//   Copyright (C) 2015 Tilman Sauerbeck <tilman@code-monkey.de>,
-//   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Romain Tartière
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The `LeCroy` `LogicStudio` 16 (`05ff:a001`, `05ff:a002` with its
 //! firmware) as libsigrok's `lecroy-logicstudio` driver sees it, built

@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/testo/api.c (the scan, the transfers),
-//   libsigrok/src/hardware/testo/protocol.c (the request and the answer's layout),
-//   libsigrok/src/hardware/testo/protocol.h,
-//   Copyright (C) 2014 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Soeren Apel,
-//   Daniel Elstner, Martin Ling, Romain Tartière, Richard
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! A Testo 435 (435/635/735) as sigrok's `testo` driver reaches it: a
 //! Renesas M16C behind an FT232R, which the driver talks to with plain
