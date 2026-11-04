@@ -2,10 +2,11 @@
 # without firmware (04b4:2090) that takes the upload and renumerates as
 # 04b5:2090, and its siblings DSO-2150, DSO-2250, DSO-5200 and 5200A.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". oxrok has no hantek-dso driver: the cases are oracle cases.
+# model".
 EMU_MODEL=hantek-dso
 EMU_OPTIONS="-o profile=dso-2090"
 EMU_DRIVER=hantek-dso
+EMU_FULL=hantek-dso
 EMU_GCOV_SHARED="src/usb.c src/ezusb.c"
 
 # The model's options for the cases that follow (see fx2lafw.sh).

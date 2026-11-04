@@ -84,6 +84,7 @@ pub mod drivers {
     pub mod dreamsourcelab_dslogic;
     pub mod ftdi_la;
     pub mod fx2lafw;
+    pub mod hantek_dso;
     pub mod ikalogic_scanaplus;
     pub mod kingst_la2016;
     pub mod logicport;
@@ -113,4 +114,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
+    registry.register(Box::new(drivers::hantek_dso::HantekDsoDriver));
 }
