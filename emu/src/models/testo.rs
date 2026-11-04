@@ -20,16 +20,22 @@
 //!   AG` and 2 `testo 435/635/735` (also iInterface), no serial, bus powered
 //!   at 400 mA, bulk `0x81` and `0x02` of 64 bytes. Sure: a real device's.
 //! - The chips: the wiki's page of the device (M30626FJPGP, FT232RQ). Sure.
-//! - The request and the answer: only `protocol.c`. The wiki links Testo's
-//!   own description inside a Windows `toolbox.exe`, which was not read, and
-//!   lists no capture. So the layout below is what the C parses, nothing
-//!   more: `21 00 00 00 01`, a byte nobody reads, the count N of
-//!   measurements, N times seven bytes (a little endian binary32, a unit, two
-//!   bytes nobody reads), and CRC-16/MCRF4XX little endian over all before
-//!   it. The unread bytes are 0 here, **a stand-in**; a real device surely
-//!   has something in them.
-//! - Units 1 (temperature), 3 (humidity), 5 (wind speed), 24 (pressure):
-//!   `protocol.c`. A real device may have others, which the C refuses.
+//! - The request and the answer: `protocol.c`, and independently Testo's own
+//!   description, `hhtcde.chm` in its `toolbox.exe`, linked from the wiki
+//!   (pages `hhx35_e`, `hhx35r_e`, `hhx35ee_x`, `hhtcd7b_e`, `HHTCD4_e`,
+//!   `exto_e`; read unpacked, not run). The request, 115200 8N1, `21 00 00 00
+//!   01`, Size at offset 5, the count N of measurements, N times seven bytes
+//!   (a little endian binary32, Unit, Unused, Decimal exponent) and a two
+//!   byte check sequence. The CRC's algorithm is the C's. No capture exists,
+//!   so what a device puts in **Size, Unused and Decimal exponent is unknown:
+//!   they are 0 here, a stand-in**, and nothing reads them.
+//! - Units 1 (temperature), 3 (humidity), 5 (wind speed), 24 (pressure): both
+//!   sources. Testo's table lists about 170 others for all its instruments;
+//!   the C refuses them. That a 435 sends one (set to °F, with a CO2 or a dew
+//!   point reading) is an inference.
+//! - Timing: Testo's example polls with `Sleep(200)` for up to 2000 ms and
+//!   suggests a 7000 ms timeout for the 435/635/735. `delay=` is counted in
+//!   reads, not milliseconds.
 //!
 //! The C's capture path has met no device since 2017: `b258c09f` dropped the
 //! `sdi->driver` its scan needs, so stock libsigrok finds no Testo, and the
@@ -38,8 +44,10 @@
 //! past its scan is weak evidence of the device.
 //!
 //! The driver's sequence, which [`Testo435`] holds it to: 4 vendor requests
-//! set 115200 8N1 with DTR and RTS high, then each 9 byte request gets one
-//! answer. The driver sends no latency timer, reset or purge.
+//! set 115200 8N1, then each 9 byte request gets one answer. The driver raises
+//! DTR and RTS, which the device does not need (Testo's example drives both
+//! low), so neither level is a violation. It sends no latency timer, reset or
+//! purge, where Testo's example asks for a 5 ms timer.
 //!
 //! **A C habit, accepted:** `FTDI_FLOW_NONE` is `0x0008` in `wValue`
 //! (`protocol.h:41`), where the mode lives in `wIndex`'s high byte and
@@ -112,6 +120,10 @@ const MAX_UNITS: usize = 40;
 
 /// The most bytes `tail=` and `stale=` take.
 const MAX_TAIL: usize = 256;
+
+/// The most bytes [`Mcu::pending`] holds. A host that asks and does not read
+/// (a violation) loses what comes past it, as a full FIFO does.
+const MAX_PENDING: usize = 1024;
 
 /// CRC-16/MCRF4XX, as `crc16_mcrf4xx` in `protocol.c:189`, from `0xffff`.
 pub fn crc(data: &[u8]) -> u16 {
@@ -276,7 +288,7 @@ fn config() -> FtdiConfig {
 #[derive(Clone, Debug)]
 struct Mcu {
     b: Behaviour,
-    /// What the UART has for the host. Bounded: an answer per request.
+    /// What the UART has for the host, at most [`MAX_PENDING`] bytes.
     pending: Vec<u8>,
     /// A piece that goes in its own IN transfer before `pending`.
     tail: Vec<u8>,
@@ -333,12 +345,6 @@ impl FtdiPorts for Mcu {
         if state.flow != 0 {
             v.report(format!("request with flow control mode {}: the driver has none", state.flow));
         }
-        if !(state.dtr && state.rts) {
-            v.report(format!(
-                "request with DTR {} and RTS {}: the driver raises both",
-                state.dtr, state.rts
-            ));
-        }
         if data != REQUEST {
             v.report(format!("{} bytes written that are not the request", data.len()));
             return Reply::ack();
@@ -356,7 +362,8 @@ impl FtdiPorts for Mcu {
             return Reply::ack();
         }
         let a = self.next_answer();
-        self.pending.extend_from_slice(&a);
+        let room = MAX_PENDING.saturating_sub(self.pending.len());
+        self.pending.extend_from_slice(&a[..a.len().min(room)]);
         self.delay = self.b.delay;
         Reply::ack()
     }
@@ -543,7 +550,7 @@ mod tests {
         let mut dev = build(&[]).unwrap();
         let mut v = Violations::default();
         dev.out(2, &REQUEST, &mut v);
-        assert_eq!(v.drain().len(), 2, "no baud rate, DTR and RTS low");
+        assert_eq!(v.drain().len(), 1, "no baud rate; DTR and RTS low are fine");
     }
 
     #[test]
@@ -551,7 +558,6 @@ mod tests {
         for (r, val, why) in [
             (3, 0x0034, "half the baud rate"),
             (4, 0x0007, "7 data bits"),
-            (1, 0x0300, "DTR and RTS low"),
         ] {
             let (mut dev, mut v) = device(&[]);
             dev.control(vendor(r, val), &[], &mut v);
@@ -564,6 +570,33 @@ mod tests {
         dev.control(s, &[], &mut v);
         dev.out(2, &REQUEST, &mut v);
         assert_eq!(v.drain().len(), 1, "RTS/CTS");
+    }
+
+    #[test]
+    fn dtr_and_rts_low_are_no_violation() {
+        let (mut dev, mut v) = device(&[]);
+        dev.control(vendor(1, 0x0300), &[], &mut v);
+        dev.out(2, &REQUEST, &mut v);
+        assert!(v.is_empty(), "{v:?}");
+        assert_eq!(payload(dev.in_transfer(1, 128, &mut v))[0], 0x21);
+    }
+
+    #[test]
+    fn what_is_not_read_stays_bounded() {
+        let (mut dev, mut v) = device(&[("units", "1,1,1,1")]);
+        for _ in 0..1000 {
+            dev.out(2, &REQUEST, &mut v);
+        }
+        assert_eq!(v.drain().len(), 999, "a request over an unread answer");
+        let mut got = 0;
+        loop {
+            let d = payload(dev.in_transfer(1, 64, &mut v));
+            if d.is_empty() {
+                break;
+            }
+            got += d.len();
+        }
+        assert_eq!(got, MAX_PENDING);
     }
 
     #[test]

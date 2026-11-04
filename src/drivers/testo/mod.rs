@@ -14,7 +14,9 @@
 //! a manufacturer starting with `testo` and the product `testo 435/635/735`.
 //! Which channels a device has depends on its probes, so the scan asks it for
 //! one answer ([`protocol::probe_channels`]) and names a channel per
-//! measurement.
+//! measurement. An answer with a unit other than 1 (°C), 3 (%rF), 5 (m/s) and
+//! 24 (hPa) drops the device, as in the C (`protocol.c:134-136`): Testo's
+//! table lists about 170 more (`HHTCD4_e`).
 //!
 //! Stock libsigrok finds no Testo: `b258c09f` (2017) dropped the assignment
 //! of `sdi->driver` from `scan()` as already done by `std_scan_complete()`,
@@ -27,7 +29,7 @@
 //! Unlike the C, this port: strips the chip's status bytes from every packet;
 //! takes two measurements of a unit, and another order of them; asks again
 //! after any damaged answer; ends a capture or a probe the device does not
-//! answer; and finds nothing for a `conn=` that names nothing. See
+//! answer, for Testo's 7 s and not for ever; and finds nothing for a `conn=` that names nothing. See
 //! [`protocol`] and `docs/DEVICES.md`.
 
 #![forbid(unsafe_code)]
@@ -128,9 +130,13 @@ fn is_testo(t: &mut dyn Transport) -> bool {
     manufacturer.starts_with(MANUFACTURER) && product == PRODUCT
 }
 
-/// `dev_open()`'s claim. The transport detaches a kernel driver (`ftdi_sio`
-/// knows this id) when the claim says busy.
+/// `dev_open()`: detaches a kernel driver, once and for good (`ftdi_sio` knows
+/// this id, and its probe would rewrite the latency timer at every release),
+/// then claims.
 fn claim(t: &mut dyn Transport) -> Result<()> {
+    t.detach_kernel_driver(0).inspect_err(|e| {
+        log::error!("Failed to detach kernel driver: {}.", libusb_error_name(e));
+    })?;
     t.claim_interface(0).inspect_err(|e| {
         log::error!("Failed to claim interface: {}.", libusb_error_name(e));
     })
@@ -385,7 +391,11 @@ mod tests {
 
     #[test]
     fn a_capture_stops_at_its_limit_without_another_request() {
-        let mut d = device(&format!("{SCAN}{START}"));
+        // Another answer on offer: a capture past its limit takes it.
+        let more = "bulk_out 02 12000000010155d1b7 -> 9\n\
+            bulk_in 81 128 -> 0160210000000100020000b04101000000003842030000729b\n";
+        let replay = Replay::from_text(&format!("{SCAN}{START}{more}")).unwrap();
+        let mut d = TestoDevice::from_transport(Box::new(replay.clone())).unwrap();
         d.open().unwrap();
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let (tx, rx) = sync_channel(16);
@@ -401,6 +411,7 @@ mod tests {
         assert_eq!((a.channels.as_slice(), a.samples.as_slice()), (&[1][..], &[45.5][..]));
         assert_eq!(packets[3], Packet::End);
         assert_eq!(packets.len(), 4);
+        assert_eq!(replay.remaining(), 2, "the next request was not sent");
         d.close().unwrap();
     }
 

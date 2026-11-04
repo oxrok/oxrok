@@ -13,16 +13,22 @@
 //!
 //! ```text
 //! request  12 00 00 00 01 01 55 d1 b7
-//! answer   21 00 00 00 01 ?? N  (value:f32le unit ?? ??){N}  crc:u16le
+//! answer   21 00 00 00 01 size N  (value:f32le unit unused exponent){N}  crc:u16le
 //! ```
 //!
-//! The CRC is CRC-16/MCRF4XX from `0xffff` over all before it; the bytes
-//! marked `??` are read by nobody. This is what the C parses, the only source:
-//! no capture of the device is known.
+//! The CRC is CRC-16/MCRF4XX from `0xffff` over all before it. Two sources
+//! agree on this: the C, and Testo's own description, `hhtcde.chm` in its
+//! `toolbox.exe` (pages `hhx35_e`, `hhx35r_e`, `hhx35ee_x`, `hhtcd7b_e`,
+//! `HHTCD4_e`, `exto_e`), which names the fields. Nobody here reads `size`,
+//! `unused` or the decimal exponent: `digits` stays 2 as in the C
+//! (`protocol.c:249`). No capture of the device is known.
 //!
 //! The chip puts two status bytes in front of every 64 byte USB packet.
-//! Where the C strips them once per transfer (`api.c:289-291`,
-//! `protocol.c:95`), so that an answer over 62 bytes never passes its CRC,
+//! The C strips them once per transfer (`api.c:289-291`, `protocol.c:95`), so
+//! a transfer that holds more than one packet keeps the later status bytes as
+//! data and fails its CRC. That needs an answer of at least 65 bytes (8
+//! measurements), and even then not every time: a chip whose latency timer
+//! fires with 4 to 61 bytes buffered sends two short packets, two transfers.
 //! [`strip_status`] strips them per packet.
 
 use crate::core::{Mq, Packet, PacketSink, Result, Unit};
@@ -49,8 +55,9 @@ const PREFIX: [u8; 5] = [0x21, 0, 0, 0, 1];
 /// The 4 vendor requests' timeout. The C's 10 ms is no protocol: a
 /// control transfer the chip answers at once only fails it on a loaded host.
 const CONTROL_TIMEOUT: Duration = Duration::from_millis(100);
-/// The timeout of the request's write and of the flush's reads (the C's
-/// 10 ms there is shorter than the chip's 16 ms latency timer).
+/// The timeout of the request's write and of the flush's reads. The C's
+/// 10 ms is no protocol for the write, as for the requests above; for a flush
+/// read it is shorter than the chip's default 16 ms latency timer.
 const SHORT_TIMEOUT: Duration = Duration::from_millis(100);
 /// The probe's read timeout, `protocol.c:87`.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
@@ -58,16 +65,48 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(250);
 /// limit are looked at while the chip holds a read.
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 
-/// Reads the probe, and the flush before it, give up after. The C reads for
-/// ever (`protocol.c:85`, `76`): a chip with nothing sends status bytes every
-/// 16 ms, so its read never times out. 256 reads is about 4 s of silence.
-const MAX_READS: usize = 256;
-/// Reads with nothing in a row that end a capture, where the C waits for
-/// ever: about 4 s of status bytes from a real chip.
-const MAX_IDLE: usize = 256;
+/// How long a device may take to answer: Testo's suggested timeout for the
+/// 435/635/735 (`exto_e`). The C waits for ever (`protocol.c:85`): a chip with
+/// nothing sends status bytes each latency timer, so its read never times
+/// out. Time rather than reads alone, as that timer is not the driver's: it
+/// sends none, and a udev rule can set 1 ms.
+pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(7);
+/// The reads a device has at least, whatever the clock says.
+const MIN_READS: usize = 256;
+/// Failed reads in a row that end a capture. These come back at once
+/// whatever the latency timer, where the C resubmits for ever (`api.c:293`).
+const MAX_ERRORS: usize = 256;
+/// Reads of data the flush takes from a device that keeps sending. The C
+/// flushes for ever (`protocol.c:76`).
+const MAX_FLUSH: usize = 256;
 /// Damaged answers in a row that end a capture. The C asks again for ever
 /// after a bad CRC, and stops asking after a bad prefix or an overrun.
 const MAX_BAD: usize = 16;
+
+/// The wait for an answer: over when both `limit` and [`MIN_READS`] are spent.
+struct Patience {
+    limit: Duration,
+    start: Instant,
+    reads: usize,
+}
+
+impl Patience {
+    fn new(limit: Duration) -> Patience {
+        Patience { limit, start: Instant::now(), reads: 0 }
+    }
+
+    /// A read with no answer in it: whether the wait is over.
+    fn spent(&mut self) -> bool {
+        self.reads = self.reads.saturating_add(1);
+        self.reads >= MIN_READS && self.start.elapsed() >= self.limit
+    }
+
+    /// Something came: the wait starts over.
+    fn restart(&mut self) {
+        self.start = Instant::now();
+        self.reads = 0;
+    }
+}
 
 /// CRC-16/MCRF4XX, `crc16_mcrf4xx()` from `0xffff`.
 pub fn crc16(data: &[u8]) -> u16 {
@@ -195,14 +234,14 @@ pub fn probe_channels(t: &mut dyn Transport) -> Result<Vec<u8>> {
     log::debug!("Probing for channels.");
     set_serial_params(t)?;
     // Flush anything buffered from a previous run. Its errors do not count.
-    for _ in 0..MAX_READS {
+    for _ in 0..MAX_FLUSH {
         match t.bulk_in(EP_IN, MAX_REPLY_SIZE, SHORT_TIMEOUT) {
             Ok(raw) if raw.len() > 2 => {}
             _ => break,
         }
     }
     t.bulk_out(EP_OUT, &REQUEST, SHORT_TIMEOUT)?;
-    let packet = read_answer(t)?;
+    let packet = read_answer(t, ANSWER_TIMEOUT)?;
     let count = usize::from(packet[6]);
     if count > MAX_CHANNELS {
         log::error!("Device says it has {count} channels!");
@@ -217,10 +256,11 @@ pub fn probe_channels(t: &mut dyn Transport) -> Result<Vec<u8>> {
     Ok(units)
 }
 
-/// The probe's reading loop: a whole answer, bounded.
-fn read_answer(t: &mut dyn Transport) -> Result<Vec<u8>> {
+/// The probe's reading loop: a whole answer, for `limit` from the request.
+fn read_answer(t: &mut dyn Transport, limit: Duration) -> Result<Vec<u8>> {
     let mut packet = Vec::with_capacity(MAX_REPLY_SIZE);
-    for _ in 0..MAX_READS {
+    let mut patience = Patience::new(limit);
+    while !patience.spent() {
         let raw = t.bulk_in(EP_IN, MAX_REPLY_SIZE, PROBE_TIMEOUT)?;
         let payload = strip_status(&raw);
         if payload.is_empty() {
@@ -376,30 +416,42 @@ impl Capture<'_> {
     /// The transfers: a request, and reads until the end.
     fn run(&mut self, stop: &AtomicBool) -> Result<()> {
         self.request()?;
-        let mut idle = 0;
+        let mut patience = Patience::new(ANSWER_TIMEOUT);
+        let mut errors = 0;
         while !stop.load(Ordering::SeqCst) && !self.limit_reached() {
             match self.t.bulk_in(EP_IN, MAX_REPLY_SIZE, READ_TIMEOUT) {
                 Err(crate::core::Error::Disconnected) => return Ok(()),
-                // A timeout, or an error, "which is fine" (api.c:293).
+                // A held read, for as long as an idle chip.
+                Err(crate::core::Error::Timeout) => {
+                    if patience.spent() {
+                        log::error!("The device stopped answering.");
+                        return Ok(());
+                    }
+                }
+                // An error, "which is fine" (api.c:293), until it is not.
                 Err(e) => {
                     log::trace!("Read failed: {e}");
-                    idle += 1;
+                    errors += 1;
+                    if errors >= MAX_ERRORS {
+                        log::error!("The device stopped answering.");
+                        return Ok(());
+                    }
                 }
                 Ok(raw) => {
+                    errors = 0;
                     let payload = strip_status(&raw);
                     if payload.is_empty() {
-                        idle += 1;
+                        if patience.spent() {
+                            log::error!("The device stopped answering.");
+                            return Ok(());
+                        }
                     } else {
-                        idle = 0;
+                        patience.restart();
                         if self.receive(&payload)? {
                             return Ok(());
                         }
                     }
                 }
-            }
-            if idle >= MAX_IDLE {
-                log::error!("The device stopped answering.");
-                return Ok(());
             }
         }
         Ok(())
@@ -506,6 +558,52 @@ mod tests {
         assert_eq!((r.len(), p), (1, Some(Problem::Hotswapped)));
         let (r, p) = decode(&answer(&[7, 1], &[1.0, 2.0]), &[1]);
         assert_eq!((r.len(), p), (0, Some(Problem::Unsupported(7))));
+    }
+
+    const STATUS_ONLY: &str = "bulk_in 81 128 -> 0160\n";
+
+    fn fixture(steps: &str) -> crate::usb::record::Replay {
+        let text = format!(
+            "# oxrok usb fixture 1\n\
+             device vid=128d pid=0003 version=0600 bus=0 addr=0 strings=1,2,0\n{steps}"
+        );
+        crate::usb::record::Replay::from_text(&text).unwrap()
+    }
+
+    #[test]
+    fn testos_timeout_is_kept() {
+        assert!(ANSWER_TIMEOUT >= Duration::from_secs(7));
+        assert!(MIN_READS >= 256);
+    }
+
+    /// `units=1 delay=300` on the emulator, at the real limit: 300 reads
+    /// are 300 ms at a latency timer of 1 ms, 4.8 s at 16 ms.
+    #[test]
+    fn an_answer_after_more_reads_than_the_minimum_is_taken() {
+        let a: String = answer(&[1], &[1.0]).iter().map(|b| format!("{b:02x}")).collect();
+        let steps = format!("{}bulk_in 81 128 -> 0160{a}\n", STATUS_ONLY.repeat(300));
+        let mut t = fixture(&steps);
+        assert_eq!(read_answer(&mut t, ANSWER_TIMEOUT).unwrap()[6], 1);
+    }
+
+    #[test]
+    fn the_wait_takes_the_reads_even_when_the_time_is_spent() {
+        let mut t = fixture(&STATUS_ONLY.repeat(MIN_READS + 5));
+        assert!(matches!(read_answer(&mut t, Duration::ZERO), Err(crate::core::Error::Timeout)));
+        // `spent()` ends the loop on the read after the last it took.
+        assert_eq!(t.remaining(), 6);
+    }
+
+    #[test]
+    fn the_wait_takes_the_time_even_when_the_reads_are_spent() {
+        let mut p = Patience::new(Duration::from_secs(3600));
+        for _ in 0..2 * MIN_READS {
+            assert!(!p.spent());
+        }
+        p.limit = Duration::ZERO;
+        assert!(p.spent());
+        p.restart();
+        assert!(!p.spent(), "the reads count again");
     }
 
     #[test]

@@ -5,7 +5,8 @@
 # Stock libsigrok finds no Testo at all: b258c09f dropped the sdi->driver
 # assignment that sr_dev_open() (device.c:730) needs during the scan. Every
 # golden here comes from the oracle with that one line restored
-# (tools/oracle-patches/libsigrok-testo-sdi-driver.patch).
+# (tools/oracle-patches/libsigrok-testo-sdi-driver.patch). api.c lines here
+# are that patched file's: upstream's plus one from its line 131 on.
 #
 # Lines of the C no case reaches (gcov.txt): api.c's scan 68 (no other scan
 # option exists) and 113 (a port path always exists here); dev_open 153,
@@ -97,15 +98,21 @@ emu_cases() {
     emu_case "testo negative reading" -- -d $D --samples 1
     testo_options units=1 values=inf
     emu_case "testo infinite reading" -- -d $D --samples 1
-    # printf's nan, in oxrok's analog output too.
+    # printf's nan, in oxrok's analog and csv output too.
     testo_options units=1 values=nan
     emu_case "testo nan reading" -- -d $D --samples 1
+    testo_options units=1 values=-nan
+    emu_case "testo negative nan reading" -- -d $D --samples 1
+    emu_case "testo negative nan csv" --filter '/^; (CSV|from)/d' -- -d $D --samples 1 -O csv
 
-    # The answer in pieces, and late.
+    # The answer in pieces, and late. 300 status-only reads are 4.8 s at the
+    # default 16 ms latency timer, within Testo's 7 s.
     testo_options chunk=3
     emu_case "testo answer in pieces" --record -- -d $D --samples 3
     testo_options delay=4
     emu_case "testo answer late" -- -d $D --samples 3
+    testo_options units=1 delay=300
+    emu_case "testo answer after 300 reads" -- -d $D --samples 1
     testo_options stale=10
     emu_case "testo flush" -- -d $D --samples 1
     testo_options tail=6
@@ -138,13 +145,17 @@ emu_cases() {
     emu_case "testo scan out stalls" --expect-fail --stderr -- -d $D --samples 1
     testo_options units=7
     emu_case "testo scan unknown unit" --expect-fail --stderr -- -d $D --samples 1
-    # A full packet is followed by a status-only one in the same transfer. The
-    # C takes those bytes for data (protocol.c:95), so it has the 128 bytes of
-    # 17 units one read before the answer is whole.
+    # chunk=62 reaches protocol.c:114: 62 bytes in a full packet, and as no
+    # more is waiting a status-only packet in the same transfer, which the C
+    # takes for data (protocol.c:95): it has its 128 bytes one read early. A
+    # real chip with 128 bytes waiting sends [64][64], then 4 bytes: the next
+    # case, which fails at protocol.c:92 instead, without a word.
     BYTES="protocol.c:95 copies len - 2 bytes as data, the status bytes of every packet after a transfer's first"
     U17=1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1
     testo_options units=$U17 chunk=62
     emu_case "testo scan 17 units" --oracle-bug "$BYTES" --expect-fail --stderr --filter "$E" -- -d $D --samples 1
+    testo_options units=$U17
+    emu_case "testo scan 17 units whole" --oracle-bug "$BYTES" --expect-fail --stderr --filter "$E" -- -d $D --samples 1
     testo_options units=$U17,1
     emu_case "testo scan 18 units" --expect-fail --stderr -- -d $D --samples 1
 
@@ -158,7 +169,7 @@ emu_cases() {
     emu_case "testo bad crc log" --stderr --filter "$E; /testo: Packet has/!d;s/^.*testo: /testo: /" -- -d $D -l 5 --samples 2
     # A measurement the scan did not see: the sample counts, the value goes.
     testo_options units=1 units2=3 swap=2
-    # The C's stop runs twice (api.c:267, 329), a line of the core's.
+    # The C's stop runs twice (api.c:268, 330), a line of the core's.
     emu_case "testo hotswap" --stderr --filter "$E; /^sr: hwdriver: testo: Device instance not active/d; s/^oxrok: warn: oxrok::cli::pipeline: //" -- -d $D --samples 2
     testo_options units=1 units2=7 swap=2
     emu_case "testo unknown unit in capture" --stderr --filter "$E; /testo: Unsupported/!d;s/^.*testo: /testo: /" -- -d $D -l 5 --samples 2
@@ -175,6 +186,10 @@ emu_cases() {
         testo_release
     fi
 
+    # As on a fresh plug in, ftdi_sio bound (its modalias has 128d:0003): the C
+    # detaches it for good (api.c:156-163), so no probe of it lands in here.
+    emu_case "testo kernel driver bound" --bound ftdi_sio -- -d $D --samples 2
+
     # An unplug. The replug binds ftdi_sio again.
     emu_case "testo unplug in a read" --unplug in=1:4 -- -d $D --samples 100
     emu_case "testo unplug at a request" --unplug out=2:3 -- -d $D --samples 100
@@ -188,30 +203,43 @@ emu_cases() {
     # oxrok ends on the signal, from a held read; a stop it ignored would time out.
     emu_case "testo interrupt" --oracle-bug "sigrok-cli has no SIGINT handler: a signal kills it" --interrupt in=1:3 --timeout 5 -- -d $D --continuous
 
-    # The C never ends; oxrok does, after a bound of its own.
+    # The C never ends; oxrok does. It completes the answers it can read; those
+    # that never come it waits for: at most ANSWER_TIMEOUT (protocol.rs), 7 s,
+    # Testo's suggested timeout. Those cases take that long, and T drops their
+    # status-only reads, whose number is what the clock allows and all it hides.
     H="--oracle-hangs --timeout 2"
+    W7="--oracle-hangs --timeout 10"
+    T='/^bulk_in 81 128 -> 0160$/d'
     SILENT="protocol.c:85-91 reads for ever while the chip sends its status bytes"
     NOASK="no request is sent again, and nothing ends the wait for an answer"
-    PREFIX="api.c:254-255 returns on a bad prefix with no request and the bytes kept: $NOASK"
+    PREFIX="api.c:255-256 returns on a bad prefix with no request and the bytes kept: $NOASK"
     testo_options mute=0
-    emu_case "testo hang silent at scan" --oracle-bug "$SILENT" $H --expect-fail --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang silent at scan" --oracle-bug "$SILENT" $W7 --tx-filter "$T" --expect-fail --stderr --filter "$E" -- -d $D --samples 1
     testo_options bad-prefix=0
-    emu_case "testo hang bad prefix at scan" --oracle-bug "$SILENT" $H --expect-fail --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang bad prefix at scan" --oracle-bug "$SILENT" $W7 --tx-filter "$T" --expect-fail --stderr --filter "$E" -- -d $D --samples 1
     testo_options mute=1
-    emu_case "testo hang silent in capture" --oracle-bug "api.c:285-296: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang silent in capture" --oracle-bug "api.c:286-297: $NOASK" $W7 --tx-filter "$T" --stderr --filter "$E" -- -d $D --samples 1
     testo_options bad-prefix=1
     emu_case "testo hang bad prefix in capture" --oracle-bug "$PREFIX" $H -- -d $D --samples 1
     testo_options out-stall=1
-    emu_case "testo hang out stalls in capture" --oracle-bug "api.c:281-283 ignores the status of the OUT: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang out stalls in capture" --oracle-bug "api.c:282-284 ignores the status of the OUT: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
     testo_options in-stall=2
-    emu_case "testo hang in stalls in capture" --oracle-bug "api.c:293-296 resubmits after any error, for ever" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang in stalls in capture" --oracle-bug "api.c:294-297 resubmits after any error, for ever" $H --stderr --filter "$E" -- -d $D --samples 1
     testo_options units=1 units2=$U17,1 swap=1
-    emu_case "testo hang overrun in capture" --oracle-bug "api.c:237-242 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang overrun in capture" --oracle-bug "api.c:238-243 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
     # Two temperatures: i goes back to the first channel each time.
     testo_options units=1,1
     emu_case "testo hang same unit twice" --oracle-bug "$I, and two of a unit send the second for ever" $H -- -d $D --samples 1
-    # Past 62 payload bytes: no CRC ever matches, for ever.
+    # 65 bytes, the shortest answer that can show api.c:290-292. The model hands
+    # it over whole, so its status bytes are in one transfer, each time, and the
+    # C asks again for ever. On a real chip that holds only when no latency
+    # timer fires with 4 to 61 bytes buffered, about 2/3 of the answers at 16 ms
+    # (AN232B-04: it counts from the last send, and sends what it holds), so the
+    # next answer may pass: the next case. 8 measurements of 4 known units repeat
+    # one, and that hangs at protocol.c:281 in its turn.
     testo_options units=1,3,5,24,1,3,5,24
-    emu_case "testo hang status bytes in the answer" --oracle-bug "api.c:289-291 strips the status bytes once per transfer, and $BYTES" $H -- -d $D --samples 1
+    emu_case "testo hang status bytes in the answer" --oracle-bug "api.c:290-292 strips the status bytes once per transfer, and $BYTES" $H -- -d $D --samples 1
+    testo_options units=1,3,5,24,1,3,5,24 chunk=30
+    emu_case "testo hang 8 units in pieces" --oracle-bug "$I, and a repeated unit never ends" $H -- -d $D --samples 1
     testo_options
 }
