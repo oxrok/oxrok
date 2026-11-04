@@ -38,8 +38,10 @@
 //!   rate, buffer size 0x4000, endpoint 0x81), first pin 1 (`<B`), alternate
 //!   pin map 2 (`<?`), start 3, stop 4.
 //! - The rate and the bus width, `libgreat/firmware/platform/lpc43xx/drivers/sgpio.c`:
-//!   `sgpio_set_up_clocking()` divides the 204 MHz clock (the figure is
-//!   the C driver's, `api.c:67`) by `clock / rate` rounded down and
+//!   `sgpio_set_up_clocking()` divides the clock it reads at run time, by
+//!   default 204 MHz (`platform_clock.c`: PLL1 at line 114, the peripheral
+//!   base clock's source at lines 177-178; `api.c:67` says the same), by
+//!   `clock / rate` rounded down and
 //!   answers the rate that gives; rate 0 means undivided. A rate over the
 //!   clock has no divider and comes back as asked.
 //!   `sgpio_set_up_bus_topology()` makes 3 bits 4 and 5 to 7 bits 8, and
@@ -51,15 +53,30 @@
 //!   disables the endpoint. A host that does not keep up gets a halted
 //!   endpoint and the stream ends (`streaming_detect_overrun()`).
 //!
-//! Inferred, not seen: after a setup the firmware refused (over 8 bits, a
-//! rate over the clock), `sgpio_set_up_functions()` has returned before
-//! generating the ISR that moves the samples, so the model sends no
-//! samples and the host waits. `wide=1` stands for the firmware the C
+//! Read from the source, not seen on a board: after a setup the firmware
+//! refused (over 8 bits, a rate over the clock), no samples come.
+//! `sgpio_set_up_functions()` clears `slices_in_use` (`sgpio.c:1323`),
+//! `sgpio_set_up_function()` marks a slice only once it succeeded
+//! (`sgpio.c:650`), and `sgpio_run()` then sets `shift_clock_enable` to that
+//! 0 (`sgpio.c:1423`), so nothing shifts. The model sends nothing and the
+//! host waits.
+//!
+//! Inferred: rates below 204 MHz / 4096, about 49.8 kHz. The firmware writes
+//! `divider - 1` to the slice's counter with no mask (`sgpio.c:345`) and
+//! answers `clock / divider` (`sgpio.c:350`), but NXP's register description
+//! (`LPC43xx_43Sxx.svd` in cmsis-svd-data: SGPIO `PRESET` and `COUNT` in bits
+//! 11:0) and AN11275 give the counter 12 bits, as `api.c:67-68` says. So 10
+//! kHz is probably answered as 10 kHz and run at 50.8 kHz, 1 kHz at 61.9 kHz.
+//! UM10503 itself could not be fetched, and no board has shown this. The model
+//! keeps no time, so it only answers what the firmware does.
+//!
+//! `wide=1` stands for the firmware the C
 //! driver's comment allows for (`protocol.c:69`), which would take more than
 //! 8 channels: 16 bits a sample, two bytes, little endian;
-//! none of the sources read has it. How samples sit in a byte is the C
-//! driver's comment (`protocol.c:1246`): the first in the least
-//! significant bits; the SGPIO's shift direction was not checked against it.
+//! none of the sources read has it. The first sample of a byte sits in its
+//! least significant bits: both the C driver (`protocol.c:1246`) and the
+//! vendor's `greatfet_logic.py` (`unpack_data`, which masks the low bits and
+//! then shifts right) read it so.
 //!
 //! The samples: sample `k` (`k` counts from 0 at each start and wraps at
 //! [`PERIOD`]) has `k ^ (k >> 5) ^ (k >> 11)` on SGPIO0 to 7, and on SGPIO8
@@ -109,11 +126,13 @@
 //! What the model taught about the C driver, from sigrok-cli's runs:
 //!
 //! - `libusb_control_transfer()` returns `LIBUSB_ERROR_BUSY` from inside
-//!   a transfer callback, so the stop that `xfer_complete_cb()` reaches
-//!   through `greatfet_abort_acquisition_quick()` and
-//!   `greatfet_free_transfer()` never reaches the device, and the failure
-//!   is logged once per transfer freed (15 frees and the abort): a halted
-//!   endpoint or an error leaves the firmware's SGPIO running.
+//!   a transfer callback. After a failed transfer, the stop that
+//!   `xfer_complete_cb()` reaches through
+//!   `greatfet_abort_acquisition_quick()` and `greatfet_free_transfer()` so
+//!   never reaches the device, and the failure is logged once per transfer
+//!   freed (15 frees and the abort): a halted endpoint or an error leaves the
+//!   firmware's SGPIO running. On a limit or a stop by hand the stop runs
+//!   outside the callback and goes out, as every full capture's `.tx` shows.
 //! - `greatfet_free_transfer()` tests `!active_transfers` the wrong way
 //!   (`protocol.c:961`): the end of the capture runs at the first transfer
 //!   freed, not the last, and frees the feed queue unflushed, so an error
@@ -171,7 +190,8 @@ const VERB_STOP: u32 = 4;
 pub const BUFFER_SIZE: u32 = 0x4000;
 /// `USB_STREAMING_IN_ADDRESS`.
 pub const SAMPLES_ENDPOINT: u8 = 0x81;
-/// The SGPIO clock, the figure in `api.c`'s comment on its rates.
+/// The SGPIO clock: the firmware's default (`platform_clock.c`), read at run
+/// time there, and the figure in `api.c`'s comment on its rates.
 pub const CLOCK: u32 = 204_000_000;
 /// The firmware's version string, one the driver's comment names.
 pub const VERSION: &[u8] = b"v2021.2.1\0";
