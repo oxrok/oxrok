@@ -572,15 +572,18 @@ mod tests {
 
     #[test]
     fn testos_timeout_is_kept() {
-        assert!(ANSWER_TIMEOUT >= Duration::from_secs(7));
-        assert!(MIN_READS >= 256);
+        assert_eq!(ANSWER_TIMEOUT, Duration::from_secs(7));
+        assert_eq!(MIN_READS, 256);
     }
 
     /// `units=1 delay=300` on the emulator, at the real limit: 300 reads
     /// are 300 ms at a latency timer of 1 ms, 4.8 s at 16 ms.
     #[test]
     fn an_answer_after_more_reads_than_the_minimum_is_taken() {
-        let a: String = answer(&[1], &[1.0]).iter().map(|b| format!("{b:02x}")).collect();
+        let mut a = String::new();
+        for b in answer(&[1], &[1.0]) {
+            write!(a, "{b:02x}").unwrap();
+        }
         let steps = format!("{}bulk_in 81 128 -> 0160{a}\n", STATUS_ONLY.repeat(300));
         let mut t = fixture(&steps);
         assert_eq!(read_answer(&mut t, ANSWER_TIMEOUT).unwrap()[6], 1);
