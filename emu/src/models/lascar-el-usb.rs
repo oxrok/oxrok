@@ -58,11 +58,17 @@
 //!
 //! Pedantic checks: a vendor request other than the C's three; a command of
 //! a length or with an argument the C does not use; a command with data
-//! still queued (the C flushes first: "The F321 requires this") or with no
-//! read waiting ("Keep a read request waiting in the wings"); a command
+//! still queued (the C flushes first: "The F321 requires this"); a command
 //! before any mode setup, a log download without a new one; a config write
 //! of the wrong length or changing a field the C does not change; a read
 //! shorter than its answer; a log read other than 4096 bytes.
+//!
+//! Not checked: that a read waits when a command comes, though the C submits
+//! it first ("Keep a read request waiting in the wings", `protocol.c:112`).
+//! That comment is no fact about the device, and eltuxusb, written against
+//! real EL-USB-1 and 2 units, writes each command and reads afterwards
+//! (`el_device.py:259-268`). It sends no flush either, so that check rests on
+//! the C's word alone.
 //!
 //! C habits, documented and not flagged: the scan's bulk reads come with no
 //! claimed interface (usbfs claims it itself; the bus shows nothing) and
@@ -366,8 +372,6 @@ pub struct ElUsb {
     saving: Option<Vec<u8>>,
     /// The write's command was refused and the block is yet to come.
     discard_block: bool,
-    /// IN URBs submitted and not answered or cancelled.
-    reads_waiting: u32,
     config_reads: u32,
     answers: u32,
     outs: u32,
@@ -393,7 +397,6 @@ impl ElUsb {
             any_mode: false,
             saving: None,
             discard_block: false,
-            reads_waiting: 0,
             config_reads: 0,
             answers: 0,
             outs: 0,
@@ -420,7 +423,6 @@ impl ElUsb {
         self.any_mode = false;
         self.saving = None;
         self.discard_block = false;
-        self.reads_waiting = 0;
         self.config_reads = 0;
         self.answers = 0;
         self.outs = 0;
@@ -491,9 +493,6 @@ impl ElUsb {
         }
         if !self.queue.is_empty() || self.download.is_some() {
             v.report("command with data still queued; the C flushes first");
-        }
-        if self.reads_waiting == 0 {
-            v.report("command with no read waiting; the C submits the read first");
         }
         if !self.any_mode {
             v.report("command before the mode setup requests");
@@ -685,7 +684,6 @@ impl DeviceModel for ElUsb {
             return Reply::Stall;
         }
         if self.halted {
-            self.reads_waiting = self.reads_waiting.saturating_sub(1);
             return Reply::Stall;
         }
         let in_blocks = self.queue.is_empty() && self.download.is_some();
@@ -707,7 +705,6 @@ impl DeviceModel for ElUsb {
         }
         // An answer, data or a fault.
         self.answers += 1;
-        self.reads_waiting = self.reads_waiting.saturating_sub(1);
         if self.o.faults.halt_in == Some(self.answers) {
             self.halted = true;
             return Reply::Stall;
@@ -726,19 +723,9 @@ impl DeviceModel for ElUsb {
         Reply::Data(self.queue.pop_front().unwrap_or_default())
     }
 
-    fn in_submitted(&mut self, ep: u8, _max: usize) {
-        if ep == EP {
-            self.reads_waiting += 1;
-        }
-    }
-
     /// `hold=K` and `hold-empty=K`: what came of the block by the cancel.
     fn in_unlinked(&mut self, ep: u8, _max: usize) -> Option<Vec<u8>> {
-        if ep != EP {
-            return None;
-        }
-        self.reads_waiting = self.reads_waiting.saturating_sub(1);
-        if !self.held {
+        if ep != EP || !self.held {
             return None;
         }
         self.held = false;
@@ -790,9 +777,7 @@ mod tests {
         assert!(v.is_empty(), "{v:?}");
     }
 
-    /// A command with its read waiting, as the C does.
     fn cmd(d: &mut ElUsb, bytes: &[u8], v: &mut Violations) {
-        d.in_submitted(EP, 256);
         d.out(EP, bytes, v);
     }
 
@@ -825,7 +810,6 @@ mod tests {
             cmd(&mut d, &[0, 0xff, 0xff], &mut v);
             let [lo, hi] = u16::try_from(size).unwrap().to_le_bytes();
             assert_eq!(data(d.in_transfer(EP, 256, &mut v)), [2, lo, hi]);
-            d.in_submitted(EP, size);
             let c = data(d.in_transfer(EP, size, &mut v));
             assert_eq!(c.len(), size);
             assert_eq!(c[0].to_string(), id);
@@ -858,15 +842,13 @@ mod tests {
         assert_eq!(data(d.in_transfer(EP, 64, &mut v)), [2, 0x00, 0x80]);
         let mut all = Vec::new();
         for _ in 0..64 {
-            d.in_submitted(EP, LOG_READ);
-            let b = data(d.in_transfer(EP, LOG_READ, &mut v));
+                let b = data(d.in_transfer(EP, LOG_READ, &mut v));
             assert_eq!(b.len(), 512);
             all.extend(b);
         }
         assert_eq!(all.len(), 32768);
         assert_eq!(&all[..6], &[120, 80, 126, 82, 132, 84]);
         assert!(all[6..].iter().all(|b| *b == 0xff));
-        d.in_submitted(EP, LOG_READ);
         assert_eq!(d.in_transfer(EP, LOG_READ, &mut v), Reply::Nak, "the memory has ended");
         assert!(v.is_empty(), "{v:?}");
     }
@@ -926,18 +908,6 @@ mod tests {
         d.control(ctl(0, 0xffff), &[], &mut v);
         cmd(&mut d, &[0, 0xff, 0xff], &mut v);
         assert_eq!(v.drain().len(), 1, "out of order");
-        // A command with no read waiting.
-        let mut d = dev(&[]);
-        mode(&mut d);
-        d.out(EP, &[0, 0xff, 0xff], &mut v);
-        assert_eq!(v.drain().len(), 1, "no read waiting");
-        // A cancelled read does not wait any more.
-        let mut d = dev(&[]);
-        mode(&mut d);
-        d.in_submitted(EP, 256);
-        assert_eq!(d.in_unlinked(EP, 256), None);
-        d.out(EP, &[0, 0xff, 0xff], &mut v);
-        assert_eq!(v.drain().len(), 1, "cancelled");
         // Wrong lengths, arguments and commands.
         let mut d = dev(&[]);
         mode(&mut d);
@@ -965,14 +935,12 @@ mod tests {
         mode(&mut d);
         cmd(&mut d, &[0, 0xff, 0xff], &mut v);
         data(d.in_transfer(EP, 64, &mut v));
-        d.in_submitted(EP, 64);
         assert_eq!(data(d.in_transfer(EP, 64, &mut v)).len(), 64);
         assert_eq!(v.drain().len(), 1, "read shorter than the block");
         let mut d = dev(&[]);
         mode(&mut d);
         cmd(&mut d, &[3, 0xff, 0xff], &mut v);
         data(d.in_transfer(EP, 64, &mut v));
-        d.in_submitted(EP, 512);
         data(d.in_transfer(EP, 512, &mut v));
         assert_eq!(v.drain().len(), 1, "log read of 512");
         assert_eq!(d.out(1, &[0], &mut v), Reply::Stall);
@@ -1007,7 +975,6 @@ mod tests {
             cmd(d, &[0, 0xff, 0xff], v);
             while let Reply::Data(x) = d.in_transfer(EP, 256, v) {
                 got.push(x);
-                d.in_submitted(EP, 256);
             }
             d.in_unlinked(EP, 256);
             got
@@ -1040,7 +1007,6 @@ mod tests {
         mode(&mut d);
         cmd(&mut d, &[0, 0xff, 0xff], &mut v);
         assert_eq!(d.in_transfer(EP, 64, &mut v), Reply::Stall);
-        d.in_submitted(EP, 64);
         assert!(matches!(d.in_transfer(EP, 64, &mut v), Reply::Data(_)), "one shot");
         let mut d = dev(&[("halt-in", "1")]);
         mode(&mut d);
@@ -1085,23 +1051,17 @@ mod tests {
         assert_eq!(data(d.in_transfer(EP, 64, &mut v)), [2, 0, 4], "the header only");
         let mut d = start(&[("log-stop", "1")], &mut v);
         data(d.in_transfer(EP, 64, &mut v));
-        d.in_submitted(EP, LOG_READ);
         data(d.in_transfer(EP, LOG_READ, &mut v));
-        d.in_submitted(EP, LOG_READ);
         assert_eq!(d.in_transfer(EP, LOG_READ, &mut v), Reply::Nak, "it has stopped");
         let mut d = start(&[("hold", "1")], &mut v);
         data(d.in_transfer(EP, 64, &mut v));
-        d.in_submitted(EP, LOG_READ);
         assert_eq!(d.in_transfer(EP, LOG_READ, &mut v), Reply::Nak);
         assert_eq!(d.in_unlinked(EP, LOG_READ).map(|x| x.len()), Some(64));
-        d.in_submitted(EP, LOG_READ);
         assert_eq!(data(d.in_transfer(EP, LOG_READ, &mut v)).len(), 512, "the next block");
         let mut d = start(&[("hold-empty", "1")], &mut v);
         data(d.in_transfer(EP, 64, &mut v));
-        d.in_submitted(EP, LOG_READ);
         assert_eq!(d.in_transfer(EP, LOG_READ, &mut v), Reply::Nak);
         assert_eq!(d.in_unlinked(EP, LOG_READ), None);
-        d.in_submitted(EP, LOG_READ);
         let first = data(d.in_transfer(EP, LOG_READ, &mut v));
         assert_eq!(&first[..2], &[120, 80], "nothing lost");
         assert!(v.is_empty(), "{v:?}");
