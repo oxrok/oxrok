@@ -1,0 +1,33 @@
+gcov testo (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        86.7%  157 of 181
+  protocol.c   96.8%  149 of 154
+  total        91.3%  306 of 335
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 68, 113
+    dev_open: 153, 158-160
+    dev_close: 180
+    config_get: 198-203, 207-211
+    receive_transfer: 299-303
+    dev_acquisition_start: 370, 377-380
+  protocol.c
+    testo_request_packet: 160-162
+    testo_check_packet_prefix: 177
+    crc16_mcrf4xx: 194
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/usb.c   66.4%  152 of 229
+  total       66.4%  152 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: 69, 79-82, 87
+    usb_source_dispatch: 138-139, 148
+    usb_pollfd_added: 183
+    usb_pollfd_removed: 212-221
+    usb_source_new: 266-267, 278-279
+    sr_usb_split_conn: 334-350, 360, 369
+    sr_usb_find: 405-406, 409-410, 418-420, 424
+    sr_usb_open: 453-455, 461-463, 472-474
+    sr_usb_close: never called (489-494)
+    usb_source_add: 504
+    usb_get_port_path: 547, 553
+    usb_match_manuf_prod: never called (565-599)

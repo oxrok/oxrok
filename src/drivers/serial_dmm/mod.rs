@@ -74,14 +74,18 @@ pub struct SerialDmmDriver(pub &'static Model);
 /// Registers a driver for every supported meter, on serial and on HID
 /// cables, and the `UT32x` thermometer.
 pub fn register_all(registry: &mut crate::core::Registry) {
-    for model in models::MODELS.iter().chain(models::hid_models()) {
+    for model in models::MODELS {
         registry.register(Box::new(SerialDmmDriver(model)));
+    }
+    for model in models::hid_models() {
+        registry.register(Box::new(super::uni_t_dmm::UniTDmmDriver(model)));
     }
     registry.register(Box::new(ut32x::Ut32xDriver));
 }
 
 /// Turns the `VID.PID` form libsigrok's USB drivers take into the HID
-/// cable name, so `uni-t-ut61e:conn=1a86.e008` works as in sigrok.
+/// cable name: for `uni-t-ut32x`, and for what `uni_t_dmm` hands to its
+/// twins (a cable of another chip, or a CH9325 off Linux).
 fn hid_conn(conn: &str) -> String {
     if let Some((v, p)) = conn.split_once('.')
         && let (Ok(vid), Ok(pid)) = (u16::from_str_radix(v, 16), u16::from_str_radix(p, 16))
@@ -170,7 +174,7 @@ impl Driver for SerialDmmDriver {
 }
 
 impl Model {
-    fn long_name(&self) -> &'static str {
+    pub(crate) fn long_name(&self) -> &'static str {
         // Built once per model: the table is static, the names are few.
         static NAMES: std::sync::OnceLock<std::sync::Mutex<Vec<(&'static str, &'static str)>>> =
             std::sync::OnceLock::new();

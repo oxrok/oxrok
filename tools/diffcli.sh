@@ -754,6 +754,24 @@ flush_data()
 flush_setup()
 '
     }
+    # emu_case --bound DRV: binds DRV to the device's vendor interfaces, so that
+    # each tool starts as on a fresh plug in, not after the other's detach. Its
+    # probe is a section of its own. A kernel without DRV runs the case unbound,
+    # with a note, as the transactions then show nothing else.
+    emu_bind() {
+        [ -n "$EMU_BUSID" ] || return 0
+        if [ ! -d "/sys/bus/usb/drivers/$2" ]; then
+            echo "note: $1: no $2 in this kernel, the case runs unbound"
+            return 0
+        fi
+        for intf in /sys/bus/usb/devices/"$EMU_BUSID":*; do
+            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = ff ] || continue
+            [ ! -e "$intf/driver" ] || continue
+            intf=$(basename "$intf")
+            emu_cmd "section bind $2 to $intf before $1" >/dev/null || return 1
+            printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$2/bind" >/dev/null || return 1
+        done
+    }
     emu_tx() {
         EMU_SECTION="# section $1" awk '$0 == ENVIRON["EMU_SECTION"] { on = 1; next }
             /^# section / { on = 0 } on && !/^#/' "$EMULOG/$EMU_MODEL.log"
@@ -887,7 +905,7 @@ flush()
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
     #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
-    #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] -- ARGS...
+    #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] [--bound DRV] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
     #   with the SHA-256 of the whole output before --filter (a filter
     #   that keeps every 64th line of a frame still compares every
@@ -956,7 +974,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -980,6 +998,7 @@ flush()
                 --oxrok) libsig_full=1 ;;
                 --tx-filter) tx_filter=$2; shift ;;
                 --no-oracle-only) no_oracle_only=1 ;;
+                --bound) bound=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
             shift
@@ -1062,8 +1081,11 @@ flush()
             # (ftdi_sio's probe would land among oxrok's transactions).
             replugged=0
             case "$t: $event" in "b: unplug"*) replugged=1 ;; esac
-            if { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
+            if [ -z "$bound" ] && { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
                 emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
+            fi
+            if [ -n "$bound" ] && ! emu_bind "$name" "$bound"; then
+                emu_fail "$name: could not bind $bound"; return
             fi
             if [ "$EMU_CDC" = 1 ] && ! emu_tty_restore "$t $name"; then
                 emu_fail "$name: could not put the tty back"; return

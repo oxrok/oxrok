@@ -1,2 +1,2 @@
-0:b1 4f ed 8b 2a c8 66 04 
-21e98493588b4d91d25c32672cf2b1637d344ecd25037719bd3b3b8184c70937  -
+sr: ikalogic-scanalogic2: Sample packet 1 of channel 0 is 4 bytes: it needs 128.
+oxrok: warn: oxrok::cli::pipeline: Device only sent 992 samples.

@@ -1,0 +1,4 @@
+kecheng-kc-330b: Getting logging info.
+kecheng-kc-330b: Failed to start acquisition: LIBUSB_SUCCESS / LIBUSB_TRANSFER_COMPLETED
+kecheng-kc-330b: Configuring device.
+kecheng-kc-330b: Failed to configure device (no ack): LIBUSB_ERROR_OVERFLOW

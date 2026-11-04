@@ -1,0 +1,26 @@
+# oxrok usb fixture 1
+# emu kecheng-kc-330b: samples 2
+# arg: -d
+# arg: kecheng-kc-330b
+# arg: --samples
+# arg: 2
+device vid=1041 pid=8101 version=0100 interfaces=0:ff:01:02
+claim 0 -> ok
+bulk_out 02 02 -> 1
+bulk_in 81 32 -> 82074b432d33333042
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=1041 pid=8101 version=0100 interfaces=0:ff:01:02
+config 1 -> ok
+claim 0 -> ok
+bulk_out 02 01002878000000 -> 7
+bulk_in 81 1 -> 81
+bulk_out 02 04 -> 1
+bulk_in 81 1 -> 84
+bulk_out 02 08 -> 1
+bulk_in 81 3 -> 88012c
+bulk_out 02 08 -> 1
+bulk_in 81 3 -> 880151
+bulk_out 02 01002878000000 -> 7
+bulk_in 81 1 -> 81
+release 0 -> ok
