@@ -33,8 +33,12 @@
 //! Each id has a `serial_dmm` twin on the other route. `conn=VID.PID`
 //! and `conn=BUS.ADDRESS` come here; no `conn=` and `conn=hid...`, which
 //! libsigrok's driver does not have, go to the twin through the HID
-//! layer, as they did before this driver existed. That route also
-//! exists where a program cannot claim a HID interface (macOS, Windows).
+//! layer, as they did before this driver existed. So do ids of another
+//! chip (a CP2110 cannot take a CH9325 report, though the C sends it),
+//! and off Linux a CH9325's ids when the HID layer sees that cable, since
+//! a program cannot claim a HID interface there (nusb: busy on macOS,
+//! unsupported on Windows with `HidUsb`). A cable bound to `WinUSB`, as
+//! Zadig does, is no HID device any more and stays on raw USB.
 //!
 //! The parsers are `crate::dmm`'s, shared with `serial_dmm`, and the
 //! table is `serial_dmm::models::hid_models`.
@@ -57,7 +61,8 @@ use crate::core::{
     OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::serial::Params;
-use crate::usb::{ControlRequest, Transport, UsbDeviceInfo, libusb_error_name, split_conn};
+use crate::serial::hid::Chip;
+use crate::usb::{Conn, ControlRequest, Transport, UsbDeviceInfo, libusb_error_name, split_conn};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -92,20 +97,46 @@ enum Route {
     /// The cable through the HID layer: the `serial_dmm` twin.
     Hid,
     /// Raw USB, as libsigrok's driver.
-    Usb(crate::usb::Conn),
+    Usb(Conn),
     /// Nothing `sr_usb_find` can look for, with its message.
     Invalid(&'static str),
 }
 
-fn route(conn: Option<&str>) -> Route {
+/// `on_hid` says whether these ids are better reached through the HID
+/// layer here: [`cable_on_hid`].
+fn route(conn: Option<&str>, on_hid: impl Fn(u16, u16) -> bool) -> Route {
     match conn {
         None => Route::Hid,
         Some(c) if crate::serial::hid::is_hid_name(c) => Route::Hid,
         Some(c) => match split_conn(c) {
+            Ok(Conn::Ids(v, p)) if other_chip(v, p) || on_hid(v, p) => Route::Hid,
             Ok(c) => Route::Usb(c),
             Err(msg) => Route::Invalid(msg),
         },
     }
+}
+
+/// A known cable that is no CH9325 or HE2325U, whose report this is not.
+fn other_chip(vid: u16, pid: u16) -> bool {
+    Chip::for_usb_id(vid, pid).is_some_and(|c| !matches!(c, Chip::Ch9325))
+}
+
+/// Off Linux (a replay stands in for raw USB everywhere): the HID layer
+/// sees this known cable, so a claim of it could only fail. Decided here
+/// alone, so that a capture's calls are the same on every system.
+fn cable_on_hid(vid: u16, pid: u16) -> bool {
+    !cfg!(target_os = "linux")
+        && !crate::usb::replaying()
+        && Chip::for_usb_id(vid, pid).is_some()
+        && crate::hid::list()
+            .is_ok_and(|l| l.iter().any(|d| d.vendor_id == vid && d.product_id == pid))
+}
+
+/// The driver for a serial port, for a `conn=` that is none of this
+/// driver's: the UT372 has no such twin.
+fn serial_hint(id: &str) -> Option<String> {
+    let ser = format!("{id}-ser");
+    super::serial_dmm::models::find(&ser).map(|_| format!("For a serial port, use {ser}."))
 }
 
 impl Driver for UniTDmmDriver {
@@ -134,14 +165,23 @@ impl Driver for UniTDmmDriver {
             Key::Conn => v.as_str(),
             _ => None,
         });
-        let conn = match route(conn) {
+        let conn = match route(conn, cable_on_hid) {
             Route::Hid => return SerialDmmDriver(self.0).scan(options),
             Route::Invalid(msg) => {
                 log::error!("{msg}");
+                if let Some(hint) = serial_hint(self.0.id) {
+                    log::warn!("{hint}");
+                }
                 return Ok(Vec::new());
             }
             Route::Usb(c) => c,
         };
+        // Only the HID route has a line to set: sr_driver_scan refuses any
+        // option the driver does not list (hwdriver.c check_options).
+        if options.iter().any(|(k, _)| matches!(k, Key::Serialcomm)) {
+            log::error!("serialcomm does not apply to raw USB: conn=hid/ch9325 takes it.");
+            return Ok(Vec::new());
+        }
         let mut devices: Vec<Box<dyn Device>> = Vec::new();
         for info in crate::usb::list_devices()? {
             if conn.matches(&info) {
@@ -392,6 +432,9 @@ impl Acquisition {
         }
         if let Err(e) = link.transport.claim_interface(INTERFACE) {
             log::error!("Failed to claim interface {INTERFACE}: {}.", libusb_error_name(&e));
+            if !cfg!(target_os = "linux") {
+                log::error!("The system may hold on to a HID cable: try conn=hid/ch9325.");
+            }
             return Err(e);
         }
         link.claimed = true;
@@ -486,17 +529,126 @@ impl Acquisition {
 mod tests {
     use super::super::serial_dmm::models;
     use super::*;
-    use crate::usb::Conn;
+    use crate::usb::InterfaceDesc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc::sync_channel;
 
     #[test]
     fn conn_picks_the_route() {
+        let route = |c| route(c, |_, _| false);
         assert_eq!(route(None), Route::Hid);
         assert_eq!(route(Some("hid/ch9325")), Route::Hid);
         assert_eq!(route(Some("hid")), Route::Hid);
         assert_eq!(route(Some("1a86.e008")), Route::Usb(Conn::Ids(0x1a86, 0xe008)));
+        assert_eq!(route(Some("04fa.2490")), Route::Usb(Conn::Ids(0x04fa, 0x2490)));
+        assert_eq!(route(Some("1234.5678")), Route::Usb(Conn::Ids(0x1234, 0x5678)));
         assert_eq!(route(Some("3.7")), Route::Usb(Conn::BusAddress(3, 7)));
         assert!(matches!(route(Some("notusb")), Route::Invalid(_)));
         assert!(matches!(route(Some("/dev/ttyUSB0")), Route::Invalid(_)));
+        // The other chips' ids go to the twin, which knows their reports.
+        assert_eq!(route(Some("10c4.ea80")), Route::Hid);
+        assert_eq!(route(Some("0820.0001")), Route::Hid);
+        assert_eq!(route(Some("1244.d237")), Route::Hid);
+    }
+
+    #[test]
+    fn off_linux_a_cable_the_hid_layer_sees_goes_there() {
+        let seen = |v, p| (v, p) == (0x1a86, 0xe008);
+        assert_eq!(route(Some("1a86.e008"), seen), Route::Hid);
+        // A cable on WinUSB is no HID device, and an address names no ids.
+        assert_eq!(route(Some("1a86.e008"), |_, _| false), Route::Usb(Conn::Ids(0x1a86, 0xe008)));
+        assert_eq!(route(Some("3.7"), |_, _| true), Route::Usb(Conn::BusAddress(3, 7)));
+        // On Linux and in a replay raw USB stays, as sigrok-cli's command.
+        if cfg!(target_os = "linux") {
+            assert!(!cable_on_hid(0x1a86, 0xe008));
+        }
+    }
+
+    #[test]
+    fn a_conn_that_is_none_points_to_the_serial_twin() {
+        assert_eq!(serial_hint("uni-t-ut61e").unwrap(), "For a serial port, use uni-t-ut61e-ser.");
+        assert_eq!(serial_hint("uni-t-ut372"), None);
+    }
+
+    /// A chip that answers every poll for ever, as a real one does.
+    struct AlwaysAnswers {
+        info: UsbDeviceInfo,
+        polls: Arc<AtomicUsize>,
+    }
+
+    impl Transport for AlwaysAnswers {
+        fn info(&self) -> &UsbDeviceInfo {
+            &self.info
+        }
+        fn set_configuration(&mut self, _: u8) -> Result<()> {
+            Ok(())
+        }
+        fn claim_interface(&mut self, _: u8) -> Result<()> {
+            Ok(())
+        }
+        fn release_interface(&mut self, _: u8) -> Result<()> {
+            Ok(())
+        }
+        fn reset(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn max_packet_size(&mut self, _: u8) -> Result<usize> {
+            Ok(CHUNK_SIZE)
+        }
+        fn interfaces(&mut self) -> Result<Vec<InterfaceDesc>> {
+            Ok(Vec::new())
+        }
+        fn control_out(&mut self, _: ControlRequest, _: &[u8], _: Duration) -> Result<()> {
+            Ok(())
+        }
+        fn control_in(&mut self, _: ControlRequest, _: usize, _: Duration) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn bulk_out(&mut self, _: u8, d: &[u8], _: Duration) -> Result<usize> {
+            Ok(d.len())
+        }
+        fn bulk_in(&mut self, _: u8, _: usize, _: Duration) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn interrupt_out(&mut self, _: u8, d: &[u8], _: Duration) -> Result<usize> {
+            Ok(d.len())
+        }
+        fn interrupt_in(&mut self, _: u8, _: usize, _: Duration) -> Result<Vec<u8>> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![0xf0, 0, 0, 0, 0, 0, 0, 0])
+        }
+        fn bulk_in_stream(
+            &mut self,
+            _: u8,
+            _: usize,
+            _: usize,
+        ) -> Result<Box<dyn crate::usb::BulkStream>> {
+            Err(Error::not_supported("bulk stream"))
+        }
+    }
+
+    /// The stop of a real Ctrl-C: the chip goes on answering, so no read
+    /// fails, and only the check at the top of the poll loop ends it.
+    #[test]
+    fn a_stop_ends_a_capture_on_a_chip_that_keeps_answering() {
+        let polls = Arc::new(AtomicUsize::new(0));
+        let transport = AlwaysAnswers { info: UsbDeviceInfo::default(), polls: Arc::clone(&polls) };
+        let model = models::find("uni-t-ut61e").unwrap();
+        let mut device = UniTDmmDevice::from_transport(model, Box::new(transport));
+        device.open().unwrap();
+        let (tx, _rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let start = Instant::now();
+        while polls.load(Ordering::SeqCst) < 3 {
+            assert!(start.elapsed() < Duration::from_secs(10), "no polls");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (done, stopped) = sync_channel(1);
+        std::thread::spawn(move || {
+            device.stop().unwrap();
+            done.send(()).unwrap();
+        });
+        assert!(stopped.recv_timeout(Duration::from_secs(10)).is_ok(), "the capture ran on");
     }
 
     #[test]

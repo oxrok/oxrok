@@ -23,6 +23,24 @@ unit_options() {
     emu_cmd "$*" >/dev/null || emu_fail "uni-t-dmm: the emulator refused '$*'"
 }
 
+# Takes usbhid off interface 0, as a capture before it would have, for a
+# case that must not depend on the order of the cases: USBDEVFS_IOCTL with
+# USBDEVFS_DISCONNECT, which sends nothing to the device.
+unit_disconnect() {
+    [ "$EMU_DRY" = 0 ] || return 0 # diffcli counting cases: no device
+    python3 -I -c '
+import array, fcntl, os, struct, sys
+d = "/sys/bus/usb/devices/" + sys.argv[1]
+bus, dev = (int(open(d + f).read()) for f in ("/busnum", "/devnum"))
+fd = os.open("/dev/bus/usb/%03d/%03d" % (bus, dev), os.O_RDWR)
+buf = array.array("B", struct.pack("iiQ", 0, 0x5516, 0))
+try:
+    fcntl.ioctl(fd, 0xc0105512, buf)
+except OSError:
+    pass  # no driver bound
+' "$EMU_BUSID" || emu_fail "uni-t-dmm: could not disconnect usbhid"
+}
+
 # Claims interface 0 through usbfs as another program would, until
 # unit_release. (As hantek_hold in tools/emu/hantek-6xxx.sh.)
 unit_hold() {
@@ -100,7 +118,15 @@ s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
     emu_case "scan by address" --keep-header -- -d $U --scan
     emu_case "scan by ids" --keep-header -- -d $I --scan
     emu_case "scan other ids" --keep-header --no-output -- -d uni-t-ut61e:conn=1a86.e009 --scan
-    emu_case "scan bad conn" --stderr --filter "$N" -- -d uni-t-ut61e:conn=notusb --scan
+    emu_case "scan bad conn" --stderr --filter "$N
+/For a serial port, use/d" -- -d uni-t-ut61e:conn=notusb --scan
+    # The hint oxrok adds there, which the case above filters.
+    emu_case "scan bad conn hint" --oracle-differs "oxrok names the driver for a serial port, sigrok-cli does not" --stderr --filter "$N" -- -d uni-t-ut61e:conn=notusb --scan
+    # An option the C does not list: hwdriver.c check_options refuses it,
+    # whatever the driver. Each tool's own line goes; the result stays.
+    emu_case "serialcomm on raw usb" --expect-fail --stderr --filter "$N
+/Invalid option .serialcomm./d
+/serialcomm does not apply/d" -- -d uni-t-ut61e:conn=1a86.e008:serialcomm=2400/8n1 --samples 1
     emu_case "show" --keep-header --filter 's/^(    conn: )[0-9]+\.[0-9]+/\1BUS.ADDR/' -- -d $I --show
     # oxrok's message says why after "invalid argument"; cut there.
     emu_case "get limit_samples" --expect-fail --stderr --filter 's/(invalid argument).*/\1/' -- -d $I --get limit_samples
@@ -113,9 +139,10 @@ s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
     emu_case "es519xx14 csv" -- -d $I --samples 2 -O csv:header=false
     emu_case "es519xx14 by address" -- -d $U --samples 2
     # No conn=: nothing in the C (api.c:73). oxrok looks for the cable
-    # through the HID layer, which the captures above have just taken
-    # away from it, so it finds nothing either. A cable with usbhid on it
-    # is tools/emu/ch9325.sh's.
+    # through the HID layer, which a raw capture takes away from it, so
+    # it finds nothing either. A cable with usbhid on it is
+    # tools/emu/ch9325.sh's.
+    unit_disconnect
     emu_case "scan no conn" --keep-header --no-output -- -d uni-t-ut61e --scan
     es11
     emu_case "es519xx11 samples 2" -- -d uni-t-ut60g:conn=1a86.e008 --samples 2

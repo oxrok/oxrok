@@ -81,7 +81,8 @@ pub fn register_all(registry: &mut crate::core::Registry) {
 }
 
 /// Turns the `VID.PID` form libsigrok's USB drivers take into the HID
-/// cable name, so `uni-t-ut61e:conn=1a86.e008` works as in sigrok.
+/// cable name: for `uni-t-ut32x`, and for what `uni_t_dmm` hands to its
+/// twins (a cable of another chip, or a CH9325 off Linux).
 fn hid_conn(conn: &str) -> String {
     if let Some((v, p)) = conn.split_once('.')
         && let (Ok(vid), Ok(pid)) = (u16::from_str_radix(v, 16), u16::from_str_radix(p, 16))
