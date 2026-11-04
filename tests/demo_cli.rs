@@ -383,3 +383,58 @@ fn a_pipe_closing_mid_capture_ends_the_run() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// The core's refusals for every driver, hwdriver.c:746-765. What sigrok-cli
+/// says is compared in tools/diffcli.sh.
+#[test]
+fn the_core_refuses_limits_of_zero() {
+    for (args, reason, last) in [
+        (
+            &["-d", "demo", "--samples", "0"][..],
+            "Cannot set 'limit_samples' to 0.",
+            "Failed to configure sample limit.",
+        ),
+        (
+            &["-d", "demo", "--samples", "18446744073709551615"][..],
+            "Cannot set 'limit_samples' to 0.",
+            "Failed to configure sample limit.",
+        ),
+        (
+            &["-d", "demo", "-c", "limit_samples=0", "--samples", "5"][..],
+            "Cannot set 'limit_samples' to 0.",
+            "Failed to set device option 'limit_samples': invalid argument",
+        ),
+        (
+            &["-d", "demo", "-c", "samplerate=0", "--set"][..],
+            "Cannot set 'samplerate' to 0.",
+            "Failed to set device option 'samplerate': invalid argument",
+        ),
+        (
+            &["-d", "demo", "-c", "limit_time=0", "--set"][..],
+            "Cannot set 'limit_time' to 0.",
+            "Failed to set device option 'limit_time': invalid argument",
+        ),
+        (
+            &["-d", "demo", "-c", "captureratio=101", "--set"][..],
+            "Capture ratio must be 0..100.",
+            "Failed to set device option 'captureratio': invalid argument",
+        ),
+    ] {
+        let (_, err, ok) = oxrok(args);
+        assert!(!ok, "{args:?}");
+        assert!(err.contains(&format!("oxrok::core::hwdriver: {reason}\n")), "{args:?}: {err}");
+        assert!(err.contains(last), "{args:?}: {err}");
+    }
+}
+
+#[test]
+fn the_null_output_discards_logic() {
+    let (out, err, ok) = oxrok(&["-d", DEMO4, "--samples", "10", "-O", "null"]);
+    assert!(ok, "{err}");
+    assert_eq!(out, "");
+    // Analog data takes the fallback, as in sigrok-cli.
+    let (out, _, ok) =
+        oxrok(&["-d", "demo:logic_channels=2:analog_channels=1", "--samples", "2", "-O", "null"]);
+    assert!(ok);
+    assert_eq!(out, "A0: -10.0000 V DC\nA0: -10.0000 V DC\n");
+}

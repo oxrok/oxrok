@@ -557,7 +557,6 @@ impl Device for SigmaDevice {
                 // sr_config_set() refuses it before the driver sees it
                 // (hwdriver.c, check_key()).
                 if r > 100 {
-                    log::error!("Capture ratio must be 0..100.");
                     return Err(Error::arg("capture ratio must be 0..100"));
                 }
                 s.capture_ratio = r;

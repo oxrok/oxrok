@@ -9,12 +9,13 @@ use std::collections::HashMap;
 
 mod analog;
 /// SI prefix selection for analog values, as libsigrok's `sr_analog_si_prefix`.
-pub use analog::si_prefix;
+pub use analog::{fallback as analog_fallback, si_prefix};
 mod ascii;
 mod binary;
 mod bits;
 mod csv;
 mod hex;
+mod null;
 mod srzip;
 mod vcd;
 
@@ -112,13 +113,14 @@ impl OutputModule {
     }
 }
 
-static MODULES: [&OutputModule; 8] = [
+static MODULES: [&OutputModule; 9] = [
     &analog::MODULE,
     &ascii::MODULE,
     &binary::MODULE,
     &bits::MODULE,
     &csv::MODULE,
     &hex::MODULE,
+    &null::MODULE,
     &srzip::MODULE,
     &vcd::MODULE,
 ];
@@ -156,6 +158,18 @@ fn meta_samplerate(packet: &Packet) -> Option<u64> {
             items.iter().find(|(k, _)| *k == Key::Samplerate).and_then(|(_, v)| v.as_u64())
         }
         _ => None,
+    }
+}
+
+/// Parses a boolean option with a default. Without a value (`-O csv:header`)
+/// it is the default, as in sigrok-cli; anything not clearly on or off is
+/// refused, as in sigrok-cli (parsers.c:469-475), which takes `true`, `yes`,
+/// `false` and `no` alone.
+fn option_bool(options: &Options, id: &str, default: bool) -> Result<bool> {
+    match options.get(id).map(String::as_str) {
+        None | Some("") => Ok(default),
+        Some(v) => crate::core::util::parse_bool(v)
+            .ok_or_else(|| Error::Arg(format!("Unable to convert '{v}' to boolean!"))),
     }
 }
 

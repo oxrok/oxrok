@@ -70,13 +70,7 @@ impl Pipeline {
             filename: args.output_file.as_ref().map(|p| p.display().to_string()),
         };
         let main = module.instantiate(&ctx, &options)?;
-        let analog = if module.analog {
-            None
-        } else {
-            let mut opts = Options::new();
-            opts.insert("meta".to_owned(), "false".to_owned());
-            output::find("analog").map(|m| m.instantiate(&ctx, &opts)).transpose()?
-        };
+        let analog = if module.analog { None } else { Some(output::analog_fallback(&ctx)) };
         let sink: Option<Box<dyn Write>> = if main.writes_file() {
             None
         } else {

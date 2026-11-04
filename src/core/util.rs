@@ -102,7 +102,16 @@ pub fn parse_sizestring(text: &str) -> Result<u64> {
         }
         value = value.checked_add((frac * multiplier as f64).round() as u64).ok_or_else(bad)?;
     }
-    Ok(value)
+    Ok(through_double(value))
+}
+
+/// C's `*size += frac_part` (strutil.c:1248-1250) takes the size through a
+/// double even with no fraction: what has more than 53 bits rounds, and what
+/// rounds to 2^64 is 0 on x86-64, where the cast is out of range. So
+/// sigrok-cli reads `--samples 18446744073709551615` as 0 and refuses it.
+fn through_double(value: u64) -> u64 {
+    let rounded = value as f64;
+    if rounded >= 18_446_744_073_709_551_616.0 { 0 } else { rounded as u64 }
 }
 
 /// Parses a duration as milliseconds: `100`, `100ms`, `2s`. Returns
@@ -118,14 +127,20 @@ pub fn parse_timestring(text: &str) -> Option<u64> {
     }
 }
 
-/// Parses `true`, `yes`, `on` and `1` as true (case insensitive); anything
-/// else is false.
-pub fn parse_boolstring(text: &str) -> bool {
-    let t = text.trim();
-    t.eq_ignore_ascii_case("true")
-        || t.eq_ignore_ascii_case("yes")
-        || t.eq_ignore_ascii_case("on")
-        || t == "1"
+/// Parses a boolean that must be clearly on or off: `true`, `yes`, `on`,
+/// `1` or `false`, `no`, `off`, `0`, in any case. `sr_parse_boolstring()`
+/// takes an empty string as true, matches prefixes (`1x`, `onward`) and
+/// takes all else as false; a device must not be told `off` for a typo.
+pub fn parse_bool(text: &str) -> Option<bool> {
+    const ON: [&str; 4] = ["true", "yes", "on", "1"];
+    const OFF: [&str; 4] = ["false", "no", "off", "0"];
+    if ON.iter().any(|w| text.eq_ignore_ascii_case(w)) {
+        Some(true)
+    } else if OFF.iter().any(|w| text.eq_ignore_ascii_case(w)) {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Parses a period like `10ms`, `2.5 us`, `1 s` into a rational number of
@@ -280,15 +295,35 @@ mod tests {
         assert!(parse_sizestring("1.5").is_err());
     }
 
+    /// As sigrok-cli reads them: `-c limit_samples=N --get limit_samples`.
     #[test]
-    fn parses_times_and_bools() {
+    fn sizes_go_through_a_double_as_in_c() {
+        assert_eq!(parse_sizestring("9007199254740992").unwrap(), 9_007_199_254_740_992);
+        assert_eq!(parse_sizestring("9007199254740993").unwrap(), 9_007_199_254_740_992);
+        assert_eq!(parse_sizestring("18446744073709549568").unwrap(), 18_446_744_073_709_549_568);
+        assert_eq!(parse_sizestring("18446744073709551615").unwrap(), 0);
+        assert_eq!(parse_sizestring("18446744073709551000").unwrap(), 0);
+    }
+
+    #[test]
+    fn parses_times() {
         assert_eq!(parse_timestring("100"), Some(100));
         assert_eq!(parse_timestring("100ms"), Some(100));
         assert_eq!(parse_timestring("2 s"), Some(2000));
         assert_eq!(parse_timestring("2h"), None);
-        assert!(parse_boolstring("yes"));
-        assert!(parse_boolstring("On"));
-        assert!(!parse_boolstring("no"));
+    }
+
+    #[test]
+    fn parses_only_clear_booleans() {
+        for on in ["true", "yes", "on", "1", "TRUE", "Yes", "oN"] {
+            assert_eq!(parse_bool(on), Some(true), "{on}");
+        }
+        for off in ["false", "no", "off", "0", "FALSE", "No", "oFf"] {
+            assert_eq!(parse_bool(off), Some(false), "{off}");
+        }
+        for neither in ["", " ", " on", "on ", "1x", "enable", "onward", "2", "00", "yes!", "t"] {
+            assert_eq!(parse_bool(neither), None, "{neither:?}");
+        }
     }
 
     #[test]

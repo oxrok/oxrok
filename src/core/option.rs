@@ -139,6 +139,62 @@ pub fn resolve_key(
         .ok_or_else(|| crate::core::error::Error::Arg(format!("Unknown device option '{name}'.")))
 }
 
+/// What hwdriver.c's `check_key()` asks of a set, for every driver. The
+/// messages go out as libsigrok has them; the log target names that file
+/// (tools/diffcli.sh prints it as libsigrok's `sr: hwdriver: `).
+fn check_set(
+    device: &dyn crate::core::device::Device,
+    key: &Key,
+    value: &crate::core::value::Value,
+    group: Option<&str>,
+) -> crate::core::error::Result<()> {
+    use crate::core::error::Error;
+    const LOG: &str = "oxrok::core::hwdriver";
+    match key {
+        // Setting any of these to 0 is not useful.
+        Key::LimitMsec | Key::LimitSamples | Key::Samplerate if value.as_u64() == Some(0) => {
+            log::error!(target: LOG, "Cannot set '{}' to 0.", key.id());
+            return Err(Error::arg("it cannot be 0"));
+        }
+        Key::CaptureRatio if value.as_u64().is_some_and(|r| r > 100) => {
+            log::error!(target: LOG, "Capture ratio must be 0..100.");
+            return Err(Error::arg("it must be 0..100"));
+        }
+        _ => {}
+    }
+    let suffix = if group.is_some() {
+        " for this device instance and channel group"
+    } else {
+        " for this device instance"
+    };
+    let Ok(options) = device.options(group) else {
+        log::error!(target: LOG, "No options available{suffix}.");
+        return Err(Error::Arg(format!("no options available{suffix}")));
+    };
+    let Some(option) = options.iter().find(|o| &o.key == key) else {
+        log::error!(target: LOG, "Option '{}' not available{suffix}.", key.id());
+        return Err(Error::Arg(format!("not available{suffix}")));
+    };
+    if !option.access.set {
+        log::error!(target: LOG, "Option '{}' not available to set{suffix}.", key.id());
+        return Err(Error::Arg(format!("not available to set{suffix}")));
+    }
+    Ok(())
+}
+
+/// `sr_config_set()`: sets an option on a device, after the checks the core
+/// makes for every driver. A front end sets options through this;
+/// [`Device::set`](crate::core::device::Device::set) is the driver's part.
+pub fn config_set(
+    device: &mut dyn crate::core::device::Device,
+    key: &Key,
+    value: &crate::core::value::Value,
+    group: Option<&str>,
+) -> crate::core::error::Result<()> {
+    check_set(&*device, key, value, group)?;
+    device.set(key, value, group)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

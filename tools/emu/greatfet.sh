@@ -59,10 +59,8 @@ emu_cases() {
     Q="s/^'[0-9]+\\.[0-9]+'\$/'BUS.ADDR'/"
     # Stderr: oxrok's log prefix as sigrok's. A refused start: libsigrok's
     # session line, which has no counterpart, goes, and the last line is
-    # sigrok-cli's for each. The core's refusal of rate 0 is the driver's
-    # here, as oxrok has no such check in its core.
+    # sigrok-cli's for each.
     R='s/^oxrok: [a-z]+: oxrok::drivers::greatfet[a-z0-9_:]*: /sr: greatfet: /
-s/^sr: hwdriver: Cannot set/sr: greatfet: Cannot set/
 /^sr: session: Could not start/d
 s/^(device error: the capture did not start|device disconnected)$/Failed to start session./'
     # The C logs a failed stop once per transfer freed; once here.
@@ -180,7 +178,7 @@ s/: not supported: not applicable/: not applicable/" -- -d $F -g Logic --get sam
     emu_case "rate 10k warns" --oracle-differs "$W_SLOW" --stderr --filter "$R" -- -d $F -c samplerate=10k --samples 64 -O bits
     # libsigrok's sr_config_set() refuses 0 before the driver.
     emu_case "rate 0 refused" --expect-fail --stderr --filter "$R
-s/invalid argument: invalid argument/invalid argument/" -- -d $F -c samplerate=0 --samples 64 -O bits
+s/(invalid argument).*\$/\\1./" -- -d $F -c samplerate=0 --samples 64 -O bits
     # In the C the u64 setting goes out as 32 bits: 2^32 + 1 is 1 Hz, 2^32 is
     # 0, which the firmware takes for undivided. oxrok refuses them.
     emu_case "rate over 32 bits" --oracle-differs "$W_WIDE" --expect-fail --stderr --filter "$R" -- -d $F -c samplerate=4294967297 --samples 64 -O bits
