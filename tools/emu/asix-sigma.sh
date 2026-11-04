@@ -58,12 +58,6 @@ s/^(Failed to open device).*$/\1./'
 \$s/.*/start refused/"
     # The bugs of the C driver that oxrok does not copy, whose cases are
     # --oracle-differs: sigrok-cli's output is kept as SLUG.oracle.
-    # sigma_read_pos() decrements the stop position to point at the last
-    # event (protocol.c:376-377), which download_capture() then takes as
-    # the count of events in the last row (protocol.c:2065): the last
-    # event is never decoded. Seen where nothing cuts the output: a time
-    # limit, or a trigger (which lifts the sample limit).
-    LAST="protocol.c:2065 takes the decremented stop position (protocol.c:376) as the last row's event count: the last event is never decoded"
     # A wrapped memory: alloc_sample_buffer() stops at the start of the
     # row before the one being written (protocol.c:1418-1421), so
     # protocol.c:2065 decodes nothing of it.
@@ -73,11 +67,6 @@ s/^(Failed to open device).*$/\1./'
     # an event moved past it (protocol.c:1913, 1775): a trigger in the
     # first 28 events gets no marker.
     START="protocol.c:1387 arms the trigger check at the start position, which protocol.c:1775 compares only after an event's increment (protocol.c:1913)"
-    # dev_acquisition_start() writes the external clock pin as its index
-    # plus 1 (api.c:578) into the 4 bit pin field (protocol.h:137):
-    # channel 16 sets CLKSEL_RISING and selects pin field 0. oxrok refuses
-    # channel 16 as the clock.
-    CLK="api.c:578 writes channel 16 as 16 into the 4 bit clock pin field (protocol.h:137), which sets CLKSEL_RISING"
     # By the address of the session's first attach, before any case
     # changes the descriptors.
     emu_case "by address" -- -d $D:conn=$EMU_USB -c samplerate=50m --samples 20 -O bits
@@ -113,7 +102,7 @@ s/^(Failed to open device).*$/\1./'
     emu_case "100 MHz" -- -d $D -c samplerate=100m --samples 100 -O hex
     emu_case "200 MHz" -- -d $D -c samplerate=200m --samples 100 -O hex
     emu_case "channels" -- -d $D -c samplerate=50m -C 1,4,16 --samples 64 -O bits
-    emu_case "time" --oracle-differs "$LAST" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 2 -O hex
+    emu_case "time" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 2 -O hex
     emu_case "150000 samples" --digest --filter "$LONG" -- -d $D -c samplerate=50m --samples 150000 -O hex
     # A time limit long enough for the memory to fill (14.7 million
     # events, 30 polls at 50 MHz) well before it: without a trigger the
@@ -123,10 +112,13 @@ s/^(Failed to open device).*$/\1./'
     # last row, so that row's event count (stop & ROW_MASK) is 0.
     # memory but the row being written.
     emu_case "memory wraps" --oracle-differs "$WRAP" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 10000 -C 1 -O hex
-    # External clock: the driver takes it as 50 MHz.
+    # External clock: the driver takes it as 50 MHz. Channel 16 as the
+    # clock writes 16 (api.c:578) into the 4 bit pin field (protocol.h:137),
+    # which sets CLKSEL_RISING: oxrok writes the same, and warns on stderr.
     emu_case "external clock" -- -d $D -c external_clock=1 --samples 50 -O hex
     emu_case "external clock falling" -- -d $D -c external_clock=1:external_clock_source=3:clock_edge=falling --samples 50 -O hex
-    emu_case "external clock either" --oracle-differs "$CLK" --stderr --expect-fail --filter "$E" -- -d $D -c external_clock=1:external_clock_source=16:clock_edge=either --samples 50 -O hex
+    emu_case "external clock 16 rising" -- -d $D -c external_clock=1:external_clock_source=16 --samples 50 -O hex
+    emu_case "external clock either" -- -d $D -c external_clock=1:external_clock_source=16:clock_edge=either --samples 50 -O hex
     emu_case "rate too high" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=60m --samples 10
 
     # With a trigger the driver submits every sample it downloads,
@@ -140,13 +132,13 @@ s/^(Failed to open device).*$/\1./'
     # A trigger in the 50 MHz netlist that ends on the time limit: the
     # poll that sees the trigger starts the limit, the next ends the
     # capture with a forced stop (2 polls, about 2200 rows).
-    emu_case "trigger level" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 40 -t 5=1 -O bits
+    emu_case "trigger level" --digest --filter "$T" -- -d $D -c samplerate=50m --samples 40 -t 5=1 -O bits
     # The others with captureratio=100: no limit, the device stops 1/256
     # of the memory (128 rows) after the trigger.
     R=captureratio=100
-    emu_case "trigger rising" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 40 -t 5=r -O bits
-    emu_case "trigger falling" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=25m:$R --samples 40 -t 5=f -O bits
-    emu_case "trigger level and edge" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 60 -t 1=0,4=0,5=r -O bits
+    emu_case "trigger rising" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 40 -t 5=r -O bits
+    emu_case "trigger falling" --digest --filter "$T" -- -d $D -c samplerate=25m:$R --samples 40 -t 5=f -O bits
+    emu_case "trigger level and edge" --digest --filter "$T" -- -d $D -c samplerate=50m:$R --samples 60 -t 1=0,4=0,5=r -O bits
     # A trigger within 28 events of the start gets no marker: the
     # software check is armed at the start position, which the decode
     # compares only after moving past it.
@@ -155,27 +147,27 @@ s/^(Failed to open device).*$/\1./'
     # previous row: the rewind crosses a row boundary. The marker comes
     # after the eighth block (samples 448 to 511): keep the first block
     # and the T: line.
-    emu_case "trigger in row 1" --oracle-differs "$LAST" --digest --filter '18,$ {/^T:/!d}' -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 6=1,7=1,8=1 -O bits
+    emu_case "trigger in row 1" --digest --filter '18,$ {/^T:/!d}' -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 6=1,7=1,8=1 -O bits
     # sigrok-cli refuses a trigger on a disabled channel itself.
     emu_case "trigger on a disabled channel" --stderr --expect-fail --filter "$A" -- -d $D -c samplerate=50m:captureratio=100 -C 1,2 --samples 40 -t 5=r -O bits
     emu_case "trigger two edges" --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=50m --samples 40 -t 1=r,2=f
     # No limit with captureratio=100: the device stops on its own.
-    emu_case "trigger ratio 100" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 5=1 -O bits
-    emu_case "trigger 10 MHz" --oracle-differs "$LAST" --digest --filter "$T3" -- -d $D -c samplerate=10m:captureratio=100 --samples 40 -t 6=f -O bits
-    emu_case "trigger 1 MHz" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=1m:captureratio=100 --samples 40 -t 5=r -O bits
-    emu_case "trigger 200 kHz" --oracle-differs "$LAST" --digest --filter "$T" -- -d $D -c samplerate=200k:captureratio=100 --samples 40 -t 5=r -O bits
+    emu_case "trigger ratio 100" --digest --filter "$T" -- -d $D -c samplerate=50m:captureratio=100 --samples 40 -t 5=1 -O bits
+    emu_case "trigger 10 MHz" --digest --filter "$T3" -- -d $D -c samplerate=10m:captureratio=100 --samples 40 -t 6=f -O bits
+    emu_case "trigger 1 MHz" --digest --filter "$T" -- -d $D -c samplerate=1m:captureratio=100 --samples 40 -t 5=r -O bits
+    emu_case "trigger 200 kHz" --digest --filter "$T" -- -d $D -c samplerate=200k:captureratio=100 --samples 40 -t 5=r -O bits
     # The 100/200 MHz netlists: one channel's edge.
     # Channel 6 rises at sample 64, falls at 128.
-    emu_case "100 MHz rising" --oracle-differs "$LAST" --digest --filter "$T2" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=r -O bits
-    emu_case "100 MHz falling" --oracle-differs "$LAST" --digest --filter "$T3" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=f -O bits
+    emu_case "100 MHz rising" --digest --filter "$T2" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=r -O bits
+    emu_case "100 MHz falling" --digest --filter "$T3" -- -d $D -c samplerate=100m:$R --samples 40 -t 6=f -O bits
     emu_case "100 MHz level" --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=100m --samples 40 -t 3=1
     emu_case "100 MHz two pins" --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=100m --samples 40 -t 3=r,4=r
     # Four channels at 200 MHz: a slower count puts the edge past the
     # first 28 events.
     asix_sigma_options step=20
-    emu_case "200 MHz rising" --oracle-differs "$LAST" --digest --filter "$T3" -- -d $D -c samplerate=200m:captureratio=100 --samples 40 -t 4=r -O bits
+    emu_case "200 MHz rising" --digest --filter "$T3" -- -d $D -c samplerate=200m:captureratio=100 --samples 40 -t 4=r -O bits
     # On the time limit, as "trigger level".
-    emu_case "200 MHz falling" --oracle-differs "$LAST" --digest --filter "$T3" -- -d $D -c samplerate=200m --samples 40 -t 4=f -O bits
+    emu_case "200 MHz falling" --digest --filter "$T3" -- -d $D -c samplerate=200m --samples 40 -t 4=f -O bits
 
     # Run length compression: a count that changes every 100000
     # samples, clusters only at the changes and the timestamp wraps.
@@ -185,7 +177,7 @@ s/^(Failed to open device).*$/\1./'
     emu_case "sparse" --digest --filter "$LONG" -- -d $D -c samplerate=50m --samples 150000 -O hex
     emu_case "sparse 50 MHz" --record -- -d $D -c samplerate=50m --samples 1000 -O hex
     emu_case "sparse 200 MHz" --record -- -d $D -c samplerate=200m --samples 100 -O hex
-    emu_case "sparse trigger" --oracle-differs "$LAST" --digest --filter "$LONG" -- -d $D -c samplerate=50m --samples 150000 -t 2=r -O hex
+    emu_case "sparse trigger" --digest --filter "$LONG" -- -d $D -c samplerate=50m --samples 150000 -t 2=r -O hex
 
     # The variants.
     asix_sigma_options variant=sigma2
@@ -217,6 +209,17 @@ s/^(Failed to open device).*$/\1./'
     emu_case "scratch bit stuck" --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=50m --samples 20
     asix_sigma_options stop-polls=3
     emu_case "slow stop" -- -d $D -c samplerate=50m --samples 20 -O hex
+    # A forced stop that takes longer than oxrok waits: sigrok-cli's poll
+    # has no limit.
+    asix_sigma_options stop-polls=12000
+    emu_case "stop never seen" --oracle-differs "protocol.c:1995-2001 poll the mode register after a forced stop for ever" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+    # A late stop register in the middle of a cluster (the model's doc):
+    # with no sample limit to hide it, both tools decode up to the
+    # decremented position, and stay out of what was not written.
+    asix_sigma_options stop-mid=6
+    emu_case "stop register late, cluster unwritten" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 2 -O hex
+    asix_sigma_options stop-mid=3
+    emu_case "stop register late, mid cluster" --digest --filter "$LONG" -- -d $D -c samplerate=50m --time 2 -O hex
     # The FTDI shell's faults. A read of the pins with nothing sampled
     # yet: the driver sleeps and reads again; never anything: it gives
     # up after 10 times 10 reads.

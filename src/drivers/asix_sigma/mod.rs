@@ -28,17 +28,19 @@
 //!
 //! The device sees the same requests as under sigrok-cli, through
 //! [`crate::ftdi::libftdi`], checked with the emulator
-//! (`tools/emu/asix-sigma.sh`), except where this port does what
-//! libsigrok's driver means to: a trigger near the start of the memory
-//! gets its marker, the last event of a capture is decoded (the C
-//! driver drops it, and all of the last row of a wrapped memory), and
-//! channel 16 is refused as the external clock, which the clock select
-//! register's 4 bit pin field (written as the index plus 1) cannot
-//! name: the C driver writes 16, which sets `CLKSEL_RISING` and leaves
-//! the pin field 0. A set during an acquisition is kept for the next
-//! one, as in the C driver, which reads its settings only at the start.
-//! Unlike libsigrok's driver, the netlist the FPGA runs is forgotten
-//! when the device is closed, so the next open configures it again.
+//! (`tools/emu/asix-sigma.sh`). Where the samples differ, this port does
+//! what libsigrok's driver means to: a trigger near the start of the
+//! memory gets its marker, and all of the last row of a wrapped memory
+//! is decoded. Channel 16 as the external clock goes out as in the C
+//! driver, with a warning: the clock select register's 4 bit pin field
+//! (written as the index plus 1) cannot name it, so the 16 sets
+//! `CLKSEL_RISING` and leaves the pin field 0, which is what was asked
+//! for with a rising edge if the hardware takes the field modulo 16;
+//! nothing here says it does not. A set during an acquisition is kept
+//! for the next one, as in the C driver, which reads its settings only
+//! at the start. As there, the netlist the FPGA runs is remembered when
+//! the device is closed: a reopen does not configure it again, which
+//! takes about 4 s.
 
 #![forbid(unsafe_code)]
 
@@ -330,6 +332,9 @@ pub struct SigmaDevice {
     channel_names: Vec<String>,
     settings: Settings,
     trigger: Option<Trigger>,
+    /// The netlist running in the FPGA (`devc->firmware_idx`), which
+    /// outlives a close.
+    firmware: Option<protocol::Firmware>,
     pending: Option<Box<dyn Transport>>,
     link: Arc<Mutex<Option<Link>>>,
     worker: Option<Worker>,
@@ -367,6 +372,7 @@ impl SigmaDevice {
             channel_names: names,
             settings: Settings::default(),
             trigger: None,
+            firmware: None,
             pending: transport,
             link: Arc::new(Mutex::new(None)),
             worker: None,
@@ -452,13 +458,12 @@ impl SigmaDevice {
                 rate_changed = true;
             }
             s.samplerate = 50_000_000;
-            // The pin field holds 4 bits, written as the index plus 1.
-            if s.clock_pin + 1 > 0x0f {
+            if !protocol::clock_pin_fits(s.clock_pin) {
                 let name = &self.channel_names[s.clock_pin];
-                log::error!(
-                    "Channel {name} cannot be the external clock: the clock select register has no code for it."
+                log::warn!(
+                    "External clock on channel {name}: the clock select's 4 bit pin field cannot \
+                     hold it, and the value spills into the rising edge bit."
                 );
-                return Err(Error::arg(format!("channel {name} cannot be the external clock")));
             }
         }
         // sigma_set_samplerate.
@@ -466,7 +471,7 @@ impl SigmaDevice {
             .ok_or_else(|| Error::arg("invalid samplerate"))?;
         let (fw, num_channels) =
             protocol::Firmware::for_rate(rate).ok_or_else(|| Error::arg("invalid samplerate"))?;
-        link.upload_firmware(fw)?;
+        link.upload_firmware(fw, &mut self.firmware)?;
         // sigma_set_acquire_timeout.
         let ms = protocol::acquire_msecs(
             s.limit_samples,
@@ -759,14 +764,32 @@ mod tests {
     }
 
     #[test]
-    fn channel_16_is_no_external_clock() {
+    fn a_reopen_does_not_upload_the_netlist_again() {
+        // The registers of a 100 MHz start, and no upload: the replay
+        // would refuse the bit mode request.
+        const START: &str = "bulk_out 02 02102032 -> 4\nbulk_out 02 02102138 -> 4\n\
+            bulk_out 02 061028302034 -> 6\nbulk_out 02 02102038 -> 4\n\
+            bulk_out 02 00102030 -> 4\nbulk_out 02 05102f37 -> 4\nbulk_out 02 03102530 -> 4\n";
         let mut dev = device("");
         dev.open().unwrap();
-        dev.set(&Key::ExternalClock, &Value::Bool(true), None).unwrap();
-        dev.set(&Key::ExternalClockSource, &Value::Str("16".into()), None).unwrap();
-        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
-        // Refused before anything goes to the device.
-        assert!(dev.start(PacketSink::new(tx, 0)).is_err());
+        dev.firmware = Some(protocol::Firmware::Mhz100);
         dev.close().unwrap();
+        assert_eq!(dev.firmware, Some(protocol::Firmware::Mhz100), "survives the close");
+        // The same device again, its serial number read by the open.
+        let text = format!(
+            "# oxrok usb fixture 1\n\
+             device vid=a600 pid=a000 version=0400 bus=0 addr=0 strings=1,2,3\n\
+             ctl_in 00 06 0300 0000 4 -> 04030904\n\
+             ctl_in 00 06 0303 0409 255 -> 120341003600300031003000410033004300\n\
+             claim 0 -> ok\nmps 81 -> 64\n\
+             ctl_out 40 00 0000 0001 - -> ok\nctl_out 40 03 4138 0000 - -> ok\n{START}"
+        );
+        let replay = crate::usb::record::Replay::from_text(&text).unwrap();
+        dev.pending = Some(Box::new(replay.clone()));
+        dev.open().unwrap();
+        dev.set(&Key::Samplerate, &Value::U64(100_000_000), None).unwrap();
+        let mut link = dev.link.lock().unwrap().take().unwrap();
+        dev.begin(&mut link).unwrap();
+        assert_eq!(replay.remaining(), 0);
     }
 }

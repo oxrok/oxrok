@@ -39,9 +39,7 @@
 //!
 //! The sample memory is 32768 rows of 64 clusters, a cluster a 16 bit
 //! timestamp and 7 events of 16 bits. Positions count events, the row
-//! in bits 9 and up, the event in the row (0 to 447) below; the
-//! position registers point after the last event written and after the
-//! trigger. Without a pin change no cluster is stored: a gap in the
+//! in bits 9 and up, the event in the row (0 to 447) below. Without a pin change no cluster is stored: a gap in the
 //! timestamps repeats the last sample. An event is one sample of 16
 //! channels up to 50 MHz, two interleaved samples of 8 at 100 MHz, four
 //! of 4 at 200 MHz.
@@ -64,14 +62,25 @@
 //!   the C driver arms the software check at the start position, which
 //!   it compares only after moving past it (`sigma_location_check`
 //!   runs after each event's increment).
-//! - The last event is decoded: the C driver takes the decremented stop
-//!   position, which points at the last event, as the count of events
-//!   in the last row (`download_capture`, `stop.raw & ROW_MASK`), and
-//!   for a wrapped memory the start of the last row it reads, which so
-//!   decodes nothing of that row (`alloc_sample_buffer`).
+//! - All of a wrapped memory's last row is decoded: the C driver ends
+//!   the readout at event 0 of that row (`alloc_sample_buffer`), so
+//!   `download_capture`'s count (`stop.raw & ROW_MASK`) is 0. The row is
+//!   whole, from the pass before: no count from the stop position is
+//!   needed, and no assumption about the register.
 //! - A forced stop that never completes ends after
-//!   [`MAX_STOP_POLLS`] reads of the mode register; the C driver polls
-//!   for ever.
+//!   [`MAX_STOP_POLLS`] reads of the mode register, or
+//!   [`MAX_STOP_POLLS_STOPPING`] once a stop was asked for; the C driver
+//!   polls for ever.
+//!
+//! Kept from `protocol.c` on purpose: without a wrap, the last row's
+//! count is the low bits of the decremented stop position. If the
+//! register points after the last event, as the comment at `protocol.c`
+//! 371-377 reads it, that is one event short; if it is late, as
+//! `protocol.c` 1433-1435 says of these registers, more would run into
+//! a cluster not written, whose timestamp 0 repeats the last sample
+//! about 65000 times. The one event is the smaller cost. A hardware
+//! recording could settle it: capture a counter with `--time` and check
+//! whether the last sample continues the count.
 
 use crate::core::{Error, Packet, PacketSink, Result, Trigger, TriggerMatch};
 use crate::ftdi::libftdi::Context;
@@ -273,6 +282,10 @@ const SUBMIT_SAMPLES: usize = 4 * 1024 * 1024 / 2;
 /// Mode reads after a forced stop before giving up (the C driver reads
 /// for ever).
 pub const MAX_STOP_POLLS: u32 = 10_000;
+/// The same once a stop was asked for, so that Ctrl-C does not wait for
+/// the above: a forced stop that a stop itself began still gets this
+/// long to complete and be read.
+pub const MAX_STOP_POLLS_STOPPING: u32 = 100;
 /// The poll period (`sr_session_source_add`'s timeout).
 pub const POLL: Duration = Duration::from_millis(10);
 
@@ -630,19 +643,19 @@ pub fn acquire_msecs(
     trigger_ratio: Option<u64>,
 ) -> Option<u64> {
     let share = |v: u64| match trigger_ratio {
-        Some(r) => v * (100 - r.min(100)) / 100,
+        Some(r) => v.saturating_mul(100 - r.min(100)) / 100,
         None => v,
     };
     let count = share(limit_samples);
     let msecs = share(limit_msec);
     let mut acquire = None::<u64>;
     if count != 0 {
-        acquire = Some(1000 * count / samplerate + 1);
+        acquire = Some(count.saturating_mul(1000) / samplerate + 1);
     }
     if msecs != 0 && acquire.is_none_or(|a| msecs < a) {
         acquire = Some(msecs);
     }
-    acquire.map(|a| a + 2 * (1000 * 65536 / samplerate))
+    acquire.map(|a| a.saturating_add(2 * (1000 * 65536 / samplerate)))
 }
 
 /// The clock select bytes of the 50 MHz netlist: the divider, or with an
@@ -667,6 +680,13 @@ pub fn clock_select_50(
     };
     let [hi, lo] = pindis.to_be_bytes();
     [asynch, div, hi, lo]
+}
+
+/// True when the pin field of the clock select, 4 bits written as the
+/// channel's index plus 1, holds `pin`. Channel 16 does not: its 16
+/// spills into `CLKSEL_RISING`.
+pub fn clock_pin_fits(pin: usize) -> bool {
+    pin < 0x0f
 }
 
 /// The mask of channels a netlist does not have.
@@ -811,7 +831,7 @@ pub struct Decoder {
     last_sample: u16,
     start: Location,
     stop_line: u64,
-    /// Events in the last row (the C driver's count is one less).
+    /// Events decoded of the last row.
     stop_events: u64,
     trig: Location,
     iter: Location,
@@ -831,7 +851,8 @@ impl Decoder {
     /// and trigger positions (the trigger `u32::MAX` when there is none)
     /// and the mode register. A memory that wrapped is read from the row
     /// after the one being written to the row before it, all of that
-    /// row; else from row 0 to the stop position, which is included.
+    /// row; else from row 0 to the stop position, which is not included
+    /// (the C driver's count, see the module documentation).
     pub fn new(
         stop_pos: u32,
         trig_pos: u32,
@@ -847,7 +868,7 @@ impl Decoder {
             (start, (row + ROW_COUNT - 1) % ROW_COUNT, EVENTS_PER_ROW)
         } else {
             let stop = Location::from_raw(stop_pos);
-            (Location::default(), stop.line, (stop_pos & u64::from(ROW_MASK)) + 1)
+            (Location::default(), stop.line, stop_pos & u64::from(ROW_MASK))
         };
         let trig = Location::from_raw(u64::from(trig_pos));
         let mut d = Decoder {
@@ -1069,11 +1090,9 @@ impl TimeLimit {
     }
 }
 
-/// libftdi's port to the SIGMA, and what the driver keeps with it.
+/// libftdi's port to the SIGMA.
 pub struct Link {
     ctx: Context,
-    /// The netlist running in the FPGA.
-    firmware: Option<Firmware>,
 }
 
 /// A transfer failed or brought less than asked (`SR_ERR_IO`).
@@ -1082,9 +1101,9 @@ fn io() -> Error {
 }
 
 impl Link {
-    /// A link over an opened chip, no netlist uploaded yet.
+    /// A link over an opened chip.
     pub fn new(ctx: Context) -> Self {
-        Link { ctx, firmware: None }
+        Link { ctx }
     }
 
     /// `sigma_read_raw`: the bytes read, logged on failure.
@@ -1278,19 +1297,30 @@ impl Link {
         Ok(())
     }
 
-    /// `upload_firmware`: configures the FPGA with `fw` unless it runs
-    /// it already.
+    /// `upload_firmware`: configures the FPGA with `fw` unless `running`
+    /// says it runs it already, and keeps `running` up to date. Unlike
+    /// the C driver, a failed upload leaves it empty: the old netlist
+    /// is gone from the FPGA by then.
     ///
     /// # Errors
     ///
     /// The step that failed, logged with the C driver's message.
-    pub fn upload_firmware(&mut self, fw: Firmware) -> Result<()> {
+    pub fn upload_firmware(&mut self, fw: Firmware, running: &mut Option<Firmware>) -> Result<()> {
+        self.upload_with(fw, running, load_firmware)
+    }
+
+    fn upload_with(
+        &mut self,
+        fw: Firmware,
+        running: &mut Option<Firmware>,
+        load: impl FnOnce(&str) -> Result<Vec<u8>>,
+    ) -> Result<()> {
         let name = fw.file();
-        if self.firmware == Some(fw) {
+        if *running == Some(fw) {
             log::info!("Not uploading firmware file '{name}' again.");
             return Ok(());
         }
-        self.firmware = None;
+        *running = None;
         if let Err(e) = self.ctx.set_bitmode(pin::MASK, crate::ftdi::BitMode::BitBang as u8) {
             log::error!("Could not setup cable mode for upload: {}", e.message);
             return Err(e.into());
@@ -1303,7 +1333,7 @@ impl Link {
             log::error!("Could not initiate firmware upload to hardware");
             return Err(e);
         }
-        let stream = match load_firmware(name) {
+        let stream = match load(name) {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Could not prepare file {name} for upload.");
@@ -1326,7 +1356,7 @@ impl Link {
             log::error!("Hardware response after firmware upload failed.");
             return Err(e);
         }
-        self.firmware = Some(fw);
+        *running = Some(fw);
         log::info!("Firmware uploaded.");
         Ok(())
     }
@@ -1415,8 +1445,8 @@ impl Acquisition {
             let mut feed = SinkFeed(sink);
             let go_on = match self.state {
                 State::Idle => break,
-                State::Stopping | State::Download => self.download(link, &mut feed),
-                State::Capture => self.capture(link, &mut feed),
+                State::Stopping | State::Download => self.download(link, &mut feed, stop),
+                State::Capture => self.capture(link, &mut feed, stop),
             };
             if !go_on || self.state == State::Idle {
                 break;
@@ -1426,20 +1456,25 @@ impl Acquisition {
     }
 
     /// `sigma_capture_mode`: false when the acquisition is to end.
-    fn capture(&mut self, link: &mut Link, feed: &mut dyn Feed) -> bool {
+    fn capture(
+        &mut self,
+        link: &mut Link,
+        feed: &mut dyn Feed,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> bool {
         let Ok((_, _, mode)) = link.read_pos() else { return false };
         if mode & rmr::POSTTRIGGERED != 0 {
-            return self.download(link, feed);
+            return self.download(link, feed, stop);
         }
         if self.acquire.expired() {
-            return self.download(link, feed);
+            return self.download(link, feed, stop);
         }
         if self.late_trigger_timeout && mode & rmr::TRIGGERED != 0 {
             self.acquire.start = Some(Instant::now());
             self.late_trigger_timeout = false;
         }
         if self.trigger.is_none() && mode & rmr::ROUND != 0 {
-            return self.download(link, feed);
+            return self.download(link, feed, stop);
         }
         true
     }
@@ -1447,7 +1482,12 @@ impl Acquisition {
     /// `download_capture`: forces the stop if needed, then reads and
     /// decodes up to 50 reads of rows; false when the acquisition is to
     /// end. Sets the state idle once all is read.
-    fn download(&mut self, link: &mut Link, feed: &mut dyn Feed) -> bool {
+    fn download(
+        &mut self,
+        link: &mut Link,
+        feed: &mut dyn Feed,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> bool {
         let Ok(mode) = link.get_register(rreg::MODE) else {
             log::error!("Could not determine current device state.");
             return false;
@@ -1468,7 +1508,8 @@ impl Acquisition {
                     break;
                 }
                 polls += 1;
-                if polls >= MAX_STOP_POLLS {
+                let stopping = stop.load(std::sync::atomic::Ordering::SeqCst);
+                if polls >= if stopping { MAX_STOP_POLLS_STOPPING } else { MAX_STOP_POLLS } {
                     log::error!("Could not poll for post-trigger state.");
                     return false;
                 }
@@ -1552,8 +1593,15 @@ mod tests {
         assert_eq!(dram_read(1), hex("6050a0"));
         assert_eq!(clock_select_50(50_000_000, None, 16), [0, 0, 0, 0]);
         assert_eq!(clock_select_50(200_000, None, 16), [0, 249, 0, 0]);
-        // Channel 16 spills into CLKSEL_RISING, which the driver refuses.
         assert_eq!(clock_select_50(50_000_000, Some((2, ClockEdge::Falling)), 16), [1, 0x23, 0, 0]);
+        // Channel 16 as the C driver writes it (api.c:578).
+        assert!(clock_pin_fits(14));
+        assert!(!clock_pin_fits(15));
+        assert_eq!(clock_select_50(50_000_000, Some((15, ClockEdge::Rising)), 16), [1, 0x10, 0, 0]);
+        assert_eq!(
+            clock_select_50(50_000_000, Some((15, ClockEdge::Falling)), 16),
+            [1, 0x30, 0, 0]
+        );
         assert_eq!(pin_disable(8), 0xff00);
         assert_eq!(pin_disable(16), 0);
     }
@@ -1669,18 +1717,27 @@ mod tests {
         // 200 kHz: 327 ms per cluster.
         assert_eq!(acquire_msecs(40, 0, 200_000, Some(50)), Some(1 + 654));
         assert_eq!(acquire_msecs(40, 0, 200_000, Some(100)), None);
+        // Huge limits saturate rather than overflow.
+        assert!(acquire_msecs(u64::MAX, 0, 200_000, None).unwrap() > 1 << 40);
+        assert!(acquire_msecs(u64::MAX, u64::MAX, 200_000, Some(1)).unwrap() > 1 << 40);
+        assert_eq!(acquire_msecs(0, u64::MAX, 50_000_000, None), Some(u64::MAX));
     }
 
     /// A link over a replayed FT245 (64 byte packets) after libftdi's
     /// open.
     fn link(steps: &str) -> Link {
+        linked(steps).0
+    }
+
+    /// [`link`], and the replay behind it, to see that it was played out.
+    fn linked(steps: &str) -> (Link, crate::usb::record::Replay) {
         let text = format!(
             "# oxrok usb fixture 1\ndevice vid=a600 pid=a000 version=0400 bus=0 addr=0 \
              strings=0,0,0\nclaim 0 -> ok\nmps 81 -> 64\n\
              ctl_out 40 00 0000 0001 - -> ok\nctl_out 40 03 4138 0000 - -> ok\n{steps}"
         );
         let t = crate::usb::record::Replay::from_text(&text).unwrap();
-        Link::new(Context::open(Box::new(t)).unwrap())
+        (Link::new(Context::open(Box::new(t.clone())).unwrap()), t)
     }
 
     /// `data` as the chip sends it: two status bytes per 64 byte packet.
@@ -1721,8 +1778,8 @@ mod tests {
         acq.run(&mut link, &PacketSink::new(tx, 0), &stop);
         let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
         assert_eq!(packets.len(), 2, "{packets:?}");
-        // Events 0 to 10.
-        assert!(matches!(&packets[0], Packet::Logic(l) if l.data.len() == 22), "{packets:?}");
+        // Events 0 to 9.
+        assert!(matches!(&packets[0], Packet::Logic(l) if l.data.len() == 20), "{packets:?}");
         assert!(matches!(packets[1], Packet::End));
     }
 
@@ -1739,23 +1796,305 @@ mod tests {
 
     #[test]
     fn a_forced_stop_that_never_ends_gives_up() {
-        let mut steps = String::from(
-            "bulk_out 02 071040 -> 3\nbulk_in 81 4096 -> 016001\nbulk_out 02 03102131 -> 4\n",
-        );
-        for _ in 0..MAX_STOP_POLLS {
-            steps.push_str("bulk_out 02 071040 -> 3\nbulk_in 81 4096 -> 016001\n");
+        use std::sync::atomic::AtomicBool;
+        for (stop, polls) in [(false, MAX_STOP_POLLS), (true, MAX_STOP_POLLS_STOPPING)] {
+            let mut steps = String::from(
+                "bulk_out 02 071040 -> 3\nbulk_in 81 4096 -> 016001\nbulk_out 02 03102131 -> 4\n",
+            );
+            for _ in 0..polls {
+                steps.push_str("bulk_out 02 071040 -> 3\nbulk_in 81 4096 -> 016001\n");
+            }
+            let (mut link, replay) = linked(&steps);
+            let mut acq = Acquisition::new(None, 16, 0, TimeLimit::default(), false);
+            let mut rec = Rec::default();
+            assert!(!acq.download(&mut link, &mut rec, &AtomicBool::new(stop)));
+            assert_eq!(replay.remaining(), 0, "stop {stop}");
         }
-        let mut acq = Acquisition::new(None, 16, 0, TimeLimit::default(), false);
+    }
+
+    /// The read of the positions, with the mode.
+    fn position_read(mode: u8) -> String {
+        format!(
+            "bulk_out 02 011041414141414141 -> 9\nbulk_in 81 4096 -> 0160000000000000{mode:02x}\n"
+        )
+    }
+
+    /// A download that fails at once: `capture()` returns false only
+    /// through it.
+    const NO_DOWNLOAD: &str = "bulk_out 02 071040 -> err device \"endpoint stalled\"\n";
+
+    fn capture_once(acq: &mut Acquisition, mode: u8) -> bool {
+        use std::sync::atomic::AtomicBool;
+        let steps = format!("{}{NO_DOWNLOAD}", position_read(mode));
         let mut rec = Rec::default();
-        assert!(!acq.download(&mut link(&steps), &mut rec));
+        acq.capture(&mut link(&steps), &mut rec, &AtomicBool::new(false))
+    }
+
+    #[test]
+    fn the_capture_ends_as_sigma_capture_mode_says() {
+        let hour = Some(Duration::from_secs(3600));
+        let idle = TimeLimit::default();
+        let trigger = Some(SigmaTrigger::default());
+        // Nothing to end on.
+        assert!(capture_once(&mut Acquisition::new(None, 16, 0, idle, false), 0));
+        // The time limit, running and run out.
+        let running = TimeLimit { limit: hour, start: Some(Instant::now()) };
+        assert!(capture_once(&mut Acquisition::new(None, 16, 0, running, false), 0));
+        let over = TimeLimit { limit: Some(Duration::ZERO), start: Some(Instant::now()) };
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(!capture_once(&mut Acquisition::new(None, 16, 0, over, false), 0));
+        // The device says it is complete.
+        assert!(!capture_once(&mut Acquisition::new(None, 16, 0, idle, false), rmr::POSTTRIGGERED));
+        // The memory wrapped: an end only without a trigger.
+        assert!(!capture_once(&mut Acquisition::new(None, 16, 0, idle, false), rmr::ROUND));
+        assert!(capture_once(&mut Acquisition::new(trigger, 16, 0, idle, false), rmr::ROUND));
+    }
+
+    #[test]
+    fn the_time_limit_of_a_trigger_starts_when_it_is_seen() {
+        let zero = TimeLimit { limit: Some(Duration::ZERO), start: None };
+        let mut acq = Acquisition::new(Some(SigmaTrigger::default()), 16, 0, zero, true);
+        // Not triggered: never expires, however short.
+        assert!(capture_once(&mut acq, 0));
+        assert!(acq.late_trigger_timeout && acq.acquire.start.is_none());
+        // Seen: it starts, and this poll goes on.
+        assert!(capture_once(&mut acq, rmr::TRIGGERED));
+        assert!(!acq.late_trigger_timeout && acq.acquire.start.is_some());
+        // The next poll finds it run out.
+        std::thread::sleep(Duration::from_millis(2));
+        assert!(!capture_once(&mut acq, rmr::TRIGGERED));
+    }
+
+    /// One burst of the suicide sequence, the PROG pulse and the purge.
+    fn init_steps() -> String {
+        format!(
+            "{}bulk_out 02 01030301010101010101 -> 10\n\
+             ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n",
+            "bulk_out 02 8484888488848884 -> 8\n".repeat(4)
+        )
+    }
+
+    const CABLE: &str = "ctl_out 40 0b 01df 0001 - -> ok\nctl_out 40 03 0000 0000 - -> ok\n";
+
+    /// What follows the netlist: bit-bang off, purge, drain, the answer.
+    const AFTER: &str = "ctl_out 40 0b 0000 0001 - -> ok\n\
+        ctl_out 40 00 0001 0001 - -> ok\nctl_out 40 00 0002 0001 - -> ok\n\
+        bulk_in 81 4096 -> 0160\n\
+        bulk_out 02 0010400f102535400f102a3a4003102038 -> 17\n\
+        bulk_in 81 4096 -> 0160a655aa\n";
+
+    fn hex_of(data: &[u8]) -> String {
+        use std::fmt::Write as _;
+        data.iter().fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
+    }
+
+    #[test]
+    fn the_upload_goes_as_the_driver_sends_it() {
+        // INIT absent for one whole attempt (10 reads with nothing), then
+        // low in one sample and high in the next.
+        let stream = bitbang_stream(&[0x12, 0x34]);
+        let steps = format!(
+            "{CABLE}{init}{idle}{init}bulk_in 81 4096 -> 01600020\nbulk_out 02 {netlist} -> 32\n{AFTER}",
+            init = init_steps(),
+            idle = "bulk_in 81 4096 -> 0160\n".repeat(10),
+            netlist = hex_of(&stream),
+        );
+        let (mut link, replay) = linked(&steps);
+        let mut running = None;
+        link.upload_with(Firmware::Mhz50, &mut running, |name| {
+            assert_eq!(name, "asix-sigma-50.fw");
+            Ok(bitbang_stream(&[0x12, 0x34]))
+        })
+        .unwrap();
+        assert_eq!(running, Some(Firmware::Mhz50));
+        assert_eq!(replay.remaining(), 0);
+    }
+
+    #[test]
+    fn the_upload_gives_up_after_ten_times_ten_reads() {
+        let once = format!("{}{}", init_steps(), "bulk_in 81 4096 -> 0160\n".repeat(10));
+        let steps = format!("{CABLE}{}", once.repeat(10));
+        let (mut link, replay) = linked(&steps);
+        let mut running = Some(Firmware::Mhz100);
+        let e = link.upload_with(Firmware::Mhz50, &mut running, |_| unreachable!()).unwrap_err();
+        assert!(matches!(e, Error::Timeout), "{e:?}");
+        assert_eq!(running, None, "the old netlist is gone");
+        assert_eq!(replay.remaining(), 0);
+    }
+
+    #[test]
+    fn a_failed_suicide_write_still_sends_the_others() {
+        let steps = format!(
+            "{CABLE}bulk_out 02 8484888488848884 -> 8\n{}",
+            "bulk_out 02 8484888488848884 -> err device \"endpoint stalled\"\n".repeat(3)
+        );
+        let (mut link, replay) = linked(&steps);
+        let mut running = None;
+        assert!(link.upload_with(Firmware::Mhz50, &mut running, |_| unreachable!()).is_err());
+        assert_eq!(replay.remaining(), 0);
+    }
+
+    /// A row of memory row `r` for the wrap test: a count that goes on
+    /// from row to row, timestamps with it.
+    fn counting_row(r: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(ROW_LENGTH_BYTES);
+        for c in 0..CLUSTERS_PER_ROW {
+            let tick = (r * EVENTS_PER_ROW + c * EVENTS_PER_CLUSTER) as u16;
+            out.extend_from_slice(&tick.to_le_bytes());
+            for e in 0..EVENTS_PER_CLUSTER {
+                out.extend_from_slice(&tick.wrapping_add(e as u16).to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Counts samples and checks that each continues the count.
+    #[derive(Default)]
+    struct Continuous {
+        samples: u64,
+        last: Option<u16>,
+    }
+
+    impl Feed for Continuous {
+        fn logic(&mut self, data: &[u8]) {
+            for c in data.as_chunks::<2>().0 {
+                let v = u16::from_le_bytes(*c);
+                if let Some(l) = self.last {
+                    assert_eq!(v, l.wrapping_add(1), "after {} samples", self.samples);
+                }
+                self.last = Some(v);
+                self.samples += 1;
+            }
+        }
+
+        fn trigger(&mut self) {}
+    }
+
+    #[test]
+    fn a_wrapped_memory_decodes_across_its_end() {
+        // Stopped in row 1 after wrapping: rows 2 to 32767, then row 0.
+        let mut d = Decoder::new(decrement_pos(1 << 9 | 7), u32::MAX, rmr::ROUND, 16, None, 0);
+        let mut feed = Continuous::default();
+        let mut fetches = Vec::new();
+        while !d.done() {
+            let (first, count) = d.next_fetch();
+            fetches.push((first, count));
+            let mut rows = Vec::with_capacity(count as usize * ROW_LENGTH_BYTES);
+            for i in 0..count {
+                rows.extend(counting_row((first + i) % ROW_COUNT));
+            }
+            d.decode(&rows, count, &mut feed);
+            d.flush(&mut feed);
+        }
+        assert_eq!(fetches[0], (2, LINES_PER_READ));
+        // The read that crosses the end of the memory, and is the last.
+        assert_eq!(fetches.last(), Some(&(32738, 31)));
+        assert_eq!(feed.samples, (ROW_COUNT - 1) * EVENTS_PER_ROW);
+        assert_eq!(d.iter.line, 1);
+    }
+
+    /// One row: cluster 0 at tick 0, cluster 1 at tick 10, `words` the
+    /// events of cluster 0 and the first of cluster 1.
+    fn row_of(words: &[u16; 8]) -> Vec<u8> {
+        let mut r = vec![0u8; ROW_LENGTH_BYTES];
+        r[16..18].copy_from_slice(&10u16.to_le_bytes());
+        for (i, w) in words[..7].iter().enumerate() {
+            r[2 + 2 * i..4 + 2 * i].copy_from_slice(&w.to_le_bytes());
+        }
+        r[18..20].copy_from_slice(&words[7].to_le_bytes());
+        r
+    }
+
+    #[test]
+    fn events_hold_two_samples_at_100_mhz() {
+        let mut words = [0u16; 8];
+        words[1] = 0x0001; // Channel 1 high in the first sample.
+        words[6] = 0xaaaa; // All 8 high in the second sample.
+        words[7] = 0x5555;
+        // Register 9, 8 events: 7 of cluster 0, 1 of cluster 1.
+        let mut d = Decoder::new(decrement_pos(9), u32::MAX, 0, 8, None, 0);
+        let mut rec = Rec::default();
+        d.next_fetch();
+        d.decode(&row_of(&words), 1, &mut rec);
+        d.flush(&mut rec);
+        let mut want = vec![0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff];
+        // A gap of 3 ticks is 3 events: 6 samples of the last one.
+        want.extend([0xff; 6]);
+        want.extend([0xff, 0]);
+        assert_eq!(rec.samples, want);
+    }
+
+    #[test]
+    fn events_hold_four_samples_at_200_mhz() {
+        let mut words = [0u16; 8];
+        words[1] = 0x0002; // Channel 1 high in the second sample.
+        words[6] = 0x8888; // All 4 high in the fourth sample.
+        words[7] = 0x1111;
+        let mut d = Decoder::new(decrement_pos(9), u32::MAX, 0, 4, None, 0);
+        let mut rec = Rec::default();
+        d.next_fetch();
+        d.decode(&row_of(&words), 1, &mut rec);
+        d.flush(&mut rec);
+        let mut want = vec![0; 4];
+        want.extend([0, 1, 0, 0]);
+        want.extend([0; 16]);
+        want.extend([0, 0, 0, 0xf]);
+        // A gap of 3 ticks is 3 events: 12 samples of the last one.
+        want.extend([0xf; 12]);
+        want.extend([0xf, 0, 0, 0]);
+        assert_eq!(rec.samples, want);
+    }
+
+    #[test]
+    fn a_trigger_lands_on_its_sample_within_an_event() {
+        let mut words = [0u16; 8];
+        words[1] = 0x0002;
+        let t = SigmaTrigger { rising: 1, ..SigmaTrigger::default() };
+        let mut d = Decoder::new(decrement_pos(9), decrement_pos(3), 0, 4, Some(t), 0);
+        let mut rec = Rec::default();
+        d.next_fetch();
+        d.decode(&row_of(&words), 1, &mut rec);
+        d.flush(&mut rec);
+        assert_eq!(rec.triggers, [5]);
+    }
+
+    #[test]
+    fn the_netlist_scrambles_with_the_known_sequence() {
+        use sha2::{Digest as _, Sha256};
+        // The first bytes of the sequence, from the C lines compiled
+        // (protocol.c:775-777).
+        let mut x = [0u8; 8];
+        unscramble(&mut x);
+        assert_eq!(x, [0x3a, 0xf0, 0xf9, 0x6a, 0x25, 0xf5, 0xf1, 0xc7]);
+        // What sigrok-cli sent of the 50 MHz stand-in: the last transfer of
+        // tests/emu/asix-sigma/50-mhz.tx, by its digest.
+        let mut file = Vec::new();
+        for i in 0.. {
+            if file.len() >= 2000 {
+                break;
+            }
+            file.extend_from_slice(&Sha256::digest(format!("asix-sigma-50.fw:{i}").as_bytes()));
+        }
+        file.truncate(2000);
+        let stream = bitbang_stream(&file);
+        assert_eq!(stream.len(), 32000);
+        assert_eq!(
+            hex_of(&Sha256::digest(&stream[7 * 4096..])),
+            "3733c9f1af7e51dbbc05c45615ab432b4ad109121b47c988ac2894b9a9e83a0a"
+        );
     }
 
     #[test]
     fn the_running_netlist_is_not_uploaded_again() {
-        let mut link = link("");
-        link.firmware = Some(Firmware::Mhz50);
         // No request at all: the replay would refuse one.
-        link.upload_firmware(Firmware::Mhz50).unwrap();
+        let (mut link, replay) = linked("");
+        let mut running = Some(Firmware::Mhz50);
+        link.upload_firmware(Firmware::Mhz50, &mut running).unwrap();
+        assert_eq!(running, Some(Firmware::Mhz50));
+        assert_eq!(replay.remaining(), 0);
     }
 
     #[test]
@@ -1800,8 +2139,8 @@ mod tests {
     }
 
     #[test]
-    fn the_last_event_is_decoded() {
-        // Stop register 11 (after event 10): events 0 to 10.
+    fn the_last_row_counts_as_the_c_driver_does() {
+        // Stop register 11, decremented 10: events 0 to 9 (protocol.c:2065).
         let mut d = Decoder::new(decrement_pos(11), u32::MAX, 0, 16, None, 0);
         assert_eq!(d.lines_total(), 1);
         let (line, count) = d.next_fetch();
@@ -1809,8 +2148,22 @@ mod tests {
         let mut rec = Rec::default();
         d.decode(&row(0), 1, &mut rec);
         d.flush(&mut rec);
-        assert_eq!(rec.samples, (0..11).collect::<Vec<_>>());
+        assert_eq!(rec.samples, (0..10).collect::<Vec<_>>());
         assert!(d.done());
+    }
+
+    #[test]
+    fn a_late_stop_register_stays_out_of_an_unwritten_cluster() {
+        // Register 8 with only cluster 0 written: one more event would
+        // take cluster 1's timestamp 0 for a gap of 65529 ticks.
+        let mut r = row(0);
+        r[16..].fill(0);
+        let mut d = Decoder::new(decrement_pos(8), u32::MAX, 0, 16, None, 0);
+        let mut rec = Rec::default();
+        d.next_fetch();
+        d.decode(&r, 1, &mut rec);
+        d.flush(&mut rec);
+        assert_eq!(rec.samples, (0..7).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1843,7 +2196,7 @@ mod tests {
                 r[c * 16 + 2 + 2 * e..c * 16 + 4 + 2 * e].copy_from_slice(&v.to_le_bytes());
             }
         }
-        let mut d = Decoder::new(decrement_pos(14), u32::MAX, 0, 16, None, 0);
+        let mut d = Decoder::new(decrement_pos(15), u32::MAX, 0, 16, None, 0);
         let mut rec = Rec::default();
         d.next_fetch();
         d.decode(&r, 1, &mut rec);
@@ -1865,8 +2218,8 @@ mod tests {
         d.decode(&row(0), 1, &mut rec);
         d.flush(&mut rec);
         assert_eq!(rec.triggers, [1]);
-        // With the trigger is the whole region, the limit aside.
-        assert_eq!(rec.samples.len(), 100);
+        // With a trigger the whole region goes out; no limit is set here.
+        assert_eq!(rec.samples.len(), 99);
     }
 
     #[test]
