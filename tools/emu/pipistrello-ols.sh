@@ -134,6 +134,12 @@ emu_cases() {
     # one sample, gets half the samples it counts on and polls for ever.
     # Channels 16-31 are not sampled in demux mode: oxrok refuses them.
     emu_case "200 MHz 32 channels hangs" --oracle-bug "protocol.c:401-406 counts the channel groups of flag_reg, not the demux word: each word is taken for one sample, and 398 waits for samples that never come" --timeout 5 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=200m --samples 64 -O hex
+    # stage.v ORs the matches of the word's two halves in demux mode and
+    # the driver writes masks to the low half only, so every stage fires
+    # at once: the capture starts at the first words, whatever the
+    # condition. A libsigrok finding, from the firmware source (hand
+    # read); oxrok sends the same, as there is no bench to show a fix
+    # (the likely one: the masks replicated into the upper half).
     emu_case "200 MHz trigger" -- -d $D -c samplerate=200m:captureratio=50 -C 0-7 --samples 64 --triggers 5=r -O bits
 
     # The flags the model accepts and does not emulate: the same samples.

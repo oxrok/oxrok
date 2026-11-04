@@ -102,7 +102,12 @@
 //! takes off (`- devc->num_stages`). Without a trigger the driver
 //! configures stage 0 alone (mask 0, start), which fires at word 0.
 //! These semantics are the OLS's as the driver's configuration implies
-//! them (assumed).
+//! them (assumed). In demux mode a stage matches when either half of
+//! the word does (`stage.v`, `matchL16 | matchH16`), and the driver
+//! writes masks to the low half only, so the empty high half matches at
+//! every word and every stage fires at once: a trigger at 200 MHz
+//! starts the capture at the first words whatever its condition, a
+//! libsigrok finding (case `200 MHz trigger`).
 //!
 //! **Capture**: after the start, `(delay + 1) * 4` more words are
 //! written, then the last `(read + 1) * 4` words are sent, newest first,
@@ -271,6 +276,23 @@ impl Stage {
         let edge = self.edge & self.mask;
         edge == 0 || prev.is_some_and(|p| (p ^ self.value) & edge == edge)
     }
+
+    /// The stage on the part of a word `half` selects.
+    fn on(self, half: u32) -> Stage {
+        Stage { mask: self.mask & half, edge: self.edge & half, ..self }
+    }
+
+    /// `stage.v`'s `next_match32Register`: in demux mode either half of
+    /// the word matching is a match, so a half with nothing in its mask
+    /// always is. The driver writes masks to the low half only, so at
+    /// 200 MHz every stage fires at once.
+    fn fires(self, word: u32, prev: Option<u32>, demux: bool) -> bool {
+        if demux {
+            self.on(0xffff).matches(word, prev) || self.on(0xffff_0000).matches(word, prev)
+        } else {
+            self.matches(word, prev)
+        }
+    }
 }
 
 /// The board as the options make it.
@@ -417,7 +439,8 @@ impl Capture {
             let (mut start, mut bump) = (false, false);
             for s in 0..4 {
                 let st = self.stages[s];
-                if self.fired[s] || st.level() > self.level || !st.matches(w, self.prev) {
+                if self.fired[s] || st.level() > self.level || !st.fires(w, self.prev, self.demux)
+                {
                     continue;
                 }
                 self.fired[s] = true;
@@ -1015,6 +1038,24 @@ mod tests {
         assert_eq!(words[31] & 0x10, 0x10);
         assert_eq!(words[30] & 0x10, 0);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn demux_stages_match_on_either_half() {
+        let st = Stage { mask: 0x10, value: 0x10, edge: 0x10, config: 0 };
+        // Not in demux mode: the condition holds or not.
+        assert!(!st.fires(0, Some(0), false));
+        assert!(st.fires(0x10, Some(0), false));
+        assert!(!st.fires(0x10, None, false));
+        // In demux mode the empty high half matches at every word.
+        assert!(st.fires(0, Some(0), true));
+        assert!(st.fires(0, None, true));
+        // Masks in both halves: either half decides.
+        let both = Stage { mask: 0x0001_0001, value: 0x0001_0001, edge: 0, config: 0 };
+        assert!(!both.fires(0, None, true));
+        assert!(both.fires(0x0001_0000, None, true));
+        assert!(both.fires(0x0000_0001, None, true));
+        assert!(!both.fires(0x0000_0001, None, false));
     }
 
     #[test]
