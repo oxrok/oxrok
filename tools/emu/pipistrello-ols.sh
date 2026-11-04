@@ -76,13 +76,13 @@ emu_cases() {
     emu_case "trigger after polls" -- -d $D -C 8-15 -c samplerate=10k:captureratio=50 --samples 32 --triggers 10=r -O bits
     # Pre-trigger samples beyond the run: memory never written reads 0.
     emu_case "trigger early" -- -d $D -C 0-7 --samples 64 -c captureratio=90 --triggers 1=r -O bits
-    # Stages: one per character of a match. The C driver takes
-    # num_stages samples off the trigger position (api.c:524), though
-    # its start stage follows the last match by one sample: its marker
-    # is num_stages - 1 early. oxrok marks the last stage's match.
-    MARK="api.c:524 subtracts num_stages from trigger_at; the start stage follows the last match by one sample"
-    emu_case "two stages" --oracle-differs "$MARK" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=10 -O bits
-    emu_case "three stages" --oracle-differs "$MARK" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=r1f -O bits
+    # Stages: one per character of a match. The driver's marker is
+    # num_stages before the delay count's first word (api.c:524); from
+    # the firmware's source (2423ef3, hand read) that is 3, 2 and 1
+    # samples after the last match at 100 MHz with 1, 2 and 3 stages.
+    # The model's own timing is simpler and shows it earlier.
+    emu_case "two stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=10 -O bits
+    emu_case "three stages" -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=r1f -O bits
     # Two stages at captureratio=0: trigger_at is -2, which the driver
     # only tests against -1, so it sends 2 samples from before its
     # sample buffer (glibc's chunk header, 0x91 then 0 today): 34
@@ -93,14 +93,18 @@ emu_cases() {
     emu_case "ratio 0 two stages" --oracle-differs "api.c:524 makes trigger_at -num_stages, which protocol.c:620 tests only against -1: 625-645 send samples from before the buffer" --filter 's/^([0-9]+:)../\1xx/' -- -d $D -C 0-7 --samples 32 --triggers 3=10 -O bits
     # Four stages: set_trigger puts the start bit on stage num_stages,
     # 4, which does not exist, so the capture never starts and the
-    # driver polls for ever. oxrok puts the start bit on the last stage
-    # and marks its match.
-    emu_case "four stages hangs" --oracle-bug "set_trigger() puts TRIGGER_START on stage num_stages (api.c:415-417), which does not exist with 4 stages: the capture never starts" --timeout 5 -- -d $D -C 0-7 --samples 64 --triggers 3=1010 -O bits
+    # driver polls for ever. oxrok puts the start bit on the last stage;
+    # the word the delay count starts from is then the match's next, so
+    # the marker is on the match, and none at captureratio=0.
+    FOUR="set_trigger() puts TRIGGER_START on stage num_stages (api.c:415-417), which does not exist with 4 stages: the capture never starts"
+    emu_case "four stages ratio 50" --oracle-bug "$FOUR" --oracle-hangs --timeout 5 -- -d $D -C 0-7 --samples 64 -c captureratio=50 --triggers 3=1010 -O bits
+    emu_case "four stages" --oracle-bug "$FOUR" --oracle-hangs --timeout 5 -- -d $D -C 0-7 --samples 64 --triggers 3=1010 -O bits
     # captureratio=100: the delay count goes out as 0xffffffff, so the
-    # board captures 2^34 words after the trigger; at 10 Hz the driver
+    # board captures 2^28 words after the trigger (fwd has 26 bits,
+    # controller.v), about 2.7 s at 100 MHz; at 10 Hz the driver
     # polls for ever. oxrok sends a delay of one unit (4 samples after
     # the trigger).
-    emu_case "ratio 100 hangs" --oracle-bug "delaycount is 0 at captureratio=100 (api.c:523), sent as 0xffffffff (api.c:562-566): the board never finishes at 10 Hz" --timeout 5 -- -d $D -C 0-7 -c samplerate=10:captureratio=100 --samples 64 --triggers 3=1 -O bits
+    emu_case "ratio 100" --oracle-hangs --oracle-bug "delaycount is 0 at captureratio=100 (api.c:523), sent as 0xffffffff (api.c:562-566): the board never finishes at 10 Hz" --timeout 5 -- -d $D -C 0-7 -c samplerate=10:captureratio=100 --samples 64 --triggers 3=1 -O bits
     emu_case "five stages" --stderr --expect-fail --filter "$F" -- -d $D --samples 64 --triggers 3=10101
 
     # RLE: a run is a word and a count word (top bit set), counts of
@@ -115,6 +119,10 @@ emu_cases() {
     # (api.c:524), which count RLE words, not samples: here the
     # trigger is long before the 2000 samples kept, and oxrok, which
     # follows the word count, marks nothing.
+    # At captureratio=99 the words after the trigger are few enough for
+    # the match to be among the samples kept: oxrok marks channel 10's
+    # rise, the C driver the same count of samples as without RLE.
+    emu_case "rle trigger marker" --oracle-differs "api.c:524 computes trigger_at from counts of RLE words as if they were samples" -- -d $D -c rle=on:captureratio=99 -C 8-15 --samples 2000 --triggers 10=r -O bits
     emu_case "rle trigger" --oracle-differs "api.c:524 computes trigger_at from counts of RLE words as if they were samples" -- -d $D -c rle=on:captureratio=50 -C 8-15 --samples 2000 --triggers 10=r -O hex
 
     # Demux: 200 MHz, two samples of channels 0-15 per word; the driver
@@ -133,7 +141,7 @@ emu_cases() {
     # All 32 channels at 200 MHz: the driver takes each demux word for
     # one sample, gets half the samples it counts on and polls for ever.
     # Channels 16-31 are not sampled in demux mode: oxrok refuses them.
-    emu_case "200 MHz 32 channels hangs" --oracle-bug "protocol.c:401-406 counts the channel groups of flag_reg, not the demux word: each word is taken for one sample, and 398 waits for samples that never come" --timeout 5 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=200m --samples 64 -O hex
+    emu_case "200 MHz 32 channels" --oracle-hangs --oracle-bug "protocol.c:401-406 counts the channel groups of flag_reg, not the demux word: each word is taken for one sample, and 398 waits for samples that never come" --timeout 5 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=200m --samples 64 -O hex
     # stage.v ORs the matches of the word's two halves in demux mode and
     # the driver writes masks to the low half only, so every stage fires
     # at once: the capture starts at the first words, whatever the
@@ -155,6 +163,10 @@ emu_cases() {
     emu_case "samplerate too low" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=5 --samples 10
     emu_case "samplerate too high" --stderr --expect-fail --filter "$S" -- -d $D -c samplerate=300m --samples 10
     emu_case "too few samples" --stderr --expect-fail -- -d $D --samples 2
+    emu_case "captureratio too high" --stderr --expect-fail --filter "s/^oxrok: err: oxrok::drivers::pipistrello_ols: (Capture ratio)/sr: hwdriver: \\1/; s/^(Failed to set device option .captureratio.): invalid argument: .*/\\1: invalid argument./" -- -d $D -c captureratio=101 --samples 16
+    # The driver has no scan options and ignores any (api.c:90); oxrok's
+    # command line refuses one the driver does not list, for any driver.
+    emu_case "conn scan option" --oracle-differs "sigrok-cli passes a scan option the driver does not list and api.c:90 ignores it" --stderr --expect-fail -- -d $D:conn=1.2 --scan
     emu_case "pattern unknown" --stderr --expect-fail --filter "s/^(Failed to set device option .pattern.): invalid argument: .*/\\1: generic\\/unspecified error./" -- -d $D -c pattern=Other --samples 10
     emu_case "get conn" --stderr --expect-fail --filter "s/^(Failed to get 'conn'): unknown option: conn\$/\\1: not applicable/" -- -d $D --get conn
 
@@ -185,6 +197,9 @@ emu_cases() {
     pols_options max-rate=50000000
     emu_case "max rate 50 MHz" --oracle-differs "$SLOW" -- -d $D --get samplerate
     emu_case "max rate 50 MHz capture" --oracle-differs "$SLOW" -- -d $D -C 0-7 --samples 16 -O hex
+    # One the clock does not divide to: the rate below it.
+    pols_options max-rate=60000000
+    emu_case "max rate 60 MHz" --oracle-differs "$SLOW" -- -d $D --get samplerate
     pols_options channels=16
     emu_case "16 channels" --keep-header -- -d $D --scan
     emu_case "16 channels capture" -- -d $D --samples 32 -O hex

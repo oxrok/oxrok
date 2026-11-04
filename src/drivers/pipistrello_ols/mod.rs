@@ -26,9 +26,11 @@
 //! wrong ([`protocol`] lists those).
 //!
 //! Also unlike the C driver: a board whose metadata gives a maximum
-//! rate below the 100 MHz default starts at that maximum (the C driver
-//! fails to set its default there, reads back 0 Hz and sends a divider
-//! of 0, which samples at 100 MHz).
+//! rate below the 100 MHz default starts at that maximum, or the rate
+//! below it the clock divides to (the C driver fails to set its default
+//! there, reads back 0 Hz and sends a divider of 0, which samples at
+//! 100 MHz, and flags without `FLAG_FILTER`, which oxrok sets as at any
+//! rate up to 100 MHz).
 
 #![forbid(unsafe_code)]
 
@@ -227,9 +229,10 @@ impl Driver for PipistrelloOlsDriver {
             let Ok(found) = open_port(&info) else { return Ok(Vec::new()) };
             let Some(mut ctx) = found else { continue };
             let meta = probe(&mut ctx);
-            let closed = close_port(ctx);
-            return match (meta, closed) {
-                (Ok(Some(meta)), Ok(())) => Ok(vec![Box::new(PolsDevice::new(info, &meta))]),
+            // api.c:162 logs a failed close and keeps the device.
+            let _ = close_port(ctx);
+            return match meta {
+                Ok(Some(meta)) => Ok(vec![Box::new(PolsDevice::new(info, &meta))]),
                 _ => Ok(Vec::new()),
             };
         }
@@ -452,7 +455,9 @@ impl Device for PolsDevice {
             }
             Key::CaptureRatio => {
                 let r = value.as_u64().ok_or_else(bad)?;
+                // hwdriver.c's check of the key, before the driver.
                 if r > 100 {
+                    log::error!("Capture ratio must be 0..100.");
                     return Err(bad());
                 }
                 self.capture_ratio = r;
@@ -607,6 +612,8 @@ fn run(ctx: &mut Context, plan: &protocol::Plan, limit: u64, sink: &PacketSink, 
     let mut buf = vec![0u8; FTDI_BUF_SIZE];
     let mut received = 0usize;
     let mut complete = false;
+    // No pause between reads: a read that brings only the status bytes
+    // has waited out the chip's 16 ms latency timer.
     while !stop.load(Ordering::SeqCst) {
         if decoder.done() {
             complete = true;

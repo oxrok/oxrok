@@ -34,11 +34,11 @@
 //! - the excess of the last buffer beyond the sample limit is taken off
 //!   the run being copied, never off a count of 0 (`protocol.c`
 //!   557-563 and 597-600 wrap `rle_count` and copy beyond the buffer);
-//! - the trigger marker is where the board's own count puts the last
-//!   stage's match, the word the delay count starts at, also with RLE,
-//!   several stages or a limit that is not a multiple of 4 (`api.c` 524
-//!   takes `num_stages` samples off, `protocol.c` 620 tests only -1 and
-//!   sends samples from before its buffer);
+//! - at a limit that is not a multiple of 4, or with RLE, the trigger
+//!   marker follows the board's word count rather than taking counts of
+//!   words for samples, and a marker before the first sample is no
+//!   marker (`protocol.c` 620 tests only -1 and sends samples from
+//!   before its buffer);
 //! - four stages put the start bit on the last of them, as there is no
 //!   fifth for it (`set_trigger` in `api.c` sets it on stage
 //!   `num_stages`, which does not exist, so the board never starts);
@@ -237,12 +237,16 @@ pub fn samplerate(rate: u64, max_samplerate: u32) -> Option<Rate> {
     }
     let demux = rate > CLOCK_RATE;
     let divider = if demux { CLOCK_RATE * 2 / rate - 1 } else { CLOCK_RATE / rate - 1 };
-    let divider = u32::try_from(divider).unwrap_or(u32::MAX);
-    let mut samplerate = CLOCK_RATE / (u64::from(divider) + 1);
-    if demux {
-        samplerate *= 2;
+    let mut divider = u32::try_from(divider).unwrap_or(u32::MAX - 1);
+    let given = |divider: u32| {
+        let rate = CLOCK_RATE / (u64::from(divider) + 1);
+        if demux { rate * 2 } else { rate }
+    };
+    // The divider rounds down: never above the board's maximum.
+    if max_samplerate != 0 && given(divider) > u64::from(max_samplerate) {
+        divider += 1;
     }
-    Some(Rate { samplerate, divider, demux })
+    Some(Rate { samplerate: given(divider), divider, demux })
 }
 
 /// The enabled channel groups (bytes of the channel mask), one bit each.
@@ -414,12 +418,19 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
         )]
         let d = (f64::from(readcount) * (1.0 - s.capture_ratio as f64 / 100.0)) as u32;
         delaycount = d.max(1);
-        // The start bit goes on the stage after the user's, which fires
-        // one word after their last match; with four there is none
-        // after them, and it goes on the last one.
+        // The start bit goes on the stage after the user's; with four
+        // there is none after them, and it goes on the last one. The
+        // marker, in memory words from the newest: api.c:524's
+        // (readcount - delaycount) * 4 - num_stages from the oldest.
+        // From the firmware's source (hand read, no bench) that is 3
+        // samples after the last match at 100 MHz, 2 at 50 MHz, 1 at
+        // 33 MHz or less, less num_stages - 1. On the last stage itself
+        // the first word the delay counts is the one after the match,
+        // so the word at `words` is the match.
         let start = stages.count.min(NUM_TRIGGER_STAGES - 1);
         let words = u64::from(delaycount) * 4;
-        trigger_word = Some(if start < stages.count { words - 1 } else { words });
+        trigger_word =
+            Some(if start < stages.count { words } else { words + stages.count as u64 - 1 });
         for i in 0..NUM_TRIGGER_STAGES {
             if i <= stages.count {
                 log::debug!("Setting p-ols stage {i} trigger.");
@@ -672,6 +683,9 @@ mod tests {
         assert_eq!((r.samplerate, r.divider, r.demux), (200_000_000, 0, true));
         assert_eq!(samplerate(10, 0).unwrap().divider, 9_999_999);
         assert!(samplerate(200_000_000, 100_000_000).is_none());
+        // A maximum the clock does not divide to: the rate below it.
+        let r = samplerate(60_000_000, 60_000_000).unwrap();
+        assert_eq!((r.samplerate, r.divider), (50_000_000, 1));
     }
 
     #[test]
@@ -770,7 +784,13 @@ mod tests {
         let p = plan(&s, &st).unwrap();
         let h = hexes(&p);
         assert_eq!((h[2].as_str(), h[14].as_str()), ("c200000000", "ce00000308"));
-        assert_eq!(p.trigger_word, Some(31));
+        // The word at the delay count is the match itself.
+        assert_eq!(p.trigger_word, Some(32));
+        // Two and three stages: api.c:524's position.
+        for n in [2, 3] {
+            let st = Stages { count: n, ..Stages::default() };
+            assert_eq!(plan(&s, &st).unwrap().trigger_word, Some(32 + n as u64 - 1), "{n}");
+        }
         // Five: refused with the C driver's message.
         let mut five = four.clone();
         five.add(4, 3, TriggerMatch::One);
@@ -880,6 +900,51 @@ mod tests {
         assert_eq!(s[16 - 1 - 3], 3);
         assert_eq!(s[16 - 1 - 1], 3);
         assert_eq!(s[16 - 1 - 4], 4);
+    }
+
+    #[test]
+    fn the_marker_on_a_count_word_is_the_newest_sample_of_its_run() {
+        let s = Settings { channel_mask: 0xff, limit_samples: 16, ..settings() };
+        let p = plan(&s, &Stages::default()).unwrap();
+        let p = Plan { flag_reg: p.flag_reg | FLAG_RLE, trigger_word: Some(1), ..p };
+        let mut d = Decoder::new(&p, 16);
+        // Newest first: 1, then a count word, then 3 three times.
+        d.feed(&[1, 0x82, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+        let (s, t) = d.finish();
+        assert_eq!(t, Some(16 - 1 - 1));
+        assert_eq!(s[16 - 1 - 1], 3);
+    }
+
+    #[test]
+    fn the_marker_with_demux_pairs() {
+        // Channels 0-7 at 200 MHz, ratio 50, one stage: 2 units, the
+        // delay 1: the word 4 from the newest, 8 samples.
+        let s = Settings {
+            flag_reg: FLAG_DEMUX,
+            channel_mask: 0xff,
+            limit_samples: 16,
+            capture_ratio: 50,
+            ..settings()
+        };
+        let st = convert_trigger(Some(&trigger(&[(0, 1, TriggerMatch::One)])), 0xff).unwrap();
+        let p = plan(&s, &st).unwrap();
+        assert_eq!(p.trigger_word, Some(4));
+        let mut d = Decoder::new(&p, 16);
+        d.feed(&(0..16u8).rev().collect::<Vec<_>>());
+        let (samples, t) = d.finish();
+        assert_eq!(t, Some(7));
+        assert_eq!(samples[7], 7);
+        // With RLE: the newer sample of the run's oldest pair.
+        let p = Plan { flag_reg: p.flag_reg | FLAG_RLE, trigger_word: Some(2), ..p };
+        let mut d = Decoder::new(&p, 16);
+        // Pairs: (1, 2), a count of 1, then (3, 4) twice, the rest.
+        d.feed(&[1, 2, 0x01, 0x80, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+        let (samples, t) = d.finish();
+        assert_eq!(samples.len(), 16);
+        // The value word, word 2, holds the run's oldest pair: its newer
+        // sample is 4 from the newest.
+        assert_eq!(t, Some(16 - 1 - 4));
+        assert_eq!(samples[16 - 1 - 4], 3);
     }
 
     #[test]
