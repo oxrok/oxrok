@@ -100,6 +100,7 @@ pub mod drivers {
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
     pub mod sysclk_lwla;
+    pub mod uni_t_dmm;
     pub mod zeroplus_logic_cube;
 }
 

@@ -273,7 +273,9 @@ pub trait Transport: Send {
     /// binds it. For a C driver that does this itself on an interface a
     /// kernel driver binds, whose probe would otherwise send requests of
     /// its own at every release. No transfer, so a recording has no line
-    /// for it. Nothing to do on a system that does not have this.
+    /// for it. A no-op for nusb off Linux and on Windows; libusb on macOS
+    /// implements both calls (`darwin_usb.c`), and there the detach fails
+    /// with `LIBUSB_ERROR_ACCESS` without root or an entitlement.
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
         let _ = interface;
         Ok(())

@@ -1,0 +1,30 @@
+# oxrok usb fixture 1
+# emu uni-t-dmm: es519xx14 samples 4
+# arg: -d
+# arg: uni-t-ut61e:conn=1a86.e008
+# arg: --samples
+# arg: 4
+device vid=1a86 pid=e008 version=1100 manufacturer="WCH.CN " product="USB to Serial" interfaces=0:03:00:00
+claim 0 -> ok
+ctl_out 21 09 0300 0000 004b000003 -> ok
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f7313132b334b53b
+int_in 82 8 -> f7b0b0b0bab00d8a
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f73132b034b5b63b
+int_in 82 8 -> f7b0b0b0bab00d8a
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f7313132b334b53b
+int_in 82 8 -> f7b0b0b0bab00d8a
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f000{7}
+int_in 82 8 -> f73132b034b5b63b
+int_in 82 8 -> f7b0b0b0bab00d8a
+release 0 -> ok

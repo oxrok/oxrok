@@ -440,24 +440,26 @@ pub fn fs9922_parse(buf: &[u8], z1_diode: bool) -> Option<Reading> {
         b'-' => -1.0,
         _ => return None,
     };
-    let value = if &buf[1..5] == b"?0:?" {
-        f32::INFINITY
+    // An overload ("0.L") leaves parse_value before the sign and the
+    // point are looked at: plus infinity, with no decimals of its own.
+    let (value, exponent) = if &buf[1..5] == b"?0:?" {
+        (f32::INFINITY, 0)
     } else {
         let mut v = 0u32;
         for &c in &buf[1..5] {
             v = v * 10 + u32::from(c.checked_sub(b'0').filter(|d| *d < 10)?);
         }
-        v as f32
-    };
-    let exponent = match buf[6] {
-        b'0' => 0,
-        b'1' => -3,
-        b'2' => -2,
-        b'4' => -1,
-        _ => return None,
+        let exponent = match buf[6] {
+            b'0' => 0,
+            b'1' => -3,
+            b'2' => -2,
+            b'4' => -1,
+            _ => return None,
+        };
+        (v as f32 * sign, exponent)
     };
     let f = fs9922_flags(buf);
-    let (v, digits) = scaled(value * sign, exponent + f.prefix.exponent());
+    let (v, digits) = scaled(value, exponent + f.prefix.exponent());
     let mut r = Reading::new(v, Mq::Gain, Unit::Unitless, digits);
     if f.volt || f.diode {
         (r.mq, r.unit) = (Mq::Voltage, Unit::Volt);
@@ -582,12 +584,20 @@ mod tests {
         assert_eq!((r.mq, r.unit, r.digits), (Mq::Voltage, Unit::Volt, 3));
         assert!((r.value - 1.234).abs() < 1e-5);
         assert!(r.flags.contains(MqFlags::DC | MqFlags::AUTORANGE));
-        // Over limit, milli, ampere, AC.
+        // Over limit, milli, ampere, AC: parse_value leaves before the
+        // sign and the point, so plus infinity with the prefix's digits
+        // only, whatever byte 6 says (tools/emu/uni-t-dmm.sh, "overload
+        // fs9922", against sigrok-cli).
+        for point in *b"019" {
+            let mut p = b"-?0:? 0".to_vec();
+            p[6] = point;
+            p.extend([0b0000_1000, 0, 0b0100_0000, 0b0100_0000, 0, b'\r', b'\n']);
+            let r = fs9922_parse(&p, false).unwrap();
+            assert!(r.value.is_infinite() && r.value > 0.0);
+            assert_eq!((r.mq, r.flags, r.digits), (Mq::Current, MqFlags::AC, 3));
+        }
         let mut p = b"-?0:? 0".to_vec();
         p.extend([0b0000_1000, 0, 0b0100_0000, 0b0100_0000, 0, b'\r', b'\n']);
-        let r = fs9922_parse(&p, false).unwrap();
-        assert!(r.value.is_infinite() && r.value < 0.0);
-        assert_eq!((r.mq, r.flags, r.digits), (Mq::Current, MqFlags::AC, 3));
         // Both AC and DC is not a packet.
         p[7] = 0b0001_1000;
         assert!(!fs9922_valid(&p));

@@ -682,6 +682,7 @@ impl Transport for Recorder {
         r
     }
 
+    /// No transfer and nothing a replay needs, so it is not recorded.
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
         self.inner.detach_kernel_driver(interface)
     }

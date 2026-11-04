@@ -316,11 +316,19 @@ impl Transport for Nusb {
         let Ok(config) = config else { return Ok(()) };
         let path = interface_driver_link(self.info.bus, &self.info.ports, config, interface);
         let driver = std::fs::read_link(path).ok();
-        let name = driver.as_deref().and_then(std::path::Path::file_name);
-        if name.is_none_or(|n| n == "usbfs") {
+        let Some(name) = driver.as_deref().and_then(std::path::Path::file_name) else {
+            return Ok(());
+        };
+        if name == "usbfs" {
             return Ok(());
         }
-        self.device.detach_kernel_driver(interface).map_err(|e| map(&e, "detach"))
+        self.device.detach_kernel_driver(interface).map_err(|e| map(&e, "detach"))?;
+        log::info!(
+            "Detached kernel driver {} from interface {interface}: it stays detached until \
+             the device is plugged in again.",
+            name.to_string_lossy()
+        );
+        Ok(())
     }
 
     fn claim_interface(&mut self, interface: u8) -> Result<()> {
