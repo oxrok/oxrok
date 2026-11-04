@@ -92,6 +92,7 @@ pub mod drivers {
     pub mod raspberrypi_pico;
     pub mod rigol_ds;
     pub mod saleae_logic16;
+    pub mod saleae_logic_pro;
     pub mod serial_dmm;
 }
 
@@ -106,6 +107,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::microchip_pickit2::Pickit2Driver));
     registry.register(Box::new(drivers::fx2lafw::Fx2lafwDriver));
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
+    registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
