@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The driver against sessions recorded from a Pico running the
 //! sigrok-pico firmware (`OXROK_SERIAL_RECORD`): a four channel digital
 //! capture in the compact format and a mixed analog and digital one.

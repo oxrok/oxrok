@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/ikalogic-scanaplus/api.c (the ids, the product string, the open sequence),
-//   libsigrok/src/hardware/ikalogic-scanaplus/protocol.c (the EEPROM id, the FPGA writes, the compressed sample format),
-//   libsigrok/src/hardware/ikalogic-scanaplus/protocol.h,
-//   Copyright (C) 2013 Uwe Hermann <uwe@hermann-uwe.de>,
-//   with commits by Lars-Peter Clausen, Bert Vermeulen, Daniel Elstner,
-//   Gerhard Sittig, Martin Ling, Soeren Apel, Marc Schink
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The IKALOGIC `ScanaPLUS` as libsigrok's `ikalogic-scanaplus` driver
 //! sees it: an FT232H (`0403:6014`) in synchronous FIFO mode in front

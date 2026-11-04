@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The value tables of libsigrok's own unit tests (`tests/*.c` in the
 //! libsigrok tree), run against oxrok's counterparts. Each test names
 //! the libsigrok test it mirrors. Cases that only check NULL handling

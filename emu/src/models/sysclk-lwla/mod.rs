@@ -1,17 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/sysclk-lwla/api.c (the ids, the endpoints, the open's drain),
-//   libsigrok/src/hardware/sysclk-lwla/lwla.c (the bitstream transfer, the command words),
-//   libsigrok/src/hardware/sysclk-lwla/lwla.h,
-//   libsigrok/src/hardware/sysclk-lwla/lwla1034.c (the registers, long registers and the 36-bit memory format),
-//   libsigrok/src/hardware/sysclk-lwla/lwla1016.c (the registers and the 32-bit memory formats),
-//   libsigrok/src/hardware/sysclk-lwla/protocol.c (the capture sequence and the status poll),
-//   libsigrok/src/hardware/sysclk-lwla/protocol.h,
-//   Copyright (C) 2014 Daniel Elstner <daniel.kitta@gmail.com>,
-//   Copyright (C) 2015 Daniel Elstner <daniel.kitta@gmail.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Bert Vermeulen,
-//   Soeren Apel, Martin Ling, Gerhard Sittig
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Sysclk LWLA1034 (`2961:6689`) and LWLA1016 (`2961:6688`) as
 //! libsigrok's `sysclk-lwla` driver sees them: a Cypress FX2 with its

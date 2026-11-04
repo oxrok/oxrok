@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! Transport shells: the parts every device of a kind shares, which a
 //! model builds on and fills in with what its own protocol means.
 //!

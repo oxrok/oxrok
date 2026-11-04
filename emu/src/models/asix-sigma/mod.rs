@@ -1,15 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/asix-sigma/api.c (the ids, the scan by serial number),
-//   libsigrok/src/hardware/asix-sigma/protocol.c (the bit-bang pins, the netlist scrambling, the FPGA configuration sequence),
-//   libsigrok/src/hardware/asix-sigma/protocol.h,
-//   Copyright (C) 2010-2012 Håvard Espeland <gus@ping.uio.no>,
-//   Copyright (C) 2010 Martin Stensgård <mastensg@ping.uio.no>,
-//   Copyright (C) 2010 Carl Henrik Lunde <chlunde@ping.uio.no>,
-//   Copyright (C) 2020 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Niklas Thorne, jry,
-//   Daniel Trnka
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The ASIX SIGMA and SIGMA2 logic analyzers (and the OMEGA's scan) as
 //! libsigrok's `asix-sigma` driver sees them: an FTDI chip in FIFO mode

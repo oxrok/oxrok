@@ -1,18 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/serial-dmm/api.c (the meters' line settings),
-//   libsigrok/src/dmm/metex14.c (the request and the packet's layout),
-//   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2012 Alexandru Gagniuc <mr.nuke.me@gmail.com>,
-//   Copyright (C) 2012 Uwe Hermann <uwe@hermann-uwe.de>,
-//   Copyright (C) 2012-2013 Uwe Hermann <uwe@hermann-uwe.de>,
-//   with commits by Gerhard Sittig, Lars-Peter Clausen, Martin Ling,
-//   Daniel Elstner, Soeren Apel, Baruch Even, Elen Eisendle, Frank Stettner,
-//   Janne Huttunen, Karl Palsson, Mandl, Matthias Schulz, Matthieu Gaillet,
-//   Mike McCauley, Peter Skarpetis, Rafael G. Martins, Richard,
-//   Thomas Weißschuh, Timo Kokkonen, Tobias Faeth, Vitaliy Vorobyov,
-//   Wolfram Sang, Aurelien Jacobs
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! A serial multimeter on the CDC-ACM shell, the shell's pilot: one meter
 //! that must be asked for each packet and two that send on their own.

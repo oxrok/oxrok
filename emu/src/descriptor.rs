@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! Building and walking USB descriptors.
 
 /// Descriptor types.

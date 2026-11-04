@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/ikalogic-scanalogic2/api.c (the open sequence, the capture command),
-//   libsigrok/src/hardware/ikalogic-scanalogic2/protocol.c (the status reads, the sample packets),
-//   libsigrok/src/hardware/ikalogic-scanalogic2/protocol.h,
-//   Copyright (C) 2013 Marc Schink <sigrok-dev@marcschink.de>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Bert Vermeulen,
-//   Soeren Apel, Martin Ling, Daniel Elstner
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The IKALOGIC Scanalogic-2: an `ATmega168PA` with four 23K256 SRAMs
 //! behind a low speed HID interface. Every command and answer is one

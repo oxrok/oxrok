@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! `oxrok-emu`: serves a device model over USB/IP and, on Linux with
 //! root, attaches it to the machine through `vhci-hcd`.
 //!

@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! The CDC-ACM shell: a serial instrument the kernel's `cdc_acm` binds,
 //! which the tools reach through `/dev/ttyACMn`.
 //!

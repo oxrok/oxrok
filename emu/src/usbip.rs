@@ -1,3 +1,6 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
+
 //! The USB/IP server: protocol version 1.1.1 as the Linux `vhci-hcd`
 //! client speaks it. One TCP connection carries one device:
 //! `OP_REQ_DEVLIST` lists it, `OP_REQ_IMPORT` claims it, then the

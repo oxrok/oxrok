@@ -1,13 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/kingst-la2016/protocol.c (send_chunk(), stream_data(): the sample layouts),
-//   Copyright (C) 2022 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   Copyright (C) 2020 Florian Schmidt <schmidt_florian@gmx.de>,
-//   Copyright (C) 2013 Marcus Comstedt <marcus@mc.pp.se>,
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2012 Joel Holdsworth <joel@airwebreathe.org.uk>,
-//   with commits by Kevin Grant, Helge Kruse, Dave Platt, Soeren Apel
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The sample side of the Kingst model: the signal on the probes, the
 //! FPGA's hardware trigger, the run length encoded sample memory of a

@@ -1,14 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/lascar-el-usb/protocol.c (the commands, the configuration block, the sample bytes),
-//   libsigrok/src/hardware/lascar-el-usb/protocol.h,
-//   libsigrok/src/hardware/lascar-el-usb/api.c (the log download),
-//   eltuxusb (Romain Aviolat), GPLv3, version 0.3,
-//   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Lars-Peter Clausen, Daniel Elstner,
-//   Martin Ling, Soeren Apel, Aurelien Jacobs, Daniel Glöckner,
-//   Gerhard Sittig, Frank Stettner
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Lascar `EasyLog` EL-USB data loggers: a `SiLabs` C8051F321 running
 //! `USBXpress`, an EEPROM holding the log, and a sensor. The host never

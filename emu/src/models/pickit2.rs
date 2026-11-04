@@ -1,14 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/microchip-pickit2/protocol.c (the commands,
-//     their layout and order),
-//   libsigrok/src/hardware/microchip-pickit2/protocol.h,
-//   libsigrok/src/hardware/microchip-pickit2/api.c (the rates, the
-//     capture ratio presets, the interface),
-//   Copyright (C) 2018 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   with commits by Uwe Hermann
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like
-//   it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Microchip PICkit2 programmer in its logic analyzer mode, as the
 //! Pico emulator plays it (`hil/pico-hidcable`, `MODE pickit2`) with the

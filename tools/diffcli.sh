@@ -1,4 +1,5 @@
 #!/bin/sh
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 # Differential check: runs the same command lines through sigrok-cli and
 # oxrok and diffs the output after the first header line.
 #

@@ -1,4 +1,5 @@
 #![allow(clippy::format_collect, clippy::doc_markdown)]
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 
 //! The driver against hand written serial fixtures: packets built from
 //! the chipset layouts, with the byte stream starting mid packet as a

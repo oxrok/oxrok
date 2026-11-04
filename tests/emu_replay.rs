@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Replays of the sessions the emulator records: every
 //! `tests/fixtures/DRIVER/emu-*.txt` was written by an `emu_case
 //! --record` of `tools/diffcli.sh --emu` (docs/USB.md, "Record and

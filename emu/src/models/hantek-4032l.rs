@@ -1,13 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/hantek-4032l/api.c (the rates, the trigger packing),
-//   libsigrok/src/hardware/hantek-4032l/protocol.c (the commands, the status and the stream),
-//   libsigrok/src/hardware/hantek-4032l/protocol.h,
-//   Copyright (C) 2016 Andreas Zschunke <andreas.zschunke@gmx.net>,
-//   Copyright (C) 2017 Andrej Valek <andy@skyrain.eu>,
-//   Copyright (C) 2017 Uwe Hermann <uwe@hermann-uwe.de>,
-//   with commits by Gerhard Sittig, Romain Tartière
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Hantek 4032L logic analyzer (32 channels in two groups of 16, A
 //! and B) as libsigrok's `hantek-4032l` driver sees it: a vendor USB

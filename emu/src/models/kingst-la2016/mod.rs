@@ -1,16 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/kingst-la2016/api.c (the models, rates, thresholds, the scan),
-//   libsigrok/src/hardware/kingst-la2016/protocol.c (the requests, registers and sample layout),
-//   libsigrok/src/hardware/kingst-la2016/protocol.h,
-//   Copyright (C) 2022 Gerhard Sittig <gerhard.sittig@gmx.net>,
-//   Copyright (C) 2020 Florian Schmidt <schmidt_florian@gmx.de>,
-//   Copyright (C) 2013 Marcus Comstedt <marcus@mc.pp.se>,
-//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   Copyright (C) 2012 Joel Holdsworth <joel@airwebreathe.org.uk>,
-//   with commits by Kevin Grant, Helge Kruse, Mike Walters, Soeren Apel,
-//   Uwe Hermann, Dave Platt
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The Kingst LA series (LA1010, LA1016, LA2016, LA5016, LA5032 and
 //! their A1/A2 revisions) as libsigrok's `kingst-la2016` driver sees

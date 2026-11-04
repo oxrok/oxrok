@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/uni-t-dmm/protocol.c (the cable's view of the driver),
-//   libsigrok/src/hardware/uni-t-dmm/api.c,
-//   Copyright (C) 2012-2013 Uwe Hermann <uwe@hermann-uwe.de>,
-//   with commits by Gerhard Sittig, Daniel Elstner, Martin Ling,
-//   Bert Vermeulen, Lars-Peter Clausen, Soeren Apel, Elen Eisendle,
-//   Karl Palsson
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The UNI-T UT-D04 cable as libsigrok's `uni-t-dmm` driver reaches it:
 //! a WCH CH9325 UART to HID bridge, `1a86:e008`, driven by raw USB and

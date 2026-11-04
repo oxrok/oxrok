@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! Protocol decoding through the binary, compared with annotation
 //! output captured from sigrok-cli 0.8.0-git with libsigrokdecode on
 //! 2026-10-22. `uart-hi.vcd` is a synthetic 8N1 capture at 115200 baud,

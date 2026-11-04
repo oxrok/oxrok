@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 //! The binary against the demo driver, compared with output captured from
 //! sigrok-cli 0.7.2 with libsigrok 0.5.2 on 2026-10-22. The first header
 //! line names the tool and is skipped; everything after it must match

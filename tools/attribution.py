@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 """Regenerate the "Counterpart in sigrok" comments of the Rust sources.
 
 Each Rust file that corresponds to a sigrok source gets a comment naming

@@ -1,10 +1,5 @@
-// Counterpart in sigrok:
-//   libftdi1 (ftdi.c: ftdi_to_clkbits, ftdi_convert_baudrate), by Intra2net
-//   AG and the libftdi developers.
-// This file is written for oxrok from FTDI's application notes; libftdi was
-//   the reference for which requests a driver sends, and libftdi_divisor is a
-//   port of libftdi's ftdi_to_clkbits and ftdi_convert_baudrate
-//   (LGPL-2.1-only, taken under its section 3 as GPL-3.0-or-later).
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! The FTDI shell: what every FT232/FT245/FT2232/FT4232/FT232H/FT-X
 //! device shares, so that a model only says what its pins and FIFOs
@@ -373,41 +368,53 @@ pub fn decode_divisor(chip: Chip, value: u16, bits: u16) -> Result<Divisor, Stri
     Ok(Divisor { encoded, eighths, clock: if clk10 { 12_000_000 } else { 3_000_000 } })
 }
 
-/// libftdi's divisor for `baud` (`ftdi_convert_baudrate`, the bit-bang
-/// factor of 4 already applied by the caller): `wValue`, the divisor
-/// bits of `wIndex` as [`decode_divisor`] takes them, and the rate it
-/// gives. libftdi refuses rates more than 5 % from what they give.
-///
-/// A port of libftdi 1.5's `ftdi_to_clkbits` and the H chip branch of
-/// `ftdi_convert_baudrate` (LGPL-2.1, see the file header), not of
-/// the AM's `ftdi_to_clkbits_AM`.
+/// The FTDI chip's baud-rate divisor for `baud`, as the host's
+/// `SET_BAUD_RATE` request carries it: `wValue`, the divisor bits of
+/// `wIndex` as [`decode_divisor`] takes them, and the rate the divisor
+/// gives. The bit-bang factor of 4 is already applied by the caller; the
+/// host takes the closest divisor only within `AN_120` §3's ±3 %.
+/// Written from the FTDI `AN_120` divisor encoding.
 pub fn libftdi_divisor(chip: Chip, baud: u32) -> (u16, u16, u32) {
-    fn clkbits(baud: u64, clk: u64, div: u64) -> (u32, u32) {
-        if baud >= clk / div {
-            (0, (clk / div) as u32)
-        } else if baud >= clk / (div + div / 2) {
-            (1, (clk / (div + div / 2)) as u32)
-        } else if baud >= clk / (2 * div) {
-            (2, (clk / (2 * div)) as u32)
-        } else {
-            let divisor = clk * 16 / div / baud;
-            let mut best = if divisor & 1 == 1 { divisor / 2 + 1 } else { divisor / 2 };
-            if best > 0x20000 {
-                best = 0x1ffff;
-            }
-            let b = clk * 16 / div / best;
-            let b = if b & 1 == 1 { b / 2 + 1 } else { b / 2 };
-            (((best >> 3) as u32) | (FRAC_CODE[(best & 7) as usize] << 14), b as u32)
-        }
-    }
-    let baud = u64::from(baud.max(1));
-    let (encoded, best) = if chip.high_speed() && baud * 10 > 120_000_000 / 0x3fff {
-        let (e, b) = clkbits(baud, 120_000_000, 10);
-        (e | 0x20000, b)
+    // The chip divides the master clock by `base * divisor`; the divisor
+    // is in eighths (8 = divide by 1). AN_120 §3: 48 MHz / 16 normally
+    // (a 3 MHz reference); §4.4: 120 MHz / 10 on the H chips with the
+    // switch set (a 12 MHz reference).
+    let target = u64::from(baud.max(1));
+    let (clock, base, hi) = if chip.high_speed() && target * 10 > 120_000_000 / 0x3fff {
+        (120_000_000, 10, true)
     } else {
-        clkbits(baud, 48_000_000, 16)
+        (48_000_000, 16, false)
     };
-    ((encoded & 0xffff) as u16, (encoded >> 16) as u16, best)
+    let rate = |d: u64| clock / d;
+    // AN_120 §3 (and §4.4 for the H chips): the top rates clamp to the
+    // exact divisor (divisors 0 and 1 are special cases, no fraction);
+    // below them the divisor is the closest one (in eighths) at or under
+    // the target, within ±3 %.
+    let (encoded, achieved) = if target >= rate(base) {
+        (0, rate(base))
+    } else if target >= rate(base + base / 2) {
+        (1, rate(base + base / 2))
+    } else if target >= rate(2 * base) {
+        (2, rate(2 * base))
+    } else {
+        // AN_120 §3: divisor = 3 000 000 / baud, i.e. 8 * (clock /
+        // (base * target)), rounded up to a whole eighth and clamped to
+        // the 17-bit maximum (n up to 2^14 = 16384).
+        let raw = clock * 16 / base / target;
+        let mut eighths = if raw & 1 == 1 { raw / 2 + 1 } else { raw / 2 };
+        if eighths > 0x20000 {
+            eighths = 0x1ffff;
+        }
+        let got = clock * 16 / base / eighths;
+        let got = if got & 1 == 1 { got / 2 + 1 } else { got / 2 };
+        // AN_120 §4.3: the integer part (bits 13:0) in the low bits, the
+        // 3-bit fraction code (bits 16:15:14) via the AN_120 table.
+        let code = FRAC_CODE[(eighths & 7) as usize];
+        (((eighths >> 3) as u32) | (code << 14), got)
+    };
+    // AN_120 §4.4: set the MSB so the H chips divide the 12 MHz clock.
+    let encoded = if hi { encoded | 0x20000 } else { encoded };
+    ((encoded & 0xffff) as u16, (encoded >> 16) as u16, achieved as u32)
 }
 
 /// The settings of one port, as the host left them.

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+
 // HID cable emulator: the Pico enumerates as one of the USB HID adapters
 // that handheld multimeters come with, and plays a meter packet.
 //
