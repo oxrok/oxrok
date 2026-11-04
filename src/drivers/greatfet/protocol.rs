@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn serial_numbers() {
         assert_eq!(parse_serial(b"GFS123").as_deref(), Some("GFS123"));
-        assert_eq!(parse_serial(b"GFS\0123").as_deref(), Some("GFS"));
+        assert_eq!(parse_serial(b"GFS\x00123").as_deref(), Some("GFS"));
         let mut words = vec![0; 8];
         words.extend_from_slice(&0x57cc_67e6u32.to_le_bytes());
         words.extend_from_slice(&0x3018_7657u32.to_le_bytes());

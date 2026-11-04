@@ -839,7 +839,7 @@ mod tests {
 
     #[test]
     fn packed_samples_are_first_in_the_low_bits() {
-        let p = packed(2, 0);
+        let p = packed(2, 0, None);
         let expected = (0..4).fold(0u8, |a, j| a | ((pins(j) as u8 & 3) << (2 * j)));
         assert_eq!(p[0], expected);
         assert_eq!(packed(1, 8, None)[0] & 1, (pins(0) >> 8) as u8 & 1);
