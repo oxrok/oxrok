@@ -181,7 +181,8 @@ s/^(Failed to open device).*$/\1./'
 
     # The variants.
     asix_sigma_options variant=sigma2
-    # Attached again (other strings): an address the READY line did not report.
+    # Attached again (other strings): a full case's two tools see
+    # different addresses.
     emu_case "sigma2 scan" --keep-header --filter 's/conn=[0-9]+[.][0-9]+/conn=BUS.ADDR/' -- -d $D --scan
     emu_case "sigma2 capture" -- -d $D -c samplerate=50m --samples 20 -O hex
     # Another product id of ASIX's: not a SIGMA.

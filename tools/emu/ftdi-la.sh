@@ -79,8 +79,8 @@ s/^(Failed to set device option .samplerate.): device error: .*/\1: generic\/uns
     emu_case "ftdi-la samplerate beyond 32 bits" --oracle-differs "protocol.h:44 keeps the samplerate in a uint32_t, which api.c:426 truncates" --stderr --expect-fail --filter "$E" -- -d $D -c samplerate=4295967296 --samples 100 -O hex
     emu_case "ftdi-la trigger" --stderr --expect-fail -- -d $D --samples 10 --triggers ADBUS0=1
 
-    # The variants. EMU_USB is the first attach's address: a device
-    # whose descriptors changed is attached again, so conn= takes ids.
+    # The variants. A case's reset attaches a device whose descriptors
+    # changed again, after the case line read EMU_USB, so conn= takes ids.
     # FT232R: full speed, 64 byte packets, samplerate / 30 on the 3 MHz
     # clock, the RS232 pin names.
     ftdi_la_options chip=ft232r

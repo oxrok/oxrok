@@ -1,10 +1,20 @@
+// Counterpart in sigrok:
+//   sigrok-cli/main.c (the logger, select_channels, the maybe_config helpers),
+//   sigrok-cli/device.c (device_scan),
+//   sigrok-cli/parsers.c (the option, channel and trigger parsers),
+//   sigrok-cli/session.c (run_session, datafeed_in, opt_to_gvar),
+//   sigrok-cli/show.c (show_dev_list),
+//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
+//   Copyright (C) 2011 Bert Vermeulen <bert@biot.com>,
+//   with commits by Uwe Hermann, Gerhard Sittig, Martin Ling, Daniel Elstner,
+//   Karl Palsson, Dan Horák, Devan Lai, Jens Steinhauser, Alexandru Gagniuc,
+//   Anatoly Sokolov, poljar (Damir Jelić), Bartosz Golaszewski, Soeren Apel,
+//   Aleksander Alekseev, Aurelien Jacobs, Guido Trentalancia, Peter Zotov,
+//   Vincent Palatin, Andreas Sandberg, Frank Stettner
+//   (sigrok-cli sigrok-cli-unreleased-103-gf44dd91).
+// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+
 /*
- * Counterpart in sigrok:
- *   sigrok-cli/session.c (run_session, datafeed_in, opt_to_gvar),
- *   sigrok-cli/parsers.c, sigrok-cli/show.c (show_dev_list).
- * This file is a port of those parts of sigrok-cli, GPL-3.0-or-later
- * like it.
- *
  * libsigrok-run: drives libsigrok as sigrok-cli does, for drivers that
  * sigrok-cli cannot drive. sigrok-cli runs a session only with
  * --samples, --time, --frames or --continuous, and refuses the session
@@ -18,15 +28,29 @@
  *                 [--samples N] [--time T] [--frames N] [--stop-after N]
  *   libsigrok-run -d DRIVER[:KEY=VALUE...] [-l LEVEL] --scan
  *
- * Every option means what it means to sigrok-cli, and fails where
- * sigrok-cli fails (a --samples the driver cannot take is "Failed to
- * configure sample limit."). With none of --samples, --time and
- * --frames the session runs until the driver ends it. --stop-after N
- * counts the samples itself (logic ones, else those of the first
- * analog channel), cuts the packet that reaches N, drops what comes
- * after and stops the session there: a sample limit for a driver that
- * has none. The output goes through libsigrok's output modules (default
- * bits, as sigrok-cli without -o), so it reads as sigrok-cli's would.
+ * The options mean what they mean to sigrok-cli, and the common failures
+ * read the same (a --samples the driver cannot take is "Failed to
+ * configure sample limit."). It is a subset, not a copy: no -g, -o,
+ * --continuous, --get, --set, --show, decoders or transforms, no
+ * channel_group= in -c, and a scan that finds several devices is
+ * refused rather than narrowed to the one that is not a demo device.
+ * With none of --samples, --time and --frames the session runs until the
+ * driver ends it.
+ *
+ * --stop-after N is a sample limit for a driver that has none. The runner
+ * counts the samples itself (logic ones, else those of the first analog
+ * channel), cuts the packet that reaches N and drops what comes after,
+ * and asks for the stop from an idle callback of the main loop, as a
+ * client's key press or button would: sr_session_stop() from the
+ * datafeed callback would run the driver's stop inside its transfer
+ * callback, inside libusb's event handling. So a driver that ends the
+ * capture in the same callback as its samples (lecroy-logicstudio) never
+ * sees that stop, and the option only cuts its output. --stop-after 0
+ * asks for the stop as soon as the session has started, at the header
+ * packet, before any sample.
+ *
+ * The output goes through libsigrok's output modules (default bits, as
+ * sigrok-cli without -o), so it reads as sigrok-cli's would.
  *
  * tools/diffcli.sh builds it against the oracle's libsigrok (emu_case
  * --libsigrok, docs/USB.md): it links the same libsigrok.so as
@@ -57,6 +81,7 @@ static struct sr_context *sr_ctx;
 static struct sr_session *session;
 static uint64_t limit_samples;
 static uint64_t stop_after;
+static gboolean have_stop;
 
 /* sigrok-cli's logger: everything to stderr, a critical ends the run. */
 static void logger(const gchar *log_domain, GLogLevelFlags log_level,
@@ -342,23 +367,30 @@ static struct sr_channel *find_channel(GSList *channels, const char *name)
 static void select_channels(struct sr_dev_inst *sdi)
 {
 	GSList *channels = sr_dev_inst_channels_get(sdi), *selected = NULL, *l;
-	char **tokens, **names, *end, str[12];
+	char **tokens, **names, **range, *end, str[12];
 	struct sr_channel *ch;
 	long b, e;
 
 	if (!opt_channels)
 		return;
+	/* An empty list is all channels, enabled. */
+	if (!opt_channels[0])
+		selected = g_slist_copy(channels);
 	tokens = g_strsplit(opt_channels, ",", 0);
 	for (int i = 0; tokens[i]; i++) {
 		if (!tokens[i][0])
 			g_critical("Invalid empty channel.");
 		if (strchr(tokens[i], '-')) {
-			b = strtol(tokens[i], &end, 10);
-			if (end == tokens[i] || *end != '-')
-				g_critical("Invalid channel syntax '%s'.", tokens[i]);
-			e = strtol(end + 1, &end, 10);
-			if (*end || b < 0 || b >= e)
+			/* As parse_channelstring(): the end of the range is
+			 * read up to what is not a digit, so 1-2-3 is 1-2. */
+			range = g_strsplit(tokens[i], "-", 2);
+			b = strtol(range[0], &end, 10);
+			if (end == range[0] || *end)
+				g_critical("Invalid channel '%s'.", range[0]);
+			e = strtol(range[1], NULL, 10);
+			if (b < 0 || b >= e)
 				g_critical("Invalid channel range '%s'.", tokens[i]);
+			g_strfreev(range);
 			for (; b <= e; b++) {
 				snprintf(str, sizeof(str), "%ld", b);
 				if (!(ch = find_channel(channels, str)))
@@ -433,10 +465,16 @@ static struct sr_trigger *parse_triggerstring(const struct sr_dev_inst *sdi, con
 				g_critical("Trigger match '%c' not supported by device.", sep[t]);
 			while (!(stage = g_slist_nth_data(trigger->stages, t)))
 				sr_trigger_stage_add(trigger);
-			if (sr_trigger_match_add(stage, ch, match, 0) != SR_OK)
-				g_critical("Invalid trigger '%s'.", s);
+			/* libsigrok has logged why; sigrok-cli adds nothing
+			 * and gives up without a failing status. */
+			if (sr_trigger_match_add(stage, ch, match, 0) != SR_OK) {
+				sr_trigger_free(trigger);
+				trigger = NULL;
+				goto done;
+			}
 		}
 	}
+done:
 	g_strfreev(tokens);
 	g_variant_unref(gvar);
 	return trigger;
@@ -448,9 +486,12 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 	const struct sr_output_module *omod;
 	const struct sr_option **options;
 	GHashTable *fmtargs, *fmtopts = NULL;
-	GVariant *gvar;
+	GVariant *gvar = NULL;
+	GHashTableIter iter;
+	gpointer key;
 	const char *fmtspec, *s;
 	const struct sr_output *o;
+	int i;
 
 	fmtargs = parse_generic_arg(opt_output_format ? opt_output_format : "bits", TRUE);
 	fmtspec = g_hash_table_lookup(fmtargs, "sigrok_key");
@@ -459,7 +500,18 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 	if ((options = sr_output_options_get(omod))) {
 		fmtopts = g_hash_table_new_full(g_str_hash, g_str_equal, g_free,
 			(GDestroyNotify)g_variant_unref);
-		for (int i = 0; options[i]; i++) {
+		/* parsers.c's warn_unknown_keys(). */
+		g_hash_table_iter_init(&iter, fmtargs);
+		while (g_hash_table_iter_next(&iter, &key, NULL)) {
+			if (!strcmp(key, "sigrok_key"))
+				continue;
+			for (i = 0; options[i]; i++)
+				if (!strcmp(options[i]->id, key))
+					break;
+			if (!options[i])
+				g_warning("Unknown keyword: %s.", (char *)key);
+		}
+		for (i = 0; options[i]; i++) {
 			if (!(s = g_hash_table_lookup(fmtargs, options[i]->id)))
 				continue;
 			if (g_variant_is_of_type(options[i]->def, G_VARIANT_TYPE_UINT32))
@@ -470,10 +522,14 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 				gvar = g_variant_new_uint64(strtoull(s, NULL, 10));
 			else if (g_variant_is_of_type(options[i]->def, G_VARIANT_TYPE_DOUBLE))
 				gvar = g_variant_new_double(strtod(s, NULL));
-			else if (g_variant_is_of_type(options[i]->def, G_VARIANT_TYPE_BOOLEAN))
-				gvar = g_variant_new_boolean(!strcmp(s, "true") || !strcmp(s, "yes"));
-			else
+			else if (g_variant_is_of_type(options[i]->def, G_VARIANT_TYPE_BOOLEAN)) {
+				if (strcmp(s, "true") && strcmp(s, "yes") && strcmp(s, "false") && strcmp(s, "no"))
+					g_critical("Unable to convert '%s' to boolean!", s);
+				gvar = g_variant_new_boolean(strcmp(s, "false") && strcmp(s, "no"));
+			} else if (g_variant_is_of_type(options[i]->def, G_VARIANT_TYPE_STRING))
 				gvar = g_variant_new_string(s);
+			else
+				g_critical("Don't know GVariant type for option '%s'!", options[i]->id);
 			g_hash_table_insert(fmtopts, g_strdup(options[i]->id), g_variant_ref_sink(gvar));
 		}
 		sr_output_options_free(options);
@@ -485,13 +541,30 @@ static const struct sr_output *setup_output_format(const struct sr_dev_inst *sdi
 	return o;
 }
 
+/* The stop --stop-after asks for, out of the datafeed callback. */
+static gboolean stop_idle(gpointer data)
+{
+	(void)data;
+	sr_session_stop(session);
+	return G_SOURCE_REMOVE;
+}
+
+static void request_stop(void)
+{
+	static gboolean requested;
+
+	if (!requested) {
+		requested = TRUE;
+		g_idle_add(stop_idle, NULL);
+	}
+}
+
 /* session.c's datafeed_in() without decoders, plus --stop-after. */
 static void datafeed_in(const struct sr_dev_inst *sdi,
 		const struct sr_datafeed_packet *packet, void *cb_data)
 {
 	static const struct sr_output *o, *oa;
 	static uint64_t rcvd_logic, rcvd_analog;
-	static gboolean stopped;
 	const struct sr_datafeed_packet *send = packet;
 	struct sr_datafeed_packet cut;
 	struct sr_datafeed_logic logic_cut;
@@ -510,13 +583,15 @@ static void datafeed_in(const struct sr_dev_inst *sdi,
 			g_critical("Failed to initialize output module.");
 		oa = sr_output_new(sr_output_find("analog"), NULL, sdi, NULL);
 		rcvd_logic = rcvd_analog = 0;
+		if (have_stop && stop_after == 0)
+			request_stop();
 		break;
 	case SR_DF_LOGIC:
 		logic = packet->payload;
 		if (logic->length == 0)
 			break;
 		n = logic->length / logic->unitsize;
-		if (stop_after) {
+		if (have_stop) {
 			if (rcvd_logic >= stop_after)
 				return;
 			if (rcvd_logic + n > stop_after) {
@@ -535,7 +610,7 @@ static void datafeed_in(const struct sr_dev_inst *sdi,
 		if (analog->num_samples == 0)
 			break;
 		/* With logic channels too, the logic ones count. */
-		if (stop_after && rcvd_logic == 0) {
+		if (have_stop && rcvd_logic == 0) {
 			if (rcvd_analog >= stop_after)
 				return;
 			if (rcvd_analog + analog->num_samples > stop_after) {
@@ -561,11 +636,9 @@ static void datafeed_in(const struct sr_dev_inst *sdi,
 		if (out)
 			g_string_free(out, TRUE);
 	}
-	if (stop_after && !stopped
-			&& (rcvd_logic >= stop_after || (rcvd_logic == 0 && rcvd_analog >= stop_after))) {
-		stopped = TRUE;
-		sr_session_stop(session);
-	}
+	if (have_stop && (packet->type == SR_DF_LOGIC || packet->type == SR_DF_ANALOG)
+			&& (rcvd_logic >= stop_after || (rcvd_logic == 0 && rcvd_analog >= stop_after)))
+		request_stop();
 	if (packet->type == SR_DF_END) {
 		sr_output_free(o);
 		o = NULL;
@@ -656,8 +729,10 @@ static void run_session(void)
 	select_channels(sdi);
 	if (opt_triggers) {
 		trigger = parse_triggerstring(sdi, opt_triggers);
-		if (sr_session_trigger_set(session, trigger) != SR_OK)
-			exit(1);
+		if (!trigger || sr_session_trigger_set(session, trigger) != SR_OK) {
+			sr_session_destroy(session);
+			return;
+		}
 	}
 	if (opt_time)
 		set_limit_time(sdi);
@@ -683,8 +758,11 @@ static void run_session(void)
 		if (maybe_config_set(sdi, SR_CONF_LIMIT_FRAMES, g_variant_new_uint64(frames)) != SR_OK)
 			g_critical("Failed to configure frame limit.");
 	}
-	if (opt_stop_after && (sr_parse_sizestring(opt_stop_after, &stop_after) != SR_OK || !stop_after))
-		g_critical("Invalid --stop-after '%s'.", opt_stop_after);
+	if (opt_stop_after) {
+		if (sr_parse_sizestring(opt_stop_after, &stop_after) != SR_OK)
+			g_critical("Invalid --stop-after '%s'.", opt_stop_after);
+		have_stop = TRUE;
+	}
 
 	main_loop = g_main_loop_new(NULL, FALSE);
 	sr_session_stopped_callback_set(session, (sr_session_stopped_callback)g_main_loop_quit, main_loop);

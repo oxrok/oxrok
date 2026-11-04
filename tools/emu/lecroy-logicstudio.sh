@@ -181,22 +181,26 @@ emu_cases() {
     # whose memory wraps.
     emu_case "lib 8ch lower 1M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=1M -t D3=r -O bits
     emu_case "lib 8ch lower 500M" --libsigrok --digest --filter "$T8L" -- -d $L -C $LO -c samplerate=500M -t D3=r -O bits
-    # The stretch after the wrap and before the trigger is 8192 bytes
-    # here, a whole number of send_samples()'s 4096 sample chunks, and
-    # the 8 channel path sends the remainder all the same
-    # (protocol.c:980-989), a logic packet of 0 bytes; libsigrok's bits
-    # and hex outputs loop to length - unitsize
-    # (bits.c:158, hex.c:163), which wraps for 0, and the run dies of
-    # SIGSEGV after the samples before it. sigrok-cli's datafeed_in()
-    # hands the empty packet on the same way. The ascii output counts
-    # samples (ascii.c:219), so it takes the whole capture.
+    # send_samples() sends a logic packet of 0 bytes for any stretch of
+    # a whole number of its 4096 sample chunks in the 8 channel path
+    # (protocol.c:980-989; 8192 bytes here, after the wrap, before the
+    # trigger) and for an empty stretch in the 16 channel path
+    # (protocol.c:957-960, from 1062 when the trigger is where the read
+    # starts). libsigrok's outputs do not take it: bits, hex and ols loop
+    # to length - unitsize (bits.c:158, hex.c:163, ols.c:121), which
+    # wraps for 0, and die of SIGSEGV; csv dies of SIGFPE. sigrok-cli's
+    # datafeed_in() hands the empty packet on the same way. The ascii
+    # output counts samples (ascii.c:219), so it takes the whole capture.
     emu_case "lib 8ch upper wraps bits crash" --libsigrok --expect-fail --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
     emu_case "lib 8ch upper wraps ascii" --libsigrok --digest --filter '1,/^D15:/b; /T/{=;b;}; d' -- -d $L -C $HI -c samplerate=1M -t D14=r -O ascii
     emu_case "lib 8ch upper 1G ratio 20" --libsigrok --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1G:captureratio=20 -t D9=r -O bits
     # The runner's own limit (--stop-after): the output cut at 1000
-    # samples and the session stopped from the first packet that
-    # reaches them.
+    # samples. The driver sends the samples and ends the acquisition in
+    # one callback (recv_bulk_transfer()), so the stop asked from the
+    # main loop comes after that end: it stops nothing here, and stderr
+    # stays empty of the failed write a nested stop would log.
     emu_case "lib stop after 1000" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
+    emu_case "lib stop after 1000 stderr" --libsigrok --no-output --stderr -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
     # The C driver never ends: with no trigger it arms nothing and waits
     # (protocol.c:1119, 926-933); an unplug during the fetch or while
     # it waits for the trigger leaves it resubmitting or waiting.
@@ -227,6 +231,12 @@ emu_cases() {
         ls_options flashed=1 $f
         emu_case "lib fault $f hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
     done
+    # A stop while the trigger wait is pending: --stop-after 0 asks for
+    # it as the session starts, on inputs that never fire the trigger.
+    # The stop writes the arm register, and the interrupt transfer's end
+    # finds the abort (recv_intr_transfer(), protocol.c:920-923).
+    ls_options flashed=1 still=1
+    emu_case "lib stop while waiting" --libsigrok --no-output -- -d $L -c samplerate=1M -t D3=r --stop-after 0 -O bits
     # The bitstream file missing, or of another size than the driver's
     # FPGA_FIRMWARE_SIZE (upload_fpga_bitstream(), protocol.c:433-445).
     ls_options flashed=1

@@ -88,7 +88,8 @@ logicpro_options() {
 emu_cases() {
     F=saleae-logic-pro
     logicpro_fx3_standin || emu_fail "saleae-logic-pro: could not write the FX3 stand-in"
-    # A renumerated device has an address the READY line did not report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     # Each transfer of 16 KiB holds 131072 samples of one channel, 8192
     # of sixteen: the goldens keep the first line of each channel and the
@@ -122,6 +123,12 @@ emu_cases() {
     emu_case "show" --keep-header --filter "$C" -- -d $F --show
     emu_case "by ids" --digest --filter "$B4" -- -d $F:conn=21a9.1006 -C $D4 --continuous -O bits
     emu_case "unflashed 16ch 10M" --digest --filter "$B16" -- -d $F --continuous -O bits
+    # By its real address without firmware: the case before left the
+    # board renumerated, so a reset of its own moves it first and the
+    # case line reads where it went. libsigrok's debug line shows
+    # sr_usb_find() matching it.
+    emu_reset
+    emu_case "by address after a reset" --stderr --filter '/Found USB device/!d; s/ \[[0-9:.]+\]//; s/= [0-9]+\.[0-9]+\)/= BUS.ADDR)/' -- -l 5 -d $F:conn=$EMU_USB --scan
     # The boot stage's strings are not known: with strings, each
     # strcmp() of scan_firmware() fails in turn, and the upload follows.
     logicpro_options boot_strings=Cypress/WestBridge

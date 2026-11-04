@@ -51,17 +51,10 @@ hantek_release() {
     HOLDPID=""
 }
 
-# The attached device's bus.address, read when the case line runs: the
-# READY line's goes stale once a change of options re-attached it.
-hantek_addr() {
-    d=/sys/bus/usb/devices/$EMU_BUSID
-    echo "$(cat $d/busnum).$(cat $d/devnum)"
-}
-
 emu_cases() {
     H=hantek-dso
-    # A device that renumerated has an address the READY line did not
-    # report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     # The last stderr line, sigrok-cli's own, made one word: the
     # driver's message before it is in the transactions' wake.
@@ -150,7 +143,7 @@ emu_cases() {
     hantek_options profile=dso-2090 flashed=1
     emu_case "flashed 2090 scan" --keep-header --filter "$C" -- -d $H --scan
     emu_case "flashed 2090 by ids" --digest --filter "$HD_FRAME" -- -d $H:conn=04b5.2090 --frames 1
-    emu_case "flashed 2090 by address" --digest --filter "$HD_FRAME" -- -d $H:conn=$(hantek_addr) --frames 1
+    emu_case "flashed 2090 by address" --digest --filter "$HD_FRAME" -- -d $H:conn=$EMU_USB --frames 1
     # Another program holds the interface: the claim fails.
     if hantek_hold; then
         emu_case "interface claimed by another program" --expect-fail --stderr --filter "$E" -- -d $H --frames 1

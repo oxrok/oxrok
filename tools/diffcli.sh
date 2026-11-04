@@ -71,7 +71,8 @@
 # the case's reset comes after that: a reset that re-attaches the device
 # (it renumerated in the case before, or the options changed its
 # descriptors) moves it once more, so conn=$EMU_USB holds only on a board
-# whose descriptors stay.
+# whose descriptors stay, or after an emu_reset of its own on the line
+# before, for a case with one tool.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -694,6 +695,14 @@ flush()
         echo "$1" | tr 'A-Z' 'a-z' | sed -E 's/[^a-z0-9]+/-/g; s/^-//; s/-$//'
     }
 
+    # A reset of its own before a case line that names the address: a
+    # board the case's reset would re-attach (it renumerated in the case
+    # before, or the options changed its descriptors) moves now, and
+    # EMU_USB, read when the case line runs, follows. The case's reset
+    # then changes nothing. Good for one run: a full case's second tool
+    # meets a board the first one moved.
+    emu_reset() { [ "$EMU_DRY" = 1 ] || emu_cmd reset >/dev/null; }
+
     # Puts a device an armed unplug took off the bus back on it, and
     # takes over the new attach's nodes and address.
     emu_replug() {
@@ -944,6 +953,7 @@ flush()
             esac
             wait "$TOOLPID"
             st=$?
+            [ $t = b ] || a_st=$st
             TOOLPID=""
             if [ -n "$WATCHPID" ]; then kill "$WATCHPID" 2>/dev/null; wait "$WATCHPID" 2>/dev/null; fi
             if [ $st = 124 ] && { [ -z "$bug" ] || [ $t = b ]; } && [ $hangs = 0 ]; then
@@ -1148,6 +1158,17 @@ flush()
     # goldens, sigrok-cli's failure against the .oracle golden.
     emu_oracle_bug() {
         [ $mode = full ] || why="$why; --oracle-bug needs oxrok's $driver"
+        # A sigrok-cli the timeout stopped may have been in the middle
+        # of a line (libsigrok writes its "sr: " first): a last line
+        # without its newline, or that prefix alone, is not part of what
+        # it failed with. The libusb line of a retried open of a
+        # renumerated device comes at random (docs/USB.md).
+        case $a_st in
+            124 | 137)
+                [ -z "$(tail -c 1 "$TMP/a.err")" ] || sed -i '$d' "$TMP/a.err"
+                sed -i -E '${/^sr: *$/d;}' "$TMP/a.err" ;;
+        esac
+        sed -i '/LIBUSB_ERROR_ACCESS/d' "$TMP/a.err"
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
         blessed=""
         if [ "$EMU_BLESS" = 1 ]; then

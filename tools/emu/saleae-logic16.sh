@@ -52,7 +52,8 @@ logic16_release() {
 
 emu_cases() {
     F=saleae-logic16
-    # A renumerated device has an address the READY line did not report.
+    # A renumerated device's address, in the text the harness's conn=
+    # rule does not reach (--show, --get).
     C='s/conn(=|: )[0-9]+\.[0-9]+/conn\1BUS.ADDR/g'
     D4=0,1,2,3
     # The two tools prefix their log lines differently ("sr: DRIVER: "
@@ -99,7 +100,7 @@ emu_cases() {
     emu_case "trigger ratio" -- -d $F -C $D4 -c samplerate=2M:captureratio=50 --samples 40 -t 2=f -O bits
     # A ratio above 100: api.c:473 would take it, but sr_config_set()
     # refuses it first (hwdriver.c:757-764), and so does oxrok.
-    emu_case "trigger ratio above 100" --expect-fail --stderr --filter "$N; s/(invalid argument).*\$/\1./" -- -d $F -C $D4 -c samplerate=2M:captureratio=150 --samples 40 -t 2=f -O bits
+    emu_case "trigger ratio above 100" --expect-fail --stderr --filter "/LIBUSB_ERROR_ACCESS/d; $N; s/(invalid argument).*\$/\1./" -- -d $F -C $D4 -c samplerate=2M:captureratio=150 --samples 40 -t 2=f -O bits
     emu_case "trigger two" -- -d $F -C 0,1,9 -c samplerate=4M --samples 24 -t 0=0,9=r -O bits
     emu_case "trigger late" --filter '1,/^4:/!d' -- -d $F -C 0,1,2,3,4 -c samplerate=500k --samples 40 -t 4=e -O bits
     # Rates off the list the driver takes all the same: 100 MHz / 250
