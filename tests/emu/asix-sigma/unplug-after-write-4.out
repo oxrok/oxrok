@@ -1,5 +1,3 @@
 sr: asix-sigma: USB data write failed: usb bulk write failed
 sr: asix-sigma: Could not initiate firmware upload to hardware
-sr: session: Could not start asix-sigma device BUS.ADDR acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+start refused

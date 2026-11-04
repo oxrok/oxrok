@@ -1,4 +1,2 @@
 sr: asix-sigma: Could not setup cable mode after upload: unable to configure bitbang mode. Perhaps not a BM/2232C type chip?
-sr: session: Could not start asix-sigma device BUS.ADDR acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+start refused
