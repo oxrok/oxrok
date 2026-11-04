@@ -1,3 +1,4 @@
+# Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 # The GreatFET One (emu/src/models/greatfet.rs): firmware facts from
 # greatscottgadgets/greatfet and libgreat, the driver's from libsigrok.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device

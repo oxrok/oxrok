@@ -1,12 +1,5 @@
-// Counterpart in sigrok:
-//   libsigrok/src/hardware/greatfet/api.c (the scan, the channels, the rates),
-//   libsigrok/src/hardware/greatfet/protocol.c (the commands and the transfers),
-//   libsigrok/src/hardware/greatfet/protocol.h,
-//   Copyright (C) 2019 Katherine J. Temkin <k@ktemkin.com>,
-//   Copyright (C) 2019 Mikaela Szekely <qyriad@gmail.com>,
-//   Copyright (C) 2023 Gerhard Sittig <gerhard.sittig@gmx.net>
-//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
-// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+// Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+// SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
 //! A `GreatFET` One with its stock firmware, as libsigrok's `greatfet`
 //! driver sees it.
@@ -62,11 +55,11 @@
 //! rate over the clock), `sgpio_set_up_functions()` has returned before
 //! generating the ISR that moves the samples, so the model sends no
 //! samples and the host waits. `wide=1` stands for the firmware the C
-//! driver's comment expects (`protocol.c:69`, "transparently ... support
-//! more than 8 channels"): 16 bits a sample, two bytes, little endian;
+//! driver's comment allows for (`protocol.c:69`), which would take more than
+//! 8 channels: 16 bits a sample, two bytes, little endian;
 //! none of the sources read has it. How samples sit in a byte is the C
 //! driver's comment (`protocol.c:1246`): the first in the least
-//! significant bits, which is how the SGPIO shifts them in too.
+//! significant bits; the SGPIO's shift direction was not checked against it.
 //!
 //! The samples: sample `k` (`k` counts from 0 at each start and wraps at
 //! [`PERIOD`]) has `k ^ (k >> 5) ^ (k >> 11)` on SGPIO0 to 7, and on SGPIO8
@@ -132,7 +125,7 @@
 //!   stop is ever sent.
 //! - With a `probe_names` list starting with `-` and at most 8 names, the
 //!   wire and the feed have one byte a sample, so
-//!   `greatfet_process_receive_data()` takes its "simple case" and passes
+//!   `greatfet_process_receive_data()` takes its path for whole samples and passes
 //!   packed bytes as if each were a sample (`protocol.c:1311`).
 //!
 //! Not reached in the driver, and why: a failing `libusb_open`; a device
@@ -178,7 +171,7 @@ const VERB_STOP: u32 = 4;
 pub const BUFFER_SIZE: u32 = 0x4000;
 /// `USB_STREAMING_IN_ADDRESS`.
 pub const SAMPLES_ENDPOINT: u8 = 0x81;
-/// The SGPIO clock, `api.c`'s "204MHz base clock".
+/// The SGPIO clock, the figure in `api.c`'s comment on its rates.
 pub const CLOCK: u32 = 204_000_000;
 /// The firmware's version string, one the driver's comment names.
 pub const VERSION: &[u8] = b"v2021.2.1\0";
@@ -492,7 +485,7 @@ impl Greatfet {
             return Reply::Stall;
         }
         if self.underway.take().is_some() {
-            // The firmware's "out of sync" path: this STALLs and the
+            // The firmware treats this as a host error: this STALLs and the
             // waiting command is dropped.
             v.report("a new command while the last one waits for its IN");
             return Reply::Stall;
