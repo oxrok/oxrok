@@ -158,7 +158,7 @@ One crate, `oxrok`, with the library and the binary. Modules:
 | `usb`, `serial`, `hid`, `scpi` | transports, each with record and replay fixtures |
 | `ftdi`, `ezusb` | FTDI vendor requests and FIFO reads; Cypress FX2 firmware upload |
 | `dmm` | multimeter packet parsers |
-| `drivers::*` | demo, logicport, fx2lafw, serial_dmm, rigol_ds, raspberrypi_pico, dcttech_usbrelay, microchip_pickit2 |
+| `drivers::*` | asix_sigma, chronovu_la, dcttech_usbrelay, demo, dreamsourcelab_dslogic, ftdi_la, fx2lafw, hantek_4032l, hantek_6xxx, hantek_dso, ikalogic_scanaplus, kingst_la2016, lecroy_logicstudio, logicport, microchip_pickit2, pipistrello_ols, raspberrypi_pico, rigol_ds, saleae_logic16, saleae_logic_pro, serial_dmm, sysclk_lwla, zeroplus_logic_cube |
 | `decode`, `decoders` | the decoder API and the native `uart`, `i2c`, `spi` decoders |
 | `pydecode` | runs libsigrokdecode's Python decoders (features `rustpython`, `python`) |
 
