@@ -83,6 +83,12 @@ pub fn device_scan(registry: &Registry, args: &Args) -> Result<Vec<Box<dyn Devic
     }
 }
 
+/// Opens a device for a command line, saying what sigrok-cli says with the
+/// reason added.
+pub fn open_device(device: &mut dyn Device) -> Result<()> {
+    device.open().map_err(|e| Error::Arg(format!("Failed to open device: {e}.")))
+}
+
 /// Resolves a key name against the device's options of `group`, so a
 /// driver's custom keys work like the well known ones.
 pub fn resolve_key(device: &dyn Device, name: &str, group: Option<&str>) -> Result<Key> {
@@ -318,6 +324,62 @@ mod tests {
         info: oxrok::core::DeviceInfo,
         channels: Vec<oxrok::core::Channel>,
         sent: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    /// A device that cannot be opened.
+    struct Unopenable(Recorder);
+
+    impl Device for Unopenable {
+        fn info(&self) -> &oxrok::core::DeviceInfo {
+            self.0.info()
+        }
+        fn classes(&self) -> &[oxrok::core::DeviceClass] {
+            self.0.classes()
+        }
+        fn channels(&self) -> &[oxrok::core::Channel] {
+            self.0.channels()
+        }
+        fn enable_channel(&mut self, pos: usize, on: bool) -> Result<()> {
+            self.0.enable_channel(pos, on)
+        }
+        fn rename_channel(&mut self, pos: usize, name: &str) -> Result<()> {
+            self.0.rename_channel(pos, name)
+        }
+        fn options(&self, group: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+            self.0.options(group)
+        }
+        fn get(&self, key: &Key, group: Option<&str>) -> Result<Value> {
+            self.0.get(key, group)
+        }
+        fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+            self.0.set(key, value, group)
+        }
+        fn list(&self, key: &Key, group: Option<&str>) -> Result<oxrok::core::ValueList> {
+            self.0.list(key, group)
+        }
+        fn open(&mut self) -> Result<()> {
+            Err(Error::Busy)
+        }
+        fn start(&mut self, sink: oxrok::core::PacketSink) -> Result<()> {
+            self.0.start(sink)
+        }
+        fn stop(&mut self) -> Result<()> {
+            self.0.stop()
+        }
+    }
+
+    #[test]
+    fn a_failed_open_says_so_with_the_reason() {
+        let mut dev = Unopenable(Recorder {
+            info: oxrok::core::DeviceInfo::default(),
+            channels: Vec::new(),
+            sent: std::sync::Arc::default(),
+        });
+        let e = open_device(&mut dev).unwrap_err();
+        assert!(
+            matches!(&e, Error::Arg(m) if m == "Failed to open device: device is busy."),
+            "{e}"
+        );
     }
 
     impl Device for Recorder {

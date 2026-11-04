@@ -260,8 +260,7 @@ emu_cases() {
     sl2_options stall-set=6
     emu_case "open idle stalls" --expect-fail --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-set=5
-    # oxrok's --show has no "Failed to open device." of its own.
-    emu_case "show with reset stalled" --expect-fail --stderr --filter "$P; s/^device error: endpoint stalled\$/Failed to open device./" -- -d $S --show
+    emu_case "show with reset stalled" --expect-fail --stderr --filter "$P" -- -d $S --show
     # A capture: CMD_SAMPLE, a status read, a packet, the end.
     sl2_options stall-set=7
     emu_case "sample stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits

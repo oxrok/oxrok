@@ -32,7 +32,7 @@ fn pick_device(registry: &Registry, args: &Args) -> Result<Box<dyn Device>> {
         devices = real;
     }
     let mut device = devices.remove(0);
-    device.open().map_err(|e| Error::Arg(format!("Failed to open device: {e}.")))?;
+    parse::open_device(device.as_mut())?;
     Ok(device)
 }
 

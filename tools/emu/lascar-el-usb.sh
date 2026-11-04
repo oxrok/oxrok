@@ -73,7 +73,7 @@ emu_cases() {
     # oxrok's reason for a refusal becomes sr_strerror()'s words; the driver's
     # own line says what went wrong.
     D='(^| |::)lascar[-_]el[-_]usb[a-z_:]*: '
-    E="/$D|^(Failed|Device|device |No |This|Unable|Error)/!d; /: (Opening device instance|Starting acquisition|Stopping acquisition)[.]/d; s/^.*$D//; s/^(Failed to get 'datalog'): .*\$/\\1: generic\\/unspecified error/; s/^(Failed to set device option 'datalog'): .*\$/\\1: generic\\/unspecified error./; s/^(Failed to open device): .*\$/\\1./; s/^device error: (Failed to open device).*\$/\\1./; s/^(device error: .*|device disconnected)\$/Failed to start session./"
+    E="/$D|^(Failed|Device|device |No |This|Unable|Error)/!d; /: (Opening device instance|Starting acquisition|Stopping acquisition)[.]/d; s/^.*$D//; s/^(Failed to get 'datalog'): .*\$/\\1: generic\\/unspecified error/; s/^(Failed to set device option 'datalog'): .*\$/\\1: generic\\/unspecified error./; s/^(Failed to open device): .*\$/\\1./; s/^(device error: .*|device disconnected)\$/Failed to start session./"
     # A long log: the first lines, and the digest of all of it.
     H="1,10!d"
 
