@@ -943,8 +943,8 @@ mod tests {
     fn packets_of_a_later_channel_meet_the_kept_ones_at_their_offset() {
         // Two packets per channel.
         let mut m = at_data(Plan::new(1000, 0, 0, DeviceTrigger::NONE, vec![0, 1]));
-        feed(&mut m, &packet(0, 0, 0xff));
-        feed(&mut m, &packet(0, 1, 0x00));
+        let _ = feed(&mut m, &packet(0, 0, 0xff));
+        let _ = feed(&mut m, &packet(0, 1, 0x00));
         let (_, first) = feed(&mut m, &packet(1, 0, 0x00));
         assert_eq!(logic(&first), [1; 992]);
         let (_, second) = feed(&mut m, &packet(1, 1, 0xff));
@@ -996,7 +996,7 @@ mod tests {
         let mut m = at_data(Plan::new(32, 0, 0, DeviceTrigger::NONE, vec![0]));
         let (r, out) = feed(&mut m, &[5, 0, 0, 0]);
         assert_eq!(r.unwrap_err(), "Sample packet 0 of channel 0 is 4 bytes of 128.");
-        assert!(out.is_empty());
+        assert_eq!(out.len(), 0);
         // Of a channel that is kept too.
         let mut m = at_data(Plan::new(32, 0, 0, DeviceTrigger::NONE, vec![0, 1]));
         assert!(feed(&mut m, &[5, 0, 0, 0]).0.is_err());
@@ -1026,8 +1026,8 @@ mod tests {
     #[test]
     fn a_reset_goes_on_until_the_device_is_ready() {
         let mut m = at_data(Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]));
-        feed(&mut m, &packet(0, 0, 0));
-        feed(&mut m, &packet(1, 0, 0));
+        let _ = feed(&mut m, &packet(0, 0, 0));
+        let _ = feed(&mut m, &packet(1, 0, 0));
         // A packet: valid, not ready. RESET, once more, and it asks again
         // when a report is no status.
         assert_eq!(feed(&mut m, &packet(2, 0, 0)).0, Ok(Next::Out));
@@ -1045,8 +1045,8 @@ mod tests {
     #[test]
     fn a_device_never_ready_ends_the_wait() {
         let mut m = at_data(Plan::new(8, 0, 0, DeviceTrigger::NONE, vec![0]));
-        feed(&mut m, &packet(0, 0, 0));
-        feed(&mut m, &packet(1, 0, 0));
+        let _ = feed(&mut m, &packet(0, 0, 0));
+        let _ = feed(&mut m, &packet(1, 0, 0));
         let mut rounds = 0;
         loop {
             match feed(&mut m, &packet(2, 0, 0)).0 {

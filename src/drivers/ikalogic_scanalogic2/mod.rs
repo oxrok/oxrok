@@ -319,10 +319,9 @@ impl Device for Scanalogic2Device {
         if let Some(w) = self.worker.take() {
             let _ = w.handle.join();
         }
-        if let Some(mut t) = self.link.lock().expect("link lock").take() {
-            if let Err(e) = t.release_interface(protocol::INTERFACE) {
-                log::debug!("Releasing the interface: {e}.");
-            }
+        let link = self.link.lock().expect("link lock").take();
+        if let Some(Err(e)) = link.map(|mut t| t.release_interface(protocol::INTERFACE)) {
+            log::debug!("Releasing the interface: {e}.");
         }
         Ok(())
     }

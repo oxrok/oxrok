@@ -640,6 +640,13 @@ mod tests {
     use super::claim_or_detach;
     use std::cell::Cell;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_driver_link_is_the_interface_s_in_sysfs() {
+        let link = super::interface_driver_link(3, &[1, 2], 1, 0);
+        assert_eq!(link, "/sys/bus/usb/devices/3-1.2:1.0/driver");
+    }
+
     #[derive(Debug, PartialEq)]
     enum E {
         Busy,
