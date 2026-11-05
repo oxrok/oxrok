@@ -64,9 +64,10 @@
 //!
 //! The pedantic checks: only the commands above, in the format `%03.0f` gives,
 //! within the limits and the supply's 1 V floor; nothing left of a command when
-//! a tool opens. Two C habits are taken, as nothing shows how a real one refuses
-//! them (the driver's range check is two comparisons): `CURR-00`, as 0, and
-//! `VOLTnan` and `CURRnan`, as nothing. Both are answered `OK`, which is a guess.
+//! a tool opens. Three C habits are taken, as nothing shows how a real one
+//! refuses them (the driver's range check is two comparisons): `CURR-00`, as 0,
+//! and `VOLTnan` and `CURRnan`, and `VOLTinf` and `CURRinf` after a `GMAX` that
+//! says `inf`, as nothing. All are answered `OK`, which is a guess.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
@@ -302,7 +303,7 @@ impl Supply {
             return Ok(());
         }
         // The C habits, see the head.
-        if value == "nan" {
+        if value == "nan" || value == "inf" {
             return Ok(());
         }
         if name == "CURR" && value == "-00" {
@@ -533,6 +534,8 @@ mod tests {
         let mut h = supply(&[("output", "1"), ("load", "10")]);
         assert_eq!(ask(&mut h, b"VOLTnan\r"), b"OK\r");
         assert_eq!(ask(&mut h, b"CURRnan\r"), b"OK\r");
+        assert_eq!(ask(&mut h, b"VOLTinf\r"), b"OK\r");
+        assert_eq!(ask(&mut h, b"CURRinf\r"), b"OK\r");
         assert_eq!(violations(&mut h), 0);
         assert_eq!(ask(&mut h, b"GETD\r"), b"120001200\rOK\r", "nothing changed");
         assert_eq!(ask(&mut h, b"CURR-00\r"), b"OK\r");
