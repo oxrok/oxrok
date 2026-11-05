@@ -198,22 +198,34 @@ on a timeout on both backends, so a one-off read needs no stream.
 
 ## Serial devices
 
-`serial` is the counterpart of libsigrok's `serial.c`: a `Port`
-trait (read with a timeout, write, parameters, RTS and DTR), the
-`serialcomm` syntax in `Params::parse`, and `Recorder`/`Replay` with a
-text fixture like the USB one. A driver takes `conn=` and an optional
-`serialcomm=`, opens the port with `serial::open` (which records
-when `OXROK_SERIAL_RECORD` is set) and keeps a UART it probed with
-(sigrok closes it after the scan and opens it again; reopening toggles
-the handshake lines, and adapters such as the CP2102 on the ESP32 reset
-their board on that), flushing its input when the device takes it
-over, as sigrok's `serial_open` does on every open. A serial over HID
-cable has no handshake lines and is closed after the probe and
-reopened, as in sigrok, which sends its line parameters again. Packet based protocols are
-pure parsers in `dmm` (`valid` and `parse` on a byte slice), so
-each one tests against packets written from its layout without a
-meter. A validity check should demand a recognised function, not only
-a terminator: fourteen bytes ending in CR LF is also a boot banner.
+`serial` is the counterpart of libsigrok's `serial.c`: a `Port` trait
+(read with a timeout, write, parameters, RTS and DTR), the `serialcomm`
+syntax in `Params::parse`, and `Recorder`/`Replay` with a text fixture
+like the USB one. A driver takes `conn=` and an optional `serialcomm=`,
+and opens the port with `serial::open`, which records when
+`OXROK_SERIAL_RECORD` is set. Serial-dmm closes the port after the
+probe and opens it again, as sigrok does; `ut32x` and the Pico still
+keep the port they probed with. `serial_open` sets the parameters and
+flushes both buffers on each open, and `Native` opens as `sp_open` does:
+`HUPCL` and `INPCK` off, so a close leaves DTR and RTS as they are and
+no parity is checked. The reopen matches sigrok and is safe by reading
+on Linux with `HUPCL` off: the kernel lowers the lines at close only
+under `HUPCL`, each open raises both, and `cp210x` sets both in one
+request. It is unverified on a CP2102, whose close also disables its
+UART (`cp210x.c:812`), and on macOS, pending a probe on EN. Adapters
+such as the CP2102 on the ESP32 have been seen to reset their board when
+the handshake lines toggle, and `hil/oxrok-hil/src/siggen.rs:25-27`
+lowering DTR before RTS may itself be what did that. Windows has no
+`HUPCL`. `Port::write` does not drain, as `serial_write_blocking` does
+not; `Port::drain(timeout)` is `serial_drain` with a bound, polling the
+output queue. A write waits for room up to 5 s per wait, where C waits
+for ever. `Native` holds a second descriptor for its termios changes, as
+`src/serial` forbids unsafe code, so each oxrok open sends the line
+state twice; the `.tx` normalisation hides that. Packet based protocols
+are pure parsers in `dmm` (`valid` and `parse` on a byte slice), so each
+one tests against packets written from its layout without a meter. A
+validity check should demand a recognised function, not only a
+terminator: fourteen bytes ending in CR LF is also a boot banner.
 
 Serial over HID cables (libsigrok's `serial_hid*.c`) are `Port`s too:
 `serial::hid` holds one `Chip` per adapter with its USB ids,
@@ -450,6 +462,15 @@ would have cost a user a long afternoon.
   check in libsigrok's hwdriver.c (`sr_config_set()`, `check_key()`): it
   may refuse the value first, and then the driver's bug cannot be
   reached.
+- `core::config_set` now makes check_key's refusals, so a port need not
+  repeat them or log them; a driver keeps a refusal only for library
+  callers, who bypass the check when they call `Device::set` directly.
+  The CLI checks a group, a key's set access and `core::check_value`
+  before it sends any `-c`, from `Device::options`: a driver whose
+  option list changes with what a `-c` sets needs that plan revisited
+  (no driver on main does; hantek-4032l's depends on the FPGA version
+  read at open). `Device::set` gets a group as the device spells it, or
+  `None` for `global`: a driver need not compare without case.
 - libsigrok's session stops the device whose start failed
   (session.c:831-835). A driver whose stop sends commands shows them
   after every refused start, so the port sends them as well.
@@ -707,6 +728,187 @@ would have cost a user a long afternoon.
   failures.
 - After a fix based on an agent's reading, a run on the other backend
   catches it.
+- A HID-class interface under raw USB keeps usbhid bound for
+  `--no-oracle`, since the harness unbinds only vendor interfaces. A
+  normal run reaches the detach only where something rebinds the driver
+  before oxrok, such as the replug after sigrok-cli's run in an
+  `--unplug` case. Use `Transport::detach_kernel_driver` to match a C
+  driver that leaves the driver detached; `claim_interface`'s own detach
+  gives it back, and the probe lands in the case's `.tx`.
+- A case that needs a kernel driver gone must take it off itself.
+  Depending on an earlier case fails under `-k`, and the same goes for a
+  usbfs hold helper.
+- A stop test that holds a read only exercises the error path. A chip
+  that always answers needs its own test with a fake transport, or the
+  loop's stop check can go unnoticed: try that mutant.
+- A flag sweep through a full case finds parser differences that a few
+  sample packets miss; try the early exits (overloads) with odd sign and
+  point bytes.
+- Before writing "sigrok-cli cuts the excess", read session.c:
+  `limit_samples` cuts what goes to decoders and the count, and
+  `sr_output_send` gets the whole packet. A port that honours the limit
+  differs on every capture the device rounds up, so use limits the
+  device holds exactly for the full cases.
+- A call that differs leaves a replay where it is, so a failed call plus
+  an ignored result still ends with `finish()` passing. To test that
+  something was not asked for, offer it and assert
+  `Replay::remaining()`. Two stop tests passed against mutants until
+  they did.
+- A case's helper variable can be overwritten by `emu_case`: a loop's
+  `f` turned into "err" mid-loop, because the two `emu_case` calls share
+  one function scope.
+- A stop flag kept on the device for a reply wait must be reset at the
+  open: `close` sets it.
+- `--show` gives oxrok's raw open error, and `run.rs` adds "Failed to
+  open device"; a filter has to map the former.
+- A stop or bound test that a mutant fails only by running long is no
+  test: cargo test has no timeout. Offer the data and assert
+  `Replay::remaining()`, make the closure panic, or shrink the input
+  until the count shows it.
+- `hantek_6xxx`'s `!is_finished()` can say busy for a moment after End.
+  Giving the link back before End, and asking whether the thread still
+  holds it, lets a client start as soon as it sees End. Don't join a
+  thread that may still be sending End to a full queue.
+- A HID class device reached over usbfs needs the kernel driver left
+  detached, as `libusb_detach_kernel_driver` does: nusb's
+  detach-and-claim and libusb's auto-detach both attach it again on
+  release, and usbhid's probe then sends requests.
+  `Transport::detach_kernel_driver` does the check and the detach. It
+  passes `--no-oracle`, where usbhid is really bound.
+- A bare `USBDEVFS_DISCONNECT` has no check for another program's usbfs
+  claim; libusb asks for the driver first. Look before detaching.
+- `--unplug in=` and `--interrupt in=` count listing reads too, so a
+  libusb run fires them earlier: compare those cases by what they show,
+  not by their position.
+- `--hangs` on a model option can be false: `ignore-reset=never` alone
+  ends once the data runs out and the device says ready. Check that the
+  C really hangs before calling it a bug.
+- A replay repeats a status read that has no sequence number, so it
+  hides an extra poll: a stop's wiring needs a test that logs the
+  transfers, not only `finish()`. A mutant that passed `false` for the
+  flag survived until the wrapper logged them.
+- A check on a report's length should ask for the bytes used, not the
+  report's full size. Refusing anything short turned an inference about
+  the firmware into a refusal.
+- Check a rounding case against a mutant: 150 samples at ratio 33 gave
+  13 bytes with or without the extra sample.
+- A test that a command was not sent must offer it. With no step left, a
+  replay makes the command fail, a driver that ignores that failure
+  looks the same, and the assertion holds either way. Put a sentinel
+  step in the fixture and assert `Replay::remaining()`.
+- Don't size a bound's fixture from the constant it tests: a changed
+  constant then still passes. A fixture that runs out can also end the
+  test before the bound does, so offer more after it.
+- A driver's destructive step belongs after the session has taken every
+  packet, not on the acquisition thread: a failed output only shows
+  there. The session stops a device whose consumer failed, even at the
+  last packet, so read the stop flag before joining.
+- Comparing settings with what the device last took gives real-change
+  dirtiness, and it also handles a set that is undone.
+- A C path that no run has ever completed leaves no wire to keep: choose
+  on data safety, not on line-by-line parity.
+- Never start a bless while a mutant loop is running in the same
+  worktree: the build picks up the mutated source.
+- A GLib critical can hide a whole path from both sigrok-cli and
+  libsigrok-run: analog.c reads META by key type.
+  `--survive-glib-critical` reaches what lies behind it.
+- The harness records no `--oracle-bug` case. A path only oxrok can run
+  gets its replays as unit tests.
+- A wrong type in a key's value can make a table of options unreachable
+  for every client, so the C's other table entries have no oracle.
+- A hang case's stdout is not lost: the preload flushes it, so
+  `--no-output` fails; filter a growing output to its first line.
+- When a close's condition is inverted, split it. `close()` does the
+  intended thing and `close_after_capture()` keeps the wire, so captures
+  stay full cases.
+- A command-then-header protocol reads with plain reads: libusb's stream
+  thread reads ahead at once and eats the next answer. A C comment about
+  a read "waiting in the wings" is no device fact; another program
+  written against real units settled it here.
+- A session log per backend, compared without string reads, shows a
+  libusb run is the same when `--no-oracle` fails every case on them.
+- libusb reaps in a loop, so one event pass can complete a whole
+  download. A `--stop-after` stop then comes after the end; use
+  `--stop-in-callback` for a driver whose stop does no USB.
+- A test of a bound or an end on a `Replay` must offer one more step and
+  check `remaining()`. An exhausted replay answers an error that a retry
+  loop counts as a failed read, and `finish()` tolerates an unread
+  repeat of the last read, so neither shows that the loop stopped in
+  time.
+- `libusb_control_transfer()` from a transfer callback gets
+  `LIBUSB_ERROR_BUSY` with no wire transaction. The same C function can
+  send a request fine on one path and not on another, so check the `.tx`
+  per path. In greatfet the stop fails only after a failed transfer.
+- `sigrok-cli` cuts only the decoder's input at `--samples`, not the
+  output module's, so an overshoot in the C shows on stdout.
+- With a driver that sends a samplerate meta, `--keep-header` shows
+  sigrok-cli's `META` line and it counts in a `-O binary --digest`: drop
+  `--keep-header` on capture cases, and don't digest `-O binary` with
+  it.
+- A driver that resubmits before checking its limit has no stable
+  transfer count on a free-running model. Have the model hold after N
+  transfers and put each case's limit in the last of them.
+- A test stream's "went on" bound must be below the test channel's
+  capacity, or a mutant blocks in the send instead of failing.
+- A grep over test output can hide a compile failure: count "test
+  result" lines, as a broken model test went unnoticed until the final
+  gate here.
+- A test that an End comes after the link goes back can't rely on a
+  retry loop, as the window is too small. Hold the link's lock while a
+  gated stream ends, so that End can't arrive unless the order is wrong.
+- A spy transport that counts writes is what makes a "sends nothing"
+  test bite. A `Replay` with no steps just fails the request, and the
+  code under test logs it and passes.
+- A protocol with no terminators is framed in the model by its command
+  table; a value's width comes from the C's printf, and `-0.0` makes
+  `%05.3f` six characters wide.
+- A C gboolean holding a masked bit (`status & 0x40`) differs from one a
+  setter stored (1), so a change flag fires falsely. Keep the raw value
+  if that is what output parity needs.
+- A value the C passes through two comparisons can be NaN or -0.0. Check
+  what a live output would receive.
+- A missing reply is an observation: don't turn it into a reading
+  because `sr_atof_ascii("")` gives 0.0. Not counting it means a sample
+  limit may never come, so bound it.
+- On a protocol with no framing, drop the input queue before each query.
+  It costs nothing on the wire and stops one late reply shifting all
+  that follow, though the reading that meets a late reply can still be
+  wrong.
+- `serial::read_blocking` and `serial::serial_timeout` are
+  `serial_read_blocking` and `serial_timeout`; use them rather than
+  writing your own. A 0 from `Port::read` is not the end of a read.
+- A test on a stop or a limit must have a bound of its own, so the
+  mutant fails rather than hangs. A fake's timed bytes should be purged
+  only once they have arrived, or a late-reply test proves nothing. A
+  mutant test whose failure is a hang must run the test binary under its
+  own timeout: under `lcargo` the orphan holds the slot, and every later
+  mutant looks caught.
+- A scenario defines `emu_conns` and uses `emu_options` and `emu_hex`
+  from `tools/diffcli.sh`. A model parses options with `crate::options`.
+- A new safeguard can hide an old one from its test: the purge made an
+  unread sixth byte invisible to the scan test, and only a rerun of the
+  mutant showed it.
+- An emulator model cannot check pacing; test it on a fake `Port` with
+  timestamps.
+- To say what the C sends in an `--oracle-bug` case, run it once without
+  the flag and read the diff: the `.oracle` keeps stderr only, so
+  passing proves only that it failed.
+- A status-only packet follows a full FTDI packet in the same transfer
+  only when no more data is waiting, so a driver that strips status
+  bytes once per transfer counts them as data and may finish a read
+  early. A bound counted in reads of an FTDI chip is a bound in latency
+  timers, which a udev rule can change: use time as well. `tag
+  --contains` misses fixes and regressions on a release branch: check a
+  release with `git grep TAG -- file`. A fault meant to test one check
+  must not trip another: a mutant run shows it. When a driver has a
+  scan-time kernel driver, a case with `--bound DRV` shows what the
+  gates hide.
+- "Keep the C's wire" needs a C path that runs. Where no C run reaches a
+  step, there is no wire to keep, and an irreversible device write must
+  take the safest reading.
+- A hand-run `sigrok-cli --scan` on the emulator's box reads strings
+  from every device (testo's scan has no vendor filter) and lands in a
+  session's `.tx`.
 
 ## Porting a decoder
 

@@ -312,7 +312,7 @@ Windows; attaching a device is Linux only.
   `--hangs` cases; and fault cases run on a board that starts
   with its firmware (`flashed=1` or the like), since after an upload
   the drivers retry a failing open for 3 s of wall time.
-- CDC-ACM and USBTMC come next.
+- USBTMC comes next.
 - Models live in `emu/src/models`, one file `NAME.rs` or one directory
   `NAME/mod.rs` each, and nothing else names them: `emu/build.rs` finds
   them and generates the module declarations, the table
@@ -691,6 +691,127 @@ takes the STALL; `vhci_hcd: vhci_device speed not set` in `dmesg`
 during the attach is harmless. A USB/IP server must not close its end
 while attached, so the process keeps the socket it handed to the
 kernel until it detaches.
+
+- `--bound DRV` binds DRV to the device's vendor interfaces before each
+  tool's run, in a section of its own, as on a fresh plug in. A kernel
+  without DRV runs the case unbound, with a note.
+- The `.oracle` of `--oracle-bug` masks the address in the core's
+  "device N.M acquisition." line. A status above 128 other than 137 adds
+  `oracle died: signal N` to it, so a crash golden pins its signal
+  (`timeout` gives 128+signal or re-raises it; 137 can be its own KILL).
+  `--interrupt` cases where sigrok-cli dies of SIGINT pin signal 2 too.
+
+### Writing a serial model
+
+`emu/src/shells/cdc.rs` makes a CDC-ACM function that the kernel's
+`cdc_acm` binds and the tools reach through `/dev/ttyACMn`. A model is a
+byte stream and never sees a URB:
+
+```rust
+struct Meter;
+impl Serial for Meter {
+    fn received(&mut self, data: &[u8], port: &mut Port<'_>) {
+        if data.contains(&b'?') { port.send(b"reply\r"); }
+    }
+}
+pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
+    let mut faults = Faults::default();
+    for (k, v) in options {
+        if faults.option(k, v)? { continue; }
+        return Err(Error(format!("{NAME} has no option {k}")));
+    }
+    let id = Identity::new(0x1209, 0x0001, "Maker", "Name");
+    Ok(Box::new(Cdc::new(NAME, &id, faults, Meter)))
+}
+```
+
+1. `Serial::received` gets what the host wrote. How it was cut into
+   transfers means nothing, so collect frames yourself, in a buffer with
+   a bound. `Serial::changed` gets `LineEvent::{Coding, Lines, Break}`.
+   Each open sends `SET_CONTROL_LINE_STATE` 3, which arrives as `Lines {
+   dtr: true, rts: true }` whether or not the lines changed;
+   `LineEvent::opened()` says so. DTR rising is not an open: with
+   `HUPCL` off a close leaves the lines up. `Serial::tick` is one offer
+   of a pending read with nothing queued, about every 20 ms and more
+   when the host is busy, and it stands still while the tty is closed.
+   `Serial::reset` goes back to power on.
+2. `Port` has `send`, `line`, `dtr`, `rts`, `violation`,
+   `mark_event_point` and `set_modem_lines`.
+3. An instrument behind a UART calls
+   `.behind_uart(Line::parse("1200/7n2")?)`: while the rate, data bits
+   or presence of parity differ, nothing passes either way. A native USB
+   port omits it and the settings do nothing.
+4. Pace by the host. Answer in `received`, and the reply goes out in the
+   same server round as the request. A meter that streams uses
+   `hidcable::Stream`, restarted on `opened()`, with a period long
+   enough for the tool to close first.
+5. Unit tests: `shells::cdc::host::Host::open(cdc, line, dtr, rts)`,
+   then `write`, `read`, `offer`, `set_line`, `set_lines`.
+
+The shell's options (all models take them): `stall=line|lines|break`,
+`chunk=N`, `in-limit=N` (holds after N bytes and marks the event point),
+`in-stall=N`, `out-hold=N`. Endpoints: 1 notifications, 2 data, so
+`--unplug in=2:N` and `--interrupt out=2:N` count data transfers.
+
+The scenario sets `EMU_CDC=1` and names the node `conn=$EMU_TTY`, with
+`EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"`. Under `EMU_CDC=1`:
+- A session with no ttyACM fails. A case whose tty moved after its line
+  was read fails, so re-read `conn=` after anything that re-attaches
+  (see `serial_dmm_conns`).
+- Before each tool the tty goes back to 9600/8n1 in a section of its
+  own, and the model is replaced, because the kernel keeps termios and
+  the last line coding across closes.
+- The `.tx` is normalised: consecutive bulk transfers of a direction
+  become one line (`bulk_in 82 LEN -> DATA`, a digest above 1 KiB), and
+  a run of `SET_LINE_CODING` and `SET_CONTROL_LINE_STATE` keeps the last
+  coding, first, if it changes the line, then the line states that
+  change the lines.
+- libsigrok swaps odd and even (`serial.c:652-655` against
+  `serial_libsp.c:253-258`), so in sigrok-cli's `.tx` alone bParityType
+  01 and 02 are swapped back. A driver with `o` or `e` runs full. A
+  fixed libsigrok fails the comparison, which is how that would show.
+
+Consecutive means with nothing between: a device that streams while the
+host writes interleaves by timing, so avoid it or filter it.
+
+On a request/response driver with no `rts` setting, keeping the probed
+port and reopening it look identical in a `.tx`, since an open repeats
+the state the lines are in. So a clean `.tx` there does not tell you
+which one a driver does.
+
+What the first model taught:
+- While the tty is open the kernel holds 16 bulk INs of two packets (128
+  bytes at full speed) and one interrupt IN. One `write()` is one bulk
+  OUT, up to 20 packets.
+- sigrok-cli leaves DTR and RTS up at close (libserialport clears
+  `HUPCL`), and each open raises both, so RTS pulses even with `rts=0`.
+- serial-dmm closes the port after the scan, and its streaming-meter
+  scans took two packets to find one. `ut32x` and the Pico keep the
+  probed port, so check each driver's C.
+- A driver that asks without a `req_timeout_ms` asks again every 50 ms
+  while it waits: a silent device's write count is wall-clock, so filter
+  it (`--tx-filter 's/^bulk_out 02 (44)+ -> [0-9]+$/.../'`), and keep
+  answers immediate.
+- Events go at a quiet point (`--unplug model`, `--interrupt model`,
+  `--tx-filter '/^interrupt$/q'`). Bytes just delivered are lost to an
+  unplug's hangup, or not, as the pace has it.
+- After an unplug, a read returns EOF or POLLHUP. A C driver that only
+  reads never notices (`--oracle-bug --oracle-hangs`).
+- A device that NAKs bulk OUT blocks C's next write for good, and the
+  kernel holds any tool's close for `closing_wait`, 30 s. The pilot pins
+  this once ("metex stops reading"; `emu_tty_closing_wait` makes it
+  cheap). Do not repeat that case unless a driver's write-error path is
+  its own: each copy costs at least 20 s.
+- The node number is the lowest free one and comes back the same after a
+  replug, once the tool has exited.
+- Faults on the line: a stalled `SET_LINE_CODING` is ignored by the
+  kernel, a stalled `SET_CONTROL_LINE_STATE` fails the tool's ioctl, and
+  a stalled read is recovered by `CLEAR_FEATURE` without any tool seeing
+  it.
+- `collect_nodes` waits for a device's first node only.
+- Packages: `kernel-modules-core` on Fedora, `linux-modules` or the
+  extras on Ubuntu. A distribution's brltty or gpsd may claim a tty;
+  only ModemManager has been looked at.
 
 ### Writing a device model
 

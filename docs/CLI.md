@@ -168,9 +168,57 @@ Deliberate, and kept small:
   ("Unknown scan option 'conn'.", exit 1); sigrok-cli prints nothing and
   exits 0, as libsigrok finds no device. `zeroplus-logic-cube` takes
   `conn=` without listing it.
-- `-c a=1:b=2` sets the options in the order given. sigrok-cli sets them
-  in its hash table's order, which shows on a device where setting an
-  option talks to the hardware (the Kingst PWM outputs).
+- `-c` checks every option of every `-c` before sending any: its scope,
+  its key, its value, that the key can be set in that scope, and what
+  the core refuses for every driver (`limit_samples=0`). It then sends
+  `enabled=off` first, the others in the order given and `enabled=on`
+  last, stopping at the first error, so an output goes on only if every
+  setpoint was accepted. In a capture, `enabled=on` waits until the rest
+  of the command line was accepted, just before the start. sigrok-cli
+  sets them in its hash table's order (session.c:700-701), and each -c
+  in turn, so it may have switched an output by the time it refuses a
+  later option; this shows on a device where setting an option talks to
+  the hardware (Kingst PWM, relays, power supplies). Separate `-c` keep
+  sigrok-cli's order except for `enabled`.
+- The last `enabled` of a scope counts. A device-wide `enabled=off`
+  drops an `enabled=on` given before it on a channel group, where
+  sigrok-cli pulses that output. `-c enabled=on -c
+  channel_group=R1:enabled=off` (all but R1) keeps its order, so R1 has
+  power between the two.
+- A failed start leaves the output as it is, as in sigrok-cli and as a
+  finished capture does: the state before is not known and the device
+  may be gone. oxrok says so on stderr ("The capture failed with the
+  output on: it was left on.").
+- `channel_group=` is the scope only as the first element of a `-c` or
+  `--get`, as in sigrok-cli; later on it is an unknown option. An empty
+  first element (`-c :enabled=on`) is refused; sigrok-cli dies on an
+  assertion. An empty group name (`channel_group=`, `-g ""`) is refused
+  too, where sigrok-cli takes it as device-wide: a shell variable that
+  came out empty should not switch every output. `global`, in any case,
+  is device-wide in both. Group names match without case on every
+  driver.
+- A boolean in `-c` or `-d` must be `true`, `yes`, `on`, `1`, `false`,
+  `no`, `off` or `0`, in any case; anything else is refused.
+  `sr_parse_boolstring()` takes an empty string as true, matches
+  prefixes (`1x`) and takes the rest as false.
+- A boolean output option (`-O csv:header=`) takes the same words in any
+  case; sigrok-cli takes only `true`, `yes`, `false` and `no` in lower
+  case and refuses the rest ("Unable to convert", so also `header=TRUE`,
+  `on`, `off`, `1`, `0`). `-O csv:header=` with an empty value is the
+  default; sigrok-cli refuses it.
+- A time limit whose samples overflow saturates; sigrok-cli's
+  multiplication wraps (session.c:61) and gives a limit unrelated to the
+  time.
+- "Failed to open device" carries the reason ("Failed to open device:
+  device is busy."), in `--show` as in a capture; sigrok-cli stops at
+  "device.".
+- A refused value says why ("Failed to set device option 'samplerate':
+  invalid argument: it cannot be 0."); sigrok-cli stops at "invalid
+  argument.". The line before it is the same text under oxrok's log
+  prefix.
+- `-d driver:key` without a value and `--show`: oxrok stops at the error
+  before any output; sigrok-cli has printed the driver's functions and
+  scan options first, then gives the same error and exit status.
 - kingst-la2016 captures stop at `--samples`, and a rate whose divider
   does not fit 16 bits is refused.
 - `dreamsourcelab-dslogic`: `--get clock_edge` answers the edge set;
@@ -275,6 +323,89 @@ Deliberate, and kept small:
 - hantek-6xxx: a capture whose transfers come back empty or fail ends,
   where sigrok-cli waits for ever.
 - hantek-6xxx: Ctrl-C ends the capture, where sigrok-cli dies.
+- uni-t-dmm: The ids of `uni-t-dmm` also accept no `conn=` and
+  `conn=hid...` (through the HID layer, `serialcomm=` too), where
+  sigrok-cli finds no device. `conn=VID.PID` of another chip's cable
+  goes there too, and off Linux so does a CH9325 cable the HID layer
+  sees. A `conn=` that is no USB adds a line naming the `-ser` driver. A
+  report count above 7 is cut to 7. The csv and analog outputs match on
+  a capture that ends in a USB error, although oxrok's driver sends the
+  end packet the C does not.
+- testo: A conn= that names nothing finds nothing, where sigrok-cli
+  selects every device.
+- testo: oxrok completes what sigrok-cli does not: two measurements of
+  one unit, another order of measurements (sigrok-cli skips some),
+  answers of 65 bytes or more, and captures after a bad prefix or an
+  overrun (it asks again).
+- testo: oxrok ends what sigrok-cli waits on for ever: a device that
+  does not answer, after Testo's suggested 7 s and at least 256 reads;
+  failing reads after 256; damaged answers after 16 in a row.
+- testo: Answers of 65 bytes or more fail in sigrok-cli only when one
+  transfer holds two packets, so it depends on the chip's latency timer.
+- testo: The analog and csv outputs print NaN as printf does, `nan` and
+  `-nan`.
+- `sysclk-sla5032`: `--samples` is honoured: sigrok-cli prints what the
+  device's rounded depths hold (1024 samples for a limit of 512).
+- `sysclk-sla5032`: `conn=` matching nothing, or a bad spec, lists
+  nothing; sigrok-cli lists the device.
+- `sysclk-sla5032`: a chunk that ends in the 2 s timeout with data is
+  written out; sigrok-cli drops it and prints nothing. Records claiming
+  over 2^31 samples give the limit's samples; sigrok-cli prints none.
+- `sysclk-sla5032`: warnings "The FPGA's key step failed" and "The
+  capture ended early" (a failure, no samples, or a chunk with no end
+  marker); exit status stays 0 as with sigrok-cli.
+- ikalogic-scanalogic2: `-t` with two stages is refused where sigrok-cli
+  captures without a trigger. A serial over 2^31 prints as it is, not
+  negative. A sample packet lacking bytes the capture uses ends it with
+  an error, where sigrok-cli repeats old samples. `samplerate=2.5M`
+  works, where sigrok-cli reads 2. `conn=` is refused by name where
+  sigrok-cli's `--scan` finds nothing, silently.
+- kecheng-kc-330b: `sample_interval` is in ms (125, 500, 1000, 2000,
+  5000, 10000, 60000). sigrok-cli's `--get` prints (1, 8), and its set
+  and `--show` die.
+- kecheng-kc-330b: `--show` and a plain `--get` send nothing, while
+  sigrok-cli's close configures.
+- kecheng-kc-330b: A `--set` that really changes a setting sends a
+  configure outside memory mode, which clears the meter's log by the C's
+  comment. sigrok-cli's `--set` sends nothing. A set to the current
+  value sends nothing in either.
+- kecheng-kc-330b: A log read clears nothing unless another setting was
+  asked for along with it.
+- kecheng-kc-330b: oxrok takes `conn=`.
+- kecheng-kc-330b: A live capture retries bad answers, 5 in a row at
+  most; sigrok-cli hangs.
+- kecheng-kc-330b: oxrok's USB timeouts are 100 to 250 ms against the
+  C's 5 to 40.
+- lascar-el-usb: `--samples N` cuts the output at N samples per channel,
+  and the whole memory is still read. sigrok-cli ignores the limit.
+- lascar-el-usb: half degrees and half percents are kept (23.5 where
+  sigrok-cli says 23).
+- lascar-el-usb: a device that stops sending or halts its endpoint ends
+  the capture after 30 reads with an error line, exit 0. sigrok-cli
+  never ends.
+- greatfet: a limit inside a byte of packed sample memory gives exactly
+  the limit, where sigrok-cli gives up to 7 more.
+- greatfet: a `samplerate` of 2^32 or more is refused, where sigrok-cli
+  sends it truncated and captures.
+- greatfet: oxrok warns on an answered rate below about 49.8 kHz or over
+  204 MHz; sigrok-cli says nothing.
+- `--continuous` with stdin at EOF: sigrok-cli stops at once; oxrok runs
+  until interrupted.
+- korad-kaxxxxp: `--get voltage`, `voltage_target`, `current` or
+  `current_limit` with no reply fails, where sigrok-cli prints 0.0 with
+  rc=0. In a capture such a reading is no sample and doesn't count;
+  sigrok-cli sends 0 and counts it. A capture ends after 5 such readings
+  in a row.
+- korad-kaxxxxp: oxrok refuses `voltage_target=nan` and
+  `current_limit=nan`; sigrok-cli sends `VSET1:  nan` to the supply.
+- korad-kaxxxxp: `-0` goes out as `VSET1:00.00` and `ISET1:0.000`;
+  sigrok-cli sends `VSET1:-0.00` and `ISET1:-0.000`.
+- korad-kaxxxxp: sigrok-cli sends `VSET1:00.00` for `voltage_target=abc`
+  and `VSET1:12.00` for `12V`; oxrok refuses both.
+- korad-kaxxxxp: a device that leaves ends a korad capture, with exit 0;
+  libsigrok repeats the last values until the limit.
+- korad-kaxxxxp: each query first drops what is in the input queue,
+  which C does not do; it puts nothing on the wire.
 
 ## Not available yet
 
@@ -284,5 +415,5 @@ Deliberate, and kept small:
   `scale` options of the `csv` output.
 - The `csv` input and the other long tail input modules (ChronoVu LA8,
   STF, Trace32, ISF, WAV, LogicPort .lpf).
-- The other libsigrok hardware drivers: the USB logic analyzers come
+- The other libsigrok hardware drivers: the serial instruments come
   next, the rest after them (`docs/ROADMAP.md`).

@@ -21,12 +21,11 @@ mind, and read the table below for what has met which kind of evidence.
 
 Early, and most of it has never touched the device it drives.
 
-On 2026-11-04 `src/lib.rs` registers 23 driver modules, with 119 driver
-ids (`oxrok -L`; most ids are multimeters). 22 of the modules are
+On 2026-11-05 `src/lib.rs` registers 31 driver modules, with 126 driver
+ids (`oxrok -L`; most ids are multimeters). 30 of the modules are
 counterparts of libsigrok's 87 `src/hardware` directories, and one, the
 LogicPort, is not in libsigrok; the `serial-dmm` module also takes in
-`uni-t-ut32x` and the HID cable meters of `uni-t-dmm`. More are being
-ported: [docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
+`uni-t-ut32x`. More are being ported: [docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
 
 Also there: the `bits`, `hex`, `ascii`, `analog`, `csv`, `vcd`, `binary`
 and `srzip` outputs; `.sr`, VCD and binary inputs (no CSV input yet, see
@@ -39,7 +38,7 @@ record and replay; native `uart`, `i2c` and `spi` decoders.
 [How drivers are tested](#how-drivers-are-tested): parity with libsigrok
 against a device model, not contact with hardware. Cases are counted from
 `tests/emu/MODEL/*.out`, gcov from `tests/emu/MODEL/gcov.txt`, both on
-2026-11-04. gcov is the share of the C driver's lines the cases reach.
+2026-11-05. gcov is the share of the C driver's lines the cases reach.
 
 Run on real hardware:
 
@@ -55,9 +54,9 @@ with no real device yet:
 
 | driver | stand-in | emulator | notes |
 |---|---|---|---|
-| `dcttech-usbrelay` | Pico | 17 cases, gcov 82.2% | |
+| `dcttech-usbrelay` | Pico | 30 cases, gcov 82.2% | |
 | `microchip-pickit2` | Pico | 48 cases, gcov 84.0% | |
-| `serial-dmm` family | ESP32 for UT61E and UT60A streams; Pico for the BU-86X, CH9325 and Victor cables | 61 cases over 4 cable models, gcov 60% to 77% | CP2110 on the emulator only; the other meters have replay tests only |
+| `serial-dmm` family | ESP32 for UT61E and UT60A streams; Pico for the BU-86X, CH9325 and Victor cables | 92 cases over 5 models (4 cables, CDC-ACM), gcov 60% to 77% | CP2110 and CDC-ACM on the emulator only; the other meters have replay tests only |
 
 Emulator and replay only, never run on hardware:
 
@@ -67,22 +66,28 @@ Emulator and replay only, never run on hardware:
 | `chronovu-la` | 52 | 87.0% |
 | `dreamsourcelab-dslogic` | 94 | 90.2% |
 | `ftdi-la` | 46 | 86.4% |
+| `greatfet` | 131 | 84.8% |
 | `hantek-4032l` | 135 | 91.4% |
 | `hantek-6xxx` | 102 | 91.0% |
 | `hantek-dso` | 148 | 96.2% |
+| `ikalogic-scanalogic2` | 143 | 88.6% |
 | `ikalogic-scanaplus` | 53 | 93.8% |
-| `kingst-la2016` | 151 | 91.2% |
+| `kecheng-kc-330b` | 129 | 79.3% |
+| `kingst-la2016` | 158 | 91.2% |
+| `korad-kaxxxxp` | 130 | 88.6% |
+| `lascar-el-usb` | 152 | 93.9% |
 | `lecroy-logicstudio` | 94 | 95.9% |
 | `p-ols` (Pipistrello) | 107 | 97.0% |
 | `saleae-logic16` | 87 | 91.6% |
 | `saleae-logic-pro` | 109 | 97.1% |
 | `sysclk-lwla` | 141 | 91.1% |
+| `sysclk-sla5032` | 165 | 91.5% |
+| `testo` | 70 | 91.3% |
+| `uni-t-dmm` raw USB | 78 | 97.4% |
 | `zeroplus-logic-cube` | 134 | 87.6% |
 
-Models with no port yet, whose cases run sigrok-cli alone:
-`ikalogic-scanalogic2` (134 cases), `sysclk-sla5032` (142). `demo` is
-software, covered by the software cases of `tools/diffcli.sh`. The native
-decoders were compared with libsigrokdecode on captures from an ESP32.
+`demo` is software, covered by the software cases of
+`tools/diffcli.sh`. The native decoders were compared with libsigrokdecode on captures from an ESP32.
 
 [docs/DEVICES.md](docs/DEVICES.md) has the details per device, and what is
 known to differ. If you own one of these devices, a report is worth more

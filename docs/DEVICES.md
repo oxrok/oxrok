@@ -114,6 +114,14 @@ frames the stream itself (`Protocol::frame`), and the driver pulses RTS
 after opening the port as the meter requires. Nothing on this list past
 the FS9721 and ES519xx families has met a real meter; see below.
 
+Emulated on the CDC-ACM shell: model `serial-dmm`
+(`meter=metex|es51922|fs9721`; `packet=`, `noise=`, `flood=`, `period=`,
+`burst=`, `answers=`, and the shell's faults), 29 cases on
+`metex-m3640d`, `uni-t-ut61e-ser` and `uni-t-ut60a-ser`, 2026-11-04.
+gcov 71.3% of the driver. Not emulated: the HID and variable-length
+meters. libsigrok swaps odd and even parity, which the harness undoes in
+its `.tx`; see USB.md.
+
 ### HID cables
 
 Some cables are USB HID devices rather than serial ports: the Brymen
@@ -250,14 +258,45 @@ delay, and a panic on an overload reading.
 libsigrok's `uni-t-dmm` driver covers 27 meters whose UT-D04 cable is a
 CH9325 HID bridge (`uni-t-ut61e`, `voltcraft-vc820`, `tenma-72-7730`,
 `uni-t-ut372`, ...). oxrok registers the same ids as twins of the
-serial entries over `hid/ch9325`, so they scan without `conn=` and also
-take sigrok's `conn=1a86.e008` form. The UT372 tachometer parser came
+serial entries over `hid/ch9325`, so they scan without `conn=`. The UT372 tachometer parser came
 with them. The UNI-T UT32x thermometer (`uni-t-ut32x`) has its own
 driver: channels `T1`, `T2`, `T1-T2`, `data_source` `Live` or `Memory`,
 `conn=` required since the cable cannot be told from any other UT-D04.
 Both were exercised with the Pico emulator in CH9325 mode (a UT61E
 stream for the meters, a 23.5 C packet for the UT32x); sigrok-cli has
 no reference run for them on macOS, where libusb cannot claim a HID.
+
+libsigrok's `uni-t-dmm` is ported as `src/drivers/uni_t_dmm`, 27 ids.
+`conn=VID.PID` and `conn=BUS.ADDRESS` use raw USB as the C does: on the
+first poll usbhid is detached, interface 0 is claimed, the line is set
+with `baud 00 00 03` (8 data bits, so a 7o1 meter's parity arrives in
+bit 7 and is masked), then one 8 byte interrupt read on 0x82 per poll.
+No `conn=` and `conn=hid...` keep the HID route through the `serial_dmm`
+twin, and so do ids of another chip (a CP2110's `10c4.ea80`), which the
+C would send a CH9325 report.
+
+On Linux usbhid stays detached after a raw capture, as with sigrok-cli
+(logged at info level). Until a replug, no `conn=` and `conn=hid` find
+no hidraw node and say "No devices found". Raw USB needs write access to
+the usbfs node, not to hidraw (untested). A failed claim logs `Failed to
+claim interface 0` and `HID chip init failed`, and the run exits 0, as
+sigrok-cli does.
+
+Off Linux, `conn=VID.PID` of a known cable the HID layer sees goes to
+the twin, since nusb cannot claim it (busy on macOS, unsupported on
+Windows with HidUsb). On Windows a cable bound to WinUSB through Zadig
+is no HID device and works raw only (untested); there a failed claim
+names `conn=hid/ch9325`. `serialcomm=` on raw USB finds no device, as in
+the C.
+
+Emulated by model `uni-t-dmm`, with descriptors from the sigrok wiki's
+lsusb: options packet, baud, parity, chunk, idle, burst, stall-report,
+stall-in, short-in, hold. 78 cases (75 full, 1 --oracle-bug, 1
+--oracle-differs, 1 library), gcov 97.4%, unreached: a failed detach and
+a short control write. Not on hardware. The HE2325U cable and the
+bcdDevice 12.00 variant are not modelled, and full speed is an
+assumption from the CH9326's datasheet. The model found that oxrok's
+fs9922 overload ignored the C's early return.
 
 ## USB relay boards and the PICkit2
 
@@ -1618,14 +1657,35 @@ without a trigger (`api.c:501-502`), keeping an earlier session's masks.
 
 ## Sysclk SLA5032 (sysclk-sla5032)
 
-`sysclk-sla5032`: oxrok has no port yet.
+`sysclk-sla5032`: ported, emulator-verified, not checked on hardware.
+165 cases: 131
+full, 8 `--oracle-bug`, 15 `--oracle-differs`, 11 library; gcov 91.5%
+(api.c 85.7%, protocol.c 94.7%), usb.c 35.4%. The driver rounds depths
+both ways: a limit of 512 gets 1024 samples, 5000 gets 4608. sigrok-cli
+counts its limit only for decoders and "Device only sent", and writes
+whole packets to its output (session.c:464), so it prints all 1024;
+oxrok cuts to the limit on the host, with the same transactions, and a
+shortfall is reported by both. Where oxrok differs: a `conn=` selecting
+nothing lists nothing (api.c:116); records are summed in 64 bits and
+expanded in blocks, so what they claim allocates nothing
+(protocol.c:782, 795); a chunk ended by the 2 s timeout is kept where
+the C drops it (protocol.c:749), which matters only if the firmware
+sends no ZLP, unknown; a failed key step (protocol.c:646) and a failure
+that ends a capture keep the C's good open and exit 0 but warn, and so
+does a chunk that is empty or neither full nor marked
+(protocol.c:760-765, 851); a stop ends a wait for a reply. The bitstream
+is the vendor's, as `sysclk-sla5032.bit`. A stop while waiting writes
+nothing to the device, as in the C, so sampling stays on in register 14.
+A stop that ends a wait for a reply leaves any late reply on the FX2, so
+the next session's reads would be one behind until a reset. `limit
+highest` compares transactions only: there is no sample digest at 64 Mi
+samples. Replay fixtures record a board with its design already in
+place.
 
-Emulated (2026-11-04), oracle cases only: model `sysclk-sla5032` (FX2LP,
-Spartan-6 with bitstream upload and EEPROM keys, RLE sample memory),
-options `period=`, `wait=`, `configured=1`, `fw_size=` and the faults
+The model `sysclk-sla5032` (2026-11-04) is an FX2LP with
+a Spartan-6, bitstream upload and EEPROM keys, and RLE sample memory. Options: `period=`, `wait=`, `configured=1`, `fw_size=` and the faults
 `stall=`, `stall_reply=`, `short_reply=`, `hold_reply=`, `data_stall=`,
-`data_hold=`, `data_short=`, `no_marker=1`, `overcount=1`. 142 oracle
-cases; gcov 91.0% (api.c 84.4%, protocol.c 94.7%), usb.c 35.4%. Not
+`data_hold=`, `data_short=`, `no_marker=1`, `overcount=1`, `no_zlp=1`. Not
 emulated: allocation and libusb list failures other than
 protocol.c:797-801, a partly taken OUT, an open failing between scan and
 open, what sigrok-cli or the driver's config_set checks first;
@@ -1642,8 +1702,7 @@ whose records end on a packet boundary (about 1 in 256) would hit the 2
 s timeout, and protocol.c:749 drops the chunk with exit 0. What the
 driver shows: it ignores a failed key step (protocol.c:646), has no time
 limit on a trigger that never fires, ends a capture with exit 0 on
-errors, and rounds depths both ways (a limit of 512 gives 1024 samples,
-5000 gives 4608). T goes on the first match in memory, whatever the
+errors. T goes on the first match in memory, whatever the
 depth; the distance from the hardware's trigger is unknown. It sums
 device records into an `int` unchecked (protocol.c:782): a total from
 2^31 up to 2^32 goes negative and fails the allocation, and one that
@@ -1652,9 +1711,30 @@ the C, no case).
 
 ## IKALOGIC Scanalogic-2 (ikalogic-scanalogic2)
 
-`ikalogic-scanalogic2`: oxrok has no port yet.
+`ikalogic-scanalogic2`: ported (2026-11-04), never on a board. All cases
+full or pinned: 143 (123 full, 3 `--oracle-bug`, 9 `--oracle-differs`, 8
+library, among them the stops and the no-limit crash, which only
+libsigrok-run can reach). gcov as before. Control transfers on a claimed
+interface as in C; the scan and the open detach usbhid, which stays
+detached until the device is plugged in again, as libusb leaves it. Not
+through hidraw, which needs usbhid bound. On Windows the default nusb
+backend cannot claim a device bound to the HID driver, while libusb has
+a HID backend and may work (both from their source, not tried; nor was
+macOS). A status wait stays 1.5 s of wall time, and a stop cuts it
+short. A two-stage trigger is refused (the C drops the error and
+captures untriggered, api.c:342). A sample packet that lacks bytes the
+capture uses ends it (the C uses old buffer contents,
+protocol.c:301-307); a shorter report that holds them all is fine. A
+status of fewer than two bytes counts as no valid status. The last match
+of a multi-channel trigger is used, with a warning. A stale info report
+is listed, with a warning. The serial is unsigned. A device that does
+not get ready after a capture or a stop ends the capture after 100
+status reads, where the C goes on for ever: a few seconds at low speed,
+not a time the device is known to need, and a device still busy stays
+un-idled until the next scan or open resets it. Replay: `emu-bits`,
+`emu-ratio-1-rounding`.
 
-Emulated (2026-11-04), oracle cases only: model `ikalogic-scanalogic2`
+The model is `ikalogic-scanalogic2`
 (`emu/src/models/ikalogic-scanalogic2.rs`), a low speed HID device,
 `20a0:4123`, whose every command and answer is a 128 byte feature report
 on endpoint 0. No firmware source was found; descriptors come from the
@@ -1662,9 +1742,7 @@ sigrok wiki's lsusb of a real device, the protocol from its Protocol
 section (by the driver's author) and the C driver. Options: `serial=`,
 `fw=`, `wait-trigger=N|never`, `sampling=N`, `digest=1`; faults
 `stall-get=`, `stall-set=`, `short-get=`, `stale-sample=`,
-`stale-info=1`, `stale-reset=`, `busy-reset=`, `ignore-reset=N|never`.
-134 oracle cases (5 through libsigrok-run: the stops and the no-limit
-crash). gcov 88.6% of the driver, src/usb.c 64.2%. Not emulated:
+`stale-info=1`, `stale-reset=`, `busy-reset=`, `ignore-reset=N|never`, `short-len=N`. gcov 88.6% of the driver, src/usb.c 64.2%. Not emulated:
 allocation failures, a kernel driver returning or refusing to detach,
 the device vanishing between scan and open or between a callback and its
 resubmit (races only), a stop during the 1.5 s status poll
@@ -1685,6 +1763,184 @@ samples; a two-stage trigger logs an error and captures untriggered;
 only the last match of a multi-channel trigger is used; a serial over
 2^31 prints negative; `samplerate=2.5M` parses as 2
 (`sr_parse_sizestring`), so 2.5 MHz is written 2500000.
+
+## Testo 435/635/735 (testo)
+
+Testo 435/635/735 (`testo`): emulated, model `testo` (FT232R shell,
+`128d:0003`, descriptors from the wiki's lsusb of a 435-4). The protocol
+comes from the C and, independently, from Testo's own description
+(`hhtcde.chm` in its `toolbox.exe`, pages hhx35_e, hhx35r_e, hhx35ee_x,
+hhtcd7b_e, HHTCD4_e, exto_e), which agree on the request, 115200 8N1,
+the layout and units 1, 3, 5, 24; the CRC's algorithm is the C's alone.
+No capture is known, so the model's Size, Unused and Decimal exponent
+bytes are invented zeros. Ported, 70 cases: 54 full, 13 --oracle-bug, 2
+--oracle-differs, 1 library; gcov 91.3%. **This oracle has one line
+restored: `sdi->driver = di;`, removed by b258c09f
+(tools/oracle-patches/libsigrok-testo-sdi-driver.patch). Stock libsigrok
+finds no Testo: libsigrok 0.5.1, 0.5.2 and unreleased lack the line,
+0.5.0 has it. This rests on device.c:730, api.c and the commit, not on a
+run.** The C's capture path has met no device in those versions, so its
+behaviour is weak evidence. A device whose answer holds a unit other
+than 1 (°C), 3 (%rF), 5 (m/s) or 24 (hPa) is not found, with only a
+debug line, as in the C (protocol.c:134-136). Testo's table lists 173
+units across all its instruments, so that a 435 set to °F or with a CO2
+or dew point reading sends one is an inference. The scan opens every USB
+device to read its strings, as the C does. A kernel's ftdi_sio is
+detached once and stays detached until the device is replugged, as in
+the C. Not verified on hardware.
+
+## Kecheng KC-330B (kecheng-kc-330b)
+
+Kecheng KC-330B (`kecheng-kc-330b`), sound level meter, 1041:8101,
+vendor bulk. Emulated and ported: model `kecheng-kc-330b` (options
+model=, inactive=, stored=, log-interval=, log-time=, log-freq=,
+log-source=, id-length=, digest=, and faults stall-out=, silent=,
+stall-in=, short=, garbage=, each CC[@N]). 129 cases, gcov 79.3%.
+Descriptors and protocol are from the sigrok wiki and the C; no firmware
+or recording, not verified on hardware. The model needs a quiet host:
+the oracle's 5 to 40 ms timeouts miss under load, and oxrok's are 100 to
+250 ms.
+
+libsigrok cannot read the log. sigrok-cli dies on the meta packet's
+tuple (api.c:367), and past that api.c:405 refuses every log start for
+any client, on a request that went out, since 85ed4ab3 (2013). It also
+cannot change the interval or run `--show`. A client that survives the
+critical, PulseView for one, would reach api.c:405, and the C's stop
+could then wipe an unread log there (session.c:831, api.c:429, against
+api.c:433; inferred from source, not run).
+
+oxrok reads the whole log with `-c data_source=Memory --continuous` or
+`--samples N`, and never erases a log the user only asked to read. By
+the C's comment (api.c:430, the only source) a configure clears the log,
+so oxrok sends none on a refused start, a cut, a stop, or a failed read
+or output. A live capture configures, in both tools, so it clears the
+log. So does a read to the end with `-c sample_interval=...` or a
+weighting set: that setting is applied after the read, and by the C's
+comment the log goes with it.
+
+Data source byte: the wiki's "0=memory, 1=real time" looks observed, and
+the C writes its own enum (bc7be4a9). The memory path sends no configure
+before 05 and 07, so the byte affects only a later configure. A live
+configure sends 0 in both tools for parity with the C's working live
+path; if the wiki is right, that byte says "memory", unproven.
+`set_date_time` (protocol.c:232) is unused by the C (api.c:141), and
+oxrok has no counterpart. Command 06 is not read.
+
+## Lascar EL-USB data loggers (lascar-el-usb)
+
+lascar-el-usb: Lascar EasyLog EL-USB data loggers (SiLabs F321,
+10c4:0002), a stored log downloaded, not a stream. Needs conn=.
+Temperature and humidity models 3, 12, 13, 16 (channels Temp, Hum) and
+CO models 9, 11 (channel CO); the 15 others of the C table are
+identified and refused, as in C. Emulated and ported 2026-11-04, none on
+hardware: model lascar-el-usb, 152 cases (140 full, 4 --oracle-bug, 5
+--oracle-differs, 3 library), gcov 93.9%. Not emulated: allocation
+failures, libusb_open failing, a claim failing only after the scan, a
+submit failing right after one that worked. The model's descriptors are
+the wiki's lsusb recordings. Its block and memory sizes are inferred
+from eltuxusb's read counts and tables: 0.3 for most, 128 bytes of
+configuration for id 12 from ab91106, 65024 bytes of memory for id 14
+from branch el-usb1-pro (f7aa7f7), and ids 15 to 21 are in none of them
+and unverified. The driver takes the lengths from the device's headers.
+What it found in libsigrok: api.c:312 reads 256 bytes into resp[4], and
+sigrok-cli dies with enough queued; protocol.c:426, 430 lose half
+degrees and percents; api.c:174 ignores the sample limit; protocol.c:558
+never ends on a stopped or halted device; protocol.c:155 closes a handle
+still in use.
+Kept from C: CO's /1e6 at 0 digits. libsigrok.h:293-298 defines
+SR_UNIT_CONCENTRATION as normalised 0 to 1, so the division is
+deliberate, while src/analog.c:70 labels it "ppm". The analog output
+shows 0 for all realistic readings (under 500,000 ppm, if s*high+low is
+ppm, which is inferred); use `-O csv` and multiply by 1e6.
+Also kept from C: `datalog=on` sets bit 0 of 0x21 and zeroes 0x18 to
+0x1b (protocol.c:630-637), and leaves the sample count, the start time
+and the downloaded bit as they were, unlike eltuxusb's start, which
+writes 0x21 = 00000011, a count of 0 and a new start time. Download
+first; the effect on stored data is unverified on hardware.
+
+## GreatFET One (greatfet)
+
+greatfet (Great Scott Gadgets GreatFET One, 1d50:60e6). Emulated by
+model `greatfet` (options `in-limit=N`, `wide=1`, `level=HHLL`; faults
+`stall=`, `stall-read=`, `serial=`, `version=`, `configure-len=`,
+`in-stall=`, `stall_string=`, `short_string=`), built from
+greatscottgadgets/greatfet da49f6b, libgreat 699d267 and the C driver.
+131 cases, 2026-11-04: 104 full, 6 `--oracle-bug`, 11
+`--oracle-differs`, 10 library. gcov 84.8% (api.c 86.6%, protocol.c
+84.1%); not emulated: a failing open, a device without string 3,
+timed-out transfers (timeout 0), allocation failures, unknown transfer
+status. No real board has been tried.
+What the model taught:
+- After a failed transfer, the C's stop runs inside the transfer
+  callback, where libusb answers BUSY, so it never reaches the board. On
+  a limit or a stop by hand it runs outside the callback and goes out,
+  as every full capture's `.tx` shows under both tools.
+- A failed transfer loses what the feed queue holds, as the capture's
+  end runs at the first transfer freed.
+- With `probe_names=-...` of 8 names or fewer, packed bytes pass as
+  samples.
+- A limit overshoots to a whole byte of sample memory at 1, 2 and 4
+  bits.
+- A failed submission after a start leaves the board sampling.
+- The C sends a rate of 2^32 or more truncated to the firmware's 32 bit
+  field, so 2^32 runs at 204 MHz.
+- By the firmware source, more than 8 channels on one bus, or a rate
+  over 204 MHz, is refused without telling the host, and no samples
+  come: `slices_in_use` stays 0, so nothing shifts (read from the
+  source, not seen on a board).
+- Rates below about 49.8 kHz are answered as asked but likely run faster
+  (10 kHz at 50.8 kHz, 1 kHz at 61.9 kHz). This is inferred: the
+  firmware writes the divider unmasked, and NXP's register description
+  gives the counter 12 bits.
+What oxrok does about these: it sends the stop after a failed transfer,
+keeps the samples, unpacks, cuts to the sample, refuses rates over 32
+bits, and warns on the two doubtful rate ranges.
+
+## Korad KAxxxxP power supplies (korad-kaxxxxp)
+
+Korad KAxxxxP family (`korad-kaxxxxp`): ported and emulated on the
+CDC-ACM shell. Model `korad-kaxxxxp` (`idn=HEX|none`, `vmax=`, `imax=`,
+`vset=`, `iset=`, `output=`, `ocp=`, `ovp=`, `beep=`, `load=`, `vout=`,
+`iout=`, `status=`, `sixth=`, `answers=`, `setters=`, `uart=`, and the
+shell's faults), 130 cases over all 14 table entries, 2026-11-05: 111
+full, 15 `--oracle-differs`, 4 `--oracle-bug`. gcov 88.6% of the driver.
+Not emulated: BEEP, SAV, RCL and TRACK (no C path sends them, so the
+model flags them), firmware silent on `STATUS?` with the output off, the
+OEM's binary protocol.
+
+USB ids from reports, not a device: `0416:5011` "Nuvoton USB Virtual
+COM", native USB, on a KA3005P and in a FreeBSD report of a Tenma
+72-2635.
+
+A scan, `--get`, `--show` or capture sends only queries, and a close
+nothing. A `-c` with any bad option or limit sends no setting.
+
+The status bits are disputed. `protocol.c` has bit 5 as OCP and bit 7 as
+OVP; RND's document has bit 5 as Lock and bit 7 unused; the sigrok wiki
+has 0x20 as either protection and trusts only 0x01, 0x20 and 0x40;
+Nicoretti's ka3005p decodes neither; tspi.at has bit 4 as OCP. oxrok
+keeps the C's decoding. So `ocp_enabled` and `ovp_enabled` readback is
+not reliable: set them explicitly and check the panel. `enabled` and
+CV/CC are the bits the sources agree on.
+
+Some firmware answers `*IDN?` once per power cycle (tspi.at), so a
+second run finds no device, in either tool; `force_detect=` gets round
+it.
+
+A silent device is not 0 V: a reading with no reply fails `--get` and
+gives no sample, and a capture ends after 5 in a row. A silent `STATUS?`
+still reads as all bits clear, so `--get enabled` prints `false`: do not
+take that as "the output is off" from a device that may not be
+answering.
+
+A garbage reply keeps the last value, as in C. A reply arriving after
+its timeout can be read once as the next request's answer: nothing in
+the protocol tells them apart.
+
+A capture that loses the device, or ends for silence, exits 0.
+
+No serial replay fixture, as the harness records USB and HID only. Not
+checked on hardware.
 
 ## Oracle
 
