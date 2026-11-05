@@ -11,8 +11,14 @@
 //!
 //! After power on, `50` asks for the board's id, one byte back, and `51` enters
 //! command mode, with nothing back. In command mode every byte is the state of
-//! all relays, active low, and nothing back. Nothing leaves that mode but a power
-//! cycle, and a `50` or `51` sent there is a relay byte like any other.
+//! all relays, active low as C has it, and nothing back. Nothing leaves that mode
+//! but a power cycle, and a `50` or `51` sent there is a relay byte like any other.
+//!
+//! Active low is unsettled on the ICSE013A: the programs written for it have a 1
+//! for on (`brightlight`, `icserelay`, `piswitcher`). No recording settles it and
+//! this keeps C's wire. If they are right, on that board `-g R1 enabled=on` sends
+//! `02`, which turns R2 on and R1 off while a get says R1 is on, and `enabled=off`
+//! for all sends `03`, which turns both on.
 //!
 //! No request after the identification has an answer, so no late reply can meet
 //! a reading: the cached relay state is all there is to read.
@@ -82,10 +88,11 @@ pub fn send_byte(port: &mut dyn Port, byte: u8) -> Result<()> {
     }
 }
 
-/// Sends the identification request and reads its answer. The board switches
-/// relays on a request it takes as a state, if it was started before: no other
-/// way to name a board exists.
-pub fn identify(port: &mut dyn Port) -> Result<u8> {
+/// Sends the identification request and reads its answer: `None` when the request
+/// went out and nothing came back in time. The board switches relays on a request
+/// it takes as a state, if it was started before: no other way to name a board
+/// exists.
+pub fn identify(port: &mut dyn Port) -> Result<Option<u8>> {
     send_byte(port, CMD_ID).inspect_err(|_| {
         log::debug!("Could not send identification request.");
     })?;
@@ -94,11 +101,11 @@ pub fn identify(port: &mut dyn Port) -> Result<u8> {
     match got {
         Ok(1) => {
             log::debug!("Identification response 0x{:02x}.", id[0]);
-            Ok(id[0])
+            Ok(Some(id[0]))
         }
         Ok(_) => {
             log::debug!("Could not receive identification response.");
-            Err(Error::Timeout)
+            Ok(None)
         }
         Err(e) => {
             log::debug!("Could not receive identification response.");

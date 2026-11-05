@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::icstation_usbrelay: Cannot retrieve identification details.
+oxrok: warn: oxrok::drivers::icstation_usbrelay: A board already in command mode takes this request as a relay byte: relays may have switched, and only a power cycle lets it identify again.

@@ -10,9 +10,15 @@
 //! without a group, `enabled` switches them all. See [`protocol`].
 //!
 //! The board can be identified only once per power cycle: the open puts it in
-//! command mode, and from then on the scan's request is a relay byte. So a second
-//! run finds nothing, and its scan has switched relays. There is no way to read
-//! the relays, so a get reads what this process last set, from all off.
+//! command mode, and from then on the scan's request is a relay byte. So a run
+//! after any `--show`, `--get`, `--set` or capture, failed ones too, finds nothing
+//! and has switched relays: ICSE012A all four on, ICSE014A R1 to R4, R6 and R8 on.
+//! The request is both the probe and the harm, so it can't be held back; the scan
+//! warns of it. There is no way to read the relays, so a get reads what this
+//! process last set, from all off.
+//!
+//! On the ICSE013A the polarity is unsettled, and this keeps C's: see
+//! [`protocol`] for what `enabled` does there if the sources are right.
 
 #![forbid(unsafe_code)]
 
@@ -82,7 +88,7 @@ impl Driver for IcstationUsbrelayDriver {
         let (port, params) = match first {
             Ok(first) => first,
             Err(e) => {
-                log::debug!("{e}");
+                log::error!("{e}");
                 return Ok(Vec::new());
             }
         };
@@ -96,9 +102,20 @@ impl Driver for IcstationUsbrelayDriver {
 /// The scan after the open. The port goes when this returns, as C closes it
 /// on each path; the open that follows flushes what an answer left.
 fn probe(mut port: Box<dyn Port>, conn: String, opener: Opener) -> Option<IcstationDevice> {
-    let Ok(id) = protocol::identify(port.as_mut()) else {
-        log::error!("Cannot retrieve identification details.");
-        return None;
+    let id = match protocol::identify(port.as_mut()) {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            log::error!("Cannot retrieve identification details.");
+            log::warn!(
+                "A board already in command mode takes this request as a relay byte: relays \
+                 may have switched, and only a power cycle lets it identify again."
+            );
+            return None;
+        }
+        Err(_) => {
+            log::error!("Cannot retrieve identification details.");
+            return None;
+        }
     };
     let Some(profile) = protocol::profile(id) else {
         log::warn!("Unknown device identification 0x{id:02x}.");
@@ -131,8 +148,10 @@ impl IcstationDevice {
                 model: profile.name.to_owned(),
                 version: String::new(),
                 serial: String::new(),
-                // Off the scan line, as in C: only one board can be behind the
-                // conn= its user had to name. A get of conn answers.
+                // Off the scan line, as in C, where that is the same bug as the
+                // get of conn: sigrok-cli's show.c:314 adds `:conn=` only when the
+                // get succeeds. A choice: only one board can be behind the conn=
+                // its user had to name. A get of conn answers.
                 conn: None,
             },
             conn,
@@ -242,8 +261,14 @@ impl Device for IcstationDevice {
         }
         let mut port = (self.opener)()?;
         // A second open of the same object sends no 51, where C's dev_open does
-        // (api.c:225-226): the board would take it as a relay byte and switch
-        // them behind the cache.
+        // (api.c:225-226). This parts from C on outside evidence, with no
+        // recording: `usb-relay04-fw`'s README says a 51 on a started board is a
+        // relay byte, and the programs that send it to one (`Clapper`, g33k's
+        // sketch) follow it with a state at once. C's plain reopen, by that
+        // reading, sets R1 off and R2 to R4 on behind the cache. The cost: the
+        // board has only USB power, so a replug between a close and a reopen is a
+        // power cycle. No 51 goes out then, a set returns Ok, the cache says on,
+        // and nothing switched.
         if !self.started {
             if protocol::start(port.as_mut()).is_err() {
                 log::error!("Cannot initiate command mode.");

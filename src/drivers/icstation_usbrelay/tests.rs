@@ -152,6 +152,24 @@ fn a_scan_asks_once_and_names_the_board() {
     assert_eq!(shared.written(), [0x50], "and no start before an open");
 }
 
+/// Only a request that went out and got nothing can have switched relays, which
+/// is what the scan's warning says.
+#[test]
+fn identify_tells_silence_from_a_failure() {
+    let shared = Shared::default();
+    shared.line().answers.push_back(0xab);
+    let mut opener = shared.opener();
+    assert_eq!(protocol::identify(opener().unwrap().as_mut()).unwrap(), Some(0xab));
+    shared.line().silent_reads = usize::MAX;
+    assert_eq!(protocol::identify(opener().unwrap().as_mut()).unwrap(), None);
+    shared.line().read_fails = true;
+    assert!(protocol::identify(opener().unwrap().as_mut()).is_err());
+    let shared = Shared::default();
+    shared.line().write_takes_none = true;
+    let mut opener = shared.opener();
+    assert!(protocol::identify(opener().unwrap().as_mut()).is_err(), "nothing went out");
+}
+
 #[test]
 fn an_unknown_id_is_no_board() {
     let shared = Shared::default();
