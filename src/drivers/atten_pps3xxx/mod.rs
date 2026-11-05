@@ -164,8 +164,6 @@ struct Shared {
     reported: Reported,
     /// Settings no frame has carried yet.
     dirty: bool,
-    /// Channels something was set on.
-    named: [bool; CHANNELS],
     warned: bool,
     /// What to say at the close if no frame has gone out by then: settings
     /// that made none, though the device reports otherwise.
@@ -173,19 +171,13 @@ struct Shared {
 }
 
 impl Shared {
-    /// What a set frame does to an output nobody named, once per device.
+    /// What the next set frame does to what the device reports, once.
     fn warn_of_what_it_turns_off(&mut self) {
-        let turned = (0..CHANNELS)
-            .filter(|&i| self.reported.enabled[i] && !self.named[i])
-            .map(|i| GROUPS[i])
-            .collect::<Vec<_>>();
-        if !self.warned && !turned.is_empty() {
-            self.warned = true;
-            log::warn!(
-                "{} on: this turns them off and to 0 V. A frame sets everything, and the device \
-                 cannot report its setpoints: set them on the command line to keep them.",
-                turned.join(", ")
-            );
+        if let Some(warning) = frame_warning(&self.reported, &self.settings) {
+            if !self.warned {
+                self.warned = true;
+                log::warn!("{warning}");
+            }
         }
     }
 
@@ -205,6 +197,23 @@ impl Shared {
         self.unsent.clear();
         Ok(())
     }
+}
+
+/// What a frame of `settings` does to an output `reported` has on: named in
+/// the run or not, it goes by what goes out.
+fn frame_warning(reported: &Reported, settings: &Settings) -> Option<String> {
+    let turned: Vec<&str> = (0..CHANNELS)
+        .filter(|&i| reported.enabled[i] && !settings.channels[i].enabled)
+        .map(|i| GROUPS[i])
+        .collect();
+    if turned.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{} on: this turns them off and to 0 V. A frame sets everything, and the device cannot \
+         report its setpoints: set them on the command line to keep them.",
+        turned.join(", ")
+    ))
 }
 
 /// The one supply.
@@ -269,7 +278,6 @@ impl AttenPpsDevice {
                 settings: Settings::default(),
                 reported,
                 dirty: false,
-                named: [false; CHANNELS],
                 warned: false,
                 unsent: Vec::new(),
             })),
@@ -360,7 +368,6 @@ impl AttenPpsDevice {
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         }
-        s.named[channel] = true;
         Ok(())
     }
 }
@@ -937,6 +944,23 @@ mod tests {
         d.shared().send_settings().unwrap();
         assert!(d.shared().unsent.is_empty(), "the frame carried it");
         assert_eq!(writes(&seen)[0][15], 0);
+    }
+
+    #[test]
+    fn the_warning_goes_by_what_the_frame_does_to_each_output() {
+        let mut reported = Reported::default();
+        reported.update(&<[u8; FRAME]>::try_from(reading()).unwrap());
+        // CH1 and CH2 are on: one named with a setpoint alone still goes off.
+        let mut settings = Settings::default();
+        settings.channels[0].voltage = 5.0;
+        let warning = frame_warning(&reported, &settings).unwrap();
+        assert!(warning.starts_with("CH1, CH2 "), "{warning}");
+        settings.channels[0].enabled = true;
+        let warning = frame_warning(&reported, &settings).unwrap();
+        assert!(warning.starts_with("CH2 "), "{warning}");
+        settings.channels[1].enabled = true;
+        assert_eq!(frame_warning(&reported, &settings), None);
+        assert_eq!(frame_warning(&Reported::default(), &Settings::default()), None);
     }
 
     #[test]
