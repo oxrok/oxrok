@@ -958,6 +958,37 @@ mod tests {
         assert_eq!(logic(&packets), [8, 0, 0, 0, 9, 0, 0, 0]);
     }
 
+    /// A capture where a word comes, `gap` of nothing, then another: the bytes
+    /// it kept, and how long from the first word it took.
+    fn capture_with_a_gap(gap: Duration) -> (Vec<u8>, Duration) {
+        fn none(_: &[u8]) -> Option<(Duration, Vec<u8>)> {
+            None
+        }
+        let (mut fake, _) = Fake::new(none);
+        let at = Instant::now();
+        fake.input.extend([1u8, 0, 0, 0].map(|b| (at, b)));
+        fake.input.extend([2u8, 0, 0, 0].map(|b| (at + gap, b)));
+        let mut dev = device(fake);
+        let (s, rx) = sink();
+        dev.start(s).unwrap();
+        let packets = until_end(&rx);
+        let took = at.elapsed();
+        dev.stop().unwrap();
+        (logic(&packets), took)
+    }
+
+    #[test]
+    fn silence_ends_a_capture_at_a_hundred_milliseconds() {
+        // Literal, not from END_OF_DATA: a constant of 2000 ms passed the rest.
+        let (kept, took) = capture_with_a_gap(Duration::from_millis(80));
+        assert_eq!(kept, [2, 0, 0, 0, 1, 0, 0, 0], "80 ms is inside the capture");
+        assert!(took >= Duration::from_millis(180), "then 100 ms more, took {took:?}");
+        let (kept, took) = capture_with_a_gap(Duration::from_millis(200));
+        assert_eq!(kept, [1, 0, 0, 0], "the silence ended it before the rest");
+        assert!(took >= Duration::from_millis(100), "too soon: {took:?}");
+        assert!(took < Duration::from_millis(200), "too late: {took:?}");
+    }
+
     #[test]
     fn before_the_first_byte_silence_is_no_end() {
         fn never(_: &[u8]) -> Option<(Duration, Vec<u8>)> {
