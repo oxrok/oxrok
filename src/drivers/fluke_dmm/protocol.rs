@@ -528,7 +528,8 @@ const ATTRIBUTES: [&[u8]; 9] = [
 
 /// `fluke_handle_qm_28x`. A line of two tokens has no state and so no sample,
 /// where C reads a pointer from past the `NULL` that ends its array
-/// (`fluke-28x.c:196`) and dies in about half of the runs.
+/// (`fluke-28x.c:196`) and dies when the heap held no null there: in 32% of a
+/// review's runs, and always with `glibc.malloc.perturb` set.
 fn fields_reading(tokens: &[&[u8]]) -> Option<Reading> {
     let Some((mut value, digits)) = parse_float(tokens[0]) else {
         log::error!("Invalid float '{}'.", shown(tokens[0]));

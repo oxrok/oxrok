@@ -48,6 +48,7 @@ emu_cases() {
     # sed names exactly what may go, so that anything else still shows.
     QM_287='/^bulk_out 02 (514d0d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d312e30333237453[0-9a-f]*0d)+$/d'
     FIRST='2,$d'
+    NO_STATE_BUG="fluke-28x.c:196 reads tokens[3] of a line of two tokens, past the NULL that ends g_strsplit's array, and strcmp dies on what it finds; oxrok takes it for a line with no state, so no sample"
     # oxrok's log prefix on its side only, then what the driver itself says:
     # the rest of a log is the core's or libserialport's, and goes.
     L='s/^oxrok: (err|warn): oxrok::drivers::fluke_dmm(::protocol)?: /sr: fluke-dmm: /
@@ -258,12 +259,10 @@ emu_cases() {
     fl_fields '1.5' '1.5E0,VDC,NORMAL,NONE'
     emu_case "287 value alone" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     fl_fields '1.5E0,VDC' '1.5E0,VDC,NORMAL,NONE'
-    # fluke-28x.c:196 reads tokens[3] of a line of two tokens, past the NULL
-    # that ends g_strsplit's array. sigrok-cli dies of a segmentation fault in
-    # about half of the runs and takes the next line in the others, so it can
-    # be neither a full case nor an --oracle-bug one. oxrok takes it for a
-    # line with no state: no sample. The goldens are oxrok's.
-    emu_case "287 no state" --no-oracle-only -- -d $F --samples 1
+    # What tokens[3] holds is what the heap held: sigrok-cli crashed in 32%
+    # of a reviewer's runs as it stands, and in 25 of 25 with the heap's
+    # freed bytes filled in, which is what makes this a case.
+    emu_case "287 no state" --oracle-bug "$NO_STATE_BUG" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 -- -d $F --samples 1
     fl_fields '1.5E0,VDC,NORMAL' '1.5E0,VDC,NORMAL,NONE'
     emu_case "287 no attribute" -- -d $F --samples 1
     fl_fields '1.5E0,OHM,NORMAL' '1.5E0,VDC,NORMAL,NONE'

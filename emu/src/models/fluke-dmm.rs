@@ -72,8 +72,9 @@
 //! a completed transfer, and the next may or may not be accepted); the two
 //! null checks of `fluke_receive_data` (`protocol.c:98`, `101`), which no
 //! session reaches; and `parse_measurement_state`'s `NULL` (`fluke-28x.c:137`),
-//! from a line with no state, which the scenario runs under oxrok alone as the
-//! read a line later crashes sigrok-cli in about half of the runs.
+//! from a line with no state, as the read a line later crashes sigrok-cli, which
+//! the scenario makes certain with `glibc.malloc.perturb`, and a crash writes
+//! no counts.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
