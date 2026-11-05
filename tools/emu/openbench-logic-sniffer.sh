@@ -22,7 +22,7 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     W='s/^oxrok: warn: oxrok::cli::pipeline: //'
     UNIT_BUG="unitsize comes only from a channel count in the metadata (protocol.c:304), else 0, and hex.c:163's loop adds 0 for ever: every board that answers no metadata hangs a capture; oxrok takes the size from the channels"
     MEMORY_BUG="max_samples 0 makes samplecount 0 and the read count 0 (protocol.c:597-599), sent minus 1 as 0xffff (protocol.c:656): the board sends all it has, for any limit, and the delay is as large; oxrok counts from the limit"
-    DELAY_BUG="a ratio that leaves less than one unit makes delaycount 0 (protocol.c:617), sent minus 1 as 0xffff (protocol.c:656-657): the capture goes on 2^18 words past the trigger, where the marker says before it; oxrok sends one unit"
+    DELAY_BUG="a ratio that leaves less than one unit makes delaycount 0 (protocol.c:617), sent minus 1 as 0xffff (protocol.c:656-657): the capture goes on 2^18 words past the trigger, where the marker says before it; oxrok sends one unit, and everything else as C"
     MARKER_BUG="trigger_at_smpl counts samples of a whole read (protocol.c:618), whatever the limit cut off or RLE made of them; oxrok follows the board's words"
     BEFORE_BUG="with ratio 0 and two stages or more trigger_at_smpl is -num_stages, which only -1 passes (protocol.c:503, 526-538): num_stages samples from before raw_sample_buf go out; oxrok sends no marker, there is none in the capture"
     WRAP_BUG="a marker beyond the samples that came wraps logic.length (protocol.c:532-533), and the output runs off: SIGSEGV; oxrok sends what came with no marker"
@@ -251,6 +251,10 @@ $W" -- -d $O -C 0-23 --samples 8192 -O hex
     emu_options slow=8
     emu_case "ratio 50 rle marker" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50:rle=on -C 0-7 --samples 64 -t 4=1 -O bits
     emu_options
+    # So few samples that the ratio leaves C a delay of 0, 0xffff on the wire.
+    emu_case "ratio 50 limit 4" --oracle-differs "$DELAY_BUG" -- -d $O -c captureratio=50 --samples 4 -t 4=1 -O bits
+    emu_case "ratio 100 limit 8" --oracle-differs "$DELAY_BUG" -- -d $O -c captureratio=100 --samples 8 -t 4=1 -O bits
+    emu_case "ratio 1 limit 13 two stages" -- -d $O -c captureratio=1 --samples 13 -t 4=10 -O bits
     emu_case "ratio 50 200m" -- -d $O -c captureratio=50:samplerate=200m -C 0-15 --samples 16 -t 4=1 -O hex
     emu_case "ratio 50 beyond the memory" --stderr --expect-fail -- -d $O -c captureratio=50 --samples 7000 -t 4=1 -O hex
     emu_case "ratio 50 trigger bits" -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O bits
@@ -262,6 +266,7 @@ $W" -- -d $O -C 0-23 --samples 8192 -O hex
     # 0 for ever.
     emu_options meta=none
     emu_case "no metadata capture" --oracle-bug "$UNIT_BUG" --oracle-hangs --timeout 5 -- -d $O --samples 8 -O hex
+    emu_case "no metadata trigger" --oracle-bug "$UNIT_BUG" --oracle-hangs --timeout 5 -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O bits
     emu_options meta=${NAME}2100006000230bebc20000
     emu_case "no channel key capture" --oracle-bug "$UNIT_BUG" --oracle-hangs --timeout 5 -- -d $O --samples 8 -O hex
     # max_samples 0 makes the read count 0, sent as 0xffff (protocol.c:597-599,

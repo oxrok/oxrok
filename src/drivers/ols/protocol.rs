@@ -196,8 +196,12 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
             clippy::cast_precision_loss
         )]
         let d = (f64::from(readcount) * (1.0 - s.capture_ratio as f64 / 100.0)) as u32;
+        // C's 0 goes out minus 1, and only then: everything else is as C.
         delaycount = d.max(1);
-        trigger_word = Some(u64::from(delaycount) * 4 + stages.count as u64 - 1);
+        let word = u64::from(delaycount) * 4 + stages.count as u64 - 1;
+        // One unit may be all that is read: the match is then just before
+        // the oldest word, and the marker goes there rather than being lost.
+        trigger_word = Some(if d == 0 { word.min(u64::from(readcount) * 4 - 1) } else { word });
         for i in 0..stages.count {
             log::debug!("Setting OLS stage {i} trigger.");
             commands.extend(stage_commands(stages, i, stages.count));
@@ -364,6 +368,16 @@ mod tests {
         let p = plan(&s, &st).unwrap();
         assert!(hexes(&p).contains(&"8103000300".to_owned()));
         assert_eq!(p.trigger_word, Some(16), "no such word of 16: no marker");
+        // A limit of 4 at ratio 50: C's delay of 0, one unit here, all read.
+        let s = Settings { capture_ratio: 50, limit_samples: 4, ..settings() };
+        let p = plan(&s, &st).unwrap();
+        assert!(hexes(&p).contains(&"8100000000".to_owned()));
+        assert_eq!(p.trigger_word, Some(3), "on the oldest word, not lost");
+        // Any delay C computes as more than 0 goes out as C's.
+        let s = Settings { capture_ratio: 75, limit_samples: 16, ..settings() };
+        let p = plan(&s, &st).unwrap();
+        assert!(hexes(&p).contains(&"8103000000".to_owned()));
+        assert_eq!(p.trigger_word, Some(4));
         // A limit of 5 reads 2 units of 4.
         let s = Settings { capture_ratio: 50, limit_samples: 5, ..settings() };
         let p = plan(&s, &st).unwrap();
