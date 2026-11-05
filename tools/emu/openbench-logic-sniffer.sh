@@ -23,7 +23,7 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     UNIT_BUG="unitsize comes only from a channel count in the metadata (protocol.c:304), else 0, and hex.c:163's loop adds 0 for ever: every board that answers no metadata hangs a capture; oxrok takes the size from the channels"
     MEMORY_BUG="max_samples 0 makes samplecount 0 and the read count 0 (protocol.c:597-599), sent minus 1 as 0xffff (protocol.c:656): the board sends all it has, for any limit, and the delay is as large; oxrok counts from the limit"
     DELAY_BUG="a ratio that leaves less than one unit makes delaycount 0 (protocol.c:617), sent minus 1 as 0xffff (protocol.c:656-657): the capture goes on 2^18 words past the trigger, where the marker says before it; oxrok sends one unit, and everything else as C"
-    MARKER_BUG="trigger_at_smpl counts samples of a whole read (protocol.c:618), whatever the limit cut off or RLE made of them; oxrok follows the board's words"
+    MARKER_BUG="trigger_at_smpl counts samples of a whole read (protocol.c:618), whatever the limit cut off; oxrok follows the board's words"
     BEFORE_BUG="with ratio 0 and two stages or more trigger_at_smpl is -num_stages, which only -1 passes (protocol.c:503, 526-538): num_stages samples from before raw_sample_buf go out; oxrok sends no marker, there is none in the capture"
     WRAP_BUG="a marker beyond the samples that came wraps logic.length (protocol.c:532-533), and the output runs off: SIGSEGV; oxrok sends what came with no marker"
     EMPTY_BUG="a capture with no sample sends a logic packet of length 0, and hex.c:163's length - unitsize wraps: SIGSEGV; oxrok sends no packet"
@@ -247,9 +247,9 @@ $W" -- -d $O -C 0-23 --samples 8192 -O hex
     # by 3: a unit test has oxrok's.
     emu_case "ratio 50 limit 5" -- -d $O -c captureratio=50 --samples 5 -t 4=1 -O hex
     emu_case "ratio 50 limit 101" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50 --samples 101 -t 4=1 -O bits
-    emu_case "ratio 50 rle" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50:rle=on -C 8-15 --samples 128 -t 9=1 -O bits
+    emu_case "ratio 50 rle" -- -d $O -c captureratio=50:rle=on -C 8-15 --samples 128 -t 9=1 -O bits
     emu_options slow=8
-    emu_case "ratio 50 rle marker" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50:rle=on -C 0-7 --samples 64 -t 4=1 -O bits
+    emu_case "ratio 50 rle marker" -- -d $O -c captureratio=50:rle=on -C 0-7 --samples 64 -t 4=1 -O bits
     emu_options
     # So few samples that the ratio leaves C a delay of 0, 0xffff on the wire.
     emu_case "ratio 50 limit 4" --oracle-differs "$DELAY_BUG" -- -d $O -c captureratio=50 --samples 4 -t 4=1 -O bits

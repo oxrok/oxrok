@@ -36,8 +36,16 @@
 //! - the delay count is at least one unit (`protocol.c:617` gives 0 for
 //!   `captureratio=100`, and 650-657 send it minus 1: all of the capture
 //!   after the trigger, against the marker);
-//! - the marker follows the board's words, not samples taken for words
-//!   (`protocol.c:618`), see [`Plan::trigger_word`].
+//! - without RLE, the marker follows the board's words, so a limit that cuts
+//!   the read does not move it (`protocol.c:618` reckons for the whole read),
+//!   see [`Plan::trigger_word`].
+//!
+//! Under RLE the marker stays where `protocol.c:618` puts it, that many
+//! samples from the oldest, though words are not samples there. From
+//! `rle_enc.v` and `controller.v` of a Pipistrello fork of the firmware
+//! (hand read, not this board's, no bench), the delay counts stored words, so
+//! the match would be that many words from the newest, and with a run or a
+//! limit C's sample is not it. That is an inference, so it changes nothing here.
 
 use crate::drivers::pipistrello_ols::protocol as sump;
 pub use sump::{
@@ -136,11 +144,14 @@ pub struct Plan {
     pub commands: Vec<Vec<u8>>,
     /// `capture_flags` afterwards: the disabled groups in bits 2-5.
     pub flags: u16,
-    /// The word, counted from the newest one sent, at the marker.
-    /// `protocol.c:618` has it `(readcount - delaycount) * 4 - num_stages`
-    /// samples from the oldest, which is this word without RLE and at a limit
-    /// of whole units.
+    /// Without RLE, the word, counted from the newest one sent, at the
+    /// marker. `protocol.c:618` has it `(readcount - delaycount) * 4 -
+    /// num_stages` samples from the oldest, which is this word at a limit of
+    /// whole units.
     pub trigger_word: Option<u64>,
+    /// Under RLE, that many samples from the oldest, as C, when not negative
+    /// (C's -1 is no trigger, and below that it reads before its buffer).
+    pub trigger_sample: Option<u64>,
 }
 
 /// The commands of `stage`, of `count` stages used: its level in the config,
@@ -185,8 +196,10 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
         log::warn!("The board returns {returned} samples of the {} asked for.", s.limit_samples);
     }
     let mut commands = Vec::new();
+    let rle = s.flags & FLAG_RLE != 0;
     let delaycount;
-    let trigger_word;
+    let mut trigger_word;
+    let mut trigger_sample = None;
     if stages.count > 0 {
         log::debug!("Send reset command before trigger configure");
         commands.extend(std::iter::repeat_n(short_command(CMD_RESET), 5));
@@ -202,6 +215,11 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
         // One unit may be all that is read: the match is then just before
         // the oldest word, and the marker goes there rather than being lost.
         trigger_word = Some(if d == 0 { word.min(u64::from(readcount) * 4 - 1) } else { word });
+        if rle {
+            trigger_word = None;
+            trigger_sample =
+                (u64::from(readcount - d.min(readcount)) * 4).checked_sub(stages.count as u64);
+        }
         for i in 0..stages.count {
             log::debug!("Setting OLS stage {i} trigger.");
             commands.extend(stage_commands(stages, i, stages.count));
@@ -229,7 +247,7 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
     flags |= !(u16::from(groups) << 2) & 0x3c;
     commands.push(long_command(CMD_SET_FLAGS, u32::from(flags)));
     commands.push(short_command(CMD_RUN));
-    Ok(Plan { commands, flags, trigger_word })
+    Ok(Plan { commands, flags, trigger_word, trigger_sample })
 }
 
 #[cfg(test)]
@@ -383,6 +401,21 @@ mod tests {
         let p = plan(&s, &st).unwrap();
         assert!(hexes(&p).contains(&"8101000000".to_owned()));
         assert_eq!(p.trigger_word, Some(4));
+    }
+
+    #[test]
+    fn under_rle_the_marker_is_c_s_sample() {
+        let st = stages(&[(0, 4, TriggerMatch::One)], u32::MAX);
+        let s = Settings { capture_ratio: 50, limit_samples: 128, flags: FLAG_RLE, ..settings() };
+        let p = plan(&s, &st).unwrap();
+        assert_eq!((p.trigger_word, p.trigger_sample), (None, Some(63)));
+        // Ratio 0: -1 is no trigger, as for C.
+        let s = Settings { capture_ratio: 0, ..s };
+        assert_eq!(plan(&s, &st).unwrap().trigger_sample, None);
+        // Without RLE it is the word.
+        let s = Settings { capture_ratio: 50, flags: 0, ..s };
+        let p = plan(&s, &st).unwrap();
+        assert_eq!((p.trigger_word, p.trigger_sample), (Some(64), None));
     }
 
     #[test]

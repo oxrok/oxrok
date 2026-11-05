@@ -608,6 +608,7 @@ impl Device for OlsDevice {
         };
         let capture = Capture {
             decoder: Decoder::plain(plan.flags, self.limit_samples, plan.trigger_word),
+            trigger_sample: plan.trigger_sample,
             unit_size: self.unit_size,
         };
         let slot = Arc::clone(&self.port);
@@ -637,6 +638,8 @@ impl Device for OlsDevice {
 /// `ols_receive_data` on its own thread.
 struct Capture {
     decoder: Decoder,
+    /// [`protocol::Plan::trigger_sample`].
+    trigger_sample: Option<u64>,
     unit_size: usize,
 }
 
@@ -683,7 +686,13 @@ impl Capture {
 
     fn send(self, sink: &PacketSink) {
         let unit = self.unit_size;
-        let (samples, trigger) = self.decoder.finish();
+        let (samples, by_word) = self.decoder.finish();
+        // Beyond what came is no marker, where C's length wraps.
+        let by_sample = self
+            .trigger_sample
+            .and_then(|at| usize::try_from(at).ok())
+            .filter(|&at| at <= samples.len());
+        let trigger = by_word.or(by_sample);
         let bytes = |s: &[u32]| -> Vec<u8> {
             s.iter().flat_map(|v| v.to_le_bytes().into_iter().take(unit)).collect()
         };
@@ -1120,6 +1129,41 @@ mod tests {
         assert!(matches!(packets[1], Packet::Trigger));
         let expected: Vec<u8> = (3..8u32).flat_map(u32::to_le_bytes).collect();
         assert_eq!(logic(&packets), expected);
+    }
+
+    #[test]
+    fn under_rle_the_marker_counts_samples_and_stops_at_what_came() {
+        fn runs(data: &[u8]) -> Option<(Duration, Vec<u8>)> {
+            // A count of 9, value 1: ten samples, one group.
+            (data == [protocol::CMD_RUN]).then(|| (Duration::ZERO, vec![0x89, 1]))
+        }
+        let capture = |limit: u64| {
+            let (fake, _) = Fake::new(runs);
+            let mut dev = device(fake);
+            for i in 8..32 {
+                dev.enable_channel(i, false).unwrap();
+            }
+            dev.set(&Key::Rle, &Value::Bool(true), None).unwrap();
+            dev.set(&Key::CaptureRatio, &Value::U64(50), None).unwrap();
+            dev.set(&Key::LimitSamples, &Value::U64(limit), None).unwrap();
+            let mut t = Trigger::new();
+            t.add(0, 4, TriggerMatch::One);
+            dev.set_trigger(Some(t)).unwrap();
+            let (s, rx) = sink();
+            dev.start(s).unwrap();
+            let packets = until_end(&rx);
+            dev.stop().unwrap();
+            packets
+        };
+        // Limit 8: units 2, delay 1, marker (2 - 1) * 4 - 1 = 3 from the oldest.
+        let packets = capture(8);
+        let Packet::Logic(first) = &packets[1] else { panic!("samples first") };
+        assert_eq!(first.data.len(), 3 * 4);
+        assert!(matches!(packets[2], Packet::Trigger));
+        // Limit 32: units 8, delay 4, marker at 15, past the 10 that came.
+        let packets = capture(32);
+        assert!(!packets.iter().any(|p| matches!(p, Packet::Trigger)));
+        assert_eq!(logic(&packets).len(), 10 * 4);
     }
 
     #[test]
