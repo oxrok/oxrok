@@ -20,9 +20,15 @@
 //! On a `ScopeMeter` the answer says what the display shows, and each answer
 //! then asks for the next value (`QM 11` or `QM 19`), as fast as the meter
 //! gives them, while a `QM` every second keeps up with the display (3.5 s
-//! without an answer). A silent meter is waited for, as it may come back: a
-//! `--samples` capture of one ends only with an interrupt, or with a port
-//! that fails, as with the cable pulled.
+//! without an answer).
+//!
+//! A meter that gives no sample is waited for without a bound, on purpose and
+//! unlike the other serial ports here: `protocol.c:127` has the retry there to
+//! recover from temporary disconnects. So a `--samples` capture of a silent
+//! meter, or one that answers and never has a sample (`BLANK`, a 199B reading
+//! exactly 0), ends only at a time limit, a stop, or a port that is gone, as
+//! with the cable pulled. A write that times out is logged and the capture goes
+//! on; only a port that is gone ends it.
 //!
 //! See [`protocol`].
 
@@ -53,6 +59,10 @@ const BETWEEN_LINES: Duration = Duration::from_millis(5);
 /// `serial_source_add`'s 50 ms: how long the capture waits for a byte
 /// before it looks at its limits and timers.
 const POLL: Duration = Duration::from_millis(50);
+/// How long a command waits for the last to leave. A queue that does not empty
+/// is a meter or cable not taking bytes, and a write then could block for
+/// `WRITE_TIMEOUT` in `crate::serial`: this keeps a stop from waiting for that.
+const QUEUE_WAIT: Duration = Duration::from_millis(50);
 const SET: Access = Access { get: false, set: true, list: false };
 static DEV_OPTIONS: [OptionDesc; 3] = [
     OptionDesc::new(Key::Continuous, Access::NONE),
@@ -350,9 +360,7 @@ impl Capture {
         if !sink.send(Packet::header()) {
             return;
         }
-        if let Err(e) = port.write(b"QM\r") {
-            log::debug!("{e}");
-            log::error!("Unable to send QM.");
+        if !send(port, b"QM\r", "Unable to send QM.") {
             return;
         }
         let mut sent_at = Instant::now();
@@ -380,10 +388,10 @@ impl Capture {
                         return;
                     }
                 }
-                if let Some(Err(e)) = handled.ask.as_ref().map(|ask| port.write(ask.as_bytes())) {
-                    log::debug!("{e}");
-                    log::error!("Cannot send QM (measurement).");
-                    return;
+                if let Some(ask) = &handled.ask {
+                    if !send(port, ask.as_bytes(), "Cannot send QM (measurement).") {
+                        return;
+                    }
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
@@ -394,11 +402,9 @@ impl Capture {
             }
             let elapsed = sent_at.elapsed();
             if (!waiting && elapsed > self.profile.poll_period) || elapsed > self.profile.timeout {
-                // C logs this and asks again every second for ever
+                // C logs a failure and asks again every second for ever
                 // (protocol.c:132-133): here a port gone ends the capture.
-                if let Err(e) = port.write(b"QM\r") {
-                    log::debug!("{e}");
-                    log::error!("Unable to send QM.");
+                if !send(port, b"QM\r", "Unable to send QM.") {
                     return;
                 }
                 sent_at = Instant::now();
@@ -416,6 +422,24 @@ impl Capture {
             unit: r.unit,
             digits: r.digits,
         })
+    }
+}
+
+/// A command, and whether the capture can go on: only a port that is gone ends
+/// it. A write that times out is `complaint` and the next `QM` tries again, as
+/// C carries on (`protocol.c:72-73`, `132-133`).
+fn send(port: &mut dyn Port, data: &[u8], complaint: &str) -> bool {
+    let sent = match port.drain(QUEUE_WAIT) {
+        Err(Error::Timeout) => Err(Error::Timeout),
+        _ => port.write(data),
+    };
+    let Err(e) = sent else { return true };
+    log::debug!("{e}");
+    log::error!("{complaint}");
+    match e {
+        Error::Timeout => true,
+        Error::Io(io) => io.kind() == std::io::ErrorKind::TimedOut,
+        _ => false,
     }
 }
 
@@ -490,6 +514,11 @@ mod tests {
         answer: Answer,
         fail_writes_from: Option<usize>,
         fail_reads: bool,
+        /// Writes of these numbers wait this long and then time out.
+        blocked_writes: std::ops::Range<usize>,
+        write_blocks_for: Duration,
+        /// The output queue does not empty, so `drain` times out.
+        stuck_queue: bool,
     }
 
     impl Fake {
@@ -501,6 +530,9 @@ mod tests {
                 answer,
                 fail_writes_from: None,
                 fail_reads: false,
+                blocked_writes: 0..0,
+                write_blocks_for: Duration::ZERO,
+                stuck_queue: false,
             };
             (fake, seen)
         }
@@ -544,7 +576,19 @@ mod tests {
                 return Err(Error::device("write failed"));
             }
             seen.writes.push((Instant::now(), data.to_vec()));
+            if self.blocked_writes.contains(&n) {
+                drop(seen);
+                std::thread::sleep(self.write_blocks_for);
+                return Err(Error::Io(std::io::ErrorKind::TimedOut.into()));
+            }
             self.input.extend((self.answer)(n, data));
+            Ok(())
+        }
+        fn drain(&mut self, timeout: Duration) -> Result<()> {
+            if self.stuck_queue {
+                std::thread::sleep(timeout);
+                return Err(Error::Timeout);
+            }
             Ok(())
         }
         fn purge(&mut self) -> Result<()> {
@@ -726,6 +770,37 @@ mod tests {
         let mut d = device(&QUICK, fake);
         d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
         packets_to_end(&start(&mut d));
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_write_that_times_out_is_tried_again_at_the_next_qm() {
+        let (mut fake, seen) = Fake::new(reading);
+        fake.blocked_writes = 0..2;
+        fake.write_blocks_for = Duration::from_millis(5);
+        let mut d = device(&QUICK, fake);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let packets = packets_to_end(&start(&mut d));
+        assert_eq!(values(&packets), [1.5, 1.5]);
+        assert_eq!(writes(&seen).len(), 4, "two lost, two answered");
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_stuck_queue_writes_nothing_and_a_stop_comes_soon() {
+        let (mut fake, seen) = Fake::new(reading);
+        fake.stuck_queue = true;
+        fake.blocked_writes = 0..usize::MAX;
+        fake.write_blocks_for = BOUND * 2;
+        let mut d = device(&QUICK, fake);
+        let rx = start(&mut d);
+        rx.recv_timeout(BOUND).unwrap();
+        std::thread::sleep(QUICK.timeout * 2);
+        let asked = Instant::now();
+        d.stop().unwrap();
+        packets_to_end(&rx);
+        assert!(asked.elapsed() < Duration::from_millis(500), "{:?}", asked.elapsed());
+        assert_eq!(writes(&seen).len(), 0);
         d.close().unwrap();
     }
 
