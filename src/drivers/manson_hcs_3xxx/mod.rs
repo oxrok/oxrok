@@ -472,7 +472,10 @@ impl Capture {
         }
         progress.quiet_since = Instant::now();
         progress.samples += 1;
-        send_sample(sink, link.voltage, link.current)
+        let (voltage, current) = (link.voltage, link.current);
+        // Not with the link: a full queue must not hold up a client's get or set.
+        drop(link);
+        send_sample(sink, voltage, current)
     }
 
     /// The next `GETD` if it is time, as the end of `hcs_receive_data`. False
@@ -1009,6 +1012,41 @@ mod tests {
         let mut d = MansonDevice::from_port(model, (36.0, 10.0), Box::new(fake));
         let (tx, _rx) = sync_channel(16);
         assert!(d.start(PacketSink::new(tx, 0)).is_err());
+    }
+
+    /// Runs `f` on its own thread: it must end within the bound.
+    fn within_bound(what: &str, f: impl FnOnce() + Send + 'static) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = tx.send(());
+        });
+        assert!(rx.recv_timeout(CAPTURE_BOUND).is_ok(), "{what} still blocked");
+    }
+
+    #[test]
+    fn a_full_queue_does_not_hold_the_link() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        // The header fills the queue, nobody reads, and the worker waits to
+        // send its first sample.
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while getds(&seen) < 1 {
+            assert!(Instant::now() < deadline, "no request");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+        let writes_before = getds(&seen);
+        within_bound("get and set", move || {
+            d.get(&Key::Voltage, None).unwrap();
+            d.set(&Key::Enabled, &Value::Bool(false), None).unwrap();
+            // The reader goes, the worker's send fails, and close can join.
+            drop(rx);
+            d.close().unwrap();
+        });
+        assert_eq!(getds(&seen), writes_before, "the worker was waiting");
     }
 
     #[test]
