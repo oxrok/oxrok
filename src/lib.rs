@@ -83,6 +83,7 @@ pub mod drivers {
     pub mod dcttech_usbrelay;
     pub mod demo;
     pub mod dreamsourcelab_dslogic;
+    pub mod fluke_dmm;
     pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod greatfet;
@@ -122,6 +123,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
+    registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
