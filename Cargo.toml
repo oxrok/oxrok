@@ -124,7 +124,7 @@ lto = "thin"
 codegen-units = 1
 
 # vusb's branch oxrok-migration, until a release has what it adds
-# (session::Builder::observer). This path is outside the repository: it
+# (session::Builder::observer, pairs in the options command). This path is outside the repository: it
 # goes when oxrok-emu's dependency moves to that release.
 [patch.crates-io]
 vusb = { path = "/home/fedora/work/vusb-oxrok/vusb" }

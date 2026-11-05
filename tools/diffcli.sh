@@ -563,24 +563,19 @@ if [ $emu = 1 ]; then
     emu_json_text() {
         printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
     }
-    # The JSON object of the model's options KEY=VALUE..., whose values stay
-    # text: vusb-ctl's own words read 1e3, a hex string too, as a number. A
-    # key twice has no place in one.
+    # The arguments of vusb's options command for the model's options
+    # KEY=VALUE...: pairs, in their order, a key twice as well, whose values
+    # stay text (vusb-ctl's own words read 1e3, a hex string too, as a number).
     emu_option_args() {
-        ea_json=""; ea_seen=" "
+        ea_json=""
         for ea_word in "$@"; do
             case "$ea_word" in
                 *=*) ;;
                 *) echo "emulator: option '$ea_word' is not KEY=VALUE" >&2; return 1 ;;
             esac
-            ea_key=${ea_word%%=*}
-            case "$ea_seen" in
-                *" $ea_key "*) echo "emulator: option $ea_key twice" >&2; return 1 ;;
-            esac
-            ea_seen="$ea_seen$ea_key "
-            ea_json="$ea_json${ea_json:+,}\"$(emu_json_text "$ea_key")\":\"$(emu_json_text "${ea_word#*=}")\""
+            ea_json="$ea_json${ea_json:+,}[\"$(emu_json_text "${ea_word%%=*}")\",\"$(emu_json_text "${ea_word#*=}")\"]"
         done
-        printf '{%s}' "$ea_json"
+        printf '{"pairs":[%s]}' "$ea_json"
     }
     # Sends a command through vusb-ctl, which returns once the server has
     # answered, and takes over what it reported before that. A command

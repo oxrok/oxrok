@@ -245,9 +245,9 @@ on Windows; attaching a device is Linux only.
   way, from a `reset` section. `vusb-ctl options KEY=VALUE...` sets
   the options of the resets that follow (`options` alone restores the
   command line's), which is how one scenario covers several boards or
-  chips. vusb-ctl's words read a value like `1e3` as a number and a JSON
-  object holds a key once, so `emu_cmd` sends options as `--args` JSON
-  of text and refuses a key given twice.
+  chips. vusb-ctl's words read a value like `1e3` as a number and an
+  object holds a key once, so `emu_cmd` sends them as `--args` JSON,
+  `{"pairs":[["KEY","VALUE"],...]}`.
 - A model sees each IN submission (`DeviceModel::in_submitted`), and
   transfers on one endpoint complete in order. A streaming model can
   thus complete one transfer per submission, which real devices do
