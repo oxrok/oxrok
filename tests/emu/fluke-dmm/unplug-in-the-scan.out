@@ -1,0 +1,8 @@
+sr: serial-libsp: Error flushing port (5): Input/output error.
+sr: serial-libsp: Write error (5): Input/output error.
+sr: fluke-dmm: Unable to send ID string
+sr: serial-libsp: Error flushing port (5): Input/output error.
+sr: serial-libsp: Write error (5): Input/output error.
+sr: fluke-dmm: Unable to send ID string
+sr: serial-libsp: Error getting port from name /dev/ttyACMN: (2) No such file or directory.
+sr: serial-libsp: Error getting port from name /dev/ttyACMN: (2) No such file or directory.
