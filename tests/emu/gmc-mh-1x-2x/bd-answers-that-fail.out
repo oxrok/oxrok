@@ -1,0 +1,9 @@
+sr: gmc-mh-1x-2x: Device: Illegal error code!
+sr: gmc-mh-1x-2x: Device: Incorrect checksum in cmd!
+sr: gmc-mh-1x-2x: Device: Incorrect block length in cmd!
+sr: gmc-mh-1x-2x: Device: Incorrect byte 2 or 3 in cmd!
+sr: gmc-mh-1x-2x: Device: Parameter out of range!
+sr: gmc-mh-1x-2x: Device: Unknown error code!
+sr: gmc-mh-1x-2x: process_msg_14(): byte 1/2 unexpected!
+sr: gmc-mh-1x-2x: process_msg_14(): Invalid checksum!
+sr: gmc-mh-1x-2x: process_msg_14(): Address mismatch, msg for other device!

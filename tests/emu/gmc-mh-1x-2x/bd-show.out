@@ -1,0 +1,12 @@
+Driver functions:
+    Multimeter
+    Thermometer
+Scan options:
+    conn
+    serialcomm
+gmc-mh-2x-bd232 - Gossen Metrawatt METRAHit 26S Firmware 1.2 with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    power_off: on, off (current)
