@@ -197,6 +197,7 @@ s/^data is invalid$/Failed to start session./"
     emu_case "set current_limit over the list" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c current_limit=6.5 --set
     emu_case "set ovp_threshold too wide" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c ovp_threshold=70 --set
     emu_case "set ocp_threshold negative" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c ocp_threshold=-1 --set
+    emu_case "set ovp_threshold negative that rounds to 0" --oracle-differs "$WRAP_BUG" --driver rdtech-rd --expect-fail --stderr --filter "$F" -- -d $R -c ovp_threshold=-0.0004 --set
     emu_case "set voltage_target -0" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=-0 --set
     # The order on the wire: the setpoints, then the output. Hash table order
     # under sigrok-cli, so in these two it is the output first.

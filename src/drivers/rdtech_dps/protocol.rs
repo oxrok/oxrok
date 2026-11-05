@@ -330,8 +330,10 @@ impl Multipliers {
 /// What no register holds, a NaN too.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn register_value(value: f64, multiplier: f64) -> Result<u16> {
+    // The sign before the rounding, or -0.004 V would round to a raw 0. A -0.0
+    // passes, and is 0; a NaN does not.
     let raw = (value * multiplier).round();
-    if (0.0..=f64::from(u16::MAX)).contains(&raw) {
+    if value >= 0.0 && raw <= f64::from(u16::MAX) {
         Ok(raw as u16)
     } else {
         Err(Error::arg(format!("{value} does not fit its register")))
@@ -608,7 +610,7 @@ mod tests {
 
     #[test]
     fn what_no_register_holds_is_refused() {
-        for bad in [655.36, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for bad in [655.36, -1.0, -0.004, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(register_value(bad, 100.0).is_err(), "{bad}");
         }
     }
