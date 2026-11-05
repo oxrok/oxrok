@@ -803,6 +803,7 @@ mod tests {
         let rx = start(&mut d);
         rx.recv_timeout(BOUND).unwrap();
         std::thread::sleep(QUICK.timeout * 2);
+        assert!(rx.try_recv().is_err(), "a stuck queue ends nothing");
         let asked = Instant::now();
         d.stop().unwrap();
         packets_to_end(&rx);
