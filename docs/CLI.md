@@ -521,6 +521,22 @@ Deliberate, and kept small:
 - `motech-lps-301`: `enabled` is a channel group option here (`-g CG1`),
   and `-c` sends `enabled=off` first and `enabled=on` last, as on all
   drivers.
+- juntek-jds6600: a silent device ends `--get`, `--set` or the scan
+  after 1.2 s; sigrok-cli waits for ever. A frequency reply of fewer
+  than two words is no device, where sigrok-cli crashes. A NaN and an
+  infinite phase are refused and nothing is sent. -0 goes out as 0, as a
+  precaution. An enable the device refused is not remembered.
+  `serialcomm=` is refused as on all drivers (the C core drops it and
+  finds nothing). The scan's first reply is waited for 100 ms, not 10
+  ms; it accepts more devices and refuses none, and that a busy host
+  needs it is an inference. A `-nan` reply prints `nan` where sigrok-cli
+  prints `-nan`. A serial number that is not UTF-8 goes through lossy
+  conversion, where sigrok-cli keeps the raw bytes.
+- juntek-jds6600, library clients: every setting is narrowed to single
+  precision to match sigrok-cli's `strtof` (session.c:570), though C's
+  driver keeps a double (api.c:296, protocol.c:731-734). 12345678.91 Hz
+  goes out as `1234567900,0` here and `1234567891,0` through libsigrok,
+  and a phase of 1e300 is refused here.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

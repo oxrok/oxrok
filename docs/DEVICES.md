@@ -2209,6 +2209,32 @@ clears `acq_running`, and they and a second capture wait out an answer
 the last capture left on its way. When a limit ends a capture in the
 pass that read an `OK`, one more `VOUT1` goes out, as in C.
 
+## Juntek JDS6600 signal generator (juntek-jds6600)
+
+Juntek JDS6600 DDS signal generator (also Joy-IT), two channels, CH340
+at 115200/8n1, `conn=` required. Emulator-verified on the CDC-ACM shell
+(`emu/src/models/juntek-jds6600.rs`), no hardware. Groups CH1 and CH2
+have enabled, pattern (17 built in, arb-01 to arb-60), output_frequency,
+amplitude, offset, output_duty_cycle; device-wide are conn, enabled (set
+only) and phase. It acquires nothing: sigrok-cli and oxrok refuse a
+capture for want of a limit key, and a session (libsigrok's and
+`Session::run`) refuses to start one because the channels start
+disabled. Only a direct `Device::start` gets a header and an end.
+libsigrok bugs the model found: every request after the first waits for
+ever on a silent device or after an unplug (protocol.c:442-450); a
+frequency reply of fewer than two words crashes the scan
+(protocol.c:602-603, 608-609); NaN goes out as `nan` and an infinite
+phase as `-nan`. As a precaution oxrok sends `-0` as `0`; nothing shows
+the firmware rejects it. Kept from C but doubtful, with no recording to
+settle either: the frequency's scale code divides (protocol.c:617-618),
+where on1arf/jds6600_python multiplies by the same table and its notes
+fit only that, so `100,3` reads as 1000 Hz here and 0.001 Hz there
+(writes always send scale 0); and a negative phase goes out with its
+sign, though protocol.c:811 says 0..360 and the Python sends -90 as
+35100. The model's ranges are the C driver's limits, not the device's.
+229 cases: 205 full, 10 --oracle-bug, 13 --oracle-differs, 1 library.
+gcov 89.2%.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

@@ -81,6 +81,7 @@ Emulator and replay only, never run on hardware:
 | `lascar-el-usb` | 152 | 93.9% |
 | `lecroy-logicstudio` | 94 | 95.9% |
 | `manson-hcs-3xxx` | 171 | 91.9% |
+| `juntek-jds6600` | 229 | 89.2% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |
 | `ols` | 213 | 94.7% |

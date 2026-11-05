@@ -298,6 +298,31 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- sr_atod is strtof, and an empty string is 0 with no error. An unlisted
+  scan option never reaches the driver, so a driver's
+  `sr_serial_extract_options` for serialcomm can be dead code: check
+  scanopts first.
+- A C parser that takes `sr_text_next_word`'s result unchecked dies on a
+  reply with too few words: a one-field reply is worth a case on any
+  comma-separated value.
+- `sr_channel_new(..., FALSE, ...)` makes a session refuse to start: try
+  a `--libsigrok` run before assuming a dummy start ends at once.
+- A model's fault option applied from the first request stops the scan;
+  `after=N` (faults only after N requests) reaches the get and set error
+  paths behind a good scan.
+- A shell loop variable named as one emu_case uses gets overwritten, and
+  a case name that differs only by a sign or punctuation collides on its
+  slug.
+- Read an outside source's code, not a summary of it. A fetch summary
+  made "both sources agree" look true where one divides by a table and
+  the other multiplies by it.
+- Narrowing a setting to match sigrok-cli's strtof makes the comparison
+  full, but it comes from the CLI, not the driver: say what it costs a
+  library client, with numbers.
+- A fake that releases bytes at a clock time fails on a 20 ms stall.
+  Release them on the Nth read, and inject the waits to test which wait
+  a step uses. Run under short stalls and a CPU quota as well as the
+  slow-sleep shim.
 - Read a C capture's start and its callback together, and when they
   don't fit, read the driver's history: maynuo-m97's callback reads the
   reply (address -1) to a request a 2025 commit stopped sending. A
