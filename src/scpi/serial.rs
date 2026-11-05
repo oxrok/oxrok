@@ -29,6 +29,12 @@ impl Serial {
         Ok(Serial { port, resource: path.to_owned(), got_newline: false })
     }
 
+    /// Opens `path` with the line it has: `serial_open` with no `serialcomm`.
+    pub fn open_keeping_line(path: &str) -> Result<Serial> {
+        let port = crate::serial::open_keeping_line(path)?;
+        Ok(Serial { port, resource: path.to_owned(), got_newline: false })
+    }
+
     /// Wraps an open port, e.g. a replay.
     pub fn from_port(port: Box<dyn Port>) -> Serial {
         let resource = port.name().to_owned();
@@ -65,5 +71,9 @@ impl ScpiTransport for Serial {
 
     fn read_complete(&self) -> bool {
         self.got_newline
+    }
+
+    fn purge(&mut self) -> Result<()> {
+        self.port.purge()
     }
 }

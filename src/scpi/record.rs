@@ -243,6 +243,11 @@ impl ScpiTransport for Recorder {
         self.inner.resource()
     }
 
+    /// No step in a fixture: nothing goes over the wire.
+    fn purge(&mut self) -> Result<()> {
+        self.inner.purge()
+    }
+
     fn send(&mut self, data: &[u8]) -> Result<()> {
         self.finish_response(false);
         self.fixture.lock().expect("fixture lock").steps.push(Step::Send(data.to_vec()));

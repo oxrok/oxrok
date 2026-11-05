@@ -116,6 +116,7 @@ pub mod drivers {
     pub mod rdtech_tc;
     pub mod rdtech_um;
     pub mod rigol_ds;
+    pub mod rohde_schwarz_sme_0x;
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
@@ -148,6 +149,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
+    registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));

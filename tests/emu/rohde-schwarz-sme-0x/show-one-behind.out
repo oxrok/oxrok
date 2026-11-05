@@ -5,5 +5,5 @@ Scan options:
     serialcomm
 rohde-schwarz-sme-0x - Rohde&Schwarz SME03 1.00 [S/N: 000000/000] 
 Supported configuration options:
-    output_frequency: (never set)
-    amplitude: 100000000.000000 (current)
+    output_frequency: 
+    amplitude: 
