@@ -802,19 +802,24 @@ pub fn config(manufacturer: Option<&str>, product: Option<&str>, serial: Option<
 
 fn parse_hex(key: &str, s: &str) -> Result<Vec<u8>> {
     if !s.is_ascii() || !s.len().is_multiple_of(2) {
-        return Err(Error(format!("{key}={s}: an even number of hex digits")));
+        return Err(Error::Invalid(format!("{key}={s}: an even number of hex digits")));
     }
     (0..s.len())
         .step_by(2)
         .map(|i| {
             u8::from_str_radix(&s[i..i + 2], 16)
-                .map_err(|_| Error(format!("{key}={s}: not hex")))
+                .map_err(|_| Error::Invalid(format!("{key}={s}: not hex")))
         })
         .collect()
 }
 
 fn number<T: std::str::FromStr>(key: &str, s: &str) -> Result<T> {
-    s.parse().map_err(|_| Error(format!("{key}={s}: not a number")))
+    s.parse().map_err(|_| Error::Invalid(format!("{key}={s}: not a number")))
+}
+
+/// Long data as its digest.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(256)
 }
 
 /// A board from the `-o` options.
@@ -843,7 +848,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     "ols" => Some(*b"1SLO"),
                     "none" => None,
                     hex => Some(parse_hex(k, hex)?.try_into().map_err(|_| {
-                        Error(format!("id={hex}: sla, ols, none or four bytes in hex"))
+                        Error::Invalid(format!("id={hex}: sla, ols, none or four bytes in hex"))
                     })?),
                 }
             }
@@ -859,7 +864,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "ext-clock" => board.ext_clock = number(k, v)?,
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }
@@ -910,10 +915,6 @@ impl DeviceModel for PipistrelloOls {
     fn reset(&mut self) {
         self.chip.reset();
         self.fpga = Fpga::new(self.fpga.board.clone());
-    }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(256)
     }
 }
 

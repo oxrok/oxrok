@@ -33,9 +33,6 @@ const KEYWORDS: &[&str] = &[
     "true", "try", "type", "unsafe", "use", "where", "while", "yield",
 ];
 
-/// The models on vusb so far; the move goes shell by shell.
-const MIGRATED: &[&str] = &["usbrelay", "ftdi-la", "fx2lafw", "korad-kaxxxxp", "kecheng-kc-330b"];
-
 /// The module identifier of a model file name.
 fn ident(name: &str) -> String {
     assert!(
@@ -85,9 +82,6 @@ fn main() {
         } else {
             continue;
         };
-        if !MIGRATED.contains(&name.as_str()) {
-            continue;
-        }
         let id = ident(&name);
         if let Some((other, _)) = models.get(&id) {
             panic!("emu/src/models: {name} and {other} map to the same module {id}");

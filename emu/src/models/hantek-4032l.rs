@@ -313,7 +313,7 @@ impl Faults {
                         Some((name, n)) => (
                             name,
                             Some(n.parse::<u32>().ok().filter(|n| *n > 0).ok_or_else(|| {
-                                Error(format!("stall={item}: N from 1"))
+                                Error::Invalid(format!("stall={item}: N from 1"))
                             })?),
                         ),
                         None => (item, None),
@@ -322,22 +322,22 @@ impl Faults {
                         "reset" => What::Reset,
                         "out" => What::Out,
                         "in" => What::In,
-                        _ => return Err(Error(format!("stall={name}: reset, out or in"))),
+                        _ => return Err(Error::Invalid(format!("stall={name}: reset, out or in"))),
                     };
                     self.stall.push((what, n));
                 }
             }
             "stale" => {
-                self.stale = v.parse().map_err(|_| Error(format!("stale={v}: a count")))?;
+                self.stale = v.parse().map_err(|_| Error::Invalid(format!("stale={v}: a count")))?;
             }
             "end" => self.end = Some(parse_u32(k, v)?),
             "hold" => {
-                self.hold = Some(v.parse().map_err(|_| Error(format!("hold={v}: a count")))?);
+                self.hold = Some(v.parse().map_err(|_| Error::Invalid(format!("hold={v}: a count")))?);
             }
             "partial" => {
-                self.partial = v.parse().map_err(|_| Error(format!("partial={v}: bytes")))?;
+                self.partial = v.parse().map_err(|_| Error::Invalid(format!("partial={v}: bytes")))?;
                 if !(self.partial as usize).is_multiple_of(PACKET) {
-                    return Err(Error(format!("partial={v}: whole packets of {PACKET}")));
+                    return Err(Error::Invalid(format!("partial={v}: whole packets of {PACKET}")));
                 }
             }
             "release" => self.release = v == "1",
@@ -353,7 +353,12 @@ fn parse_u32(k: &str, v: &str) -> Result<u32> {
         Some(hex) => u32::from_str_radix(hex, 16),
         None => v.parse(),
     };
-    n.map_err(|_| Error(format!("{k}={v}: a 32 bit number, decimal or 0x hex")))
+    n.map_err(|_| Error::Invalid(format!("{k}={v}: a 32 bit number, decimal or 0x hex")))
+}
+
+/// Data transfers of 2048 bytes.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `fpga=VERSION`, `fill=N` and the
@@ -372,12 +377,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
         }
         match k.as_str() {
             "fpga" => fpga = parse_u32(k, v)?,
-            "fill" => fill = v.parse().map_err(|_| Error(format!("fill={v}: a count")))?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            "fill" => fill = v.parse().map_err(|_| Error::Invalid(format!("fill={v}: a count")))?,
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     if faults.hold.is_none() && (faults.partial > 0 || faults.release) {
-        return Err(Error("partial= and release= need hold=".to_owned()));
+        return Err(Error::Invalid("partial= and release= need hold=".to_owned()));
     }
     let mut model = H4032l::new(fpga);
     model.fill = fill;
@@ -902,11 +907,6 @@ impl DeviceModel for H4032l {
         self.ready = false;
         self.stale = 0;
         self.first_stream_in = false;
-    }
-
-    /// Data transfers of 2048 bytes.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 }
 

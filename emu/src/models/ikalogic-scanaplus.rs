@@ -145,6 +145,11 @@ const SEQUENCE_HEAD: [u8; 4] = [0x01, 0x05, 0x01, 0x02];
 const PULSES: usize = 57;
 const SEQUENCE_LEN: usize = SEQUENCE_HEAD.len() + 2 * PULSES;
 
+/// Long data as its digest.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
+}
+
 /// A `ScanaPLUS` from the `-o` options.
 ///
 /// # Errors
@@ -162,7 +167,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "short" => short.extend(parse_short(v)?),
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }
@@ -177,7 +182,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 fn parse_short(s: &str) -> Result<Vec<(u64, usize)>> {
     s.split(',')
         .map(|p| {
-            let bad = || Error(format!("short={s}: N:M[,N:M...], transfer N (from 1) of M bytes"));
+            let bad = || Error::Invalid(format!("short={s}: N:M[,N:M...], transfer N (from 1) of M bytes"));
             let (n, m) = p.split_once(':').ok_or_else(bad)?;
             let n: u64 = n.parse().map_err(|_| bad())?;
             let m: usize = m.parse().map_err(|_| bad())?;
@@ -190,7 +195,7 @@ fn parse_short(s: &str) -> Result<Vec<(u64, usize)>> {
 }
 
 fn parse_devid(s: &str) -> Result<[u8; 3]> {
-    let bad = || Error(format!("devid={s}: three bytes in hex, as 1ca357"));
+    let bad = || Error::Invalid(format!("devid={s}: three bytes in hex, as 1ca357"));
     if s.len() != 6 {
         return Err(bad());
     }
@@ -476,10 +481,6 @@ impl DeviceModel for ScanaPlus {
     fn reset(&mut self) {
         // A bus reset leaves the FPGA alone; a fresh model is a power on.
         self.chip.reset();
-    }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 }
 

@@ -197,14 +197,14 @@ impl Default for Behaviour {
 }
 
 fn number<T: std::str::FromStr>(key: &str, value: &str) -> Result<T> {
-    value.parse().map_err(|_| Error(format!("{key}={value}: not a number")))
+    value.parse().map_err(|_| Error::Invalid(format!("{key}={value}: not a number")))
 }
 
 fn units(key: &str, value: &str) -> Result<Vec<u8>> {
     let list: Vec<u8> =
         value.split(',').filter(|s| !s.is_empty()).map(|s| number(key, s)).collect::<Result<_>>()?;
     if list.len() > MAX_UNITS {
-        return Err(Error(format!("{key}: at most {MAX_UNITS} units")));
+        return Err(Error::Invalid(format!("{key}: at most {MAX_UNITS} units")));
     }
     Ok(list)
 }
@@ -232,7 +232,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "chunk" => {
                 let n: usize = number(k, v)?;
                 if n == 0 {
-                    return Err(Error("chunk=0: at least a byte".to_owned()));
+                    return Err(Error::Invalid("chunk=0: at least a byte".to_owned()));
                 }
                 b.chunk = Some(n);
             }
@@ -250,12 +250,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     "data" => ftdi::request::SET_DATA,
                     "flow-ctrl" => ftdi::request::SET_FLOW_CTRL,
                     "modem-ctrl" => ftdi::request::MODEM_CTRL,
-                    _ => return Err(Error(format!("stall-start={v}: one of the driver's four"))),
+                    _ => return Err(Error::Invalid(format!("stall-start={v}: one of the driver's four"))),
                 });
             }
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }

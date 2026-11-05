@@ -90,7 +90,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
                     "metex" => Kind::Metex,
                     "es51922" => Kind::Es51922,
                     "fs9721" => Kind::Fs9721,
-                    _ => return Err(Error(format!("meter={v}: metex, es51922 or fs9721"))),
+                    _ => return Err(Error::Invalid(format!("meter={v}: metex, es51922 or fs9721"))),
                 };
             }
             "packet" => packets = Some(cable::parse_packets(v, PACKET_BYTES, PACKET_BYTES)?),
@@ -99,7 +99,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "burst" => burst = cable::parse_burst(v)?,
             "answers" => answers = Some(cable::parse_number(k, v, 0..=1000)?),
             "flood" => flood = Some(cable::parse_number(k, v, 0..=1000)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let packets = match packets {
@@ -198,7 +198,7 @@ impl Serial for Meter {
                 ));
             }
             if self.answers.is_some_and(|n| self.answered >= n) {
-                port.mark_event_point();
+                port.mark();
                 continue;
             }
             self.answered += 1;
@@ -229,7 +229,7 @@ impl Serial for Meter {
             // unplug's hangup, or not, as the pace has it.
             self.quiet += 1;
             if self.quiet >= self.period {
-                port.mark_event_point();
+                port.mark();
                 self.burst_left = None;
             }
         }
@@ -301,10 +301,10 @@ mod tests {
         let mut h = meter(&[("answers", "1")]);
         h.write(b"D");
         assert_eq!(h.read(), PACKET);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         h.write(b"D");
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
     }
 
     #[test]
@@ -343,14 +343,14 @@ mod tests {
         assert!(matches!(h.offer(), Reply::Data(_)));
         for _ in 0..3 {
             assert_eq!(h.offer(), Reply::Nak);
-            assert!(!h.cdc.take_event_point(), "a period later");
+            assert!(!h.cdc.mark(), "a period later");
         }
         assert_eq!(h.offer(), Reply::Nak);
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         for _ in 0..10 {
             assert_eq!(h.offer(), Reply::Nak);
         }
-        assert!(!h.cdc.take_event_point(), "once");
+        assert!(!h.cdc.mark(), "once");
     }
 
     #[test]

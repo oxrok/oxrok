@@ -488,17 +488,17 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
                     .parse::<u32>()
                     .ok()
                     .filter(|n| *n > 0)
-                    .ok_or_else(|| Error(format!("{k}={item}: N from 1")))?;
+                    .ok_or_else(|| Error::Invalid(format!("{k}={item}: N from 1")))?;
                 (name, Some(n))
             }
             None => (item, None),
         };
         let command = COMMANDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).ok_or_else(|| {
             let names: Vec<&str> = COMMANDS.iter().map(|(n, _)| *n).collect();
-            Error(format!("{k}={name}: one of {}", names.join(", ")))
+            Error::Invalid(format!("{k}={name}: one of {}", names.join(", ")))
         })?;
         if k == "bad_status" && !STATUS_COMMANDS.contains(&command) {
-            return Err(Error(format!(
+            return Err(Error::Invalid(format!(
                 "{k}={name}: only init-bitstream, send-bitstream, wake-i2c, write-i2c and \
                  read-i2c answer a status"
             )));
@@ -517,14 +517,14 @@ fn byte(k: &str, v: &str) -> Result<u8> {
         Some(hex) => u8::from_str_radix(hex, 16).ok(),
         None => v.parse().ok(),
     };
-    parsed.ok_or_else(|| Error(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
+    parsed.ok_or_else(|| Error::Invalid(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
 }
 
 fn flag(k: &str, v: &str) -> Result<bool> {
     match v {
         "0" => Ok(false),
         "1" => Ok(true),
-        _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+        _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
     }
 }
 
@@ -535,7 +535,7 @@ fn string_indexes(k: &str, v: &str) -> Result<Vec<u8>> {
             i.parse::<u8>()
                 .ok()
                 .filter(|i| *i <= 3)
-                .ok_or_else(|| Error(format!("{k}={i}: a string index, 0 to 3")))?,
+                .ok_or_else(|| Error::Invalid(format!("{k}={i}: a string index, 0 to 3")))?,
         );
     }
     Ok(list)
@@ -562,7 +562,7 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "stall" => self.stall = shots(k, v)?,
             "stall_reply" => self.stall_reply = shots(k, v)?,
@@ -575,7 +575,7 @@ impl Faults {
             "short_in" => self.short_in = Some(count(v)? as usize),
             "stall_load" => {
                 self.stall_load = Some(
-                    count(v).ok().filter(|n| *n > 0).ok_or_else(|| Error(format!("{k}={v}: N from 1")))?,
+                    count(v).ok().filter(|n| *n > 0).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))?,
                 );
             }
             "stall_string" => self.stall_string = string_indexes(k, v)?,
@@ -584,6 +584,11 @@ impl Faults {
         }
         Ok(true)
     }
+}
+
+/// Firmware parts, bitstream chunks and sample transfers.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `flashed=0|1`, `fpga=0|1`,
@@ -608,14 +613,14 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "fpga" => fpga = flag(k, v)?,
             "boot_strings" => {
                 let (m, p) = v.split_once('/').filter(|(m, p)| !m.is_empty() && !p.is_empty()).ok_or_else(
-                    || Error(format!("boot_strings={v}: MANUFACTURER/PRODUCT, both non-empty")),
+                    || Error::Invalid(format!("boot_strings={v}: MANUFACTURER/PRODUCT, both non-empty")),
                 )?;
                 boot_strings = Some((m.to_owned(), p.to_owned()));
             }
             "transfers" => {
-                transfers = v.parse().map_err(|_| Error(format!("transfers={v}: a count")))?;
+                transfers = v.parse().map_err(|_| Error::Invalid(format!("transfers={v}: a count")))?;
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = LogicPro::new(flashed, fpga, boot_strings.as_ref());
@@ -1505,11 +1510,6 @@ impl DeviceModel for LogicPro {
         // the board keeps power.
         self.fpga.stream = None;
         self.answer = None;
-    }
-
-    /// Firmware parts, bitstream chunks and sample transfers.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

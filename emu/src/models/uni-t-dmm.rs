@@ -126,7 +126,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 cfg.odd = match v.as_str() {
                     "odd" => true,
                     "none" => false,
-                    _ => return Err(Error(format!("parity={v}: odd or none"))),
+                    _ => return Err(Error::Invalid(format!("parity={v}: odd or none"))),
                 };
             }
             "chunk" => cfg.chunks = Some(parse_chunks(v)?),
@@ -136,7 +136,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "stall-in" => cfg.stall_in = nth(k, v)?,
             "short-in" => cfg.short_in = nth(k, v)?,
             "hold" => cfg.hold = Some(cable::parse_number(k, v, 0..=100_000)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     Ok(Box::new(UniTDmm::new(cfg)))

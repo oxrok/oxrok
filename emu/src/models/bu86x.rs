@@ -91,13 +91,13 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 request = match v.as_str() {
                     "bm86x" => REQUEST,
                     "bm52x" => BM52X_REQUEST,
-                    _ => return Err(Error(format!("meter={v}: bm86x or bm52x"))),
+                    _ => return Err(Error::Invalid(format!("meter={v}: bm86x or bm52x"))),
                 }
             }
             "drop" => drop = cable::parse_number(k, v, 0..=1000)?,
             "lose" => lose = parse_requests(k, v)?,
             "stall" => stall = parse_requests(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let default = if request == REQUEST { DEFAULT_PACKET } else { BM52X_PACKET };

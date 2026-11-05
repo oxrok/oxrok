@@ -380,7 +380,7 @@ pub struct Faults {
 }
 
 fn hex_bytes<const N: usize>(k: &str, v: &str) -> Result<[u8; N]> {
-    let bad = || Error(format!("{k}={v}: {} hex digits", 2 * N));
+    let bad = || Error::Invalid(format!("{k}={v}: {} hex digits", 2 * N));
     if v.len() != 2 * N {
         return Err(bad());
     }
@@ -395,7 +395,7 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "stall" => {
                 self.stall.clear();
@@ -405,7 +405,7 @@ impl Faults {
                         None => (item, None),
                     };
                     let req = Req::parse(what).ok_or_else(|| {
-                        Error(format!(
+                        Error::Invalid(format!(
                             "stall={item}: eeprom, fpga-init-in, fpga-init-out, fpga-enable, \
                              bulk-start, bulk-reset, bitstream, loader, read:REG or write:REG, then @N"
                         ))
@@ -415,16 +415,16 @@ impl Faults {
             }
             "fpga-init" => {
                 self.fpga_init =
-                    v.parse().map_err(|_| Error(format!("fpga-init={v}: 0 to 255")))?;
+                    v.parse().map_err(|_| Error::Invalid(format!("fpga-init={v}: 0 to 255")))?;
             }
             "run-state" => {
                 let n = u16::from_str_radix(v.trim_start_matches("0x"), 16)
-                    .map_err(|_| Error(format!("run-state={v}: four hex digits")))?;
+                    .map_err(|_| Error::Invalid(format!("run-state={v}: four hex digits")))?;
                 self.run_state = Some(n);
             }
             "pwm" => {
                 self.pwm = v.parse().ok().filter(|m| *m < 4).ok_or_else(|| {
-                    Error(format!("pwm={v}: a mask of the two outputs, 0 to 3"))
+                    Error::Invalid(format!("pwm={v}: a mask of the two outputs, 0 to 3"))
                 })?;
             }
             "eeprom-id" => self.eeprom_id = Some(hex_bytes(k, v)?),
@@ -434,14 +434,14 @@ impl Faults {
                 self.short_bitstream = match v {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("short-bitstream={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("short-bitstream={v}: 0 or 1"))),
                 }
             }
             "fw-dead" => {
                 self.fw_dead = match v {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("fw-dead={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("fw-dead={v}: 0 or 1"))),
                 }
             }
             "extra-bytes" => self.extra_bytes = count(v)?,
@@ -452,7 +452,7 @@ impl Faults {
                 self.slow_in = match v {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("slow-in={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("slow-in={v}: 0 or 1"))),
                 }
             }
             "in-limit" => self.in_limit = Some(count(v)?),
@@ -466,8 +466,13 @@ fn flag(k: &str, v: &str) -> Result<bool> {
     match v {
         "0" => Ok(false),
         "1" => Ok(true),
-        _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+        _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
     }
+}
+
+/// Firmware chunks of 4 KiB, bitstream chunks, downloads.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A device from the `-o` options: `model=KEY` (see [`PROFILES`]),
@@ -488,16 +493,16 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "model" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
                     let keys: Vec<&str> = PROFILES.iter().map(|p| p.key).collect();
-                    Error(format!("model={v}: one of {}", keys.join(", ")))
+                    Error::Invalid(format!("model={v}: one of {}", keys.join(", ")))
                 })?;
             }
             "mcu" => mcu = flag(k, v)?,
             "fpga" => fpga = flag(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     if fpga && !mcu {
-        return Err(Error("fpga=1 needs mcu=1: the bitstream is loaded through the firmware".into()));
+        return Err(Error::Invalid("fpga=1 needs mcu=1: the bitstream is loaded through the firmware".into()));
     }
     Ok(Box::new(Kingst::new(profile, mcu, fpga, faults)))
 }
@@ -740,7 +745,7 @@ impl Kingst {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&Self::mcu_image(), v);
+            ezusb::check_ezusb_c(loader, &Self::mcu_image(), v);
             // A firmware that never runs leaves the boot loader, which
             // comes back as the bare FX2.
             self.loader = if self.faults.fw_dead { Some(Box::new(Loader::new(Chip::Fx2lp))) } else { None };
@@ -1379,7 +1384,7 @@ impl DeviceModel for Kingst {
         Some(out)
     }
 
-    fn take_event_point(&mut self) -> bool {
+    fn mark(&mut self) -> bool {
         std::mem::take(&mut self.point)
     }
 
@@ -1396,11 +1401,6 @@ impl DeviceModel for Kingst {
             self.run = Run::Idle;
         }
         self.bulk = Bulk::default();
-    }
-
-    /// Firmware chunks of 4 KiB, bitstream chunks, downloads.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

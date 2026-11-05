@@ -213,25 +213,25 @@ impl Default for Options {
 }
 
 fn number<T: std::str::FromStr>(k: &str, v: &str) -> Result<T> {
-    v.parse().map_err(|_| Error(format!("{k}={v}: a number")))
+    v.parse().map_err(|_| Error::Invalid(format!("{k}={v}: a number")))
 }
 
 fn nth(k: &str, v: &str) -> Result<Option<u32>> {
-    v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+    v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
 }
 
 fn hex_u16(k: &str, v: &str) -> Result<u16> {
-    u16::from_str_radix(v.trim_start_matches("0x"), 16).map_err(|_| Error(format!("{k}={v}: hex")))
+    u16::from_str_radix(v.trim_start_matches("0x"), 16).map_err(|_| Error::Invalid(format!("{k}={v}: hex")))
 }
 
 fn hex_u8(k: &str, v: &str) -> Result<u8> {
-    u8::from_str_radix(v.trim_start_matches("0x"), 16).map_err(|_| Error(format!("{k}={v}: hex")))
+    u8::from_str_radix(v.trim_start_matches("0x"), 16).map_err(|_| Error::Invalid(format!("{k}={v}: hex")))
 }
 
 fn bounded(k: &str, v: &str, low: usize, high: usize) -> Result<usize> {
     let n: usize = number(k, v)?;
     if n < low || n > high {
-        return Err(Error(format!("{k}={v}: {low} to {high}")));
+        return Err(Error::Invalid(format!("{k}={v}: {low} to {high}")));
     }
     Ok(n)
 }
@@ -258,7 +258,7 @@ impl Options {
                     o.pattern = match v.as_str() {
                         "whole" => Pattern::Whole,
                         "half" => Pattern::Half,
-                        _ => return Err(Error(format!("{k}={v}: whole or half"))),
+                        _ => return Err(Error::Invalid(format!("{k}={v}: whole or half"))),
                     };
                 }
                 "invalid" => o.invalid = Some(bounded(k, v, 1, 0xffff)?),
@@ -273,7 +273,7 @@ impl Options {
                 "stall-ctl" => {
                     let (r, val) = v
                         .split_once('/')
-                        .ok_or_else(|| Error(format!("{k}={v}: REQ/VALUE in hex")))?;
+                        .ok_or_else(|| Error::Invalid(format!("{k}={v}: REQ/VALUE in hex")))?;
                     f.stall_ctl.push((hex_u8(k, r)?, hex_u16(k, val)?));
                 }
                 "stall-in" => f.stall_in = nth(k, v)?,
@@ -287,11 +287,16 @@ impl Options {
                 "log-stop" => f.log_stop = Some(number(k, v)?),
                 "hold" => f.hold = nth(k, v)?,
                 "hold-empty" => f.hold_empty = nth(k, v)?,
-                other => return Err(Error(format!("{NAME} has no option {other}"))),
+                other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
             }
         }
         Ok(o)
     }
+}
+
+/// Long data as its digest.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(MAX_CONFIG)
 }
 
 /// A logger from the `-o` options, see the module documentation.
@@ -741,10 +746,6 @@ impl DeviceModel for ElUsb {
             d.offset = end;
         }
         Some(data)
-    }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(MAX_CONFIG)
     }
 
     fn reset(&mut self) {

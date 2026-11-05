@@ -110,7 +110,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut delay = DEFAULT_DELAY;
     let mut faults = Faults::default();
     let nth = |k: &str, v: &str| -> Result<Option<u32>> {
-        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
     };
     for (k, v) in options {
         match k.as_str() {
@@ -119,19 +119,19 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .parse()
                     .ok()
                     .filter(|n| *n <= 1000)
-                    .ok_or_else(|| Error(format!("delay={v}: 0 to 1000")))?;
+                    .ok_or_else(|| Error::Invalid(format!("delay={v}: 0 to 1000")))?;
             }
             "button" => {
                 faults.no_button = match v.as_str() {
                     "0" => true,
                     "1" => false,
-                    _ => return Err(Error(format!("button={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("button={v}: 0 or 1"))),
                 };
             }
             "stall-in" => faults.stall_in = nth(k, v)?,
             "short-in" => faults.short_in = nth(k, v)?,
             "stall-out" => faults.stall_out = nth(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut dev = Pickit2::new(delay);
@@ -647,7 +647,7 @@ impl DeviceModel for Pickit2 {
         self.again = None;
     }
 
-    fn take_event_point(&mut self) -> bool {
+    fn mark(&mut self) -> bool {
         self.analyzer.take_point()
     }
 }
@@ -853,7 +853,7 @@ mod tests {
             assert!(build(&o).is_err(), "{bad:?}");
         }
         let mut dev = faulty(&[]);
-        assert!(!dev.take_event_point());
+        assert!(!dev.mark());
     }
 
     #[test]
@@ -876,18 +876,18 @@ mod tests {
         let mut dev = faulty(&[("delay", "1"), ("button", "0")]);
         dev.out(1, &packet(&[CMD_SETUP, 1, 0x0c, 0x0c, 0x0c, 1, 0, 0, 0]), &mut v);
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
-        assert!(!dev.take_event_point(), "the delay first");
+        assert!(!dev.mark(), "the delay first");
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
-        assert!(dev.take_event_point());
+        assert!(dev.mark());
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
-        assert!(!dev.take_event_point(), "once");
+        assert!(!dev.mark(), "once");
         assert!(v.is_empty(), "{v:?}");
         // A stalled SETUP.
         let mut dev = faulty(&[("stall-out", "1")]);
         let setup = packet(&[CMD_SETUP, 1, 0, 0, 0, 0, 0, 0, 0]);
         assert_eq!(dev.out(1, &setup, &mut v), Reply::Stall);
         assert_eq!(dev.in_transfer(1, PACKET, &mut v), Reply::Nak);
-        assert!(dev.take_event_point());
+        assert!(dev.mark());
         assert!(v.is_empty(), "{v:?}");
     }
 }

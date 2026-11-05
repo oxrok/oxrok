@@ -123,7 +123,7 @@ s/^(Failed to set device option .samplerate.): device error: .*/\1: generic\/uns
     ftdi_la_options chip=tumpa product=
     emu_case "tumpa no product" --keep-header --oracle-differs "$CONN_BUG" --filter "$C" -- -d $D:conn=0403.8a98 --scan
 
-    # The FTDI shell's faults (emu/src/shells/ftdi.rs), on an FT2232H.
+    # The FTDI shell's faults (vusb::shells::ftdi), on an FT2232H.
     # A chip with nothing sampled yet answers its two status bytes
     # alone, which libftdi strips: reads of 0 bytes, then the samples.
     ftdi_la_options idle=3

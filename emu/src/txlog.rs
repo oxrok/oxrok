@@ -38,8 +38,12 @@ pub struct Rules {
     /// uninitialised struct field, which would make the log differ from
     /// one run to the next. The log shows them as `xx`
     /// ([`data_undefined`]); the model documents each.
-    pub undefined: Option<fn(u8, &[u8]) -> Vec<Range<usize>>>,
+    pub undefined: Option<UndefinedBytes>,
 }
+
+/// The bytes of an OUT transfer to an endpoint that the host leaves
+/// undefined, see [`Rules::undefined`].
+pub type UndefinedBytes = fn(ep: u8, data: &[u8]) -> Vec<Range<usize>>;
 
 impl Rules {
     /// Data longer than `above` as its digest, every byte defined.
@@ -110,13 +114,7 @@ impl TxLog {
             let undefined =
                 self.rules.undefined.map_or_else(Vec::new, |f| f(t.endpoint & 0x0f, &t.data));
             transfer_line_undefined(
-                kind,
-                t.endpoint,
-                t.offered,
-                &t.data,
-                &undefined,
-                &t.reply,
-                above,
+                kind, t.endpoint, t.offered, &t.data, &undefined, &t.reply, above,
             )
         }
     }

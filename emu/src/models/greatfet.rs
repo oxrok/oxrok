@@ -576,16 +576,21 @@ fn flag(k: &str, v: &str) -> Result<bool> {
     match v {
         "0" => Ok(false),
         "1" => Ok(true),
-        _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+        _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
     }
 }
 
 fn hex(k: &str, v: &str) -> Result<Vec<u8>> {
-    let bad = || Error(format!("{k}={v}: hex digits"));
+    let bad = || Error::Invalid(format!("{k}={v}: hex digits"));
     if !v.len().is_multiple_of(2) || !v.is_ascii() {
         return Err(bad());
     }
     (0..v.len() / 2).map(|i| u8::from_str_radix(&v[2 * i..2 * i + 2], 16).map_err(|_| bad())).collect()
+}
+
+/// Transfers of 256 KiB.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options; see the module documentation.
@@ -599,7 +604,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut wide = false;
     let mut level = None;
     let count = |k: &str, v: &str| -> Result<u32> {
-        v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")))
+        v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")))
     };
     let index = |k: &str, v: &str| -> Result<Vec<u8>> {
         v.split(',')
@@ -608,7 +613,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 i.parse::<u8>()
                     .ok()
                     .filter(|i| *i <= 3)
-                    .ok_or_else(|| Error(format!("{k}={i}: a string index, 0 to 3")))
+                    .ok_or_else(|| Error::Invalid(format!("{k}={i}: a string index, 0 to 3")))
             })
             .collect()
     };
@@ -617,14 +622,14 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "in-limit" => in_limit = count(k, v)?,
             "wide" => wide = flag(k, v)?,
             "level" => {
-                let bad = || Error(format!("level={v}: four hex digits"));
+                let bad = || Error::Invalid(format!("level={v}: four hex digits"));
                 level = Some(u16::from_str_radix(v, 16).map_err(|_| bad())?);
             }
             "stall" => {
                 faults.stall.clear();
                 for name in v.split(',').filter(|n| !n.is_empty()) {
                     faults.stall.push(
-                        verb_of(name).ok_or_else(|| Error(format!("stall={name}: no such verb")))?,
+                        verb_of(name).ok_or_else(|| Error::Invalid(format!("stall={name}: no such verb")))?,
                     );
                 }
             }
@@ -633,7 +638,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 for name in v.split(',').filter(|n| !n.is_empty()) {
                     faults.stall_read.push(
                         verb_of(name)
-                            .ok_or_else(|| Error(format!("stall-read={name}: no such verb")))?,
+                            .ok_or_else(|| Error::Invalid(format!("stall-read={name}: no such verb")))?,
                     );
                 }
             }
@@ -643,7 +648,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "in-stall" => faults.in_stall = Some(count(k, v)?),
             "stall_string" => faults.stall_string = index(k, v)?,
             "short_string" => faults.short_string = index(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     Ok(Box::new(Greatfet::new(in_limit, wide, level, faults)))
@@ -719,11 +724,6 @@ impl DeviceModel for Greatfet {
         self.completed = 0;
         self.halted = false;
         self.early_submit = false;
-    }
-
-    /// Transfers of 256 KiB.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     /// `stall_string` and `short_string`: `GET_DESCRIPTOR` of a string.

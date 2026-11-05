@@ -454,11 +454,11 @@ fn parse_u8(k: &str, v: &str) -> Result<u8> {
         Some(hex) => u8::from_str_radix(hex, 16),
         None => v.parse(),
     };
-    n.map_err(|_| Error(format!("{k}={v}: a byte, decimal or 0x hex")))
+    n.map_err(|_| Error::Invalid(format!("{k}={v}: a byte, decimal or 0x hex")))
 }
 
 fn parse_count(k: &str, v: &str) -> Result<u32> {
-    v.parse::<u32>().ok().filter(|n| *n > 0).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+    v.parse::<u32>().ok().filter(|n| *n > 0).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
 }
 
 impl Faults {
@@ -484,7 +484,7 @@ impl Faults {
                         "bulkreq" => What::Bulkreq,
                         "bulk" => What::Bulk,
                         _ => {
-                            return Err(Error(format!(
+                            return Err(Error::Invalid(format!(
                                 "stall={name}: addr, wdata, rdata, bulkreq or bulk"
                             )));
                         }
@@ -500,7 +500,7 @@ impl Faults {
                             .ok()
                             .filter(|l| *l < READ_SIZE && l % 4 == 0 && l % PACKET != 0)
                             .ok_or_else(|| {
-                                Error(format!(
+                                Error::Invalid(format!(
                                     "short={v}: LEN a multiple of 4 below {READ_SIZE}, not of \
                                      {PACKET}"
                                 ))
@@ -520,6 +520,11 @@ impl Faults {
         }
         Ok(true)
     }
+}
+
+/// Bulk transfers of 2048 bytes.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options (see the module documentation).
@@ -543,18 +548,18 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 pid = u16::from_str_radix(hex, 16)
                     .ok()
                     .filter(|p| PROFILES.iter().any(|m| m.pid == *p))
-                    .ok_or_else(|| Error(format!("pid={v}: one of zeroplus_models[] (hex)")))?;
+                    .ok_or_else(|| Error::Invalid(format!("pid={v}: one of zeroplus_models[] (hex)")))?;
             }
             "serial" => serial = Some(v.clone()),
             "warm" => {
                 warm = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("warm={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("warm={v}: 0 or 1"))),
                 };
             }
-            "fill" => fill = v.parse().map_err(|_| Error(format!("fill={v}: a count")))?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            "fill" => fill = v.parse().map_err(|_| Error::Invalid(format!("fill={v}: a count")))?,
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = Zeroplus::new(pid, serial);
@@ -1125,7 +1130,7 @@ impl DeviceModel for Zeroplus {
             }
         };
         let want = if what == What::Bulkreq { 8 } else { 1 };
-        if setup.index != 0 || setup.length != want || (!setup.is_in() && data.len() != want.into())
+        if setup.index != 0 || setup.length != want || (!setup.is_in() && data.len() != usize::from(want))
         {
             v.report(format!(
                 "request {:#04x} {:#04x} value {:#06x}: index {} length {}, the driver sends \
@@ -1181,11 +1186,6 @@ impl DeviceModel for Zeroplus {
         self.addr = None;
         self.read = None;
         self.refused = false;
-    }
-
-    /// Bulk transfers of 2048 bytes.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn fail_standard(&mut self, setup: Setup) -> Option<StandardFault> {

@@ -132,11 +132,11 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "burst" => burst = crate::shells::hidcable::parse_burst(v)?,
             "serial" => {
                 if v.is_empty() || v.len() > 30 {
-                    return Err(Error(format!("serial={v}: 1 to 30 characters")));
+                    return Err(Error::Invalid(format!("serial={v}: 1 to 30 characters")));
                 }
                 serial.clone_from(v);
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut cable = Cp2110::new(period, &serial);

@@ -589,16 +589,13 @@ fn the_first_poll_of_a_capture_is_the_event_point() {
     let mut v = Violations::default();
     let mut dev = device(&[("mcu", "1"), ("fpga", "1")]);
     set_config(&mut dev, &mut v);
-    dev.arm(crate::model::Arm::parse("interrupt model").unwrap());
-    let reply = Reply::ack();
     spi_read(&mut dev, REG_RUN, 2, &mut v);
-    assert_eq!(dev.fired(0, true, &reply), None, "a run state outside a capture");
+    assert!(!dev.mark(), "a run state outside a capture");
     setup(&mut dev, 0, &trigger(1, 0, 0, 0), &sampling(10_000_000, 0, 0x100, 10_000), &mut v);
     spi_write(&mut dev, REG_RUN, &[3], &mut v);
-    assert_eq!(dev.fired(0, false, &reply), None);
+    assert!(!dev.mark());
     spi_read(&mut dev, REG_RUN, 2, &mut v);
-    assert!(dev.fired(0, true, &reply).is_some());
-    dev.arm(crate::model::Arm::parse("interrupt model").unwrap());
+    assert!(dev.mark());
     spi_read(&mut dev, REG_RUN, 2, &mut v);
-    assert_eq!(dev.fired(0, true, &reply), None, "once");
+    assert!(!dev.mark(), "once");
 }

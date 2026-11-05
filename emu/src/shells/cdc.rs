@@ -21,7 +21,7 @@ pub mod host {
     /// `SET_CONTROL_LINE_STATE`.
     const SET_CONTROL_LINE_STATE: u8 = 0x22;
 
-/// A function with the tty open.
+    /// A function with the tty open.
     pub struct Host<S> {
         /// The function.
         pub cdc: Cdc<S>,

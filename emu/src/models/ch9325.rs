@@ -100,7 +100,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "baud" => baud = cable::parse_number(k, v, 1..=0xffff)?,
             "bits" => bits = cable::parse_number(k, v, 5..=8)?,
             "burst" => burst = cable::parse_burst(v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut cable = Ch9325::new(packets, period, baud as u16, bits as u8);
