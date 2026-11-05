@@ -89,6 +89,7 @@ pub mod drivers {
     pub mod fx2lafw;
     pub mod greatfet;
     pub mod gwinstek_gpd;
+    pub mod gwinstek_psp;
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
@@ -136,6 +137,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
+    registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
