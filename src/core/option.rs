@@ -208,6 +208,27 @@ pub fn config_set(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::value::Value;
+
+    #[test]
+    fn the_core_takes_a_capture_ratio_up_to_100() {
+        for ok in [0, 1, 99, 100] {
+            assert!(check_value(&Key::CaptureRatio, &Value::U64(ok)).is_ok(), "{ok}");
+        }
+        for bad in [101, u64::MAX] {
+            assert!(check_value(&Key::CaptureRatio, &Value::U64(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_core_refuses_0_for_limits_and_the_rate_alone() {
+        for key in [Key::LimitSamples, Key::LimitMsec, Key::Samplerate] {
+            assert!(check_value(&key, &Value::U64(0)).is_err(), "{key}");
+            assert!(check_value(&key, &Value::U64(1)).is_ok(), "{key}");
+        }
+        assert!(check_value(&Key::LimitFrames, &Value::U64(0)).is_ok());
+        assert!(check_value(&Key::CaptureRatio, &Value::U64(0)).is_ok());
+    }
 
     #[test]
     #[allow(clippy::float_cmp)]

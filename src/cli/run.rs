@@ -327,6 +327,61 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// A device that reads `limit_samples` and has no way to set it.
+    struct ReadsLimit {
+        info: oxrok::core::DeviceInfo,
+        set_calls: usize,
+    }
+
+    impl Device for ReadsLimit {
+        fn info(&self) -> &oxrok::core::DeviceInfo {
+            &self.info
+        }
+        fn classes(&self) -> &[DeviceClass] {
+            &[]
+        }
+        fn channels(&self) -> &[oxrok::core::Channel] {
+            &[]
+        }
+        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn options(&self, _: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+            Ok(vec![oxrok::core::OptionDesc::new(Key::LimitSamples, oxrok::core::Access::GET)])
+        }
+        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn set(&mut self, _: &Key, _: &Value, _: Option<&str>) -> Result<()> {
+            self.set_calls += 1;
+            Ok(())
+        }
+        fn list(&self, key: &Key, _: Option<&str>) -> Result<ValueList> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn start(&mut self, _: oxrok::core::PacketSink) -> Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// sigrok-cli's --samples and --frames fail silently here: not through
+    /// `check_key()`, whose message `config_set` would log.
+    #[test]
+    fn samples_ask_for_set_access_first() {
+        let mut dev = ReadsLimit { info: oxrok::core::DeviceInfo::default(), set_calls: 0 };
+        let e = maybe_config_set(&mut dev, &Key::LimitSamples, 5).unwrap_err();
+        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
+        let e = maybe_config_set(&mut dev, &Key::LimitFrames, 5).unwrap_err();
+        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
+        assert_eq!(dev.set_calls, 0);
+    }
+
     #[test]
     fn a_driver_that_ends_captures_itself_starts_with_output_or_trigger() {
         use clap::Parser as _;

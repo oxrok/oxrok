@@ -36,6 +36,10 @@ emu_cases() {
     emu_case "relay channel_group later" --oracle-bug "it switches R1 in its hash table order (session.c:700-701), then finds channel_group unknown" --keep-header --expect-fail --stderr -- -d $R --set -c channel_group=R1:enabled=on:channel_group=R2
     emu_case "relay channel_group last" --oracle-bug "it switches all relays in its hash table order (session.c:700-701), then finds channel_group unknown" --keep-header --expect-fail --stderr -- -d $R --set -c enabled=on:channel_group=R1
     emu_case "relay empty first element" --oracle-bug "parse_generic_arg() asserts on it (parsers.c:363-364)" --keep-header --expect-fail --stderr -- -d $R --set -c :enabled=on
+    # A capture holds enabled=on until the rest was accepted: here the relay
+    # has no limit. --get does not hold it, and reads what it set.
+    emu_case "relay capture does not switch" --oracle-bug "it switches the relays, then fails on the limit (session.c:865)" --keep-header --expect-fail --stderr -- -d $R -c enabled=on --samples 1
+    emu_case "relay get after enabled" --keep-header -- -d $R -g R1 -c enabled=on --get enabled
     emu_case "relay by serial" --keep-header -- -d $R:conn=sn=ABCDE -g R2 --get enabled
     # The node the emulator got, as the READY line reported it.
     emu_case "relay by path" --keep-header -- -d $R:conn=$EMU_HIDRAW -g R1 --get enabled

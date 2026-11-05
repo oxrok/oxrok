@@ -119,6 +119,8 @@ emu_cases() {
     emu_case "pwm stays off with a refused duty" --oracle-bug "it turns the output on, then refuses the duty (its hash table order, session.c:700-701)" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c enabled=on:output_duty_cycle=101
     # The device has no enabled of its own: refused before PWM1 goes on.
     emu_case "pwm stays off with a key of no scope" --oracle-bug "it turns the output on, then finds the device has no enabled (session.c:700-710)" --expect-fail --stderr --filter "$L" -- -d $K --set -c channel_group=PWM1:enabled=on -c enabled=off
+    emu_case "pwm held by a channel unknown" --oracle-bug "it turns the output on, then fails on the channel (session.c:700, 776)" --expect-fail --stderr --filter "$L" -- -d $K -c channel_group=PWM1:enabled=on --samples 1000 -C nosuch
+    emu_case "pwm1 get after enabled" -- -d $K -g PWM1 -c enabled=on --get enabled
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0
