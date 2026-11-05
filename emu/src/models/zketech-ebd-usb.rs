@@ -35,9 +35,10 @@
 //! - What the checksum is when the XOR reaches `f0`. The wiki says no byte but
 //!   the first and last can be `fa` or `f8`, and the gist's host takes its XOR
 //!   modulo `f0`, which no example of the wiki shows. So it sends that modulo,
-//!   and `raw-checksum=1` the plain XOR, which then can be `fa` or `f8`. It
-//!   takes what the driver sends, the plain XOR, as nothing shows a real one
-//!   refusing it: it takes a frame by its length.
+//!   and `raw-checksum=1` the plain XOR, which then can be `fa` or `f8`. From the
+//!   host it takes both: the modulo, as the gist's host works against a real one,
+//!   and the plain XOR the driver sends, as nothing shows a real one refusing
+//!   that. It takes a frame by its length, so even a checksum of `f8` is no end.
 //! - That `06` leaves the load as it is. A program stopping a load sends `02`
 //!   first, in the driver and in the gist.
 //! - The rate of the stream. Neither says, and the driver gives each frame at
@@ -74,7 +75,7 @@
 //!   point a period later, with commands still taken, as the wiki's "sometimes it doesn't
 //!   send any messages anymore";
 //! - `replies=HEX[,HEX...]`, frames played in turn instead of the computed one,
-//!   of any length up to 64;
+//!   of any length up to 256;
 //! - `deaf=1`, which loses every load command, as the wiki says a real one can;
 //! - `setters=0`, which flags any load command, for what must change nothing;
 //! - `uart=LINE`.
@@ -83,7 +84,8 @@
 //! "later" (`protocol.c:417-439,473-495`), as they need a measurement seen and
 //! neither sigrok-cli nor the library runner sets anything in a capture; the end
 //! of `ebd_loadstart` (118-123), as `send_cmd` never returns `SR_OK`; a read's
-//! error (192-193, 212-213), as a read after an unplug neither ends nor fails;
+//! error (192-193, 212-213), as a read after an unplug gives none and each turn
+//! then takes 1 s (`serial.c:1159`), 200 s in all;
 //! and the checks on NULLs, unknown keys and a missing `devc`.
 //!
 //! The pedantic checks: the ends, the checksum, the type, zeros where a frame
@@ -121,7 +123,7 @@ const VOLTS_MAX: u32 = 21000;
 /// The device byte of an EBD-USB+.
 const EBD_USB_PLUS: u8 = 0x1a;
 /// `replies=` may be longer than a frame, up to this.
-const LONGEST_REPLY: usize = 64;
+const LONGEST_REPLY: usize = 256;
 /// About 300 ms, and the stream's frames stay well inside what the driver
 /// waits for one: see the module's note on the rate.
 const PERIOD: u32 = 15;
@@ -349,7 +351,8 @@ impl Load {
             port.violation(format!("{}: no frame", show(f)));
             return;
         }
-        if f[8] != xor(&f[1..8]) {
+        let checksum = xor(&f[1..8]);
+        if f[8] != checksum && f[8] != checksum % BASE_BYTE {
             port.violation(format!("{}: wrong checksum", show(f)));
             return;
         }
@@ -686,6 +689,41 @@ mod tests {
         }
         h.write(&command(0x02, 0, 0));
         assert_eq!(violations(&mut h), 1);
+    }
+
+    /// 128 mV: all eight ripples have an XOR of `f0` or more, so a host that checks
+    /// the plain XOR takes none of them.
+    #[test]
+    fn some_readings_fail_the_plain_xor_all_through_the_ripple() {
+        let mut h = load(&[("vbus", "128"), ("period", "2")]);
+        h.write(&start());
+        let mut frame = h.read();
+        for _ in 0..8 {
+            assert_ne!(xor(&frame[1..18]), 0, "{}", show(&frame));
+            frame = next_frame(&mut h);
+        }
+    }
+
+    #[test]
+    fn a_hosts_checksum_modulo_f0_is_taken_too() {
+        let mut f = command(0x01, 3824, 16);
+        f[8] %= BASE_BYTE;
+        assert_eq!(f[8], 0x0e);
+        let mut h = load(&[]);
+        h.write(&f);
+        assert_eq!(violations(&mut h), 0);
+        assert!(h.cdc.model.on);
+    }
+
+    /// A checksum that looks like the frame's end does not end it.
+    #[test]
+    fn a_checksum_of_f8_is_no_end() {
+        let f = command(0x01, 3824, 22);
+        assert_eq!(show(&f), "fa010fe000160000f8f8");
+        let mut h = load(&[]);
+        h.write(&f);
+        assert_eq!(violations(&mut h), 0);
+        assert_eq!(h.cdc.model.cutoff, 22);
     }
 
     #[test]
