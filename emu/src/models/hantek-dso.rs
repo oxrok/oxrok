@@ -373,7 +373,7 @@ impl Faults {
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
         let nth = |s: &str| {
-            s.parse::<u32>().ok().filter(|n| *n > 0).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+            s.parse::<u32>().ok().filter(|n| *n > 0).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
         };
         match k {
             "stall" => {
@@ -385,7 +385,7 @@ impl Faults {
                     };
                     let what = WHATS.iter().find(|(w, _)| *w == name).map(|(_, w)| *w).ok_or_else(
                         || {
-                            Error(format!(
+                            Error::Invalid(format!(
                                 "stall={name}: load, eeprom, begin, offset, relays, out or state"
                             ))
                         },
@@ -398,10 +398,10 @@ impl Faults {
                 for item in v.split(',').filter(|i| !i.is_empty()) {
                     let (state, n) = item
                         .split_once('@')
-                        .ok_or_else(|| Error(format!("state={item}: V@N")))?;
+                        .ok_or_else(|| Error::Invalid(format!("state={item}: V@N")))?;
                     let state = state
                         .parse::<u8>()
-                        .map_err(|_| Error(format!("state={item}: V from 0 to 255")))?;
+                        .map_err(|_| Error::Invalid(format!("state={item}: V from 0 to 255")))?;
                     self.states.push((nth(n)?, state));
                 }
             }
@@ -413,7 +413,7 @@ impl Faults {
             }
             "in-limit" => {
                 self.in_limit = Some(
-                    v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")))?,
+                    v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")))?,
                 );
             }
             "endpoints" => {
@@ -422,13 +422,20 @@ impl Faults {
                     "bad" => Endpoints::Bad,
                     "swapped" => Endpoints::Swapped,
                     "one" => Endpoints::One,
-                    _ => return Err(Error(format!("endpoints={v}: good, bad, swapped or one"))),
+                    _ => return Err(Error::Invalid(format!("endpoints={v}: good, bad, swapped or one"))),
                 }
             }
             _ => return Ok(false),
         }
         Ok(true)
     }
+}
+
+/// Firmware chunks, capture state answers and channel data, which
+/// would make a frame's log some 40 KiB of hex; the EEPROM read (72
+/// bytes), the relays and offsets (17) and the commands stay in hex.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(DIGEST_ABOVE)
 }
 
 /// A board from the `-o` options: `profile=`, `flashed=0|1`,
@@ -450,26 +457,26 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
         if faults.parse(k, v)? {
             continue;
         }
-        let count = || v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = || v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k.as_str() {
             "profile" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
                     let keys: Vec<&str> = PROFILES.iter().map(|p| p.key).collect();
-                    Error(format!("profile={v}: one of {}", keys.join(", ")))
+                    Error::Invalid(format!("profile={v}: one of {}", keys.join(", ")))
                 })?;
             }
             "flashed" => {
                 flashed = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("flashed={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("flashed={v}: 0 or 1"))),
                 }
             }
             "speed" => {
                 full = match v.as_str() {
                     "high" => false,
                     "full" => true,
-                    _ => return Err(Error(format!("speed={v}: high or full"))),
+                    _ => return Err(Error::Invalid(format!("speed={v}: high or full"))),
                 }
             }
             "fill" => polls = count()?,
@@ -477,11 +484,11 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 ext = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("ext={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("ext={v}: 0 or 1"))),
                 }
             }
             "wrap" => wrap = count()? as usize,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = HantekDso::new(profile, flashed, full, faults);
@@ -728,7 +735,7 @@ impl HantekDso {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&image, v);
+            ezusb::check_ezusb_c(loader, &image, v);
             self.loader = None;
             self.renumerate = true;
         }
@@ -1364,13 +1371,6 @@ impl DeviceModel for HantekDso {
         self.capture = None;
         self.pending = Pending::Nothing;
         self.begun = false;
-    }
-
-    /// Firmware chunks, capture state answers and channel data, which
-    /// would make a frame's log some 40 KiB of hex; the EEPROM read (72
-    /// bytes), the relays and offsets (17) and the commands stay in hex.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(DIGEST_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

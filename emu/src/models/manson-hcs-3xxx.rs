@@ -150,7 +150,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
     for (k, v) in options {
         if k == "model" {
             let rating = RATINGS.iter().find(|r| r.code == v);
-            let rating = rating.ok_or_else(|| Error(format!("model={v}: not in the table")))?;
+            let rating = rating.ok_or_else(|| Error::Invalid(format!("model={v}: not in the table")))?;
             config.rating = *rating;
             rating.code.clone_into(&mut config.gmod);
         }
@@ -179,7 +179,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "gap" => config.gap = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     // A CP2102's strings (the wiki's `lsusb`), not its ids; see the head.
@@ -349,12 +349,12 @@ impl Supply {
             }
         }
         if self.config.answers.is_some_and(|n| self.answered >= n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         if self.config.gap == Some(self.answered) && !self.gap_taken {
             self.gap_taken = true;
-            port.mark_event_point();
+            port.mark();
             return;
         }
         self.answered += 1;
@@ -589,20 +589,20 @@ mod tests {
     fn answers_runs_out_and_marks_the_point() {
         let mut h = supply(&[("answers", "1")]);
         assert_eq!(ask(&mut h, b"GMOD\r"), b"3202\rOK\r");
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         assert_eq!(ask(&mut h, b"GETD\r"), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
     }
 
     #[test]
     fn a_gap_misses_one_answer_and_marks_the_point() {
         let mut h = supply(&[("gap", "1")]);
         assert_eq!(ask(&mut h, b"GMOD\r"), b"3202\rOK\r");
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         assert_eq!(ask(&mut h, b"GETD\r"), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         assert_eq!(ask(&mut h, b"GETD\r"), b"000000000\rOK\r", "and on it goes");
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
     }
 
     #[test]

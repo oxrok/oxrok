@@ -359,14 +359,14 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
                     .parse::<u32>()
                     .ok()
                     .filter(|n| *n > 0)
-                    .ok_or_else(|| Error(format!("{k}={item}: N from 1")))?;
+                    .ok_or_else(|| Error::Invalid(format!("{k}={item}: N from 1")))?;
                 (name, Some(n))
             }
             None => (item, None),
         };
         let command = COMMANDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).ok_or_else(|| {
             let names: Vec<&str> = COMMANDS.iter().map(|(n, _)| *n).collect();
-            Error(format!("{k}={name}: one of {}", names.join(", ")))
+            Error::Invalid(format!("{k}={name}: one of {}", names.join(", ")))
         })?;
         out.push(Shot { command, nth });
     }
@@ -407,14 +407,14 @@ fn byte(k: &str, v: &str) -> Result<u8> {
         Some(hex) => u8::from_str_radix(hex, 16).ok(),
         None => v.parse().ok(),
     };
-    parsed.ok_or_else(|| Error(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
+    parsed.ok_or_else(|| Error::Invalid(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
 }
 
 fn flag(k: &str, v: &str) -> Result<bool> {
     match v {
         "0" => Ok(false),
         "1" => Ok(true),
-        _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+        _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
     }
 }
 
@@ -422,7 +422,7 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "stall" => self.stall = shots(k, v)?,
             "stall_reply" => self.stall_reply = shots(k, v)?,
@@ -439,6 +439,11 @@ impl Faults {
         }
         Ok(true)
     }
+}
+
+/// Firmware chunks of 4 KiB and sample transfers.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `flashed=0|1`, `bitstream=old|new`,
@@ -462,21 +467,21 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 new_map = match v.as_str() {
                     "old" => false,
                     "new" => true,
-                    _ => return Err(Error(format!("bitstream={v}: old or new"))),
+                    _ => return Err(Error::Invalid(format!("bitstream={v}: old or new"))),
                 }
             }
             "variant" => {
                 variant = match v.as_str() {
                     "original" => Variant::Original,
                     "mcupro" => Variant::Mcupro,
-                    _ => return Err(Error(format!("variant={v}: original or mcupro"))),
+                    _ => return Err(Error::Invalid(format!("variant={v}: original or mcupro"))),
                 }
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     if variant == Variant::Mcupro && new_map {
-        return Err(Error("bitstream=new: the mcupro clone has the old map".into()));
+        return Err(Error::Invalid("bitstream=new: the mcupro clone has the old map".into()));
     }
     let mut model = Logic16::new(flashed, variant, new_map);
     model.faults = faults;
@@ -692,7 +697,7 @@ impl Logic16 {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&image, v);
+            ezusb::check_ezusb_c(loader, &image, v);
             self.stage = Stage::Running;
             self.renumerate = true;
         }
@@ -1216,11 +1221,6 @@ impl DeviceModel for Logic16 {
         self.fpga.stream = None;
         self.fpga.armed = false;
         self.reply = None;
-    }
-
-    /// Firmware chunks of 4 KiB and sample transfers.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

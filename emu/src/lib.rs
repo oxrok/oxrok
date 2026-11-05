@@ -1,70 +1,29 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
-//! Device emulation over USB/IP.
+//! The devices oxrok's drivers are checked against, on [`vusb`].
 //!
-//! A device is a [`model::DeviceModel`]: descriptors, control
-//! transfers, OUT and IN transfers, reset. Plain Rust with no I/O, so
-//! the same model runs in a unit test, on this server and, later, on a
-//! microcontroller. [`device::Device`] wraps a model with the standard
-//! requests every USB device answers (descriptors, configuration,
-//! status, halts) and the checks on what the host sends. [`shells`]
-//! carry what every device of a kind shares (HID so far), and
-//! [`models`] holds the devices, one file each, found by `build.rs`.
-//! [`usbip`] is
-//! the USB/IP server the Linux `vhci-hcd` module connects to, and
-//! [`vhci`] attaches and detaches through its sysfs files, so no
-//! `usbip` tool is needed. Everything the host does goes to a
-//! [`txlog::TxLog`]: one line per completed transfer, in the dialect
-//! of oxrok's USB fixtures, and a `! violation:` line whenever the
-//! host leaves the protocol as the model defines it.
+//! The contract, the bus, the class shells, USB/IP and the control
+//! socket are the `vusb` crate's; its paths are re-exported here, so a
+//! model says `crate::model::DeviceModel` or `crate::shells::cdc`
+//! whichever crate holds them. What is oxrok's own:
 //!
-//! Only Linux can attach the device; the models and the protocol code
-//! build and test everywhere.
+//! - [`models`]: the devices, one file each, found by `build.rs`.
+//! - [`txlog`]: the transaction log, vusb's fixture log under the rules
+//!   of the model: one line per completed transfer, and a `! violation:`
+//!   line whenever the host leaves the protocol as the model defines it.
+//!   `tests/emu` holds this format.
+//! - [`shells::hidcable`] and the checks on a firmware upload in
+//!   [`shells::ezusb`], which know sigrok's fixtures.
+//!
+//! Only Linux can attach the device; the models build and test
+//! everywhere.
 
 #![forbid(unsafe_code)]
 
-pub mod descriptor;
-pub mod device;
-pub mod model;
+pub use vusb::{Error, Result, descriptor, device, model};
+
 pub mod models;
 pub mod options;
 pub mod shells;
 pub mod txlog;
-pub mod usbip;
-pub mod vhci;
-
-use std::fmt;
-
-/// An error with a message.
-#[derive(Debug)]
-pub struct Error(pub String);
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<std::io::Error> for Error {
-    fn from(e: std::io::Error) -> Error {
-        Error(e.to_string())
-    }
-}
-
-impl From<String> for Error {
-    fn from(s: String) -> Error {
-        Error(s)
-    }
-}
-
-impl From<&str> for Error {
-    fn from(s: &str) -> Error {
-        Error(s.to_owned())
-    }
-}
-
-/// Result with [`Error`].
-pub type Result<T> = std::result::Result<T, Error>;

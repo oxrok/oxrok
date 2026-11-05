@@ -30,7 +30,6 @@ EMU_TX_FOLD=1
 # builds the model with them, and re-attaches the device when its
 # descriptors change. None restores EMU_OPTIONS.
 chronovu_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "chronovu-la: the emulator refused '$*'"
 }

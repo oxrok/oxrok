@@ -13,8 +13,10 @@
 //! included by `src/models/mod.rs`, declares each as a module (a name
 //! with `-` becomes an identifier with `_`) and builds the `NAMES`
 //! table and the `build` dispatch from the `NAME`, `ABOUT` and `build`
-//! each module exports. A new model is a new file and nothing else, so
-//! models written in parallel never touch a shared list.
+//! each module exports, and the `log_rules` dispatch from the modules
+//! with a line that starts `pub fn log_rules(`. A new model is a new
+//! file and nothing else, so models written in parallel never touch a
+//! shared list.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -116,8 +118,23 @@ fn main() {
             .unwrap();
     }
     out.push_str(
-        "    Err(Error(format!(\"no model named {name}; oxrok-emu list names them\")))\n}\n",
+        "    Err(Error::Invalid(format!(\"no model named {name}; oxrok-emu list names them\")))\n}\n\n",
     );
+    out.push_str(
+        "/// How the transaction log shows a model built with `options`.\n\
+         pub fn log_rules(name: &str, options: &[(String, String)]) -> crate::txlog::Rules {\n",
+    );
+    for (id, (_, path)) in &models {
+        let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if source.lines().any(|l| l.starts_with("pub fn log_rules(")) {
+            writeln!(
+                out,
+                "    if name == {id}::NAME {{\n        return {id}::log_rules(options);\n    }}"
+            )
+            .unwrap();
+        }
+    }
+    out.push_str("    let _ = (name, options);\n    crate::txlog::Rules::default()\n}\n");
 
     let dest = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("models.rs");
     // Rewritten only when it changes, so an unrelated build script run

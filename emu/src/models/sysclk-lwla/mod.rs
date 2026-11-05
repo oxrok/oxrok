@@ -427,17 +427,17 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
                     .parse::<u32>()
                     .ok()
                     .filter(|n| *n > 0)
-                    .ok_or_else(|| Error(format!("{k}={item}: N from 1")))?;
+                    .ok_or_else(|| Error::Invalid(format!("{k}={item}: N from 1")))?;
                 (name, Some(n))
             }
             None => (item, None),
         };
         let kind = KINDS.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).ok_or_else(|| {
             let names: Vec<&str> = KINDS.iter().map(|(n, _)| *n).collect();
-            Error(format!("{k}={name}: one of {}", names.join(", ")))
+            Error::Invalid(format!("{k}={name}: one of {}", names.join(", ")))
         })?;
         if k != "stall" && matches!(kind, Kind::WriteReg | Kind::WriteLregs | Kind::Bitstream) {
-            return Err(Error(format!("{k}={name}: only read-reg, read-mem and read-lregs reply")));
+            return Err(Error::Invalid(format!("{k}={name}: only read-reg, read-mem and read-lregs reply")));
         }
         out.push(Shot { kind, nth });
     }
@@ -453,7 +453,7 @@ fn number(k: &str, v: &str) -> Result<u64> {
         Some(hex) => u64::from_str_radix(hex, 16).ok(),
         None => v.parse().ok(),
     };
-    parsed.ok_or_else(|| Error(format!("{k}={v}: a number")))
+    parsed.ok_or_else(|| Error::Invalid(format!("{k}={v}: a number")))
 }
 
 /// Ways the board can misbehave, as a real one can; none by default.
@@ -794,6 +794,11 @@ pub fn descriptors(board: Board) -> Descriptors {
     Descriptors { speed: Speed::High, device: dev.bytes(), configs: vec![config], strings: vec![] }
 }
 
+/// The bitstream and the memory reads.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(96)
+}
+
 /// A board from the `-o` options: `model=1034|1016`, `period=N`,
 /// `tick=MS`, `ext_clock=HZ`, `ext_trg=N`, `short_transfers=0|1`,
 /// `stale=N` and the faults (see [`Faults`]).
@@ -809,19 +814,19 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut stale = 0usize;
     for (k, v) in options {
         let positive = |v: &str| {
-            number(k, v).ok().filter(|n| *n > 0).ok_or_else(|| Error(format!("{k}={v}: from 1")))
+            number(k, v).ok().filter(|n| *n > 0).ok_or_else(|| Error::Invalid(format!("{k}={v}: from 1")))
         };
         let flag = |v: &str| match v {
             "0" => Ok(false),
             "1" => Ok(true),
-            _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+            _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
         };
         match k.as_str() {
             "model" => {
                 board = match v.as_str() {
                     "1034" => Board::Lwla1034,
                     "1016" => Board::Lwla1016,
-                    _ => return Err(Error(format!("model={v}: 1034 or 1016"))),
+                    _ => return Err(Error::Invalid(format!("model={v}: 1034 or 1016"))),
                 }
             }
             "period" => sig.period = positive(v)?,
@@ -833,14 +838,14 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 stale = usize::try_from(number(k, v)?)
                     .ok()
                     .filter(|n| *n <= 4096)
-                    .ok_or_else(|| Error(format!("stale={v}: 0 to 4096 bytes")))?;
+                    .ok_or_else(|| Error::Invalid(format!("stale={v}: 0 to 4096 bytes")))?;
             }
             "stall" => faults.stall = shots(k, v)?,
             "stall_reply" => faults.stall_reply = shots(k, v)?,
             "short_reply" => faults.short_reply = shots(k, v)?,
             "test_id" => faults.test_id = Some(number(k, v)?),
             "halt_in" => faults.halt_in = flag(v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     sig.channels = board.channels();
@@ -1632,11 +1637,6 @@ impl DeviceModel for Lwla {
         for c in stale.chunks(PACKET) {
             self.pending.push_back(Chunk { data: c.to_vec(), stall: false, total: c.len() });
         }
-    }
-
-    /// The bitstream and the memory reads.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(96)
     }
 }
 

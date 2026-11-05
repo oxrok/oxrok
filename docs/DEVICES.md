@@ -504,7 +504,7 @@ Where oxrok differs from libsigrok:
   it detached. The next open by either tool detaches it again.
 
 Emulated (2026-11-03): model `ftdi-la` (`emu/src/models/ftdi-la.rs`, on
-the FTDI shell `emu/src/shells/ftdi.rs`), an FTDI chip with port A in
+vusb's FTDI shell), an FTDI chip with port A in
 asynchronous bit-bang mode, all pins inputs. Sample n is n modulo 256,
 and the count restarts at every SET_BITMODE and at every purge of the
 chip-to-host buffer. Options: `chip=` `ft2232h` (default), `ft4232h`,

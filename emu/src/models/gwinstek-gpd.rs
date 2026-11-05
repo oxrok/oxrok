@@ -114,7 +114,7 @@ fn parse_milli(text: &str) -> Option<u32> {
 }
 
 fn parse_limit(key: &str, value: &str) -> Result<u32> {
-    let invalid = || Error(format!("{key}={value}: a number as in 30 or 3.2"));
+    let invalid = || Error::Invalid(format!("{key}={value}: a number as in 30 or 3.2"));
     let number: f64 = value.parse().map_err(|_| invalid())?;
     if !(0.0..=1000.0).contains(&number) {
         return Err(invalid());
@@ -123,7 +123,7 @@ fn parse_limit(key: &str, value: &str) -> Result<u32> {
 }
 
 fn set_point(key: &str, value: &str) -> Result<u32> {
-    parse_milli(value).ok_or_else(|| Error(format!("{key}={value}: as in 5.000")))
+    parse_milli(value).ok_or_else(|| Error::Invalid(format!("{key}={value}: as in 5.000")))
 }
 
 fn answers_list(value: &str) -> Packets {
@@ -148,7 +148,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
                     "lf" => b"\n",
                     "cr" => b"\r",
                     "crlf" => b"\r\n",
-                    _ => return Err(Error(format!("eol={v}: lf, cr or crlf"))),
+                    _ => return Err(Error::Invalid(format!("eol={v}: lf, cr or crlf"))),
                 };
             }
             "junk" => config.junk = v.as_bytes().to_vec(),
@@ -174,7 +174,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "chatter" => config.chatter = Some(v.as_bytes().to_vec()),
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = flag(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     config.baud = uart.baud;
@@ -315,7 +315,7 @@ impl Supply {
 
     fn query(&mut self, command: Query, port: &mut Port<'_>) {
         if self.config.answers.is_some_and(|n| self.answered >= n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         self.answered += 1;
@@ -665,10 +665,10 @@ mod tests {
         let mut h = supply(&[("answers", "1")]);
         h.write(b"*IDN?\n");
         assert_ne!(h.read(), b"");
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         h.write(b"IOUT1?\n");
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
     }
 
     #[test]

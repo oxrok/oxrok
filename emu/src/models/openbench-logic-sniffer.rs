@@ -253,7 +253,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Sniffer>> {
             "slow" => slow = u64::from(parse_number(k, v, 1..=65536)?),
             "sends" => sends = Some(u64::from(parse_number(k, v, 0..=MAX_MEMORY)?)),
             "uart" => uart = Some(Line::parse(v)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let long_counts = meta.is_none().then_some(memory > SMALL_MEMORY);
@@ -577,7 +577,7 @@ impl Serial for Sniffer {
 
     fn tick(&mut self, port: &mut Port<'_>) {
         if std::mem::take(&mut self.point_due) {
-            port.mark_event_point();
+            port.mark();
         }
     }
 
@@ -803,21 +803,21 @@ mod tests {
         let mut h = board(&[("sends", "0")]);
         setup(&mut h, 0x38, 1, 1);
         h.write(&[RUN]);
-        assert!(!h.cdc.take_event_point(), "the run's write is still draining");
+        assert!(!h.cdc.mark(), "the run's write is still draining");
         h.offer();
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         // After the words that are sent, not before them.
         let mut h = board(&[("sends", "2")]);
         setup(&mut h, 0x38, 1, 1);
         h.write(&[RUN]);
         assert_eq!(read_all(&mut h), [7, 6]);
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         // A capture sent whole has no point.
         let mut h = board(&[]);
         setup(&mut h, 0x38, 1, 1);
         h.write(&[RUN]);
         read_all(&mut h);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
     }
 
     #[test]

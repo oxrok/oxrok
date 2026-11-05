@@ -1,282 +1,141 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
-//! The transaction log: one line per completed transfer, in the
-//! dialect of oxrok's USB fixtures (`docs/USB.md`), `# section NAME`
-//! markers between the phases of a run, and `! violation: ...` lines
-//! for what the host did outside the protocol. Transfers the device
-//! holds with a NAK are not logged until they complete, so a log does
-//! not depend on how often the host polls; unlinks and other events
-//! are `#` comments, written only in verbose mode. For a model that
-//! asks for it ([`crate::model::DeviceModel::log_digest_above`]), data
-//! longer than that, in either direction, is written as `@LEN:SHA256`,
-//! the fixture dialect's digest form, so a firmware upload or a stream
-//! of samples does not make lines of megabytes.
+//! The transaction log of `tests/emu`: vusb's [`Log`], which writes the
+//! format (vusb's `docs/log.md`), under the [`Rules`] of the model behind
+//! the device. What is oxrok's own is that a verbose log also tells
+//! standard error what it writes as comments, and that the rules follow
+//! the model ([`factory`]).
 
-use std::fmt::Write as _;
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
-use std::ops::Range;
-use std::path::Path;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 
-use sha2::{Digest as _, Sha256};
+pub use vusb::observer::fixture::{DIGEST_ABOVE as HASH_ABOVE, Rules, hex};
+use vusb::observer::fixture::{Log, line};
+use vusb::observer::{Notice, Observer, Outcome, Transfer};
+use vusb::session::ModelFactory;
 
-use crate::model::{BULK, CONTROL, INTERRUPT, Reply, Setup};
+use crate::models;
 
-/// The log.
-pub struct TxLog {
-    out: Option<BufWriter<File>>,
+/// The log, with its comments on standard error too when verbose.
+#[derive(Debug)]
+pub struct TxLog<W> {
+    log: Log<W>,
     verbose: bool,
-    violations: usize,
-    section: String,
 }
 
-impl TxLog {
-    /// A log to `path`, or to nowhere; events go in only when
-    /// `verbose`. Violations are also printed to stderr.
-    pub fn new(path: Option<&Path>, verbose: bool) -> io::Result<TxLog> {
-        let out = match path {
-            Some(p) => Some(BufWriter::new(File::create(p)?)),
-            None => None,
-        };
-        Ok(TxLog { out, verbose, violations: 0, section: String::new() })
+impl<W: Write + Send> TxLog<W> {
+    /// A log to `out`, under the default rules until [`TxLog::set_rules`];
+    /// comments and held transfers go in only when `verbose`.
+    pub fn new(out: W, verbose: bool) -> TxLog<W> {
+        TxLog { log: Log::new(out, Rules::default()).verbose(verbose), verbose }
     }
 
-    fn line(&mut self, s: &str) {
-        if let Some(o) = &mut self.out {
-            // Errors writing the log are not worth stopping the device.
-            let _ = writeln!(o, "{s}");
-            let _ = o.flush();
-        }
-    }
-
-    /// Starts a section.
-    pub fn section(&mut self, name: &str) {
-        name.clone_into(&mut self.section);
-        self.line(&format!("# section {name}"));
-    }
-
-    /// The current section's name.
-    pub fn current_section(&self) -> &str {
-        &self.section
-    }
-
-    /// One completed transfer.
-    pub fn transfer(&mut self, line: &str) {
-        self.line(line);
-    }
-
-    /// A violation, counted and also printed to stderr.
-    pub fn violation(&mut self, message: &str) {
-        self.violations += 1;
-        eprintln!("violation [{}]: {message}", self.section);
-        self.line(&format!("! violation: {message}"));
-    }
-
-    /// An event, in verbose mode only.
-    pub fn event(&mut self, message: &str) {
-        if self.verbose {
-            eprintln!("emu: {message}");
-            self.line(&format!("# {message}"));
-        }
-    }
-
-    /// How many violations were logged.
-    pub fn violations(&self) -> usize {
-        self.violations
+    /// The rules of the model behind the device from now on.
+    pub fn set_rules(&mut self, rules: Rules) {
+        self.log.set_rules(rules);
     }
 }
 
-/// Bytes as hex pairs, `-` when empty.
-pub fn hex(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return "-".to_owned();
+impl<W: Write + Send> Observer for TxLog<W> {
+    fn transfer(&mut self, t: &Transfer) {
+        if self.verbose && t.outcome == Outcome::Held {
+            eprintln!("emu: seq {}: {} (held)", t.seqnum, line(t, &self.log.rules()));
+        }
+        self.log.transfer(t);
     }
-    bytes.iter().fold(String::with_capacity(2 * bytes.len()), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
+
+    fn violation(&mut self, message: &str) {
+        self.log.violation(message);
+    }
+
+    fn notice(&mut self, notice: Notice<'_>) {
+        if let (true, Notice::Comment(c)) = (self.verbose, &notice) {
+            eprintln!("emu: {c}");
+        }
+        self.log.notice(notice);
+    }
+}
+
+/// What builds the model `name` for a session, for the start and for each
+/// reset, and gives `log` the rules of what it built.
+///
+/// `options` builds a model too, to refuse what it cannot take, so the
+/// rules can be a `reset` ahead of the model; nothing compares what goes
+/// between the two.
+pub fn factory<W: Write + Send + 'static>(name: &str, log: Arc<Mutex<TxLog<W>>>) -> ModelFactory {
+    let name = name.to_owned();
+    Box::new(move |options: &[(String, String)]| {
+        let model = models::build(&name, options)?;
+        log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
+        Ok(model)
     })
-}
-
-/// The size above which oxrok's fixtures record data sent to a device
-/// as its length and SHA-256 (`oxrok::usb::record::HASH_ABOVE`), and
-/// the value models that log digests use.
-pub const HASH_ABOVE: usize = 1024;
-
-/// Bytes as [`hex`], or as `@LEN:SHA256` when longer than `above`.
-pub fn data(bytes: &[u8], above: Option<usize>) -> String {
-    if above.is_some_and(|n| bytes.len() > n) {
-        format!("@{}:{}", bytes.len(), hex(&Sha256::digest(bytes)))
-    } else {
-        hex(bytes)
-    }
-}
-
-/// Bytes as [`data`], those in `undefined` (bytes the host left
-/// undefined, [`crate::model::DeviceModel::log_undefined`]) as `xx`; in
-/// a digest they count as 0 and their ranges follow it, `@LEN:SHA256/xx=A-B,...`.
-pub fn data_undefined(bytes: &[u8], undefined: &[Range<usize>], above: Option<usize>) -> String {
-    let inside = |i: usize| undefined.iter().any(|r| r.contains(&i));
-    if undefined.is_empty() {
-        data(bytes, above)
-    } else if above.is_some_and(|n| bytes.len() > n) {
-        let zeroed: Vec<u8> =
-            bytes.iter().enumerate().map(|(i, b)| if inside(i) { 0 } else { *b }).collect();
-        let ranges: Vec<String> =
-            undefined.iter().map(|r| format!("{}-{}", r.start, r.end.saturating_sub(1))).collect();
-        format!("{}/xx={}", data(&zeroed, above), ranges.join(","))
-    } else {
-        bytes.iter().enumerate().fold(String::with_capacity(2 * bytes.len()), |mut s, (i, b)| {
-            if inside(i) {
-                s.push_str("xx");
-            } else {
-                let _ = write!(s, "{b:02x}");
-            }
-            s
-        })
-    }
-}
-
-fn result(reply: &Reply, is_in: bool, above: Option<usize>) -> String {
-    match reply {
-        Reply::Data(d) if is_in => data(d, above),
-        Reply::Data(_) => "ok".to_owned(),
-        Reply::Nak => "nak".to_owned(),
-        Reply::Stall => "err stall".to_owned(),
-    }
-}
-
-/// The line of a control transfer: the fixture format, the direction
-/// bit of `bmRequestType` left to the `ctl_in`/`ctl_out` word; data
-/// longer than `above` as its digest.
-pub fn control_line(setup: Setup, bytes: &[u8], reply: &Reply, above: Option<usize>) -> String {
-    let kind = setup.request_type & 0x7f;
-    if setup.is_in() {
-        format!(
-            "ctl_in {kind:02x} {:02x} {:04x} {:04x} {} -> {}",
-            setup.request,
-            setup.value,
-            setup.index,
-            setup.length,
-            result(reply, true, above)
-        )
-    } else {
-        format!(
-            "ctl_out {kind:02x} {:02x} {:04x} {:04x} {} -> {}",
-            setup.request,
-            setup.value,
-            setup.index,
-            data(bytes, above),
-            result(reply, false, above)
-        )
-    }
-}
-
-/// The line of a bulk, interrupt or isochronous transfer on endpoint
-/// `address`; `max` is the length asked for an IN, `data` the payload
-/// of an OUT.
-pub fn transfer_line(
-    transfer_type: u8,
-    address: u8,
-    max: usize,
-    bytes: &[u8],
-    reply: &Reply,
-    above: Option<usize>,
-) -> String {
-    transfer_line_undefined(transfer_type, address, max, bytes, &[], reply, above)
-}
-
-/// [`transfer_line`] with the OUT payload's `undefined` bytes shown as
-/// [`data_undefined`] shows them.
-pub fn transfer_line_undefined(
-    transfer_type: u8,
-    address: u8,
-    max: usize,
-    bytes: &[u8],
-    undefined: &[Range<usize>],
-    reply: &Reply,
-    above: Option<usize>,
-) -> String {
-    let word = match transfer_type {
-        BULK => "bulk",
-        INTERRUPT => "int",
-        CONTROL => "ctl",
-        _ => "iso",
-    };
-    if address & 0x80 != 0 {
-        format!("{word}_in {address:02x} {max} -> {}", result(reply, true, above))
-    } else {
-        let taken = match reply {
-            Reply::Data(d) if d.is_empty() => bytes.len().to_string(),
-            Reply::Data(d) => d.len().to_string(),
-            other => result(other, false, above),
-        };
-        format!("{word}_out {address:02x} {} -> {taken}", data_undefined(bytes, undefined, above))
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use vusb::bus::Bus;
+    use vusb::device::Device;
+    use vusb::model::Setup;
+    use vusb::observer::SharedObserver;
+
     use super::*;
 
+    fn pairs(options: &[(&str, &str)]) -> Vec<(String, String)> {
+        options.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect()
+    }
+
+    /// Each time the factory builds the model, as a `reset` does, the log
+    /// goes on under the rules of what it built, in the same file.
     #[test]
-    fn undefined_bytes_show_as_xx() {
-        let r = Reply::ack();
-        let mid = 1..3;
-        let head = 0..2;
-        assert_eq!(
-            transfer_line_undefined(
-                BULK,
-                0x02,
-                0,
-                &[1, 2, 3, 4],
-                std::slice::from_ref(&mid),
-                &r,
-                None
-            ),
-            "bulk_out 02 01xxxx04 -> 4"
-        );
-        let long = vec![7u8; HASH_ABOVE + 2];
-        let mut zeroed = long.clone();
-        zeroed[..2].fill(0);
-        assert_eq!(
-            data_undefined(&long, std::slice::from_ref(&head), Some(HASH_ABOVE)),
-            format!("{}/xx=0-1", data(&zeroed, Some(HASH_ABOVE)))
-        );
-        assert_eq!(data_undefined(&[5], &[], None), "05");
+    fn the_rules_follow_the_model_the_factory_builds() {
+        let log = Arc::new(Mutex::new(TxLog::new(Vec::new(), false)));
+        let build = factory("ikalogic-scanalogic2", Arc::clone(&log));
+        // A board's one feature report, 128 bytes.
+        let read = |options: &[(&str, &str)]| {
+            let model = build(&pairs(options)).unwrap();
+            let shared: SharedObserver = log.clone();
+            let mut bus = Bus::new(Device::new(model)).with_observer(shared);
+            bus.notice(Notice::Section("read"));
+            let configure = Setup { request_type: 0x00, request: 9, value: 1, index: 0, length: 0 };
+            bus.control(configure, &[]);
+            let report =
+                Setup { request_type: 0xa1, request: 1, value: 0x0300, index: 0, length: 128 };
+            bus.control(report, &[]);
+        };
+        read(&[]);
+        read(&[("digest", "1")]);
+        read(&[]);
+
+        let log = log.lock().unwrap();
+        let text = String::from_utf8_lossy(log.log.get_ref());
+        let reports: Vec<&str> = text.lines().filter(|l| l.starts_with("ctl_in")).collect();
+        assert_eq!(reports.len(), 3, "{text}");
+        assert!(!reports[0].contains('@'), "{text}");
+        assert!(reports[1].starts_with("ctl_in 21 01 0300 0000 128 -> @128:"), "{text}");
+        assert_eq!(reports[2], reports[0], "{text}");
+    }
+
+    /// `build.rs` finds a model's `log_rules`, and a model without any
+    /// has the default.
+    #[test]
+    fn a_model_brings_its_rules() {
+        let rules = |name| models::log_rules(name, &[]);
+        assert_eq!(rules("fx2lafw").digest_above, Some(HASH_ABOVE));
+        assert!(rules("dreamsourcelab-dslogic").undefined.is_some());
+        assert_eq!(rules("usbrelay").digest_above, None);
+        assert!(rules("usbrelay").undefined.is_none());
     }
 
     #[test]
-    fn lines_follow_the_fixture_dialect() {
-        let s = Setup { request_type: 0xa1, request: 1, value: 0x0300, index: 0, length: 8 };
-        assert_eq!(
-            control_line(s, &[], &Reply::Data(vec![0x41, 0x42]), None),
-            "ctl_in 21 01 0300 0000 8 -> 4142"
-        );
-        let s = Setup { request_type: 0x21, request: 9, value: 0x0300, index: 0, length: 2 };
-        assert_eq!(
-            control_line(s, &[0xff, 1], &Reply::ack(), None),
-            "ctl_out 21 09 0300 0000 ff01 -> ok"
-        );
-        assert_eq!(
-            control_line(s, &[0xff, 1], &Reply::Stall, None),
-            "ctl_out 21 09 0300 0000 ff01 -> err stall"
-        );
-        assert_eq!(
-            transfer_line(INTERRUPT, 0x81, 64, &[], &Reply::Data(vec![1]), None),
-            "int_in 81 64 -> 01"
-        );
-        assert_eq!(
-            transfer_line(BULK, 0x02, 0, &[1, 2], &Reply::ack(), None),
-            "bulk_out 02 0102 -> 2"
-        );
-        // Long data as its digest, the fixtures' form, when asked for.
-        let long = vec![0u8; HASH_ABOVE + 1];
-        assert_eq!(data(&long, None).len(), 2 * (HASH_ABOVE + 1));
-        assert_eq!(data(&long[..HASH_ABOVE], Some(HASH_ABOVE)), "00".repeat(HASH_ABOVE));
-        assert_eq!(
-            transfer_line(BULK, 0x82, 2048, &[], &Reply::Data(long), Some(HASH_ABOVE)),
-            format!("bulk_in 82 2048 -> @1025:{}", hex(&Sha256::digest([0u8; 1025])))
-        );
+    fn comments_go_in_when_verbose() {
+        let text = |verbose| {
+            let mut log = TxLog::new(Vec::new(), verbose);
+            log.notice(Notice::Section("run"));
+            log.notice(Notice::Comment("usbip client connected"));
+            String::from_utf8(log.log.into_inner()).unwrap()
+        };
+        assert_eq!(text(false), "# section run\n");
+        assert_eq!(text(true), "# section run\n# usbip client connected\n");
     }
 }

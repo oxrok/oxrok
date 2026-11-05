@@ -235,7 +235,7 @@ emu_cases() {
     pols_options product=Papilio
     emu_case "other product" --stderr --expect-fail -- -d $D --samples 10
 
-    # The FTDI shell's faults (emu/src/shells/ftdi.rs).
+    # The FTDI shell's faults (vusb::shells::ftdi).
     # The requests of p_ols_open, each STALLed: libftdi's own reset in
     # ftdi_usb_open, the purge, the bit mode reset, the latency timer.
     pols_options stall=reset/0

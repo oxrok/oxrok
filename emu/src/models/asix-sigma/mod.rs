@@ -171,6 +171,11 @@ pub fn netlist_bits(name: &str, size: usize) -> Vec<u8> {
     data
 }
 
+/// Long data as its digest.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(HASH_ABOVE)
+}
+
 /// A device from the `-o` options.
 ///
 /// # Errors
@@ -188,26 +193,26 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             Some(h) => u64::from_str_radix(h, 16),
             None => v.parse(),
         };
-        n.map_err(|_| Error(format!("{k}={v}: not a number")))
+        n.map_err(|_| Error::Invalid(format!("{k}={v}: not a number")))
     };
     for (k, v) in options {
         match k.as_str() {
             "variant" => {
                 variant = *VARIANTS.iter().find(|x| x.0 == v).ok_or_else(|| {
-                    Error(format!("variant={v}: sigma, sigma2 or omega"))
+                    Error::Invalid(format!("variant={v}: sigma, sigma2 or omega"))
                 })?;
             }
             "product" => {
                 product = Some(
                     u16::try_from(number(k, v)?)
-                        .map_err(|_| Error(format!("product={v}: 16 bits")))?,
+                        .map_err(|_| Error::Invalid(format!("product={v}: 16 bits")))?,
                 );
             }
             "serial" => serial = Some((!v.is_empty()).then(|| v.clone())),
             "step" => {
                 step = number(k, v)?;
                 if step == 0 {
-                    return Err(Error("step=0: at least 1".into()));
+                    return Err(Error::Invalid("step=0: at least 1".into()));
                 }
             }
             "init-busy" => board.init_busy = number(k, v)? as u32,
@@ -215,22 +220,22 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "stop-mid" => {
                 board.fpga.stop_mid = number(k, v)?;
                 if board.fpga.stop_mid > 6 {
-                    return Err(Error(format!("stop-mid={v}: 0 to 6")));
+                    return Err(Error::Invalid(format!("stop-mid={v}: 0 to 6")));
                 }
             }
             "id" => {
                 board.fpga.id = u8::try_from(number(k, v)?)
-                    .map_err(|_| Error(format!("id={v}: one byte")))?;
+                    .map_err(|_| Error::Invalid(format!("id={v}: one byte")))?;
             }
             "scratch" if v == "stuck" => board.fpga.scratch_stuck = 0xff,
             "scratch" if v == "bit0" => board.fpga.scratch_stuck = 0x01,
             "config" if v == "fail" => board.config_fails = true,
             "scratch" | "config" => {
-                return Err(Error(format!("{k}={v}: scratch=stuck|bit0 or config=fail")));
+                return Err(Error::Invalid(format!("{k}={v}: scratch=stuck|bit0 or config=fail")));
             }
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }
@@ -495,12 +500,8 @@ impl DeviceModel for Sigma {
         self.board = self.initial.clone();
     }
 
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(HASH_ABOVE)
-    }
-
-    fn take_event_point(&mut self) -> bool {
-        self.board.fpga.as_mut().is_some_and(Fpga::take_event_point)
+    fn mark(&mut self) -> bool {
+        self.board.fpga.as_mut().is_some_and(Fpga::mark)
     }
 }
 

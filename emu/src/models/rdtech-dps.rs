@@ -233,7 +233,7 @@ fn parse_faults(value: &str) -> Result<Vec<(u32, Kind)>> {
         .map(|item| {
             item.split_once(':')
                 .and_then(|(n, k)| Some((n.parse().ok()?, parse_kind(k)?)))
-                .ok_or_else(|| Error(format!("faults={value}: N:KIND, in {item}")))
+                .ok_or_else(|| Error::Invalid(format!("faults={value}: N:KIND, in {item}")))
         })
         .collect()
 }
@@ -316,7 +316,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "id" => config.id = parse_raw(k, v)?,
             "version" => config.version = parse_raw(k, v)?,
             "serial" => {
-                config.serial = v.parse().map_err(|_| Error(format!("serial={v}: a number")))?;
+                config.serial = v.parse().map_err(|_| Error::Invalid(format!("serial={v}: a number")))?;
             }
             "addr" => config.addr = u8::try_from(parse_number(k, v, 1..=247)?).expect("in range"),
             "uart" => uart = Some(Line::parse(v)?),
@@ -336,7 +336,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "faults" => config.faults = parse_faults(v)?,
             "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let line = match uart {
@@ -551,7 +551,7 @@ impl Supply {
         let number = self.frames;
         let mut answer = self.answer(frame, port);
         if self.config.answers.is_some_and(|n| number > n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         let fault = self.config.faults.iter().find(|(n, _)| *n == number).map(|(_, k)| *k);

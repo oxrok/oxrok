@@ -557,7 +557,7 @@ impl Fpga {
     }
 
     /// Whether the first poll of a capture was answered since asked.
-    pub fn take_event_point(&mut self) -> bool {
+    pub fn mark(&mut self) -> bool {
         let marked = self.first_poll == FirstPoll::Marked;
         if marked {
             self.first_poll = FirstPoll::Done;

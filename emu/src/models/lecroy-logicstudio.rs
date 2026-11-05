@@ -397,7 +397,7 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
                     .parse::<u32>()
                     .ok()
                     .filter(|n| *n > 0)
-                    .ok_or_else(|| Error(format!("{k}={item}: N from 1")))?;
+                    .ok_or_else(|| Error::Invalid(format!("{k}={item}: N from 1")))?;
                 (name, Some(n))
             }
             None => (item, None),
@@ -405,7 +405,7 @@ fn shots(k: &str, v: &str) -> Result<Vec<Shot>> {
         let request =
             REQUESTS.iter().find(|(n, _)| *n == name).map(|(_, r)| *r).ok_or_else(|| {
                 let names: Vec<&str> = REQUESTS.iter().map(|(n, _)| *n).collect();
-                Error(format!("{k}={name}: one of {}", names.join(", ")))
+                Error::Invalid(format!("{k}={name}: one of {}", names.join(", ")))
             })?;
         out.push(Shot { request, nth });
     }
@@ -416,7 +416,7 @@ fn flag(k: &str, v: &str) -> Result<bool> {
     match v {
         "0" => Ok(false),
         "1" => Ok(true),
-        _ => Err(Error(format!("{k}={v}: 0 or 1"))),
+        _ => Err(Error::Invalid(format!("{k}={v}: 0 or 1"))),
     }
 }
 
@@ -425,7 +425,7 @@ fn byte(k: &str, v: &str) -> Result<u8> {
         Some(hex) => u8::from_str_radix(hex, 16).ok(),
         None => v.parse().ok(),
     };
-    parsed.ok_or_else(|| Error(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
+    parsed.ok_or_else(|| Error::Invalid(format!("{k}={v}: a byte, 0 to 255 or 0x00 to 0xff")))
 }
 
 /// Ways the board can misbehave, as a real one can; none by default.
@@ -448,7 +448,7 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "stall" => self.stall = shots(k, v)?,
             "verify" => self.verify = count(v)?,
@@ -456,7 +456,7 @@ impl Faults {
             "stall_bitstream" => {
                 let n = count(v)?;
                 if n == 0 {
-                    return Err(Error(format!("{k}={v}: N from 1")));
+                    return Err(Error::Invalid(format!("{k}={v}: N from 1")));
                 }
                 self.stall_bitstream = Some(n);
             }
@@ -465,14 +465,14 @@ impl Faults {
             "intr_short" => {
                 let n = count(v)? as usize;
                 if n >= STATUS_SIZE {
-                    return Err(Error(format!("{k}={v}: fewer than {STATUS_SIZE} bytes")));
+                    return Err(Error::Invalid(format!("{k}={v}: fewer than {STATUS_SIZE} bytes")));
                 }
                 self.intr_short = Some(n);
             }
             "bulk_short" => {
                 let n = count(v)? as usize;
                 if n == 0 || n >= MEMORY {
-                    return Err(Error(format!("{k}={v}: 1 to {}", MEMORY - 1)));
+                    return Err(Error::Invalid(format!("{k}={v}: 1 to {}", MEMORY - 1)));
                 }
                 self.bulk_short = Some(n);
             }
@@ -487,6 +487,11 @@ impl Faults {
     fn stalls(&self, request: Request, count: u32) -> bool {
         self.stall.iter().any(|s| s.request == request && s.nth.is_none_or(|n| n == count))
     }
+}
+
+/// Firmware and bitstream chunks and sample transfers.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `flashed=0|1`, `still=0|1` and the
@@ -507,7 +512,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
         match k.as_str() {
             "flashed" => flashed = flag(k, v)?,
             "still" => still = flag(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = LogicStudio::new(flashed, still);
@@ -834,7 +839,7 @@ impl LogicStudio {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&STANDINS.fx2, v);
+            ezusb::check_ezusb_c(loader, &STANDINS.fx2, v);
             if self.faults.no_renumeration {
                 self.stage = Stage8051::Gone;
             } else {
@@ -1551,11 +1556,6 @@ impl DeviceModel for LogicStudio {
         self.fpga.capture = None;
         self.fpga.fetch = None;
         self.fpga.bulk_ready = false;
-    }
-
-    /// Firmware and bitstream chunks and sample transfers.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

@@ -104,7 +104,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 fn three(key: &str, value: &str, limits: [u16; 3]) -> Result<[u16; 3]> {
     let parts: Vec<&str> = value.split(',').collect();
     if parts.len() != 3 {
-        return Err(Error(format!("{key}={value}: three numbers, one per channel")));
+        return Err(Error::Invalid(format!("{key}={value}: three numbers, one per channel")));
     }
     let mut out = [0; 3];
     for (i, part) in parts.iter().enumerate() {
@@ -139,7 +139,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
             "uart" => uart = Line::parse(v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     // Test ids: see the module's note on the real FT232R.
@@ -301,7 +301,7 @@ impl Supply {
             }
         }
         if self.config.answers.is_some_and(|n| self.answered >= n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         self.answered += 1;
@@ -531,10 +531,10 @@ mod tests {
         let mut h = supply(&[("answers", "1")]);
         h.write(&ask());
         assert_eq!(h.read().len(), FRAME);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         h.write(&ask());
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         h.write(&setting(100, 100, 1));
         assert_eq!(h.cdc.model.now.vset[0], 100, "a silent one still takes a setting");
     }

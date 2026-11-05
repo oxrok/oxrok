@@ -215,7 +215,8 @@ to anything. Recordings would need the devices too.
 
 ### The emulator
 
-`oxrok-emu` (the `emu` crate) is a USB/IP server in Rust. A device model is
+`oxrok-emu` (the `emu` crate) is a USB/IP server in Rust, on the
+[`vusb`](https://crates.io/crates/vusb) crate. A device model is
 plain Rust: descriptors, answers to control and bulk transfers, and checks
 on what the host sends. The server attaches it through Linux's `vhci-hcd`
 module, so the kernel enumerates a USB device like any other, and neither
@@ -240,8 +241,9 @@ tool knows the difference. sigrok-cli runs unmodified.
                        (the oracle, the same model)         (the port)
 ```
 
-Transport shells in `emu/src/shells` carry what a kind of device shares:
-HID, the FTDI chips, EZ-USB firmware upload and renumeration. On
+Transport shells, vusb's, carry what a kind of device shares: HID, the FTDI
+chips, EZ-USB firmware upload and renumeration, CDC-ACM. `emu/` holds the
+models, the `.tx` log and what knows sigrok's fixtures. On
 2026-11-04 there are 24 models (`oxrok-emu list`), all USB: serial and SCPI
 instruments are still open.
 
@@ -401,10 +403,12 @@ checks only the one or two cases recorded per driver.
 
 The emulator needs Linux, the `vhci-hcd` module (in `kernel-modules-extra`
 on Fedora, `linux-modules-extra-$(uname -r)` on Debian and Ubuntu) and
-passwordless sudo, as the server attaches devices as root:
+passwordless sudo, as the server attaches devices as root. The harness
+drives the server through vusb's `vusb-ctl`:
 
 ```sh
 sudo modprobe vhci-hcd
+cargo install vusb-cli --version 0.2.1 --locked
 cargo build --workspace
 
 # oxrok against the committed goldens; no sigrok needed.
@@ -419,7 +423,8 @@ sh tools/diffcli.sh --emu-model usbrelay           # one model
 sh tools/diffcli.sh --emu-model usbrelay --gcov    # and its C coverage
 
 # Serve a model by hand; the lock keeps it out of a running session's way.
-flock /tmp/oxrok-emu.lock sudo target/debug/oxrok-emu serve usbrelay --attach --open-devices -v
+flock /tmp/oxrok-emu.lock sudo target/debug/oxrok-emu serve usbrelay --attach --open-devices -v --control /tmp/emu.sock
+vusb-ctl -s /tmp/emu.sock status
 ```
 
 To add a model, see

@@ -91,7 +91,7 @@ emu_cases() {
     scanaplus_options product=
     emu_case "no product string" --stderr --expect-fail --filter "$N" -- -d $D --samples 10
 
-    # The FTDI shell's faults (emu/src/shells/ftdi.rs). A chip with
+    # The FTDI shell's faults (vusb::shells::ftdi). A chip with
     # nothing yet answers its status bytes alone: reads of 0 bytes,
     # which the driver skips.
     scanaplus_options idle=3

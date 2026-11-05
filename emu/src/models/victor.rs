@@ -76,7 +76,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "packet" => packets = cable::parse_packets(v, REPORT_BYTES, REPORT_BYTES)?,
             "period" => period = cable::parse_number(k, v, 4..=1000)?,
             "burst" => burst = cable::parse_burst(v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut cable = Victor::new(packets, period);

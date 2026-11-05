@@ -347,7 +347,7 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "stall" => {
                 self.stall.clear();
@@ -356,7 +356,7 @@ impl Faults {
                         Some((n, x)) => {
                             let x = x
                                 .parse::<u8>()
-                                .map_err(|_| Error(format!("stall={item}: a data byte 0 to 255")))?;
+                                .map_err(|_| Error::Invalid(format!("stall={item}: a data byte 0 to 255")))?;
                             (n, Some(x))
                         }
                         None => (item, None),
@@ -364,7 +364,7 @@ impl Faults {
                     let cmd = NAMES.iter().find(|(n, _)| *n == name).map(|(_, c)| *c).ok_or_else(
                         || {
                             let names: Vec<&str> = NAMES.iter().map(|(n, _)| *n).collect();
-                            Error(format!("stall={name}: one of {}", names.join(", ")))
+                            Error::Invalid(format!("stall={name}: one of {}", names.join(", ")))
                         },
                     )?;
                     self.stall.push((cmd, value));
@@ -378,14 +378,14 @@ impl Faults {
                     *n > 0 && n.is_multiple_of(2) && !n.is_multiple_of(PACKET)
                 });
                 self.short = Some(n.ok_or_else(|| {
-                    Error(format!("short={v}: an even byte count, not a multiple of {PACKET}"))
+                    Error::Invalid(format!("short={v}: an even byte count, not a multiple of {PACKET}"))
                 })?);
             }
             "bcd" => {
                 let hex = v.strip_prefix("0x").unwrap_or(v);
                 self.bcd = Some(
                     u16::from_str_radix(hex, 16)
-                        .map_err(|_| Error(format!("bcd={v}: a 16 bit hex number")))?,
+                        .map_err(|_| Error::Invalid(format!("bcd={v}: a 16 bit hex number")))?,
                 );
             }
             _ => return Ok(false),
@@ -396,6 +396,11 @@ impl Faults {
     fn stalls(&self, cmd: u8, value: Option<u8>) -> bool {
         self.stall.iter().any(|(c, x)| *c == cmd && (x.is_none() || *x == value))
     }
+}
+
+/// Firmware chunks of 4 KiB and transfers of up to 12 MiB.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `profile=KEY` (see [`PROFILES`]),
@@ -416,17 +421,17 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "profile" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
                     let keys: Vec<&str> = PROFILES.iter().map(|p| p.key).collect();
-                    Error(format!("profile={v}: one of {}", keys.join(", ")))
+                    Error::Invalid(format!("profile={v}: one of {}", keys.join(", ")))
                 })?;
             }
             "flashed" => {
                 flashed = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("flashed={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("flashed={v}: 0 or 1"))),
                 }
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     Ok(Box::new(Hantek::new(profile, flashed, faults)))
@@ -642,7 +647,7 @@ impl Hantek {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&image, v);
+            ezusb::check_ezusb_c(loader, &image, v);
             // The firmware disconnects and comes back as the scope.
             self.stage = Stage::Running(Scope::new(&self.profile));
             self.renumerate = true;
@@ -899,11 +904,6 @@ impl DeviceModel for Hantek {
         // A new attach ends an acquisition; the firmware stays in RAM
         // and keeps its settings.
         self.stop();
-    }
-
-    /// Firmware chunks of 4 KiB and transfers of up to 12 MiB.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {

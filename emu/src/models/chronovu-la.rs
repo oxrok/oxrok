@@ -409,6 +409,11 @@ impl ChronovuLa {
     }
 }
 
+/// Long data as its digest.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
+}
+
 /// An analyzer from the `-o` options.
 ///
 /// # Errors
@@ -430,7 +435,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             Some(h) => u32::from_str_radix(h, 16),
             None => v.parse(),
         }
-        .map_err(|_| Error(format!("{k}={v}: not a number")))
+        .map_err(|_| Error::Invalid(format!("{k}={v}: not a number")))
     };
     for (k, v) in options {
         match k.as_str() {
@@ -438,19 +443,19 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 model = match v.as_str() {
                     "la8" => Model::La8,
                     "la16" => Model::La16,
-                    _ => return Err(Error(format!("model={v}: la8 or la16"))),
+                    _ => return Err(Error::Invalid(format!("model={v}: la8 or la16"))),
                 }
             }
             "chip" => {
                 chip = match v.as_str() {
                     "bm" => Chip::Bm,
                     "r" => Chip::R,
-                    _ => return Err(Error(format!("chip={v}: bm or r"))),
+                    _ => return Err(Error::Invalid(format!("chip={v}: bm or r"))),
                 }
             }
             "pid" => {
                 product = u16::try_from(number(k, v)?)
-                    .map_err(|_| Error(format!("pid={v}: 16 bits")))?;
+                    .map_err(|_| Error::Invalid(format!("pid={v}: 16 bits")))?;
             }
             "product" => description = Some(v.clone()),
             "serial" => serial = (!v.is_empty()).then(|| v.clone()),
@@ -460,7 +465,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "pretrigger" => pretrigger = u64::from(number(k, v)?),
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }
@@ -500,10 +505,6 @@ impl DeviceModel for ChronovuLa {
     fn reset(&mut self) {
         self.chip.reset();
         self.logic = self.fresh.clone();
-    }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 }
 

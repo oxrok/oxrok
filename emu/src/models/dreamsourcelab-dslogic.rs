@@ -72,7 +72,7 @@
 //! Emulation artifacts: the trigger packet completes right after the
 //! start; the log shows the global trigger word of a setting packet
 //! without a trigger as `xxxx`, as the driver leaves it uninitialised
-//! and it changes from run to run ([`DeviceModel::log_undefined`]); the
+//! and it changes from run to run ([`log_rules`]); the
 //! samples ignore the rate, the external clock and its edge and the
 //! threshold (the model takes a threshold register write on every
 //! profile; whether the first DSLogic, whose threshold is its
@@ -333,21 +333,21 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         let outs = |v: &str| -> Result<[bool; 2]> {
             let mut o = [false; 2];
             for name in v.split(',').filter(|n| !n.is_empty()) {
                 match name {
                     "fpga" => o[0] = true,
                     "setting" => o[1] = true,
-                    _ => return Err(Error(format!("{k}={name}: fpga or setting"))),
+                    _ => return Err(Error::Invalid(format!("{k}={name}: fpga or setting"))),
                 }
             }
             Ok(o)
         };
         match k {
             "version" => {
-                let bad = || Error(format!("version={v}: MAJOR.MINOR, each 0 to 255"));
+                let bad = || Error::Invalid(format!("version={v}: MAJOR.MINOR, each 0 to 255"));
                 let (major, minor) = v.split_once('.').ok_or_else(bad)?;
                 self.version = Some([major.parse().map_err(|_| bad())?, minor.parse().map_err(|_| bad())?]);
             }
@@ -363,7 +363,7 @@ impl Faults {
                         "setting" => u16::from(CMD_SETTING),
                         "wr_reg" => u16::from(CMD_WR_REG),
                         _ => {
-                            return Err(Error(format!(
+                            return Err(Error::Invalid(format!(
                                 "stall={name}: version, revid, start, stop, config, setting or wr_reg"
                             )));
                         }
@@ -377,7 +377,7 @@ impl Faults {
                     "stall" => TriggerFault::Stall,
                     "short" => TriggerFault::Short,
                     "never" => TriggerFault::Never,
-                    _ => return Err(Error(format!("trigger={v}: stall, short or never"))),
+                    _ => return Err(Error::Invalid(format!("trigger={v}: stall, short or never"))),
                 });
             }
             "empty" => self.empty = count(v)?,
@@ -390,12 +390,34 @@ impl Faults {
                     "cpucs" => LoadFault::Hold,
                     "chunk" => LoadFault::Chunk,
                     "release" => LoadFault::Release,
-                    _ => return Err(Error(format!("load={v}: cpucs, chunk or release"))),
+                    _ => return Err(Error::Invalid(format!("load={v}: cpucs, chunk or release"))),
                 });
             }
             _ => return Ok(false),
         }
         Ok(true)
+    }
+}
+
+/// Firmware chunks, bitstreams and sample transfers.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules {
+        digest_above: Some(crate::txlog::HASH_ABOVE),
+        undefined: Some(undefined_bytes),
+    }
+}
+
+/// Without a trigger, `fpga_configure()` leaves the global trigger
+/// word of the setting packet uninitialised (`set_trigger()` returns
+/// before it sets it): the log shows it as `xxxx`.
+fn undefined_bytes(ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let setting = ep == 2 && data.len() == SETTING_LEN && data[..4] == 0xf5a5_f5a5u32.to_le_bytes();
+    if setting && u16::from_le_bytes([data[6], data[7]]) & MODE_TRIG_EN == 0 {
+        // trig_glb, bytes 28 and 29.
+        let trig_glb = 28..30;
+        vec![trig_glb]
+    } else {
+        Vec::new()
     }
 }
 
@@ -417,17 +439,17 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "profile" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
                     let keys: Vec<&str> = PROFILES.iter().map(|p| p.key).collect();
-                    Error(format!("profile={v}: one of {}", keys.join(", ")))
+                    Error::Invalid(format!("profile={v}: one of {}", keys.join(", ")))
                 })?;
             }
             "flashed" => {
                 flashed = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("flashed={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("flashed={v}: 0 or 1"))),
                 }
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = Dslogic::new(profile, flashed);
@@ -816,7 +838,7 @@ impl Dslogic {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&ezusb::standin(name, size), v);
+            ezusb::check_ezusb_c(loader, &ezusb::standin(name, size), v);
             self.stage = running();
             self.renumerate = true;
         }
@@ -1161,26 +1183,6 @@ impl DeviceModel for Dslogic {
         if let Stage::Running(fw) = &mut self.stage {
             fw.acq = None;
             fw.setting_due = None;
-        }
-    }
-
-    /// Firmware chunks, bitstreams and sample transfers.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
-    }
-
-    /// Without a trigger, `fpga_configure()` leaves the global trigger
-    /// word of the setting packet uninitialised (`set_trigger()` returns
-    /// before it sets it): the log shows it as `xxxx`.
-    fn log_undefined(&self, ep: u8, data: &[u8]) -> Vec<std::ops::Range<usize>> {
-        let setting =
-            ep == 2 && data.len() == SETTING_LEN && data[..4] == 0xf5a5_f5a5u32.to_le_bytes();
-        if setting && u16::from_le_bytes([data[6], data[7]]) & MODE_TRIG_EN == 0 {
-            // trig_glb, bytes 28 and 29.
-            let trig_glb = 28..30;
-            vec![trig_glb]
-        } else {
-            Vec::new()
         }
     }
 
@@ -1573,14 +1575,13 @@ mod tests {
 
     #[test]
     fn the_uninitialised_global_trigger_word_is_logged_as_undefined() {
-        let model = Dslogic::new(PROFILES[0], true);
         let mut p = setting(100, 1000, 3, None, 0);
         assert_eq!(&p[28..30], &[0xad, 0xde]);
         let trig_glb = 28..30;
-        assert_eq!(model.log_undefined(2, &p), [trig_glb]);
+        assert_eq!(undefined_bytes(2, &p), [trig_glb]);
         p = setting(100, 1000, 3, Some([!1, 1, 0]), 0);
-        assert!(model.log_undefined(2, &p).is_empty(), "set with a trigger");
-        assert!(model.log_undefined(2, &[0; 360]).is_empty(), "not a setting packet");
+        assert!(undefined_bytes(2, &p).is_empty(), "set with a trigger");
+        assert!(undefined_bytes(2, &[0; 360]).is_empty(), "not a setting packet");
     }
 
     #[test]

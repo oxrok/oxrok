@@ -202,6 +202,14 @@ pub const REPORT_DESCRIPTOR: [u8; 22] = [
     0xc0, // end collection
 ];
 
+/// `digest=1` logs every report as a digest.
+pub fn log_rules(options: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules {
+        digest_above: options.iter().any(|(k, v)| k == "digest" && v == "1").then_some(REPORT_BYTES - 1),
+        undefined: None,
+    }
+}
+
 /// A board from the `-o` options (see the module doc).
 ///
 /// # Errors
@@ -210,14 +218,14 @@ pub const REPORT_DESCRIPTOR: [u8; 22] = [
 pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut config = Config::default();
     let number = |k: &str, v: &str| -> Result<u32> {
-        v.parse().map_err(|_| Error(format!("{k}={v}: a number")))
+        v.parse().map_err(|_| Error::Invalid(format!("{k}={v}: a number")))
     };
     let nth = |k: &str, v: &str| -> Result<Option<u32>> {
         v.parse()
             .ok()
             .filter(|n| *n > 0)
             .map(Some)
-            .ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+            .ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
     };
     let endless = |k: &str, v: &str| -> Result<u32> {
         if v == "never" { Ok(NEVER) } else { number(k, v) }
@@ -229,11 +237,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                 config.firmware = v
                     .split_once('.')
                     .and_then(|(a, b)| Some((a.parse().ok()?, b.parse().ok()?)))
-                    .ok_or_else(|| Error(format!("fw={v}: MAJOR.MINOR")))?;
+                    .ok_or_else(|| Error::Invalid(format!("fw={v}: MAJOR.MINOR")))?;
             }
             "wait-trigger" => config.wait_trigger = endless(k, v)?,
             "sampling" => config.sampling = number(k, v)?,
-            "digest" => config.digest = v == "1",
+            // log_rules reads it.
+            "digest" => {}
             "stall-get" => config.stall_get = nth(k, v)?,
             "stall-set" => config.stall_set = nth(k, v)?,
             "short-get" => config.short_get = nth(k, v)?,
@@ -242,14 +251,14 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .parse()
                     .ok()
                     .filter(|n| *n <= REPORT_BYTES)
-                    .ok_or_else(|| Error(format!("{k}={v}: 0 to {REPORT_BYTES}")))?;
+                    .ok_or_else(|| Error::Invalid(format!("{k}={v}: 0 to {REPORT_BYTES}")))?;
             }
             "stale-sample" => config.stale_sample = number(k, v)?,
             "stale-info" => config.stale_info = v == "1",
             "stale-reset" => config.stale_reset = number(k, v)?,
             "busy-reset" => config.busy_reset = number(k, v)?,
             "ignore-reset" => config.ignore_reset = endless(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     Ok(Box::new(Scanalogic2::new(config)))
@@ -266,8 +275,6 @@ pub struct Config {
     pub wait_trigger: u32,
     /// Status reads that say "sampling".
     pub sampling: u32,
-    /// Log every report as a digest.
-    pub digest: bool,
     /// This feature read (from 1) gets a STALL.
     pub stall_get: Option<u32>,
     /// This feature write (from 1) gets a STALL and is not taken.
@@ -297,7 +304,6 @@ impl Default for Config {
             firmware: FIRMWARE,
             wait_trigger: 0,
             sampling: 0,
-            digest: false,
             stall_get: None,
             stall_set: None,
             short_get: None,
@@ -745,10 +751,6 @@ impl DeviceModel for Scanalogic2 {
     fn reset(&mut self) {
         self.hid.reset();
         self.board = Board::new(self.board.config);
-    }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        self.board.config.digest.then_some(REPORT_BYTES - 1)
     }
 }
 
@@ -1220,9 +1222,8 @@ mod tests {
         dev.control(SET, &cmd(CMD_INFO), &mut v);
         let Reply::Data(info) = dev.control(GET, &[], &mut v) else { panic!() };
         assert_eq!(info[..7], [0x0a, 2, 1, 0, 0, 2, 7]);
-        let dev = build(&o("digest", "1")).unwrap();
-        assert_eq!(dev.log_digest_above(), Some(127));
-        assert_eq!(build(&[]).unwrap().log_digest_above(), None);
+        assert_eq!(log_rules(&o("digest", "1")).digest_above, Some(127));
+        assert_eq!(log_rules(&[]).digest_above, None);
         assert!(build(&o("ignore-reset", "never")).is_ok());
         assert!(build(&o("wait-trigger", "never")).is_ok());
         assert!(build(&o("stale-info", "1")).is_ok());
