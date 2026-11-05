@@ -1,0 +1,29 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+itech-it8500 - ITECH 8500 1.23 [S/N: 0123456789] with 3 channels: V1 I1 P1
+Channel groups:
+    1: channels V1 I1 P1
+Supported configuration options on channel group 1:
+    enabled: on, off (current)
+    regulation: CC (current), CV, CW, CR
+    voltage: 12.000000 (current)
+    voltage_target: 0.100000, 120.000000, 0.010000
+    current: 0.000000 (current)
+    current_limit: 0.000000, 30.000000, 0.001000
+    power: 0.000000 (current)
+    power_target: 0.000000, 300.000000, 0.010000
+    resistance_target: 0.050000, 7500.000000, 0.010000
+    ovp_enabled: on (current), off
+    ovp_active: on, off (current)
+    ovp_threshold: 120.000000 (current)
+    ocp_enabled: on (current), off
+    ocp_active: on, off (current)
+    ocp_threshold: 30.000000 (current)
+    uvc: on, off (current)
+    uvc_active: on, off (current)
+    uvc_threshold: 0.000000 (current)
+    otp: on (current), off
+    otp_active: on, off (current)

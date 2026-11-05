@@ -1,0 +1,14 @@
+itech-it8500: Probing serial port: /dev/ttyACMN
+itech-it8500: Model name: 8500 (v1.23)
+itech-it8500: Address: 0
+itech-it8500: Serial number: 0123456789
+itech-it8500: Barcode: BK8500012020
+itech-it8500: Max current: 120 A
+itech-it8500: Max power: 1200 W
+itech-it8500: Voltage range: 0.0 - 800.0 V
+itech-it8500: Resistance range: 65.53 - 4000.00 Ohm
+itech-it8500: Load status: V=12.0000, I=0.0000, P=0.000, State=OFF, Mode=CC (op=0x00, demand=0x0040)
+itech-it8500: Mode: CC
+itech-it8500: State: OFF
+itech-it8500: Default sample rate: 10 Hz
+itech-it8500: Maximum sample rate: 15 Hz
