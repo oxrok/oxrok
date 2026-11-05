@@ -45,8 +45,9 @@
 //!   memory capture, after [`SILENCE_BOUND`], as nothing else would: C waits for
 //!   ever (`protocol.c:321`), and the scan vouches for no meter. A live capture with
 //!   no limit waits for a stop.
-//! - A port that is gone ends a capture. C's callback does nothing but return when
-//!   `revents` holds more than `G_IO_IN` (`protocol.c:321`), so it spins for ever.
+//! - A port that is gone ends a capture. C's callback reads only when `revents` is
+//!   `G_IO_IN` alone (`protocol.c:321`), and a run after an unplug neither read a
+//!   failure (gcov: 323 unreached) nor ended within 20 s.
 //! - A failed `connect` closes the port it opened, where `dev_open` leaves it open
 //!   (`api.c:240`).
 //! - What a capture leaves behind does not reach the next. A capture after a memory

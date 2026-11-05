@@ -24,7 +24,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     CUT_BUG="C sends all of a memory capture past its limit, by choice (protocol.c:92), and sigrok-cli shows it; oxrok honours the limit in the output, with the same requests"
     HANG_BUG="with no answer C waits for ever, as no read has a bound (protocol.c:285,312,321) and no limit counts what never came; oxrok ends after 5 s, and that wait is what this case costs"
     TEN_BUG="the wiki gives a status's last byte as 10 or 20, and protocol.c:185 takes 20 alone, so C waits for ever; oxrok reads the memory"
-    GONE_BUG="on a port that is gone the source's revents is no longer G_IO_IN alone, so protocol.c:285,312,321 skip the read and the callback returns TRUE for ever: this stays in the loop at 20 s and on. oxrok's read fails and ends the capture"
+    GONE_BUG="on a port that is gone the source's revents is no longer G_IO_IN alone, so protocol.c:285,312,321 skip the read and the callback returns TRUE, by reading; a run after an unplug read no failure (gcov: 323 unreached) and had not ended at 20 s. oxrok's read fails and ends the capture"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # Most of what follows has no use for the stream, and frames=0 keeps it from
     # the .tx whatever the timing.
