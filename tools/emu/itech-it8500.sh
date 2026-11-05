@@ -55,6 +55,11 @@ emu_cases() {
     OK_STATUS=aa0012800000000000000000000000000000000000000000003c
     P="/^bulk_out 02 $LOCAL -> 26\$/{\$d;N;d}
 /^bulk_out 02 [0-9a-f]{52}$LOCAL -> 52\$/{s/$LOCAL -> 52\$/ -> 26/;n;/^bulk_in 82 26 -> $OK_STATUS\$/d}"
+    # What a poll does between the point where the model goes silent and the
+    # signal goes by the clock: under load more unanswered polls go out, some on
+    # the line of local mode. Local mode stays, last.
+    POLL=aa005f0000000000000000000000000000000000000000000009
+    I="/^interrupt\$/,\${s/^bulk_out 02 ($POLL)+($LOCAL) -> [0-9]+\$/bulk_out 02 \2 -> 26/;/^bulk_out 02 ($POLL)+ -> [0-9]+\$/d}"
     # 12.345 V, 1.2345 A, 15.24 W, load on, constant current, then the rest.
     S0=$(it_state 12345 12345 15240 8 64)
     S1=$(it_state 11000 20000 22000 8 64)
@@ -354,9 +359,9 @@ emu_cases() {
     emu_case "silent with a sample limit says so" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 9 --stderr --filter "$N" -- -d $A --samples 2
     # With no limit both wait. Three readings, then the signal on silence.
     emu_options answers=8
-    emu_case "interrupt polls" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous
+    emu_case "interrupt polls" --oracle-bug "$SIGINT_BUG" --tx-filter "$I" --interrupt model --timeout 15 -- -d $A --continuous
     emu_options answers=5
-    emu_case "interrupt on a silent load" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --no-output -- -d $A --continuous
+    emu_case "interrupt on a silent load" --oracle-bug "$SIGINT_BUG" --tx-filter "$I" --interrupt model --timeout 15 --no-output -- -d $A --continuous
 
     # A load that leaves.
     emu_options answers=0
