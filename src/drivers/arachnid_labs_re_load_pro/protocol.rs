@@ -105,7 +105,7 @@ pub fn version_of(line: &[u8]) -> Option<&[u8]> {
 /// `g_ascii_strtod`, with 0 where it converts nothing. Firmware >= 1.10 is what
 /// C asks, as a float: 1.9 is above it, and so 1.2.
 pub fn number(text: &[u8]) -> f64 {
-    crate::drivers::manson_hcs_3xxx::protocol::strtod(c_string(text)).unwrap_or(0.0)
+    crate::core::util::g_ascii_strtod(c_string(text)).unwrap_or(0.0)
 }
 
 /// What the firmware's whole numbers of milli are in floats, as C keeps them.
