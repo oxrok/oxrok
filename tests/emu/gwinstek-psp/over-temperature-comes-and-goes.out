@@ -1,0 +1,8 @@
+V: 12.00 V DC
+I: 500 mA DC
+META otp_active: 1
+V: 11.00 V DC
+I: 750 mA DC
+META otp_active: 0
+V: 11.00 V DC
+I: 0 mA DC
