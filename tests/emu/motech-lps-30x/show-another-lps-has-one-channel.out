@@ -1,0 +1,13 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+motech-lps-301 - Motech LPS-301 2.10 with 1 channel: CH1
+Channel groups:
+    CG1: channel CH1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    channel_config: Independent (current)
