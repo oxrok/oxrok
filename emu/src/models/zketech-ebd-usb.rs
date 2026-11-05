@@ -170,6 +170,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Load>> {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 struct Config {
     vbus: u32,
     dp: u32,
