@@ -724,7 +724,7 @@ if [ $emu = 1 ]; then
     # emu_hex TEXT: TEXT as hex, printf's backslash escapes included, for a
     # model's option: an option's value can hold no space.
     emu_hex() {
-        printf "$1" | od -An -tx1 | tr -d ' \n'
+        printf "$1" | od -v -An -tx1 | tr -d ' \n'
     }
     # emu_tty_closing_wait CENTISECONDS, in a scenario, before a case whose
     # device stops reading: how long the kernel holds a tool's close for
