@@ -96,6 +96,7 @@ Emulator and replay only, never run on hardware:
 | `testo` | 70 | 91.3% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `zeroplus-logic-cube` | 134 | 87.6% |
+| `zketech-ebd-usb` | 109 | 86.6% |
 
 `demo` is software, covered by the software cases of
 `tools/diffcli.sh`. The native decoders were compared with libsigrokdecode on captures from an ESP32.

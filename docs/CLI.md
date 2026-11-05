@@ -537,6 +537,14 @@ Deliberate, and kept small:
   driver keeps a double (api.c:296, protocol.c:731-734). 12345678.91 Hz
   goes out as `1234567900,0` here and `1234567891,0` through libsigrok,
   and a phase of 1e300 is refused here.
+- `zketech-ebd-usb`: `--set` of `current_limit` or `uvc_threshold` sends
+  nothing, as in sigrok-cli, and oxrok warns at the close. A capture
+  warns when it ends with the load possibly on, including the second
+  toggle of a one-frame capture. A NaN is refused, where sigrok-cli
+  stores it. `-C` is honoured, where C sends all four channels. An
+  unplug ends a capture or scan at once, where sigrok-cli takes some 200
+  s. A read error sends what a stop sends and ends. `-C V.D-` is refused
+  by both tools, in different words, as the dash reads as a range.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

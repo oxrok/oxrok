@@ -2235,6 +2235,41 @@ sign, though protocol.c:811 says 0..360 and the Python sends -90 as
 229 cases: 205 full, 10 --oracle-bug, 13 --oracle-differs, 1 library.
 gcov 89.2%.
 
+## ZKETECH EBD-USB (zketech-ebd-usb)
+
+A 35 W electronic load, 0 to 4 A and 0 to 21 V, behind a PL2303. `conn=`
+is required and `serialcomm=` defaults to 9600/8e1. Emulated by the
+`zketech-ebd-usb` model on the CDC-ACM shell (test ids, as `pl2303`
+would take the real ones), options `vbus=`, `dp=`, `dm=`, `limit=`,
+`cutoff=`, `load=`, `sag=`, `device=`, `raw-checksum=`, `period=`,
+`frames=`, `replies=`, `deaf=`, `setters=`, `uart=`. 109 cases: 88 full,
+8 `--oracle-bug`, 7 `--oracle-differs`, 6 library. gcov 86.6%; not
+reached: the setters past "later", as no client sets during a capture,
+the end of `ebd_loadstart`, read errors, and argument checks. Never run
+on hardware. Frames are from the sigrok wiki, the line from mdijkens'
+program written against a real unit. Not known: the stream's rate, what
+`06` does to a load, and the checksum when the XOR reaches `f0`. The
+model sends it modulo `f0` and takes either from a host.
+
+What the model taught: `send_cmd` returns `SR_ERR` for every command
+that goes out (`protocol.c:58`), which leaves the end of `ebd_loadstart`
+dead and makes a setter fail after sending. A checksum of `f8` ends a
+frame early and one of `fa` restarts it, if a device sends the plain
+XOR. If it takes it modulo `f0`, such frames fail C's check: 783 of the
+20994 millivolt readings then fail all through the model's ripple, so
+`--samples` never ends there, in C or in oxrok, until the capture is
+stopped. After an unplug `serial_timeout` falls back to 1 s
+(`serial.c:1159`), so C's 200 turns take some 200 s before it ends by
+itself; oxrok ends at once.
+
+The load is reached only in a capture. `current_limit` and
+`uvc_threshold` read back what was set, and `--set` alone sends nothing.
+A capture with no limit toggles off a load that is on. A stop toggles by
+what the last frame said, so a capture ending on the frame that started
+the load leaves it on, and one with nothing set, ending on the frame
+that toggled it off, toggles it back on. Silence sends nothing. oxrok
+keeps those wires and warns of each.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

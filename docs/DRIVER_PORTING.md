@@ -298,6 +298,29 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A periodic stream can't be held to a `.tx` by its period alone: hold
+  it while a command is coming in, and count the period from the last
+  frame or command.
+- `chunk=1` makes `Serial::tick` offers come far faster, so a period
+  counted in ticks collapses: use a long `period=`.
+- A flood that ends when the driver's stop lands has a byte count set by
+  timing, and shows only under load. Send more than the driver reads in
+  one reply.
+- `frames=N` counts a scan's frames too. A model's event mark should
+  wait a period after the last frame.
+- A hang with no timeout in sight may be a slow fallback:
+  `serial_timeout` gives 1 s when it can't read a gone port's settings,
+  so "never ends" was 200 s here. Run one case with a long `--timeout`
+  before calling it a hang.
+- A flag read from the last frame goes stale after any command that
+  changes it. Walk a stop through the frame that just sent a command:
+  here it toggled a load back on.
+- A hang case's merged `bulk_in` count depends on time, so `--tx-filter`
+  it.
+- `is_finished()` can say Busy just after End. Telling the old worker to
+  stop and joining gives up a blocked End within a bound instead.
+- A model's check should not refuse what another host written against a
+  real unit sends.
 - sr_atod is strtof, and an empty string is 0 with no error. An unlisted
   scan option never reaches the driver, so a driver's
   `sr_serial_extract_options` for serialcomm can be dead code: check
