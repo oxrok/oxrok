@@ -105,6 +105,23 @@ pub fn samplerate(rate: u64, max_samplerate: u32) -> Option<Rate> {
     Some(Rate { samplerate, divider, demux })
 }
 
+/// The rate a device starts at: `DEFAULT_SAMPLERATE`, or on a board whose
+/// maximum is below that, the highest the clock divides to at or below it.
+/// C fails there and reads 0 Hz. Nothing shows what such a board wants; the
+/// divider stops at its 24 bits, about 6 Hz, however low the maximum.
+pub fn starting_rate(max_samplerate: u32) -> Rate {
+    let max = u64::from(max_samplerate);
+    if max_samplerate == 0 || max >= DEFAULT_SAMPLERATE {
+        return samplerate(DEFAULT_SAMPLERATE, max_samplerate).expect("within the maximum");
+    }
+    let divider = CLOCK_RATE.div_ceil(max).min(1 << 24) - 1;
+    Rate {
+        samplerate: CLOCK_RATE / (divider + 1),
+        divider: u32::try_from(divider).expect("24 bits"),
+        demux: false,
+    }
+}
+
 /// `ols_metadata_quirks()`: what a Shrimp doesn't say.
 pub fn apply_quirks(m: &mut Metadata) {
     if m.name == "Shrimp1.0" {
@@ -448,6 +465,22 @@ mod tests {
         // The clock does not divide to 15 MHz: 16.67, above the maximum.
         assert_eq!(samplerate(15_000_000, 15_000_000).unwrap().samplerate, 16_666_666);
         assert!(samplerate(0, 0).is_none());
+    }
+
+    #[test]
+    fn a_slow_board_starts_at_or_below_its_maximum() {
+        assert_eq!(starting_rate(0).samplerate, DEFAULT_SAMPLERATE);
+        assert_eq!(starting_rate(200_000).samplerate, DEFAULT_SAMPLERATE);
+        assert_eq!(starting_rate(200_000_000).divider, 499);
+        assert_eq!(starting_rate(100_000).samplerate, 100_000);
+        // 150150 Hz is the C's rounding of this, above the maximum.
+        let r = starting_rate(150_000);
+        assert_eq!((r.samplerate, r.divider), (149_925, 666));
+        assert_eq!(starting_rate(199_999).samplerate, 199_600);
+        assert_eq!(starting_rate(10).divider, 9_999_999);
+        // Below what 24 bits divide to: the slowest there is, never a wrap.
+        assert_eq!(starting_rate(1).divider, 0xff_ffff);
+        assert_eq!(starting_rate(1).samplerate, 5);
     }
 
     #[test]

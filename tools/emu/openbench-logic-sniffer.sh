@@ -27,7 +27,7 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     BEFORE_BUG="with ratio 0 and two stages or more trigger_at_smpl is -num_stages, which only -1 passes (protocol.c:503, 526-538): num_stages samples from before raw_sample_buf go out; oxrok sends no marker, there is none in the capture"
     WRAP_BUG="a marker beyond the samples that came wraps logic.length (protocol.c:532-533), and the output runs off: SIGSEGV; oxrok sends what came with no marker"
     EMPTY_BUG="a capture with no sample sends a logic packet of length 0, and hex.c:163's length - unitsize wraps: SIGSEGV; oxrok sends no packet"
-    SLOW_BUG="the scan's ols_set_samplerate(DEFAULT_SAMPLERATE) (api.c:224) fails on a board below 200 kHz, leaving 0 Hz, divider 0 and no noise filter flag; oxrok starts at the maximum"
+    SLOW_BUG="the scan's ols_set_samplerate(DEFAULT_SAMPLERATE) (api.c:224) fails on a board below 200 kHz, leaving 0 Hz, divider 0 and no noise filter flag; oxrok starts at the highest rate at or below the maximum, its own choice"
     DRAIN_BUG="serial_drain has no bound (serial_libsp.c:157, sp_drain), so a device that stops reading holds the scan; oxrok gives up after a second, no device"
     SAYS_SO="libsigrok has no word for a limit beyond what the counts hold, only sigrok-cli's 'Device only sent' at the end; oxrok warns ahead"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
@@ -144,6 +144,9 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     emu_case "max rate at it" -- -d $O -c samplerate=100m --get samplerate
     emu_options rate=15000000
     emu_case "max rate off the clock" -- -d $O -c samplerate=15m --get samplerate
+    emu_options rate=150000
+    emu_case "max rate 150 kHz" --oracle-differs "$SLOW_BUG" -- -d $O --get samplerate
+    emu_case "max rate 150 kHz capture" --oracle-differs "$SLOW_BUG" -- -d $O --samples 8 -O hex
     emu_options rate=100000
     emu_case "max rate below the default" --oracle-differs "$SLOW_BUG" -- -d $O --get samplerate
     emu_case "max rate below the default capture" --oracle-differs "$SLOW_BUG" -- -d $O --samples 8 -O hex

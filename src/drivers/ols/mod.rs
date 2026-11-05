@@ -24,7 +24,7 @@
 //! keeps sigrok-cli's output in a loop; a capture with no sample ends with no
 //! logic packet, where an empty one crashes it; a channel count beyond 32 is
 //! 32, where it runs off C's sample; and a board below the default of 200 kHz
-//! starts at its maximum. Stopping a capture drops what came, as C does.
+//! starts at the highest rate the clock gives at or below its maximum. Stopping a capture drops what came, as C does.
 
 #![forbid(unsafe_code)]
 
@@ -37,7 +37,7 @@ use crate::core::{
 };
 use crate::serial::{Params, Port, read_blocking, serial_timeout};
 use protocol::{
-    CMD_ID, CMD_METADATA, CMD_RESET, DEFAULT_SAMPLERATE, Decoder, FLAG_CLOCK_EXTERNAL, FLAG_DEMUX,
+    CMD_ID, CMD_METADATA, CMD_RESET, Decoder, FLAG_CLOCK_EXTERNAL, FLAG_DEMUX,
     FLAG_EXTERNAL_TEST_MODE, FLAG_FILTER, FLAG_INTERNAL_TEST_MODE, FLAG_INVERT_EXT_CLOCK, FLAG_RLE,
     FLAG_SWAP_CHANNELS, MIN_NUM_SAMPLES, Metadata, SAMPLERATE_MAX, SAMPLERATE_MIN,
 };
@@ -293,14 +293,7 @@ impl OlsDevice {
             port: Arc::new(Mutex::new(None)),
             worker: None,
         };
-        // The default, or the board's maximum below it.
-        let mut rate = DEFAULT_SAMPLERATE;
-        if dev.max_samplerate != 0 {
-            rate = rate.min(u64::from(dev.max_samplerate));
-        }
-        if dev.set_samplerate(rate).is_err() {
-            log::debug!("Failed to set default samplerate ({rate}).");
-        }
+        dev.use_rate(protocol::starting_rate(dev.max_samplerate));
         dev
     }
 
@@ -320,6 +313,14 @@ impl OlsDevice {
         let Some(r) = protocol::samplerate(rate, self.max_samplerate) else {
             return Err(Error::arg("invalid samplerate"));
         };
+        self.use_rate(r);
+        if r.samplerate != rate {
+            log::info!("Can't match samplerate {rate}, using {}.", r.samplerate);
+        }
+        Ok(())
+    }
+
+    fn use_rate(&mut self, r: protocol::Rate) {
         if r.demux {
             log::info!("Enabling demux mode.");
             self.flags |= FLAG_DEMUX;
@@ -331,10 +332,6 @@ impl OlsDevice {
         }
         self.divider = r.divider;
         self.samplerate = r.samplerate;
-        if r.samplerate != rate {
-            log::info!("Can't match samplerate {rate}, using {}.", r.samplerate);
-        }
-        Ok(())
     }
 
     /// `ols_channel_mask()`.
@@ -1194,11 +1191,12 @@ mod tests {
     }
 
     #[test]
-    fn a_board_slower_than_the_default_starts_at_its_maximum() {
+    fn a_board_slower_than_the_default_starts_no_faster_than_its_maximum() {
         let (fake, _) = Fake::new(board);
-        let meta = Metadata { max_samplerate: 100_000, ..Metadata::default() };
+        let meta = Metadata { max_samplerate: 150_000, ..Metadata::default() };
         let dev = OlsDevice::from_port(Some(meta), Box::new(fake));
-        assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(100_000));
+        assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(149_925));
+        assert_ne!(dev.flags & FLAG_FILTER, 0);
     }
 
     #[test]
