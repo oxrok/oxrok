@@ -21,8 +21,8 @@ mind, and read the table below for what has met which kind of evidence.
 
 Early, and most of it has never touched the device it drives.
 
-On 2026-11-05 `src/lib.rs` registers 31 driver modules, with 126 driver
-ids (`oxrok -L`; most ids are multimeters). 30 of the modules are
+On 2026-11-05 `src/lib.rs` registers 39 driver modules, with 135 driver
+ids (`oxrok -L`; most ids are multimeters). 38 of the modules are
 counterparts of libsigrok's 87 `src/hardware` directories, and one, the
 LogicPort, is not in libsigrok; the `serial-dmm` module also takes in
 `uni-t-ut32x`. More are being ported: [docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
@@ -63,10 +63,13 @@ Emulator and replay only, never run on hardware:
 | driver | emulator | gcov |
 |---|---|---|
 | `asix-sigma` | 110 cases | 89.4% |
+| `atten-pps3203` | 133 | 90.5% |
 | `chronovu-la` | 52 | 87.0% |
 | `dreamsourcelab-dslogic` | 94 | 90.2% |
+| `fluke-dmm` | 159 | 98.6% |
 | `ftdi-la` | 46 | 86.4% |
 | `greatfet` | 131 | 84.8% |
+| `gwinstek-gpd` | 141 | 95.6% |
 | `hantek-4032l` | 135 | 91.4% |
 | `hantek-6xxx` | 102 | 91.0% |
 | `hantek-dso` | 148 | 96.2% |
@@ -77,7 +80,12 @@ Emulator and replay only, never run on hardware:
 | `korad-kaxxxxp` | 130 | 88.6% |
 | `lascar-el-usb` | 152 | 93.9% |
 | `lecroy-logicstudio` | 94 | 95.9% |
+| `manson-hcs-3xxx` | 171 | 91.9% |
+| `ols` | 213 | 94.7% |
 | `p-ols` (Pipistrello) | 107 | 97.0% |
+| `rdtech-dps`, `rdtech-rd` | 226 | 89.2% |
+| `rdtech-tc` | 73 | 93.8% |
+| `rdtech-um` | 90 | 93.7% |
 | `saleae-logic16` | 87 | 91.6% |
 | `saleae-logic-pro` | 109 | 97.1% |
 | `sysclk-lwla` | 141 | 91.1% |

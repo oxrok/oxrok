@@ -407,6 +407,108 @@ Deliberate, and kept small:
   libsigrok repeats the last values until the limit.
 - korad-kaxxxxp: each query first drops what is in the input queue,
   which C does not do; it puts nothing on the wire.
+- rdtech-tc honours `-C` on every output, where libsigrok sends all six
+  channels (protocol.c:266-274).
+- rdtech-tc: with only a frame limit, a capture ends after 5 s with a
+  reply owed, so a later reply loses frames sigrok-cli would get.
+  libsigrok waits for ever. Under `--time` or `--continuous` it waits as
+  libsigrok does.
+- rdtech-tc: 5 failed poll writes in a row end a capture, where
+  libsigrok retries for ever.
+- rdtech-tc: a device name that is not UTF-8 shows U+FFFD, where
+  sigrok-cli passes the bytes.
+- rdtech-tc: `bt/` ports are not available.
+- rdtech-um: `-C` selects the channels sent; sigrok-cli's driver sends
+  all six, and its analog output prints them.
+- rdtech-um: a reply that stays incomplete is dropped after 10 s, and
+  bytes with no id at once, and polling goes on, where sigrok-cli stops
+  polling for good.
+- rdtech-um: bytes ahead of an id are dropped at any read; sigrok-cli
+  looks only at the read that brings a reply's second byte, so it can
+  end the capture on a failed check.
+- rdtech-um: an unplug ends the capture, where sigrok-cli logs a failed
+  poll without end.
+- rdtech-um: a silent meter ends a capture that only `--frames` could
+  end, after 30 s; with `--time` or `--continuous` it is polled on, as
+  in sigrok-cli.
+- rdtech-um: a meter that stopped reading is no error, as in sigrok-cli:
+  a poll waits 1 ms for room.
+- All formats: SI-prefixed analog values match sigrok's float rounding
+  exactly (1500 V at 4 digits prints 1.5000001 kV).
+- rdtech-dps, rdtech-rd: values are read and set in the scale of
+  `api.c`'s table on all models, where sigrok-cli gives inf or -nan and
+  writes 0 on all but the RD6012P; that table is unproven on some models
+  (docs/DEVICES.md). `voltage_target` and `current_limit` round, and a
+  value over the model's list or the register, or a negative one, is
+  refused; sigrok-cli truncates and wraps. `modbusaddr` over 255 is
+  refused. A DPS's panel is unlocked on every way out that reaches the
+  driver, where sigrok-cli unlocks only when it exits 0. A capture whose
+  only limit is `--samples` ends after 5 s with no good read, exit 0;
+  under `--time` and `--continuous` it waits and recovers, and
+  sigrok-cli hangs in the first case and recovers in the others. An
+  RD6012P scaled write first reads register 20, one more read than
+  sigrok-cli.
+- All drivers: `-c` sends `range` after `enabled=off` and before the
+  other settings.
+- `atten-pps3203`: `--continuous` with stdin at EOF differs. sigrok-cli
+  stops before its first poll, so it sends no set frame and leaves the
+  supply untouched; oxrok does not read stdin, sends the poll and zeroes
+  the supply. Run with stdin held open, sigrok-cli polls as well.
+- `atten-pps3203`: `--get` and `--show` read the scan's answer;
+  sigrok-cli says 0 and off until a capture's first answer.
+- `atten-pps3203`: setpoints go to the nearest 0.01 V or 1 mA;
+  sigrok-cli truncates, so 3.3 V is 3.29. NaN is refused; sigrok-cli
+  sends it as 0.
+- `atten-pps3203`: a capture ends after 2 s of silence, and a stop after
+  300 ms; sigrok-cli never ends, even when stopped. An extra byte does
+  not shift later frames, and an answer no supply could give is no
+  reading.
+- `atten-pps3203`: oxrok warns on stderr of what a set frame changes,
+  and when a setting sent nothing though the device reports otherwise;
+  sigrok-cli says nothing. The wire is the same.
+- manson-hcs-3xxx: a silent device is no device, and a failed setting,
+  after 2 s; sigrok-cli waits for ever. A timed-out `enabled=on` says
+  the output may be on. A capture with only a sample limit ends after 5
+  s with no reading, where sigrok-cli asks for ever; under `--time` or
+  `--continuous` both keep asking and go on when it answers. A reply
+  that is not eight digits and a mode is no sample; sigrok-cli takes
+  what strtod makes of it, 0 V for garbage. A fragment of a reply is
+  dropped after 500 ms; sigrok-cli joins it to the next.
+  `voltage_target=nan` is refused and `current_limit=-0` sends
+  `CURR000`; sigrok-cli sends `VOLTnan` and `CURR-00`. A `GMAX` of `inf`
+  is a limit of 0; sigrok-cli passes `voltage_target=inf` on as
+  `VOLTinf`.
+- With libserialport 0.1.2 or later, sigrok-cli fails `--show`, `--get`,
+  `--set` and captures on `gwinstek-gpd` with "Failed to open device",
+  as the driver's scan leaves the port locked; on 0.1.1 it runs them.
+  oxrok runs them on any version.
+- `gwinstek-gpd` accepts `current_limit=3.2` on the GPD-3303S, the
+  maximum it lists; libsigrok refuses it, as `strtof` gives a value
+  above the table's double.
+- `gwinstek-gpd` honours `-C`; libsigrok sends every channel.
+- `gwinstek-gpd` ends a capture on an invalid reading. With only a
+  sample limit it also ends one after 2 s with no reply. libsigrok hangs
+  under `--samples`, or parses old bytes. Under `--time` or
+  `--continuous` both wait for a silent device.
+- `gwinstek-gpd`'s `-O csv` warns: four rows a round, with made-up zeros
+  (known limit, shared fix pending). libsigrok's csv reads past its
+  buffer here.
+- `-c` holds back `enabled=on` until the rest was accepted, and sends
+  nothing on a parse error. A range error is found at send time, so a
+  set point ahead of it has gone out.
+- `0x10` and `3.3V` as a value are refused by the shared CLI, where
+  sigrok-cli's `strtof` takes them.
+- fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
+  where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
+- fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
+  capture goes on, where sigrok-cli stops reading for good.
+- fluke-dmm: a port that is gone ends a capture, with exit 0, where
+  sigrok-cli retries each second for ever.
+- fluke-dmm: a 28x line of two fields gives no sample, where sigrok-cli
+  reads past its array and crashes depending on the heap
+  (`fluke-28x.c:196`).
+- fluke-dmm: a write that finds no room logs a warning, where sigrok-cli
+  says nothing.
 
 ## Not available yet
 
@@ -416,5 +518,5 @@ Deliberate, and kept small:
   `scale` options of the `csv` output.
 - The `csv` input and the other long tail input modules (ChronoVu LA8,
   STF, Trace32, ISF, WAV, LogicPort .lpf).
-- The other libsigrok hardware drivers: the serial instruments come
-  next, the rest after them (`docs/ROADMAP.md`).
+- The other libsigrok hardware drivers: the rest of the serial
+  instruments come next, the rest after them (`docs/ROADMAP.md`).
