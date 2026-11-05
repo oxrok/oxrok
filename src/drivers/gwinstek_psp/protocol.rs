@@ -442,7 +442,7 @@ impl Link {
         let got = self.read(&mut reply[..wanted], READ_TIME, stop).inspect_err(|e| {
             log::error!("Error {e} reading from device.");
         })?;
-        if got < wanted && stop.load(Ordering::SeqCst) {
+        if stop.load(Ordering::SeqCst) {
             self.unread = Some((wanted - got, now));
             return Ok(Poll::Stopped);
         }

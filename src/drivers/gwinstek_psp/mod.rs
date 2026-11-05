@@ -627,6 +627,8 @@ mod tests {
         fail_writes_after: Option<usize>,
         fail_reads: bool,
         purges: Arc<AtomicUsize>,
+        /// Sets this flag at the read of this number, from 1.
+        stop_at_read: Option<(u32, Arc<AtomicBool>)>,
     }
 
     impl Fake {
@@ -645,6 +647,7 @@ mod tests {
                 fail_writes_after: None,
                 fail_reads: false,
                 purges: Arc::new(AtomicUsize::new(0)),
+                stop_at_read: None,
             };
             (fake, seen)
         }
@@ -675,6 +678,12 @@ mod tests {
             Ok(())
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            if let Some((at, stop)) = &mut self.stop_at_read {
+                *at = at.saturating_sub(1);
+                if *at == 0 {
+                    stop.store(true, Ordering::SeqCst);
+                }
+            }
             if self.fail_reads {
                 return Err(Error::device("Input/output error"));
             }
@@ -1477,7 +1486,8 @@ mod tests {
         wait_for(|| count_l(&seen) >= 3);
         d.stop().unwrap();
         packets(&rx);
-        d.set(&Key::LimitSamples, &Value::U64(5), None).unwrap();
+        // Enough to go past what was kept, to answers of its own.
+        d.set(&Key::LimitSamples, &Value::U64(12), None).unwrap();
         let rx = start(&mut d);
         let got: Vec<f32> = readings(&packets(&rx))
             .iter()
@@ -1506,6 +1516,77 @@ mod tests {
         std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
         assert_eq!(voltage(&d), 2.0);
         assert_eq!(count_l(&seen), 2);
+    }
+
+    /// The wait is for the answer: a look at what has come so far would miss it, and
+    /// it would then be taken for the answer to the next `L`.
+    #[test]
+    fn the_next_poll_waits_out_the_reply_a_stop_left() {
+        let (uart, _) = Uart::new(80, b"\r\n");
+        let mut link = Link::new(Some(Box::new(uart)), params(), model());
+        let began = Instant::now();
+        assert_eq!(link.poll(&AtomicBool::new(true)).unwrap(), Poll::Stopped);
+        link.poll(&AtomicBool::new(false)).unwrap();
+        // 80 ms, and 39 bytes at 4.17 ms each.
+        assert!(began.elapsed() >= Duration::from_millis(240), "{:?}", began.elapsed());
+    }
+
+    /// Up to the time the answer had from its `L`, and no longer: this device never
+    /// answers, and the time is already over when the next poll comes.
+    #[test]
+    fn the_wait_for_the_reply_a_stop_left_is_bounded_from_its_l() {
+        let (fake, _) = Fake::new(b"");
+        let mut link = Link::new(Some(Box::new(fake)), params(), model());
+        assert_eq!(link.poll(&AtomicBool::new(true)).unwrap(), Poll::Stopped);
+        std::thread::sleep(Duration::from_millis(1100));
+        let began = Instant::now();
+        assert_eq!(link.poll(&AtomicBool::new(false)).unwrap(), Poll::Silent);
+        // The new L's second and the drain's: a wait for the old one would be more.
+        assert!(began.elapsed() < Duration::from_secs(5), "{:?}", began.elapsed());
+    }
+
+    /// What is beyond the answer a stop left goes with it.
+    #[test]
+    fn what_follows_the_reply_a_stop_left_goes_too() {
+        let (fake, _) = Fake::new(ON_11);
+        let fake = fake.with_raw(&[b"V12.00A0.500W006.0U60I1.00P200F100100\r\nxx"]);
+        let mut link = Link::new(Some(Box::new(fake)), params(), model());
+        assert_eq!(link.poll(&AtomicBool::new(true)).unwrap(), Poll::Stopped);
+        std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+        assert_eq!(link.poll(&AtomicBool::new(false)).unwrap(), Poll::Fresh);
+        assert_eq!(link.status.voltage, 11.0);
+    }
+
+    /// A stop in the drain after a frame that did not read: what the drain did not
+    /// get to goes ahead of the next `L`.
+    #[test]
+    fn a_stop_in_a_drain_leaves_nothing_for_the_next_read() {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (mut fake, _) = Fake::new(ON_11);
+        fake = fake.with_raw(&[b"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\r\nmore"]);
+        fake.stop_at_read = Some((2, Arc::clone(&stop)));
+        let mut link = Link::new(Some(Box::new(fake)), params(), model());
+        assert_eq!(link.poll(&stop).unwrap(), Poll::Stopped);
+        std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+        assert_eq!(link.poll(&AtomicBool::new(false)).unwrap(), Poll::Fresh);
+        assert_eq!(link.status.voltage, 11.0);
+    }
+
+    /// An answer that takes the status time means an `L` a sample: the time runs
+    /// from ahead of the `L`, not from the end of its read.
+    #[test]
+    fn on_a_real_unit_each_sample_is_new() {
+        let (uart, _) = Uart::new(80, b"\r\n");
+        let mut d = PspDevice::from_port(model(), Box::new(uart));
+        d.open().unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let rx = start(&mut d);
+        let got: Vec<f32> = readings(&packets(&rx))
+            .iter()
+            .filter(|(c, _)| *c == CHANNEL_V)
+            .map(|(_, v)| *v)
+            .collect();
+        assert_eq!(got, [1.0, 2.0, 3.0, 4.0]);
     }
 
     /// URPSP1's last byte comes a byte's time after the read of the short line end:
