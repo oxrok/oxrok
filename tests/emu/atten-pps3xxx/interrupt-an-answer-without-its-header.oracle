@@ -1,4 +1,3 @@
 sr: hwdriver: Option 'samplerate' not available for this device instance.
 sr: output/csv: Untested configuration: multi-channel analog data.
 sr: output/csv: Resulting CSV output data may be incomplete or incorrect.
-oracle died: signal 2
