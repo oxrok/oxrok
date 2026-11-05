@@ -1,0 +1,85 @@
+gcov uni-t-ut181a (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        83.9%  240 of 286
+  protocol.c   91.7%  1133 of 1235
+  total        90.3%  1373 of 1521
+never reached, by function (line ranges hold no reached line):
+  api.c
+    ut181a_update_recordings: 74, 84, 96, 101
+    ut181a_query_initial_state: 125, 132, 136, 145-146, 152
+    config_get: 296, 300, 305, 310, 313, 320, 326-327
+    config_set: 355, 359, 383, 399, 409-419, 423-424
+    config_list: 443, 455-456
+    dev_acquisition_start: 493, 497, 515, 522, 527, 535-537, 540
+  protocol.c
+    ut181a_get_mode_from_mq_flags: 351-353
+    ut181a_get_range_from_packet_bytes: 518, 527, 649-650
+    ut181a_set_range_from_text: 671, 673, 676, 679, 814-815
+    ut181a_get_mq_details_from_text: 879, 974-977
+    ut181a_send_frame: 1088
+    ut181a_configure_waitfor: 1265
+    ut181a_waitfor_response: 1317
+    ut181a_get_value_params: 1338
+    ut181a_cond_stop_acquisition: 1354, 1357
+    ut181a_feedbuff_setup_unit: 1439
+    ut181a_feedbuff_setup_value: 1456
+    ut181a_feedbuff_setup_channel: 1482, 1484
+    ut181a_feedbuff_send_feed: 1503, 1509
+    ut181a_feedbuff_cleanup: 1527
+    ut181a_feedbuff_count_frame: 1562, 1566
+    check_len: 1582
+    consume_str: 1701
+    process_packet: 1778, 1787, 1796, 1899, 1956, 2023, 2033, 2038, 2052, 2058, 2062, 2067, 2081, 2092, 2106, 2118, 2122, 2126, 2131, 2170, 2178, 2182, 2203, 2213, 2218, 2233, 2239, 2243, 2248, 2262, 2268, 2273, 2287, 2294, 2338, 2351, 2364, 2377, 2384, 2392, 2396, 2417, 2422, 2426, 2431, 2446, 2453, 2468, 2487, 2498, 2566, 2579, 2586, 2593, 2597, 2624, 2634, 2659, 2667, 2671, 2684
+    process_buffer: 2785
+    ut181a_receive_data: 2851-2852, 2865
+    ut181a_handle_events: 2889, 2892
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/serial.c         27.4%  110 of 402
+  src/serial_libsp.c   37.5%  96 of 256
+  total                31.3%  206 of 658
+never reached, by function (line ranges hold no reached line):
+  src/serial.c
+    dev_is_supported: 62
+    serial_open: 87-88, 99, 101, 103, 107, 122, 140, 142
+    serial_close: 162-163, 169, 173-174
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 292
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: 461-462, 466
+    serial_read_blocking: never called (490-493)
+    serial_set_params: 541-542, 548
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: 651-656, 664-704
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: never called (952-981)
+    serial_source_add: 992-993, 997-998, 1002
+    serial_source_remove: 1013-1014, 1018
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    sr_serial_find_usb: never called (1119-1137)
+    serial_timeout: never called (1141-1166)
+  src/serial_libsp.c
+    sr_ser_libsp_open: 70-71, 76-84
+    sr_ser_libsp_close: 103-111
+    sr_ser_libsp_flush: 126-127, 133-141
+    sr_ser_libsp_drain: never called (147-167)
+    sr_ser_libsp_write: 178-179, 183, 188-190
+    sr_ser_libsp_read: 209-210, 216, 219-226
+    sr_ser_libsp_set_params: 242-243, 253-260, 276-284
+    sr_ser_libsp_set_handshake: never called (290-311)
+    sr_ser_libsp_source_add_int: 330-331, 334-335, 339, 345, 347, 350-351, 354-357, 369, 371
+    sr_ser_libsp_source_add: 398
+    sr_ser_libsp_list: never called (414-432)
+    sr_ser_libsp_find_usb: never called (435-458)
+    sr_ser_libsp_get_frame_format: never called (461-503)
+    sr_ser_libsp_get_rx_avail: never called (506-517)

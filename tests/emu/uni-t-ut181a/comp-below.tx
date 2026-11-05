@@ -1,0 +1,11 @@
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 abcd040005010a00 -> 8
+bulk_in 82 1534 -> @1534:a3c0478975970130fe89d8da8da2150378107d6e12436b8c7baf852b4aeff6d3
+bulk_out 02 abcd040005000900 -> 8
+bulk_in 82 9 -> abcd0500014f4ba000
+bulk_out 02 abcd03000e1100 -> 7
+bulk_in 82 10 -> abcd0600720e00008600
+bulk_out 02 abcd040005010a00 -> 8
+bulk_in 82 1541 -> @1541:b2e068bc967fb1b26e2e0bc0c6b5bcaee82c39aabdf61e35e4c5e000c9e293b7
+bulk_out 02 abcd040005000900 -> 8
+bulk_in 82 9 -> abcd0500014f4ba000
