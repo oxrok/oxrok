@@ -359,7 +359,9 @@ on Windows; attaching a device is Linux only.
   taken the command and 1 if it refused: `section name=NAME` marks the
   log, `reset` puts a fresh model behind the attached device (its
   initial state, for a second run; the kernel keeps seeing the device
-  it enumerated), `quit` ends the run, as does a termination signal, and
+  it enumerated), `quit` ends the run, as do a termination signal and,
+  with `--while-alive PID`, the end of that process (the harness passes
+  its own), and
   `sync` does nothing but answer, after every input taken before it, a
   renumeration a run asked for included. Whatever `READY`, `RENUMERATED`,
   `REPLUGGED` or `EVENT` line that input caused is on standard output

@@ -639,7 +639,7 @@ if [ $emu = 1 ]; then
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 --attach \
-            --open-devices --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" \
+            --open-devices --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" --while-alive $$ \
             </dev/null >"$TMP/emu.out" 2>"$TMP/emu.err" 8<&- &
         EMUPID=$!
         emu_wait 0 '^READY ' || return 1

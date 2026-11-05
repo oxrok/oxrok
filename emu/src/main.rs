@@ -22,7 +22,9 @@
 //! again after a renumeration or a `reset` that changed its descriptors,
 //! `REPLUGGED port=...` when an unplugged device came back, and
 //! `EVENT NAME` when an armed event fired. The exit status is 2 when any
-//! violation was logged.
+//! violation was logged. With `--while-alive PID` the server also ends
+//! once that process is gone, so a harness that is killed leaves no
+//! server behind.
 //!
 //! The log (`--log`) is the transaction log of `tests/emu`, [`TxLog`],
 //! not vusb's. In it an armed event shows as `unplug`, or as the name of
@@ -41,6 +43,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use oxrok_emu::models;
@@ -49,7 +53,7 @@ use serde_json::Value;
 use vusb::attach::vhci;
 use vusb::control::{Address, ListenOptions};
 use vusb::observer::SharedObserver;
-use vusb::session::Builder;
+use vusb::session::{Builder, Stopper};
 use vusb::{Error, Result, options};
 
 #[derive(Parser)]
@@ -107,6 +111,9 @@ struct Serve {
     /// The control socket, for vusb-ctl: a path, or host:port on loopback.
     #[arg(long)]
     control: Option<String>,
+    /// Ends the session once this process is gone (Linux).
+    #[arg(long, value_name = "PID")]
+    while_alive: Option<u32>,
 }
 
 /// The bus number the server announces; with the device number it
@@ -209,6 +216,21 @@ fn announce(event: &Value) {
     }
 }
 
+/// Ends the process from outside the session (INT, TERM or HUP, or the
+/// process it serves gone), the device detached first; the status is that
+/// of a run that ended (1 for a lost device, 2 after violations).
+fn finish_process(stopper: &Stopper) -> ! {
+    let report = stopper.finish();
+    println!("violations: {}", report.violations);
+    std::process::exit(if report.lost {
+        1
+    } else if report.violations == 0 {
+        0
+    } else {
+        2
+    });
+}
+
 fn serve(args: &Serve) -> Result<u8> {
     let log = Arc::new(Mutex::new(TxLog::new(args.log.as_deref(), args.verbose)?));
     let name = args.model.clone();
@@ -238,21 +260,19 @@ fn serve(args: &Serve) -> Result<u8> {
         println!("listening on {addr} busid 1-1");
     }
     let stopper = session.stopper();
-    // Ends the process on INT, TERM or HUP, the device detached first;
-    // the status is that of a run that ended (1 for a lost device, 2
-    // after violations).
-    ctrlc::set_handler(move || {
-        let report = stopper.finish();
-        println!("violations: {}", report.violations);
-        std::process::exit(if report.lost {
-            1
-        } else if report.violations == 0 {
-            0
-        } else {
-            2
+    if let Some(pid) = args.while_alive {
+        let stopper = stopper.clone();
+        let alive = PathBuf::from(format!("/proc/{pid}"));
+        thread::spawn(move || {
+            while alive.exists() {
+                thread::sleep(Duration::from_secs(1));
+            }
+            eprintln!("oxrok-emu: process {pid} is gone; ending the session");
+            finish_process(&stopper);
         });
-    })
-    .map_err(|e| Error::Other(format!("signal handler: {e}")))?;
+    }
+    ctrlc::set_handler(move || finish_process(&stopper))
+        .map_err(|e| Error::Other(format!("signal handler: {e}")))?;
     let report = session.run()?;
     println!("violations: {}", report.violations);
     Ok(if report.violations == 0 { 0 } else { 2 })
