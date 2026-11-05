@@ -14,4 +14,6 @@
 
 pub use vusb::shells::{ftdi, hid};
 
+pub mod cdc;
 pub mod ezusb;
+pub mod hidcable;

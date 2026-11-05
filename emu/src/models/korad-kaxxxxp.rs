@@ -128,7 +128,7 @@ fn parse_milli(text: &str) -> Option<u32> {
 }
 
 fn parse_limit(key: &str, value: &str) -> Result<u32> {
-    let invalid = || Error(format!("{key}={value}: a number as in 31 or 5.1"));
+    let invalid = || Error::Invalid(format!("{key}={value}: a number as in 31 or 5.1"));
     let number: f64 = value.parse().map_err(|_| invalid())?;
     if !(0.0..=1000.0).contains(&number) {
         return Err(invalid());
@@ -155,11 +155,11 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "imax" => config.imax = parse_limit(k, v)?,
             "vset" => {
                 config.power_on.vset =
-                    parse_centi(v).ok_or_else(|| Error(format!("vset={v}: as in 12.34")))?;
+                    parse_centi(v).ok_or_else(|| Error::Invalid(format!("vset={v}: as in 12.34")))?;
             }
             "iset" => {
                 config.power_on.iset =
-                    parse_milli(v).ok_or_else(|| Error(format!("iset={v}: as in 1.000")))?;
+                    parse_milli(v).ok_or_else(|| Error::Invalid(format!("iset={v}: as in 1.000")))?;
             }
             "output" => config.power_on.output = flag(k, v)?,
             "ocp" => config.power_on.ocp = flag(k, v)?,
@@ -176,7 +176,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = flag(k, v)?,
             "uart" => uart = Some(Line::parse(v)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     // The strings tspi.at shows. No such dump says more about the rest.
@@ -300,7 +300,7 @@ impl Supply {
     /// Whether a query gets its answer.
     fn answers_left(&mut self, port: &mut Port<'_>) -> bool {
         if self.config.answers.is_some_and(|n| self.answered >= n) {
-            port.mark_event_point();
+            port.mark();
             return false;
         }
         self.answered += 1;
@@ -686,10 +686,10 @@ mod tests {
         let mut h = supply(&[("answers", "1")]);
         h.write(b"*IDN?");
         assert_eq!(h.read(), DEFAULT_IDN);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         h.write(b"IOUT1?");
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         h.write(b"OUT1");
         assert_eq!(violations(&mut h), 0, "a setting still arrives");
     }
