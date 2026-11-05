@@ -162,6 +162,11 @@ pub fn scan_f32(reply: &[u8]) -> Option<f32> {
     let signed = |v: f32| if negative { -v } else { v };
     let lower: Vec<u8> = body.iter().take(3).map(u8::to_ascii_lowercase).collect();
     if lower == b"inf" {
+        // `inf`, or all of `infinity`: glibc refuses what stops in between.
+        let rest: Vec<u8> = body[3..].iter().take(5).map(u8::to_ascii_lowercase).collect();
+        if rest.first() == Some(&b'i') && rest != b"inity" {
+            return None;
+        }
         return Some(signed(f32::INFINITY));
     }
     if lower == b"nan" {
@@ -448,7 +453,7 @@ mod tests {
         ] {
             assert_eq!(scan_f32(text), Some(want), "{}", text.escape_ascii());
         }
-        for text in [&b"-inf"[..], b"infinity", b"infx"] {
+        for text in [&b"-inf"[..], b"infinity", b"INFINITY", b"infx", b"infinityx", b"inf.5"] {
             assert!(scan_f32(text).unwrap().is_infinite(), "{}", text.escape_ascii());
         }
         assert_eq!(scan_f32(b"1e999"), Some(f32::INFINITY));
@@ -468,6 +473,12 @@ mod tests {
             b"0x1p",
             b"0xg",
             b"nan(",
+            b"infi",
+            b"infin",
+            b"infini",
+            b"infinit",
+            b"infinix",
+            b"-infi",
             b"in",
             b"n",
             b"x",
