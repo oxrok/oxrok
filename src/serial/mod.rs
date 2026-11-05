@@ -218,6 +218,59 @@ impl dyn Port {
     }
 }
 
+/// `serial_timeout`: 10 ms for the system, and the time `bytes` take on the
+/// line, in whole milliseconds.
+pub fn serial_timeout(params: &Params, bytes: u32) -> Duration {
+    let parity = u32::from(params.parity != Parity::None);
+    let bits = 1 + u32::from(params.data_bits) + parity + u32::from(params.stop_bits);
+    let line = 1000.0 / f64::from(params.baud) * f64::from(bits) * f64::from(bytes);
+    Duration::from_millis(10 + line as u64)
+}
+
+/// `serial_read_blocking` with a bound: fills `buf` until `timeout` has
+/// passed and says how much came, none being no error. Where
+/// [`Port::read`] returns what it has at once, a reply in several pieces
+/// comes back whole, and where it waits for less than a millisecond it
+/// waits for one: `Duration::as_millis` truncates, and serialport's
+/// `COMMTIMEOUTS` constant of 0 on Windows is outside the combination
+/// Microsoft documents for a read that waits for its first byte. A 0 from
+/// a read is not the end either: a hung up tty gives one at once, so this
+/// pauses and tries again until the time is up, which also means it cannot
+/// spin. A `timeout` of 0 tries once, unlike C's, where 0 waits for ever.
+///
+/// # Errors
+///
+/// What the port's read gives.
+pub fn read_blocking(port: &mut dyn Port, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+    /// The pause after a read that gave nothing before its time.
+    const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
+    let deadline = std::time::Instant::now() + timeout;
+    let mut got = 0;
+    loop {
+        if got == buf.len() {
+            return Ok(got);
+        }
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() && !timeout.is_zero() {
+            return Ok(got);
+        }
+        let n = port.read(&mut buf[got..], whole_millis(left))?;
+        got += n;
+        if timeout.is_zero() {
+            return Ok(got);
+        }
+        if n == 0 {
+            std::thread::sleep(EMPTY_READ_PAUSE.min(left));
+        }
+    }
+}
+
+/// `left` rounded up to a whole millisecond, and at least one.
+fn whole_millis(left: Duration) -> Duration {
+    let ms = left.as_nanos().div_ceil(1_000_000).max(1);
+    Duration::from_millis(u64::try_from(ms).unwrap_or(u64::MAX))
+}
+
 /// A port on the operating system.
 pub struct Native {
     name: String,
@@ -443,6 +496,111 @@ pub fn list_ports() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Plays `script`, each read taking one entry: how many bytes it gives.
+    /// It remembers the time each read was given.
+    struct Script {
+        reads: Vec<usize>,
+        next: usize,
+        asked: Vec<Duration>,
+        slow_zero: bool,
+    }
+
+    impl Script {
+        fn new(script: &[usize], slow_zero: bool) -> Script {
+            Script { reads: script.to_vec(), next: 0, asked: Vec::new(), slow_zero }
+        }
+    }
+
+    impl Port for Script {
+        fn name(&self) -> &'static str {
+            "script"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            self.asked.push(timeout);
+            let n = self.reads.get(self.next).copied().unwrap_or(0).min(buf.len());
+            self.next += 1;
+            if n == 0 && self.slow_zero {
+                std::thread::sleep(timeout);
+            }
+            Ok(n)
+        }
+        fn write(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn serial_timeout_is_the_lines_time_and_10_ms() {
+        let p = Params::parse("9600/8n1").unwrap();
+        for (bytes, ms) in [(1, 11), (3, 13), (5, 15), (48, 60)] {
+            assert_eq!(serial_timeout(&p, bytes), Duration::from_millis(ms));
+        }
+        let p = Params::parse("1200/7e2").unwrap();
+        assert_eq!(serial_timeout(&p, 1), Duration::from_millis(19));
+    }
+
+    #[test]
+    fn a_blocking_read_puts_the_pieces_together() {
+        let mut port = Script::new(&[2, 1, 2], true);
+        let mut buf = [0; 5];
+        let n = read_blocking(&mut port, &mut buf, Duration::from_secs(5)).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(port.next, 3, "no read once it is full");
+    }
+
+    #[test]
+    fn a_blocking_read_gives_what_came_by_its_time() {
+        let mut port = Script::new(&[2], true);
+        let mut buf = [0; 5];
+        let begun = std::time::Instant::now();
+        let n = read_blocking(&mut port, &mut buf, Duration::from_millis(30)).unwrap();
+        assert_eq!(n, 2);
+        assert!(begun.elapsed() >= Duration::from_millis(30), "{:?}", begun.elapsed());
+    }
+
+    #[test]
+    fn a_read_that_gives_0_at_once_neither_ends_it_nor_spins() {
+        // A hung up tty, then the bytes.
+        let mut port = Script::new(&[0, 0, 3], false);
+        let mut buf = [0; 3];
+        assert_eq!(read_blocking(&mut port, &mut buf, Duration::from_secs(5)).unwrap(), 3);
+        // Nothing at all: it ends at the time, with a pause per try.
+        let mut port = Script::new(&[], false);
+        let begun = std::time::Instant::now();
+        assert_eq!(read_blocking(&mut port, &mut buf, Duration::from_millis(50)).unwrap(), 0);
+        assert!(begun.elapsed() >= Duration::from_millis(50), "{:?}", begun.elapsed());
+        assert!(port.asked.len() <= 51, "{} reads in 50 ms", port.asked.len());
+    }
+
+    #[test]
+    fn no_read_asks_for_less_than_a_millisecond() {
+        assert_eq!(whole_millis(Duration::ZERO), Duration::from_millis(1));
+        assert_eq!(whole_millis(Duration::from_micros(1)), Duration::from_millis(1));
+        assert_eq!(whole_millis(Duration::from_micros(1001)), Duration::from_millis(2));
+        assert_eq!(whole_millis(Duration::from_millis(15)), Duration::from_millis(15));
+        let mut port = Script::new(&[], false);
+        let mut buf = [0; 1];
+        read_blocking(&mut port, &mut buf, Duration::from_micros(300)).unwrap();
+        assert!(port.asked.iter().all(|t| *t >= Duration::from_millis(1)), "{:?}", port.asked);
+    }
+
+    #[test]
+    fn a_blocking_read_of_no_time_tries_once() {
+        let mut port = Script::new(&[1], false);
+        let mut buf = [0; 3];
+        assert_eq!(read_blocking(&mut port, &mut buf, Duration::ZERO).unwrap(), 1);
+        assert_eq!(port.asked.len(), 1);
+    }
 
     #[test]
     fn parses_serialcomm() {

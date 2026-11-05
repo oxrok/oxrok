@@ -28,6 +28,7 @@ pub mod descriptor;
 pub mod device;
 pub mod model;
 pub mod models;
+pub mod options;
 pub mod shells;
 pub mod txlog;
 pub mod usbip;

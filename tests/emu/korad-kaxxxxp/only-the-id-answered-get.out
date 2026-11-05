@@ -1,0 +1,7 @@
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to IOUT1?.
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to ISET1?.
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to VOUT1?.
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to VSET1?.
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to STATUS?.
+oxrok: warn: oxrok::drivers::korad_kaxxxxp::protocol: No answer to VSET1?.
+Failed to get 'voltage_target': device error: no answer from the device

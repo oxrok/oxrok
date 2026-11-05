@@ -1,0 +1,26 @@
+I: 0 mA DC
+V: 0.00 V DC
+META enabled: 1
+I: 0 mA DC
+V: 0.00 V DC
+META enabled: 0
+I: 0 mA DC
+V: 0.00 V DC
+META regulation: CC
+I: 0 mA DC
+V: 0.00 V DC
+META regulation: CV
+I: 0 mA DC
+V: 0.00 V DC
+META regulation: CV
+META regulation: CC
+META ocp_enabled: 1
+I: 0 mA DC
+V: 0.00 V DC
+META ocp_enabled: 0
+META ovp_enabled: 1
+I: 0 mA DC
+V: 0.00 V DC
+META ovp_enabled: 0
+I: 0 mA DC
+V: 0.00 V DC
