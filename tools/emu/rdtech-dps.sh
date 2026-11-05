@@ -35,6 +35,8 @@ s/^data is invalid$/Failed to start session./"
     PURGE_BUG="modbus_serial_rtu_read_begin takes one byte of what a bad reply left (modbus_serial_rtu.c:114-116) and nothing clears the rest, so the tries after it fail too and each adds a reply; oxrok drops the input queue before a request"
     ADDR_BUG="modbus_serial_rtu_dev_inst_new keeps the low byte of modbusaddr (modbus_serial_rtu.c:47), so 257 talks to slave 1; oxrok refuses it"
     HANG_BUG="rdtech_dps_receive_data returns a failed read's negative result (protocol.c:740-741), which the session takes for true, before it checks a limit, so a device that went silent never ends the capture; oxrok ends it after 5 reads"
+    NO_CLOSE_BUG="sigrok-cli's logger exits on a critical (main.c:46-47), before its sr_dev_close (main.c:130 then 201, session.c:708), so an error leaves a DPS's panel locked; oxrok unlocks it"
+    LOCK_BUG="dev_open returns on a failed lock with no unlock and sigrok-cli sends no close (api.c:315-317), so a lost reply can leave the panel locked; oxrok tries the unlock"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # Every line of api.c's supported_models[]. A scan reads the model and
@@ -145,7 +147,7 @@ s/^data is invalid$/Failed to start session./"
     for key in enabled regulation ovp_active ocp_active; do
         emu_case "get DPS $key" -- -d $D --get $key
     done
-    emu_case "get DPS range" --stderr --filter "$F" --expect-fail -- -d $D --get range
+    emu_case "get DPS range" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D --get range
     emu_options setters=0 id=5015 uset=1200 iset=1234 ovp=4000 ocp=1600
     emu_case "get DPS5015 current_limit" --oracle-differs "$SCALE_BUG" -- -d $D --get current_limit
     emu_case "get DPS5015 ocp_threshold" --oracle-differs "$THRESHOLD_BUG" -- -d $D --get ocp_threshold
@@ -204,7 +206,7 @@ s/^data is invalid$/Failed to start session./"
     emu_case "set DPS ovp_threshold" --oracle-differs "$ZERO_WRITE_BUG" --no-output -- -d $D -c ovp_threshold=45 --set
     emu_case "set DPS ocp_threshold" --oracle-differs "$ZERO_WRITE_BUG" --no-output -- -d $D -c ocp_threshold=5.5 --set
     emu_case "set DPS the output after a voltage" --oracle-differs "$ORDER_BUG" --no-output -- -d $D -c voltage_target=5:enabled=on --set
-    emu_case "set DPS range" --expect-fail --stderr --filter "$F" -- -d $D -c range=5A --set
+    emu_case "set DPS range" --oracle-bug "$NO_CLOSE_BUG" --expect-fail --stderr --filter "$F" -- -d $D -c range=5A --set
     emu_case "set DPS then read back" --oracle-differs "$ZERO_WRITE_BUG" -- -d $D -c voltage_target=12.5 --get voltage_target
     emu_options id=60061
     emu_case "set RD6006 voltage_target" --oracle-differs "$ZERO_WRITE_BUG" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5 --set
@@ -221,17 +223,34 @@ s/^data is invalid$/Failed to start session./"
     emu_case "set bad crc" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
     # The lock's own failures: an open fails, a close does not care.
     emu_options setters=0 faults=2:exc04
-    emu_case "open: the lock refused" --stderr --filter "$F" --expect-fail -- -d $D --samples 1
-    emu_case "show: the lock refused" --stderr --filter "$F" --expect-fail --keep-header -- -d $D --show
+    emu_case "open: the lock refused" --oracle-bug "$LOCK_BUG" --stderr --filter "$F" --expect-fail -- -d $D --samples 1
+    emu_case "show: the lock refused" --oracle-bug "$LOCK_BUG" --stderr --filter "$F" --expect-fail --keep-header -- -d $D --show
     emu_options setters=0 faults=7:exc04
     emu_case "close: the unlock refused" --oracle-differs "$SCALE_BUG" -- -d $D --samples 1
+    # Every way out of a DPS: the panel ends unlocked, the .tx's last write.
+    # oxrok's CLI closes only on its way out that went well, and the driver's
+    # Drop does the rest. sigrok-cli unlocks only where it exits 0. An unplug
+    # cannot unlock, and no case can show a signal with no handler.
+    emu_options setters=0
+    emu_case "way out: no number for the samples" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D --samples abc
+    emu_case "way out: no such channel" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D -C Z --samples 1
+    emu_case "way out: no such output" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D -O nosuch --samples 1
+    emu_case "way out: get no such key" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D --get nosuch
+    emu_options
+    emu_case "way out: a refused value" --oracle-differs "$WRAP_BUG" --stderr --filter "$F" --expect-fail -- -d $D -c voltage_target=999 --set
+    emu_case "way out: a refused value in a capture" --oracle-differs "$WRAP_BUG" --stderr --filter "$F" --expect-fail -- -d $D -c voltage_target=999 --samples 1
+    emu_case "way out: refused after a setpoint" --oracle-differs "$WRAP_BUG" --stderr --filter "$F" --expect-fail -- -d $D -c voltage_target=5:current_limit=99:enabled=on --samples 1
+    emu_options faults=3:exc04
+    emu_case "way out: the output refused" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$F" --expect-fail -- -d $D -c enabled=on --samples 1
+    emu_options setters=0 faults=3:exc04,4:exc04,5:exc04
+    emu_case "way out: a refused start" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$S" --expect-fail -- -d $D --samples 1
+    emu_options setters=0 answers=6
+    emu_case "way out: interrupt" --oracle-bug "$SIGINT_BUG" --timeout 20 --interrupt model -- -d $D --continuous
+    emu_case "way out: unplug leaves it locked" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --unplug model -- -d $D --samples 3
     # Every setting's own way out, in both maps.
-    # A setpoint's value and CRC go: under libsigrok it is 0 (ZERO_WRITE_BUG),
-    # which set-dps-* pin, and a failed set cannot be --oracle-differs.
-    V='s/^(bulk_out 02 0110(0000|0001|0052|0053)000102)[0-9a-f]{8} /\1 VALUE /'
     for set in voltage_target=5 current_limit=1 enabled=on ovp_threshold=45 ocp_threshold=5; do
         emu_options faults=3:exc04
-        emu_case "set DPS refused ${set%%=*}" --stderr --expect-fail --filter "$F" --tx-filter "$V" -- -d $D -c $set --set
+        emu_case "set DPS refused ${set%%=*}" --oracle-bug "$NO_CLOSE_BUG" --stderr --expect-fail --filter "$F" -- -d $D -c $set --set
         emu_options id=60125 faults=3:exc04
         emu_case "set RD6012P refused ${set%%=*}" --driver rdtech-rd --stderr --expect-fail --filter "$F" -- -d $R -c $set --set
     done
@@ -244,9 +263,9 @@ s/^data is invalid$/Failed to start session./"
         emu_case "get refused $key" --driver rdtech-rd --stderr --expect-fail --filter "$F" -- -d $R --get $key
     done
     emu_options setters=0 faults=3:exc04,4:exc04,5:exc04
-    emu_case "get DPS refused" --stderr --expect-fail --filter "$F" -- -d $D --get voltage
+    emu_case "get DPS refused" --oracle-bug "$NO_CLOSE_BUG" --stderr --expect-fail --filter "$F" -- -d $D --get voltage
     emu_options setters=0 faults=4:exc04,5:exc04,6:exc04
-    emu_case "get DPS second block refused" --stderr --expect-fail --filter "$F" -- -d $D --get voltage
+    emu_case "get DPS second block refused" --oracle-bug "$NO_CLOSE_BUG" --stderr --expect-fail --filter "$F" -- -d $D --get voltage
     # A reply that stops early.
     emu_options setters=0 faults=1:first,2:first,3:first
     emu_case "scan only the address comes" --keep-header --no-output -- -d $D --scan

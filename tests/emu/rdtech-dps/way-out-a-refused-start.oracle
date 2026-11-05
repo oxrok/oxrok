@@ -1,0 +1,4 @@
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: session: Could not start rdtech-dps device (null) acquisition.
+sr: session: Cannot remove non-existing event source 0x1f203480.
+Failed to start session.

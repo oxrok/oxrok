@@ -17,8 +17,13 @@
 //! 115200/8n1 (RD), and `modbusaddr=` the slave address 1. A scan reads the
 //! model and the version and closes the port again.
 //!
-//! An open of a DPS locks its panel, and a close unlocks it. Nothing else
-//! changes the supply but what `set` sends, one register for each setting.
+//! An open of a DPS locks its panel, and a close unlocks it, and so does a drop
+//! of the device, as the CLI's error paths drop it unclosed where sigrok-cli
+//! closes it. What does not get there leaves the panel locked: an unplug, a
+//! signal the CLI has no handler for (`SIGTERM` and `SIGHUP`, as `ctrlc` is built
+//! without `termination`; `SIGINT` before its handler is set) and a crash.
+//! Nothing else changes the supply but what `set` sends, one register for each
+//! setting.
 //! Each `get` reads all of the state. In what order settings go out is the
 //! caller's: the CLI sends `enabled=on` last, once every setpoint was taken.
 //!
@@ -404,8 +409,9 @@ impl Device for RdtechDevice {
     }
 
     /// `dev_open`: the port, and the panel's lock on a DPS. A port on which
-    /// that fails goes, and with it the close's unlock, as a C device whose
-    /// open failed gets no close.
+    /// that fails goes. C leaves it there, with no close to follow; but the
+    /// reply is what may have been lost, with the lock taken, so here it tries
+    /// the unlock first.
     fn open(&mut self) -> Result<()> {
         let mut link = self.link.lock().expect("link lock");
         if link.modbus.is_some() {
@@ -420,6 +426,9 @@ impl Device for RdtechDevice {
         };
         link.modbus = Some(bus);
         if let Err(e) = link.set(Setting::Lock(true)) {
+            if let Err(unlock) = link.set(Setting::Lock(false)) {
+                log::debug!("Could not unlock the panel: {unlock}.");
+            }
             link.modbus = None;
             return Err(e);
         }
@@ -493,6 +502,16 @@ impl Device for RdtechDevice {
             worker.stop.store(true, Ordering::SeqCst);
         }
         Ok(())
+    }
+}
+
+/// The CLI closes only on its way out that went well, and sigrok-cli on every
+/// one: a device dropped open must not leave a panel locked.
+impl Drop for RdtechDevice {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            log::debug!("Could not close the device: {e}.");
+        }
     }
 }
 
@@ -813,13 +832,38 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_lock_fails_the_open_and_leaves_no_close_to_send() {
+    fn a_lost_reply_to_the_lock_fails_the_open_after_an_unlock() {
         let (mut fake, seen, _) = Fake::new();
         fake.answers = Some(0);
         let mut d = RdtechDevice::from_port(model(Family::Dps, 5005), Box::new(fake));
         assert!(d.open().is_err());
+        assert_eq!(writes(&seen), [write_frame(0x06, 1), write_frame(0x06, 0)]);
         d.close().unwrap();
-        assert_eq!(writes(&seen), [write_frame(0x06, 1)], "no unlock");
+        assert_eq!(writes(&seen).len(), 2, "the port has gone: nothing more");
+    }
+
+    #[test]
+    fn a_device_dropped_open_unlocks_the_panel() {
+        let (fake, seen, _) = Fake::new();
+        let d = dps(fake);
+        drop(d);
+        assert_eq!(writes(&seen), [write_frame(0x06, 1), write_frame(0x06, 0)]);
+    }
+
+    #[test]
+    fn a_device_closed_and_dropped_unlocks_once() {
+        let (fake, seen, _) = Fake::new();
+        let mut d = dps(fake);
+        d.close().unwrap();
+        drop(d);
+        assert_eq!(writes(&seen).len(), 2);
+    }
+
+    #[test]
+    fn a_device_never_opened_sends_nothing_when_dropped() {
+        let (fake, seen, _) = Fake::new();
+        drop(RdtechDevice::from_port(model(Family::Dps, 5005), Box::new(fake)));
+        assert_eq!(writes(&seen).len(), 0);
     }
 
     #[test]
