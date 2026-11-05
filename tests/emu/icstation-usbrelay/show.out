@@ -10,5 +10,5 @@ Channel groups:
     R3: No channels
     R4: No channels
 Supported configuration options across all channel groups:
-    conn: 
+    conn: /dev/ttyACMN (current)
     enabled: on, off

@@ -93,6 +93,7 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
+    pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
     pub mod juntek_jds6600;
@@ -152,6 +153,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
     registry.register(Box::new(drivers::testo::TestoDriver));
+    registry.register(Box::new(drivers::icstation_usbrelay::IcstationUsbrelayDriver));
     registry.register(Box::new(drivers::ikalogic_scanalogic2::Scanalogic2Driver));
     registry.register(Box::new(drivers::ikalogic_scanaplus::ScanaPlusDriver));
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
