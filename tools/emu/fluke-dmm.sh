@@ -378,6 +378,15 @@ $FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_i
     emu_case "287 time limit" --filter "$FIRST" --tx-filter "$QM_287" -- -d $F --time 350ms
     emu_case "287 limit_time in -c" --libsigrok --oxrok --filter "$FIRST" --tx-filter "$QM_287" -- -d $F -c limit_time=350 --continuous
 
+    # The meter stops reading. A write has 1 ms there (protocol.h:28), and C
+    # goes on; oxrok's sees the queue full and goes on too. Only the close
+    # waits, for closing_wait.
+    emu_options out-hold=2
+    emu_tty_closing_wait 100
+    emu_case "287 stops reading" --timeout 15 --tx-filter '/^bulk_out 02 /d' -- -d $F --time 1500ms
+    emu_tty_closing_wait 3000
+    emu_options
+
     # The USB side, the shell's options.
     emu_options chunk=1
     emu_case "287 one byte per transfer" -- -d $F --samples 2
