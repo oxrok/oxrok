@@ -1085,7 +1085,8 @@ flush()
     #   exits as ever: oxrok must exit 1 and say `capture failed: ` on stderr
     #   with WHY in its text (A|B when either can come, as the pace has it).
     #   In an --unplug case the last line of a refused start does as well,
-    #   when the unplug gets there before the capture. That line is taken
+    #   when the unplug gets there before the capture, and WHY is only a note,
+    #   as what an unplug says depends on the pace. That line is taken
     #   out, and the rest is compared as always, --no-oracle too. In a
     #   --record case the fixture says `# fails: WHY`.
     #   --unplug and --interrupt arm the emulator's event at WHEN
@@ -1343,16 +1344,22 @@ EOF
                 [ $st = 1 ] || why="$why; oxrok exited $st, where --oxrok-fails says it exits 1 ($ofails)"
                 # The reason goes before anything is compared. An unplug can
                 # get there before the capture does: the error of the start
-                # it refused, the last line, instead.
+                # it refused, the last line, instead. Which error an unplug
+                # gives depends on the pace, so its text is not held to WHY.
+                ofails_unplug=0
+                case $event in unplug*) ofails_unplug=1 ;; esac
                 if grep -q '^capture failed: .' "$TMP/b.err"; then
                     ofails_said=$(grep '^capture failed: .' "$TMP/b.err" | tail -n 1)
                     sed -i '/^capture failed: /d' "$TMP/b.err"
+                elif [ $ofails_unplug = 1 ]; then
+                    ofails_said=$(tail -n 1 "$TMP/b.err")
+                    sed -i '$d' "$TMP/b.err"
                 else
-                    case $event in unplug*) ofails_said=$(tail -n 1 "$TMP/b.err"); sed -i '$d' "$TMP/b.err" ;; *) ofails_said="" ;; esac
+                    ofails_said=""
                 fi
                 if [ -z "$ofails_said" ]; then
                     why="$why; oxrok gave no 'capture failed: ' line ($ofails)"
-                elif ! emu_fails_says "$ofails_said" "$ofails"; then
+                elif [ $ofails_unplug = 0 ] && ! emu_fails_says "$ofails_said" "$ofails"; then
                     why="$why; oxrok said '$ofails_said', where --oxrok-fails says '$ofails'"
                 fi
             elif [ $hangs = 1 ]; then

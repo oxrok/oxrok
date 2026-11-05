@@ -513,8 +513,9 @@ full case or oracle case. What else is checked depends on oxrok:
   out before anything is compared, and everything else is compared in
   full, under `--no-oracle` too. In an `--unplug` case the fault can get
   there before the capture does (ols's unplug can land in the drain after
-  its last command, in `start`): an exit 1 with WHY in the refused start's
-  error, the last line of stderr, passes too, and that line goes instead.
+  its last command, in `start`): an exit 1 with the refused start's error
+  as the last line of stderr passes too, and that line goes instead. There
+  WHY is only a note, as what an unplug says depends on the pace.
   It goes with `--stderr`, `--oracle-bug`, `--oracle-differs`, events and
   `--libsigrok --oxrok`. A `--record` case writes `# fails: WHY` in its
   fixture, for `tests/emu_replay.rs` to expect the same of the replay.

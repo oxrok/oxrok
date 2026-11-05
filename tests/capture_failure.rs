@@ -29,6 +29,8 @@ fn no_driver_sends_its_end_by_hand() {
     sources(&root, &mut files);
     assert!(files.len() > 40, "{} files under {}", files.len(), root.display());
     let mut found = Vec::new();
+    // A test module in a file of its own.
+    files.retain(|file| !file.ends_with("tests.rs"));
     for file in files {
         let text = std::fs::read_to_string(&file).unwrap();
         let code = text.split("#[cfg(test)]").next().unwrap();

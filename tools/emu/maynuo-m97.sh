@@ -252,7 +252,7 @@ s/^bulk_out 02 ([0-9a-f]+) -> [0-9]+$/bulk_out 02 \1/'
     # The C's side of those alone, to the end of what it sends.
     emu_case "lib samples, none ever come" --libsigrok --hangs --timeout 3 --no-output -- -d $M --samples 1
     emu_options setters=0 answers=3 quiet=50
-    emu_case "unplug in a capture" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 10 --unplug model -- -d $M --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 10 --unplug model -- -d $M --samples 3
     emu_options setters=0 answers=5 quiet=50
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --timeout 10 --interrupt model --tx-filter "$N" -- -d $M --samples 1000
     # Answers gone wrong in a capture: no sample, and the next read asks again.
@@ -264,9 +264,9 @@ s/^bulk_out 02 ([0-9a-f]+) -> [0-9]+$/bulk_out 02 \1/'
     emu_case "a poll with two bytes too many" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 3 -- -d $M --samples 2
     # A load that goes quiet with only a sample limit: 5 s, then the end.
     emu_options setters=0 answers=2
-    emu_case "silent in a capture" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" --no-output -- -d $M --samples 2
+    emu_case "silent in a capture" --oxrok-fails "no reply from the device for 5s" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" --no-output -- -d $M --samples 2
     emu_options setters=0 answers=3
-    emu_case "silent after a sample" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" -- -d $M --samples 2
+    emu_case "silent after a sample" --oxrok-fails "no reply from the device for 5s" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" -- -d $M --samples 2
     # Two reads lost under a time limit, then the readings again.
     emu_options setters=0 faults=3:silent,4:silent answers=6
     emu_case "time recovers after failed reads" --oracle-differs "$NO_REQUEST_BUG" --tx-filter "$N" -- -d $M --time 2s

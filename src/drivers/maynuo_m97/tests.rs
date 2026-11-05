@@ -616,6 +616,7 @@ fn a_sample_limit_on_a_silent_load_ends_at_the_bound() {
         let took = started.elapsed();
         assert!(took >= Duration::from_millis(1200), "{took:?}");
         assert_eq!(frames_in(&packets), 0);
+        assert!(packets.iter().any(|p| matches!(p, Packet::Failed(_))), "{packets:?}");
         // Every read but the last ended inside the bound, and a read takes at
         // least its 500 ms: a slow box means fewer, and never more than three.
         let polls = writes(&state).len() - 1;

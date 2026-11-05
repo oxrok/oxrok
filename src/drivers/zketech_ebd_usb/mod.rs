@@ -553,9 +553,9 @@ impl Device for ZketechEbdUsbDevice {
         let handle = std::thread::Builder::new()
             .name("zketech-ebd-usb acquisition".to_owned())
             .spawn(move || {
-                run_capture(&capture, &shared, &sink, &stop2);
+                let outcome = run_capture(&capture, &shared, &sink, &stop2);
                 shared.lock().expect("state lock").capturing = false;
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(|e| {
                 self.shared().capturing = false;
@@ -583,9 +583,9 @@ struct Capture {
 
 /// The End, which a client that goes on reading gets however long it takes, and
 /// after a stop only if there is room within [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -646,12 +646,18 @@ fn send_measurement(
 /// `dev_acquisition_start` and `ebd_receive_data`, up to what a stop sends. A
 /// capture the device's silence ended sends nothing more, as C has no stop on that
 /// way out.
-fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
+fn run_capture(
+    capture: &Capture,
+    shared: &Mutex<Shared>,
+    sink: &PacketSink,
+    stop: &AtomicBool,
+) -> Result<()> {
     if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
-        return;
+        return Ok(());
     }
     let _ = shared.lock().expect("state lock").send(&protocol::init());
     let mut samples = 0u64;
+    let mut outcome = Ok(());
     loop {
         let (frame, len) = match read_message(capture, shared, stop) {
             Ok(Message::Frame(frame, len)) => (frame, len),
@@ -665,10 +671,11 @@ fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, sto
                 let mut s = shared.lock().expect("state lock");
                 s.running = false;
                 warn_left_on(&s);
-                return;
+                return Err(Error::device("no messages received"));
             }
             Err(e) => {
                 log::error!("Can't receive messages: {e}.");
+                outcome = Err(e);
                 break;
             }
         };
@@ -702,6 +709,7 @@ fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, sto
         }
     }
     shared.lock().expect("state lock").stop_commands();
+    outcome
 }
 
 /// What a capture with no stop command leaves behind.

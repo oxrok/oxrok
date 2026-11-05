@@ -506,9 +506,9 @@ Deliberate, and kept small:
 - maynuo-m97: a capture asks for its readings, where sigrok-cli at the
   pinned commit sends no request and has no samples: its `--samples`
   never ends, and its `--time` ends with nothing. A capture with only a
-  sample limit ends after 5 s with no good read; one under `--time` or
-  `--continuous` waits and goes on when the load comes back. Five
-  requests in a row that cannot go out end any capture. A
+  sample limit fails after 5 s with no good read (exit 1); one under `--time`
+  or `--continuous` waits and goes on when the load comes back. Five
+  requests in a row that cannot go out fail any capture. A
   `voltage_target`, `current_limit` or threshold that is NaN or infinite
   is refused; any other value goes out, as in C, also one outside the
   list. `modbusaddr` over 255 is refused. `PC1` is cleared on every way
@@ -516,8 +516,8 @@ Deliberate, and kept small:
   set.
 - `motech-lps-301`: a device that does not answer is no device (a scan)
   or a failed setting after 250 ms, where sigrok-cli waits for as long
-  as it stays silent. A capture with only a sample limit ends after 2 s
-  with no sample.
+  as it stays silent. A capture with only a sample limit fails after 2 s
+  with no sample (exit 1).
 - `motech-lps-301`: a reading that is no number sends no sample for that
   round; sigrok-cli sends 0. A reading later than 250 ms is dropped with
   its round, where sigrok-cli waits and takes it.
@@ -548,7 +548,8 @@ Deliberate, and kept small:
   toggle of a one-frame capture. A NaN is refused, where sigrok-cli
   stores it. `-C` is honoured, where C sends all four channels. An
   unplug ends a capture or scan at once, where sigrok-cli takes some 200
-  s. A read error sends what a stop sends and ends. `-C V.D-` is refused
+  s. A read error sends what a stop sends and fails the capture (exit 1), and
+  silence, which ends a capture in sigrok-cli too, fails it here. `-C V.D-` is refused
   by both tools, in different words, as the dash reads as a range.
 - agilent-dmm: `-O csv` with a display disabled writes every row, where
   libsigrok's csv loses rows because its channel count includes disabled
