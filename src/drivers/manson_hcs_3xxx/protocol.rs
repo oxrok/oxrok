@@ -201,13 +201,19 @@ pub fn parse_getd(line: &[u8]) -> Option<(f32, f32)> {
     Some(((field(0) / 100.0) as f32, (field(4) / 100.0) as f32))
 }
 
-/// `GMAX`'s first line as the limits, volts and amperes. A field that makes no
-/// number, or a line too short to have it, is a limit of 0, so that nothing
-/// is set: C gets there by strtod's 0, but for what lies past a short line.
+/// `GMAX`'s first line as the limits, volts and amperes.
+///
+/// A field that makes no number, or a line too short to have it, is a limit of
+/// 0: no voltage can then be set, as the lowest is 1 V, and a current of 0
+/// still can. C gets there by strtod's 0, but for what lies past a short line.
+/// A limit that is not finite is 0 too, where C takes `inf` and passes
+/// `voltage_target=inf` on as `VOLTinf`. Any finite value stands as in C, so a
+/// garbled `GMAX` above the rating is not caught: nothing here knows the rating.
 pub fn parse_gmax(line: &[u8], model: &Model) -> (f32, f32) {
+    let limit = |value: f64| Some(value as f32).filter(|v| v.is_finite()).unwrap_or(0.0);
     let volts = strtod(&line[..line.len().min(3)]).unwrap_or(0.0) * VOLTAGE_STEP;
     let amps = line.get(3..).and_then(strtod).unwrap_or(0.0) * model.current_step;
-    (volts as f32, amps as f32)
+    (limit(volts), limit(amps))
 }
 
 /// Whether a line is `GETD`'s, in the form the wiki gives: eight digits and a
@@ -592,6 +598,10 @@ mod tests {
         assert_eq!(parse_gmax(b"360", tenths), (36.0, 0.0));
         assert_eq!(parse_gmax(b"36", tenths), (3.6, 0.0), "too short to have a current");
         assert_eq!(parse_gmax(b"", tenths), (0.0, 0.0));
+        assert_eq!(parse_gmax(b"infinf", tenths), (0.0, 0.0));
+        assert_eq!(parse_gmax(b"nannan", tenths), (0.0, 0.0));
+        assert_eq!(parse_gmax(b"3601e99", tenths), (36.0, 0.0), "too much for a float");
+        assert_eq!(parse_gmax(b"999999", tenths), (99.9, 99.9), "finite: as in C");
     }
 
     #[test]

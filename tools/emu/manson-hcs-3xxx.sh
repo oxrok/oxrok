@@ -39,6 +39,7 @@ $B"
     GARBAGE_BUG="hcs_parse_volt_curr_mode takes what makes no number for 0 (protocol.c:99, 105), so a garbled reply is a 0 V sample, and reads past a short line (protocol.c:104); oxrok drops the reply"
     SPLICE_BUG="hcs_receive_data keeps what came of a reply when it asks again (protocol.c:239), and it joins the next: 12 and 123601000 read as 12.12 V, 36.01 A on a 10 A supply; oxrok forgets it at the 500 ms"
     FORM_BUG="hcs_parse_volt_curr_mode takes whatever strtod makes of a field (protocol.c:99, 105), inf, nan, hex and all; oxrok takes the eight digits the wiki gives"
+    INF_BUG="api.c:173-175 take inf for a limit, so api.c:244's two comparisons let an infinite target through and %03.0f sends VOLTinf; oxrok takes a limit that is not finite for 0"
     OVERRUN_BUG="handle_new_data has no bound (protocol.c:184): over 50 bytes with no OK it overwrites devc->buflen behind buf (protocol.h:78-79) and goes on from wherever that says, then reports made up values; oxrok drops the reply"
     NUL_BUG="handle_new_data's g_str_has_suffix (protocol.c:192) stops at a NUL, so no reply after it ends and the buffer runs over (protocol.c:184), with made up values; oxrok loses that reply alone"
     NAN_BUG="api.c:244 and 255's two comparisons let a NaN through, and %03.0f sends 'VOLTnan' to a live output; oxrok refuses it"
@@ -192,6 +193,8 @@ $B"
     emu_options gmax-raw=$(ok xxxyyy)
     emu_case "set with GMAX garbage" --stderr --expect-fail --filter "$S" -- -d $K -c voltage_target=5 --set
     emu_case "set current with GMAX garbage" --no-output -- -d $K -c current_limit=0 --set
+    emu_options gmax-raw=$(ok infinf)
+    emu_case "set inf with GMAX inf" --oracle-differs "$INF_BUG" --stderr --expect-fail --filter "$S" -- -d $K -c voltage_target=inf --set
     # Together: the order is the question.
     emu_options
     emu_case "set in sigrok-cli's order" --no-output -- -d $K -c current_limit=0.5:voltage_target=3.3:enabled=on --set
