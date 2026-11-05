@@ -20,9 +20,16 @@
 //! order of the options. The other side of that: what no option named goes
 //! out as 0 and off. A capture is the same: its polls are such frames, there
 //! being nothing else to get the second reading with, so **a capture turns
-//! off and zeroes all that was not set on its command line**. This is what C
-//! does, and what `pps-tools` does; a warning says so when the device
-//! reports the output on.
+//! off and zeroes all that was not set on its command line**. C does this
+//! too, once it gets as far as a poll, which sigrok-cli does only with its
+//! stdin held open: at an EOF there it stops before the first one. A warning
+//! says what the frame changes from what the device reported, and what it
+//! writes. `pps-tools` polls with such frames as well, but its setpoints come
+//! from a user's file, which names each channel's.
+//!
+//! As in C, only a change from what this run set makes a frame (`api.c:250,
+//! 257,287`), so `enabled=off` alone on an output that is on sends nothing and
+//! it stays on. The close says so.
 //!
 //! A capture has no limit, as in C, and goes on until it is stopped. It ends
 //! too when the device stays silent for [`SILENCE`]: C never ends there, even
