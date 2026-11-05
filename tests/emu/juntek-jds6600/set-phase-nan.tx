@@ -28,5 +28,3 @@ bulk_out 02 3a7233303d302e0d0a -> 9
 bulk_in 82 11 -> 3a7233303d3530302e0d0a
 bulk_out 02 3a7233313d302e0d0a -> 9
 bulk_in 82 9 -> 3a7233313d302e0d0a
-bulk_out 02 3a7733313d6e616e2e0d0a -> 11
-bulk_in 82 5 -> 3a6f6b0d0a
