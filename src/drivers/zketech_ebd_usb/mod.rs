@@ -19,11 +19,16 @@
 //! holds. So `--set` alone sends nothing, for which the close warns. In a capture
 //! each measurement compares what the device says with what was set: with a limit
 //! the load is started, again and again if it stays off, and with none **a load
-//! that is on is turned off**, so a capture with nothing set turns off one that
-//! was left on. A stop turns the load off only if the last frame said it was on,
-//! as in C, so a capture that ends right after starting it leaves it on; and one
-//! that ends because the device went quiet sends nothing. Both warn. What the stop
-//! command `06` itself does to a load is not known.
+//! that is on is toggled off**. A stop toggles the load only by what the last frame
+//! said, as in C, and that is out of date after a command. So:
+//!
+//! - a capture that ends on the frame that started the load leaves it on;
+//! - a capture with nothing set that ends on the frame that toggled the load off
+//!   toggles it again, and **leaves it on**;
+//! - a capture that ends because the device went quiet sends nothing.
+//!
+//! Each of these warns. What the stop command `06` itself does to a load is not
+//! known.
 //!
 //! Where this differs from C, each with its cause in [`Device::set`] or
 //! [`run_capture`]:
@@ -34,13 +39,25 @@
 //!   The same return hides `ebd_loadstart`'s last lines (`protocol.c:115-123`).
 //! - A NaN passes both of `config_set`'s comparisons (`api.c:176,181`). Here it
 //!   is refused, as the setpoints of a capture would hold what x86 makes of it.
-//! - After an unplug C's read neither ends nor fails. Here it ends the capture.
-//! - An error in a read has C try for ever (`protocol.c:299-301`, `return SR_ERR`
-//!   keeps the source). Here it ends the capture.
+//! - After an unplug `serial_timeout` can't get the port's settings and falls back
+//!   to 1 s (`serial.c:1159`), so each of C's 200 turns takes 1 s and it ends by
+//!   itself after some 200 s, as for a silent device. Here the read's error ends
+//!   the capture at once.
+//! - An error in a read has C try again, as `return SR_ERR` keeps the source
+//!   (`protocol.c:299-301`), until a stop sends its commands. Here it ends the
+//!   capture at once with those commands, which fail fast on a port that is gone
+//!   and reach one that is not.
+//! - `in_range` compares in single precision where `api.c:176` compares the double,
+//!   as `gwinstek-gpd` and `manson-hcs-3xxx` do. sigrok-cli parses with `strtof`, so
+//!   its 4.0000001 reaches C as 4.0, and the CLI here parses a double. A library
+//!   client's `F64(4.0000001)` is therefore taken as 4.0, where C refuses it.
 //!
 //! C's read turns are kept, and so its silence of some 2 s for one frame. Frames
 //! that fail their checks are dropped, as in C, so a device that keeps sending
-//! only those holds a capture with a sample limit until it is stopped.
+//! only those holds a capture with a sample limit until it is stopped. That may be
+//! ordinary: if a real device takes its checksum modulo `f0`, as the wiki's rule
+//! suggests, 783 of the 20994 millivolt readings have that checksum fail however
+//! the last digits ripple, in the model's frames.
 //!
 //! See [`protocol`].
 
@@ -190,6 +207,12 @@ struct Shared {
     /// A start went out since the last measurement, so a load may be on
     /// that `load_activated` does not know of.
     start_unconfirmed: bool,
+    /// A toggle went out since the last measurement, so `load_activated` may be
+    /// out of date the other way.
+    toggle_unconfirmed: bool,
+    /// `limits`' count, which a capture reads each time, as C does, so a set
+    /// during a capture counts.
+    limit_samples: u64,
     /// Between the first thing a capture does and the last thing before End.
     capturing: bool,
     /// A setting no measurement has been compared with.
@@ -221,6 +244,7 @@ impl Shared {
     /// `ebd_loadtoggle`.
     fn load_toggle(&mut self) -> Result<()> {
         log::info!("Toggling load");
+        self.toggle_unconfirmed = true;
         self.send(&protocol::toggle())
     }
 
@@ -254,6 +278,7 @@ impl Shared {
         self.running = true;
         self.unsent = false;
         self.start_unconfirmed = false;
+        self.toggle_unconfirmed = false;
         self.load_activated = m.load_on;
         let (limit, threshold) = m.reported.unwrap_or((self.current_limit, self.uvc_threshold));
         let no_current = protocol::current_is_0(self.current_limit);
@@ -279,7 +304,15 @@ impl Shared {
     /// `dev_acquisition_stop`'s commands.
     fn stop_commands(&mut self) {
         if self.load_activated {
-            let _ = self.load_toggle();
+            let second = self.toggle_unconfirmed;
+            if self.load_toggle().is_err() {
+                log::warn!("The load could not be turned off: it may still be on.");
+            } else if second {
+                log::warn!(
+                    "The capture ended before the device reported the load off, so that was toggled a \
+                     second time: it may be on again."
+                );
+            }
         } else if self.start_unconfirmed {
             log::warn!(
                 "The capture ended before the device reported the load on, so it was not turned \
@@ -296,7 +329,6 @@ pub struct ZketechEbdUsbDevice {
     channels: Vec<Channel>,
     conn: String,
     params: Params,
-    limit_samples: u64,
     /// What one read of a byte waits: `serial_timeout(serial, 1)`, but for tests.
     byte_timeout: Duration,
     /// A port to use instead of opening `conn`, for tests.
@@ -317,8 +349,9 @@ fn no_group(group: Option<&str>) -> Result<()> {
     }
 }
 
-/// A value in `range`, in the single precision C keeps it in. A NaN is refused,
-/// where it passes C's two comparisons. A -0.0 stays, as `--get` shows it in C.
+/// A value in `range`, compared in the single precision C keeps it in: see the
+/// module's list. A NaN is refused, where it passes C's two comparisons. A -0.0
+/// stays, as `--get` shows it in C.
 fn in_range(key: &Key, value: &Value, range: &[f64; 3]) -> Result<f32> {
     let bad = || Error::Arg(format!("{} out of range", key.id()));
     let v = value.as_f64().ok_or_else(bad)? as f32;
@@ -344,7 +377,6 @@ impl ZketechEbdUsbDevice {
                 .collect(),
             conn,
             params,
-            limit_samples: 0,
             byte_timeout: serial_timeout(&params, 1),
             pending: None,
             shared: Arc::new(Mutex::new(Shared {
@@ -354,6 +386,8 @@ impl ZketechEbdUsbDevice {
                 running: false,
                 load_activated: false,
                 start_unconfirmed: false,
+                toggle_unconfirmed: false,
+                limit_samples: 0,
                 capturing: false,
                 unsent: false,
             })),
@@ -410,7 +444,7 @@ impl Device for ZketechEbdUsbDevice {
         no_group(group)?;
         let s = self.shared();
         Ok(match key {
-            Key::LimitSamples => Value::U64(self.limit_samples),
+            Key::LimitSamples => Value::U64(s.limit_samples),
             Key::CurrentLimit => Value::F64(f64::from(s.current_limit)),
             Key::UnderVoltageConditionThreshold => Value::F64(f64::from(s.uvc_threshold)),
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -423,7 +457,8 @@ impl Device for ZketechEbdUsbDevice {
         no_group(group)?;
         match key {
             Key::LimitSamples => {
-                self.limit_samples = value.as_u64().ok_or_else(|| Error::arg("limit_samples"))?;
+                self.shared().limit_samples =
+                    value.as_u64().ok_or_else(|| Error::arg("limit_samples"))?;
                 Ok(())
             }
             Key::CurrentLimit => {
@@ -489,6 +524,10 @@ impl Device for ZketechEbdUsbDevice {
         Ok(())
     }
 
+    /// Busy while a capture runs. One past its last command has only its End to
+    /// send: told to stop, it gives that up within [`END_AFTER_STOP`] if the old
+    /// client's queue stays full, so this does not wait for ever. A plain
+    /// `is_finished` would say Busy to a client that has just seen the End.
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         {
             let mut s = self.shared();
@@ -501,6 +540,7 @@ impl Device for ZketechEbdUsbDevice {
             s.capturing = true;
         }
         if let Some(worker) = self.worker.take() {
+            worker.stop.store(true, Ordering::SeqCst);
             let _ = worker.handle.join();
         }
         let shared = Arc::clone(&self.shared);
@@ -508,7 +548,6 @@ impl Device for ZketechEbdUsbDevice {
         let stop2 = Arc::clone(&stop);
         let capture = Capture {
             enabled: self.channels.iter().map(|c| c.enabled).collect(),
-            limit_samples: self.limit_samples,
             byte_timeout: self.byte_timeout,
         };
         let handle = std::thread::Builder::new()
@@ -539,7 +578,6 @@ impl Device for ZketechEbdUsbDevice {
 /// What a capture needs of the device.
 struct Capture {
     enabled: Vec<bool>,
-    limit_samples: u64,
     byte_timeout: Duration,
 }
 
@@ -606,8 +644,8 @@ fn send_measurement(
 }
 
 /// `dev_acquisition_start` and `ebd_receive_data`, up to what a stop sends. A
-/// capture that a read or the device's silence ended sends nothing more: C has
-/// no stop on those ways out either.
+/// capture the device's silence ended sends nothing more, as C has no stop on that
+/// way out.
 fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
     if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
         return;
@@ -631,8 +669,7 @@ fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, sto
             }
             Err(e) => {
                 log::error!("Can't receive messages: {e}.");
-                warn_left_on(&shared.lock().expect("state lock"));
-                return;
+                break;
             }
         };
         let m = match protocol::parse(&frame, len) {
@@ -659,7 +696,8 @@ fn run_capture(capture: &Capture, shared: &Mutex<Shared>, sink: &PacketSink, sto
             break;
         }
         samples += 1;
-        if capture.limit_samples > 0 && samples >= capture.limit_samples {
+        let limit = shared.lock().expect("state lock").limit_samples;
+        if limit > 0 && samples >= limit {
             break;
         }
     }

@@ -348,6 +348,7 @@ fn no_limit_turns_off_a_load_that_is_on() {
     limit_samples(&mut device, 2);
     run(&mut device);
     assert_eq!(fake.command_types(), [0x05, 0x02, 0x06]);
+    assert!(!device.shared().toggle_unconfirmed, "the second frame said so");
 }
 
 #[test]
@@ -360,6 +361,48 @@ fn a_load_on_with_the_values_set_gets_no_command() {
     limit_samples(&mut device, 2);
     run(&mut device);
     assert_eq!(fake.command_types(), [0x05, 0x02, 0x06], "off at the stop alone");
+}
+
+#[test]
+fn a_load_on_with_another_threshold_alone_gets_it() {
+    let fake = Fake::new();
+    fake.stream([measurement(0x0a, 1500, 300)]);
+    let mut device = fake.device();
+    set_limit(&mut device, 1.5).unwrap();
+    set_threshold(&mut device, 4.0).unwrap();
+    limit_samples(&mut device, 1);
+    run(&mut device);
+    assert_eq!(fake.commands()[1], protocol::config(1.5, 4.0).to_vec());
+}
+
+/// The frame that toggled the load off cannot yet say so: both tools toggle again.
+#[test]
+fn a_capture_of_one_frame_with_nothing_set_toggles_twice() {
+    let fake = Fake::new();
+    fake.stream([measurement(0x0a, 1500, 300)]);
+    let mut device = fake.device();
+    limit_samples(&mut device, 1);
+    run(&mut device);
+    assert_eq!(fake.command_types(), [0x05, 0x02, 0x02, 0x06]);
+    assert!(device.shared().toggle_unconfirmed, "so the stop warned");
+}
+
+/// Each `unconfirmed` lasts until the next measurement.
+#[test]
+fn a_measurement_clears_what_was_unconfirmed() {
+    let fake = Fake::new();
+    fake.stream([without_load(), measurement(0x0a, 1500, 300)]);
+    let mut device = fake.device();
+    set_limit(&mut device, 1.5).unwrap();
+    set_threshold(&mut device, 3.0).unwrap();
+    limit_samples(&mut device, 1);
+    run(&mut device);
+    assert!(device.shared().start_unconfirmed, "the start is out, and no frame since");
+    limit_samples(&mut device, 1);
+    run(&mut device);
+    let s = device.shared();
+    assert!(!s.start_unconfirmed, "the second frame said so");
+    assert!(s.load_activated);
 }
 
 #[test]
@@ -446,6 +489,43 @@ fn a_read_that_fails_ends_it() {
     device.start(PacketSink::new(tx, 0)).unwrap();
     let packets = collect(&rx);
     assert_eq!(frames(&packets), 0);
+    assert_eq!(fake.command_types(), [0x05, 0x06], "what a stop sends, for a port still there");
+}
+
+/// C keeps the source after a read error, so a later stop still sends these.
+#[test]
+fn a_read_that_fails_with_the_load_on_sends_what_a_stop_sends() {
+    let fake = Fake::new();
+    fake.stream([measurement(0x0a, 1500, 300)]);
+    let mut device = fake.device();
+    set_limit(&mut device, 1.5).unwrap();
+    set_threshold(&mut device, 3.0).unwrap();
+    let (tx, rx) = sync_channel(64);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    let deadline = Instant::now() + BOUND;
+    loop {
+        assert!(Instant::now() < deadline, "no frame");
+        if let Ok((_, Packet::FrameEnd)) = rx.recv_timeout(Duration::from_millis(50)) {
+            break;
+        }
+    }
+    fake.0.lock().unwrap().read_fails = true;
+    collect(&rx);
+    assert_eq!(fake.command_types(), [0x05, 0x02, 0x06]);
+}
+
+#[test]
+fn a_read_that_fails_on_a_port_gone_ends_all_the_same() {
+    let fake = Fake::new();
+    {
+        let mut seen = fake.0.lock().unwrap();
+        seen.read_fails = true;
+        seen.fail_writes_after = Some(10);
+    }
+    let mut device = fake.device();
+    let (tx, rx) = sync_channel(64);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    assert!(matches!(collect(&rx).last(), Some(Packet::End)));
     assert_eq!(fake.command_types(), [0x05]);
 }
 
@@ -580,6 +660,82 @@ fn a_second_start_is_refused_while_one_runs_and_taken_after() {
     assert_eq!(frames(&run(&mut device)), 1);
 }
 
+/// A client that holds a full queue and starts again: the End it cannot take must
+/// not hold the start for ever.
+#[test]
+fn a_start_after_a_capture_whose_end_is_blocked_returns() {
+    let fake = Fake::new();
+    fake.stream(vec![without_load(); 3]);
+    let mut device = fake.device();
+    limit_samples(&mut device, 1);
+    // Room for the header and one frame of six, and none for the End.
+    let (tx, rx) = sync_channel(7);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    let deadline = Instant::now() + BOUND;
+    while device.shared().capturing {
+        assert!(Instant::now() < deadline, "the capture went on");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (tx2, rx2) = sync_channel(64);
+        let started = device.start(PacketSink::new(tx2, 0)).is_ok();
+        done_tx.send(started).unwrap();
+        // The device and the new queue stay until the test has its answer.
+        std::thread::sleep(Duration::from_millis(100));
+        drop((device, rx2));
+    });
+    let got = done_rx.recv_timeout(BOUND);
+    drop(rx);
+    assert_eq!(got, Ok(true), "the start did not come back");
+}
+
+/// `protocol.c:379-380` reads the limit each time.
+#[test]
+fn a_sample_limit_set_in_a_capture_counts() {
+    let fake = Fake::new();
+    fake.stream(vec![without_load(); 100_000]);
+    let mut device = fake.device();
+    let (tx, rx) = sync_channel(64);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    let deadline = Instant::now() + BOUND;
+    loop {
+        assert!(Instant::now() < deadline, "no frame");
+        if let Ok((_, Packet::FrameEnd)) = rx.recv_timeout(Duration::from_millis(50)) {
+            break;
+        }
+    }
+    limit_samples(&mut device, 1);
+    assert_eq!(device.get(&Key::LimitSamples, None).unwrap().as_u64(), Some(1));
+    let packets = collect(&rx);
+    assert!(matches!(packets.last(), Some(Packet::End)));
+    assert!(fake.0.lock().unwrap().stream.len() > 90_000, "it read on");
+    assert_eq!(fake.command_types(), [0x05, 0x06]);
+}
+
+/// All frames dropped: only a stop ends it, with what a stop sends and no sample.
+#[test]
+fn a_stop_ends_a_run_of_dropped_frames() {
+    let fake = Fake::new();
+    let mut bad = without_load();
+    bad[17] ^= 1;
+    fake.stream(vec![bad; 100_000]);
+    let mut device = fake.device();
+    limit_samples(&mut device, 1);
+    let (tx, rx) = sync_channel(64);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    let deadline = Instant::now() + BOUND;
+    while fake.0.lock().unwrap().stream.len() > 99_000 {
+        assert!(Instant::now() < deadline, "it did not read");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fake.command_types(), [0x05], "nothing has ended it");
+    device.stop().unwrap();
+    let packets = collect(&rx);
+    assert_eq!(frames(&packets), 0);
+    assert_eq!(fake.command_types(), [0x05, 0x06]);
+}
+
 /// `protocol.c:411-439`: after a measurement a setting goes out at once, which
 /// no sigrok-cli run reaches, and counts as done where C's `send_cmd` says failed.
 #[test]
@@ -592,7 +748,8 @@ fn a_setting_after_a_measurement_goes_out_at_once() {
     ];
     for (name, frame, limit, sent) in cases {
         let fake = Fake::new();
-        fake.stream([frame]);
+        // Frames go on until the stop, so that no silence ends `running` first.
+        fake.stream(vec![frame; 100_000]);
         let mut device = fake.device();
         let (tx, rx) = sync_channel(64);
         // The load's own answer to the frame is not the point: set it equal.
@@ -600,7 +757,6 @@ fn a_setting_after_a_measurement_goes_out_at_once() {
             set_limit(&mut device, 1.0).unwrap();
         }
         device.start(PacketSink::new(tx, 0)).unwrap();
-        // Silence after the frame ends it, and `running` with it, so stop here.
         let deadline = Instant::now() + BOUND;
         loop {
             assert!(Instant::now() < deadline, "{name}: no frame");
@@ -620,7 +776,7 @@ fn a_setting_after_a_measurement_goes_out_at_once() {
 #[test]
 fn a_threshold_after_a_measurement_goes_out_too() {
     let fake = Fake::new();
-    fake.stream([measurement(0x0a, 1000, 0)]);
+    fake.stream(vec![measurement(0x0a, 1000, 0); 100_000]);
     let mut device = fake.device();
     set_limit(&mut device, 1.0).unwrap();
     let (tx, rx) = sync_channel(64);
@@ -644,7 +800,9 @@ fn a_setting_gets_in_during_a_capture_that_waits() {
     let fake = Fake::new();
     fake.stream([without_load()]);
     let mut device = fake.device();
-    device.byte_timeout = Duration::from_millis(5);
+    // 200 turns of this are seconds: a reader that kept the lock would hold the set
+    // until the silence ended the capture and `running` with it.
+    device.byte_timeout = Duration::from_millis(20);
     let (tx, rx) = sync_channel(64);
     device.start(PacketSink::new(tx, 0)).unwrap();
     let deadline = Instant::now() + BOUND;
@@ -654,10 +812,11 @@ fn a_setting_gets_in_during_a_capture_that_waits() {
             break;
         }
     }
+    std::thread::sleep(Duration::from_millis(50));
     let before = Instant::now();
     set_limit(&mut device, 1.0).unwrap();
-    assert!(before.elapsed() < Duration::from_secs(1), "{:?}", before.elapsed());
-    assert_eq!(fake.command_types().last(), Some(&0x01));
+    assert!(before.elapsed() < BOUND, "{:?}", before.elapsed());
+    assert_eq!(fake.command_types().last(), Some(&0x01), "sent, in the wait");
     device.stop().unwrap();
     collect(&rx);
 }

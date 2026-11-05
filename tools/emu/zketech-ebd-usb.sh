@@ -16,9 +16,8 @@ emu_cases() {
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     CHAN_BUG="protocol.c:367-374 sends all four channels whatever -C says; oxrok sends those that are on"
     NAN_BUG="api.c:176 and 181 compare a NaN and let it through, and protocol.c:72 converts it to an int, undefined in C; oxrok refuses it"
-    EOF_DIFF="sigrok-cli stops a --continuous at the EOF on stdin (anykey.c:50,83), after its first frame; oxrok does not read stdin and goes on to its limit or to the device's silence"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture and sends what a stop sends"
-    UNPLUG_BUG="after an unplug the read in protocol.c:190 and 210 neither ends nor fails, so sigrok-cli stays there; oxrok gets an error and ends"
+    UNPLUG_BUG="after an unplug serial_timeout falls back to 1 s (serial.c:1159), so each of the 200 turns of protocol.c:186 takes 1 s, and sigrok-cli would end by itself after some 200 s. This case's timeout stops it long before that, which is all --oracle-hangs holds here: slow, not stuck. oxrok gets an error and ends at once"
     DASH="both tools read the dash of V.D- as a range and refuse it, in their own words, so that channel cannot be named alone"
     # What the serial library says, and the error's code against its text.
     FU="$F
@@ -39,7 +38,12 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "scan a short frame is a device" --keep-header -- -d $A --scan
     emu_options setters=0 replies=faf8
     emu_case "scan no body" --keep-header --stderr --filter "$F" -- -d $A --scan
-    emu_options setters=0 replies=55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa period=2
+    # More bytes than the 200 turns, all at once, so that nothing depends on when
+    # the 06 lands.
+    Z=55aa55aa55aa55aa
+    Z=$Z$Z$Z$Z
+    Z=$Z$Z$Z$Z
+    emu_options setters=0 replies=$Z$Z frames=1
     emu_case "scan garbage" --keep-header --no-output -- -d $A --scan
     # One byte per transfer drives offers fast, so a period is no time at all:
     # the first frame of each start is all there is.
@@ -80,10 +84,11 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "the channel with a dash" --oracle-bug "$DASH" --stderr --filter "$F" --expect-fail -- -d $A -C V.D- --samples 2
     emu_case "time" --stderr --filter "$F" --expect-fail -- -d $A --time 100
     emu_case "frames" --stderr --filter "$F" --expect-fail -- -d $A --frames 1
-    # sigrok-cli stops a --continuous at the EOF on its stdin.
-    emu_case "config limit_samples" --oracle-differs "$EOF_DIFF" -- -d $A -c limit_samples=2 --continuous
+    # The library runner, as sigrok-cli stops a --continuous at the EOF on its stdin
+    # (anykey.c:50,83) after one frame, where oxrok does not read stdin.
+    emu_case "config limit_samples" --libsigrok --oxrok -- -d $A -c limit_samples=2 --continuous
     emu_options setters=0 frames=3
-    emu_case "continuous" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
+    emu_case "continuous" --libsigrok --oxrok -- -d $A --continuous
     emu_options setters=0 chunk=1 period=100000
     emu_case "capture one byte per transfer" -- -d $A --samples 1
     # The load. A setting reaches it only from the first frame of a capture.
@@ -100,11 +105,16 @@ s/^(Failed to open device).*$/\\1./"
     # The XOR is fe, and with this D+ the device's own frames stay below f0.
     emu_options dp=1721
     emu_case "a command's checksum at the top" -- -d $A -c current_limit=3.824:uvc_threshold=0.16 --samples 2
+    # fa010fe000160000f8f8: a checksum that looks like the frame's end.
+    emu_case "a command's checksum of f8" -- -d $A -c current_limit=3.824:uvc_threshold=0.22 --samples 2
     emu_options load=1 limit=1500 cutoff=300
     emu_case "load on, nothing set" -- -d $A --samples 3
     emu_case "load on, the same set" -- -d $A -c current_limit=1.5:uvc_threshold=3 --samples 3
     emu_case "load on, another set" -- -d $A -c current_limit=1:uvc_threshold=3 --samples 3
     emu_case "load on, one sample" -- -d $A -c current_limit=1.5:uvc_threshold=3 --samples 1
+    emu_case "load on, another threshold" -- -d $A -c current_limit=1.5:uvc_threshold=4 --samples 3
+    # Kept from C: the frame turns it off and the stop, not yet told, turns it on.
+    emu_case "load on, one sample, nothing set" -- -d $A --samples 1
     emu_options device=1 load=1
     emu_case "device frames, load on" -- -d $A -c current_limit=1 --samples 3
     emu_options device=1
@@ -149,6 +159,14 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "a checksum of f8" -- -d $A --samples 1
     emu_case "a checksum of f8 says so" --stderr --filter "$F" -- -d $A --samples 1
 
+    # 128 mV: every frame's XOR is f0 or more, so its checksum modulo f0 fails all
+    # through the ripple. Nothing counts and the limit never comes, in either tool,
+    # for as long as the device goes on. The scan takes any frame.
+    emu_options vbus=128
+    emu_case "lib all frames dropped" --libsigrok --hangs --timeout 3 --stderr --filter "$F" --tx-filter 's/^bulk_in 82 [0-9]+ -> .*/bulk_in, how much depends on the time/' -- -d $A --samples 1
+    emu_options vbus=128 frames=5
+    emu_case "interrupt all frames dropped" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --no-output -- -d $A --samples 1
+
     # A device that goes quiet ends the capture, with no stop: frames= counts the
     # scan's.
     emu_options frames=1
@@ -159,7 +177,7 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "silent after two says so" --stderr --filter "$F" -- -d $A --samples 3
     emu_case "silent with the load on" -- -d $A -c current_limit=1 --samples 3
     emu_options frames=1
-    emu_case "silent with continuous" --oracle-differs "$EOF_DIFF" --no-output -- -d $A --continuous
+    emu_case "silent with continuous" --libsigrok --oxrok --no-output -- -d $A --continuous
 
     # The library runs it for longer. Four analog packets a frame.
     emu_options
@@ -171,15 +189,16 @@ s/^(Failed to open device).*$/\\1./"
     emu_options frames=3
     emu_case "lib silent after two" --libsigrok -- -d $A --continuous
 
-    # A device that leaves: C's read neither ends nor fails.
+    # A device that leaves: oxrok ends at once. C ends by itself some 200 s later,
+    # which these cases do not wait for: see UNPLUG_BUG.
     emu_options frames=2
-    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 --filter '1,4!d' -- -d $A --samples 3
+    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $A --samples 3
     emu_options frames=0
     emu_case "unplug in the scan" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 8 --keep-header --no-output -- -d $A --scan
     emu_options
     emu_case "unplug in the scan's stop" --unplug out=2:13 --stderr --filter "$FU" --expect-fail -- -d $A --samples 3
     emu_case "unplug in a capture's start" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug out=2:25 --timeout 5 --no-output -- -d $A --samples 3
-    emu_case "unplug in a capture's stop" --unplug out=2:35 --filter '1,4!d' --timeout 5 -- -d $A --samples 1
+    emu_case "unplug in a capture's stop" --unplug out=2:35 --timeout 5 -- -d $A --samples 1
 
     # What oxrok alone can run: the signal ends a stream the model has stopped
     # sending at a quiet point, and a stop's commands go out.
@@ -194,6 +213,8 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "set says it sent nothing" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c current_limit=1 --set
     emu_options
     emu_case "load one sample says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c current_limit=1 --samples 1
+    emu_options load=1 limit=1500 cutoff=300
+    emu_case "load on, one sample, nothing set says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A --samples 1
     emu_options frames=3
     emu_case "silent with the load on says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c current_limit=1 --samples 3
 
