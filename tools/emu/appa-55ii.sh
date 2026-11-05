@@ -152,8 +152,8 @@ s/^sr: \[[^]]*\] /sr: /
     emu_options period=2
     emu_case "memory but no log" --no-output --timeout 10 --tx-filter "$T" -- -d $A $M --time 1s
 
-    # A limit and the log's end in one read: C sends its end twice (protocol.c:227
-    # and :311-312), which sigrok-cli takes in its stride.
+    # A limit and the log's end in one read: C calls its stop twice (protocol.c:227
+    # and :311-312), which shows neither in its output nor on its stderr.
     emu_options burst=1 records=1 piece=20 gap=0
     emu_case "log limit and end in one read" -- -d $A $M --samples 1
     # Nothing can come of a size over 32: the buffer fills and the capture ends

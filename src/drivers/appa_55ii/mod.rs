@@ -30,8 +30,8 @@
 //!   bytes (`protocol.c:245-247`).
 //! - A live frame too short for its probes is no sample. C reads what its buffer
 //!   held and sends that (`protocol.c:79-81`).
-//! - Nothing is sent after the End. C parses on after a log's end, and may send a
-//!   second end at a limit (`protocol.c:227`, `:298`, `:311-312`).
+//! - Nothing is sent after the End. C parses on after a log's end (`protocol.c:227`,
+//!   `:298`), and calls its stop again if a limit came up in that read (`:311-312`).
 //! - A capture starts clean, and a later one on an open port drops what came
 //!   between. C keeps its buffers and its count of records, and reads what has
 //!   waited in the tty as though it were new.
