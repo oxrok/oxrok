@@ -19,6 +19,7 @@ emu_cases() {
     SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 30 s, where only that limit could"
     DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
     CHANNEL_BUG="process_data sends every channel whatever -C said (protocol.c:213-220 has no ch->enabled), and the analog output prints them; the man page has -C as the channels to be used, and csv and other drivers honour it; oxrok sends those asked for"
+    SYNC_BUG="the id is looked for only at the read that brings a reply's second byte (protocol.c:261-265); a read that brings 'ab 09' has nothing to skip, so the 130 bytes from the noise on fail the check and end the capture; oxrok looks at every read and gets all the frames"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # What a scan finds, in each model's dump.
     for m in um24c um25c um34c; do
@@ -112,6 +113,10 @@ emu_cases() {
     emu_case "noise ahead of a frame stdout" -- -d $U --frames 3
     emu_options noise=3:ab
     emu_case "a byte of noise ahead of a frame" -- -d $U --frames 3
+    # The noise and the id's first byte, then a pause, so that a read has just
+    # those. chunk=1 shows the same, when the reads fall so: 2 runs of 8 on C.
+    emu_options noise=3:ab gap=3:2
+    emu_case "noise and a gap" --oracle-differs "$SYNC_BUG" -- -d $U --frames 4
     # A dump's own id ahead of the dump: nothing to resynchronize on.
     emu_options noise=3:0963
     emu_case "an id ahead of a frame" --stderr --filter "$L" -- -d $U --frames 3
