@@ -34,7 +34,6 @@ emu_cases() {
     GET_LIMIT_BUG="api.c:39-40 list both limits as readable, and config_get has no case for them (:228); oxrok answers a limit that was set, and with none set says not applicable as C does"
     FIELD_BUG="sscanf stores each field as it goes (protocol.c:158-160), and the failure's only effect is a log line, as protocol.c:217 drops the result: the next sample has the current of a status that failed; oxrok has no sample from a status that failed, and stores none of it"
     FLOOD_BUG="what is unread after a reply keeps the source ready (api.c:338), and protocol.c's callback reads nothing within 245 ms of the last L but counts a sample (:275-278): the tail of a long reply runs a sample limit out at once, with no further L; oxrok keeps to its 50 ms and goes on asking"
-    SILENT_BUG="protocol.c:217 drops the result, so a device that stopped answering still gives the last reading and counts a sample each pass, as if it were new; oxrok has no sample, and with only a sample limit gives up after 5 s. Under --time both wait"
     UNPLUG_BUG="protocol.c:217 drops the result, so a device gone gives the last reading until the sample limit, or for ever without one; oxrok ends the capture"
     HANG_BUG="protocol.c:162 reads until a second's silence, which a device that keeps talking never gives: the scan never ends; oxrok gives up after 3 s"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
@@ -119,16 +118,21 @@ $!d'
     emu_case "scan the panel sets the current limit" --filter "$L" --stderr --timeout 8 -- -d $K --scan
     emu_options setters=0 limit-mode=p
     emu_case "scan the panel sets the power limit" --keep-header -- -d $K --scan
-    # What %f and %d take, and that the frame need not have the manual's widths.
-    emu_options setters=0 replies=$(psp_st 'V1.5e1A.5W-1.0U+7I 2 P200F00010000000')
-    emu_case "scan as sscanf takes it" -- -d $K --get voltage_target
-    emu_case "scan as sscanf takes it, a limit" -- -d $K --get current_limit
-    emu_options setters=0 replies=$(psp_st 'VnanA0.000W000.0U60I1.00P200F00000000')
-    emu_case "scan nan" -- -d $K --get voltage_target
-    emu_options setters=0 replies=$(psp_st 'V-infA0.000W000.0U60I1.00P200F0000000')
-    emu_case "scan inf" -- -d $K --get voltage_target
-    emu_options setters=0 replies=$(psp_st 'V12.00A0.000W000.0U60I0x10P200F000000')
-    emu_case "scan hexadecimal takes P for its exponent" -- -d $K --get current_limit
+    # What %f and %d take, and that the frame need not have the manual's widths. A
+    # get may be the scan's L or one of its own: the frame for either, and it folds.
+    F=$(psp_st 'V1.5e1A.5W-1.0U+7I 2 P200F00010000000')
+    emu_options setters=0 replies=$F,$F
+    emu_case "scan as sscanf takes it" --tx-filter "$FOLD" -- -d $K --get voltage_target
+    emu_case "scan as sscanf takes it, a limit" --tx-filter "$FOLD" -- -d $K --get current_limit
+    F=$(psp_st 'VnanA0.000W000.0U60I1.00P200F00000000')
+    emu_options setters=0 replies=$F,$F
+    emu_case "scan nan" --tx-filter "$FOLD" -- -d $K --get voltage_target
+    F=$(psp_st 'V-infA0.000W000.0U60I1.00P200F0000000')
+    emu_options setters=0 replies=$F,$F
+    emu_case "scan inf" --tx-filter "$FOLD" -- -d $K --get voltage_target
+    F=$(psp_st 'V12.00A0.000W000.0U60I0x10P200F000000')
+    emu_options setters=0 replies=$F,$F
+    emu_case "scan hexadecimal takes P for its exponent" --tx-filter "$FOLD" -- -d $K --get current_limit
     emu_options setters=0 replies=$(psp_st 'V0x10A0.000W000.0U60I1.00P200F0000000')
     emu_case "scan hexadecimal takes the A" --filter "$L" --stderr --timeout 8 -- -d $K --scan
     emu_options setters=0 replies=$(psp_st 'V1eA0.000W000.0U60I1.00P200F000000000')
@@ -136,8 +140,9 @@ $!d'
     emu_options setters=0 replies=$(psp_st 'V12.00A0.000W000.0U99999999999I1.00P2')
     emu_case "scan a limit too wide for an int" --keep-header -- -d $K --scan
     # A NUL ends the text sscanf sees, and the flags are read by position.
-    emu_options setters=0 replies=$(psp_st 'V12.00A0.000W000.0U60I1.00\000\000\000\000F100100')
-    emu_case "scan a NUL behind the numbers" -- -d $K --get enabled
+    F=$(psp_st 'V12.00A0.000W000.0U60I1.00\000\000\000\000F100100')
+    emu_options setters=0 replies=$F,$F
+    emu_case "scan a NUL behind the numbers" --tx-filter "$FOLD" -- -d $K --get enabled
 
     # --show and --get: asked once by the scan, and again only after 245 ms.
     emu_options setters=0
@@ -235,10 +240,12 @@ $!d'
     emu_case "a set point goes out ahead of a refused one" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c current_limit=1:voltage_target=99 -c enabled=on --set
     emu_case "two targets in one run" --oracle-differs "$STALE_LIMIT_BUG" --no-output -- -d $K -c voltage_target=5 -c voltage_target=60 --set
     emu_case "the same target twice" --oracle-differs "$STALE_LIMIT_BUG" --no-output -- -d $K -c voltage_target=5 -c voltage_target=5 --set
-    # Read back straight after, inside the 245 ms: what the last L said.
-    emu_case "set then get voltage" --oracle-differs "$READBACK_BUG" -- -d $K -c voltage_target=5 --get voltage_target
-    emu_case "set then get current" --oracle-differs "$READBACK_BUG" -- -d $K -c current_limit=0.5 --get current_limit
-    emu_case "set then get enabled" --oracle-differs "$READBACK_BUG" -- -d $K -c enabled=on --get enabled
+    # Read back straight after. Inside the 245 ms C answers what the last L said, and
+    # a slower box asks again after the settings: what the L after the first is the clock's.
+    AGAIN='1,/^bulk_in /!{/^bulk_out 02 4c0d0a -> 3$/d;/^bulk_in /d;}'
+    emu_case "set then get voltage" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c voltage_target=5 --get voltage_target
+    emu_case "set then get current" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c current_limit=0.5 --get current_limit
+    emu_case "set then get enabled" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c enabled=on --get enabled
 
     # A capture: a sample every 50 ms, an L at most every 245, so the count of
     # L is the clock's and the count of samples the limit's.
@@ -312,13 +319,14 @@ $!d'
     # scan takes one answer and the capture one, so a first sample comes however
     # long the capture took to start, with or without the scan's L still good for
     # it. Those two good for 245 ms each are at most 10 samples, 20 readings, and
-    # the pipeline counts readings against the limit: its warning always comes at 24.
-    # C's clock runs from before its 2 s of waiting, so from the silence on each of
-    # its samples takes those 2 s: "says so" is about 40 s, for the sake of that line.
+    # the pipeline counts readings against the limit, so its warning always comes at
+    # 24. C's clock runs from before its 2 s of waiting, so from the silence on each of
+    # its samples takes those 2 s: oxrok's line is pinned alone, and C's repeats are in
+    # "unplug in a capture says so", which takes no such wait.
     emu_options setters=0 output=1 answers=2
     emu_case "silent from the capture on" --filter "$PAIRS" --tx-filter "$ASKS" --timeout 25 -- -d $K --samples 12
-    emu_case "silent from the capture on says so" --oracle-differs "$SILENT_BUG" --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 60 -- -d $K --samples 24
-    emu_case "silent with a time limit" --filter "3,\$d" --tx-filter "$ASKS" --timeout 15 -- -d $K --time 700ms
+    emu_case "silent from the capture on says so" --no-oracle-only --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 15 -- -d $K --samples 24
+    emu_case "silent with a time limit" --filter "3,\$d" --tx-filter "$ASKS" --timeout 15 -- -d $K --time 1500ms
     # A device that never stops talking, which the drain waits out.
     emu_options setters=0 babble=1
     emu_case "scan a device that keeps talking" --oracle-bug "$HANG_BUG" --oracle-hangs --stderr --filter "$L" --timeout 6 --tx-filter '/^bulk_in /d' -- -d $K --scan

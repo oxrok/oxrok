@@ -15,15 +15,19 @@
 //! it again and sends nothing.
 //!
 //! A `--get` or `--show` answers what the last `L` said, asking again only if that
-//! was over 245 ms ago, as a capture does. So a capture sends a reading every 50
-//! ms, one in about five of them new. Each command waits for the 50 ms the last
-//! one needs.
+//! was over 245 ms ago, as a capture does. On a real unit, whose answer takes that
+//! long, each sample of a capture is new. Each command waits for the 50 ms the last
+//! one needs. A key the device does not have asks nothing, as sigrok-cli looks in
+//! the option list first (`main.c:81`), and this driver is asked for one ahead of
+//! each capture, while the output is still to go on.
 //!
 //! A status that does not read leaves no reading: C sends what it last had, parts
 //! of the failed status among it, and counts a sample, where here no sample comes
-//! until one reads. Where a sample limit alone could end the capture that ends
-//! after [`NO_REPLY_BOUND`]. A port that fails ends the capture, as nothing will
-//! come of it. See [`protocol`].
+//! until one reads. Two kinds of failure differ. A whole answer that does not read
+//! is a device that is there, as when its panel is setting a limit, so the capture
+//! waits for it. Nothing, or part of an answer, is silence, and where a sample limit
+//! alone could end the capture that ends after [`NO_REPLY_BOUND`] of it. A port that
+//! fails ends the capture, as nothing will come of it. See [`protocol`].
 
 #![forbid(unsafe_code)]
 
@@ -62,9 +66,10 @@ static DEV_OPTIONS: [OptionDesc; 10] = [
 
 /// `serial_source_add`'s timeout: the time between two samples.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(50);
-/// How long a capture that only a sample limit can end goes on with no status
-/// that reads, where C counts what it last had. A failed read is at least 2 s, so
-/// this allows a second try, and a supply busy on its panel for a moment passes.
+/// How long a capture that only a sample limit can end goes on hearing nothing, or
+/// only parts of answers, where C counts what it last had. A failed read is at
+/// least 2 s, so this allows a second try. A whole answer that does not read resets
+/// it: touching the panel must not end a capture.
 pub const NO_REPLY_BOUND: Duration = Duration::from_secs(5);
 /// How long the End waits for room in the queue once a stop has come. A client
 /// that stops drains (`Session` does); one that does not must not hold up a close.
@@ -280,8 +285,11 @@ impl Device for PspDevice {
             }
             _ => {}
         }
+        if !DEV_OPTIONS.iter().any(|o| o.key == *key && o.access.get) {
+            return Err(Error::UnknownKey(key.id().to_owned()));
+        }
         let mut link = self.link();
-        if link.poll(&AtomicBool::new(false))? == Poll::Failed {
+        if matches!(link.poll(&AtomicBool::new(false))?, Poll::Unreadable | Poll::Silent) {
             return Err(Error::device("no status from the device"));
         }
         Ok(match key {
@@ -446,7 +454,8 @@ impl Capture {
         let limit = Duration::from_millis(self.limit_msec);
         let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         let mut samples = 0u64;
-        let mut last_good = started;
+        // When the device last gave a whole answer, whether or not it read.
+        let mut last_heard = started;
         loop {
             if !wait(SAMPLE_INTERVAL, stop) {
                 return;
@@ -458,22 +467,21 @@ impl Capture {
                 poll_packets(&mut link, self.enabled, stop)
             };
             match polled {
-                Ok(Some(packets)) => {
-                    last_good = Instant::now();
+                Ok(Pass::Sample(packets)) => {
+                    last_heard = Instant::now();
                     if !packets.into_iter().all(|p| sink.send_while(p, go_on)) {
                         return;
                     }
                     samples += 1;
                 }
-                Ok(None) => {
-                    if stop.load(Ordering::SeqCst) {
-                        return;
-                    }
-                    if only_samples_can_end && last_good.elapsed() >= self.no_reply_bound {
+                Ok(Pass::Unreadable) => last_heard = Instant::now(),
+                Ok(Pass::Silent) => {
+                    if only_samples_can_end && last_heard.elapsed() >= self.no_reply_bound {
                         log::error!("No status from the device for {:?}.", self.no_reply_bound);
                         return;
                     }
                 }
+                Ok(Pass::Stopped) => return,
                 // The port failed: nothing more will come of this capture.
                 Err(e) => {
                     log::error!("Acquisition failed: {e}.");
@@ -490,16 +498,26 @@ impl Capture {
     }
 }
 
-/// The packets of one pass: what changed, then the two readings. `None` when the
-/// last status did not read, or a stop came.
-fn poll_packets(
-    link: &mut Link,
-    enabled: [bool; 2],
-    stop: &AtomicBool,
-) -> Result<Option<Vec<Packet>>> {
+/// What one pass of a capture came to.
+enum Pass {
+    /// What changed, then the two readings.
+    Sample(Vec<Packet>),
+    /// No sample, from a device that gave a whole answer.
+    Unreadable,
+    /// No sample, and nothing or only part of an answer.
+    Silent,
+    /// A stop came.
+    Stopped,
+}
+
+/// One pass: a status, and the packets it comes to.
+fn poll_packets(link: &mut Link, enabled: [bool; 2], stop: &AtomicBool) -> Result<Pass> {
     let before = link.status;
-    if matches!(link.poll(stop)?, Poll::Failed | Poll::Stopped) || !link.fresh {
-        return Ok(None);
+    match link.poll(stop)? {
+        Poll::Cached | Poll::Fresh => {}
+        Poll::Unreadable => return Ok(Pass::Unreadable),
+        Poll::Silent => return Ok(Pass::Silent),
+        Poll::Stopped => return Ok(Pass::Stopped),
     }
     let mut packets = Vec::new();
     if before.otp_active != link.status.otp_active {
@@ -520,7 +538,7 @@ fn poll_packets(
     if enabled[CHANNEL_I] {
         packets.push(analog(CHANNEL_I, link.status.current, Mq::Current, Unit::Ampere, 3));
     }
-    Ok(Some(packets))
+    Ok(Pass::Sample(packets))
 }
 
 /// Whether the device reports a voltage target other than the last set, and
@@ -582,6 +600,7 @@ fn analog(channel: usize, value: f32, mq: Mq, unit: Unit, digits: i32) -> Packet
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 
     /// How long a test waits for a capture before it fails: a stop or a limit
@@ -607,6 +626,7 @@ mod tests {
         babble: bool,
         fail_writes_after: Option<usize>,
         fail_reads: bool,
+        purges: Arc<AtomicUsize>,
     }
 
     impl Fake {
@@ -624,6 +644,7 @@ mod tests {
                 babble: false,
                 fail_writes_after: None,
                 fail_reads: false,
+                purges: Arc::new(AtomicUsize::new(0)),
             };
             (fake, seen)
         }
@@ -686,7 +707,95 @@ mod tests {
         }
         fn purge(&mut self) -> Result<()> {
             self.input.clear();
+            self.purges.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+    }
+
+    /// A supply at 2400 baud: its first byte `latency` after the `L`, then 4.17 ms a
+    /// byte, and each answer's V one higher than the last, so a stale one shows. A
+    /// purge takes only what has arrived, as a tty's does.
+    struct Uart {
+        seen: Seen,
+        input: VecDeque<(Instant, u8)>,
+        answers: u32,
+        latency: Duration,
+        line_end: &'static [u8],
+    }
+
+    impl Uart {
+        fn new(latency_ms: u64, line_end: &'static [u8]) -> (Uart, Seen) {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let uart = Uart {
+                seen: Arc::clone(&seen),
+                input: VecDeque::new(),
+                answers: 0,
+                latency: Duration::from_millis(latency_ms),
+                line_end,
+            };
+            (uart, seen)
+        }
+
+        fn arrived(&self) -> usize {
+            let now = Instant::now();
+            self.input.iter().take_while(|(at, _)| *at <= now).count()
+        }
+    }
+
+    impl Port for Uart {
+        fn name(&self) -> &'static str {
+            "/dev/ttyFAKE"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            let due = Instant::now() + timeout;
+            loop {
+                let n = self.arrived().min(buf.len());
+                if n > 0 {
+                    for b in &mut buf[..n] {
+                        *b = self.input.pop_front().expect("counted").1;
+                    }
+                    return Ok(n);
+                }
+                if Instant::now() >= due {
+                    return Ok(0);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            let now = Instant::now();
+            self.seen.lock().unwrap().push((now, data.to_vec()));
+            if data == b"L\r\n" {
+                self.answers += 1;
+                let mut reply =
+                    format!("V{:02}.00A0.500W006.0U60I1.00P200F100100", self.answers).into_bytes();
+                reply.extend_from_slice(self.line_end);
+                let mut at = self.input.back().map_or(now, |(last, _)| now.max(*last));
+                at += self.latency;
+                for byte in reply {
+                    at += Duration::from_micros(4170);
+                    self.input.push_back((at, byte));
+                }
+            }
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            let n = self.arrived();
+            self.input.drain(..n);
+            Ok(())
+        }
+    }
+
+    fn voltage(d: &PspDevice) -> f64 {
+        match d.get(&Key::Voltage, None) {
+            Ok(Value::F64(v)) => v,
+            other => panic!("{other:?}"),
         }
     }
 
@@ -760,7 +869,16 @@ mod tests {
 
     /// Waits, with a bound, until `what` holds.
     fn wait_for(what: impl Fn() -> bool) {
-        let deadline = Instant::now() + CAPTURE_BOUND;
+        wait_within(CAPTURE_BOUND, what);
+    }
+
+    /// For what takes a good part of [`CAPTURE_BOUND`] at full speed already.
+    fn wait_for_long(what: impl Fn() -> bool) {
+        wait_within(CAPTURE_BOUND * 6, what);
+    }
+
+    fn wait_within(bound: Duration, what: impl Fn() -> bool) {
+        let deadline = Instant::now() + bound;
         while !what() {
             assert!(Instant::now() < deadline, "did not happen within the bound");
             std::thread::sleep(Duration::from_millis(2));
@@ -843,15 +961,19 @@ mod tests {
 
     #[test]
     fn a_get_inside_the_time_asks_nothing_and_one_after_asks_again() {
-        let (fake, seen) = Fake::new(ON);
-        let fake = fake.with(&[ON]);
-        let d = device(fake.with(&[ON_11]));
-        assert_eq!(count_l(&seen), 1);
-        assert!(matches!(d.get(&Key::Voltage, None), Ok(Value::F64(v)) if v == 12.0));
-        assert_eq!(count_l(&seen), 1);
+        let (fake, seen) = Fake::new(ON_11);
+        let began = Instant::now();
+        let d = device(fake.with(&[ON]));
+        let first = voltage(&d);
+        // Only if this was in the time: a slow box has every right to ask again.
+        if began.elapsed() < protocol::STATUS_POLL_TIME {
+            assert_eq!(count_l(&seen), 1);
+            assert_eq!(first, 12.0);
+        }
+        let asked = count_l(&seen);
         std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
-        assert!(matches!(d.get(&Key::Voltage, None), Ok(Value::F64(v)) if v == 11.0));
-        assert_eq!(count_l(&seen), 2);
+        assert_eq!(voltage(&d), 11.0);
+        assert_eq!(count_l(&seen), asked + 1);
     }
 
     #[test]
@@ -1054,12 +1176,11 @@ mod tests {
         assert_eq!(readings(&all).len(), 16);
         assert_eq!(readings(&all)[..2], [(CHANNEL_V, 12.0), (CHANNEL_I, 0.5)]);
         assert!(matches!(all[0], Packet::Header { .. }));
-        // The times of the L, at least the status time apart.
-        let times: Vec<Instant> =
-            seen.lock().unwrap().iter().filter(|(_, w)| w == b"L\r\n").map(|(t, _)| *t).collect();
-        assert!(times.len() >= 2, "{}", times.len());
-        let least = times.windows(2).map(|w| w[1] - w[0]).min().unwrap();
-        assert!(least > Duration::from_millis(245), "{least:?}");
+        // The status time goes from the clock read ahead of each write, not from
+        // when the write went, so count them: the scan's, and one per status time.
+        let most = 2 + took.as_millis() / protocol::STATUS_POLL_TIME.as_millis();
+        let asked = count_l(&seen) as u128;
+        assert!((2..=most).contains(&asked), "{asked} L in {took:?}");
     }
 
     #[test]
@@ -1158,7 +1279,8 @@ mod tests {
     #[test]
     fn a_new_target_waits_for_a_second_after_the_last() {
         let (fake, _) = Fake::new(OFF_7);
-        let mut d = device(fake.with(&[OFF]));
+        // Twice: the capture's first look may be the scan's L or one of its own.
+        let mut d = device(fake.with(&[OFF, OFF]));
         d.set(&Key::LimitSamples, &Value::U64(36), None).unwrap();
         let rx = start(&mut d);
         let all = packets(&rx);
@@ -1166,11 +1288,12 @@ mod tests {
         assert_eq!(found.len(), 2, "{found:?}");
         assert!(matches!(found[0].1, Value::F64(v) if v == 12.0));
         assert!(matches!(found[1].1, Value::F64(v) if v == 7.0));
-        // At 50 ms a sample, about 20 samples lie between the two.
+        // At 50 ms a sample, about 20 lie between the two, and a slower clock has
+        // fewer. `target_news_is_cs_condition` holds the second to the millisecond.
         let first = all.iter().position(|p| matches!(p, Packet::Meta(_))).unwrap();
         let second = all.iter().rposition(|p| matches!(p, Packet::Meta(_))).unwrap();
         let between = readings(&all[first..second]).len() / 2;
-        assert!(between >= 5, "{between}");
+        assert!(between >= 1, "{between}");
     }
 
     #[test]
@@ -1264,6 +1387,173 @@ mod tests {
         let values = readings(&packets(&rx));
         assert_eq!(values.len(), 16);
         assert!(values.contains(&(CHANNEL_V, 11.0)));
+    }
+
+    /// One glitch after a long good run: the bound is from the last answer heard.
+    #[test]
+    fn the_bound_runs_from_the_last_answer_and_not_the_start() {
+        let (fake, seen) = Fake::new(ON_11);
+        // At one an L, about 245 ms apart: over 5 s of them, then one that is silent.
+        let mut d = device(fake.with(&[ON; 22]).with_raw(&[b""]));
+        d.set(&Key::LimitSamples, &Value::U64(1_000_000), None).unwrap();
+        let began = Instant::now();
+        let rx = start(&mut d);
+        // Past the bound from the start, and on through the glitch.
+        wait_for_long(|| count_l(&seen) >= 26);
+        assert!(began.elapsed() >= NO_REPLY_BOUND, "{:?}", began.elapsed());
+        assert!(!rx.try_iter().any(|(_, p)| matches!(p, Packet::End)), "the glitch ended it");
+        d.stop().unwrap();
+        packets(&rx);
+    }
+
+    /// Nothing but an unreadable frame, with a bound far shorter than the wait for
+    /// each: the capture goes on, where nothing arriving would have ended it.
+    #[test]
+    fn a_whole_frame_that_does_not_read_is_not_silence() {
+        let (fake, seen) = Fake::new(b"V12.00A0.500W006.0u60I1.00P200F100100");
+        let mut d = device(fake.with(&[ON, ON]));
+        d.no_reply_bound = Duration::from_millis(10);
+        d.set(&Key::LimitSamples, &Value::U64(1_000_000), None).unwrap();
+        let rx = start(&mut d);
+        let asked = count_l(&seen);
+        wait_for(|| count_l(&seen) >= asked + 4);
+        assert!(!rx.try_iter().any(|(_, p)| matches!(p, Packet::End)), "the panel ended it");
+        d.stop().unwrap();
+        packets(&rx);
+    }
+
+    #[test]
+    fn part_of_a_frame_is_silence() {
+        let (fake, _) = Fake::new(b"");
+        let fake = fake.with(&[ON, ON]).with_raw(&[b"V12.00A0.5"]);
+        let mut d = device(fake);
+        d.no_reply_bound = Duration::from_millis(10);
+        d.set(&Key::LimitSamples, &Value::U64(1_000_000), None).unwrap();
+        let rx = start(&mut d);
+        packets(&rx);
+    }
+
+    #[test]
+    fn silence_does_not_end_a_capture_with_no_limit() {
+        let (fake, seen) = Fake::new(b"");
+        let mut d = device(fake.with(&[ON]));
+        d.no_reply_bound = Duration::from_millis(10);
+        let rx = start(&mut d);
+        wait_for(|| count_l(&seen) >= 4);
+        assert!(!rx.try_iter().any(|(_, p)| matches!(p, Packet::End)), "the bound ended it");
+        d.stop().unwrap();
+        packets(&rx);
+    }
+
+    /// A stop just after the `L`, and part way through its answer. Either way what
+    /// comes after reads its own, where it was one behind for good.
+    #[test]
+    fn a_stop_during_a_reply_leaves_no_later_read_behind() {
+        for after_l in [Duration::ZERO, Duration::from_millis(150)] {
+            let (uart, seen) = Uart::new(80, b"\r\n");
+            let mut d = PspDevice::from_port(model(), Box::new(uart));
+            d.open().unwrap();
+            let rx = start(&mut d);
+            wait_for(|| count_l(&seen) >= 3);
+            std::thread::sleep(after_l);
+            d.stop().unwrap();
+            packets(&rx);
+            std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+            for _ in 0..3 {
+                let v = voltage(&d);
+                assert_eq!(v, count_l(&seen) as f64, "{after_l:?}");
+                std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+            }
+        }
+    }
+
+    /// The same for the next capture, straight after: nothing has come yet.
+    #[test]
+    fn a_capture_after_a_stop_during_a_reply_reads_its_own() {
+        let (uart, seen) = Uart::new(80, b"\r\n");
+        let mut d = PspDevice::from_port(model(), Box::new(uart));
+        d.open().unwrap();
+        let rx = start(&mut d);
+        wait_for(|| count_l(&seen) >= 3);
+        d.stop().unwrap();
+        packets(&rx);
+        d.set(&Key::LimitSamples, &Value::U64(5), None).unwrap();
+        let rx = start(&mut d);
+        let got: Vec<f32> = readings(&packets(&rx))
+            .iter()
+            .filter(|(c, _)| *c == CHANNEL_V)
+            .map(|(_, v)| *v)
+            .collect();
+        // Each is an L's own, in turn. The first may be the last status kept.
+        let last = *got.last().unwrap();
+        assert_eq!(last, count_l(&seen) as f32, "{got:?}");
+    }
+
+    /// A stop during the settling itself leaves the rest for the next one.
+    #[test]
+    fn a_stop_while_settling_keeps_what_is_still_to_come() {
+        let (uart, seen) = Uart::new(80, b"\r\n");
+        let mut d = PspDevice::from_port(model(), Box::new(uart));
+        d.open().unwrap();
+        let stop = AtomicBool::new(true);
+        {
+            let mut link = d.link();
+            std::thread::sleep(Duration::from_millis(1));
+            assert_eq!(link.poll(&stop).unwrap(), Poll::Stopped, "stopped in its read");
+            assert_eq!(link.poll(&stop).unwrap(), Poll::Stopped, "and in the settling");
+        }
+        assert_eq!(count_l(&seen), 1, "no L while one is on its way");
+        std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+        assert_eq!(voltage(&d), 2.0);
+        assert_eq!(count_l(&seen), 2);
+    }
+
+    /// URPSP1's last byte comes a byte's time after the read of the short line end:
+    /// the 20 ms wait is what sees it, and without it each later read is misplaced.
+    #[test]
+    fn the_late_byte_of_a_longer_line_end_is_waited_for() {
+        let (uart, _) = Uart::new(0, b"\r\r\n");
+        let mut link = Link::new(Some(Box::new(uart)), params(), model());
+        let never = AtomicBool::new(false);
+        assert_eq!(link.poll(&never).unwrap(), Poll::Fresh);
+        link.check_terminator().unwrap();
+        for want in [2.0, 3.0] {
+            std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+            assert_eq!(link.poll(&never).unwrap(), Poll::Fresh);
+            assert_eq!(link.status.voltage, want);
+        }
+    }
+
+    #[test]
+    fn a_key_the_device_does_not_have_asks_nothing() {
+        let (fake, seen) = Fake::new(ON);
+        let d = device(fake);
+        std::thread::sleep(protocol::STATUS_POLL_TIME + Duration::from_millis(5));
+        for key in [Key::Samplerate, Key::Continuous] {
+            assert!(matches!(d.get(&key, None), Err(Error::UnknownKey(_))), "{key:?}");
+        }
+        assert_eq!(count_l(&seen), 1);
+    }
+
+    /// A close comes back with its capture over: the End has already gone.
+    #[test]
+    fn a_close_joins_the_capture() {
+        let (fake, _) = Fake::new(ON);
+        let mut d = device(fake);
+        let rx = start(&mut d);
+        d.close().unwrap();
+        assert!(d.worker.is_none());
+        assert!(rx.try_iter().any(|(_, p)| matches!(p, Packet::End)), "no End yet");
+    }
+
+    #[test]
+    fn a_close_drops_what_is_unread() {
+        let (fake, _) = Fake::new(ON);
+        let purges = Arc::clone(&fake.purges);
+        let mut d = device(fake);
+        let before = purges.load(Ordering::SeqCst);
+        d.close().unwrap();
+        assert_eq!(purges.load(Ordering::SeqCst), before + 1);
     }
 
     #[test]

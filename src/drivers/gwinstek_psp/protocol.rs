@@ -18,7 +18,12 @@
 //! place in the frame: byte 31 the output, byte 32 over temperature. While the
 //! panel sets a limit its letter is in lower case, and `u` or `i` fails the read.
 //! The answer takes about 245 ms on a real unit, and within that time of the
-//! last `L` the driver answers what it has.
+//! last `L` the driver answers what it has, so with a sample every 50 ms after a
+//! read each sample there is new. A device that answers at once, as the model
+//! does, gives one new sample in about five.
+//!
+//! A stop can come with an answer on its way. It is not left for the next read
+//! to take for its own: see [`Link::poll`].
 
 use crate::core::{Error, Result};
 use crate::serial::{Params, Port, read_blocking};
@@ -124,7 +129,9 @@ fn hex_float(text: &[u8]) -> Option<(f64, usize)> {
         scale = scale.saturating_add(if negative { -exponent } else { exponent });
         at += 1 + sign + n;
     }
-    Some((value * 2f64.powi(scale), at))
+    // Zero whatever the exponent, where a huge one is 0 x inf, a NaN.
+    let value = if value == 0.0 { 0.0 } else { value * 2f64.powi(scale) };
+    Some((value, at))
 }
 
 /// `sscanf`'s `%f`, as glibc reads it: the value and the bytes used, or `None`
@@ -282,8 +289,11 @@ pub enum Poll {
     Cached,
     /// An answer was read.
     Fresh,
-    /// No answer that reads as one.
-    Failed,
+    /// A whole answer that does not read: the device is there, as when its panel
+    /// is setting a limit and its letter is in lower case.
+    Unreadable,
+    /// Nothing, or only part of an answer.
+    Silent,
     /// A stop came during the wait.
     Stopped,
 }
@@ -311,12 +321,12 @@ pub struct Link {
     pub set_voltage_target: f32,
     /// When that was.
     pub set_voltage_target_updated: Option<Instant>,
-    /// Whether the last poll read a status, so what is kept is a reading.
-    pub fresh: bool,
     /// 2 or 3: CR LF or CR CR LF.
     terminator_len: usize,
     next_request: Option<Instant>,
     last_query: Option<Instant>,
+    /// How much of the last `L`'s answer a stop left unread, and when that `L` went.
+    unread: Option<(usize, Instant)>,
 }
 
 impl Link {
@@ -333,10 +343,10 @@ impl Link {
             voltage_target_updated: None,
             set_voltage_target: 0.0,
             set_voltage_target_updated: None,
-            fresh: true,
             terminator_len: 2,
             next_request: None,
             last_query: None,
+            unread: None,
         }
     }
 
@@ -391,12 +401,32 @@ impl Link {
         Ok(())
     }
 
-    /// `gwinstek_psp_get_all_values`.
+    /// Waits out what a stop left of an answer, up to the time that answer had from
+    /// its `L`, and drops it: else each later read takes the one before its own.
+    /// False if a stop came again, which leaves what is still to come noted.
+    fn settle_unread(&mut self, stop: &AtomicBool) -> Result<bool> {
+        let Some((left, asked)) = self.unread else { return Ok(true) };
+        let time = (asked + READ_TIME).saturating_duration_since(Instant::now());
+        let mut rest = [0u8; 50];
+        let got = self.read(&mut rest[..left], time, stop)?;
+        if got < left && stop.load(Ordering::SeqCst) {
+            self.unread = Some((left - got, asked));
+            return Ok(false);
+        }
+        self.unread = None;
+        self.port()?.purge()?;
+        Ok(true)
+    }
+
+    /// `gwinstek_psp_get_all_values`, ahead of it what an earlier stop left.
     ///
     /// # Errors
     ///
     /// What the port gives, where a write fails or a read does.
     pub fn poll(&mut self, stop: &AtomicBool) -> Result<Poll> {
+        if !self.settle_unread(stop)? {
+            return Ok(Poll::Stopped);
+        }
         let now = Instant::now();
         if let Some(delta) = self.last_query.map(|last| now.duration_since(last))
             && delta <= STATUS_POLL_TIME
@@ -412,20 +442,23 @@ impl Link {
         let got = self.read(&mut reply[..wanted], READ_TIME, stop).inspect_err(|e| {
             log::error!("Error {e} reading from device.");
         })?;
-        if stop.load(Ordering::SeqCst) {
+        if got < wanted && stop.load(Ordering::SeqCst) {
+            self.unread = Some((wanted - got, now));
             return Ok(Poll::Stopped);
         }
         log::debug!("Received: '{}'", reply[..got].escape_ascii());
         let status = (got == wanted).then(|| parse_status(&reply[..got])).flatten();
         let Some(status) = status else {
             log::error!("Parsing status payload failed");
-            self.fresh = false;
             self.drain(stop)?;
-            return Ok(if stop.load(Ordering::SeqCst) { Poll::Stopped } else { Poll::Failed });
+            if stop.load(Ordering::SeqCst) {
+                self.unread = Some((0, now));
+                return Ok(Poll::Stopped);
+            }
+            return Ok(if got == wanted { Poll::Unreadable } else { Poll::Silent });
         };
         self.status = status;
         self.output_enabled = status.output_enabled;
-        self.fresh = true;
         if status.output_enabled {
             self.voltage_or_0 = status.voltage;
         } else {
@@ -513,8 +546,9 @@ impl Link {
         self.send(&voltage_command(volts))?;
         self.set_voltage_target = volts as f32;
         self.set_voltage_target_updated = Some(Instant::now());
-        // What a get answers until the device says otherwise; the capture's
-        // comparison waits a second past this, so it does not see the difference.
+        // What a get answers until an `L` with the output off says otherwise: with
+        // it on, no `L` tells the target, so this stands. The capture's comparison
+        // waits a second past this, so it does not see the difference.
         self.voltage_target = volts as f32;
         Ok(())
     }
@@ -620,6 +654,12 @@ mod tests {
         assert_eq!(s.current_limit, 0.5);
         assert!(parse_status(&frame(b"V0x10A0.000W000.0U60I1.00")).is_none());
         assert!(parse_status(&frame(b"V0xZA0W0U60I1")).is_none());
+        // Zero, as glibc has it, whatever the exponent.
+        assert_eq!(parse_status(&frame(b"V0x0p9999Z")), None);
+        let s = parse_status(&frame(b"V1A0W0U1I0x0p9999Z")).unwrap();
+        assert_eq!(s.current_limit, 0.0);
+        let s = parse_status(&frame(b"V1A0W0U1I0x0.0p-9999Z")).unwrap();
+        assert_eq!(s.current_limit, 0.0);
         assert!(parse_status(&frame(b"V0x1pA0W0U60I1")).is_none());
     }
 
