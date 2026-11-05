@@ -111,10 +111,14 @@ emu_cases() {
     # sigrok-cli keeps the pairs of one -c in a GHashTable and sets them in
     # its order, g_hash_table_iter_next() at session.c:700-701 (frequency,
     # enabled, duty); oxrok sets enabled=on last and the others as given.
-    # These two give the others in that order; "pwm option order" pins the
-    # difference and "pwm stays off" what it is for.
+    # These two give the others in that order, without enabled; "one by one"
+    # has it too, "pwm option order" pins the difference and "pwm stays off"
+    # what it is for.
     emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5
     emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:output_duty_cycle=50
+    # Each option in a -c of its own: sigrok-cli keeps that order, enabled last.
+    emu_case "pwm1 options one by one" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000 -c output_duty_cycle=50 -c enabled=on
+    emu_case "pwm2 options one by one" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345 -c output_duty_cycle=12.5 -c enabled=on
     emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok enabled=on last" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm stays off with a refused duty" --oracle-bug "it turns the output on, then refuses the duty (its hash table order, session.c:700-701)" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c enabled=on:output_duty_cycle=101
     # The device has no enabled of its own: refused before PWM1 goes on.
