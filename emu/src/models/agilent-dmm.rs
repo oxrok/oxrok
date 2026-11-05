@@ -23,7 +23,7 @@
 //! - The sigrok wiki's page on the series (`Agilent_U1231A`): more `*IDN?`
 //!   answers, `"V,0,AC"` on the U123x, `"VOLT:AC +1.000000E+00,+1.000000E-04"`
 //!   on the U124x and U125x, overload as `+9.90000000E+37`, `LOG:HAND N` and
-//!   its kin with 14 digit entries on the U124xC and U128x, `*E` for an index
+//!   its kin with 14 digit entries on the `U124xC` and U128x, `*E` for an index
 //!   out of range, and 19200 Bd on some U127x.
 //! - That the guide's `CONF?` line is in double quotes on a U128x comes from the
 //!   wiki's on other models. No recording was found of any meter.
@@ -108,7 +108,7 @@ enum Family {
     Fields,
     /// U124x, U125x: `"VOLT:AC +1.000000E+00,+1.000000E-04"`.
     Six,
-    /// U124xC, U128x: the same with eight decimals, and a log.
+    /// `U124xC`, U128x: the same with eight decimals, and a log.
     Eight,
 }
 
@@ -287,6 +287,7 @@ enum Session {
 
 const SOURCES: [&str; 4] = ["LOG:HAND", "LOG:TRIG", "LOG:AUTO", "LOG:EXPO"];
 
+#[allow(clippy::struct_excessive_bools)]
 struct Meter {
     config: Config,
     id: Option<Packets>,
@@ -559,6 +560,7 @@ impl Serial for Meter {
 mod tests {
     use super::*;
     use crate::shells::cdc::host::Host;
+    use std::fmt::Write as _;
 
     fn meter(options: &[(&str, &str)]) -> Host<Meter> {
         let o: Vec<(String, String)> =
@@ -595,7 +597,7 @@ mod tests {
             assert_eq!(fields.len(), 4, "{text}");
             assert_eq!(fields[1], p.name);
             assert_eq!(violations(&mut h), 0);
-            assert!(!ask(&mut h, "FETC?").is_empty());
+            assert_ne!(ask(&mut h, "FETC?"), Vec::<u8>::new());
             assert_eq!(violations(&mut h), 0);
         }
     }
@@ -626,7 +628,7 @@ mod tests {
             true,
         );
         h.write(b"*IDN?\r\n");
-        assert!(!h.read().is_empty());
+        assert_ne!(h.read(), Vec::<u8>::new());
     }
 
     #[test]
@@ -676,7 +678,7 @@ mod tests {
         assert!(h.cdc.mark());
         let mut h = identified(&[("answers", "1")]);
         assert!(!h.cdc.mark(), "*IDN? does not count");
-        assert!(!ask(&mut h, "CONF?").is_empty());
+        assert_ne!(ask(&mut h, "CONF?"), Vec::<u8>::new());
         assert!(!h.cdc.mark());
         assert_eq!(ask(&mut h, "STAT?"), b"");
         assert!(h.cdc.mark());
@@ -711,7 +713,11 @@ mod tests {
     }
 
     fn emu_hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|b| format!("{b:02x}")).collect()
+        let mut hex = String::new();
+        for b in bytes {
+            write!(hex, "{b:02x}").unwrap();
+        }
+        hex
     }
 
     #[test]
