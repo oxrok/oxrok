@@ -163,6 +163,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)] // independent options
 struct Config {
     /// What the panel takes: volts.
     vmax: u32,
