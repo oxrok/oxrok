@@ -5,3 +5,5 @@ bulk_out 02 01050500ff008cf6 -> 8
 bulk_in 82 8 -> 01050500ff008cf6
 bulk_out 02 010105100001fcc3 -> 8
 bulk_in 82 6 -> 0101030050e8
+bulk_out 02 010505000000cd06 -> 8
+bulk_in 82 8 -> 010505000000cd06

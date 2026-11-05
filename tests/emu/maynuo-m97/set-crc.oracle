@@ -1,0 +1,2 @@
+sr: modbus_serial: CRC error (0xD012 vs 0xD013).
+Failed to set device option 'current_limit': data is invalid.

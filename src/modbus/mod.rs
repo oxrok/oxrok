@@ -9,7 +9,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! Modbus RTU over a serial port, for the drivers of instruments that speak
-//! it (`rdtech-dps`, and `maynuo-m97` to come).
+//! it (`rdtech-dps` and `maynuo-m97`).
 //!
 //! A [`Modbus`] holds a [`Port`] and the slave's address, and gives what
 //! `modbus.c` and `modbus_serial_rtu.c` give: a request and a reply as PDUs,

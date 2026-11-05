@@ -1,2 +1,1 @@
-The following devices were found:
-maynuo-m97 - Maynuo M9710 v12.3 with 2 channels: V1 I1
+modbusaddr must be 0 to 255
