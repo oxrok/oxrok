@@ -308,30 +308,32 @@ $!d'
     emu_case "a reply too long" --oracle-differs "$FLOOD_BUG" --keep-header --filter "$PAIRS" --tx-filter "$FOLD" --timeout 15 -- -d $K --samples 30
     emu_options setters=0 output=1 limit-mode=u
     emu_case "the panel sets a limit from the start" --filter "$L" --expect-fail --stderr --timeout 8 -- -d $K --samples 1
-    # Silent from some L on: each L then takes 1 s and the drain 1 s more.
-    emu_options setters=0 output=1 answers=1
-    emu_case "silent from the capture on" --filter "$PAIRS" --tx-filter "$ASKS" --timeout 15 -- -d $K --samples 7
-    emu_case "silent from the capture on says so" --oracle-differs "$SILENT_BUG" --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 15 -- -d $K --samples 7
+    # Silent from some L on: each L then takes 1 s and the drain 1 s more. The
+    # scan takes one answer and the capture one, so a first sample comes however
+    # long the capture took to start, with or without the scan's L still good for
+    # it. Those two good for 245 ms each are at most 10 samples, 20 readings, and
+    # the pipeline counts readings against the limit: its warning always comes at 24.
+    # C's clock runs from before its 2 s of waiting, so from the silence on each of
+    # its samples takes those 2 s: "says so" is about 40 s, for the sake of that line.
+    emu_options setters=0 output=1 answers=2
+    emu_case "silent from the capture on" --filter "$PAIRS" --tx-filter "$ASKS" --timeout 25 -- -d $K --samples 12
+    emu_case "silent from the capture on says so" --oracle-differs "$SILENT_BUG" --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 60 -- -d $K --samples 24
     emu_case "silent with a time limit" --filter "3,\$d" --tx-filter "$ASKS" --timeout 15 -- -d $K --time 700ms
     # A device that never stops talking, which the drain waits out.
     emu_options setters=0 babble=1
     emu_case "scan a device that keeps talking" --oracle-bug "$HANG_BUG" --oracle-hangs --stderr --filter "$L" --timeout 6 --tx-filter '/^bulk_in /d' -- -d $K --scan
     # An unplug in a poll's wait.
-    emu_options setters=0 output=1 answers=1
-    emu_case "unplug in a capture" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 7
-    emu_case "unplug in a capture says so" --oracle-differs "$UNPLUG_BUG" --stderr --filter "$GONE" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 7
+    emu_options setters=0 output=1 answers=2
+    emu_case "unplug in a capture" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
+    emu_case "unplug in a capture says so" --oracle-differs "$UNPLUG_BUG" --stderr --filter "$GONE" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
     # Long enough for C's next L to meet the port gone, which is its write's error.
     emu_case "unplug in a long capture" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 30
     # A quiet point: the L goes unanswered, and the signal lands in its wait.
-    emu_options setters=0 output=1 answers=1
+    emu_options setters=0 output=1 answers=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --filter "$PAIRS" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
-    # A known limit of oxrok's csv with this driver, not a behaviour to keep: a
-    # packet per reading makes two rows a sample, and the driver warns. oxrok
-    # alone, by hand: libsigrok's csv reads past its buffer here too, as with
-    # gwinstek-gpd, so no comparison is possible.
+    # csv holds a row until each enabled channel has reported: one row a sample.
     emu_options setters=0 output=1 load=10 v=5.00 i=2.00
-    emu_case "csv known limit" --no-oracle-only --tx-filter "$FOLD" -- -d $K --samples 2 -O csv:header=false:time=false
-    emu_case "csv known limit warns" --no-oracle-only --stderr --filter "$L" --tx-filter "$FOLD" -- -d $K --samples 1 -O csv:header=false:time=false
+    emu_case "csv" --tx-filter "$FOLD" -- -d $K --samples 2 -O csv:header=false:time=false
     emu_options
 }
 

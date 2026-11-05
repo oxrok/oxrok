@@ -368,18 +368,6 @@ impl Device for PspDevice {
         Ok(())
     }
 
-    /// A known limit: csv takes each packet for a row, and each reading here is a
-    /// packet as in C, so a sample is two rows, with 0 for the other channel. C
-    /// warns as well (`output/csv.c:650-656`) and reads past its buffer.
-    fn note_output(&self, module: &str) {
-        if module == "csv" {
-            log::warn!(
-                "Resulting CSV output data may be incomplete or incorrect: each reading gets a \
-                 row of its own, with 0 for the other channel. Use -O analog."
-            );
-        }
-    }
-
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         if let Some(worker) = &self.worker {
             if !worker.done.load(Ordering::SeqCst) {
