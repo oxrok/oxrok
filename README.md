@@ -63,6 +63,7 @@ Emulator and replay only, never run on hardware:
 | driver | emulator | gcov |
 |---|---|---|
 | `asix-sigma` | 110 cases | 89.4% |
+| `agilent-dmm` | 383 | 97.4% |
 | `atten-pps3203` | 133 | 90.5% |
 | `chronovu-la` | 52 | 87.0% |
 | `dreamsourcelab-dslogic` | 94 | 90.2% |

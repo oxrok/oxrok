@@ -545,6 +545,24 @@ Deliberate, and kept small:
   unplug ends a capture or scan at once, where sigrok-cli takes some 200
   s. A read error sends what a stop sends and ends. `-C V.D-` is refused
   by both tools, in different words, as the dash reads as a range.
+- agilent-dmm: `-O csv` with a display disabled writes every row, where
+  libsigrok's csv loses rows because its channel count includes disabled
+  channels (`output/csv.c:191`, `713`).
+- agilent-dmm: an identity that is empty as a string is no device;
+  sigrok-cli segfaults (`api.c:145-146`). A line that fills the buffer
+  is dropped and the next read, where C stops reading
+  (`protocol.c:188`). A port gone ends the capture; C retries for ever.
+- agilent-dmm: a capture that only a sample limit can end stops after 10
+  s with nothing new from the meter, with an error. sigrok-cli goes on
+  asking.
+- agilent-dmm: `-O analog:digits=spec` shows the same digits as `all`,
+  as oxrok's analog data has one digit count; libsigrok has a separate
+  spec figure for this driver. Read from the code, not run.
+- agilent-dmm: a refused log start says `not supported: ...` where
+  sigrok-cli logs the same text and `Failed to start session.`
+- agilent-dmm: lines with VT, FF, NEL, LS, PS, a CR hidden by a NUL, or
+  non-ASCII digits match differently from GLib's regular expressions. No
+  device is known to send them.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

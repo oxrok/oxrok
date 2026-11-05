@@ -2270,6 +2270,45 @@ the load leaves it on, and one with nothing set, ending on the frame
 that toggled it off, toggles it back on. Silence sends nothing. oxrok
 keeps those wires and warns of each.
 
+## Agilent and Keysight U12xx meters (agilent-dmm)
+
+U1231A-U1233A, U1241A/B, U1242A/B, U1241C, U1242C, U1251A/B-U1253A/B,
+U1271A-U1273AX, U1281A, U1282A (`agilent-dmm`): ported and emulated on
+the CDC-ACM shell. Model `agilent-dmm` (`model=`, `uart=LINE|native`,
+`id=HEX|none`, `conf=`, `conf2=`, `stat=`, `fetc=`, `fetc2=`, `fetc3=`,
+`log=HEX|none`, `answers=`, and the shell's faults), 383 cases,
+2026-11-05: 374 full, 5 `--oracle-bug`, 1 `--oracle-differs`, 3 library.
+gcov 97.4% of the driver. Not emulated: the scan's write going short
+(`api.c:135-136`; a unit test has it), and the real IR or Bluetooth
+cable, which is a USB serial adapter or an rfcomm port, not CDC-ACM.
+Facts come from the C driver, Keysight's U1281A/U1282A guide and the
+sigrok wiki's page on the series; no recording of a meter was found.
+
+The line is 9600/8n1 unless `serialcomm=` says otherwise (some U127x run
+at 19200). A capture polls `CONF?` and `STAT?` once a second and `FETC?`
+per enabled channel at `samplerate` (1 to 20 Hz, default 5). `--samples
+N` counts channel samples, so a three display meter ends at 2 after P2.
+On the U124xC and U128x, `data_source=Log-Hand`, `Log-Trig`, `Log-Auto`
+or `Log-Export` reads the log by index until `*E`; only P1 carries it,
+and other models refuse it as in C.
+
+Turning the dial through OFF for over 10 s ends a sample-limited capture
+with an error, as does any meter silent that long, or a log entry that
+never reads. That is this port's choice: C goes on asking and picks up
+when the meter answers. With `--time`, or no limit, oxrok waits too. A
+meter that answers with no sample (square wave position, a display with
+no quantity) is waited for. So is one answering `*E` to all it is asked:
+each `*E` asks again at once, paced only by the meter and unbounded
+under `--samples`, in both tools.
+
+Kept from C without proof: a U128x reads peak hold as `4` in `STAT?`'s
+fifth letter, where the guide says `1`; on a U128x with P2 enabled, the
+square wave position still gets `FETC?`, because P2's `CONF?` answer
+clears the mode; a meter that answers `CONF?` but not `FETC?` gets no
+further `CONF?`; a `FETC?` answered late is taken for the channel asked
+next, so values shift to the wrong channel (`P2: 1.00300 kHz`, `P1:
+3.00200 kV`).
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

@@ -298,6 +298,42 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A job scheduler's timeout branch can rerun the same job: in
+  `dispatch`, a job given up whose interval is over goes again without
+  `job_next`, so the other jobs starve. Read the path for a timed-out
+  job, not only an answered one.
+- A C flag cleared in a later statement of the same function shows only
+  in a table test: U123x's DIOD sets DC and loses it at the end, and
+  U128x's byte 4 clears the MAX byte 0 set. Write expected flags from
+  the golden, not from the first branch.
+- `MIN(nb_channels, 2)` next to a comment about a third channel: on a
+  two channel meter the comment's channel gets the query. A model
+  written from the comment flagged what C sends; the oracle run showed
+  it.
+- libsigrok's csv counts disabled channels, so a `-C` subset on a
+  multi-channel analog driver loses rows there: full csv cases need all
+  channels enabled or a one channel model, and an `--oracle-differs` for
+  the rest.
+- Jobs on wall-clock intervals: "N of one per one of the other" is a
+  margin, not a fact, and two runs on a quiet box don't show it. Put a
+  case that needs a second slow job where the intervals are equal, or
+  end it before the second round. Then run `--no-oracle` under a shim
+  that scales `poll` and `nanosleep`, and under SIGSTOP stalls.
+- A wrapper around a tool under test must keep its pid: a parent that
+  doesn't forward SIGINT turns an interrupt case into exit 130.
+- A unit test with a time limit and an index into what it saw goes red
+  only under CPU pressure. A shim that scales sleeps may not show it, as
+  the limit runs on real time; use a CPU quota as well. Wait for what
+  the test needs, then stop.
+- A `--tx-filter` that deletes all of a repeated transfer deletes the
+  behaviour named by the case. Keep one of the run:
+  `/re/{x;/F/{x;d;};s/$/F/;x;}`, written on separate lines for BSD sed.
+- A silent job's writes merge into one `.tx` line when no reply
+  separates them, so a count of them is wall clock: match the whole
+  merged line with `(...)+`, not one write.
+- A test that a close joins needs the worker to still hold something
+  when a non-joining close returns: a Fake with a slow read and a Drop
+  flag. An empty slot shows nothing.
 - A periodic stream can't be held to a `.tx` by its period alone: hold
   it while a command is coming in, and count the period from the last
   frame or command.
