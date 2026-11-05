@@ -311,18 +311,15 @@ impl Link {
         let mut line = Vec::new();
         let mut next = first;
         loop {
-            let byte = match next.take() {
-                Some(byte) => byte,
-                None => {
-                    let left = REPLY_TIME.saturating_sub(started.elapsed());
-                    if left.is_zero() {
-                        return Ok(None);
-                    }
-                    match self.read_byte(left)? {
-                        Some(byte) => byte,
-                        None => return Ok(None),
-                    }
+            let byte = if let Some(byte) = next.take() {
+                byte
+            } else {
+                let left = REPLY_TIME.saturating_sub(started.elapsed());
+                if left.is_zero() {
+                    return Ok(None);
                 }
+                let Some(byte) = self.read_byte(left)? else { return Ok(None) };
+                byte
             };
             if byte == b'\r' || byte == b'\n' {
                 if line.is_empty() {
@@ -364,7 +361,7 @@ impl Link {
             let ok = self
                 .scan_value(&format!("ISET{n}?\n"), "ISETn?", ch, |s, v| s.current_limit = v)?
                 && self.scan_value(&format!("VSET{n}?\n"), "VSETn?", ch, |s, v| {
-                    s.voltage_target = v
+                    s.voltage_target = v;
                 })?
                 && self.scan_value(&format!("IOUT{n}?\n"), "IOUTn?", ch, |s, v| s.current = v)?
                 && self.scan_value(&format!("VOUT{n}?\n"), "VOUTn?", ch, |s, v| s.voltage = v)?;
@@ -383,16 +380,12 @@ impl Link {
         store: fn(&mut ChannelState, f32),
     ) -> Result<bool> {
         let reply = self.ask(command, SCAN_BUFFER)?;
-        match scan_f32(&reply) {
-            Some(value) => {
-                store(&mut self.channels[channel], value);
-                Ok(true)
-            }
-            None => {
-                log::error!("Invalid reply to {name}: '{}'.", String::from_utf8_lossy(&reply));
-                Ok(false)
-            }
-        }
+        let Some(value) = scan_f32(&reply) else {
+            log::error!("Invalid reply to {name}: '{}'.", String::from_utf8_lossy(&reply));
+            return Ok(false);
+        };
+        store(&mut self.channels[channel], value);
+        Ok(true)
     }
 }
 

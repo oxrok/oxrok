@@ -536,8 +536,8 @@ impl Capture {
                 None | Some(b'\r' | b'\n') => {}
                 Some(byte) => {
                     log::error!("No reply pending.");
-                    let line = link.read_line(CAPTURE_BUFFER, Some(byte))?.unwrap_or_default();
-                    log::error!("Unexpected data '{}'.", String::from_utf8_lossy(&line));
+                    let text = link.read_line(CAPTURE_BUFFER, Some(byte))?.unwrap_or_default();
+                    log::error!("Unexpected data '{}'.", String::from_utf8_lossy(&text));
                     drop(link);
                     if self.time_up(started) {
                         return Ok(Wait::End);
@@ -634,9 +634,11 @@ mod tests {
 
     type Received = Receiver<(usize, Packet)>;
 
+    type Seen = Arc<Mutex<Vec<(Instant, Vec<u8>)>>>;
+
     /// A supply that answers as the protocol says, noting each write and when.
     struct Fake {
-        seen: Arc<Mutex<Vec<(Instant, Vec<u8>)>>>,
+        seen: Seen,
         input: VecDeque<u8>,
         eol: &'static [u8],
         fail_writes_after: Option<usize>,
@@ -649,7 +651,7 @@ mod tests {
     }
 
     impl Fake {
-        fn new(eol: &'static [u8]) -> (Fake, Arc<Mutex<Vec<(Instant, Vec<u8>)>>>) {
+        fn new(eol: &'static [u8]) -> (Fake, Seen) {
             let seen = Arc::new(Mutex::new(Vec::new()));
             let fake = Fake {
                 seen: Arc::clone(&seen),
@@ -730,6 +732,30 @@ mod tests {
         }
     }
 
+    /// One byte per read and a millisecond for each, as a slow device has it.
+    struct Slow(Fake);
+    impl Port for Slow {
+        fn name(&self) -> &'static str {
+            "/dev/ttyFAKE"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            std::thread::sleep(Duration::from_millis(1));
+            self.0.read(&mut buf[..1], timeout)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.0.write(data)
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.0.purge()
+        }
+    }
+
     fn device(fake: Fake) -> GpdDevice {
         let mut d = GpdDevice::from_port(&protocol::MODELS[1], Box::new(fake));
         d.open().unwrap();
@@ -761,6 +787,7 @@ mod tests {
         }
     }
 
+    const NOTHING: [(usize, f32); 0] = [];
     const ROUND: [(usize, f32); 4] = [(0, 0.1), (0, 11.9), (1, 0.2), (1, 4.9)];
 
     #[test]
@@ -827,28 +854,6 @@ mod tests {
         let (mut fake, _) = Fake::new(b"\n");
         fake.input.extend(vec![b'\n'; 1 << 20]);
         fake.input.extend(b"late\n");
-        struct Slow(Fake);
-        impl Port for Slow {
-            fn name(&self) -> &'static str {
-                "/dev/ttyFAKE"
-            }
-            fn set_params(&mut self, _: Params) -> Result<()> {
-                Ok(())
-            }
-            fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
-                Ok(())
-            }
-            fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-                std::thread::sleep(Duration::from_millis(1));
-                self.0.read(&mut buf[..1], timeout)
-            }
-            fn write(&mut self, data: &[u8]) -> Result<()> {
-                self.0.write(data)
-            }
-            fn purge(&mut self) -> Result<()> {
-                self.0.purge()
-            }
-        }
         let mut link = Link::new(Some(Box::new(Slow(fake))), params(), &protocol::MODELS[0]);
         let began = Instant::now();
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap(), None);
@@ -929,7 +934,7 @@ mod tests {
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let began = Instant::now();
         let rx = start(&mut d);
-        assert!(readings(&rx).is_empty());
+        assert_eq!(readings(&rx), NOTHING);
         assert!(began.elapsed() >= REPLY_BOUND);
         assert_eq!(seen.lock().unwrap().len(), 2, "asked once");
     }
@@ -942,7 +947,7 @@ mod tests {
         d.set(&Key::LimitMsec, &Value::U64(200), None).unwrap();
         let began = Instant::now();
         let rx = start(&mut d);
-        assert!(readings(&rx).is_empty());
+        assert_eq!(readings(&rx), NOTHING);
         assert!(began.elapsed() < REPLY_BOUND);
     }
 
@@ -955,7 +960,7 @@ mod tests {
         std::thread::sleep(POLL_INTERVAL * 2);
         d.stop().unwrap();
         let began = Instant::now();
-        assert!(readings(&rx).is_empty());
+        assert_eq!(readings(&rx), NOTHING);
         assert!(began.elapsed() < REPLY_BOUND / 2);
     }
 
@@ -990,7 +995,7 @@ mod tests {
         assert_eq!(d.get(&Key::VoltageTarget, Some("CH1")).unwrap(), Value::F64(0.0));
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let rx = start(&mut d);
-        assert!(readings(&rx).is_empty());
+        assert_eq!(readings(&rx), NOTHING);
     }
 
     #[test]
@@ -1083,7 +1088,7 @@ mod tests {
         assert_eq!(d.get(&Key::Enabled, Some("CH1")).ok(), None);
         assert!(matches!(
             d.list(&Key::CurrentLimit, Some("CH1")).unwrap(),
-            ValueList::RangeStepF64 { min, max, .. } if min == 0.0 && max == 3.2
+            ValueList::RangeStepF64 { min, max, .. } if min.abs() < 1e-9 && (max - 3.2).abs() < 1e-9
         ));
     }
 }
