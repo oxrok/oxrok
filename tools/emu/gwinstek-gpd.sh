@@ -64,7 +64,7 @@ emu_cases() {
     MAX_BUG="sigrok-cli's strtof makes 3.2 3.2000000477, which api.c:361 compares to the table's double 3.2: the C refuses the maximum it lists; oxrok compares both in single precision"
     CHANNEL_BUG="protocol.c:133-176 sends every channel whatever -C says; oxrok still asks, and sends only what is enabled"
     ORDER_BUG="sigrok-cli sets each -c in turn (session.c:700-707), so OUT1 goes out before the set point that follows; oxrok sends the output on last and off first"
-    PARTIAL_BUG="sigrok-cli sets each -c in turn (session.c:700-707), so OUT1 goes out before a later option is refused; oxrok checks them all first and sends nothing"
+    PARTIAL_BUG="sigrok-cli sets each -c in turn (session.c:700-707), so OUT1 goes out before a later option is refused; oxrok holds OUT1 back until the rest was accepted. Parse errors send nothing, but a range error is found at send time, so a set point before it has gone out"
     LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtof) and sends what it makes of it; oxrok refuses it and sends nothing"
     UNPLUG_SCAN_BUG="api.c:207 onwards drop every send's and read's result, and the buffer's old replies parse, so a device unplugged in the scan is found; oxrok has no reply, so no device"
     UNPLUG_BUG="gpd_send_cmd's result is dropped at protocol.c:183 and no reply will come, as for a silent device: a --samples capture never ends; oxrok ends it"
@@ -230,13 +230,16 @@ $A" -- -d $K -g CH2 -c current_limit=nan --set
 s/^(Failed to set device option .channel_config.: )not supported.*$/\1not applicable./" --expect-fail -- -d $K -c channel_config=Independent --set
     emu_case "set several in hash order" --no-output -- -d $K -g CH1 -c current_limit=0.5:voltage_target=3.3 --set
     emu_case "set the output and a voltage" --no-output -- -d $K -g CH1 -c voltage_target=3.3 -c channel_group=global:enabled=on --set
-    # The output never goes on ahead of its set points. Nothing goes out unless
-    # all of -c is good.
+    # The output never goes on ahead of its set points, nor if one was refused.
+    # What is held back is OUT1, and everything on a parse error: a range error
+    # is the driver's, at send time, so a set point ahead of it has gone out.
     emu_case "output goes on after the set point" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=3.3 --set
     emu_case "output goes off first" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c channel_group=CH1:voltage_target=3.3 -c enabled=off --set
     emu_case "capture: the output on after the set point" --oracle-differs "$ORDER_BUG" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=4 --samples 1
     emu_case "output with a voltage too high" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr --filter "$L
 $A" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=99 --set
+    emu_case "a set point goes out ahead of a refused one" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr --filter "$L
+$A" -- -d $K -c channel_group=CH1:current_limit=1:voltage_target=99 -c enabled=on --set
     emu_case "output with an unknown option" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr -- -d $K -c enabled=on:volage_target=5 --set
     emu_case "output with a voltage that is no number" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr --filter "$L
 $A" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=abc --set
