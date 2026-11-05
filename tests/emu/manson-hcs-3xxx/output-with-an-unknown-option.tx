@@ -5,5 +5,3 @@ bulk_out 02 474554440d -> 5
 bulk_in 82 13 -> 3030303030303030300d4f4b0d
 bulk_out 02 474d41580d -> 5
 bulk_in 82 10 -> 3336303130300d4f4b0d
-bulk_out 02 534f5554300d -> 6
-bulk_in 82 3 -> 4f4b0d

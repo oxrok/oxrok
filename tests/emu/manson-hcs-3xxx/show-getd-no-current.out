@@ -8,8 +8,8 @@ Supported configuration options:
     continuous: on, off
     limit_samples: 0 (current)
     limit_time: 0 (current)
-    voltage: 12.340000 (current)
+    voltage: 0.000000 (current)
     voltage_target: 1.000000, 36.000000, 0.100000
     current: 0.000000 (current)
     current_limit: 0.000000 (current), 10.000000, 0.100000
-    enabled: on (current), off
+    enabled: on, off (current)
