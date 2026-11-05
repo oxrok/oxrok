@@ -1,1 +1,2 @@
 sr: zeroplus-logic-cube: gl_read_bulk: libusb_control_transfer: LIBUSB_ERROR_PIPE.
+oracle died: signal 2

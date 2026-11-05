@@ -2,3 +2,4 @@ sr: chronovu-la: Failed to read data (-4): usb bulk read failed.
 sr: chronovu-la: Trigger timed out. Bytes read: -4.
 sr: chronovu-la: Failed to read data (-4): usb bulk read failed.
 sr: chronovu-la: Failed to write data (-1): usb bulk write failed.
+oracle died: signal 11

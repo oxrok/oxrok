@@ -2,3 +2,4 @@ sr: kingst-la2016: High USB stream bandwidth: 3200Mbps.
 sr: kingst-la2016: Cannot write 0 bytes to USB: LIBUSB_ERROR_PIPE.
 sr: kingst-la2016: Cannot start USB bulk transfers.
 sigrok-cli: ../../libusb/os/threads_posix.h:46: usbi_mutex_lock: Assertion `pthread_mutex_lock(mutex) == 0' failed.
+oracle died: signal 6
