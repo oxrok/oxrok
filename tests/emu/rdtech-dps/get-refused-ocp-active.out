@@ -1,0 +1,4 @@
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+Failed to get 'ocp_active': data is invalid
