@@ -170,6 +170,9 @@ pub struct ConfigPlan {
 /// - `enabled=off` on a group given after a device-wide `enabled=on` (`-c
 ///   enabled=on -c channel_group=R1:enabled=off`: all but R1) stays after it.
 ///   R1 does have power between the two.
+/// - `range` goes before the other settings, after `enabled=off`: a driver may
+///   scale what it writes by the range, so `current_limit=1:range=12A` must not
+///   write the limit in the range before.
 fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     let mut kept: Vec<ConfigItem> = Vec::with_capacity(items.len());
     for item in items {
@@ -182,6 +185,7 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
         kept.push(item);
     }
     let mut offs = Vec::new();
+    let mut ranges = Vec::new();
     let mut others = Vec::new();
     let mut enables: Vec<ConfigItem> = Vec::new();
     for item in kept {
@@ -193,10 +197,13 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
             } else {
                 offs.push(item);
             }
+        } else if item.key == Key::Range {
+            ranges.push(item);
         } else {
             others.push(item);
         }
     }
+    offs.append(&mut ranges);
     offs.append(&mut others);
     ConfigPlan { settings: offs, enables }
 }
@@ -535,6 +542,7 @@ mod tests {
                 opt(Key::VoltageTarget),
                 opt(Key::CurrentLimit),
                 opt(Key::OverCurrentProtectionEnabled),
+                opt(Key::Range),
                 oxrok::core::OptionDesc::new(Key::Voltage, oxrok::core::Access::GET),
             ];
             // Not in a group.
@@ -722,6 +730,19 @@ mod tests {
         let (sent, result) = run_configs(&["-c", "enabled=on", "-c", "voltage_target=99"]);
         assert!(result.is_err());
         assert_eq!(sent, [] as [&str; 0]);
+    }
+
+    #[test]
+    fn range_goes_after_enabled_off_and_before_the_others() {
+        let (sent, result) = run_configs(&["-c", "current_limit=1:range=12A:enabled=off"]);
+        result.unwrap();
+        assert_eq!(sent, ["enabled=false", "range=12A", "current_limit=1"]);
+        let (sent, result) = run_configs(&["-c", "current_limit=1", "-c", "range=12A"]);
+        result.unwrap();
+        assert_eq!(sent, ["range=12A", "current_limit=1"]);
+        let (sent, result) = run_configs(&["-c", "enabled=on:range=12A"]);
+        result.unwrap();
+        assert_eq!(sent, ["range=12A", "enabled=true"]);
     }
 
     #[test]

@@ -20,6 +20,10 @@ s/device error: no Modbus reply: [a-zA-Z ]*/generic\/unspecified error/
 s/not supported: no such range/not applicable/
 s/^(Failed to open device): .*$/\1./
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    # A setpoint's value and CRC on an RD6006: under libsigrok it is 0
+    # (ZERO_WRITE_BUG), which set-rd6006-voltage-target pins, and a failed set
+    # cannot be --oracle-differs.
+    V='s/^(bulk_out 02 0110(0008|0009|0052|0053)000102)[0-9a-f]{8} /\1 VALUE /'
     # A refused start: the core's lines, the C's alone, and each tool's last.
     S="$F
 /^sr: session: /d
@@ -37,6 +41,7 @@ s/^data is invalid$/Failed to start session./"
     HANG_BUG="rdtech_dps_receive_data returns a failed read's negative result (protocol.c:740-741), which the session takes for true, before it checks a limit, so a device that went silent never ends a capture whose only limit is its samples, which may never come; oxrok ends that one after 5 s with no good read, and one whose request cannot go out. Under --time and --continuous it waits and recovers as C does"
     NO_CLOSE_BUG="sigrok-cli's logger exits on a critical (main.c:46-47), before its sr_dev_close (main.c:130 then 201, session.c:708), so an error leaves a DPS's panel locked; oxrok unlocks it"
     LOCK_BUG="dev_open returns on a failed lock with no unlock and sigrok-cli sends no close (api.c:315-317), so a lost reply can leave the panel locked; oxrok tries the unlock"
+    FRESH_RANGE="oxrok reads register 20 before a scaled write on a model with ranges, where set_state scales by the range it last read (protocol.c:567, 584), so a range changed on the panel writes a current limit ten times off; this is an extra read on the wire, nothing else"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # Every line of api.c's supported_models[]. A scan reads the model and
@@ -154,28 +159,37 @@ s/^data is invalid$/Failed to start session./"
 
     # A setting goes out as asked, alone, in its register.
     emu_options id=60125
-    emu_case "set RD6012P voltage_target" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5 --set
-    emu_case "set RD6012P voltage_target max" --driver rdtech-rd --no-output -- -d $R -c voltage_target=60 --set
-    emu_case "set RD6012P voltage_target 0" --driver rdtech-rd --no-output -- -d $R -c voltage_target=0 --set
-    emu_case "set RD6012P voltage_target exact" --driver rdtech-rd --no-output -- -d $R -c voltage_target=12.5 --set
-    emu_case "set RD6012P current_limit" --driver rdtech-rd --no-output -- -d $R -c current_limit=1 --set
-    emu_case "set RD6012P current_limit max" --driver rdtech-rd --no-output -- -d $R -c current_limit=6 --set
+    emu_case "set RD6012P voltage_target" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5 --set
+    emu_case "set RD6012P voltage_target max" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=60 --set
+    emu_case "set RD6012P voltage_target 0" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=0 --set
+    emu_case "set RD6012P voltage_target exact" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=12.5 --set
+    emu_case "set RD6012P current_limit" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=1 --set
+    emu_case "set RD6012P current_limit max" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=6 --set
     emu_case "set RD6012P enabled on" --driver rdtech-rd --no-output -- -d $R -c enabled=on --set
     emu_case "set RD6012P enabled off" --driver rdtech-rd --no-output -- -d $R -c enabled=off --set
-    emu_case "set RD6012P ovp_threshold" --driver rdtech-rd --no-output -- -d $R -c ovp_threshold=62.5 --set
-    emu_case "set RD6012P ocp_threshold" --driver rdtech-rd --no-output -- -d $R -c ocp_threshold=6.5 --set
+    emu_case "set RD6012P ovp_threshold" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c ovp_threshold=62.5 --set
+    emu_case "set RD6012P ocp_threshold" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c ocp_threshold=6.5 --set
     emu_case "set RD6012P range" --driver rdtech-rd --no-output -- -d $R -c range=12A --set
     emu_case "set RD6012P range back" --driver rdtech-rd --no-output -- -d $R -c range=6A --set
     emu_case "set RD6012P no such range" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c range=1A --set
-    emu_case "set then read back" --driver rdtech-rd -- -d $R -c voltage_target=12.5 --get voltage_target
+    emu_case "set then read back" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd -- -d $R -c voltage_target=12.5 --get voltage_target
     emu_case "set the range then read back" --driver rdtech-rd -- -d $R -c range=12A --get range
     emu_options id=60125 iset=1500
     emu_case "set the range changes the scale" --driver rdtech-rd -- -d $R -c range=12A --get current_limit
     emu_case "set the range changes the list" --driver rdtech-rd --keep-header -- -d $R -c range=12A --show
     emu_options id=60125
+    # The range goes first whatever the order given, or the limit is written in
+    # the range before, ten times off.
+    emu_case "set a limit then a range" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=1:range=12A --set
+    emu_case "set a range then a limit" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c range=12A:current_limit=1 --set
+    emu_case "set each -c, limit then range" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=1 -c range=12A --set
+    emu_case "set a limit only the new range holds" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=10:range=12A --set
+    emu_options id=60125 range=1
+    emu_case "set a limit on a supply in 12A" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=10 --set
+    emu_options id=60125
     # Not on a boundary, where the two tools part ways.
     emu_case "set RD6012P voltage_target 3.3" --oracle-differs "$TRUNC_BUG" --driver rdtech-rd --no-output -- -d $R -c voltage_target=3.3 --set
-    emu_case "set RD6012P current_limit 0.07" --driver rdtech-rd --no-output -- -d $R -c current_limit=0.07 --set
+    emu_case "set RD6012P current_limit 0.07" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c current_limit=0.07 --set
     # Values no register holds.
     emu_case "set voltage_target over the list" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c voltage_target=66 --set
     emu_case "set voltage_target negative" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c voltage_target=-1 --set
@@ -183,13 +197,13 @@ s/^data is invalid$/Failed to start session./"
     emu_case "set current_limit over the list" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c current_limit=6.5 --set
     emu_case "set ovp_threshold too wide" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c ovp_threshold=70 --set
     emu_case "set ocp_threshold negative" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c ocp_threshold=-1 --set
-    emu_case "set voltage_target -0" --driver rdtech-rd --no-output -- -d $R -c voltage_target=-0 --set
+    emu_case "set voltage_target -0" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=-0 --set
     # The order on the wire: the setpoints, then the output. Hash table order
     # under sigrok-cli, so in these two it is the output first.
     emu_case "set the output after a voltage" --oracle-differs "$ORDER_BUG" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5:enabled=on --set
     emu_case "set the output before a voltage" --oracle-differs "$ORDER_BUG" --driver rdtech-rd --no-output -- -d $R -c enabled=on:voltage_target=5 --set
     emu_case "set all the setpoints" --oracle-differs "$ORDER_BUG" --driver rdtech-rd --no-output -- -d $R -c enabled=on:current_limit=1:voltage_target=5:ovp_threshold=6:ocp_threshold=2 --set
-    emu_case "set the output off first" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5:enabled=off --set
+    emu_case "set the output off first" --oracle-differs "$FRESH_RANGE" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5:enabled=off --set
     emu_case "set each -c, output first" --oracle-differs "$ORDER_BUG" --driver rdtech-rd --no-output -- -d $R -c enabled=on -c voltage_target=5 --set
     # Nothing is sent unless all of -c is good, and above all no output.
     emu_case "output with a voltage too high" --oracle-differs "$WRAP_BUG" --expect-fail --stderr --filter "$F" --driver rdtech-rd -- -d $R -c enabled=on:voltage_target=99 --set
@@ -211,16 +225,16 @@ s/^data is invalid$/Failed to start session./"
     emu_options id=60061
     emu_case "set RD6006 voltage_target" --oracle-differs "$ZERO_WRITE_BUG" --driver rdtech-rd --no-output -- -d $R -c voltage_target=5 --set
     # Refused writes.
-    emu_options id=60125 faults=3:exc04
-    emu_case "set refused" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
+    emu_options id=60061 faults=2:exc04
+    emu_case "set refused" --driver rdtech-rd --tx-filter "$V" --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
     emu_options id=60125 faults=3:exc06
     emu_case "set the output refused" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c enabled=on --set
-    emu_options id=60125 faults=3:silent
-    emu_case "set no answer" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
-    emu_options id=60125 faults=3:count
-    emu_case "set wrong echo" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
-    emu_options id=60125 faults=3:crc
-    emu_case "set bad crc" --driver rdtech-rd --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
+    emu_options id=60061 faults=2:silent
+    emu_case "set no answer" --driver rdtech-rd --tx-filter "$V" --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
+    emu_options id=60061 faults=2:count
+    emu_case "set wrong echo" --driver rdtech-rd --tx-filter "$V" --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
+    emu_options id=60061 faults=2:crc
+    emu_case "set bad crc" --driver rdtech-rd --tx-filter "$V" --stderr --filter "$F" --expect-fail -- -d $R -c voltage_target=5 --set
     # The lock's own failures: an open fails, a close does not care.
     emu_options setters=0 faults=2:exc04
     emu_case "open: the lock refused" --oracle-bug "$LOCK_BUG" --stderr --filter "$F" --expect-fail -- -d $D --samples 1
@@ -251,8 +265,9 @@ s/^data is invalid$/Failed to start session./"
     for set in voltage_target=5 current_limit=1 enabled=on ovp_threshold=45 ocp_threshold=5; do
         emu_options faults=3:exc04
         emu_case "set DPS refused ${set%%=*}" --oracle-bug "$NO_CLOSE_BUG" --stderr --expect-fail --filter "$F" -- -d $D -c $set --set
-        emu_options id=60125 faults=3:exc04
-        emu_case "set RD6012P refused ${set%%=*}" --driver rdtech-rd --stderr --expect-fail --filter "$F" -- -d $R -c $set --set
+        # One range, so that a refused write is the first frame in both tools.
+        emu_options id=60061 faults=2:exc04
+        emu_case "set RD6006 refused ${set%%=*}" --driver rdtech-rd --stderr --expect-fail --filter "$F" --tx-filter "$V" -- -d $R -c $set --set
     done
     emu_options id=60125 faults=3:exc04
     emu_case "set the range refused" --driver rdtech-rd --stderr --expect-fail --filter "$F" -- -d $R -c range=12A --set

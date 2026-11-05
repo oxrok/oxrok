@@ -361,10 +361,9 @@ impl Device for RdtechDevice {
     fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
         no_group(group)?;
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
-        let range = *self.link().current_range();
-        let setting = match key {
-            // `core::config_set` refuses a 0 and says so; this is for a library
-            // caller that comes straight here.
+        // `core::config_set` refuses a 0 and says so; this is for a library
+        // caller that comes straight here.
+        match key {
             Key::LimitSamples => {
                 self.limit_samples = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
                 return Ok(());
@@ -373,6 +372,25 @@ impl Device for RdtechDevice {
                 self.limit_msec = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
                 return Ok(());
             }
+            _ => {}
+        }
+        // A value's scale is the range's, which the panel can change while the
+        // driver is not looking, and a current limit off by ten times is no
+        // small thing. C writes with the range it last read. The lock is held
+        // to the write; in a capture the polls track it.
+        let mut link = self.link();
+        let scaled = matches!(
+            key,
+            Key::VoltageTarget
+                | Key::CurrentLimit
+                | Key::OverVoltageProtectionThreshold
+                | Key::OverCurrentProtectionThreshold
+        );
+        if scaled {
+            link.update_range()?;
+        }
+        let range = *link.current_range();
+        let setting = match key {
             Key::Enabled => Setting::Output(value.as_bool().ok_or_else(bad)?),
             Key::VoltageTarget => {
                 Setting::VoltageTarget(Self::in_list(key, value, range.max_voltage)?)
@@ -382,15 +400,15 @@ impl Device for RdtechDevice {
             }
             Key::OverVoltageProtectionThreshold => Setting::OvpThreshold(Self::number(key, value)?),
             Key::OverCurrentProtectionThreshold => Setting::OcpThreshold(Self::number(key, value)?),
-            Key::Range if self.link().model.ranges.len() > 1 => {
+            Key::Range if link.model.ranges.len() > 1 => {
                 let name = value.as_str().ok_or_else(bad)?;
-                let ranges = self.link().model.ranges;
+                let ranges = link.model.ranges;
                 let at = ranges.iter().position(|r| r.name == name);
                 Setting::Range(at.ok_or_else(|| Error::not_supported("no such range"))?)
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         };
-        self.link().set(setting)
+        link.set(setting)
     }
 
     fn list(&self, key: &Key, group: Option<&str>) -> Result<ValueList> {
@@ -657,8 +675,10 @@ fn poll_packets(link: &mut Link, state: &State) -> Vec<Packet> {
     if last.output_enabled != state.output_enabled {
         packets.push(Packet::meta(Key::Enabled, state.output_enabled));
     }
-    if link.range != state.range {
+    if last.range != state.range {
         packets.push(Packet::meta(Key::Range, link.model.ranges[state.range].name));
+    }
+    if link.range != state.range {
         link.set_range(state.range);
     }
     link.last = *state;
@@ -958,14 +978,67 @@ mod tests {
     }
 
     #[test]
-    fn the_limit_of_a_list_goes_with_the_range() {
+    fn a_scaled_write_reads_the_range_first_and_refuses_on_it() {
         let (fake, seen, registers) = Fake::new();
-        registers.lock().unwrap()[20] = 1;
         let mut d = rd6012p(fake);
-        assert!(set(&mut d, &Key::CurrentLimit, 12.0).is_err(), "not read yet: 6 A");
-        d.list(&Key::CurrentLimit, None).unwrap();
+        // The panel goes to 12 A: the driver last saw 6 A.
+        registers.lock().unwrap()[20] = 1;
         set(&mut d, &Key::CurrentLimit, 12.0).unwrap();
-        assert_eq!(settings(&seen), [write_frame(9, 12000)]);
+        assert_eq!(writes(&seen), [frame(1, &[3, 0, 20, 0, 1]), write_frame(9, 12000)]);
+        set(&mut d, &Key::CurrentLimit, 1.0).unwrap();
+        assert_eq!(settings(&seen)[1], write_frame(9, 1000), "1 A in 12 A's scale");
+        // And back.
+        registers.lock().unwrap()[20] = 0;
+        assert!(set(&mut d, &Key::CurrentLimit, 12.0).is_err(), "over 6 A's list");
+        assert_eq!(settings(&seen).len(), 2, "not sent");
+        set(&mut d, &Key::CurrentLimit, 1.0).unwrap();
+        assert_eq!(settings(&seen)[2], write_frame(9, 10000), "1 A in 6 A's scale");
+    }
+
+    #[test]
+    fn a_scaled_write_is_not_sent_if_the_range_cannot_be_read() {
+        let (mut fake, seen, _) = Fake::new();
+        fake.answers = Some(0);
+        let mut d = rd6012p(fake);
+        assert!(set(&mut d, &Key::CurrentLimit, 1.0).is_err());
+        assert_eq!(settings(&seen), Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn only_a_scaled_write_of_a_model_with_ranges_reads_the_range() {
+        let (fake, seen, _) = Fake::new();
+        let mut d = rd6012p(fake);
+        set(&mut d, &Key::Enabled, true).unwrap();
+        set(&mut d, &Key::Range, "12A").unwrap();
+        assert_eq!(writes(&seen), [write_frame(18, 1), write_frame(20, 1)]);
+        let (fake, seen, _) = Fake::new();
+        let mut d = dps(fake);
+        set(&mut d, &Key::CurrentLimit, 1.0).unwrap();
+        assert_eq!(writes(&seen), [write_frame(6, 1), write_frame(1, 1000)]);
+    }
+
+    #[test]
+    fn a_range_written_in_a_capture_scales_the_next_write_at_once() {
+        let (mut d, writes, registers, _) = switched_on(Family::Rd, 60125);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        set(&mut d, &Key::Range, "12A").unwrap();
+        set(&mut d, &Key::CurrentLimit, 1.0).unwrap();
+        assert_eq!(registers.lock().unwrap()[9], 1000);
+        assert!(writes.lock().unwrap().contains(&write_frame(9, 1000)));
+        // The change still shows, as metadata, in the frame after it.
+        let mut packets = Vec::new();
+        for _ in 0..200 {
+            let (_, p) = rx.recv_timeout(CAPTURE_BOUND).expect("a packet in time");
+            packets.push(p);
+            if matches!(packets.last(), Some(Packet::Meta(_))) {
+                break;
+            }
+        }
+        assert!(matches!(packets.last(), Some(Packet::Meta(m)) if m[0].0 == Key::Range));
+        d.stop().unwrap();
+        packets_until_end(&rx);
     }
 
     #[test]

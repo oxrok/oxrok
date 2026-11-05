@@ -473,11 +473,10 @@ impl Link {
                 }
                 let value = u16::try_from(range).expect("a model has few ranges");
                 self.bus()?.write_multiple_registers(RD_RANGE, &[value])?;
-                // In a capture the state read next says so, and the capture
-                // reports it.
-                if !self.acquiring {
-                    self.set_range(range);
-                }
+                // At once, in a capture too, where C waits for the next poll: a
+                // setting that follows must not go out in the old scale. The
+                // capture still reports the change, from what it reads next.
+                self.set_range(range);
                 return Ok(());
             }
         };
