@@ -1,0 +1,97 @@
+gcov rohde-schwarz-sme-0x (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        93.5%  72 of 77
+  protocol.c  100.0%  22 of 22
+  total        94.9%  94 of 99
+never reached, by function (line ranges hold no reached line):
+  api.c
+    config_get: 183-184
+    config_set: 198, 209-210
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/scpi/scpi.c          37.9%  192 of 507
+  src/scpi/scpi_serial.c   79.8%  67 of 84
+  src/serial.c             31.8%  128 of 402
+  src/serial_libsp.c       28.1%  72 of 256
+  total                    36.7%  459 of 1249
+never reached, by function (line ranges hold no reached line):
+  src/scpi/scpi.c
+    parse_strict_bool: never called (55-78)
+    sr_scpi_scan_resource: 117
+    scpi_write_data: never called (205-207)
+    scpi_read_data: never called (219-221)
+    scpi_read_response: 243-244
+    scpi_get_data: 281, 286, 297-299
+    sr_scpi_scan: 338-339
+    scpi_dev_inst_new: 385-386
+    sr_scpi_connection_id: never called (421-424)
+    sr_scpi_source_add: never called (440-444)
+    sr_scpi_source_remove: never called (457-460)
+    sr_scpi_send_variadic: never called (495-504)
+    sr_scpi_read_data: never called (528-537)
+    sr_scpi_write_data: never called (552-561)
+    sr_scpi_free: 604
+    sr_scpi_read_response: never called (664-673)
+    sr_scpi_get_bool: never called (698-717)
+    sr_scpi_get_int: never called (730-754)
+    sr_scpi_get_float: never called (767-786)
+    sr_scpi_get_opc: never called (829-842)
+    sr_scpi_get_floatv: never called (859-902)
+    sr_scpi_get_uint8v: never called (919-961)
+    sr_scpi_get_block: never called (978-1124)
+    sr_scpi_unquote_string: never called (1231-1261)
+    sr_vendor_alias: never called (1264-1273)
+    sr_scpi_cmd_get: never called (1276-1293)
+    sr_scpi_cmd: never called (1296-1334)
+    sr_scpi_cmd_resp: never called (1337-1418)
+  src/scpi/scpi_serial.c
+    scpi_serial_scan: 71
+    scpi_serial_connection_id: never called (125-133)
+    scpi_serial_source_add: never called (136-142)
+    scpi_serial_source_remove: never called (145-150)
+    scpi_serial_send: 161-163
+    scpi_serial_read_data: 187
+  src/serial.c
+    dev_is_supported: never called (59-64)
+    serial_open: 87-88, 99, 101, 103, 107, 122, 140, 142
+    serial_close: 162-163, 169, 173-174
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 292
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: 461-462, 466
+    serial_read_blocking: never called (490-493)
+    serial_set_params: 541-542, 548
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: 651-656, 664-704
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: 963, 969
+    serial_source_add: never called (987-1004)
+    serial_source_remove: never called (1009-1020)
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: 1102
+    serial_timeout: never called (1141-1166)
+  src/serial_libsp.c
+    sr_ser_libsp_open: 70-71, 76-84
+    sr_ser_libsp_close: 96-97, 103-111
+    sr_ser_libsp_flush: 126-127, 133-141
+    sr_ser_libsp_drain: never called (147-167)
+    sr_ser_libsp_write: 178-179, 183, 188-195
+    sr_ser_libsp_read: 209-210, 216, 219-226
+    sr_ser_libsp_set_params: 242-243, 253-260, 276-284
+    sr_ser_libsp_set_handshake: never called (290-311)
+    sr_ser_libsp_source_add_int: never called (320-383)
+    sr_ser_libsp_source_add: never called (386-400)
+    sr_ser_libsp_source_remove: never called (405-411)
+    sr_ser_libsp_list: never called (414-432)
+    sr_ser_libsp_find_usb: 442, 448
+    sr_ser_libsp_get_frame_format: never called (461-503)
+    sr_ser_libsp_get_rx_avail: never called (506-517)
