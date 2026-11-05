@@ -31,7 +31,11 @@
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
-//! - A request expires after 250 ms and the next one follows. C compares a
+//! - A request expires after 250 ms and the next one follows once the line is
+//!   free ([`Settle`]), as no answer says what it answers. A late answer is
+//!   dropped; one later still shows as a status that is no number, which makes
+//!   no sample and waits for the line again, and no round makes a sample until a
+//!   good status has come after the expiry. C compares a
 //!   monotonic time with the real time it stored (`protocol.c:199`, `:239`),
 //!   so none ever expires and a reply that does not come holds it.
 //! - A reading that is no number or does not come means no sample for that round,
@@ -55,7 +59,7 @@ use crate::core::{
     ValueList,
 };
 use crate::serial::{Params, Port};
-use protocol::{CAPTURE_LINE_MAX, CURRENT, Link, REQ_TIMEOUT, SERIALCOMM, VOLTAGE};
+use protocol::{CAPTURE_LINE_MAX, CURRENT, Link, QUIET, REQ_TIMEOUT, SERIALCOMM, Settle, VOLTAGE};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -83,8 +87,8 @@ static GROUP_OPTIONS: [OptionDesc; 5] = [
 /// The session source's timeout in `dev_acquisition_start`.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// How long a capture that only a sample limit can end goes with no sample,
-/// where C waits for ever. A round is three requests of 250 ms at worst, and a
-/// supply busy on its panel should not end a capture.
+/// where C waits for ever. A request is 250 ms and a wait for the line at worst,
+/// and a supply busy on its panel should not end a capture.
 pub const SILENCE_BOUND: Duration = Duration::from_secs(2);
 /// How often a wait looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(5);
@@ -184,7 +188,7 @@ fn probe(port: Box<dyn Port>, params: Params) -> Result<Option<(Link, String)>> 
 
 /// What `g_strstrip` takes off.
 fn is_c_space(c: char) -> bool {
-    u8::try_from(c).is_ok_and(protocol::is_space)
+    u8::try_from(c).is_ok_and(protocol::is_glib_space)
 }
 
 /// One power supply.
@@ -201,6 +205,7 @@ pub struct MotechLpsDevice {
     worker: Option<Worker>,
     /// A capture is running: settings would mix with its requests.
     capturing: Arc<AtomicBool>,
+    silence_bound: Duration,
 }
 
 struct Worker {
@@ -228,6 +233,7 @@ impl MotechLpsDevice {
             link: Arc::new(Mutex::new(link)),
             worker: None,
             capturing: Arc::new(AtomicBool::new(false)),
+            silence_bound: SILENCE_BOUND,
         }
     }
 
@@ -259,12 +265,12 @@ impl MotechLpsDevice {
             Key::VoltageTarget => {
                 let volts = in_range(key, value, VOLTAGE[1])?;
                 link.command(&protocol::voltage_command(volts))?;
-                link.voltage_target = f64::from(volts as f32);
+                link.voltage_target = f64::from(volts);
             }
             Key::CurrentLimit => {
                 let amps = in_range(key, value, CURRENT[1])?;
                 link.command(&protocol::current_command(amps))?;
-                link.current_limit = f64::from(amps as f32);
+                link.current_limit = f64::from(amps);
             }
             Key::Enabled => {
                 let on = value.as_bool().ok_or_else(|| Error::arg("enabled"))?;
@@ -284,11 +290,10 @@ impl MotechLpsDevice {
 /// 5 mA its table lists, which is kept; and a NaN goes out as `VSET1   nan` to a
 /// live output, and -0.0 as `-0.000`, which nothing says a supply parses: here
 /// the one is refused and the other is 0.
-fn in_range(key: &Key, value: &Value, max: f64) -> Result<f64> {
+fn in_range(key: &Key, value: &Value, max: f64) -> Result<f32> {
     let refused = || Error::Arg(format!("{} out of range", key.id()));
-    let v = value.as_f64().ok_or_else(refused)?;
-    let single = v as f32;
-    if single >= 0.0 && single <= max as f32 { Ok(v + 0.0) } else { Err(refused()) }
+    let single = value.as_f64().ok_or_else(refused)? as f32;
+    if single >= 0.0 && single <= max as f32 { Ok(single + 0.0) } else { Err(refused()) }
 }
 
 impl Device for MotechLpsDevice {
@@ -441,6 +446,7 @@ impl Device for MotechLpsDevice {
             limit_samples: self.limit_samples,
             limit_msec: self.limit_msec,
             enabled: self.channels[0].enabled,
+            silence_bound: self.silence_bound,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -537,12 +543,47 @@ struct Round {
     readings_good: bool,
     /// The samples this pass made: volts and amperes.
     ready: Vec<(f64, f64)>,
+    /// Nothing goes out while this runs, and what comes is dropped.
+    settle: Option<Settle>,
+    step: Step,
+}
+
+/// Whether answers still go with their requests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// As far as anything shows.
+    Good,
+    /// A request expired, and no status has been read since: answers may be one
+    /// or two out of step.
+    Suspect,
+    /// They are: wait for the line again when this request has ended.
+    Out,
 }
 
 impl Round {
+    /// Starts over: what came of a line is part of what goes unread, or it would
+    /// be read as the head of the next request's answer.
+    fn wait_for_the_line(&mut self) {
+        self.line.clear();
+        self.too_long = false;
+        self.step = Step::Suspect;
+        self.settle = Some(Settle::new(QUIET, Instant::now()));
+    }
+
+    /// A byte from the line, for the wait if there is one.
+    fn take(&mut self, byte: u8, known: &mut Link) {
+        if let Some(settle) = &mut self.settle {
+            if settle.byte(byte) {
+                self.settle = None;
+            }
+            return;
+        }
+        self.feed(byte, known);
+    }
+
     /// One byte, as `motech_lps_30x_receive_data`'s loop takes it.
     fn feed(&mut self, byte: u8, known: &mut Link) {
-        if self.line.is_empty() && !self.too_long && protocol::is_space(byte) {
+        if self.line.is_empty() && !self.too_long && protocol::is_glib_space(byte) {
             return;
         }
         if byte == b'\r' || byte == b'\n' {
@@ -579,9 +620,18 @@ impl Round {
 
     fn reply(&mut self, text: Option<&[u8]>, line: &[u8], known: &mut Link) {
         if self.request == Request::Status {
-            match text.and_then(protocol::atoi) {
-                Some(status) => known.output_enabled = protocol::output_of(status),
-                None => log::error!("Failed to convert '{}' to int", show(line)),
+            if let Some(status) = text.and_then(protocol::atoi) {
+                known.output_enabled = protocol::output_of(status);
+                self.step = Step::Good;
+            } else {
+                log::error!("Failed to convert '{}' to int", show(line));
+                // Without an expiry it is the device's word, and as in C the
+                // readings stand. After one it may be a reading, and they may
+                // not: 576 V was the status.
+                if self.step != Step::Good {
+                    self.step = Step::Out;
+                    return;
+                }
             }
             if self.readings_good {
                 self.ready.push((known.voltage, known.current));
@@ -610,6 +660,7 @@ struct Capture {
     limit_msec: u64,
     /// `-C`, which C ignores: its packets go out whatever it says.
     enabled: bool,
+    silence_bound: Duration,
 }
 
 impl Capture {
@@ -637,10 +688,10 @@ impl Capture {
         let Some(first) = link.read_byte(left)? else {
             return Ok(Instant::now() >= due);
         };
-        round.feed(first, &mut link);
+        round.take(first, &mut link);
         for _ in 0..PASS_BYTES {
             let Some(byte) = link.read_byte(Duration::ZERO)? else { break };
-            round.feed(byte, &mut link);
+            round.take(byte, &mut link);
         }
         Ok(true)
     }
@@ -662,6 +713,11 @@ impl Capture {
 
     fn passes(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
+        // With nothing left open the first request goes at the first pass, as
+        // in C. With an answer on its way from the last capture, not before it.
+        let left_open = self.link.lock().expect("link lock").open_request.take();
+        let settle = left_open
+            .map_or_else(|| Settle::new(POLL_INTERVAL, started), |since| Settle::new(QUIET, since));
         let mut round = Round {
             request: Request::None,
             pending: Pending::None,
@@ -670,7 +726,23 @@ impl Capture {
             too_long: false,
             readings_good: true,
             ready: Vec::new(),
+            settle: Some(settle),
+            step: Step::Good,
         };
+        let ended = self.rounds(sink, stop, started, &mut round);
+        if round.pending != Pending::None || round.settle.is_some() {
+            self.link.lock().expect("link lock").open_request = Some(round.sent_at);
+        }
+        ended
+    }
+
+    fn rounds(
+        &self,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+        started: Instant,
+        round: &mut Round,
+    ) -> Result<()> {
         let mut samples = 0u64;
         let mut last_sample = started;
         let mut due = started + POLL_INTERVAL;
@@ -678,13 +750,13 @@ impl Capture {
             if stop.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            if !self.wait_for_pass(&mut round, due)? {
+            if !self.wait_for_pass(round, due)? {
                 // With the lock free: a get must not starve behind this loop.
                 std::thread::sleep(Duration::from_millis(1));
                 continue;
             }
             due = Instant::now() + POLL_INTERVAL;
-            let Some(new) = self.send_samples(sink, stop, &mut round) else { return Ok(()) };
+            let Some(new) = self.send_samples(sink, stop, round) else { return Ok(()) };
             if new > 0 {
                 samples += new;
                 last_sample = Instant::now();
@@ -692,25 +764,30 @@ impl Capture {
             let time_up =
                 self.limit_msec > 0 && started.elapsed() >= Duration::from_millis(self.limit_msec);
             let done = time_up || (self.limit_samples > 0 && samples >= self.limit_samples);
-            if self.bounded() && !done && last_sample.elapsed() >= SILENCE_BOUND {
+            if self.bounded() && !done && last_sample.elapsed() >= self.silence_bound {
                 return Err(Error::device("no sample from the device"));
             }
             let mut link = self.link.lock().expect("link lock");
             if round.pending != Pending::None && round.sent_at.elapsed() > REQ_TIMEOUT {
                 log::debug!("Request timeout: {:?}.", round.request);
-                if round.request != Request::Status && round.pending == Pending::Reply {
-                    round.readings_good = false;
-                }
+                // Whatever had come of it, no sample rests on this round.
+                round.readings_good = false;
                 round.pending = Pending::None;
-                round.line.clear();
-                round.too_long = false;
-                // What it still sends of that answer is not the next one's.
-                link.purge()?;
+                round.wait_for_the_line();
             }
-            if round.pending == Pending::None {
+            if round.step == Step::Out && round.pending == Pending::None {
+                round.wait_for_the_line();
+            }
+            if round.settle.as_ref().is_some_and(Settle::over) {
+                round.settle = None;
+            }
+            if round.pending == Pending::None && round.settle.is_none() {
                 round.request = round.request.next();
                 if round.request == Request::Volts {
-                    round.readings_good = true;
+                    // A round begun out of step may come back in step within it:
+                    // an answer dropped between two requests does that, and its
+                    // good status would vouch for volts that were the last status.
+                    round.readings_good = round.step == Step::Good;
                 }
                 let sent = link.send(round.request.command());
                 round.sent_at = Instant::now();
@@ -775,7 +852,12 @@ mod tests {
         fail_reads: bool,
         /// A delay between a reading and its `OK`.
         ok_late: Duration,
-        purged: Arc<Mutex<usize>>,
+        /// A delay between a status and its `OK`.
+        status_ok_late: Duration,
+        /// Every answer comes this much after its command.
+        answer_after: Duration,
+        /// Reads never run out of this.
+        endless: Option<u8>,
     }
 
     impl Fake {
@@ -789,7 +871,9 @@ mod tests {
                 fail_writes_after: None,
                 fail_reads: false,
                 ok_late: Duration::ZERO,
-                purged: Arc::new(Mutex::new(0)),
+                status_ok_late: Duration::ZERO,
+                answer_after: Duration::ZERO,
+                endless: None,
             };
             (fake, seen)
         }
@@ -824,6 +908,10 @@ mod tests {
             if self.fail_reads {
                 return Err(Error::device("hung up"));
             }
+            if let Some(byte) = self.endless {
+                buf.fill(byte);
+                return Ok(buf.len());
+            }
             let now = Instant::now();
             let n = self.arrived(now).min(buf.len());
             if n == 0 {
@@ -853,10 +941,12 @@ mod tests {
             }
             let reply = self.replies.pop_front().unwrap_or_else(|| Fake::answer(command));
             let at = self.input.back().map_or(now, |(last, _)| now.max(*last));
-            if !self.ok_late.is_zero() && reply.ends_with(b"OK\r\n\r\n") {
+            let at = at + self.answer_after;
+            let ok_late = if command == b"STATUS" { self.status_ok_late } else { self.ok_late };
+            if !ok_late.is_zero() && reply.ends_with(b"OK\r\n\r\n") {
                 let split = reply.len() - 6;
                 self.input.extend(reply[..split].iter().map(|b| (at, *b)));
-                let later = at + self.ok_late;
+                let later = at + ok_late;
                 self.input.extend(reply[split..].iter().map(|b| (later, *b)));
             } else {
                 self.input.extend(reply.iter().map(|b| (at, *b)));
@@ -866,7 +956,6 @@ mod tests {
         fn purge(&mut self) -> Result<()> {
             let n = self.arrived(Instant::now());
             self.input.drain(..n);
-            *self.purged.lock().unwrap() += 1;
             Ok(())
         }
     }
@@ -956,11 +1045,16 @@ mod tests {
         fake.replies = VecDeque::from([Fake::answer(b"MODEL"), b"V1\r\nOK\r\n".to_vec()]);
         assert!(probe(Box::new(fake), params()).unwrap().is_none());
         assert_eq!(writes(&seen).len(), 2);
-        // Only its end is stripped once the head has been checked.
+        // Only its end is stripped once the head has been checked, and VT is no
+        // space to glib.
         let (mut fake, _) = Fake::new();
         fake.replies = VecDeque::from([Fake::answer(b"MODEL"), b"Ver-1.0 \t\r\nOK\r\n".to_vec()]);
         let (_, version) = probe(Box::new(fake), params()).unwrap().expect("a device");
         assert_eq!(version, "1.0");
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([Fake::answer(b"MODEL"), b"Ver-1.0\x0b\r\nOK\r\n".to_vec()]);
+        let (_, version) = probe(Box::new(fake), params()).unwrap().expect("a device");
+        assert_eq!(version, "1.0\x0b");
     }
 
     #[test]
@@ -996,9 +1090,9 @@ mod tests {
 
     #[test]
     fn with_the_ok_not_there_yet_a_limit_sends_no_more() {
-        // The pass that read the status ends the capture before its OK.
+        // The pass that read the status ends the capture long before its OK.
         let (mut fake, seen) = Fake::new();
-        fake.ok_late = Duration::from_millis(40);
+        fake.status_ok_late = Duration::from_secs(1);
         let mut d = device(fake);
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let rx = start(&mut d);
@@ -1109,21 +1203,19 @@ mod tests {
     }
 
     #[test]
-    fn a_request_expires_after_250_ms_and_the_next_goes_with_a_purge() {
+    fn a_request_expires_after_250_ms_and_the_next_waits_for_a_silent_line() {
         // C compares two clocks here and never expires one.
         let (mut fake, seen) = Fake::new();
-        let purged = Arc::clone(&fake.purged);
         fake.replies = VecDeque::from([Vec::new()]);
         let mut d = device(fake);
-        let before = *purged.lock().unwrap();
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let rx = start(&mut d);
         assert_eq!(readings(&rx), [5.0, 0.25], "that round has no sample");
-        assert_eq!(*purged.lock().unwrap(), before + 1);
         let seen = seen.lock().unwrap();
         let gap = seen[1].0 - seen[0].0;
-        assert!(gap >= Duration::from_millis(250), "{gap:?}");
-        assert!(gap < Duration::from_millis(1000), "{gap:?}");
+        // 250 ms, then 400 ms of silence: the literals.
+        assert!(gap >= Duration::from_millis(650), "{gap:?}");
+        assert!(gap < Duration::from_secs(2), "{gap:?}");
         assert!(seen.len() >= 6, "a round lost");
     }
 
@@ -1139,7 +1231,7 @@ mod tests {
         let took = began.elapsed();
         assert!(took >= Duration::from_secs(2), "{took:?}");
         assert!(took < Duration::from_secs(6), "{took:?}");
-        assert!(writes(&seen).len() >= 8, "it kept asking");
+        assert!(writes(&seen).len() >= 2, "it kept asking");
     }
 
     #[test]
@@ -1153,7 +1245,7 @@ mod tests {
         let rx = start(&mut d);
         assert_eq!(readings(&rx), NOTHING);
         assert!(began.elapsed() >= Duration::from_millis(2500), "{:?}", began.elapsed());
-        assert!(began.elapsed() < Duration::from_secs(6), "{:?}", began.elapsed());
+        assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
     }
 
     #[test]
@@ -1267,6 +1359,448 @@ mod tests {
         assert_eq!(writes(&seen).last().unwrap(), "VSET1 1.000");
     }
 
+    /// A UART at 2400 baud: each answer's bytes 4.2 ms apart. It holds answers
+    /// back as told, and notes a command that came before the last `OK` had gone,
+    /// which the device's manual has rejected.
+    struct Uart {
+        seen: Seen,
+        input: VecDeque<(Instant, u8)>,
+        set_answer: Vec<u8>,
+        /// Which `VOUT1`, from 1, is late, and by how much.
+        late_volts: Option<(usize, Duration)>,
+        /// Which `STATUS`, from 1, is late, and by how much.
+        late_status: Option<(usize, Duration)>,
+        volts: usize,
+        status: usize,
+        early: Arc<Mutex<usize>>,
+        /// A device with output queued: what it answered meanwhile is all there
+        /// as soon as the late answer has gone, not one byte time after another.
+        burst: bool,
+    }
+
+    impl Port for Uart {
+        fn name(&self) -> &'static str {
+            "/dev/ttyFAKE"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            let now = Instant::now();
+            let n = self.input.iter().take_while(|(at, _)| *at <= now).count().min(buf.len());
+            if n == 0 {
+                std::thread::sleep(timeout.min(Duration::from_millis(1)));
+                return Ok(0);
+            }
+            for b in &mut buf[..n] {
+                *b = self.input.pop_front().expect("counted").1;
+            }
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            let now = Instant::now();
+            self.seen.lock().unwrap().push((now, data.to_vec()));
+            let command = data.strip_suffix(b"\r\n").expect("a line ends CR LF");
+            // The two line ends after OK may still be going; OK itself must not.
+            if self.input.len() > 4 {
+                *self.early.lock().unwrap() += 1;
+            }
+            let mut reply = Fake::answer(command);
+            let mut late = Duration::ZERO;
+            match command {
+                b"VOUT1" => {
+                    self.volts += 1;
+                    if let Some((n, by)) = self.late_volts
+                        && n == self.volts
+                    {
+                        late = by;
+                    }
+                }
+                b"STATUS" => {
+                    self.status += 1;
+                    if let Some((n, by)) = self.late_status
+                        && n == self.status
+                    {
+                        late = by;
+                    }
+                }
+                c if c.starts_with(b"VSET") => reply.clone_from(&self.set_answer),
+                _ => {}
+            }
+            let mut at = now + late;
+            if !self.burst {
+                at = self.input.back().map_or(now, |(last, _)| now.max(*last)) + late;
+            }
+            for b in reply {
+                at += Duration::from_micros(4200);
+                self.input.push_back((at, b));
+            }
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            let now = Instant::now();
+            let n = self.input.iter().take_while(|(at, _)| *at <= now).count();
+            self.input.drain(..n);
+            Ok(())
+        }
+    }
+
+    struct UartDevice {
+        device: MotechLpsDevice,
+        seen: Seen,
+        early: Arc<Mutex<usize>>,
+    }
+
+    fn uart(
+        set_answer: &[u8],
+        late_volts: Option<(usize, Duration)>,
+        late_status: Option<(usize, Duration)>,
+    ) -> UartDevice {
+        let seen: Seen = Arc::new(Mutex::new(Vec::new()));
+        let early = Arc::new(Mutex::new(0));
+        let port = Uart {
+            seen: Arc::clone(&seen),
+            input: VecDeque::new(),
+            set_answer: set_answer.to_vec(),
+            late_volts,
+            late_status,
+            volts: 0,
+            status: 0,
+            early: Arc::clone(&early),
+            burst: false,
+        };
+        let mut device = MotechLpsDevice::from_port(Box::new(port));
+        device.open().unwrap();
+        UartDevice { device, seen, early }
+    }
+
+    /// Whatever comes late, each sample is what the supply said it was.
+    fn assert_all_true(got: &[f32], pairs: usize) {
+        assert_eq!(got, [5.0, 0.25].repeat(pairs), "readings out of step");
+    }
+
+    #[test]
+    fn a_second_capture_right_after_a_first_at_2400_is_not_out_of_step() {
+        // The first's last request is still being answered.
+        let mut u = uart(b"OK\r\n\r\n", None, None);
+        u.device.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
+        for _ in 0..2 {
+            let rx = start(&mut u.device);
+            assert_all_true(&readings(&rx), 3);
+        }
+        assert_eq!(*u.early.lock().unwrap(), 0, "{:?}", writes(&u.seen));
+    }
+
+    #[test]
+    fn a_second_capture_waits_out_a_late_answer_of_the_first() {
+        // A stop with the second VOUT1 unanswered, its answer due 300 ms on: longer
+        // than a first request's 50 ms, within the wait.
+        let late = Some((2, Duration::from_millis(300)));
+        let mut u = uart(b"OK\r\n\r\n", late, None);
+        let rx = start(&mut u.device);
+        wait_for_writes(&u.seen, 4);
+        u.device.stop().unwrap();
+        assert_all_true(&readings(&rx), 1);
+        u.device.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut u.device);
+        assert_all_true(&readings(&rx), 2);
+        assert_eq!(*u.early.lock().unwrap(), 0, "{:?}", writes(&u.seen));
+    }
+
+    #[test]
+    fn a_failed_setting_says_what_c_says() {
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([b"ERROR\r\nOK\r\n".to_vec()]);
+        let mut d = device(fake);
+        let e = d.set(&Key::Enabled, &Value::Bool(true), Some("CG1")).unwrap_err();
+        assert!(e.to_string().contains("generic/unspecified error"), "{e}");
+    }
+
+    #[test]
+    fn a_reply_late_past_its_request_is_dropped_and_no_reading_shifts() {
+        for late in [400, 500] {
+            let late = Some((2, Duration::from_millis(late)));
+            let mut u = uart(b"OK\r\n\r\n", late, None);
+            u.device.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+            let rx = start(&mut u.device);
+            assert_all_true(&readings(&rx), 4);
+            assert_eq!(*u.early.lock().unwrap(), 0, "{:?}", writes(&u.seen));
+        }
+    }
+
+    #[test]
+    fn a_reply_later_than_the_wait_is_found_by_its_status_and_no_reading_shifts() {
+        // 250 + 400 ms have gone by: it reads as the answer to IOUT1, the real one
+        // as a status that is no number, and 576 V never goes out.
+        let late = Some((2, Duration::from_millis(900)));
+        let mut u = uart(b"OK\r\n\r\n", late, None);
+        u.device.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let rx = start(&mut u.device);
+        assert_all_true(&readings(&rx), 4);
+    }
+
+    #[test]
+    fn a_status_read_in_part_when_the_wait_starts_is_not_the_next_reading() {
+        // Seen on a pty: the late answer, what was answered meanwhile in a burst,
+        // and the start of the status's "576" all in one pass that ends on the
+        // wait. Kept, that "576" was read as volts.
+        let late = Some((2, Duration::from_millis(900)));
+        let mut hit = false;
+        for _ in 0..6 {
+            let mut u = uart(b"OK\r\n\r\n", late, None);
+            let seen = Arc::clone(&u.seen);
+            let port = Uart {
+                seen,
+                input: VecDeque::new(),
+                set_answer: Vec::new(),
+                late_volts: late,
+                late_status: None,
+                volts: 0,
+                status: 0,
+                early: Arc::clone(&u.early),
+                burst: true,
+            };
+            u.device.link().port = Some(Box::new(port));
+            u.device.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
+            let rx = start(&mut u.device);
+            assert_all_true(&readings(&rx), 3);
+            hit |= writes(&u.seen).len() > 9;
+        }
+        assert!(hit, "no round lost: the late answer did not bite");
+    }
+
+    #[test]
+    fn a_status_later_than_the_wait_shifts_no_reading() {
+        // The late 576 reads as volts, then 5.000 as amperes, then 0.2500 as a
+        // status: this is the frame that gave 576 V.
+        let late = Some((2, Duration::from_millis(900)));
+        let mut u = uart(b"OK\r\n\r\n", None, late);
+        u.device.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let rx = start(&mut u.device);
+        assert_all_true(&readings(&rx), 4);
+    }
+
+    #[test]
+    fn a_status_that_is_no_number_keeps_its_sample_only_with_no_expiry() {
+        let round = |status: &[u8]| {
+            let (mut fake, _) = Fake::new();
+            fake.replies =
+                VecDeque::from([Fake::answer(b"VOUT1"), Fake::answer(b"IOUT1"), status.to_vec()]);
+            fake
+        };
+        let mut d = device(round(b"abc\r\nOK\r\n"));
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [5.0, 0.25]);
+
+        // After an expiry: a first VOUT1 lost, then a good round but its status.
+        let (mut fake, seen) = Fake::new();
+        fake.replies = VecDeque::from([
+            Vec::new(),
+            Fake::answer(b"IOUT1"),
+            b"abc\r\nOK\r\n".to_vec(),
+            b"7.000\r\nOK\r\n".to_vec(),
+            Fake::answer(b"IOUT1"),
+            b"0.2500\r\nOK\r\n".to_vec(),
+        ]);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [5.0, 0.25], "not the 7 V of the suspect round");
+        // And it waited for the line before the next round.
+        let seen = seen.lock().unwrap();
+        let gap = seen[6].0 - seen[5].0;
+        assert!(gap >= Duration::from_millis(400), "{gap:?}");
+    }
+
+    #[test]
+    fn a_round_begun_out_of_step_makes_no_sample_though_its_status_is_good() {
+        // A status lost, its 576 read as volts, 5.000 as amperes, the answer that
+        // should have followed dropped between two requests, and then a good
+        // status: seen under load as 576 V.
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([
+            Fake::answer(b"VOUT1"),
+            Fake::answer(b"IOUT1"),
+            Fake::answer(b"STATUS"),
+            Fake::answer(b"VOUT1"),
+            Fake::answer(b"IOUT1"),
+            Vec::new(),
+            b"576\r\nOK\r\n".to_vec(),
+            b"5.000\r\nOK\r\n".to_vec(),
+            Fake::answer(b"STATUS"),
+        ]);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut d);
+        assert_all_true(&readings(&rx), 2);
+    }
+
+    #[test]
+    fn an_expiry_waiting_for_ok_costs_the_round_its_sample() {
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([b"9.000\r\n".to_vec()]);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [5.0, 0.25], "not the 9 V of a round with no OK");
+    }
+
+    #[test]
+    fn a_good_status_clears_the_suspicion() {
+        // After it a garbled status is the device's word again, as in C.
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([
+            Vec::new(),
+            Fake::answer(b"IOUT1"),
+            Fake::answer(b"STATUS"),
+            b"7.000\r\nOK\r\n".to_vec(),
+            Fake::answer(b"IOUT1"),
+            b"abc\r\nOK\r\n".to_vec(),
+        ]);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [7.0, 0.25]);
+    }
+
+    #[test]
+    fn a_setting_right_after_a_capture_gets_its_own_answer() {
+        // The capture's last OK is on its way: C refuses the setting altogether.
+        let mut u = uart(b"ERROR\r\n\r\nOK\r\n\r\n", None, None);
+        u.device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut u.device);
+        assert_all_true(&readings(&rx), 1);
+        assert!(u.device.set(&Key::VoltageTarget, &Value::F64(1.0), Some("CG1")).is_err());
+        assert_eq!(u.device.get(&Key::VoltageTarget, Some("CG1")).unwrap(), Value::F64(0.0));
+        assert_eq!(*u.early.lock().unwrap(), 0, "{:?}", writes(&u.seen));
+        // And it is one wait, not one for each.
+        assert!(u.device.link().open_request.is_none());
+        let mut u = uart(b"OK\r\n\r\n", None, None);
+        u.device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut u.device);
+        readings(&rx);
+        u.device.set(&Key::VoltageTarget, &Value::F64(1.0), Some("CG1")).unwrap();
+    }
+
+    #[test]
+    fn a_capture_after_a_stop_in_mid_answer_waits_too() {
+        let mut u = uart(b"OK\r\n\r\n", None, None);
+        let rx = start(&mut u.device);
+        wait_for_writes(&u.seen, 1);
+        u.device.stop().unwrap();
+        readings(&rx);
+        assert!(u.device.link().open_request.is_some());
+        u.device.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut u.device);
+        assert_all_true(&readings(&rx), 2);
+        assert_eq!(*u.early.lock().unwrap(), 0, "{:?}", writes(&u.seen));
+    }
+
+    #[test]
+    fn what_lay_in_the_input_before_a_setting_is_not_its_answer() {
+        // It comes after the open's purge, and with no request left open.
+        let (mut fake, _) = Fake::new();
+        let at = Instant::now() + POLL_INTERVAL;
+        fake.input.extend(b"x\r\nOK\r\n".iter().map(|b| (at, *b)));
+        let mut d = device(fake);
+        std::thread::sleep(POLL_INTERVAL * 2);
+        d.set(&Key::VoltageTarget, &Value::F64(1.0), Some("CG1")).unwrap();
+    }
+
+    #[test]
+    fn a_healthy_capture_goes_on_past_the_bound() {
+        let (mut fake, _) = Fake::new();
+        fake.answer_after = Duration::from_millis(60);
+        let mut d = device(fake);
+        d.silence_bound = Duration::from_millis(800);
+        d.set(&Key::LimitSamples, &Value::U64(10), None).unwrap();
+        let began = Instant::now();
+        let rx = start(&mut d);
+        assert_all_true(&readings(&rx), 10);
+        assert!(began.elapsed() > d.silence_bound, "{:?} proves nothing", began.elapsed());
+    }
+
+    #[test]
+    fn a_status_in_a_capture_keeps_the_output_state() {
+        let (mut fake, _) = Fake::new();
+        fake.replies = VecDeque::from([
+            Fake::answer(b"VOUT1"),
+            Fake::answer(b"IOUT1"),
+            b"512\r\nOK\r\n".to_vec(),
+        ]);
+        let mut d = device(fake);
+        d.link().output_enabled = true;
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        readings(&rx);
+        assert_eq!(d.get(&Key::Enabled, Some("CG1")).unwrap(), Value::Bool(false));
+    }
+
+    #[test]
+    fn a_line_cut_by_an_expiry_does_not_start_the_next() {
+        // With the "12" kept the next reading would be 125 V.
+        let (mut fake, _) = Fake::new();
+        fake.replies =
+            VecDeque::from([Fake::answer(b"VOUT1"), Fake::answer(b"IOUT1"), b"12".to_vec()]);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [5.0, 0.25]);
+    }
+
+    #[test]
+    fn a_failed_last_request_says_nothing_and_an_earlier_one_ends_it() {
+        let run = |fail_after| {
+            let (mut fake, _) = Fake::new();
+            fake.fail_writes_after = Some(fail_after);
+            let d = device(fake);
+            let capture = Capture {
+                link: Arc::clone(&d.link),
+                limit_samples: 1,
+                limit_msec: 0,
+                enabled: true,
+                silence_bound: SILENCE_BOUND,
+            };
+            let (tx, _rx) = sync_channel(16);
+            capture.passes(&PacketSink::new(tx, 0), &AtomicBool::new(false))
+        };
+        run(3).unwrap();
+        assert!(run(1).is_err());
+    }
+
+    #[test]
+    fn a_device_that_never_stops_talking_cannot_hold_off_a_stop() {
+        let (mut fake, _) = Fake::new();
+        fake.endless = Some(b'x');
+        let mut d = device(fake);
+        let rx = start(&mut d);
+        std::thread::sleep(POLL_INTERVAL);
+        d.stop().unwrap();
+        assert_eq!(readings(&rx), NOTHING);
+    }
+
+    #[test]
+    fn a_stop_ends_a_capture_blocked_on_its_header() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        let (tx, rx) = sync_channel(1);
+        tx.send((0, Packet::End)).unwrap();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(POLL_INTERVAL * 2);
+        assert_eq!(writes(&seen).len(), 0, "no request ahead of its header");
+        let (done, closed) = sync_channel(1);
+        std::thread::spawn(move || {
+            d.close().unwrap();
+            done.send(()).unwrap();
+        });
+        closed.recv_timeout(Duration::from_secs(5)).expect("the close hangs");
+        drop(rx);
+    }
+
     #[test]
     fn a_second_capture_starts_afresh() {
         let (fake, seen) = Fake::new();
@@ -1337,11 +1871,17 @@ mod tests {
             (Key::VoltageTarget, -0.0),
             // Above in double precision, the maximum in single.
             (Key::VoltageTarget, 32.000_000_1),
+            // No longer negative in single precision, and 0 for both.
+            (Key::VoltageTarget, -1e-50),
+            (Key::CurrentLimit, -1e-50),
         ] {
             d.set(&key, &Value::F64(ok), Some("CG1")).unwrap();
         }
         let sent = writes(&seen);
         assert_eq!(sent[4], "VSET1 0.000", "-0.0 goes out as 0");
+        assert_eq!(sent[6], "VSET1 0.000", "and what a float makes of it");
+        assert_eq!(sent[7], "ISET1 0.0000");
+        assert_eq!(d.get(&Key::CurrentLimit, Some("CG1")).unwrap().as_f64().unwrap().to_bits(), 0);
         for (key, bad) in [
             (Key::VoltageTarget, 32.01),
             (Key::VoltageTarget, -0.5),

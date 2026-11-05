@@ -16,9 +16,9 @@ emu_cases() {
     L='s/^oxrok: err: oxrok::drivers::motech_lps_30x(::protocol)?: /sr: motech-lps-30x: /
 s/, errno=[0-9]+ [A-Za-z ]+$//'
     A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
-    # sigrok-cli gives the driver's SR_ERR as a word, oxrok what went wrong.
-    G='s/^(Failed to set device option .[a-z_]+.: )(generic.unspecified error\.|device error: .*)$/\1refused by the device./'
-    ZERO_WAIT="api.c:284-291 gives lps_read_reply's next read 0 ms once the 250 ms are up, serial_read_blocking takes 0 as no timeout (serial.c:481) and serial_readline starts it (serial.c:764), so a device that does not answer holds C for ever; oxrok's answer has failed by then"
+    # The driver's SR_ERR in each tool's form: both say the same words.
+    G='s/^(Failed to set device option .[a-z_]+.: )device error: generic\/unspecified error\.$/\1generic\/unspecified error./'
+    ZERO_WAIT="api.c:284-291 gives lps_read_reply's next read 0 ms once the 250 ms are up, serial_read_blocking takes 0 as no timeout (serial.c:481) and serial_readline starts it (serial.c:764), and it blocks until a byte comes, so C waits for as long as the device is silent, and a late reply fails after five tries (serial.c:764-777); oxrok's answer has failed by then"
     TWO_CLOCKS="protocol.c:199 subtracts req_sent_at, which :239 took from g_get_real_time, from g_get_monotonic_time, so the difference is negative and a request never expires: a --samples capture never ends once a reply is lost; oxrok moves on after 250 ms and gives up after 2 s with no sample"
     NO_OK="process_line takes a bare OK for the data (protocol.c:85-133) and then waits for another OK (:135-139) that never comes, and the request never expires (protocol.c:199, :239); oxrok ends the request there"
     FULL_BUF="protocol.c:165 stops reading at 48 bytes with no line end, and the buffer never empties, so no more of the device is read; oxrok takes it as one bad line"
@@ -280,13 +280,21 @@ $G" --timeout 3 -- -d $K -g CG1 -c voltage_target=1 --set
     emu_options setters=0 vout1=1e-999,1.000
     emu_case "a reading below a double" --oracle-differs "$ZERO_READING" -- -d $K --samples 1
 
+    # An answer late by more than a request's time: C has no working timeout and
+    # takes it. oxrok has expired the request, so it drops the answer and that
+    # round. The hold is in offers, far past 250 ms at any pace. Whether the answer
+    # then comes within oxrok's wait for the line or after it, a command in between
+    # being rejected, the samples are the same: the .tx is cut at the late request.
+    LATE="protocol.c:199's two clocks: C never expires the request, and here that serves it, as the sample with the late reading is right; oxrok gives up on it after 250 ms, drops what comes and waits for the line, as no answer says what it answers"
+    emu_options setters=0 late=2:30 vout1=1.000,2.000,3.000
+    emu_case "a reading late" --oracle-differs "$LATE" --tx-filter '/^bulk_out 02 564f5554310d0a/{x;s/^/x/;/^xx/{x;s/ .*//;q};x}' -- -d $K --samples 2
     # What C never gets over. req_sent_at is real time and the timeout's check
     # takes monotonic time from it, so a request never expires.
     emu_options setters=0 answers=3
     emu_case "silent from the capture on" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 564f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
     emu_options setters=0 answers=4
     emu_case "silent after the first reading" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 494f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
-    emu_options setters=0 vout1=1.000^
+    emu_options setters=0 vout1=1.000^,2.000
     emu_case "a reading with no OK" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --timeout 3 -- -d $K --samples 1
     emu_options setters=0 vout1=-,1.000
     emu_case "a reading only OK" --oracle-bug "$NO_OK" --oracle-hangs --timeout 3 -- -d $K --samples 1

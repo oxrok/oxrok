@@ -25,8 +25,13 @@
 //! An answer of `ERROR` and `OK` is a failure. What C does with a read that
 //! comes to no line is another matter: it has 250 ms for all of an answer, and
 //! the read after those are up has 0, which `sp_blocking_read` takes as no
-//! timeout, so a device that stops answering holds it for ever. Here a read
-//! ends when those 250 ms do, and the answer has failed.
+//! timeout. `serial_readline` then waits for one byte and breaks, so C hangs for
+//! as long as the device stays silent, and a late reply fails after five tries.
+//! Here a read ends when those 250 ms do, and the answer has failed.
+//!
+//! No line says which request it answers, and the device's manual has a command
+//! before `OK` rejected. So after a request was left unanswered nothing goes out
+//! until [`Settle`] says the line is free.
 
 use crate::core::{Error, Result};
 use crate::serial::{Params, Port, read_blocking, serial_timeout};
@@ -43,6 +48,12 @@ pub const CAPTURE_LINE_MAX: usize = LINELEN_MAX - 3;
 pub const REQ_TIMEOUT: Duration = Duration::from_millis(250);
 /// The tries of each of `lps_read_reply`'s loops.
 const LINE_TRIES: usize = 5;
+/// How long the line must stay silent before a request follows one that went
+/// unanswered, unless its `OK` comes first. Much more than a late answer's bytes
+/// take at 2400 baud, so what is late by up to this much is read and dropped.
+pub const QUIET: Duration = Duration::from_millis(400);
+/// The most a line that never falls silent can hold the next request.
+const SETTLE_MAX: Duration = Duration::from_secs(1);
 /// `sr_strerror(SR_ERR)`, all that C's messages have to say of a failed answer.
 pub const GENERIC_ERROR: &str = "generic/unspecified error";
 
@@ -59,13 +70,18 @@ pub fn c_string(reply: &[u8]) -> &[u8] {
     &reply[..n]
 }
 
-/// C's `isspace` in the C locale, and `g_ascii_isspace`.
-pub fn is_space(c: u8) -> bool {
-    matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
+/// `g_ascii_isspace`, which VT is not.
+pub fn is_glib_space(c: u8) -> bool {
+    matches!(c, b' ' | b'\t' | b'\n' | 0x0c | b'\r')
+}
+
+/// C's `isspace` in the C locale, as `strtol` and `strtod` skip it.
+fn is_c_space(c: u8) -> bool {
+    is_glib_space(c) || c == 0x0b
 }
 
 fn skip_spaces(text: &[u8]) -> &[u8] {
-    let n = text.iter().take_while(|c| is_space(**c)).count();
+    let n = text.iter().take_while(|c| is_c_space(**c)).count();
     &text[n..]
 }
 
@@ -95,7 +111,8 @@ pub fn atoi(text: &[u8]) -> Option<i32> {
     i32::try_from(if negative { -value } else { value }).ok()
 }
 
-/// After `0x`, all of `H[.H][pD]`, or `None`.
+/// After `0x`, all of `H[.H][pD]`, or `None`; also where a double cannot hold it
+/// (`ERANGE`).
 fn hex_double(text: &[u8]) -> Option<f64> {
     let mut value = 0f64;
     let mut scale = 0i32;
@@ -135,7 +152,12 @@ fn hex_double(text: &[u8]) -> Option<f64> {
         let exponent: i32 = std::str::from_utf8(rest).ok()?.parse().unwrap_or(i32::MAX);
         scale = scale.saturating_add(if negative { -exponent } else { exponent });
     }
-    Some(value * 2f64.powi(scale))
+    if value == 0.0 {
+        return Some(0.0);
+    }
+    // In two steps, as `powi` alone gives up before the product would.
+    let result = value * 2f64.powi(scale / 2) * 2f64.powi(scale - scale / 2);
+    result.is_normal().then_some(result)
 }
 
 /// `sr_atod_ascii`: `g_ascii_strtod` on all of the text, and neither too large
@@ -198,18 +220,55 @@ pub fn atod_ascii(text: &[u8]) -> Option<f64> {
 
 /// `VSET1 %05.3f`, of what a C float keeps: the value comes through
 /// sigrok-cli's `strtof` there.
-pub fn voltage_command(volts: f64) -> String {
-    format!("VSET1 {:05.3}", f64::from(volts as f32))
+pub fn voltage_command(volts: f32) -> String {
+    format!("VSET1 {:05.3}", f64::from(volts))
 }
 
 /// `ISET1 %05.4f`, as [`voltage_command`].
-pub fn current_command(amps: f64) -> String {
-    format!("ISET1 {:05.4}", f64::from(amps as f32))
+pub fn current_command(amps: f32) -> String {
+    format!("ISET1 {:05.4}", f64::from(amps))
 }
 
 /// `lps_process_status`'s one use for an LPS-301: the output is on.
 pub fn output_of(status: i32) -> bool {
     status & 0x40 != 0
+}
+
+/// The wait for the line to be free: over at a line saying `OK`, or when nothing
+/// has come for the time it was given, or at [`SETTLE_MAX`].
+#[derive(Debug)]
+pub struct Settle {
+    quiet: Duration,
+    last: Instant,
+    began: Instant,
+    /// The start of a line, as much as tells `OK` from others.
+    line: Vec<u8>,
+}
+
+impl Settle {
+    /// A wait of `quiet` counted from `since`.
+    pub fn new(quiet: Duration, since: Instant) -> Settle {
+        Settle { quiet, last: since, began: Instant::now(), line: Vec::new() }
+    }
+
+    /// A byte from the line, which is dropped: true when it ended a line `OK`.
+    pub fn byte(&mut self, byte: u8) -> bool {
+        self.last = Instant::now();
+        if byte == b'\r' || byte == b'\n' {
+            let ok = self.line == b"OK";
+            self.line.clear();
+            return ok;
+        }
+        if self.line.len() <= 2 {
+            self.line.push(byte);
+        }
+        false
+    }
+
+    /// The line has been silent for long enough, or there is no more waiting.
+    pub fn over(&self) -> bool {
+        self.last.elapsed() >= self.quiet || self.began.elapsed() >= SETTLE_MAX
+    }
 }
 
 /// What the driver knows of the device: part of `dev_context`.
@@ -228,6 +287,8 @@ pub struct Link {
     pub voltage_target: f64,
     /// The current limit set, which the device is never asked.
     pub current_limit: f64,
+    /// A capture ended with a request not fully answered, sent then.
+    pub open_request: Option<Instant>,
 }
 
 impl Link {
@@ -241,6 +302,7 @@ impl Link {
             current: 0.0,
             voltage_target: 0.0,
             current_limit: 0.0,
+            open_request: None,
         }
     }
 
@@ -316,15 +378,44 @@ impl Link {
         Err(Error::device("no OK after the answer"))
     }
 
+    /// Waits out an answer a capture left on its way: a purge only drops what has
+    /// come, and its `OK` would pass for the answer to what goes next.
+    fn settle(&mut self, since: Instant) -> Result<()> {
+        let mut settle = Settle::new(QUIET, since);
+        while !settle.over() {
+            if let Some(byte) = self.read_byte(Duration::from_millis(5))?
+                && settle.byte(byte)
+            {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     /// `lps_cmd_ok`: a command whose answer is `OK` alone. What a capture's last
-    /// request left unread is no answer to this: C never gets here, as it refuses
-    /// every setting after a capture.
+    /// request left is no answer to this: C never gets here, as it refuses every
+    /// setting after a capture. A failure is C's word for it, as it has no other;
+    /// the debug log says which.
     pub fn command(&mut self, command: &str) -> Result<()> {
+        if let Some(since) = self.open_request.take() {
+            self.settle(since)?;
+        }
         self.purge()?;
         self.send(command)?;
-        match self.read_reply()? {
-            None => Ok(()),
-            Some(_) => Err(Error::device(format!("data in the answer to {command}"))),
+        match self.read_reply() {
+            Ok(None) => Ok(()),
+            Ok(Some(reply)) => {
+                log::debug!(
+                    "Data in the answer to {command}: '{}'.",
+                    String::from_utf8_lossy(&reply)
+                );
+                Err(Error::device(GENERIC_ERROR))
+            }
+            Err(Error::Device(why)) => {
+                log::debug!("{command}: {why}.");
+                Err(Error::device(GENERIC_ERROR))
+            }
+            Err(other) => Err(other),
         }
     }
 
@@ -476,6 +567,7 @@ mod tests {
             (b" 64", Some(64)),
             (b"64 ", Some(64)),
             (b"64\t\r", Some(64)),
+            (b"\x0b64\x0b", Some(64)),
             (b"007", Some(7)),
             (b"", Some(0)),
             (b"  ", Some(0)),
@@ -494,6 +586,41 @@ mod tests {
             assert_eq!(atoi(text), want, "{}", text.escape_ascii());
         }
         assert_eq!(atoi(b"64\0x"), Some(64), "a string ends at its NUL");
+    }
+
+    #[test]
+    fn vt_is_space_to_strtol_and_not_to_glib() {
+        assert!(!is_glib_space(0x0b));
+        assert!(is_c_space(0x0b));
+        for c in [b' ', b'\t', b'\n', 0x0c, b'\r'] {
+            assert!(is_glib_space(c) && is_c_space(c), "{c}");
+        }
+        assert!(!is_glib_space(b'x') && !is_c_space(b'x'));
+    }
+
+    #[test]
+    fn a_settle_ends_at_ok_or_silence_and_has_a_limit() {
+        let quiet = Duration::from_millis(100);
+        let mut s = Settle::new(quiet, Instant::now());
+        assert!(!s.over());
+        for b in *b"5.000\r\n" {
+            assert!(!s.byte(b), "{b}");
+        }
+        assert!(!s.byte(b'O') && !s.byte(b'K'));
+        assert!(s.byte(b'\r'));
+        for b in *b"OKAY\r" {
+            assert!(!s.byte(b), "{b}");
+        }
+        // Long ago: over at once.
+        std::thread::sleep(Duration::from_millis(1));
+        let s = Settle::new(Duration::ZERO, Instant::now());
+        assert!(s.over());
+        // A byte starts the silence again, up to the limit.
+        let mut s = Settle::new(Duration::from_secs(60), Instant::now());
+        s.byte(b'x');
+        assert!(!s.over());
+        s.began -= SETTLE_MAX;
+        assert!(s.over());
     }
 
     /// The output's bit, and no other.
@@ -523,6 +650,10 @@ mod tests {
             (b"0x1p-1", 0.5),
             (b"0X.8", 0.5),
             (b"-0x10", -16.0),
+            (b"0x0p9999", 0.0),
+            (b"0x1p1000", 2f64.powi(1000)),
+            (b"0x1000p-1020", 2f64.powi(-1008)),
+            (b"\x0b1", 1.0),
             (b" 1", 1.0),
             (b"0e999", 0.0),
             (b"0.0000", 0.0),
@@ -564,6 +695,11 @@ mod tests {
             b"1e-999",
             b"1e-310",
             b"  ",
+            b"0x1p9999",
+            b"-0x1p9999",
+            b"0x1p-9999",
+            b"0x1p-1060",
+            b"0xfp99999999999",
         ] {
             assert_eq!(atod_ascii(no), None, "{}", no.escape_ascii());
         }
