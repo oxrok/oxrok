@@ -109,6 +109,8 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     emu_options uart=9600/8n1
     emu_case "serialcomm misset behind a UART" --keep-header --no-output -- -d $O --scan
     emu_case "serialcomm as the UART" --keep-header -- -d $O:serialcomm=9600/8n1 --scan
+    emu_case "capture behind a UART" -- -d $O:serialcomm=9600/8n1 --samples 8 -O hex
+    emu_case "trigger behind a UART" -- -d $O:serialcomm=9600/8n1 -c captureratio=50 --samples 16 -t 4=1 -O bits
     emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $O:serialcomm=fast --scan
     emu_options
 
