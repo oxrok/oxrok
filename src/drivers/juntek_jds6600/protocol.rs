@@ -827,6 +827,7 @@ pub(crate) mod tests {
         fake.0.lock().unwrap().late =
             Some((b"\n".to_vec(), Instant::now() + Duration::from_millis(20)));
         assert_eq!(fake.link().get_phase().unwrap(), 0.9);
+        assert!(fake.0.lock().unwrap().late.is_none(), "it waited for the second line feed");
     }
 
     #[test]

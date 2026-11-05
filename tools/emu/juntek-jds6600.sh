@@ -161,6 +161,11 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
         emu_options setters=0 raw00=$(emu_hex "$jr")
         emu_case "first reply passes $jn" --keep-header -- -d $J --scan
     done
+    # A NUL hides what follows it in that read from the look for the line feed.
+    emu_options setters=0 raw00=$(emu_hex ':r00=60\000x\r\n')
+    emu_case "first reply NUL before the line feed" --keep-header --no-output -- -d $J --scan
+    emu_options setters=0 raw00=$(emu_hex ':r00=60.\r\n\000')
+    emu_case "first reply NUL behind the line feed" --keep-header -- -d $J --scan
     emu_options setters=0 raw00=none
     emu_case "scan silence" --keep-header --no-output -- -d $J --scan
     # Later replies: a wrong index is refused, as index 0 alone is not checked.
