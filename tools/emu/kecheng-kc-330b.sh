@@ -10,15 +10,22 @@
 # nothing calls it (api.c:141 is a TODO), so no case reaches it and no golden
 # holds a wall time. oxrok has no counterpart.
 #
-# This model needs a quiet host. The oracle's timeouts are 5, 10, 15 and 40 ms
-# and cannot move: under load sigrok-cli's scan misses its identify (api.c:75)
-# and finds nothing, and most cases then fail on the oracle's side. oxrok's own
-# are 100 to 250 ms.
+# The C's timeouts are 5, 10, 15 and 40 ms. libusb arms the identify's 5 ms
+# (api.c:75) before its first URB, in which the kernel claims the interface
+# for a C driver that did not, and writes usbfs's "did not claim interface"
+# to the consoles: on a VM's ttyS0 that is about 1 ms of the 5, and it has been
+# all of them. A task of the transfer's path held up behind other work does it
+# too. So a device that answered times out, the scan finds nothing, and the case
+# fails on "No devices found.", about once in 4000 scans on two otherwise busy
+# CPUs. The oracle therefore runs with EMU_ORACLE_USB_FLOOR_MS at oxrok's own
+# longest, 250 ms. No golden depends on the length of a timeout: the cases of a
+# silent model take longer, and end the same.
 EMU_MODEL=kecheng-kc-330b
 EMU_DRIVER=kecheng-kc-330b
 EMU_GCOV_SHARED="src/usb.c"
 # oxrok has the driver: its cases must run full.
 EMU_FULL=kecheng-kc-330b
+EMU_ORACLE_USB_FLOOR_MS=250
 
 # The model's options for the cases that follow; none restores them.
 kc_options() {
