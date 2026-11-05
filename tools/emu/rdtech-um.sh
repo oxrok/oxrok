@@ -152,6 +152,9 @@ emu_cases() {
     emu_options out-hold=1
     emu_tty_closing_wait 100
     emu_case "stops reading" --no-output --tx-filter '/^bulk_out 02 /d' -- -d $U --time 3s
+    # Nor is it an error to report, which the case above cannot see: the kernel's
+    # 16 writes are full after 1.6 s, and this finds no room from then on.
+    emu_case "stops reading says nothing" --stderr --no-output --tx-filter '/^bulk_out 02 /d' -- -d $U --time 3s
     emu_tty_closing_wait 3000
     # An unplug: in a scan's wait, and in a capture.
     emu_options answers=0

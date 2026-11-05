@@ -29,9 +29,9 @@
 //!   where another limit or the user can end it; a frame limit alone would
 //!   never come, so that capture ends after [`Pace::silence`] with an error.
 //!
-//! A write here waits for room up to `src/serial`'s 5 s and then fails, where
-//! C gives up after 1 ms (`WRITE_TO_MS`) and carries on, so a meter that has
-//! stopped reading ends a capture late and with an error, past a time limit.
+//! A poll waits 1 ms for room (`WRITE_TO_MS`), and finding none is no error, as
+//! in C: nothing went, and the next try comes a period later. So a meter that
+//! has stopped reading does not end a capture, and neither does it hold one.
 //!
 //! See [`protocol`].
 
@@ -61,6 +61,8 @@ static DEV_OPTIONS: [OptionDesc; 3] = [
 ];
 /// `PROBE_TO_MS`.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1000);
+/// `WRITE_TO_MS`.
+const WRITE_TIMEOUT: Duration = Duration::from_millis(1);
 
 /// The times of a capture; tests take shorter ones.
 #[derive(Clone, Copy, Debug)]
@@ -149,7 +151,7 @@ impl Driver for RdtechUmDriver {
 
 /// `rdtech_um_probe`: one poll, and the model its answer says.
 fn probe(port: &mut dyn Port) -> Option<&'static Profile> {
-    if let Err(e) = port.write(&[POLL]) {
+    if let Err(e) = port.write_timeout(&[POLL], WRITE_TIMEOUT) {
         log::debug!("{e}");
         log::error!("Failed to send probe request.");
         return None;
@@ -480,11 +482,13 @@ impl Capture {
     }
 }
 
-/// One poll: whether it went out. C drops a failure in a capture and tries
-/// again, without end on a port that left; here it ends the capture.
+/// One poll: false when the port failed. C drops that in a capture and tries
+/// again, without end on a port that left; here it ends the capture. No room
+/// in the time is no failure, in C too (`ret < 0` at `protocol.c:179`), and its
+/// period starts over as C's does.
 fn poll(port: &mut dyn Port) -> bool {
-    match port.write(&[POLL]) {
-        Ok(()) => true,
+    match port.write_timeout(&[POLL], WRITE_TIMEOUT) {
+        Ok(_) => true,
         Err(e) => {
             log::debug!("{e}");
             log::error!("Unable to send poll request.");
@@ -515,6 +519,8 @@ mod tests {
         polls: Vec<Instant>,
         other_writes: usize,
         purges: usize,
+        /// Timed writes that found no room, and the times they were given.
+        blocked: Vec<Duration>,
     }
 
     /// What a poll gets.
@@ -535,6 +541,8 @@ mod tests {
         energy: u32,
         fail_write_at: Option<usize>,
         fail_read: bool,
+        /// From this many polls on, so many timed writes find no room.
+        block: Option<(usize, usize)>,
     }
 
     fn dump(energy: u32) -> Vec<u8> {
@@ -558,8 +566,39 @@ mod tests {
                 energy: 0,
                 fail_write_at: None,
                 fail_read: false,
+                block: None,
             };
             (fake, seen)
+        }
+
+        /// A write that went, and what it gets.
+        fn answer(&mut self, data: &[u8]) -> Result<()> {
+            let now = Instant::now();
+            {
+                let mut seen = self.seen.lock().unwrap();
+                if self.fail_write_at == Some(seen.polls.len()) {
+                    return Err(Error::device("the port went"));
+                }
+                if data == [POLL] {
+                    seen.polls.push(now);
+                } else {
+                    seen.other_writes += 1;
+                }
+            }
+            match self.script.pop_front().or_else(|| self.after.clone()) {
+                Some(Reply::Dump) => {
+                    let d = dump(self.energy);
+                    self.energy += 1;
+                    self.push(now, &d);
+                }
+                Some(Reply::Bytes(b)) => self.push(now, &b),
+                Some(Reply::Parts(a, pause, b)) => {
+                    self.push(now, &a);
+                    self.push(now + pause, &b);
+                }
+                None => {}
+            }
+            Ok(())
         }
 
         fn push(&mut self, at: Instant, bytes: &[u8]) {
@@ -598,33 +637,26 @@ mod tests {
                 std::thread::sleep(Duration::from_micros(200));
             }
         }
-        fn write(&mut self, data: &[u8]) -> Result<()> {
-            let now = Instant::now();
-            {
+        fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+            if let Some((after, left)) = &mut self.block {
                 let mut seen = self.seen.lock().unwrap();
-                if self.fail_write_at == Some(seen.polls.len()) {
-                    return Err(Error::device("the port went"));
-                }
-                if data == [POLL] {
-                    seen.polls.push(now);
-                } else {
-                    seen.other_writes += 1;
+                if seen.polls.len() >= *after && *left > 0 {
+                    *left -= 1;
+                    seen.blocked.push(timeout);
+                    drop(seen);
+                    std::thread::sleep(timeout);
+                    return Ok(0);
                 }
             }
-            match self.script.pop_front().or_else(|| self.after.clone()) {
-                Some(Reply::Dump) => {
-                    let d = dump(self.energy);
-                    self.energy += 1;
-                    self.push(now, &d);
-                }
-                Some(Reply::Bytes(b)) => self.push(now, &b),
-                Some(Reply::Parts(a, pause, b)) => {
-                    self.push(now, &a);
-                    self.push(now + pause, &b);
-                }
-                None => {}
+            self.answer(data)?;
+            Ok(data.len())
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            if self.block.is_some() {
+                // As `Native::write` on a device that stopped reading.
+                return Err(Error::device("no room in 5 s"));
             }
-            Ok(())
+            self.answer(data)
         }
         fn purge(&mut self) -> Result<()> {
             self.seen.lock().unwrap().purges += 1;
@@ -906,6 +938,68 @@ mod tests {
         assert_eq!(frame_count(&until_end(&rx)), 2);
         assert_eq!(seen.lock().unwrap().polls.len(), 2);
         d.close().unwrap();
+    }
+
+    #[test]
+    fn a_write_that_finds_no_room_is_no_error_and_the_capture_goes_on() {
+        let (mut fake, seen) = Fake::new();
+        fake.block = Some((0, usize::MAX));
+        let started = Instant::now();
+        let (mut d, rx) = capture(fake, 0, 200);
+        assert_eq!(frame_count(&until_end(&rx)), 0);
+        assert!(started.elapsed() >= Duration::from_millis(200), "the time limit ended it");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.polls.len(), 0);
+        assert!(seen.blocked.len() >= 3, "it kept trying, {} times", seen.blocked.len());
+        assert!(seen.blocked.iter().all(|t| *t == WRITE_TIMEOUT));
+        drop(seen);
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn blocked_writes_keep_the_period() {
+        let (mut fake, seen) = Fake::new();
+        fake.block = Some((0, usize::MAX));
+        let (mut d, rx) = capture(fake, 0, 200);
+        until_end(&rx);
+        let tries = seen.lock().unwrap().blocked.len();
+        let most = 200 / QUICK.period.as_millis() + 1;
+        assert!(tries as u128 <= most, "{tries} tries in 200 ms, at most {most}");
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn the_meter_reading_again_brings_the_frames_back() {
+        let (mut fake, seen) = Fake::new();
+        fake.block = Some((1, 3));
+        let (mut d, rx) = capture(fake, 2, 0);
+        assert_eq!(energies(&until_end(&rx)), [0.0, 0.001]);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.blocked.len(), 3);
+        assert_eq!(seen.polls.len(), 2);
+        drop(seen);
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_hung_up_port_still_ends_a_capture_with_writes_blocking_before() {
+        let (mut fake, seen) = Fake::new();
+        fake.block = Some((1, 2));
+        fake.fail_write_at = Some(1);
+        let (mut d, rx) = capture(fake, 0, 0);
+        assert_eq!(frame_count(&until_end(&rx)), 1);
+        assert_eq!(seen.lock().unwrap().blocked.len(), 2);
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_probe_that_finds_no_room_reads_for_nothing() {
+        let (mut fake, seen) = Fake::new();
+        fake.block = Some((0, 1));
+        assert_eq!(probe_with(&mut fake), None);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.blocked, [WRITE_TIMEOUT]);
+        assert_eq!(seen.polls.len(), 0);
     }
 
     #[test]
