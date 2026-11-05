@@ -12,7 +12,4 @@
 //!
 //! USBTMC comes next (`docs/ROADMAP.md`, "Emulation plan").
 
-pub mod hid {
-    //! vusb's HID shell.
-    pub use vusb::shells::hid::*;
-}
+pub use vusb::shells::{ftdi, hid};

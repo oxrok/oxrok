@@ -90,7 +90,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "manufacturer" | "product" | "serial" => strings.push((k, v)),
             other => {
                 if !faults.option(other, v)? {
-                    return Err(Error(format!("{NAME} has no option {other}")));
+                    return Err(Error::Invalid(format!("{NAME} has no option {other}")));
                 }
             }
         }
@@ -117,7 +117,7 @@ pub fn config(name: &str) -> Result<FtdiConfig> {
     let (_, chip, product, manufacturer, description, serial) =
         VARIANTS.iter().find(|v| v.0 == name).ok_or_else(|| {
             let names: Vec<&str> = VARIANTS.iter().map(|v| v.0).collect();
-            Error(format!("chip={name}: one of {}", names.join(", ")))
+            Error::Invalid(format!("chip={name}: one of {}", names.join(", ")))
         })?;
     let mut c = FtdiConfig::new(*chip);
     c.product = *product;
