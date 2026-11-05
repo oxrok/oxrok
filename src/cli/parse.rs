@@ -170,15 +170,21 @@ pub struct ConfigPlan {
 ///   that holds for every key, as sigrok-cli's hash table keeps one value
 ///   per key; across several `-c` the others are all sent, in order, as
 ///   sigrok-cli does.
-/// - `enabled=off` given after an `enabled=on` that overlaps it, one of the
-///   two on the device and the other on a channel group (`-c enabled=on -c
-///   channel_group=R1:enabled=off`: all but R1), stays after it.
+/// - A device-wide `enabled=off` overrides any `enabled=on` given before it
+///   on a channel group: that on goes, rather than pulse an output that ends
+///   off.
+/// - `enabled=off` on a group given after a device-wide `enabled=on` (`-c
+///   enabled=on -c channel_group=R1:enabled=off`: all but R1) stays after it.
+///   R1 does have power between the two.
 fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     let mut kept: Vec<ConfigItem> = Vec::with_capacity(items.len());
     for item in items {
         kept.retain(|k| {
             !(k.same_setting(&item) && (k.config == item.config || item.key == Key::Enabled))
         });
+        if item.is_enabled(false) && item.group.is_none() {
+            kept.retain(|k| !(k.is_enabled(true) && k.group.is_some()));
+        }
         kept.push(item);
     }
     let mut offs = Vec::new();
@@ -188,8 +194,7 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
         if item.is_enabled(true) {
             enables.push(item);
         } else if item.is_enabled(false) {
-            let overlaps = |on: &ConfigItem| on.group.is_none() || item.group.is_none();
-            if enables.iter().any(overlaps) {
+            if enables.iter().any(|on| on.group.is_none()) {
                 enables.push(item);
             } else {
                 offs.push(item);
@@ -667,11 +672,29 @@ mod tests {
         assert_eq!(sent, ["voltage_target=2"]);
         let (sent, _) = run_configs(&["-c", "voltage_target=1", "-c", "voltage_target=2"]);
         assert_eq!(sent, ["voltage_target=1", "voltage_target=2"]);
-        // All on but one group, all off after one group: the order given.
+        // All on but one group: the order given.
         let (sent, _) = run_configs(&["-c", "enabled=on", "-c", "channel_group=R1:enabled=off"]);
         assert_eq!(sent, ["enabled=true", "R1:enabled=false"]);
+        // All off after one group: no pulse. What comes after it stays.
         let (sent, _) = run_configs(&["-c", "channel_group=R1:enabled=on", "-c", "enabled=off"]);
-        assert_eq!(sent, ["R1:enabled=true", "enabled=false"]);
+        assert_eq!(sent, ["enabled=false"]);
+        let (sent, _) = run_configs(&[
+            "-c",
+            "channel_group=R1:enabled=on",
+            "-c",
+            "enabled=off",
+            "-c",
+            "channel_group=R2:enabled=on",
+        ]);
+        assert_eq!(sent, ["enabled=false", "R2:enabled=true"]);
+        // An off on another group overrides nothing.
+        let (sent, _) = run_configs(&[
+            "-c",
+            "channel_group=R1:enabled=on",
+            "-c",
+            "channel_group=R2:enabled=off",
+        ]);
+        assert_eq!(sent, ["R2:enabled=false", "R1:enabled=true"]);
         // Groups that do not overlap: off first, on last. -g and a group
         // named another way are the same scope.
         let (sent, _) = run_configs(&[

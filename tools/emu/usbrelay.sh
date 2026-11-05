@@ -40,6 +40,8 @@ emu_cases() {
     # has no limit. --get does not hold it, and reads what it set.
     emu_case "relay capture does not switch" --oracle-bug "it switches the relays, then fails on the limit (session.c:865)" --keep-header --expect-fail --stderr -- -d $R -c enabled=on --samples 1
     emu_case "relay get after enabled" --keep-header -- -d $R -g R1 -c enabled=on --get enabled
+    # No pulse on an output a later device-wide off overrides.
+    emu_case "relay R1 on then all off" --oracle-differs "it switches R1 on, then all off; oxrok only all off" --keep-header --no-output -- -d $R --set -c channel_group=R1:enabled=on -c enabled=off
     emu_case "relay by serial" --keep-header -- -d $R:conn=sn=ABCDE -g R2 --get enabled
     # The node the emulator got, as the READY line reported it.
     emu_case "relay by path" --keep-header -- -d $R:conn=$EMU_HIDRAW -g R1 --get enabled
