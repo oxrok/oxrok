@@ -1,0 +1,12 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+agilent-dmm - Agilent U1253B V2.26 with 3 channels: P1 P2 P3
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    samplerate (1 Hz - 20 Hz in steps of 1 Hz)
+    data_source: Live (current), Log-Hand, Log-Trig, Log-Auto, Log-Export
