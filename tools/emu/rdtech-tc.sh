@@ -109,7 +109,8 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     # kept up to the first of the capture.
     emu_case "time" --filter '7,$d' --tx-filter '/^bulk_in 82 192 -> /{x;s/^/x/;/^xx/{x;q};x}' -- -d $K --time 500ms
 
-    # The values: a float of the 32 bits, then C's scale in single precision.
+    # The values: a float of the 32 bits, times C's scale in double precision,
+    # back to a float.
     emu_options v=0,1,10000,99999,16777216,16777217,4294967295 i=0,1,100000,123456,16777217,3,4294967295 \
         dp=0,1,10,100,333,4294967295,7 dm=1,0,999,1000,12345,4294967295,7 \
         e0=0,1,999,1000,16777217,4294967295,7 e1=1,0,1001,123456789,3,4294967295,7

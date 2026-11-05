@@ -344,7 +344,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn values_scale_in_single_precision_as_the_c() {
+    fn values_go_through_a_float_and_a_double_scale_as_the_c() {
         let value = |channel: usize, raw: u32| {
             let plain = decrypt(&reply(|p| put(p, CHANNELS[channel].offset, raw)));
             CHANNELS[channel].value(&plain)
