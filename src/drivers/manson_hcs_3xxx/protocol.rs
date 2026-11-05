@@ -204,6 +204,12 @@ pub fn parse_gmax(line: &[u8], model: &Model) -> (f32, f32) {
     (volts as f32, amps as f32)
 }
 
+/// Whether a line is `GETD`'s, in the form the wiki gives: eight digits and a
+/// mode.
+pub fn is_reading(line: &[u8]) -> bool {
+    matches!(line.len(), 8 | 9) && line[..8].iter().all(u8::is_ascii_digit)
+}
+
 /// `VOLT%03.0f\r`.
 pub fn voltage_command(volts: f64) -> String {
     format!("VOLT{:03.0}\r", volts / VOLTAGE_STEP)
@@ -324,7 +330,42 @@ impl Link {
     /// When they do not come within [`REPLY_TIMEOUT`], where C waits for ever,
     /// or do not end so.
     pub fn read_reply(&mut self, lines: usize) -> Result<Vec<u8>> {
+        self.read_reply_by(lines, Instant::now() + REPLY_TIMEOUT)
+    }
+
+    /// A setting's answer. A capture's reply that came after its 500 ms is not
+    /// that answer, and would fail a setting the device took: it is passed
+    /// over, its line and its `OK`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Link::read_reply`].
+    pub fn read_ack(&mut self) -> Result<()> {
         let deadline = Instant::now() + REPLY_TIMEOUT;
+        loop {
+            match self.read_lines(1, deadline)? {
+                line if is_reading(first_line(&line)) => {
+                    log::debug!("A late reading in the way: '{}'.", line.escape_ascii());
+                    self.read_lines(1, deadline)?;
+                }
+                line if c_string(&line).ends_with(OK) => return Ok(()),
+                _ => return Err(Error::device("the device did not answer OK")),
+            }
+        }
+    }
+
+    fn read_reply_by(&mut self, lines: usize, deadline: Instant) -> Result<Vec<u8>> {
+        let reply = self.read_lines(lines, deadline)?;
+        let seen = reply.iter().filter(|c| **c == b'\r').count();
+        if seen == lines && c_string(&reply).ends_with(OK) {
+            Ok(reply)
+        } else {
+            Err(Error::device("the device did not answer OK"))
+        }
+    }
+
+    /// `lines` lines, or as much as [`REPLY_MAX`] takes.
+    fn read_lines(&mut self, lines: usize, deadline: Instant) -> Result<Vec<u8>> {
         let mut reply = Vec::with_capacity(REPLY_MAX);
         let mut seen = 0;
         while seen < lines && reply.len() < REPLY_MAX {
@@ -335,11 +376,7 @@ impl Link {
             seen += usize::from(byte == b'\r');
             reply.push(byte);
         }
-        if seen == lines && c_string(&reply).ends_with(OK) {
-            Ok(reply)
-        } else {
-            Err(Error::device("the device did not answer OK"))
-        }
+        Ok(reply)
     }
 
     /// A question whose answer is one line and `OK`.
@@ -366,16 +403,20 @@ impl Link {
     pub fn apply(&mut self, command: &str) -> Result<()> {
         self.settle();
         self.send(command)?;
-        self.read_reply(1)?;
-        Ok(())
+        self.read_ack()
     }
 
     /// What goes ahead of a setting. A capture's reply on its way would be
     /// taken for the setting's, which C does (only a library can ask during
-    /// one): that reading is dropped first.
+    /// one): that reading is dropped first. So is what has come and is no one's,
+    /// as the late `OK` of a setting that timed out, which C would take for the
+    /// next setting's. One still on its way can't be told apart.
     pub fn settle(&mut self) {
         if self.reply_pending {
             self.finish_pending();
+        }
+        if let Some(Err(e)) = self.port.as_mut().map(|port| port.purge()) {
+            log::debug!("{e}");
         }
     }
 
@@ -402,6 +443,79 @@ impl Link {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::serial::Params;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    /// A port whose next read gives these bytes, and that notes nothing.
+    fn link_with(input: &[u8], ack: &[u8]) -> (Link, Arc<Mutex<Vec<Vec<u8>>>>) {
+        let written = Arc::new(Mutex::new(Vec::new()));
+        let port = Script {
+            input: input.iter().copied().collect(),
+            ack: ack.to_vec(),
+            written: Arc::clone(&written),
+        };
+        (Link::new(Some(Box::new(port)), lookup(b"3202").unwrap()), written)
+    }
+
+    struct Script {
+        input: VecDeque<u8>,
+        ack: Vec<u8>,
+        written: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl Port for Script {
+        fn name(&self) -> &'static str {
+            "/dev/ttySCRIPT"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+            let Some(byte) = self.input.pop_front() else { return Ok(0) };
+            buf[0] = byte;
+            Ok(1)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.written.lock().unwrap().push(data.to_vec());
+            self.input.extend(self.ack.iter());
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.input.clear();
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_late_ack_is_not_the_next_settings_answer() {
+        let (mut link, written) = link_with(b"OK\r", b"ERR\r");
+        assert!(link.apply("SOUT1\r").is_err(), "the device said ERR to this one");
+        assert_eq!(written.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_late_reading_is_passed_over_for_the_settings_answer() {
+        let (mut link, _) = link_with(b"", b"120001200\rOK\rOK\r");
+        link.apply("SOUT1\r").expect("the setting's OK comes after the reading's");
+        let (mut link, _) = link_with(b"", b"120001200\rOK\rERR\r");
+        assert!(link.apply("SOUT1\r").is_err(), "and its answer still counts");
+        let (mut link, _) = link_with(b"", b"12\rOK\r");
+        assert!(link.apply("SOUT1\r").is_err(), "no reading, so no answer");
+    }
+
+    #[test]
+    fn a_reading_has_its_form() {
+        for good in [&b"12340100"[..], b"123401000", b"123401001"] {
+            assert!(is_reading(good), "{}", good.escape_ascii());
+        }
+        for bad in [&b""[..], b"OK", b"1234010", b"1234010000", b"1234x1000"] {
+            assert!(!is_reading(bad), "{}", bad.escape_ascii());
+        }
+    }
 
     #[test]
     fn every_model_has_two_ids() {

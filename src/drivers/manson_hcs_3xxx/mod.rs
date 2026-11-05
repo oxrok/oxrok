@@ -306,9 +306,17 @@ impl Device for MansonDevice {
                 link.send(&protocol::output_command(on)).inspect_err(|_| {
                     log::error!("Could not send SR_CONF_ENABLED command.");
                 })?;
-                link.read_reply(1).inspect_err(|_| {
-                    log::error!("Could not read SR_CONF_ENABLED reply.");
-                })?;
+                link.read_ack()
+                    .inspect_err(|_| {
+                        log::error!("Could not read SR_CONF_ENABLED reply.");
+                    })
+                    .map_err(|e| match e {
+                        // It went out, and a reply late or lost says nothing.
+                        Error::Timeout if on => {
+                            Error::device("no answer from the device: the output may be on")
+                        }
+                        other => other,
+                    })?;
                 link.output_enabled = on;
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -1039,6 +1047,17 @@ mod tests {
         assert!(!ended, "the bound took the settings for silence");
         d.stop().unwrap();
         let _ = until_end(&rx);
+    }
+
+    #[test]
+    fn a_timed_out_enabled_on_says_the_output_may_be_on() {
+        let (mut fake, _) = Fake::new();
+        fake.ack = Vec::new();
+        let mut d = device(fake);
+        let e = d.set(&Key::Enabled, &Value::Bool(true), None).unwrap_err();
+        assert!(e.to_string().contains("the output may be on"), "{e}");
+        let e = d.set(&Key::Enabled, &Value::Bool(false), None).unwrap_err();
+        assert!(!e.to_string().contains("may be on"), "{e}");
     }
 
     /// Runs `f` on its own thread: it must end within the bound.
