@@ -14,9 +14,9 @@ emu_cases() {
     L='s/^oxrok: (err|warn): oxrok::drivers::rdtech_um: /sr: rdtech-um: /'
     # What oxrok adds after the error sigrok-cli names.
     A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
-    STUCK_BUG="an incomplete reply, or two bytes a failed sync left, hold back every later poll (protocol.c:157-158 returns while buflen is set), so nothing more ever comes; oxrok drops them and asks again"
-    HUP_BUG="a hung up port is not read, as its events are not plain G_IO_IN (protocol.c:350), and the failed poll is dropped (protocol.c:361), so it logs that for ever; oxrok ends the capture"
-    SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:361); oxrok ends the capture after 5 s, where only that limit could"
+    STUCK_BUG="an incomplete reply, or two bytes a failed sync left, hold back every later poll (protocol.c:166-167 returns while buflen is set), so nothing more ever comes; oxrok drops them and asks again"
+    HUP_BUG="a hung up port is not read, as its events are not plain G_IO_IN (protocol.c:350), and the failed poll is dropped (protocol.c:365), so it logs that for ever; oxrok ends the capture"
+    SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 5 s, where only that limit could"
     DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # What a scan finds, in each model's dump.

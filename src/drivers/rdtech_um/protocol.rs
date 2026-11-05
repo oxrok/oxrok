@@ -179,9 +179,9 @@ pub struct Synced {
 /// Puts dumps together, from the id on.
 ///
 /// C looks for the id only at the read that brings the second byte of a
-/// reply (`protocol.c:254-266`), so what follows depends on how the reads cut
+/// reply (`protocol.c:261-265`), so what follows depends on how the reads cut
 /// the stream, and what it fails to find leaves two bytes which hold back all
-/// polls for good (`protocol.c:157-158`). Here any bytes ahead of an id go,
+/// polls for good (`protocol.c:166-167`). Here any bytes ahead of an id go,
 /// whenever they came, and bytes that cannot begin an id don't stay. Bytes
 /// that begin with an id are a dump as far as the framing goes, as in C: a
 /// false id fails the check at its 130th byte.

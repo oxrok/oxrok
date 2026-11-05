@@ -19,10 +19,10 @@
 //! Where C ends up stuck, here the capture goes on or ends:
 //!
 //! - A reply that stays incomplete, or that has no id, holds back every later
-//!   poll in C (`protocol.c:157-158`), so a lost byte stops a capture for good.
+//!   poll in C (`protocol.c:166-167`), so a lost byte stops a capture for good.
 //!   Here an incomplete reply goes after [`Pace::stall`] with a warning, and
 //!   bytes ahead of an id go as they come (see [`protocol::Assembly`]).
-//! - After an unplug C logs a failed poll without end (`protocol.c:350`, 361:
+//! - After an unplug C logs a failed poll without end (`protocol.c:350`, 365:
 //!   a hung up port is not read, and the failure is dropped). Here a port that
 //!   fails ends the capture.
 //! - A meter that does not answer is polled for ever in C. Here that is so
