@@ -64,7 +64,10 @@
 //! - `noise=N:HEX`, bytes ahead of it;
 //! - `junk=N:LEN`, LEN bytes with no id in place of it;
 //! - `defer=N`, sent only behind the next answer, which is a link too slow for
-//!   the host's pace.
+//!   the host's pace;
+//! - `gap=N:LEN`, its first LEN bytes at once and the rest [`GAP_TICKS`] offers
+//!   of a read later, which is a link that pauses. `chunk=` cuts an answer as
+//!   finely but in no fixed time, so how a tool's reads fall on it is a race.
 //!
 //! The pedantic check: every byte the host writes is 0xF0.
 //!
@@ -86,7 +89,7 @@ pub const NAME: &str = "rdtech-um";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "An RDTech UM24C, UM25C or UM34C power meter, CDC-ACM standing in for its \
                          Bluetooth link; model=, id=, volts=, amps=, dplus=, dminus=, celsius=, \
-                         energy=, answers=, bad-end=, short=, noise=, junk=, defer=, and the \
+                         energy=, answers=, bad-end=, short=, noise=, junk=, defer=, gap=, and the \
                          shell's stall=, chunk=, in-limit=, in-stall=, out-hold=";
 
 /// The one command this model takes.
@@ -97,6 +100,8 @@ const DUMP: usize = 130;
 const JUNK: u8 = 0x55;
 /// The most bytes `junk=` and `noise=` take: more than any host buffer.
 const MOST_FAULT_BYTES: u32 = 4096;
+/// Offers of a read that `gap=` waits, each about 20 ms (see `Serial::tick`).
+const GAP_TICKS: u32 = 5;
 /// The offsets the UM34C's last byte covers.
 const UM34C_SUM: [usize; 32] = [
     1, 3, 7, 9, 15, 17, 19, 23, 31, 39, 41, 45, 49, 53, 55, 57, 59, 63, 67, 69, 73, 79, 83, 89, 97,
@@ -128,6 +133,7 @@ enum Fault {
     Noise(Vec<u8>),
     Junk(usize),
     Defer,
+    Gap(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +220,11 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
                 let (n, len) = numbered(k, v)?;
                 c.faults.push((n, Fault::Junk(parse_number(k, len, 1..=MOST_FAULT_BYTES)? as usize)));
             }
+            "gap" => {
+                let (n, len) = numbered(k, v)?;
+                let len = parse_number(k, len, 1..=MOST_FAULT_BYTES)? as usize;
+                c.faults.push((n, Fault::Gap(len)));
+            }
             "noise" => {
                 let (n, hex) = numbered(k, v)?;
                 let bytes = parse_hex_list(k, hex, 1, MOST_FAULT_BYTES as usize)?.remove(0);
@@ -238,11 +249,14 @@ struct Meter {
     polls: u32,
     /// An answer held back by `defer=`.
     held: Vec<u8>,
+    /// The rest of an answer under `gap=`, and the offers it still waits.
+    rest: Vec<u8>,
+    rest_ticks: u32,
 }
 
 impl Meter {
     fn new(config: Config) -> Meter {
-        Meter { config, polls: 0, held: Vec::new() }
+        Meter { config, polls: 0, held: Vec::new(), rest: Vec::new(), rest_ticks: 0 }
     }
 
     /// The dump for answer `i` (from 0), as sound as the device makes it.
@@ -286,10 +300,12 @@ impl Meter {
         d
     }
 
-    /// Answer `n` (from 1) as the faults leave it.
-    fn answer(&self, n: u32) -> (Vec<u8>, bool) {
+    /// Answer `n` (from 1) as the faults leave it: the bytes, whether they wait
+    /// for the next answer, and how many go ahead of a gap.
+    fn answer(&self, n: u32) -> (Vec<u8>, bool, Option<usize>) {
         let mut bytes = self.dump(n - 1).to_vec();
         let mut defer = false;
+        let mut gap = None;
         for (_, fault) in self.config.faults.iter().filter(|(at, _)| *at == n) {
             match fault {
                 Fault::BadEnd => bytes[DUMP - 1] ^= 1,
@@ -299,9 +315,10 @@ impl Meter {
                 }
                 Fault::Junk(len) => bytes = vec![JUNK; *len],
                 Fault::Defer => defer = true,
+                Fault::Gap(len) => gap = Some(*len),
             }
         }
-        (bytes, defer)
+        (bytes, defer, gap)
     }
 
     fn poll(&mut self, port: &mut Port<'_>) {
@@ -310,13 +327,17 @@ impl Meter {
             return;
         }
         self.polls += 1;
-        let (bytes, defer) = self.answer(self.polls);
+        let (mut bytes, defer, gap) = self.answer(self.polls);
         if defer {
             self.held.extend(bytes);
             return;
         }
         let held = std::mem::take(&mut self.held);
         port.send(&held);
+        if let Some(len) = gap.filter(|len| *len < bytes.len()) {
+            self.rest = bytes.split_off(len);
+            self.rest_ticks = GAP_TICKS;
+        }
         port.send(&bytes);
     }
 }
@@ -332,6 +353,16 @@ impl Serial for Meter {
         }
     }
 
+    fn tick(&mut self, port: &mut Port<'_>) {
+        if self.rest.is_empty() {
+            return;
+        }
+        self.rest_ticks = self.rest_ticks.saturating_sub(1);
+        if self.rest_ticks == 0 {
+            port.send(&std::mem::take(&mut self.rest));
+        }
+    }
+
     fn reset(&mut self) {
         *self = Meter::new(self.config.clone());
     }
@@ -341,6 +372,7 @@ impl Serial for Meter {
 mod tests {
     use super::*;
     use crate::shells::cdc::Line;
+    use crate::model::Reply;
     use crate::shells::cdc::host::Host;
 
     fn meter(options: &[(&str, &str)]) -> Host<Meter> {
@@ -484,6 +516,21 @@ mod tests {
     }
 
     #[test]
+    fn a_gap_sends_the_rest_after_its_offers_and_no_sooner() {
+        let mut h = meter(&[("gap", "1:3")]);
+        h.write(&[POLL]);
+        assert!(matches!(h.offer(), Reply::Data(d) if d.len() == 3));
+        for _ in 1..GAP_TICKS {
+            assert!(!matches!(h.offer(), Reply::Data(_)), "not before its offers");
+        }
+        let rest = h.read();
+        assert_eq!(rest.len(), DUMP - 3);
+        assert_eq!(rest[0], 0x00, "byte 3 on: the low half of the voltage");
+        assert_eq!(poll(&mut h).len(), DUMP, "one answer only");
+        assert_eq!(h.v.drain().len(), 0);
+    }
+
+    #[test]
     fn any_other_command_is_flagged_and_gets_nothing() {
         for command in [0xf1, 0xf4, 0xa0, 0xb3, 0xd2, 0xe1, 0x00, 0xff] {
             let mut h = meter(&[]);
@@ -509,6 +556,8 @@ mod tests {
             ("junk", "1:0"),
             ("noise", "1:abc"),
             ("defer", "0"),
+            ("gap", "1:0"),
+            ("gap", "1"),
             ("nosuch", "1"),
         ] {
             let o = [(k.to_owned(), v.to_owned())];
