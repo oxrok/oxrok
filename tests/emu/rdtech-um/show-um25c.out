@@ -1,0 +1,10 @@
+Driver functions:
+    Energy meter
+Scan options:
+    conn
+    serialcomm
+rdtech-um - RDTech UM25C with 6 channels: V I D+ D- T E
+Supported configuration options:
+    continuous: on, off
+    limit_frames: 0 (current)
+    limit_time: 0 (current)

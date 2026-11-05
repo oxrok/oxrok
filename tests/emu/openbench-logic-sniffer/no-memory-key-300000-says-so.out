@@ -1,0 +1,2 @@
+oxrok: warn: oxrok::drivers::ols::protocol: The board returns 262144 samples of the 300000 asked for.
+Device only sent 262144 samples.

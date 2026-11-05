@@ -1,0 +1,18 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+    probe_names
+ols:conn=/dev/ttyACMN - Open Logic Sniffer v1.01 FPGA version 3.07 with 32 channels: 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31
+Supported configuration options:
+    conn: /dev/ttyACMN (current)
+    Maximum number of samples: 6144
+    samplerate (10 Hz - 100 MHz in steps of 1 Hz)
+    Supported triggers: 0 1 
+    captureratio: 0 (current)
+    external_clock: on, off (current)
+    clock_edge: rising (current), falling
+    pattern: None (current), External, Internal
+    swap: on, off
+    rle: on, off (current)

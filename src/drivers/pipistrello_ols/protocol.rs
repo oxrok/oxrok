@@ -152,11 +152,16 @@ pub struct Metadata {
 /// channel count beyond 32 is taken as 32 (the C driver names channels
 /// from beyond its table).
 pub fn parse_metadata(buf: &[u8]) -> Metadata {
+    let mut bytes = buf.iter().copied();
+    read_metadata(|| bytes.next())
+}
+
+/// The metadata block, a byte at a time from `next`, which gives `None` at
+/// the end of what there is: the loop of `p_ols_get_metadata()` and of
+/// `ols_get_metadata()`, which reads the port as it goes.
+pub fn read_metadata(mut next: impl FnMut() -> Option<u8>) -> Metadata {
     let mut m = Metadata::default();
-    let mut i = 0;
-    while i < buf.len() {
-        let key = buf[i];
-        i += 1;
+    while let Some(key) = next() {
         if key == 0 {
             log::debug!("Got metadata key 0x00, metadata ends.");
             break;
@@ -164,9 +169,13 @@ pub fn parse_metadata(buf: &[u8]) -> Metadata {
         let token = key & 0x1f;
         match key >> 5 {
             0 => {
-                let end = buf[i..].iter().position(|&b| b == 0).map_or(buf.len(), |p| i + p);
-                let s: String = buf[i..end].iter().map(|&b| char::from(b)).collect();
-                i = (end + 1).min(buf.len());
+                let mut s = String::new();
+                while let Some(b) = next() {
+                    if b == 0 {
+                        break;
+                    }
+                    s.push(char::from(b));
+                }
                 log::debug!("Got metadata key 0x{key:02x} value '{s}'.");
                 let mut version = |what: &str| {
                     if !m.version.is_empty() {
@@ -183,12 +192,18 @@ pub fn parse_metadata(buf: &[u8]) -> Metadata {
                 }
             }
             1 => {
-                let Some(b) = buf.get(i..i + 4) else {
+                let mut b = [0u8; 4];
+                let mut got = 0;
+                while got < 4 {
+                    let Some(byte) = next() else { break };
+                    b[got] = byte;
+                    got += 1;
+                }
+                if got < 4 {
                     log::debug!("Metadata key 0x{key:02x} cut off.");
                     break;
-                };
-                let v = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
-                i += 4;
+                }
+                let v = u32::from_be_bytes(b);
                 log::debug!("Got metadata key 0x{key:02x} value 0x{v:08x}.");
                 match token {
                     0x00 => m.channels = (v as usize).min(NUM_CHANNELS),
@@ -200,11 +215,10 @@ pub fn parse_metadata(buf: &[u8]) -> Metadata {
                 }
             }
             2 => {
-                let Some(&v) = buf.get(i) else {
+                let Some(v) = next() else {
                     log::debug!("Metadata key 0x{key:02x} cut off.");
                     break;
                 };
-                i += 1;
                 log::debug!("Got metadata key 0x{key:02x} value 0x{v:02x}.");
                 match token {
                     0x00 => m.channels = usize::from(v).min(NUM_CHANNELS),
@@ -492,7 +506,32 @@ pub struct Decoder {
 impl Decoder {
     /// A decoder for a capture of `plan` with sample limit `limit`.
     pub fn new(plan: &Plan, limit: u64) -> Self {
-        let flag_reg = plan.flag_reg;
+        let demux = plan.flag_reg & FLAG_DEMUX != 0;
+        let width = u64::from((!(plan.flag_reg >> 2) as u8 & 0xf).count_ones());
+        let word_bytes = width * if demux { 2 } else { 1 };
+        Self::with_bounds(
+            plan.flag_reg,
+            limit,
+            plan.max_samples,
+            u64::from(plan.readcount) * 4 * word_bytes,
+            plan.trigger_word,
+        )
+    }
+
+    /// A decoder bound by the sample limit alone, for a driver that takes
+    /// every word for one sample whatever `FLAG_DEMUX` says, and ends a
+    /// short capture by a silence (`openbench-logic-sniffer`).
+    pub fn plain(flag_reg: u16, limit: u64, trigger_word: Option<u64>) -> Self {
+        Self::with_bounds(flag_reg & !FLAG_DEMUX, limit, u64::MAX, u64::MAX, trigger_word)
+    }
+
+    fn with_bounds(
+        flag_reg: u16,
+        limit: u64,
+        max_samples: u64,
+        expected: u64,
+        trigger_word: Option<u64>,
+    ) -> Self {
         let groups = !(flag_reg >> 2) as u8 & 0xf;
         let width = groups.count_ones() as usize;
         let demux = flag_reg & FLAG_DEMUX != 0;
@@ -504,10 +543,10 @@ impl Decoder {
             rle,
             pairs: demux && rle,
             limit,
-            max_samples: plan.max_samples,
+            max_samples,
             word_bytes,
-            expected: u64::from(plan.readcount) * 4 * word_bytes,
-            trigger_word: plan.trigger_word,
+            expected,
+            trigger_word,
             unit: Vec::with_capacity(8),
             rle_count: 0,
             counted: 0,
@@ -523,6 +562,11 @@ impl Decoder {
         self.samples.len() as u64 >= self.limit
             || self.counted >= self.max_samples
             || self.bytes >= self.expected
+    }
+
+    /// The sample limit.
+    pub fn limit(&self) -> u64 {
+        self.limit
     }
 
     /// The samples decoded so far.

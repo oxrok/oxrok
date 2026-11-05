@@ -1,0 +1,18 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+    probe_names
+ols:conn=/dev/ttyACMN - Shrimp1.0 with 4 channels: 0 1 2 3
+Supported configuration options:
+    conn: /dev/ttyACMN (current)
+    Maximum number of samples: 262144
+    samplerate (10 Hz - 20 MHz in steps of 1 Hz)
+    Supported triggers: 0 1 
+    captureratio: 0 (current)
+    external_clock: on, off (current)
+    clock_edge: rising (current), falling
+    pattern: None (current), External, Internal
+    swap: on, off
+    rle: on, off (current)
