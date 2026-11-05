@@ -298,6 +298,24 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A stop can land with a reply on its way, and at 2400 baud it usually
+  does. Note what is unread, and wait it out and purge ahead of the next
+  command, or every later read is one reply behind. A fake that answers
+  at once can't show this; use a byte-paced one.
+- Check a key against the driver's option list before any I/O in `get`.
+  `src/cli/run.rs` asks for `Samplerate` ahead of each capture, before
+  the output goes on, and sigrok-cli checks capabilities first
+  (`main.c:81`).
+- A whole answer that doesn't parse is not silence. Tell them apart
+  before ending a capture on a bound.
+- The tty harness joins writes in a row, so a filter for an optional
+  command must also match it on the end of the line before, and drop the
+  count.
+- A status cache may serve a capture's first sample from the scan's
+  answer. Give the capture an answer of its own.
+- Don't copy another driver's csv warning without running it.
+- Run the model under the shim with only oxrok wrapped; it found a
+  joined-write problem that plain runs and load did not.
 - A job scheduler's timeout branch can rerun the same job: in
   `dispatch`, a job given up whose interval is over goes again without
   `job_next`, so the other jobs starve. Read the path for a timed-out

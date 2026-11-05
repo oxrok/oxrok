@@ -2309,6 +2309,19 @@ further `CONF?`; a `FETC?` answered late is taken for the channel asked
 next, so values shift to the wrong channel (`P2: 1.00300 kHz`, `P1:
 3.00200 kV`).
 
+## GW Instek PSP series (gwinstek-psp)
+
+GW Instek PSP-603, PSP-405 and PSP-2010 (`gwinstek-psp`): ported and
+emulated on the CDC-ACM shell. Model `gwinstek-psp` (`model=`, `uart=`,
+`urpsp=`, `v=`, `i=`, `u=`, `output=`, `otp=`, `load=`, `limit-mode=`,
+`replies=`, `answers=`, `babble=`, `setters=`, and the shell's faults),
+154 cases: 128 full, 18 `--oracle-differs`, 7 `--oracle-bug`, 1
+`--no-oracle-only`. gcov 92.5% of the driver. Never on hardware.
+Commands and frame are from Texio's manual and pypsp; URPSP1 rests only
+on protocol.c's comment, and the frame at 10 A is a guess. The model
+answers at once, so a real unit's timing is tested only with a
+byte-paced fake in the unit tests.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

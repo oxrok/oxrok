@@ -563,6 +563,19 @@ Deliberate, and kept small:
 - agilent-dmm: lines with VT, FF, NEL, LS, PS, a CR hidden by a NUL, or
   non-ASCII digits match differently from GLib's regular expressions. No
   device is known to send them.
+- `gwinstek-psp` refuses NaN and sends 0 for -0; libsigrok sends both.
+- `gwinstek-psp` honours `-C`; libsigrok sends both readings.
+- `gwinstek-psp` has no sample from a status that failed, and ends a
+  capture when the port fails. With only a sample limit it gives up
+  after 5 s of hearing nothing or only part of a status; a whole status
+  that does not read, as while the panel sets a limit, does not end it,
+  and no samples come until one reads. libsigrok repeats the last
+  reading and counts it. Under `--time` both wait.
+- `gwinstek-psp` gives up after 3 s on a device that keeps talking;
+  libsigrok's scan never ends.
+- `gwinstek-psp`: a `--get` after a set answers what was set until the
+  next `L`; with the output on, a target set stays as set, as no `L`
+  tells it. libsigrok answers the last `L`.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
