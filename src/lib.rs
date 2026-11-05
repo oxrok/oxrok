@@ -103,6 +103,7 @@ pub mod drivers {
     pub mod manson_hcs_3xxx;
     pub mod maynuo_m97;
     pub mod microchip_pickit2;
+    pub mod motech_lps_30x;
     pub mod ols;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
@@ -132,6 +133,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
+    registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));

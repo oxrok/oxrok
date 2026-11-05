@@ -1,0 +1,2 @@
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 4d4f44454c0d0a -> 7
