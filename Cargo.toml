@@ -46,6 +46,8 @@ rustpython = [
 ]
 
 [dependencies]
+# rdtech-tc's replies: AES-256 ECB, the block functions only.
+aes = "0.9"
 log.workspace = true
 thiserror.workspace = true
 clap = { workspace = true, optional = true }
