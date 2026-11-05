@@ -101,6 +101,7 @@ pub mod drivers {
     pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod manson_hcs_3xxx;
+    pub mod maynuo_m97;
     pub mod microchip_pickit2;
     pub mod ols;
     pub mod pipistrello_ols;
@@ -133,6 +134,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
+    registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));

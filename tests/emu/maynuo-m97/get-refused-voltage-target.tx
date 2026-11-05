@@ -1,0 +1,7 @@
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 01030b060002262e
+bulk_in 82 9 -> 010304001c007b7bd6
+bulk_out 02 01050500ff008cf6
+bulk_in 82 8 -> 01050500ff008cf6
+bulk_out 02 01030a03000237d3
+bulk_in 82 5 -> 01830440f3

@@ -1,0 +1,13 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+    modbusaddr
+maynuo-m97 - Maynuo M9710 v12.3 with 2 channels: V1 I1
+Channel groups:
+    1: channels V1 I1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
