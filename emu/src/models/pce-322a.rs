@@ -94,8 +94,9 @@
 //! (`api.c:126-138,144`, `protocol.c:413-426`), since a get comes before any reading
 //! in one run of either tool; the checks on NULLs and unknown keys; `dev_open`'s
 //! error return (238), as a port that opens at the scan also opens here; a failed
-//! write (`protocol.c:41,58-64,455`), which needs a write cut short, and only the
-//! close's after an unplug fails; a read that gives nothing after a `G_IO_IN`
+//! write (`protocol.c:39-41,58-64,455`), as a write straight after an unplug may
+//! still pass, which `--unplug out=2:1` showed both ways, so no case holds it; a
+//! read that gives nothing after a `G_IO_IN`
 //! (287,314,323); `meas_range_set`'s else (450), as `config_set` looks a pair up in
 //! its table first; `pce_322a_memory_clear`, called by nothing; and "Exhausted
 //! memory blocks" (298-299): a block counter that reaches `used` ends the read at a
