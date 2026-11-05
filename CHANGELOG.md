@@ -13,7 +13,7 @@ release may change the library API.
   log as an observer, `hidcable` and the checks on a firmware upload. The
   server takes commands through `vusb-ctl` on `--control PATH` rather than
   on standard input, and `tools/diffcli.sh` needs `vusb-ctl`
-  (`cargo install vusb-cli --version 0.1.1 --locked`). The goldens have not
+  (`cargo install vusb-cli --version 0.2.1 --locked`). The goldens have not
   changed.
 
 ### Added

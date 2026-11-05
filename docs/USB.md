@@ -406,7 +406,8 @@ on Windows; attaching a device is Linux only.
   `#` comments.
 - Pedantic checks come in two layers: `Device` flags transfers to
   endpoints the configuration lacks or before `SET_CONFIGURATION`,
-  unknown configurations, interfaces, features and descriptors; a
+  unknown configurations, interfaces, features and descriptors (OTG
+  and debug descriptors only STALL, as a device without them does); a
   model flags what its protocol forbids (for the relay board: report
   lengths other than 8, report ids, unknown commands, relay numbers
   beyond the board). A clean run under sigrok-cli validates the
@@ -425,7 +426,7 @@ function `emu_cases` of `emu_case NAME [flags] -- ARGS...` lines.
 that `oxrok -L` does not list fails, rather than quietly turning into
 an oracle case, and an `oxrok -L` that fails or lists no driver fails
 the run. A case name neither starts nor ends with white space and holds
-no tab or newline, since the emulator trims what it acknowledges.
+no tab or newline.
 `--emu-model NAME` (repeatable, or a comma list) runs only those
 models and no other cases; `-k` still selects cases by name.
 

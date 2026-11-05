@@ -21,7 +21,7 @@
 
 #![forbid(unsafe_code)]
 
-pub use vusb::{Error, Result, arm, descriptor, device, model};
+pub use vusb::{Error, Result, descriptor, device, model};
 
 pub mod models;
 pub mod options;

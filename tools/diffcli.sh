@@ -444,9 +444,16 @@ if [ $emu = 1 ]; then
     fi
     command -v "$VUSB_CTL" >/dev/null \
         || echo "note: no $VUSB_CTL: cargo install vusb-cli --version 0.2.1 --locked" >&2
+    # The client and the server speak one protocol: the same vusb for both.
+    vusb_want=$(sed -n '/^name = "vusb"$/{n;s/^version = "\(.*\)"$/\1/p;}' "$TOOLS/../Cargo.lock" 2>/dev/null)
+    vusb_have=$("$VUSB_CTL" --version 2>/dev/null | sed 's/.* //')
+    if [ -n "$vusb_want" ] && [ -n "$vusb_have" ] && [ "$vusb_want" != "$vusb_have" ]; then
+        echo "$VUSB_CTL is $vusb_have, Cargo.lock has vusb $vusb_want: cargo install vusb-cli --version $vusb_want --locked" >&2
+        exit 2
+    fi
     # The control socket. Not under TMP: TMPDIR may be long, and a
     # socket's path has a low limit.
-    EMU_CTL_DIR=$(mktemp -d /tmp/oxrok-emu.XXXXXX)
+    EMU_CTL_DIR=$(mktemp -d /tmp/oxrok-emu.XXXXXX) || exit 2
     EMU_CONTROL=$EMU_CTL_DIR/s
     EMU_BLESS=${EMU_BLESS:-0}
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
@@ -624,7 +631,7 @@ if [ $emu = 1 ]; then
     # after a renumeration or a reset that re-attached the device), in
     # order, so that EMU_USB and the rest name the device as it is now
     # and the outputs name every attach of the session generically. The
-    # server prints such a line before the OK of any command it takes
+    # server prints such a line before the reply to any command it takes
     # in after the attach.
     emu_track() {
         total=$(wc -l <"$TMP/emu.out")
@@ -1304,7 +1311,7 @@ flush()
                 if [ $expect = 1 ] && [ $st = 0 ]; then why="$why; $(basename "$tool") did not fail"; fi
             fi
             # Once the run's status is checked (emu_cmd sets st): a
-            # renumeration the run caused is reported by the OK, so the
+            # renumeration the run caused is reported by the next reply, so the
             # outputs name its address generically and the next case
             # line reads it in EMU_USB.
             if ! emu_cmd sync >/dev/null; then

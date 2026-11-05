@@ -15,7 +15,6 @@ EMU_FULL=fx2lafw
 # builds the model with them, and re-attaches the device when its
 # descriptors change.
 fx2lafw_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "fx2lafw: the emulator refused '$*'"
 }

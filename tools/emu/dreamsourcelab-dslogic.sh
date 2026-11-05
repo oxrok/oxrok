@@ -19,7 +19,6 @@ EMU_FULL=dreamsourcelab-dslogic
 # builds the model with them, and re-attaches the device when its
 # descriptors change.
 dslogic_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "dslogic: the emulator refused '$*'"
 }

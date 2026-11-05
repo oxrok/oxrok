@@ -16,7 +16,6 @@ EMU_FULL=kingst-la2016
 # builds the model with them, and re-attaches the device when its
 # descriptors change.
 kingst_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "kingst-la2016: the emulator refused '$*'"
 }

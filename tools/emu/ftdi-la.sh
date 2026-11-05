@@ -21,7 +21,6 @@ EMU_FULL=ftdi-la
 # builds the model with them, and re-attaches the device when its
 # descriptors change. None restores EMU_OPTIONS.
 ftdi_la_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "ftdi-la: the emulator refused '$*'"
 }

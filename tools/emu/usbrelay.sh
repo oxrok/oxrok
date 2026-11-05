@@ -11,7 +11,6 @@ EMU_FULL=dcttech-usbrelay
 # The model's options for the cases that follow (every case's reset
 # builds the model with them); none restores EMU_OPTIONS.
 usbrelay_options() {
-    # The emulator trims what it acknowledges: no trailing space.
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "usbrelay: the emulator refused '$*'"
 }
