@@ -1,0 +1,3 @@
+sr: rdtech-tc: Invalid poll response packet (checksum).
+sr: rdtech-tc: Unrecognized TC device!
+sr: rdtech-tc: Failed to find a supported RDTech TC device.
