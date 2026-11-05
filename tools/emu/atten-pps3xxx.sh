@@ -18,6 +18,7 @@ emu_cases() {
     SCAN_BUG="scan drops the answer it reads (api.c:129-138), so all reads 0 and off before a capture's first answer, with the outputs on; oxrok takes it as the state"
     OFF_SAYS="api.c:250,257,287 compare a setting with what was last set, so with the device's output on, enabled=off sends nothing and it stays on, likewise protection and the mode. oxrok sends what C sends and says so on stderr; sigrok-cli says nothing"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    WARNS="oxrok sends what sigrok-cli sends and warns on stderr of what the frame changes from what the device reported, and the setpoints it writes; sigrok-cli says nothing"
     STOP_BUG="only an answer ends the capture (protocol.c:158-172), so a device that stays silent holds it for ever, a stop or none; oxrok ends it after a bound"
     # A frame of readings: CH1 12.34 V 0.500 A, CH2 5.00 V 1.250 A, CH3 3.30 V
     # 0.025 A, all on, protection on, series.
@@ -187,6 +188,11 @@ emu_cases() {
     emu_case "interrupt warns of what it turns off" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --stderr -- -d $A -c $A1:voltage_target=5 --continuous
     emu_options answers=5 replies=${R}ff,$R
     emu_case "interrupt a long answer shifts nothing" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous -O csv:header=false:time=false
+    emu_options answers=4 output=7 ocp=1 mode=1 load=10
+    emu_case "interrupt warns on a live supply" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --stderr -- -d $A -c $A1:voltage_target=5 --continuous
+    emu_options output=7 ocp=1 mode=1 load=10
+    emu_case "set warns on a live supply" --oracle-differs "$WARNS" --stderr -- -d $A -c $A1:voltage_target=5 --set
+    emu_case "set on a live supply" --no-output -- -d $A -c $A1:voltage_target=5 --set
     # A reply with no header: C reads it as readings, oxrok none.
     G=55aa270f01f401f404e2014a001901070100010100000000
     emu_options replies=$R,$G,$R

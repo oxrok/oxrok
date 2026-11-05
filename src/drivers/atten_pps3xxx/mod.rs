@@ -199,20 +199,48 @@ impl Shared {
     }
 }
 
-/// What a frame of `settings` does to an output `reported` has on: named in
-/// the run or not, it goes by what goes out.
+/// What a frame of `settings` changes from what `reported` holds, and the
+/// setpoints it writes on a device with an output on, which it cannot report.
+/// `None` when it changes nothing that shows and no output is on.
 fn frame_warning(reported: &Reported, settings: &Settings) -> Option<String> {
+    let on_off = |on: bool| if on { "on" } else { "off" };
+    let mut changes = Vec::new();
     let turned: Vec<&str> = (0..CHANNELS)
         .filter(|&i| reported.enabled[i] && !settings.channels[i].enabled)
         .map(|i| GROUPS[i])
         .collect();
-    if turned.is_empty() {
+    if !turned.is_empty() {
+        changes.push(format!("{} from on to off", turned.join(", ")));
+    }
+    if settings.ocp != reported.ocp {
+        changes.push(format!(
+            "ocp_enabled from {} to {}",
+            on_off(reported.ocp),
+            on_off(settings.ocp)
+        ));
+    }
+    if settings.mode != reported.mode {
+        changes.push(format!(
+            "channel_config from {} to {}",
+            MODES[usize::from(reported.mode)],
+            MODES[usize::from(settings.mode)]
+        ));
+    }
+    if changes.is_empty() && !reported.enabled.contains(&true) {
         return None;
     }
+    let setpoints: Vec<String> = settings
+        .channels
+        .iter()
+        .zip(GROUPS)
+        .map(|(c, name)| format!("{name} {:.2} V {:.3} A", c.voltage, c.current))
+        .collect();
+    let changes =
+        if changes.is_empty() { String::new() } else { format!("{}. ", changes.join(", ")) };
     Some(format!(
-        "{} on: this turns them off and to 0 V. A frame sets everything, and the device cannot \
-         report its setpoints: set them on the command line to keep them.",
-        turned.join(", ")
+        "{changes}A frame sets everything and the device cannot report its setpoints, so what \
+         this run did not set goes to 0: {}.",
+        setpoints.join(", ")
     ))
 }
 
@@ -951,16 +979,38 @@ mod tests {
         let mut reported = Reported::default();
         reported.update(&<[u8; FRAME]>::try_from(reading()).unwrap());
         // CH1 and CH2 are on: one named with a setpoint alone still goes off.
-        let mut settings = Settings::default();
+        let mut settings = Settings { ocp: true, mode: 1, ..Settings::default() };
         settings.channels[0].voltage = 5.0;
         let warning = frame_warning(&reported, &settings).unwrap();
-        assert!(warning.starts_with("CH1, CH2 "), "{warning}");
+        assert!(warning.starts_with("CH1, CH2 from on to off. "), "{warning}");
         settings.channels[0].enabled = true;
         let warning = frame_warning(&reported, &settings).unwrap();
-        assert!(warning.starts_with("CH2 "), "{warning}");
+        assert!(warning.starts_with("CH2 from on to off. "), "{warning}");
+        // On and staying on, it still gets setpoints it cannot report.
         settings.channels[1].enabled = true;
-        assert_eq!(frame_warning(&reported, &settings), None);
-        assert_eq!(frame_warning(&Reported::default(), &Settings::default()), None);
+        let warning = frame_warning(&reported, &settings).unwrap();
+        assert!(warning.starts_with("A frame sets everything"), "{warning}");
+        assert!(warning.contains("CH1 5.00 V 0.000 A, CH2 0.00 V 0.000 A"), "{warning}");
+    }
+
+    #[test]
+    fn the_warning_says_protection_and_the_mode_change() {
+        let mut reported = Reported::default();
+        reported.update(&<[u8; FRAME]>::try_from(reading()).unwrap());
+        let warning = frame_warning(&reported, &Settings::default()).unwrap();
+        assert!(warning.contains("ocp_enabled from on to off"), "{warning}");
+        assert!(warning.contains("channel_config from Series to Independent"), "{warning}");
+        let settings = Settings { ocp: true, mode: 2, ..Settings::default() };
+        let warning = frame_warning(&Reported::default(), &settings).unwrap();
+        assert!(warning.contains("ocp_enabled from off to on"), "{warning}");
+        assert!(warning.contains("channel_config from Independent to Parallel"), "{warning}");
+    }
+
+    #[test]
+    fn a_frame_that_changes_nothing_on_a_supply_all_off_is_no_warning() {
+        let mut settings = Settings::default();
+        settings.channels[0].voltage = 5.0;
+        assert_eq!(frame_warning(&Reported::default(), &settings), None);
     }
 
     #[test]

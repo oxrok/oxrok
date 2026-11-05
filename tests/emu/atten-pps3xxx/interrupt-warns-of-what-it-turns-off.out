@@ -1,1 +1,1 @@
-oxrok: warn: oxrok::drivers::atten_pps3xxx: CH1, CH2, CH3 on: this turns them off and to 0 V. A frame sets everything, and the device cannot report its setpoints: set them on the command line to keep them.
+oxrok: warn: oxrok::drivers::atten_pps3xxx: CH1, CH2, CH3 from on to off. A frame sets everything and the device cannot report its setpoints, so what this run did not set goes to 0: CH1 5.00 V 0.000 A, CH2 0.00 V 0.000 A, CH3 0.00 V 0.000 A.
