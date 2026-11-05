@@ -583,8 +583,15 @@ impl Device for OlsDevice {
     }
 
     fn start(&mut self, sink: PacketSink) -> Result<()> {
+        // The thread gives the port back ahead of End, so a client that has
+        // seen End finds it here, where `is_finished` may still say no. What
+        // is left of the thread is that End: not joined, as a full queue
+        // would hold it.
         if self.worker.is_some() {
-            return Err(Error::Busy);
+            if self.lock_port().is_none() {
+                return Err(Error::Busy);
+            }
+            self.worker = None;
         }
         let Some(mut port) = self.lock_port().take() else {
             return Err(Error::device("device is not open"));
@@ -966,6 +973,35 @@ mod tests {
         let packets = until_end(&rx);
         assert_eq!(logic(&packets), [0u8; 0]);
         assert_eq!(written(&seen)[written(&seen).len() - 5..], [[0], [0], [0], [0], [0]]);
+    }
+
+    #[test]
+    fn a_second_capture_follows_the_first_without_a_stop() {
+        let (fake, seen) = Fake::new(board);
+        let mut dev = device(fake);
+        for _ in 0..2 {
+            let (s, rx) = sink();
+            // At once after End, with no retry.
+            dev.start(s).unwrap();
+            assert_eq!(logic(&until_end(&rx)).len(), 32);
+        }
+        dev.stop().unwrap();
+        let runs = written(&seen).iter().filter(|w| w.as_slice() == [protocol::CMD_RUN]).count();
+        assert_eq!(runs, 2);
+    }
+
+    #[test]
+    fn a_capture_under_way_is_busy() {
+        fn none(_: &[u8]) -> Option<(Duration, Vec<u8>)> {
+            None
+        }
+        let (fake, _) = Fake::new(none);
+        let mut dev = device(fake);
+        let (s, _rx) = sink();
+        dev.start(s).unwrap();
+        let (s, _rx2) = sink();
+        assert!(matches!(dev.start(s), Err(Error::Busy)));
+        dev.stop().unwrap();
     }
 
     #[test]
