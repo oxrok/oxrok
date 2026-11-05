@@ -17,7 +17,10 @@
 # --emu adds the emulated devices (docs/USB.md, "Emulation over USB/IP"):
 # for each scenario file tools/emu/MODEL.sh the USB/IP server EMU
 # (default target/debug/oxrok-emu) is started under sudo, attaches the
-# model through vhci-hcd, and the file's emu_case lines run against it.
+# model through vhci-hcd, and the file's emu_case lines run against it,
+# the commands to the server going through VUSB_CTL (default
+# target/debug/vusb-ctl when there is one, else vusb-ctl on PATH:
+# cargo install vusb-cli --version 0.1.1 --locked).
 # A case is full when oxrok has the case's driver (both tools, outputs
 # and transactions compared) and oracle-only when it does not
 # (sigrok-cli alone, checked against the goldens in tests/emu/MODEL);
@@ -69,7 +72,8 @@
 # sigrok-cli.
 #
 # EMU_USB, EMU_USBFS and the node variables follow the device: each
-# READY, REPLUGGED and RENUMERATED line replaces them (emu_track), and
+# READY, REPLUGGED and RENUMERATED line of the server's standard output
+# replaces them (emu_track), and
 # after each tool's run a `sync` makes sure a renumeration it caused
 # was reported. A scenario expands them when the case line is read, and
 # the case's reset comes after that: a reset that re-attaches the device
@@ -115,7 +119,8 @@ SIGROK_CLI=${SIGROK_CLI:-sigrok-cli}
 OXROK=${OXROK:-$(dirname "$0")/../target/debug/oxrok}
 HIL=${HIL:-$(dirname "$0")/../target/debug/oxrok-hil}
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+EMU_CTL_DIR=""
+trap 'rm -rf "$TMP" "$EMU_CTL_DIR"' EXIT
 # An interrupt stops the run: the emulator (when one runs) is detached
 # and the lock released by the exit, rather than every remaining case
 # failing against a server the signal took down.
@@ -433,6 +438,16 @@ if [ $emu = 1 ]; then
     EMU_LOCK_WAIT=${EMU_LOCK_WAIT:-1800}
     EMU_GOLDEN=${EMU_GOLDEN:-$(cd "$TOOLS/.." && pwd)/tests/emu}
     EMU_FIXTURES=${EMU_FIXTURES:-$(cd "$TOOLS/.." && pwd)/tests/fixtures}
+    if [ -z "${VUSB_CTL:-}" ]; then
+        VUSB_CTL=vusb-ctl
+        [ ! -x "$TOOLS/../target/debug/vusb-ctl" ] || VUSB_CTL=$TOOLS/../target/debug/vusb-ctl
+    fi
+    command -v "$VUSB_CTL" >/dev/null \
+        || echo "note: no $VUSB_CTL: cargo install vusb-cli --version 0.1.1 --locked" >&2
+    # The control socket. Not under TMP: TMPDIR may be long, and a
+    # socket's path has a low limit.
+    EMU_CTL_DIR=$(mktemp -d /tmp/oxrok-emu.XXXXXX)
+    EMU_CONTROL=$EMU_CTL_DIR/s
     EMU_BLESS=${EMU_BLESS:-0}
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
     EMULOG=${EMULOG:-$TMP}
@@ -544,16 +559,70 @@ if [ $emu = 1 ]; then
             sleep 0.05
         done
     }
-    # Sends a command and waits for its own acknowledgement.
+    # A text as a JSON string's content: options hold no control characters.
+    emu_json_text() {
+        printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+    }
+    # The JSON object of the model's options KEY=VALUE..., whose values stay
+    # text: vusb-ctl's own words read 1e3, a hex string too, as a number. A
+    # key twice has no place in one.
+    emu_option_args() {
+        ea_json=""; ea_seen=" "
+        for ea_word in "$@"; do
+            case "$ea_word" in
+                *=*) ;;
+                *) echo "emulator: option '$ea_word' is not KEY=VALUE" >&2; return 1 ;;
+            esac
+            ea_key=${ea_word%%=*}
+            case "$ea_seen" in
+                *" $ea_key "*) echo "emulator: option $ea_key twice" >&2; return 1 ;;
+            esac
+            ea_seen="$ea_seen$ea_key "
+            ea_json="$ea_json${ea_json:+,}\"$(emu_json_text "$ea_key")\":\"$(emu_json_text "${ea_word#*=}")\""
+        done
+        printf '{%s}' "$ea_json"
+    }
+    # Sends a command through vusb-ctl, which returns once the server has
+    # answered, and takes over what it reported before that. A command
+    # is what a scenario names: section NAME, arm unplug WHEN, arm
+    # interrupt WHEN, options [KEY=VALUE...], reset, replug, sync, detach.
     emu_cmd() {
         # Counting the cases of a --no-oracle model without a session.
         [ "$EMU_DRY" = 0 ] || return 0
         emu_alive || { echo "emulator: not running for '$1'" >&2; return 1; }
         [ "$EMU_DEAD" = 0 ] || { echo "emulator: not answering, so no '$1'" >&2; return 1; }
-        lines=$(wc -l <"$TMP/emu.out")
-        printf '%s\n' "$1" >&7 || return 1
-        emu_wait "$lines" -F -x "OK $1" || return 1
-        emu_track
+        if emu_stopped; then
+            EMU_DEAD=1
+            echo "emulator: stopped (process state T); not waiting for it" >&2
+            return 1
+        fi
+        ec_what=$1
+        case "$1" in
+            "section "*) set -- section "name=${1#section }" ;;
+            "arm unplug "*) set -- arm event=unplug "when=${1#arm unplug }" ;;
+            # The harness delivers the interrupt (emu_interrupt).
+            "arm interrupt "*) set -- arm event=mark name=interrupt "when=${1#arm interrupt }" ;;
+            options) set -- options ;;
+            "options "*)
+                # Split as the server would, with no file name expansion.
+                ec_args=$(set -f; emu_option_args ${1#options }) || return 1
+                set -- options --args "$ec_args" ;;
+            detach) set -- quit ;;
+        esac
+        timeout 15 "$VUSB_CTL" -s "$EMU_CONTROL" "$@" >/dev/null 2>"$TMP/ctl.err" 8<&-
+        ec_st=$?
+        case $ec_st in
+            0) emu_track; return 0 ;;
+            124)
+                EMU_DEAD=1
+                echo "emulator: no answer after 15 s to '$ec_what'" >&2; sed 's/^/  /' "$TMP/emu.err" >&2 ;;
+            *)
+                sed 's/^/  /' "$TMP/ctl.err" >&2
+                if ! emu_alive; then
+                    echo "emulator exited:" >&2; sed 's/^/  /' "$TMP/emu.err" >&2
+                fi ;;
+        esac
+        return 1
     }
     # Takes over the nodes and address of each attach the server
     # reported since the last call (READY, REPLUGGED, and RENUMERATED
@@ -574,14 +643,10 @@ if [ $emu = 1 ]; then
         [ "$EMU_CDC" != 1 ] || emu_cdc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
-        rm -f "$TMP/emu.ctl"; mkfifo "$TMP/emu.ctl"
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 --attach \
-            --open-devices --log "$EMULOG/$EMU_MODEL.log" \
-            <"$TMP/emu.ctl" >"$TMP/emu.out" 2>"$TMP/emu.err" 7>&- 8<&- &
+            --open-devices --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" \
+            </dev/null >"$TMP/emu.out" 2>"$TMP/emu.err" 8<&- &
         EMUPID=$!
-        # Read-write, so neither end blocks opening it; closing it is
-        # the end of input that detaches the device.
-        exec 7<>"$TMP/emu.ctl"
         emu_wait 0 '^READY ' || return 1
         : >"$TMP/emu.sed"
         EMU_SEEN=0
@@ -633,7 +698,6 @@ if [ $emu = 1 ]; then
         if [ "${EMU_DEAD:-0}" = 0 ]; then
             emu_cmd "section detach" >/dev/null 2>&1 && emu_cmd detach >/dev/null 2>&1
         fi
-        exec 7>&-
         if [ "$EMU_DEAD" = 1 ] && emu_alive; then
             echo "emulator: not answering; terminating it" >&2
         fi
@@ -1041,8 +1105,7 @@ flush()
     #   EMU_BLESS=1 writes them and otherwise the recording must match
     #   them, so a recording that is not deterministic fails. The name
     #   neither starts nor ends with white space and holds no tab or
-    #   newline: the emulator trims the
-    #   command line it acknowledges and logs as the section name.
+    #   newline: it is the section name in the log.
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
@@ -1204,12 +1267,12 @@ flush()
                     [ -p "$stdin" ] || mkfifo "$stdin"
                     ;;
             esac
-            timeout -k 5 "$case_timeout" "$@" <>"$stdin" >"$TMP/$t.out" 2>"$TMP/$t.err" 7>&- 8<&- &
+            timeout -k 5 "$case_timeout" "$@" <>"$stdin" >"$TMP/$t.out" 2>"$TMP/$t.err" 8<&- &
             TOOLPID=$!
             shift $(($# - nargs))
             WATCHPID=""
             case "$event" in
-                interrupt*) emu_interrupt "$evskip" "$TOOLPID" 7>&- 8<&- & WATCHPID=$! ;;
+                interrupt*) emu_interrupt "$evskip" "$TOOLPID" 8<&- & WATCHPID=$! ;;
             esac
             wait "$TOOLPID"
             st=$?
@@ -1609,7 +1672,7 @@ flush()
                 EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_slugs=""
                 EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
                 EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
-                emu_cases >/dev/null 2>&1 7>&- 8<&-
+                emu_cases >/dev/null 2>&1 8<&-
                 echo "$emu_dry_full $emu_dry_oracle"
             )
             case "$dry" in

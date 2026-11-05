@@ -68,7 +68,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut serial = *SERIAL;
     let mut faults = Faults::default();
     let nth = |k: &str, v: &str| -> Result<Option<u32>> {
-        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error(format!("{k}={v}: N from 1")))
+        v.parse().ok().filter(|n| *n > 0).map(Some).ok_or_else(|| Error::Invalid(format!("{k}={v}: N from 1")))
     };
     for (k, v) in options {
         match k.as_str() {
@@ -77,13 +77,13 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .parse()
                     .ok()
                     .filter(|n| (1..=8).contains(n))
-                    .ok_or_else(|| Error(format!("relays={v}: 1 to 8")))?;
+                    .ok_or_else(|| Error::Invalid(format!("relays={v}: 1 to 8")))?;
             }
             "serial" => serial = parse_serial(v)?,
             "stall-get" => faults.stall_get = nth(k, v)?,
             "short-get" => faults.short_get = nth(k, v)?,
             "stall-set" => faults.stall_set = nth(k, v)?,
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut dev = UsbRelay::new(relays);
@@ -104,7 +104,7 @@ fn parse_serial(v: &str) -> Result<[u8; 5]> {
     };
     bytes
         .and_then(|b| <[u8; 5]>::try_from(b).ok())
-        .ok_or_else(|| Error(format!("serial={v}: five bytes, as text or 0x and ten hex digits")))
+        .ok_or_else(|| Error::Invalid(format!("serial={v}: five bytes, as text or 0x and ten hex digits")))
 }
 
 /// The faults of the `-o` options; none by default.

@@ -1,17 +1,18 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
-//! The transaction log: one line per completed transfer, in the
-//! dialect of oxrok's USB fixtures (`docs/USB.md`), `# section NAME`
-//! markers between the phases of a run, and `! violation: ...` lines
-//! for what the host did outside the protocol. Transfers the device
-//! holds with a NAK are not logged until they complete, so a log does
-//! not depend on how often the host polls; unlinks and other events
-//! are `#` comments, written only in verbose mode. For a model that
-//! asks for it ([`crate::model::DeviceModel::log_digest_above`]), data
-//! longer than that, in either direction, is written as `@LEN:SHA256`,
-//! the fixture dialect's digest form, so a firmware upload or a stream
-//! of samples does not make lines of megabytes.
+//! The transaction log, as an [`Observer`] of the vusb bus: one line per
+//! completed transfer, in the dialect of oxrok's USB fixtures
+//! (`docs/USB.md`), `# section NAME` markers between the phases of a
+//! run, and `! violation: ...` lines for what the host did outside the
+//! protocol. Transfers the device holds with a NAK are not logged until
+//! they complete, so a log does not depend on how often the host polls;
+//! unlinks and other events are `#` comments, written only in verbose
+//! mode. A model's [`Rules`] can ask for data longer than some size, in
+//! either direction, to be written as `@LEN:SHA256`, the fixture
+//! dialect's digest form, so a firmware upload or a stream of samples
+//! does not make lines of megabytes, and for bytes the host leaves
+//! undefined to show as `xx`. `tests/emu` holds this format.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -20,26 +21,54 @@ use std::ops::Range;
 use std::path::Path;
 
 use sha2::{Digest as _, Sha256};
+use vusb::observer::{Notice, Observer, Outcome, Transfer};
 
 use crate::model::{BULK, CONTROL, INTERRUPT, Reply, Setup};
 
+/// How a model's transfers are logged. A model module that wants more
+/// than the default exports `pub fn log_rules(options: &[(String,
+/// String)]) -> Rules`, which `build.rs` finds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Rules {
+    /// Data longer than this is logged as `@LEN:SHA256` rather than in
+    /// hex ([`HASH_ABOVE`] is the usual value); `None` logs every byte.
+    pub digest_above: Option<usize>,
+    /// The bytes of an OUT transfer of the data to endpoint number `ep`
+    /// (not 0) that the host leaves undefined, such as a C driver's
+    /// uninitialised struct field, which would make the log differ from
+    /// one run to the next. The log shows them as `xx`
+    /// ([`data_undefined`]); the model documents each.
+    pub undefined: Option<fn(u8, &[u8]) -> Vec<Range<usize>>>,
+}
+
+impl Rules {
+    /// Data longer than `above` as its digest, every byte defined.
+    pub fn digest_above(above: usize) -> Rules {
+        Rules { digest_above: Some(above), undefined: None }
+    }
+}
+
 /// The log.
+#[derive(Debug)]
 pub struct TxLog {
     out: Option<BufWriter<File>>,
     verbose: bool,
-    violations: usize,
-    section: String,
+    rules: Rules,
 }
 
 impl TxLog {
-    /// A log to `path`, or to nowhere; events go in only when
-    /// `verbose`. Violations are also printed to stderr.
+    /// A log to `path`, or to nowhere; events go in only when `verbose`.
     pub fn new(path: Option<&Path>, verbose: bool) -> io::Result<TxLog> {
         let out = match path {
             Some(p) => Some(BufWriter::new(File::create(p)?)),
             None => None,
         };
-        Ok(TxLog { out, verbose, violations: 0, section: String::new() })
+        Ok(TxLog { out, verbose, rules: Rules::default() })
+    }
+
+    /// The rules of the model behind the device from now on.
+    pub fn set_rules(&mut self, rules: Rules) {
+        self.rules = rules;
     }
 
     fn line(&mut self, s: &str) {
@@ -50,40 +79,80 @@ impl TxLog {
         }
     }
 
-    /// Starts a section.
-    pub fn section(&mut self, name: &str) {
-        name.clone_into(&mut self.section);
-        self.line(&format!("# section {name}"));
-    }
-
-    /// The current section's name.
-    pub fn current_section(&self) -> &str {
-        &self.section
-    }
-
-    /// One completed transfer.
-    pub fn transfer(&mut self, line: &str) {
-        self.line(line);
-    }
-
-    /// A violation, counted and also printed to stderr.
-    pub fn violation(&mut self, message: &str) {
-        self.violations += 1;
-        eprintln!("violation [{}]: {message}", self.section);
-        self.line(&format!("! violation: {message}"));
-    }
-
     /// An event, in verbose mode only.
-    pub fn event(&mut self, message: &str) {
+    fn event(&mut self, message: &str) {
         if self.verbose {
             eprintln!("emu: {message}");
             self.line(&format!("# {message}"));
         }
     }
 
-    /// How many violations were logged.
-    pub fn violations(&self) -> usize {
-        self.violations
+    /// The line of a transfer that was offered to the device.
+    fn transfer_text(&self, t: &Transfer) -> String {
+        let above = self.rules.digest_above;
+        if let Some(setup) = t.setup {
+            return control_line(setup, &t.data, &t.reply, above);
+        }
+        // An endpoint the configuration lacks has no kind; such a transfer
+        // is a violation already.
+        let kind = t.kind.unwrap_or(0xff);
+        if t.is_in {
+            // An unlinked transfer shows what reached the URB.
+            let cut = match &t.reply {
+                Reply::Data(d) if t.outcome == Outcome::Unlinked => {
+                    Some(Reply::Data(d[..d.len().min(t.requested)].to_vec()))
+                }
+                _ => None,
+            };
+            let reply = cut.as_ref().unwrap_or(&t.reply);
+            transfer_line(kind, t.endpoint, t.offered, &t.data, reply, above)
+        } else {
+            let undefined =
+                self.rules.undefined.map_or_else(Vec::new, |f| f(t.endpoint & 0x0f, &t.data));
+            transfer_line_undefined(
+                kind,
+                t.endpoint,
+                t.offered,
+                &t.data,
+                &undefined,
+                &t.reply,
+                above,
+            )
+        }
+    }
+}
+
+impl Observer for TxLog {
+    fn transfer(&mut self, t: &Transfer) {
+        let line = self.transfer_text(t);
+        match t.outcome {
+            Outcome::Held => self.event(&format!("seq {}: {line} (held)", t.seqnum)),
+            Outcome::Babble => {
+                self.line(&format!("{line} (babble: the URB holds {})", t.requested));
+            }
+            _ => self.line(&line),
+        }
+    }
+
+    fn violation(&mut self, message: &str) {
+        self.line(&format!("! violation: {message}"));
+    }
+
+    fn notice(&mut self, notice: Notice<'_>) {
+        match notice {
+            Notice::Comment(c) => self.event(c),
+            Notice::Section(name) => self.line(&format!("# section {name}")),
+            // Lines the comparisons keep, in the section of the run that
+            // caused it: a tool that ends right after the transfer would
+            // otherwise see them or not depending on timing.
+            Notice::Renumeration { vendor, product } => {
+                self.line("disconnect");
+                self.line(&format!("connect {vendor:04x}:{product:04x}"));
+            }
+            // In the running section, right after the transfer that fired it.
+            Notice::Fired(event) => self.line(event.word()),
+            _ => {}
+        }
     }
 }
 
@@ -113,7 +182,7 @@ pub fn data(bytes: &[u8], above: Option<usize>) -> String {
 }
 
 /// Bytes as [`data`], those in `undefined` (bytes the host left
-/// undefined, [`crate::model::DeviceModel::log_undefined`]) as `xx`; in
+/// undefined, [`Rules::undefined`]) as `xx`; in
 /// a digest they count as 0 and their ranges follow it, `@LEN:SHA256/xx=A-B,...`.
 pub fn data_undefined(bytes: &[u8], undefined: &[Range<usize>], above: Option<usize>) -> String {
     let inside = |i: usize| undefined.iter().any(|r| r.contains(&i));
@@ -217,7 +286,59 @@ pub fn transfer_line_undefined(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use vusb::bus::Bus;
+    use vusb::device::Device;
+    use vusb::examples::relay::UsbRelay;
+    use vusb::observer::SharedObserver;
+
     use super::*;
+
+    /// What a log says of a board configured and read, with `rules`.
+    fn relay_log(rules: Rules) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "oxrok-emu-txlog-{}-{}",
+            std::process::id(),
+            rules.digest_above.unwrap_or(0)
+        ));
+        let mut log = TxLog::new(Some(&path), false).unwrap();
+        log.set_rules(rules);
+        let log: SharedObserver = Arc::new(Mutex::new(log));
+        let mut bus = Bus::new(Device::new(Box::new(UsbRelay::new(2)))).with_observer(log);
+        let setup = |request_type, request, value, length| Setup {
+            request_type,
+            request,
+            value,
+            index: 0,
+            length,
+        };
+        bus.notice(Notice::Section("run"));
+        bus.control(setup(0x00, 9, 1, 0), &[]);
+        bus.control(setup(0xa1, 1, 0x0300, 8), &[]);
+        bus.notice(Notice::Renumeration { vendor: 0x1234, product: 0xabcd });
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        text
+    }
+
+    #[test]
+    fn a_session_reads_as_the_goldens_do() {
+        assert_eq!(
+            relay_log(Rules::default()),
+            "# section run\n\
+             ctl_out 00 09 0001 0000 - -> ok\n\
+             ctl_in 21 01 0300 0000 8 -> 4142434445000000\n\
+             disconnect\n\
+             connect 1234:abcd\n"
+        );
+    }
+
+    #[test]
+    fn rules_apply_to_control_data() {
+        let text = relay_log(Rules::digest_above(2));
+        assert!(text.contains("ctl_in 21 01 0300 0000 8 -> @8:"), "{text}");
+    }
 
     #[test]
     fn undefined_bytes_show_as_xx() {
