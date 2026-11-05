@@ -1,0 +1,14 @@
+Driver functions:
+    Multiplexer
+Scan options:
+    conn
+    serialcomm
+icstation-usbrelay - ICStation ICSE012A 
+Channel groups:
+    R1: No channels
+    R2: No channels
+    R3: No channels
+    R4: No channels
+Supported configuration options across all channel groups:
+    conn: /dev/ttyACMN (current)
+    enabled: on, off
