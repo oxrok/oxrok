@@ -303,7 +303,7 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     emu_case "silent from the capture on" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 4 -- -d $K --samples 1
     # A time limit does end those: the timer's branch checks it.
     emu_case "silent from the capture on, time" --no-output --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/q' -- -d $K --time 300ms
-    # goto error frees match_info and regex (api.c:270-273), and no path clears
+    # goto error frees match_info and regex (api.c:258-261), and no path clears
     # them for the next rate: a later error path frees them again. Here it
     # corrupts the heap some runs ("malloc(): smallbin double linked list
     # corrupted", SIGABRT) and not others, so only the first rate is compared.
