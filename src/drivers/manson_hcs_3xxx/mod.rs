@@ -64,6 +64,8 @@ static DEV_OPTIONS: [OptionDesc; 8] = [
 /// How long one pass of a capture waits for a byte: the session's timeout in
 /// `serial_source_add`, and what a stop waits for at worst.
 const POLL: Duration = Duration::from_millis(10);
+/// A pause after a read that found nothing, with the link free.
+const LET_CLIENTS_IN: Duration = Duration::from_millis(1);
 /// How long a capture that only a sample limit could end goes without a
 /// reading. C has no bound, so such a capture of a silent device never ends. A
 /// time limit or a client's stop ends the rest.
@@ -472,7 +474,14 @@ impl Capture {
                 return false;
             }
         };
-        let Some(reply) = byte.and_then(|b| link.buffer.push(b)) else {
+        let Some(byte) = byte else {
+            // A mutex is not fair: taken again at once, it leaves a client's get
+            // or set waiting until the reads happen to let it in.
+            drop(link);
+            std::thread::sleep(LET_CLIENTS_IN);
+            return true;
+        };
+        let Some(reply) = link.buffer.push(byte) else {
             return true;
         };
         link.reply_pending = false;
@@ -1073,6 +1082,23 @@ mod tests {
         assert!(e.to_string().contains("the output may be on"), "{e}");
         let e = d.set(&Key::Enabled, &Value::Bool(false), None).unwrap_err();
         assert!(!e.to_string().contains("may be on"), "{e}");
+    }
+
+    #[test]
+    fn a_client_gets_the_link_while_a_capture_waits() {
+        let (mut fake, _) = Fake::new();
+        fake.reading = Vec::new();
+        let mut d = device(fake);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        for _ in 0..20 {
+            let started = Instant::now();
+            d.get(&Key::Voltage, None).unwrap();
+            assert!(started.elapsed() < Duration::from_millis(200), "{:?}", started.elapsed());
+        }
+        d.stop().unwrap();
+        let _ = until_end(&rx);
     }
 
     /// Runs `f` on its own thread: it must end within the bound.
