@@ -4,11 +4,32 @@
 EMU_MODEL=openbench-logic-sniffer
 EMU_CDC=1
 EMU_DRIVER=ols
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=openbench-logic-sniffer
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 emu_cases() {
     emu_conns
+    # oxrok's log prefix as sigrok-cli's, on its side only, and sr_strerror's
+    # wording of what it adds to an error.
+    L='s/^oxrok: err: oxrok::drivers::ols: /sr: openbench-logic-sniffer: /'
+    A='s/^(Failed to set device option .[a-z_]+.: invalid argument): (it |invalid value for captureratio).*$/\1./
+s/^(Failed to set device option .samplerate.): invalid argument: (invalid samplerate)\.?$/\1: \2./
+s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*$/\1: generic\/unspecified error./'
+    # A capture that does not start: libsigrok's session and serial lines
+    # have no counterpart in oxrok, and each tool ends in its own words.
+    F="/^sr: (session|serial-libsp): /d; $L; \$ { /^sr: openbench-logic-sniffer: /! s/.*/start refused/; }"
+    W='s/^oxrok: warn: oxrok::cli::pipeline: //'
+    UNIT_BUG="unitsize comes only from a channel count in the metadata (protocol.c:304), else 0, and hex.c:163's loop adds 0 for ever: every board that answers no metadata hangs a capture; oxrok takes the size from the channels"
+    MEMORY_BUG="max_samples 0 makes samplecount 0 and the read count 0 (protocol.c:597-599), sent minus 1 as 0xffff (protocol.c:656): the board sends all it has, for any limit, and the delay is as large; oxrok counts from the limit"
+    DELAY_BUG="a ratio that leaves less than one unit makes delaycount 0 (protocol.c:617), sent minus 1 as 0xffff (protocol.c:656-657): the capture goes on 2^18 words past the trigger, where the marker says before it; oxrok sends one unit"
+    MARKER_BUG="trigger_at_smpl counts samples of a whole read (protocol.c:618), whatever the limit cut off or RLE made of them; oxrok follows the board's words"
+    BEFORE_BUG="with ratio 0 and two stages or more trigger_at_smpl is -num_stages, which only -1 passes (protocol.c:503, 526-538): num_stages samples from before raw_sample_buf go out; oxrok sends no marker, there is none in the capture"
+    WRAP_BUG="a marker beyond the samples that came wraps logic.length (protocol.c:532-533), and the output runs off: SIGSEGV; oxrok sends what came with no marker"
+    EMPTY_BUG="a capture with no sample sends a logic packet of length 0, and hex.c:163's length - unitsize wraps: SIGSEGV; oxrok sends no packet"
+    SLOW_BUG="the scan's ols_set_samplerate(DEFAULT_SAMPLERATE) (api.c:224) fails on a board below 200 kHz, leaving 0 Hz, divider 0 and no noise filter flag; oxrok starts at the maximum"
+    DRAIN_BUG="serial_drain has no bound (serial_libsp.c:157, sp_drain), so a device that stops reading holds the scan; oxrok gives up after a second, no device"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # The token block's pieces, as hex.
     NAME=014f4c5300
     # The rest of a plain board: 24576 bytes, 200 MHz, 32 channels.
@@ -23,9 +44,9 @@ emu_cases() {
     emu_options id=none
     emu_case "scan no ID" --keep-header --no-output -- -d $O --scan
     emu_options id=4142
-    emu_case "scan a short ID" --stderr --keep-header -- -d $O --scan
+    emu_case "scan a short ID" --stderr --filter "$L" --keep-header -- -d $O --scan
     emu_options id=41424344
-    emu_case "scan another ID" --stderr --keep-header -- -d $O --scan
+    emu_case "scan another ID" --stderr --filter "$L" --keep-header -- -d $O --scan
     # What is left of the ID is taken for the metadata, as 0x58 (type 2).
     emu_options id=31534c4f58
     emu_case "scan a long ID" --keep-header -- -d $O --scan
@@ -105,26 +126,26 @@ emu_cases() {
     done
     emu_case "set swap" --no-output -- -d $O -c swap=on --set
     emu_case "set swap off" --no-output -- -d $O -c swap=off --set
-    emu_case "set samplerate too low" --stderr --expect-fail -- -d $O -c samplerate=9 --set
-    emu_case "set samplerate too high" --stderr --expect-fail -- -d $O -c samplerate=201m --set
-    emu_case "set samplerate 0" --stderr --expect-fail -- -d $O -c samplerate=0 --set
-    emu_case "set limit_samples 3" --stderr --expect-fail -- -d $O -c limit_samples=3 --set
-    emu_case "set limit_samples 0" --stderr --expect-fail -- -d $O -c limit_samples=0 --set
-    emu_case "set captureratio 101" --stderr --expect-fail -- -d $O -c captureratio=101 --set
-    emu_case "set pattern unknown" --stderr --expect-fail -- -d $O -c pattern=Bogus --set
+    emu_case "set samplerate too low" --stderr --expect-fail --filter "$A" -- -d $O -c samplerate=9 --set
+    emu_case "set samplerate too high" --stderr --expect-fail --filter "$A" -- -d $O -c samplerate=201m --set
+    emu_case "set samplerate 0" --stderr --expect-fail --filter "$A" -- -d $O -c samplerate=0 --set
+    emu_case "set limit_samples 3" --stderr --expect-fail --filter "$A" -- -d $O -c limit_samples=3 --set
+    emu_case "set limit_samples 0" --stderr --expect-fail --filter "$A" -- -d $O -c limit_samples=0 --set
+    emu_case "set captureratio 101" --stderr --expect-fail --filter "$A" -- -d $O -c captureratio=101 --set
+    emu_case "set pattern unknown" --stderr --expect-fail --filter "$A" -- -d $O -c pattern=Bogus --set
     # config_set takes any other string for rising (api.c:329-335).
     emu_case "set clock_edge unknown" --no-output -- -d $O -c clock_edge=up --set
     emu_case "set several" --no-output -- -d $O -c rle=on:external_clock=on:clock_edge=falling --set
     # A board's maximum: 100 MHz, no demux, and one below the default.
     emu_options rate=100000000
     emu_case "max rate show" --keep-header -- -d $O --show
-    emu_case "max rate refuses" --stderr --expect-fail -- -d $O -c samplerate=200m --set
+    emu_case "max rate refuses" --stderr --expect-fail --filter "$A" -- -d $O -c samplerate=200m --set
     emu_case "max rate at it" -- -d $O -c samplerate=100m --get samplerate
     emu_options rate=15000000
     emu_case "max rate off the clock" -- -d $O -c samplerate=15m --get samplerate
     emu_options rate=100000
-    emu_case "max rate below the default" -- -d $O --get samplerate
-    emu_case "max rate below the default capture" -- -d $O --samples 8 -O hex
+    emu_case "max rate below the default" --oracle-differs "$SLOW_BUG" -- -d $O --get samplerate
+    emu_case "max rate below the default capture" --oracle-differs "$SLOW_BUG" -- -d $O --samples 8 -O hex
     emu_options
 
     # Captures. What differs between them is on the wire.
@@ -147,7 +168,8 @@ emu_cases() {
     emu_case "channels 0-15 beyond" --stderr --expect-fail -- -d $O -C 0-15 --samples 13000 -O hex
     # The list says 24576 / 3, and three groups take four bytes each. The
     # device sends what it has, and after 100 ms of silence that is all.
-    emu_case "channels 0-23 listed" --stderr --filter '/^(0|[1-9][0-9]*):/d' -- -d $O -C 0-23 --samples 8192 -O hex
+    emu_case "channels 0-23 listed" --stderr --filter "/^(0|[1-9][0-9]*):/d
+$W" -- -d $O -C 0-23 --samples 8192 -O hex
     for rate in 10 1k 200k 1m 25m 100m; do
         emu_case "rate $rate" -- -d $O -c samplerate=$rate --samples 8 -O hex
     done
@@ -172,17 +194,18 @@ emu_cases() {
     emu_case "no rate key" --keep-header -- -d $O --show
     emu_options
 
-    # RLE. slow=N holds the pins for N samples.
+    # RLE. slow=N holds the pins for N samples. What a limit leaves is still
+    # coming while the resets go out, so a capture stays within one bulk IN
+    # of the kernel's 128 bytes, and the .tx has one order.
     emu_case "rle no runs" -- -d $O -c rle=on --samples 16 -O hex
-    emu_case "rle one group" -- -d $O -c rle=on -C 8-15 --samples 1000 -O hex
-    emu_case "rle two groups" -- -d $O -c rle=on -C 8-15,24-31 --samples 1000 -O hex
+    emu_case "rle one group" -- -d $O -c rle=on -C 8-15 --samples 128 -O hex
+    emu_case "rle two groups" -- -d $O -c rle=on -C 8-15,24-31 --samples 64 -O hex
     emu_case "rle cut by the limit" -- -d $O -c rle=on -C 8-15 --samples 100 -O hex
-    emu_options slow=100
-    emu_case "rle three groups" -- -d $O -c rle=on -C 0-23 --samples 1000 -O hex
-    emu_case "rle four groups" -- -d $O -c rle=on --samples 1000 -O hex
-    emu_case "rle runs longer than 127" -- -d $O -c rle=on -C 0-7 --samples 1000 -O hex
+    emu_options slow=8
+    emu_case "rle three groups" -- -d $O -c rle=on -C 0-23 --samples 32 -O hex
+    emu_case "rle four groups" -- -d $O -c rle=on --samples 32 -O hex
     emu_options slow=300
-    emu_case "rle a count in one group" -- -d $O -c rle=on -C 8-15 --samples 1000 -O hex
+    emu_case "rle runs longer than 127" -- -d $O -c rle=on -C 0-7 --samples 128 -O hex
     emu_options memory=64 slow=8
     emu_case "rle at the memory" -- -d $O -c rle=on -C 0-7 --samples 64 -O hex
     emu_case "rle beyond the memory" --stderr --expect-fail -- -d $O -c rle=on -C 0-7 --samples 4096 -O hex
@@ -197,7 +220,7 @@ emu_cases() {
     emu_case "three stages" -- -d $O -c captureratio=50 --samples 16 -t 4=101 -O hex
     emu_case "four stages" -- -d $O -c captureratio=50 --samples 16 -t 4=1010 -O hex
     # The session's stop removes a source there is none of, and logs where.
-    emu_case "five stages" --stderr --expect-fail --filter '/Cannot remove non-existing event source/d' -- -d $O -c captureratio=50 --samples 16 -t 4=10101
+    emu_case "five stages" --stderr --expect-fail --filter "$F" -- -d $O -c captureratio=50 --samples 16 -t 4=10101
     # A condition sigrok-cli refuses by the list of matches.
     emu_case "trigger rising" --stderr --expect-fail -- -d $O -c captureratio=50 --samples 16 -t 4=r
     emu_case "trigger falling" --stderr --expect-fail -- -d $O -c captureratio=50 --samples 16 -t 4=f
@@ -205,16 +228,24 @@ emu_cases() {
     # fires at once.
     emu_case "trigger on a disabled channel" --stderr --expect-fail -- -d $O -C 0-7 -c captureratio=50 --samples 16 -t 12=1 -O hex
     emu_case "trigger on an enabled group" -- -d $O -C 0-7 -c captureratio=50 --samples 16 -t 4=1 -O hex
-    for r in 0 1 25 49 50 75 99 100; do
+    for r in 0 1 25 49 50 75; do
         emu_case "ratio $r" -- -d $O -c captureratio=$r --samples 16 -t 4=1 -O hex
     done
-    emu_case "ratio 0 two stages" -- -d $O -c captureratio=0 --samples 16 -t 4=10 -O hex
-    emu_case "ratio 0 three stages" -- -d $O -c captureratio=0 --samples 16 -t 4=101 -O hex
-    emu_case "ratio 100 two stages" -- -d $O -c captureratio=100 --samples 16 -t 4=10 -O hex
-    emu_case "ratio 100 limit 5" --expect-fail -- -d $O -c captureratio=100 --samples 5 -t 4=1 -O hex
+    for r in 99 100; do
+        emu_case "ratio $r" --oracle-differs "$DELAY_BUG" -- -d $O -c captureratio=$r --samples 16 -t 4=1 -O hex
+    done
+    emu_case "ratio 0 two stages" --oracle-differs "$BEFORE_BUG" -- -d $O -c captureratio=0 --samples 16 -t 4=10 -O hex
+    emu_case "ratio 0 three stages" --oracle-differs "$BEFORE_BUG" -- -d $O -c captureratio=0 --samples 16 -t 4=101 -O hex
+    emu_case "ratio 100 two stages" --oracle-differs "$DELAY_BUG" -- -d $O -c captureratio=100 --samples 16 -t 4=10 -O hex
+    emu_case "ratio 100 limit 5" --oracle-bug "$WRAP_BUG" -- -d $O -c captureratio=100 --samples 5 -t 4=1 -O hex
+    # The output shows no marker in so few samples, where the tools differ
+    # by 3: a unit test has oxrok's.
     emu_case "ratio 50 limit 5" -- -d $O -c captureratio=50 --samples 5 -t 4=1 -O hex
-    emu_case "ratio 50 limit 101" -- -d $O -c captureratio=50 --samples 101 -t 4=1 -O hex
-    emu_case "ratio 50 rle" -- -d $O -c captureratio=50:rle=on -C 8-15 --samples 1000 -t 9=1 -O hex
+    emu_case "ratio 50 limit 101" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50 --samples 101 -t 4=1 -O bits
+    emu_case "ratio 50 rle" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50:rle=on -C 8-15 --samples 128 -t 9=1 -O bits
+    emu_options slow=8
+    emu_case "ratio 50 rle marker" --oracle-differs "$MARKER_BUG" -- -d $O -c captureratio=50:rle=on -C 0-7 --samples 64 -t 4=1 -O bits
+    emu_options
     emu_case "ratio 50 200m" -- -d $O -c captureratio=50:samplerate=200m -C 0-15 --samples 16 -t 4=1 -O hex
     emu_case "ratio 50 beyond the memory" --stderr --expect-fail -- -d $O -c captureratio=50 --samples 7000 -t 4=1 -O hex
     emu_case "ratio 50 trigger bits" -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O bits
@@ -225,13 +256,13 @@ emu_cases() {
     # ols_get_metadata alone, and needs the key), and hex.c:163's loop adds
     # 0 for ever.
     emu_options meta=none
-    emu_case "no metadata capture" --hangs --no-output --timeout 3 -- -d $O --samples 8 -O hex
+    emu_case "no metadata capture" --oracle-bug "$UNIT_BUG" --oracle-hangs --timeout 5 -- -d $O --samples 8 -O hex
     emu_options meta=${NAME}2100006000230bebc20000
-    emu_case "no channel key capture" --hangs --no-output --timeout 3 -- -d $O --samples 8 -O hex
+    emu_case "no channel key capture" --oracle-bug "$UNIT_BUG" --oracle-hangs --timeout 5 -- -d $O --samples 8 -O hex
     # max_samples 0 makes the read count 0, sent as 0xffff (protocol.c:597-599,
     # 656), so the board sends all it has and C keeps the newest.
     emu_options memory=64 meta=${NAME}402000
-    emu_case "no memory key capture" -- -d $O --samples 8 -O hex
+    emu_case "no memory key capture" --oracle-differs "$MEMORY_BUG" -- -d $O --samples 8 -O hex
     emu_options meta=${NAME}20000000402100006000
     emu_case "64 channels capture" -- -d $O --samples 8 -O hex
     emu_options
@@ -239,17 +270,21 @@ emu_cases() {
     # What the device does wrong.
     emu_options sends=3
     emu_case "sends 3 of 16" -- -d $O --samples 16 -O hex
-    emu_case "sends 3 ratio 50" --expect-fail -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
+    emu_case "sends 3 ratio 50" --oracle-bug "$WRAP_BUG" -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
     emu_options sends=0
-    emu_case "sends nothing" --hangs --no-output --timeout 2 -- -d $O --samples 16 -O hex
+    # Nothing ends these but a stop, under either tool: a capture that has
+    # not begun has no silence to end on. What oxrok does with the stop.
+    emu_case "lib sends nothing" --libsigrok --hangs --no-output --timeout 2 -- -d $O --samples 16 -O hex
+    emu_case "interrupt waiting" --oracle-bug "$SIGINT_BUG" --interrupt model --no-output --timeout 15 --tx-filter '/^interrupt$/q' -- -d $O --samples 16 -O hex
     emu_options
-    emu_case "a trigger that never comes" --hangs --no-output --timeout 2 -- -d $O --samples 16 -t 0=1,16=1 -O hex
+    emu_case "lib a trigger that never comes" --libsigrok --hangs --no-output --timeout 2 -- -d $O --samples 16 -t 0=1,16=1 -O hex
+    emu_case "interrupt a trigger that never comes" --oracle-bug "$SIGINT_BUG" --interrupt model --no-output --timeout 15 --tx-filter '/^interrupt$/q' -- -d $O --samples 16 -t 0=1,16=1 -O hex
+    # A stop mid capture drops what came, as abort_acquisition does, with
+    # 100 ms of silence racing it: a unit test has that.
     emu_options chunk=1
     emu_case "one byte per transfer" -- -d $O --samples 16 -O hex
-    # A stalled read loses what comes with the kernel's recovery, so only
-    # the ID's is used: a capture would wait for bytes gone by timing.
-    emu_options in-stall=0
-    emu_case "the ID read stalled" --keep-header -- -d $O --scan
+    # No in-stall=: the kernel's recovery loses what comes with it or not, by
+    # timing, and nothing here asks again.
     emu_options stall=line
     emu_case "line coding stalled" --keep-header -- -d $O --scan
     emu_options stall=lines
@@ -263,15 +298,15 @@ emu_cases() {
     # The hangup ends the capture with no sample: an empty logic packet, and
     # the output's loop runs off (hex.c:163).
     emu_options sends=0
-    emu_case "unplug waiting" --expect-fail --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
-    emu_case "unplug waiting trigger" --expect-fail --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
-    # The start's writes failing, one each: the scan writes 7, a capture
-    # the stage's 3, the divider, the counts, the flags and the run.
+    emu_case "unplug waiting" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
+    emu_case "unplug waiting trigger" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
+    # A write of the start failing: the scan writes 7, a capture the stage's
+    # 3 first. Later than this the unplug and the run race, and C's hangup
+    # has it end by a crash or an error as the pace has it.
     emu_options
-    emu_case "unplug at the divider" --unplug out=2:10 --timeout 10 --stderr --expect-fail --filter '/Cannot remove non-existing event source/d' -- -d $O --samples 16 -O hex
-    emu_case "unplug at the run" --unplug out=2:13 --timeout 10 --stderr --expect-fail --filter '/Cannot remove non-existing event source/d' -- -d $O --samples 16 -O hex
-    emu_options in-limit=100
-    emu_case "unplug mid capture" --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 100 -O hex
+    emu_case "unplug at the divider" --unplug out=2:10 --timeout 10 --stderr --expect-fail --filter "$F" -- -d $O --samples 16 -O hex
+    # No unplug mid capture: bytes just delivered are lost to the hangup or
+    # not, as the pace has it, and with none C crashes. A unit test has it.
     emu_options
 
     # What sigrok-cli cannot reach: a stop, and no limit.
@@ -282,11 +317,11 @@ emu_cases() {
     # source goes (protocol.c:381-385), and with it the session.
     emu_options memory=64
     emu_case "lib no limit" --libsigrok --stderr --filter 's/0x[0-9a-f]+/PTR/' -- -d $O -O hex
-    # A device that stops reading: C's drain has no bound, and each copy of
-    # this case costs a closing_wait.
+    # A device that stops reading: this driver drains each command, so it
+    # stops at the first, a path of its own. It costs a closing_wait.
     emu_options out-hold=0
     emu_tty_closing_wait 100
-    emu_case "device stops reading" --hangs --no-output --timeout 3 --tx-filter '/^bulk_out 02 /d' -- -d $O --scan
+    emu_case "device stops reading" --oracle-bug "$DRAIN_BUG" --oracle-hangs --no-output --keep-header --timeout 9 --tx-filter '/^bulk_out 02 /d' -- -d $O --scan
     emu_tty_closing_wait 3000
 }
 

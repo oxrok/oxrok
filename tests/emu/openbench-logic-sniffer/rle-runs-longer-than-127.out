@@ -1,49 +1,9 @@
 Acquisition with 8/32 channels at 200 kHz
-0:00 00 00 00 00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff ff ff ff ff 
-1:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-2:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-3:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-4:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-5:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-6:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-0:fe 00 00 00 00 00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff ff ff ff 
-1:fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-2:01 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-3:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-4:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-5:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-6:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-0:ff fe 00 00 00 00 00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff ff ff 
-1:00 01 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-2:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-3:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-4:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-5:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-6:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-0:ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff ff 
-1:ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-2:ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-3:ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-4:00 00 01 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-5:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-6:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-0:ff ff ff fe 00 00 00 00 00 00 00 00 00 00 00 00 1f ff ff ff ff ff ff ff 
-1:00 00 00 01 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-2:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-3:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-4:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-5:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-6:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
-7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-0:ff ff ff ff fe 
-1:ff ff ff ff fe 
-2:00 00 00 00 01 
-3:00 00 00 00 00 
-4:ff ff ff ff ff 
-5:ff ff ff ff ff 
-6:ff ff ff ff ff 
-7:00 00 00 00 00 
+0:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+1:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+2:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+3:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+4:ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff 
+5:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+6:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+7:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 

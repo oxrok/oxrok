@@ -1,4 +1,1 @@
-sr: serial-libsp: Write error (5): Input/output error.
-sr: session: Could not start ols device /dev/ttyACMN acquisition.
-sr: serial-libsp: Write error (5): Input/output error.
-Failed to start session.
+start refused

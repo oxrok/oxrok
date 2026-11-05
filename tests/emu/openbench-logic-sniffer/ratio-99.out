@@ -1,9 +1,9 @@
 Acquisition with 32/32 channels at 200 kHz
 0:aa aa 
 1:66 66 
-2:1e 1e 
-3:01 fe 
-4:00 01 
+2:e1 e1 
+3:1f e0 
+4:00 1f 
 5:00 00 
 6:00 00 
 7:00 00 
@@ -17,9 +17,9 @@ Acquisition with 32/32 channels at 200 kHz
 15:00 00 
 16:55 55 
 17:99 99 
-18:e1 e1 
-19:fe 01 
-20:ff fe 
+18:1e 1e 
+19:e0 1f 
+20:ff e0 
 21:ff ff 
 22:ff ff 
 23:ff ff 

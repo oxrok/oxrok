@@ -19,8 +19,8 @@ never reached, by function (line ranges hold no reached line):
     ols_prepare_acquisition: 615, 624, 632, 641, 650, 653, 690
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/serial.c         34.3%  138 of 402
-  src/serial_libsp.c   50.0%  128 of 256
-  total                40.4%  266 of 658
+  src/serial_libsp.c   48.0%  123 of 256
+  total                39.7%  261 of 658
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
@@ -55,7 +55,7 @@ never reached, by function (line ranges hold no reached line):
   src/serial_libsp.c
     sr_ser_libsp_open: 70-71, 76-84
     sr_ser_libsp_close: 96-97, 103-111
-    sr_ser_libsp_flush: 126-127, 133-135
+    sr_ser_libsp_flush: 126-127, 133-141
     sr_ser_libsp_drain: 153-154, 160-164
     sr_ser_libsp_write: 178-179, 183, 188-190
     sr_ser_libsp_read: 209-210, 219-226
