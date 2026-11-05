@@ -572,7 +572,7 @@ impl Capture {
             // between two, and the packets go out with no lock.
             let polled = {
                 let mut link = self.link.lock().expect("link lock");
-                let polled = link.read_state();
+                let polled = link.read_state_until(stop);
                 if link.request_unsent() {
                     unsent += 1;
                 } else {
@@ -1443,6 +1443,22 @@ mod tests {
         assert!(!d.link().acquiring);
         d.close().unwrap();
         assert_eq!(writes(&seen).last().unwrap(), &write_frame(0x06, 0));
+    }
+
+    #[test]
+    fn a_stop_on_a_silent_supply_comes_between_two_tries() {
+        let (mut d, writes, _, mode) = switchable();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        *mode.lock().unwrap() = Mode::Silent;
+        std::thread::sleep(Duration::from_millis(100));
+        d.stop().unwrap();
+        let before = writes.lock().unwrap().len();
+        let started = Instant::now();
+        packets_until_end(&rx);
+        assert!(started.elapsed() < Duration::from_millis(700), "{:?}", started.elapsed());
+        assert_eq!(writes.lock().unwrap().len(), before, "no try after the stop");
     }
 
     #[test]

@@ -24,6 +24,7 @@
 
 use crate::core::{Error, Result};
 use crate::modbus::Modbus;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Which map a model has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,15 +172,29 @@ impl Identity {
     }
 }
 
-fn read_registers(modbus: &mut Modbus, address: u16, registers: &mut [u16]) -> Result<()> {
+/// `rdtech_dps_read_holding_registers`. A stop comes between two tries, each of
+/// which may wait 500 ms for nothing, where C has no stop to look at.
+fn read_registers_until(
+    modbus: &mut Modbus,
+    address: u16,
+    registers: &mut [u16],
+    stop: &AtomicBool,
+) -> Result<()> {
     let mut outcome = Ok(());
     for _ in 0..READ_TRIES {
+        if stop.load(Ordering::SeqCst) {
+            return Err(Error::device("stopped"));
+        }
         outcome = modbus.read_holding_registers(address, registers);
         if outcome.is_ok() {
             break;
         }
     }
     outcome
+}
+
+fn read_registers(modbus: &mut Modbus, address: u16, registers: &mut [u16]) -> Result<()> {
+    read_registers_until(modbus, address, registers, &AtomicBool::new(false))
 }
 
 /// `rdtech_dps_get_model_version`.
@@ -411,6 +426,15 @@ impl Link {
     ///
     /// What the bus gives after its tries.
     pub fn read_state(&mut self) -> Result<State> {
+        self.read_state_until(&AtomicBool::new(false))
+    }
+
+    /// [`Link::read_state`], giving up between two tries once `stop` is set.
+    ///
+    /// # Errors
+    ///
+    /// What the bus gives after its tries, or the stop.
+    pub fn read_state_until(&mut self, stop: &AtomicBool) -> Result<State> {
         let multipliers = self.multipliers;
         let model = self.model;
         let bus = self.bus()?;
@@ -418,16 +442,16 @@ impl Link {
         match model.family {
             Family::Dps => {
                 let mut block = [0; DPS_BLOCK];
-                read_registers(bus, DPS_USET, &mut block)?;
-                read_registers(bus, DPS_OVPSET, &mut thresholds)?;
+                read_registers_until(bus, DPS_USET, &mut block, stop)?;
+                read_registers_until(bus, DPS_OVPSET, &mut thresholds, stop)?;
                 Ok(decode_dps(&block, &thresholds, &multipliers))
             }
             Family::Rd => {
                 let mut block = [0; RD_BLOCK_WITH_RANGE];
                 let count = if model.ranges.len() > 1 { RD_BLOCK_WITH_RANGE } else { RD_BLOCK };
                 let block = &mut block[..count];
-                read_registers(bus, RD_VOLT_TGT, block)?;
-                read_registers(bus, RD_OVP_THR, &mut thresholds)?;
+                read_registers_until(bus, RD_VOLT_TGT, block, stop)?;
+                read_registers_until(bus, RD_OVP_THR, &mut thresholds, stop)?;
                 Ok(decode_rd(block, &thresholds, &multipliers))
             }
         }
