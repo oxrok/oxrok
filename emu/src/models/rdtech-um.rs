@@ -157,7 +157,7 @@ fn list(key: &str, value: &str, most: u32) -> Result<Vec<u32>> {
 /// `N:REST`, with N from 1.
 fn numbered<'a>(key: &str, value: &'a str) -> Result<(u32, &'a str)> {
     let (n, rest) =
-        value.split_once(':').ok_or_else(|| Error(format!("{key}={value}: as in 2:{key}")))?;
+        value.split_once(':').ok_or_else(|| Error::Invalid(format!("{key}={value}: as in 2:{key}")))?;
     Ok((parse_number(key, n, 1..=1_000_000)?, rest))
 }
 
@@ -195,7 +195,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
                     "um24c" => Kind::Um24c,
                     "um25c" => Kind::Um25c,
                     "um34c" => Kind::Um34c,
-                    _ => return Err(Error(format!("model={v}: um24c, um25c or um34c"))),
+                    _ => return Err(Error::Invalid(format!("model={v}: um24c, um25c or um34c"))),
                 };
             }
             "id" => {
@@ -230,7 +230,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
                 let bytes = parse_hex_list(k, hex, 1, MOST_FAULT_BYTES as usize)?.remove(0);
                 c.faults.push((n, Fault::Noise(bytes)));
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     // pid.codes' test id: no such USB device exists.
@@ -323,7 +323,7 @@ impl Meter {
 
     fn poll(&mut self, port: &mut Port<'_>) {
         if self.config.answers.is_some_and(|n| self.polls >= n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         self.polls += 1;
@@ -467,9 +467,9 @@ mod tests {
     fn answers_runs_out_and_a_reset_brings_it_back() {
         let mut h = meter(&[("answers", "1")]);
         assert_eq!(poll(&mut h).len(), DUMP);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         assert_eq!(poll(&mut h).len(), 0);
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         h.cdc.model.reset();
         assert_eq!(poll(&mut h).len(), DUMP);
         let mut h = meter(&[("answers", "0")]);
