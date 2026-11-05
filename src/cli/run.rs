@@ -218,6 +218,12 @@ fn maybe_config_set(device: &mut dyn Device, key: &Key, value: u64) -> Result<()
     }
 }
 
+/// The samples of a time limit. sigrok-cli's multiplication wraps
+/// (session.c:61) and gives a limit unrelated to the time; here it saturates.
+fn time_samples(rate: u64, msec: u64) -> u64 {
+    rate.saturating_mul(msec) / 1000
+}
+
 fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
     let msec = parse_timestring(text)
         .filter(|t| *t > 0)
@@ -229,7 +235,7 @@ fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
     }
     if device.option(&Key::Samplerate, None).is_some_and(|o| o.access.get) {
         let rate = device.get(&Key::Samplerate, None)?.as_u64().unwrap_or(0);
-        let samples = rate * msec / 1000;
+        let samples = time_samples(rate, msec);
         if samples == 0 {
             return Err(Error::arg("Not enough time at this samplerate."));
         }
@@ -330,6 +336,15 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_limit_does_not_overflow() {
+        assert_eq!(time_samples(1000, 1500), 1500);
+        assert_eq!(time_samples(200_000, 1), 200);
+        assert_eq!(time_samples(999, 1), 0);
+        assert_eq!(time_samples(u64::MAX, 2), u64::MAX / 1000);
+        assert_eq!(time_samples(2, u64::MAX), u64::MAX / 1000);
+    }
 
     /// A device that reads `limit_samples` and has no way to set it.
     struct ReadsLimit {

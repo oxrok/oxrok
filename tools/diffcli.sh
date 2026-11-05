@@ -248,6 +248,7 @@ case_ "demo hex graycode" -- -d $D8 -g Logic -c pattern=graycode --samples 100 -
 case_ "demo ascii" -- -d $D4 -g Logic -c pattern=walking-zero --samples 50 -O ascii
 case_ "demo analog sine" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=sine --samples 20 -O analog
 case_ "demo analog square amplitude" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=square:amplitude=5 --samples 10 -O analog
+case_ "analog show" --names --keep-header -- -O analog --show
 case_ "demo null" -- -d $D4 --samples 10 -O null
 case_ "demo null with analog" -- -d demo:logic_channels=2:analog_channels=1 --samples 4 -O null
 case_ "null show" --keep-header -- -O null --show

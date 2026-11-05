@@ -14,31 +14,19 @@ pub(super) static MODULE: OutputModule = OutputModule {
     id: "analog",
     name: "Analog",
     description: "ASCII analog data values and units",
-    options: &[
-        OutputOption {
-            id: "digits",
-            name: "Digits",
-            description: "Digits to show (all or spec)",
-            default: "all",
-        },
-        OutputOption {
-            id: "meta",
-            name: "Meta",
-            description: "Print META lines for metadata packets",
-            default: "true",
-        },
-    ],
+    options: &[OutputOption {
+        id: "digits",
+        name: "Digits",
+        description: "Digits to show (all or spec)",
+        default: "all",
+    }],
     extensions: &[],
     analog: true,
-    create: |ctx, options| {
-        let meta = super::option_bool(options, "meta", true)?;
-        Ok(Box::new(Analog::new(ctx, meta)))
-    },
+    create: |ctx, _| Ok(Box::new(Analog::new(ctx))),
 };
 
 struct Analog {
     names: Vec<(usize, String)>,
-    meta: bool,
     /// Whether a `META samplerate` line prints; see [`fallback`].
     samplerate: bool,
 }
@@ -47,7 +35,7 @@ struct Analog {
 /// show. As `-O analog` but for `META samplerate` lines, which sigrok-cli
 /// prints here too and oxrok does not (docs/CLI.md).
 pub fn fallback(ctx: &OutputContext) -> Box<dyn Output> {
-    let mut analog = Analog::new(ctx, true);
+    let mut analog = Analog::new(ctx);
     analog.samplerate = false;
     Box::new(analog)
 }
@@ -65,9 +53,9 @@ fn meta_text(value: &Value) -> String {
 }
 
 impl Analog {
-    fn new(ctx: &OutputContext, meta: bool) -> Self {
+    fn new(ctx: &OutputContext) -> Self {
         let names = ctx.channels.iter().map(|c| (c.index, c.name.clone())).collect();
-        Analog { names, meta, samplerate: true }
+        Analog { names, samplerate: true }
     }
 
     fn name(&self, index: usize) -> String {
@@ -141,9 +129,6 @@ impl Output for Analog {
             _ => {}
         }
         if let Packet::Meta(items) = packet {
-            if !self.meta {
-                return Ok(());
-            }
             for (key, value) in items {
                 if *key != Key::Samplerate || self.samplerate {
                     let text = meta_text(value);
@@ -194,8 +179,7 @@ mod tests {
         let rest = "META enabled: 1\nMETA ocp_enabled: 0\nMETA regulation: CC\n\
                     META voltage_target: 5.000000\n";
         assert_eq!(text(fallback(&ctx).as_mut()), rest);
-        assert_eq!(text(&mut Analog::new(&ctx, true)), format!("META samplerate: 1000\n{rest}"));
-        assert_eq!(text(&mut Analog::new(&ctx, false)), "");
+        assert_eq!(text(&mut Analog::new(&ctx)), format!("META samplerate: 1000\n{rest}"));
         // Samplerate alone gives the fallback nothing to print.
         let mut out = Vec::new();
         let rate = Packet::Meta(vec![(Key::Samplerate, Value::U64(1000))]);

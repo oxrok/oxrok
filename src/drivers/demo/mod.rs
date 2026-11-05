@@ -502,8 +502,10 @@ impl Acquisition {
         let Some(g) = &self.logic else { return };
         let unit = g.unit_size();
         self.soft = trigger.and_then(|t| SoftTrigger::new(t, unit));
-        let pre = self.settings.limit_samples * self.settings.capture_ratio / 100;
-        self.pre = PreTriggerBuffer::new(unit, pre as usize);
+        self.pre = PreTriggerBuffer::new(
+            unit,
+            pre_trigger_samples(self.settings.limit_samples, self.settings.capture_ratio, unit),
+        );
     }
 
     fn run(&mut self, sink: &PacketSink, stop: &AtomicBool) {
@@ -707,9 +709,25 @@ fn analog_packet(agen: &AnalogGen, samples: Vec<f32>) -> AnalogData {
     }
 }
 
+/// The capture ratio's share of the sample limit, whose bytes must fit.
+fn pre_trigger_samples(limit: u64, ratio: u64, unit: usize) -> usize {
+    let share = u128::from(limit) * u128::from(ratio) / 100;
+    let most = usize::MAX / unit.max(1);
+    usize::try_from(share).map_or(most, |share| share.min(most))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_huge_limit_keeps_its_pre_trigger_share_in_range() {
+        const HUGE: u64 = 18_446_744_073_709_549_568;
+        assert_eq!(pre_trigger_samples(HUGE, 20, 1), 3_689_348_814_741_909_913);
+        assert_eq!(pre_trigger_samples(HUGE, 100, 1), usize::try_from(HUGE).unwrap());
+        assert_eq!(pre_trigger_samples(HUGE, 100, 2), usize::MAX / 2);
+        assert_eq!(pre_trigger_samples(1000, 25, 1), 250);
+    }
     use std::sync::mpsc::sync_channel;
 
     fn capture(args: &[(Key, Value)], configure: impl FnOnce(&mut dyn Device)) -> Vec<Packet> {
