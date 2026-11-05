@@ -400,7 +400,6 @@ impl Capture {
                 return;
             }
             if self.limit.is_some_and(|limit| started.elapsed() > limit) {
-                log::debug!("Requested sampling time reached.");
                 return;
             }
             if matches!(self.poll(port.as_mut(), &mut rx), Pass::End) {
@@ -447,7 +446,6 @@ impl Capture {
         }
         *frames += 1;
         if self.limit_frames > 0 && *frames >= self.limit_frames {
-            log::debug!("Requested number of frames ({}) reached.", self.limit_frames);
             return Pass::End;
         }
         rx.buf.copy_within(POLL_LEN..rx.len, 0);
