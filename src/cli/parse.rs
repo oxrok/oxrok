@@ -191,16 +191,41 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     ConfigPlan { settings: offs, enables }
 }
 
-/// Resolves and parses every `-c` option. The group comes from the
-/// option's own `channel_group=` element, else from `-g`.
+/// The scope of a `-c` or `--get`: its own `channel_group=`, else `-g`.
+/// Refused as sigrok-cli's `lookup_channel_group()` words it (device.c), where
+/// that goes on to use the device.
+fn resolve_scope(device: &dyn Device, own: Option<&str>, args: &Args) -> Result<Option<String>> {
+    let Some(name) = own.or(args.channel_group.as_deref()) else { return Ok(None) };
+    let groups = device.channel_groups();
+    if groups.is_empty() {
+        return Err(Error::arg("This device does not have any channel groups."));
+    }
+    if !groups.iter().any(|g| g.name.eq_ignore_ascii_case(name)) {
+        return Err(Error::Arg(format!("Invalid channel group '{name}'")));
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// Resolves and checks every `-c` option: its scope, its key, its value,
+/// that the key can be set in that scope and what the core refuses for every
+/// driver. No driver's option list depends on what a `-c` sets (each answers
+/// from its model and the group), so all this holds at send time.
 pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
     let mut items = Vec::new();
     for (config, text) in args.configs.iter().enumerate() {
         let parsed = generic_args(text, false);
-        let group = parsed.scope.clone().or_else(|| args.channel_group.clone());
+        let group = resolve_scope(device, parsed.scope.as_deref(), args)?;
         for (name, v) in parsed.items {
             let key = resolve_key(device, &name, group.as_deref())?;
             let value = option_value(&name, v.as_deref(), key.kind())?;
+            let access = device.option(&key, group.as_deref()).map(|o| o.access);
+            if access.is_none_or(|a| !a.set) {
+                return Err(Error::Arg(format!(
+                    "Failed to set device option '{name}': not applicable."
+                )));
+            }
+            oxrok::core::check_value(&key, &value)
+                .map_err(|e| Error::Arg(format!("Failed to set device option '{name}': {e}.")))?;
             items.push(ConfigItem { name, key, value, group: group.clone(), config });
         }
     }
@@ -211,10 +236,6 @@ fn send_configs(device: &mut dyn Device, items: &[ConfigItem]) -> Result<()> {
     for item in items {
         let k = &item.name;
         let group = item.group.as_deref();
-        let access = device.option(&item.key, group).map(|o| o.access);
-        if access.is_none_or(|a| !a.set) {
-            return Err(Error::Arg(format!("Failed to set device option '{k}': not applicable.")));
-        }
         oxrok::core::config_set(device, &item.key, &item.value, group)
             .map_err(|e| Error::Arg(format!("Failed to set device option '{k}': {e}.")))?;
     }
@@ -347,7 +368,21 @@ mod tests {
     struct Recorder {
         info: oxrok::core::DeviceInfo,
         channels: Vec<oxrok::core::Channel>,
+        groups: Vec<oxrok::core::ChannelGroup>,
         sent: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Recorder {
+        fn new(sent: &std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Recorder {
+                info: oxrok::core::DeviceInfo::default(),
+                channels: Vec::new(),
+                groups: ["R1", "R2", "CH1", "CH2"]
+                    .map(|name| oxrok::core::ChannelGroup { name: name.into(), channels: vec![] })
+                    .to_vec(),
+                sent: std::sync::Arc::clone(sent),
+            }
+        }
     }
 
     /// A device that cannot be opened.
@@ -394,11 +429,7 @@ mod tests {
 
     #[test]
     fn a_failed_open_says_so_with_the_reason() {
-        let mut dev = Unopenable(Recorder {
-            info: oxrok::core::DeviceInfo::default(),
-            channels: Vec::new(),
-            sent: std::sync::Arc::default(),
-        });
+        let mut dev = Unopenable(Recorder::new(&std::sync::Arc::default()));
         let e = open_device(&mut dev).unwrap_err();
         assert!(
             matches!(&e, Error::Arg(m) if m == "Failed to open device: device is busy."),
@@ -416,20 +447,29 @@ mod tests {
         fn channels(&self) -> &[oxrok::core::Channel] {
             &self.channels
         }
+        fn channel_groups(&self) -> &[oxrok::core::ChannelGroup] {
+            &self.groups
+        }
         fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
             Ok(())
         }
         fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
             Ok(())
         }
-        fn options(&self, _: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+        fn options(&self, group: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
             let opt = |key| oxrok::core::OptionDesc::new(key, oxrok::core::Access::GET_SET);
-            Ok(vec![
+            let mut list = vec![
                 opt(Key::Enabled),
                 opt(Key::VoltageTarget),
                 opt(Key::CurrentLimit),
                 opt(Key::OverCurrentProtectionEnabled),
-            ])
+                oxrok::core::OptionDesc::new(Key::Voltage, oxrok::core::Access::GET),
+            ];
+            // Not in a group.
+            if group.is_none() {
+                list.extend([opt(Key::LimitSamples), opt(Key::CaptureRatio)]);
+            }
+            Ok(list)
         }
         fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
             Err(Error::UnknownKey(key.id().to_owned()))
@@ -457,11 +497,7 @@ mod tests {
     fn run_configs(extra: &[&str]) -> (Vec<String>, Result<()>) {
         use clap::Parser as _;
         let sent = std::sync::Arc::default();
-        let mut dev = Recorder {
-            info: oxrok::core::DeviceInfo::default(),
-            channels: Vec::new(),
-            sent: std::sync::Arc::clone(&sent),
-        };
+        let mut dev = Recorder::new(&sent);
         let args = Args::try_parse_from([&["oxrok", "--set"], extra].concat()).unwrap();
         let result = apply_configs(&mut dev, &args);
         let sent = sent.lock().unwrap().clone();
@@ -483,6 +519,57 @@ mod tests {
         let (sent, result) = run_configs(&["-c", "enabled=on", "-c", "volage_target=5"]);
         assert!(result.is_err());
         assert_eq!(sent, [] as [&str; 0]);
+    }
+
+    #[test]
+    fn scope_and_settability_are_checked_with_nothing_sent() {
+        for (argv, says) in [
+            (
+                &["-c", "channel_group=R1:enabled=on", "-c", "channel_group=R9:enabled=on"][..],
+                "Invalid channel group 'R9'",
+            ),
+            (&["-g", "R9", "-c", "current_limit=1"][..], "Invalid channel group 'R9'"),
+            // A key the device reads and does not set.
+            (
+                &["-c", "enabled=on", "-c", "voltage=1"][..],
+                "Failed to set device option 'voltage': not applicable.",
+            ),
+            // A key of the device, not of a group.
+            (
+                &["-c", "channel_group=R1:enabled=on", "-c", "channel_group=R1:limit_samples=5"][..],
+                "Failed to set device option 'limit_samples': not applicable.",
+            ),
+            // What the core refuses for every driver.
+            (
+                &["-c", "current_limit=1", "-c", "limit_samples=0"][..],
+                "Failed to set device option 'limit_samples': invalid argument: it cannot be 0.",
+            ),
+            (
+                &["-c", "current_limit=1:captureratio=101"][..],
+                "Failed to set device option 'captureratio': invalid argument: it must be 0..100.",
+            ),
+        ] {
+            let (sent, result) = run_configs(argv);
+            let e = result.unwrap_err();
+            assert!(matches!(&e, Error::Arg(m) if m == says), "{argv:?}: {e}");
+            assert_eq!(sent, [] as [&str; 0], "{argv:?}");
+        }
+    }
+
+    #[test]
+    fn a_device_without_groups_has_no_scope() {
+        use clap::Parser as _;
+        let sent = std::sync::Arc::default();
+        let mut dev = Recorder::new(&sent);
+        dev.groups.clear();
+        let args =
+            Args::try_parse_from(["oxrok", "--set", "-g", "R1", "-c", "enabled=on"]).unwrap();
+        let e = apply_configs(&mut dev, &args).unwrap_err();
+        assert!(
+            matches!(&e, Error::Arg(m) if m == "This device does not have any channel groups."),
+            "{e}"
+        );
+        assert_eq!(sent.lock().unwrap().len(), 0);
     }
 
     #[test]

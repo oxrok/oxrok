@@ -117,6 +117,8 @@ emu_cases() {
     emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok enabled=on last" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm stays off with a refused duty" --oracle-bug "it turns the output on, then refuses the duty (its hash table order, session.c:700-701)" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c enabled=on:output_duty_cycle=101
+    # The device has no enabled of its own: refused before PWM1 goes on.
+    emu_case "pwm stays off with a key of no scope" --oracle-bug "it turns the output on, then finds the device has no enabled (session.c:700-710)" --expect-fail --stderr --filter "$L" -- -d $K --set -c channel_group=PWM1:enabled=on -c enabled=off
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0

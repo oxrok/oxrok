@@ -139,9 +139,30 @@ pub fn resolve_key(
         .ok_or_else(|| crate::core::error::Error::Arg(format!("Unknown device option '{name}'.")))
 }
 
-/// What hwdriver.c's `check_key()` asks of a set, for every driver. The
-/// messages go out as libsigrok has them; the log target names that file
+/// The log target of what hwdriver.c logs: `oxrok::core::hwdriver`
 /// (tools/diffcli.sh prints it as libsigrok's `sr: hwdriver: `).
+const HWDRIVER: &str = "oxrok::core::hwdriver";
+
+/// The value checks of hwdriver.c's `check_key()`, which need no device, for
+/// a front end that validates a command line before it sends any of it.
+pub fn check_value(key: &Key, value: &crate::core::value::Value) -> crate::core::error::Result<()> {
+    use crate::core::error::Error;
+    match key {
+        // Setting any of these to 0 is not useful.
+        Key::LimitMsec | Key::LimitSamples | Key::Samplerate if value.as_u64() == Some(0) => {
+            log::error!(target: HWDRIVER, "Cannot set '{}' to 0.", key.id());
+            Err(Error::arg("it cannot be 0"))
+        }
+        Key::CaptureRatio if value.as_u64().is_some_and(|r| r > 100) => {
+            log::error!(target: HWDRIVER, "Capture ratio must be 0..100.");
+            Err(Error::arg("it must be 0..100"))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// What hwdriver.c's `check_key()` asks of a set, for every driver, with
+/// the messages libsigrok has.
 fn check_set(
     device: &dyn crate::core::device::Device,
     key: &Key,
@@ -149,19 +170,8 @@ fn check_set(
     group: Option<&str>,
 ) -> crate::core::error::Result<()> {
     use crate::core::error::Error;
-    const LOG: &str = "oxrok::core::hwdriver";
-    match key {
-        // Setting any of these to 0 is not useful.
-        Key::LimitMsec | Key::LimitSamples | Key::Samplerate if value.as_u64() == Some(0) => {
-            log::error!(target: LOG, "Cannot set '{}' to 0.", key.id());
-            return Err(Error::arg("it cannot be 0"));
-        }
-        Key::CaptureRatio if value.as_u64().is_some_and(|r| r > 100) => {
-            log::error!(target: LOG, "Capture ratio must be 0..100.");
-            return Err(Error::arg("it must be 0..100"));
-        }
-        _ => {}
-    }
+    const LOG: &str = HWDRIVER;
+    check_value(key, value)?;
     let suffix = if group.is_some() {
         " for this device instance and channel group"
     } else {
