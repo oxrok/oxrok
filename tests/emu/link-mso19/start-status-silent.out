@@ -1,4 +1,2 @@
 sr: link-mso19: Reading status failed
-sr: session: Could not start link-mso19 device (null) acquisition.
-sr: session: Cannot remove non-existing event source.
 Failed to start session.

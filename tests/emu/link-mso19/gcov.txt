@@ -1,10 +1,9 @@
 gcov link-mso19 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        90.1%  336 of 373
+  api.c        90.3%  337 of 373
   protocol.c   94.4%  238 of 252
-  total        91.8%  574 of 625
+  total        92.0%  575 of 625
 never reached, by function (line ranges hold no reached line):
   api.c
-    mso_set_trigger_level: 171
     scan_handle_port: 246
     dev_open: 365, 371, 382
     config_get: 397, 410, 415, 427, 431, 436, 444, 447-448

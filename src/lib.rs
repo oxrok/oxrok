@@ -105,6 +105,7 @@ pub mod drivers {
     pub mod korad_kaxxxxp;
     pub mod lascar_el_usb;
     pub mod lecroy_logicstudio;
+    pub mod link_mso19;
     pub mod logicport;
     pub mod manson_hcs_3xxx;
     pub mod maynuo_m97;
@@ -147,6 +148,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
+    registry.register(Box::new(drivers::link_mso19::LinkMso19Driver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));

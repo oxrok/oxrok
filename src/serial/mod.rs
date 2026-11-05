@@ -613,6 +613,45 @@ pub fn list_ports() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A serial port on USB, with what its descriptors say.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UsbPort {
+    /// Its path.
+    pub name: String,
+    /// `idVendor`.
+    pub vid: u16,
+    /// `idProduct`.
+    pub pid: u16,
+    /// The serial number's string, when it has one.
+    pub serial: Option<String>,
+    /// The manufacturer's string, when it has one.
+    pub manufacturer: Option<String>,
+    /// The product's string, when it has one.
+    pub product: Option<String>,
+}
+
+/// The serial ports on this machine that are on USB, for a driver that goes by
+/// the ids, `sp_get_port_usb_vid_pid`, without opening anything.
+pub fn list_usb_ports() -> Vec<UsbPort> {
+    let Ok(ports) = serialport::available_ports() else {
+        return Vec::new();
+    };
+    ports
+        .into_iter()
+        .filter_map(|port| match port.port_type {
+            serialport::SerialPortType::UsbPort(usb) => Some(UsbPort {
+                name: port.port_name,
+                vid: usb.vid,
+                pid: usb.pid,
+                serial: usb.serial_number,
+                manufacturer: usb.manufacturer,
+                product: usb.product,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
