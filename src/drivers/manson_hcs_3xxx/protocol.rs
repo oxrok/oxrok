@@ -274,6 +274,9 @@ pub struct Link {
     pub reply_pending: bool,
     /// What has come of that reply.
     pub buffer: ReplyBuffer,
+    /// A setting dropped a capture's reading, which is no silence of the
+    /// device's: the capture takes this as its `no reading` clock's restart.
+    pub reading_dropped: bool,
 }
 
 impl Link {
@@ -291,6 +294,7 @@ impl Link {
             output_enabled: false,
             reply_pending: false,
             buffer: ReplyBuffer::default(),
+            reading_dropped: false,
         }
     }
 
@@ -391,6 +395,7 @@ impl Link {
         }
         self.buffer = ReplyBuffer::default();
         self.reply_pending = false;
+        self.reading_dropped = true;
     }
 }
 

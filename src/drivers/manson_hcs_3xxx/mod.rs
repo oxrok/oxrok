@@ -482,6 +482,9 @@ impl Capture {
     /// when the capture is over.
     fn request(&self, progress: &mut Progress) -> bool {
         let mut link = self.link.lock().expect("link lock");
+        if std::mem::take(&mut link.reading_dropped) {
+            progress.quiet_since = Instant::now();
+        }
         if link.reply_pending {
             if progress.sent_at.is_some_and(|at| at.elapsed() > protocol::REQ_TIMEOUT) {
                 link.reply_pending = false;
@@ -1012,6 +1015,30 @@ mod tests {
         let mut d = MansonDevice::from_port(model, (36.0, 10.0), Box::new(fake));
         let (tx, _rx) = sync_channel(16);
         assert!(d.start(PacketSink::new(tx, 0)).is_err());
+    }
+
+    #[test]
+    fn settings_that_drop_readings_are_no_silence() {
+        let (mut fake, _) = Fake::new();
+        fake.reading = Vec::new();
+        let mut d = device(fake);
+        // Each setting waits out the unanswered GETD, 500 ms, and three of them
+        // go past the bound. The clock restarts with each.
+        d.no_reading_bound = Duration::from_millis(700);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(20));
+            d.set(&Key::Enabled, &Value::Bool(false), None).unwrap();
+        }
+        let mut ended = false;
+        while let Ok((_, p)) = rx.try_recv() {
+            ended |= matches!(p, Packet::End);
+        }
+        assert!(!ended, "the bound took the settings for silence");
+        d.stop().unwrap();
+        let _ = until_end(&rx);
     }
 
     /// Runs `f` on its own thread: it must end within the bound.
