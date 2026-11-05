@@ -1,0 +1,1 @@
+sr: serial: Small stream detect RX buffer, want 2x packet size.

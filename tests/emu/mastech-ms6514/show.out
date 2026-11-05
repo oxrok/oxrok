@@ -1,0 +1,11 @@
+Driver functions:
+    Thermometer
+Scan options:
+    conn
+    serialcomm
+mastech-ms6514 - MASTECH MS6514 with 3 channels: T1 T2 T1-T2
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    data_source: Live (current), Memory
