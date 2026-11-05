@@ -116,7 +116,7 @@ fn raw_list(key: &str, value: &str) -> Result<Vec<u32>> {
 
 /// `REPLY:N`, with REPLY from 1.
 fn at_reply(key: &str, value: &str) -> Result<(u32, u32)> {
-    let invalid = || Error(format!("{key}={value}: as in 2:100, the reply counted from 1"));
+    let invalid = || Error::Invalid(format!("{key}={value}: as in 2:100, the reply counted from 1"));
     let (reply, n) = value.split_once(':').ok_or_else(invalid)?;
     let reply = parse_number(key, reply, 1..=u32::MAX)?;
     Ok((reply, parse_number(key, n, 0..=4096)?))
@@ -124,7 +124,7 @@ fn at_reply(key: &str, value: &str) -> Result<(u32, u32)> {
 
 /// `REPLY:OFFERS`, with REPLY from 1.
 fn at_reply_offers(key: &str, value: &str) -> Result<(u32, u32)> {
-    let invalid = || Error(format!("{key}={value}: as in 2:300, the reply counted from 1"));
+    let invalid = || Error::Invalid(format!("{key}={value}: as in 2:300, the reply counted from 1"));
     let (reply, offers) = value.split_once(':').ok_or_else(invalid)?;
     Ok((parse_number(key, reply, 1..=u32::MAX)?, parse_number(key, offers, 1..=1_000_000)?))
 }
@@ -149,7 +149,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "flip" => {
                 let (reply, byte) = at_reply(k, v)?;
                 if byte as usize >= REPLY_LEN {
-                    return Err(Error(format!("flip={v}: a byte below {REPLY_LEN}")));
+                    return Err(Error::Invalid(format!("flip={v}: a byte below {REPLY_LEN}")));
                 }
                 config.flips.push((reply, byte as usize));
             }
@@ -164,7 +164,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "again" => config.again.push(parse_number(k, v, 1..=u32::MAX)?),
             "late" => config.late.push(at_reply_offers(k, v)?),
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     // Not the meter's: see the module's documentation.
@@ -313,7 +313,7 @@ impl Meter {
             return;
         }
         if self.config.answers.is_some_and(|n| self.replies >= n) {
-            port.mark_event_point();
+            port.mark();
             return;
         }
         self.replies += 1;
@@ -556,9 +556,9 @@ mod tests {
     fn answers_runs_out_and_marks_the_point() {
         let mut h = meter(&[("answers", "1")]);
         assert_eq!(poll(&mut h).len(), REPLY_LEN);
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         assert_eq!(poll(&mut h), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         assert_eq!(violations(&mut h), 0);
     }
 
