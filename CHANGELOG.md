@@ -6,6 +6,16 @@ release may change the library API.
 
 ## [Unreleased]
 
+### Changed
+
+- `emu/` is on the `vusb` crate: the contract, the bus, the shells, USB/IP
+  and the control socket are vusb's, and `emu/` keeps the models, the `.tx`
+  log as an observer, `hidcable` and the checks on a firmware upload. The
+  server takes commands through `vusb-ctl` on `--control PATH` rather than
+  on standard input, and `tools/diffcli.sh` needs `vusb-ctl`
+  (`cargo install vusb-cli --version 0.1.1 --locked`). The goldens have not
+  changed.
+
 ### Added
 
 - The `emu` crate (`oxrok-emu`): a USB/IP device server with a

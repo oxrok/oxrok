@@ -186,3 +186,10 @@ dual-licensed GPL-3.0-or-later OR Apache-2.0 (`emu/LICENSE`,
 one part that was a port of LGPL-2.1 code (the FTDI shell's baud-rate
 divisor, from libftdi) was re-implemented from the FTDI AN_120 spec so
 the crate can carry the Apache branch.
+
+Its core, the contract, the bus, the shells and USB/IP, is the `vusb`
+crate, MIT OR Apache-2.0, a separate project with its own repository,
+which started as a copy of this crate's core by its author. It is a
+dependency like any other, and `cargo deny` reads its licence. Nothing
+of `vusb` is GPL only, and `emu/` keeps the models, the `.tx` log and
+what knows sigrok's fixtures.

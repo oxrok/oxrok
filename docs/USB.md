@@ -160,30 +160,37 @@ their own codes, then 14 integer bits and a 3 bit code for the eighths.
 On Linux a device can be a program: the `vhci-hcd` module turns a
 USB/IP server into a USB device that libusb, nusb, hidraw and the
 kernel's class drivers see as real. `oxrok-emu`, the `emu` crate of
-the workspace (`cargo build -p oxrok-emu`), is that server, written
-here rather than taken from a crate so that the models, the checks on
-what the host sends and the transaction log are all in one place. It
-is how a driver is verified against sigrok-cli without the hardware
-(`docs/ROADMAP.md`, "Emulation plan"). `oxrok-emu` also builds on
-Windows; attaching a device is Linux only.
+the workspace (`cargo build -p oxrok-emu`), is that server, on the
+[`vusb`](https://crates.io/crates/vusb) crate, which holds the
+contract, the bus, the shells, the USB/IP server, the attach path and
+the control socket; [its documentation](https://docs.rs/vusb) and its
+repository's `docs/design.md` and `docs/control.md` describe them. `emu/`
+holds what is oxrok's own: the device models, the transaction log in the
+fixture dialect (`emu/src/txlog.rs`), `shells/hidcable.rs` and the
+checks on a firmware upload in `shells/ezusb.rs`, which know sigrok's
+fixtures, and the `oxrok-emu` commands. It re-exports vusb's paths, so a
+model says `crate::model` or `crate::shells::cdc` whichever crate holds
+them. It is how a driver is verified against sigrok-cli without the
+hardware (`docs/ROADMAP.md`, "Emulation plan"). `oxrok-emu` also builds
+on Windows; attaching a device is Linux only.
 
-- A device is a `DeviceModel` (`emu/src/model.rs`): its descriptors,
+- A device is a `DeviceModel` (`vusb::model`): its descriptors,
   `control(setup, data)`, `out(ep, data)`, `in_transfer(ep, max)`
   answering data, NAK or STALL, and `reset`. Plain Rust with no I/O,
   so a model runs in a unit test, on this server and, later, on a
-  Pico. `Device` (`device.rs`) wraps it with the standard requests
+  Pico. `Device` (`vusb::device`) wraps it with the standard requests
   every device answers (descriptors, configuration, status, halts) and
   the checks on every transfer.
-- Transport shells, in `emu/src/shells`, carry what every device of a
+- Transport shells, in `vusb::shells`, carry what every device of a
   kind shares, and a model fills in what its own protocol means.
-  `shells/hid.rs` is the first (`HidInterface::with_version` sets a
+  `shells::hid` is the first (`HidInterface::with_version` sets a
   `bcdHID` other than the default 1.11): the HID class descriptor, the
   report descriptor fetch, `GET_REPORT`, `SET_REPORT`, idle and protocol, with
   the model answering the reports through `HidReports`.
-  `shells/hidcable.rs` is what the serial over HID cable models share:
-  the Pico emulator's descriptors, the packets they play, a stream
+  `emu/src/shells/hidcable.rs` is what the serial over HID cable models
+  share: the Pico emulator's descriptors, the packets they play, a stream
   paced by polls of the held interrupt transfer rather than wall time.
-- `shells/ftdi.rs` is the FTDI shell. Per chip (AM, BM, FT2232C, R,
+- `shells::ftdi` is the FTDI shell. Per chip (AM, BM, FT2232C, R,
   FT2232H, FT4232H, FT232H, FT-X): the bcdDevice libftdi and ftdi_sio
   take the type from (0x0200 for a BM without a serial, as on the
   chip), speed, ports with bulk IN 0x81+2n and OUT 0x02+2n of 64 or 512
@@ -214,12 +221,12 @@ Windows; attaching a device is Linux only.
   port at attach, reads and sets the latency timer of each, and reads
   the EEPROM of R, FT232H and FT-X chips for its CBUS GPIOs; libftdi
   detaches it from the interface it claims and does not reattach it.
-- `shells/ezusb.rs` is the FX2 without firmware: its built-in
+- `shells::ezusb` is the FX2 without firmware: its built-in
   descriptors, the boot loader's vendor request `0xa0` (RAM `0x0000`
   up to 8 or 16 KiB and `0xe000` to `0xe1ff`, CPUCS at `0xe600`), and
-  `Loader::check_ezusb_c`, which holds an upload against libsigrok's
-  `ezusb.c` byte for byte. When the 8051 is released the model asks to
-  renumerate (`DeviceModel::take_renumeration`). The server logs
+  `check_ezusb_c` (`emu/src/shells/ezusb.rs`), which holds an upload
+  against libsigrok's `ezusb.c` byte for byte. When the 8051 is released
+  the model asks to renumerate (`DeviceModel::take_renumeration`). The log gets
   `disconnect` and `connect VID:PID` at once in the running section,
   and what the host sends until the detach follows there and is
   compared. The main loop then detaches the device, imports it again
@@ -227,24 +234,27 @@ Windows; attaching a device is Linux only.
   renumerated device by its port path. From the detach on the log is
   in a `renumeration` section; the run's section resumes once the
   kernel has configured the device, then `vhci::open_device` runs and
-  a `RENUMERATED port=... usb=...` line reports the new nodes. So the
+  a `RENUMERATED port=... usb=...` line on standard output reports the
+  new nodes. So the
   kernel's enumeration never lands in a tool's transactions. libusb
   can open a renumerated device before its node is world accessible;
   the C driver logs `LIBUSB_ERROR_ACCESS` and tries again, so only its
   stderr changes.
 - A `reset` whose fresh model has other descriptors than the attached
   device (it renumerated, or the options changed) re-attaches the same
-  way, from a `reset` section. The stdin command `options
-  KEY=VALUE...` sets the options of the resets that follow (`options`
-  alone restores the command line's), which is how one scenario covers
-  several boards or chips.
+  way, from a `reset` section. `vusb-ctl options KEY=VALUE...` sets
+  the options of the resets that follow (`options` alone restores the
+  command line's), which is how one scenario covers several boards or
+  chips. vusb-ctl's words read a value like `1e3` as a number and a JSON
+  object holds a key once, so `emu_cmd` sends options as `--args` JSON
+  of text and refuses a key given twice.
 - A model sees each IN submission (`DeviceModel::in_submitted`), and
   transfers on one endpoint complete in order. A streaming model can
   thus complete one transfer per submission, which real devices do
   not do, so that the number of transfers a capture completes does not
   depend on timing. A model can ask for data over a size to be logged
-  as `@LEN:SHA256`, the fixtures' digest form
-  (`DeviceModel::log_digest_above`; fx2lafw does, for its firmware
+  as `@LEN:SHA256`, the fixtures' digest form (a `log_rules` function
+  in its module; fx2lafw does, for its firmware
   chunks and transfers of up to 240 KiB); by default every byte is
   logged. What fx2lafw taught: a driver that stops after a transfer
   must not have resubmitted it first, or one more completes; libsigrok
@@ -254,12 +264,13 @@ Windows; attaching a device is Linux only.
   a claim held by another program can be staged without a transfer by
   a usbfs helper that claims through `/sys/bus/usb/devices/$EMU_BUSID`
   between cases whose descriptors do not change.
-- Mid-run events. The stdin command `arm EVENT WHEN` arms `unplug` or
-  `interrupt` for the run that follows (a `reset` disarms it): `WHEN`
+- Mid-run events. `vusb-ctl arm event=unplug when=WHEN` or `arm
+  event=mark name=interrupt when=WHEN` arms an unplug or an interrupt
+  for the run that follows (a `reset` disarms it): `WHEN`
   is `in=EP:N` (the Nth IN transfer on endpoint EP completed; a STALL
   counts, a NAK does not; endpoint 0 counts control reads),
   `out=EP:N`, or `model`, the point the model marks through
-  `DeviceModel::take_event_point`. When it fires the log gets an
+  `DeviceModel::mark`. When it fires the log gets an
   `unplug` or `interrupt` line right after the transfer that fired it,
   and `EVENT unplug|interrupt` is printed. An unplug drops whatever the
   host submits from then on, detaches the port and keeps the device
@@ -280,7 +291,7 @@ Windows; attaching a device is Linux only.
   be timed against libsigrok's reads, so `serial_hid*.c` read errors
   stay unreached.
 - A model can name the bytes of an OUT transfer the host leaves
-  undefined (`DeviceModel::log_undefined`): the log prints them as
+  undefined (`Rules::undefined`, from its `log_rules`): the log prints them as
   `xx`, and in a digest they count as 0 and their ranges follow
   (`@LEN:SHA256/xx=A-B`). The DSLogic driver sends an uninitialised
   struct field that would otherwise make the log differ between runs.
@@ -322,7 +333,10 @@ Windows; attaching a device is Linux only.
   line: the device and its options) and
   `pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>>`,
   which parses the `-o KEY=VALUE` options and rejects unknown ones. A
-  unit test checks that each `NAME` is its file name and that each
+  model whose data is not all logged byte by byte also exports
+  `pub fn log_rules(options: &[(String, String)]) -> txlog::Rules`, on a
+  line of its own at the start of a line, which is how `build.rs` finds
+  it. A unit test checks that each `NAME` is its file name and that each
   model builds with no options.
 - `sudo oxrok-emu serve MODEL --attach --open-devices --log FILE`
   listens on TCP (`--listen`, port 0 picks a free one), imports the
@@ -340,13 +354,18 @@ Windows; attaching a device is Linux only.
   `udevadm settle`, changes the modes, and checks them again after a
   second settle; `vhci::open_device` does all of it and is what a
   device that reappears under a new address (EZ-USB renumeration)
-  calls again. On standard input, each acknowledged with an `OK` line:
-  `section NAME` marks the log, `reset` puts a fresh model behind the
-  attached device (its initial state, for a second run; the kernel
-  keeps seeing the device it enumerated), `detach` ends the run, as
-  does end of input or a termination signal, and `sync` does nothing
-  but answer, after every input taken before it, a renumeration a run
-  asked for included. The exit status is 2 when
+  calls again. With `--control PATH`, `vusb-ctl -s PATH` drives the run
+  (`cargo install vusb-cli --version 0.1.1 --locked`; vusb's
+  `docs/control.md` has the commands), and exits 0 once the server has
+  taken the command and 1 if it refused: `section name=NAME` marks the
+  log, `reset` puts a fresh model behind the attached device (its
+  initial state, for a second run; the kernel keeps seeing the device
+  it enumerated), `quit` ends the run, as does a termination signal, and
+  `sync` does nothing but answer, after every input taken before it, a
+  renumeration a run asked for included. Whatever `READY`, `RENUMERATED`,
+  `REPLUGGED` or `EVENT` line that input caused is on standard output
+  before the answer. `tools/diffcli.sh` finds vusb-ctl as `VUSB_CTL`,
+  `target/debug/vusb-ctl` or on `PATH`. The exit status is 2 when
   a violation was logged. Without `--attach` it is a plain USB/IP
   server a `usbip` client can import `1-1` from. A device that never
   configures is detached before the server exits with an error.
@@ -369,7 +388,8 @@ Windows; attaching a device is Linux only.
   session (`diffcli.sh`'s, or a script run under `flock`) passes
   `--locked`; `--force` detaches regardless. An ad hoc cleanup run
   outside the lock used to kill sessions midway.
-- The transaction log is the fixture dialect above, one line per
+- The transaction log (`emu/src/txlog.rs`, an `Observer` on vusb's bus)
+  is the fixture dialect above, not vusb's own log, one line per
   completed transfer: `ctl_in 21 01 0300 0000 8 -> 4142434445000000`,
   `ctl_out 21 09 0300 0000 ff02000000000000 -> ok`, `int_in`,
   `bulk_out`, `-> err stall`. A transfer the model NAKs is held, as a
@@ -703,7 +723,7 @@ kernel until it detaches.
 
 ### Writing a serial model
 
-`emu/src/shells/cdc.rs` makes a CDC-ACM function that the kernel's
+`vusb::shells::cdc` makes a CDC-ACM function that the kernel's
 `cdc_acm` binds and the tools reach through `/dev/ttyACMn`. A model is a
 byte stream and never sees a URB:
 
@@ -718,7 +738,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut faults = Faults::default();
     for (k, v) in options {
         if faults.option(k, v)? { continue; }
-        return Err(Error(format!("{NAME} has no option {k}")));
+        return Err(Error::Invalid(format!("{NAME} has no option {k}")));
     }
     let id = Identity::new(0x1209, 0x0001, "Maker", "Name");
     Ok(Box::new(Cdc::new(NAME, &id, faults, Meter)))
@@ -736,7 +756,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
    when the host is busy, and it stands still while the tty is closed.
    `Serial::reset` goes back to power on.
 2. `Port` has `send`, `line`, `dtr`, `rts`, `violation`,
-   `mark_event_point` and `set_modem_lines`.
+   `mark` and `set_modem_lines`.
 3. An instrument behind a UART calls
    `.behind_uart(Line::parse("1200/7n2")?)`: while the rate, data bits
    or presence of parity differ, nothing passes either way. A native USB
@@ -825,8 +845,8 @@ of a sigrok driver `DRIVER`:
 
 1. Read the C driver (`api.c`, `protocol.c`) and, where there is one,
    the datasheet or the firmware source, for what the device answers
-   and what the driver may send. Pick the shell (`emu/src/shells`) the
-   device builds on; a shell that does not exist yet is a separate
+   and what the driver may send. Pick the shell (`vusb::shells`,
+   `emu/src/shells`) the device builds on; a shell that does not exist yet is a separate
    piece of work, not part of a model.
 2. Write `emu/src/models/NAME.rs`, or for a model with submodules
    `emu/src/models/NAME/mod.rs` with the submodules beside it in
