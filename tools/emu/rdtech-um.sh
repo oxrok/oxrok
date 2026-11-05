@@ -16,7 +16,7 @@ emu_cases() {
     A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     STUCK_BUG="an incomplete reply, or two bytes a failed sync left, hold back every later poll (protocol.c:166-167 returns while buflen is set), so nothing more ever comes; oxrok drops an incomplete one after 10 s, or at once what has no id, and asks again"
     HUP_BUG="a hung up port is not read, as its events are not plain G_IO_IN (protocol.c:350), and the failed poll is dropped (protocol.c:365), so it logs that for ever; oxrok ends the capture"
-    SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 5 s, where only that limit could"
+    SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 30 s, where only that limit could"
     DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # What a scan finds, in each model's dump.
@@ -139,7 +139,7 @@ emu_cases() {
     # Silence: it polls on, as often as the time lets it.
     emu_options answers=1
     emu_case "silent time limit" --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --time 300ms
-    emu_case "silent frames" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 8 --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --frames 1
+    emu_case "silent frames" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 34 --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --frames 1
 
     # The USB side misbehaving, the shell's options.
     emu_options chunk=7

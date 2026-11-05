@@ -30,7 +30,8 @@
 //!   fails ends the capture.
 //! - A meter that does not answer is polled for ever in C. Here that is so
 //!   where another limit or the user can end it; a frame limit alone would
-//!   never come, so that capture ends after [`Pace::silence`] with an error.
+//!   never come, so that capture ends after [`Pace::silence`] with an error,
+//!   long enough for a Bluetooth link to come back.
 //!
 //! A poll waits 1 ms for room (`WRITE_TO_MS`), and finding none is no error, as
 //! in C: nothing went, and the next try comes a period later. So a meter that
@@ -83,7 +84,10 @@ pub struct Pace {
     /// thing. It is well above a link's hiccup, as a reply that goes on is
     /// better kept; the figure is a choice, with no recording behind it.
     pub stall: Duration,
-    /// How long a capture that only a frame limit can end waits for a dump.
+    /// How long a capture that only a frame limit can end waits for a dump: 30 s,
+    /// so as not to cut one that would finish. A Bluetooth link's supervision
+    /// timeout may be about 20 s; that figure is from memory, not from a source
+    /// or a meter. `rdtech-tc` has 5 s, as the TC66C is on USB.
     pub silence: Duration,
 }
 
@@ -93,7 +97,7 @@ impl Default for Pace {
             period: Duration::from_millis(100),
             wait: Duration::from_millis(50),
             stall: Duration::from_secs(10),
-            silence: Duration::from_secs(5),
+            silence: Duration::from_secs(30),
         }
     }
 }
@@ -880,6 +884,11 @@ mod tests {
         let polls = seen.lock().unwrap().polls.len();
         assert_eq!(polls, 1 + MAX_RESYNCS as usize + 1, "each took its failure");
         d.close().unwrap();
+    }
+
+    #[test]
+    fn silence_outlasts_a_link_that_comes_back() {
+        assert_eq!(Pace::default().silence, Duration::from_secs(30));
     }
 
     #[test]
