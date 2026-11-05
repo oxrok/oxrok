@@ -583,7 +583,7 @@ pub(crate) mod tests {
     }
 
     impl Port for Fake {
-        fn name(&self) -> &str {
+        fn name(&self) -> &'static str {
             "fake"
         }
 
@@ -891,7 +891,7 @@ pub(crate) mod tests {
         assert_eq!(c_atod(b"  ").unwrap(), 0.0);
         assert_eq!(c_atod(b" 12.5 ").unwrap(), 12.5);
         assert_eq!(c_atod(b"0.1").unwrap(), f64::from(0.1f32));
-        assert_eq!(c_atod(b"1234567891").unwrap(), 1234567936.0);
+        assert_eq!(c_atod(b"1234567891").unwrap(), 1_234_567_936.0);
         assert_eq!(c_atod(b"-500").unwrap(), -500.0);
         assert!(c_atod(b"inf").unwrap().is_infinite());
         assert!(c_atod(b"nan").unwrap().is_nan());
