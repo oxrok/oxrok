@@ -184,15 +184,21 @@ pub fn strtod(text: &[u8]) -> Option<f64> {
     Some(sign * value)
 }
 
-/// `GETD`'s first line as volts and amperes, or `None` where a field makes no
-/// number, which C reads as 0 or, past the end of a short line, as whatever
-/// lies there. The mode byte is not read, as no key shows it.
+/// `GETD`'s first line as volts and amperes, or `None` where it is not eight
+/// digits and a mode. C takes what `strtod` makes of each field, 0 for no number
+/// and whatever lies past a short line, so a fragment of a reply that joins
+/// the next makes up a reading. Eight digits is the form the wiki gives; no
+/// firmware is known to send another, and a recording could say otherwise. The
+/// mode byte is not read, as no key shows it.
 pub fn parse_getd(line: &[u8]) -> Option<(f32, f32)> {
+    if !is_reading(line) {
+        return None;
+    }
     let field = |from: usize| {
-        let bytes = line.get(from..)?;
-        strtod(&bytes[..bytes.len().min(4)])
+        let digits = &line[from..from + 4];
+        digits.iter().fold(0.0, |value, digit| value * 10.0 + f64::from(digit - b'0'))
     };
-    Some(((field(0)? / 100.0) as f32, (field(4)? / 100.0) as f32))
+    Some(((field(0) / 100.0) as f32, (field(4) / 100.0) as f32))
 }
 
 /// `GMAX`'s first line as the limits, volts and amperes. A field that makes no
@@ -389,7 +395,7 @@ impl Link {
     pub fn take_getd(&mut self, reply: &[u8]) -> bool {
         log::debug!("Received '{}'.", reply.escape_ascii());
         let Some((voltage, current)) = parse_getd(first_line(reply)) else {
-            log::warn!("A reading that makes no numbers, dropped: '{}'.", reply.escape_ascii());
+            log::warn!("A reading not in its form, dropped: '{}'.", reply.escape_ascii());
             return false;
         };
         self.voltage = voltage;
@@ -569,7 +575,10 @@ mod tests {
         assert_eq!(parse_getd(b""), None);
         assert_eq!(parse_getd(b"xxxx0100"), None);
         assert_eq!(parse_getd(b"1234yyyy"), None);
-        assert_eq!(parse_getd(b"1e0102e1"), Some((0.1, 0.2)));
+        assert_eq!(parse_getd(b"1e0102e1"), None, "strtod's, not the device's");
+        assert_eq!(parse_getd(b" 12 100"), None);
+        assert_eq!(parse_getd(b"infxinfx0"), None);
+        assert_eq!(parse_getd(b"12123401000"), None, "a fragment and a reading");
     }
 
     #[test]

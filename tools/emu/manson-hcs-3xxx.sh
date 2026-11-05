@@ -37,6 +37,8 @@ $B"
     NOREPLY_BUG="hcs_receive_data asks again every 500 ms for ever (protocol.c:239, 245), so a limit in samples never comes; oxrok ends a capture only a sample limit could end after 5 s with no reading"
     HUP_BUG="hcs_receive_data takes no revents but G_IO_IN as data (protocol.c:223) and ignores a failed send (protocol.c:245-246), so with the device gone it spins until a time limit; oxrok ends the capture"
     GARBAGE_BUG="hcs_parse_volt_curr_mode takes what makes no number for 0 (protocol.c:99, 105), so a garbled reply is a 0 V sample, and reads past a short line (protocol.c:104); oxrok drops the reply"
+    SPLICE_BUG="hcs_receive_data keeps what came of a reply when it asks again (protocol.c:239), and it joins the next: 12 and 123601000 read as 12.12 V, 36.01 A on a 10 A supply; oxrok forgets it at the 500 ms"
+    FORM_BUG="hcs_parse_volt_curr_mode takes whatever strtod makes of a field (protocol.c:99, 105), inf, nan, hex and all; oxrok takes the eight digits the wiki gives"
     OVERRUN_BUG="handle_new_data has no bound (protocol.c:184): over 50 bytes with no OK it overwrites devc->buflen behind buf (protocol.h:78-79) and goes on from wherever that says, then reports made up values; oxrok drops the reply"
     NUL_BUG="handle_new_data's g_str_has_suffix (protocol.c:192) stops at a NUL, so no reply after it ends and the buffer runs over (protocol.c:184), with made up values; oxrok loses that reply alone"
     NAN_BUG="api.c:244 and 255's two comparisons let a NaN through, and %03.0f sends 'VOLTnan' to a live output; oxrok refuses it"
@@ -250,10 +252,10 @@ $B"
     emu_options setters=0 getd-raw=$(ok 123401000),$(ok 123501011),$(ok 000000000),$(ok 123601000)
     emu_case "readings in turn" -- -d $K --samples 5
     emu_case "readings in turn csv" -- -d $K --samples 5 -O csv:header=false:time=false
-    emu_options setters=0 getd-raw=$(ok ' 12 100'),$(ok '1.2 1.0 0'),$(ok '\055100\0551000'),$(ok 1e0102e1)
-    emu_case "readings as strtod takes them" -- -d $K --samples 4
+    emu_options setters=0 getd-raw=$(ok ' 12 100'),$(ok '1.2 1.0 0'),$(ok '\055100\0551000'),$(ok 1e0102e1),$(ok 123401000)
+    emu_case "readings as strtod takes them" --oracle-differs "$FORM_BUG" -- -d $K --samples 5
     emu_options setters=0 getd-raw=$(ok infxinfx0),$(ok nanxnanx0),$(ok 0x100x100),$(ok 12340100)
-    emu_case "readings inf nan hex" -- -d $K --samples 4
+    emu_case "readings inf nan hex" --oracle-differs "$FORM_BUG" -- -d $K --samples 4
     emu_options setters=0 getd-raw=$(ok 123401000),$(ok xxxxyyyyz),$(ok 123601000)
     emu_case "garbage reading" --oracle-differs "$GARBAGE_BUG" -- -d $K --samples 3
     emu_options setters=0 getd-raw=$(ok 123401000),$(ok 1234),$(ok 123601000)
@@ -264,6 +266,9 @@ $B"
     emu_case "reading with only OK" --oracle-differs "$GARBAGE_BUG" --filter "$PAST_GETD" -- -d $K --samples 3
     emu_options setters=0 getd-raw=$(ok 123401000),$(emu_hex 'x\000OK\015'),$(ok 123601000)
     emu_case "reading with a NUL" --oracle-differs "$NUL_BUG" --timeout 15 -- -d $K --samples 3
+    # A fragment and silence: it joins the next reply in C.
+    emu_options setters=0 getd-raw=$(ok 123401000),$(ok 123401000),$(emu_hex '12'),$(ok 123601000)
+    emu_case "a fragment of a reply" --oracle-differs "$SPLICE_BUG" -- -d $K --samples 3
     # Two at once: the next GETD meets a reply that is already there.
     emu_options setters=0 getd-raw=$(emu_hex '123401000\015OK\015123501000\015OK\015'),$(ok 123601000)
     emu_case "two replies at once" -- -d $K --samples 2

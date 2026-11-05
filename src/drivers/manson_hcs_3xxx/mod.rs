@@ -26,8 +26,9 @@
 //! that only a sample limit could end ends after [`NO_READING_BOUND`] with no
 //! reading. Under a time limit or with no limit it keeps asking, as C does, and
 //! goes on when the device answers again: a log survives a supply that went
-//! quiet, or a burst of noise. A field that makes no number is no reading
-//! either, where C makes up 0 V.
+//! quiet, or a burst of noise. A reply that is not eight digits and a mode is
+//! no reading either, where C makes up 0 V, and what came of a reply is
+//! forgotten once it is 500 ms late, where C splices it into the next.
 //!
 //! See [`protocol`].
 
@@ -496,6 +497,8 @@ impl Capture {
         if link.reply_pending {
             if progress.sent_at.is_some_and(|at| at.elapsed() > protocol::REQ_TIMEOUT) {
                 link.reply_pending = false;
+                // C keeps it, and it joins the next reply as one reading.
+                link.buffer = protocol::ReplyBuffer::default();
             }
             return true;
         }
@@ -930,13 +933,15 @@ mod tests {
     #[test]
     fn a_reply_with_no_end_makes_up_nothing() {
         let (mut fake, seen) = Fake::new();
-        // The second GETD's reply ends the long one and is lost with it.
-        fake.getd = [vec![b'7'; 4000], b"123401000\rOK\r".to_vec()].into_iter().collect();
+        // Past the buffer, and the OK that ends it is lost with it.
+        let mut long = vec![b'7'; 4000];
+        long.extend(b"123401000\rOK\r");
+        fake.getd = [long].into_iter().collect();
         let mut d = device(fake);
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let packets = capture(&mut d);
         assert_eq!(readings(&packets), [5.0, 0.25]);
-        assert_eq!(getds(&seen), 3);
+        assert_eq!(getds(&seen), 2);
     }
 
     #[test]
@@ -979,6 +984,16 @@ mod tests {
         assert!(!link.reply_pending);
         assert_eq!(writes(&seen), ["GETD\r", "VOLT050\r"]);
         assert_eq!(link.read_byte(Duration::ZERO).unwrap(), None, "nothing left over");
+    }
+
+    #[test]
+    fn a_fragment_is_forgotten_when_its_request_expires() {
+        let (mut fake, seen) = Fake::new();
+        fake.getd = [b"12".to_vec()].into_iter().collect();
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        assert_eq!(readings(&capture(&mut d)), [5.0, 0.25], "not 12 and what follows");
+        assert_eq!(getds(&seen), 2);
     }
 
     #[test]
