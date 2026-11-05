@@ -1,2 +1,18 @@
-sr: serial-libsp: Write error (9): Bad file descriptor.
-No devices found.
+Driver functions:
+    Multiplexer
+Scan options:
+    conn
+devantech-eth008:conn=/dev/ttyACMN - Devantech ETH008 HW2 FW3 [S/N: 0004a3123456] 
+Channel groups:
+    DO1: No channels
+    DO2: No channels
+    DO3: No channels
+    DO4: No channels
+    DO5: No channels
+    DO6: No channels
+    DO7: No channels
+    DO8: No channels
+    Vsupply: No channels
+Supported configuration options across all channel groups:
+    conn: /dev/ttyACMN (current)
+    enabled: on, off

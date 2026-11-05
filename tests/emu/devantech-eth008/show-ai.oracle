@@ -1,0 +1,1 @@
+g_variant_get_double: assertion 'g_variant_is_of_type (value, G_VARIANT_TYPE_DOUBLE)' failed

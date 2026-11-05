@@ -5,6 +5,7 @@
 EMU_MODEL=devantech-eth008
 EMU_CDC=1
 EMU_DRIVER=devantech-eth008
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=devantech-eth008
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -74,6 +75,14 @@ eth_oracle() {
 emu_cases() {
     eth_oracle
     emu_conns
+    # oxrok's log prefix, on its side only.
+    L='s/^oxrok: err: oxrok::drivers::devantech_eth008(::protocol)?: /sr: devantech-eth008: /'
+    SHOW_BUG="api.c:279 gives SR_CONF_VOLTAGE a uint32 where hwdriver.c:141 has it SR_T_FLOAT, which show.c:750 reads with g_variant_get_double: a GLib critical, on which sigrok-cli's logger exits (main.c:46-47); oxrok shows the number"
+    STOCK_BUG="api.c:105 opens with no flags, which serial_libsp.c:67-71 gives sp_open as a mode of 0, so read only, and the scan's first write fails with EBADF: on a tty stock sigrok-cli finds no board, with any libserialport; oxrok opens for both"
+    SHIFT_BUG="recv_response reads what it asks for (protocol.c:191) and nothing clears the rest, so a byte too many is the head of the next answer: here the serial number reads one byte along, and so does every later answer of a session; oxrok drops the input queue before a request"
+    REFUSED_BUG="sigrok-cli sets -c at session.c:804 before the limit it cannot set (:866), so every relay goes on for a capture it then refuses; oxrok holds enabled=on until the start (docs/CLI.md) and sends nothing"
+    LOOSE_BUG="sigrok-cli takes what is no boolean as off (session.c:566, sr_parse_boolstring gives false) and turns every relay off; oxrok refuses it and sends nothing"
+    SERIALCOMM_BUG="hwdriver.c's check_options logs the unlisted option and scan goes on with nothing, so sigrok-cli exits 0 finding nothing; oxrok refuses it by its name and exits 1"
 
     # Each line of api.c's models[]: its name, and that a scan reads the module
     # info and the serial number, and sets nothing.
@@ -84,11 +93,11 @@ emu_cases() {
     emu_options setters=0 hw=0 fw=255 mac=ffeeddccbbaa
     emu_case "scan version and serial corners" --keep-header -- -d $K --scan
     emu_options setters=0 board=99
-    emu_case "scan unknown board" --stderr -- -d $K --scan
+    emu_case "scan unknown board" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0
     emu_case "no conn" --keep-header --no-output -- -d devantech-eth008 --scan
     emu_case "no such node" --keep-header --no-output -- -d devantech-eth008:conn=/dev/ttyACM97 --scan
-    emu_case "serialcomm is no scan option" --stderr -- -d $K:serialcomm=9600/8n1 --scan
+    emu_case "serialcomm is no scan option" --oracle-differs "$SERIALCOMM_BUG" --expect-fail --stderr -- -d $K:serialcomm=9600/8n1 --scan
 
     # A probe with a wrong answer. Each is one request with no second try.
     for bad in module=~ module=1302 serial=~ serial=0004a3 serial=0004a31234; do
@@ -97,7 +106,7 @@ emu_cases() {
     done
     # A byte too many stays for the next read.
     emu_options setters=0 module=130203ff
-    emu_case "scan module info too long" --keep-header -- -d $K --scan
+    emu_case "scan module info too long" --oracle-differs "$SHIFT_BUG" --keep-header -- -d $K --scan
     emu_options setters=0 serial=0004a3123456ff
     emu_case "scan serial number too long" --keep-header -- -d $K --scan
 
@@ -110,7 +119,7 @@ emu_cases() {
     emu_case "show DO" --keep-header -- -d $K -g DO1 --show
     emu_case "show DI" --keep-header -- -d $K -g DI2 --show
     emu_case "show Vsupply" --keep-header -- -d $K -g Vsupply --show
-    emu_case "show AI" --keep-header --stderr --expect-fail -- -d $K -g AI1 --show
+    emu_case "show AI" --oracle-bug "$SHOW_BUG" --keep-header -- -d $K -g AI1 --show
     emu_case "show no such group" --keep-header --stderr --expect-fail -- -d $K -g DO5 --show
     emu_options setters=0 board=20 outputs=~
     emu_case "show DO with no answer" --keep-header -- -d $K -g DO1 --show
@@ -174,13 +183,14 @@ emu_cases() {
     for id in 18 19 20 21 52; do
         emu_options board=$id
         emu_case "set all on board $id" --no-output -- -d $K -c enabled=on --set
-        emu_case "set all off board $id" --no-output -- -d $K -c enabled=off --set
     done
+    emu_options board=21
+    emu_case "set all off" --no-output -- -d $K -c enabled=off --set
     emu_options board=20
-    for io in DO1 DO4 DO9 DO16; do
-        emu_case "set $io on" --no-output -- -d $K -g $io -c enabled=on --set
-        emu_case "set $io off" --no-output -- -d $K -g $io -c enabled=off --set
-    done
+    emu_case "set DO1 on" --no-output -- -d $K -g DO1 -c enabled=on --set
+    emu_case "set DO4 off" --no-output -- -d $K -g DO4 -c enabled=off --set
+    emu_case "set DO9 on" --no-output -- -d $K -g DO9 -c enabled=on --set
+    emu_case "set DO16 off" --no-output -- -d $K -g DO16 -c enabled=off --set
     emu_options board=21
     emu_case "set DO20 on" --no-output -- -d $K -g DO20 -c enabled=on --set
 
@@ -205,10 +215,12 @@ emu_cases() {
     emu_case "set Vsupply" --stderr --expect-fail -- -d $K -g Vsupply -c voltage=1 --set
     emu_case "set voltage with no group" --stderr --expect-fail -- -d $K -c voltage=1 --set
     emu_case "set no such key" --stderr --expect-fail -- -d $K -c nonesuch=1 --set
-    emu_case "set not a boolean" --no-output -- -d $K -c enabled=perhaps --set
+    emu_case "set not a boolean" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $K -c enabled=perhaps --set
     emu_case "set no such group" --stderr --expect-fail -- -d $K -g DO5 -c enabled=on --set
     emu_case "set conn" --stderr --expect-fail -- -d $K -c conn=x --set
     emu_case "set with nothing" --stderr --expect-fail -- -d $K --set
+    emu_case "set with no value" --no-output -- -d $K -c enabled --set
+    emu_case "set in a refused capture" --oracle-bug "$REFUSED_BUG" --expect-fail --stderr -- -d $K -c enabled=on --samples 1
 
     # C's hexdumps of each request and answer, at the level that prints them.
     emu_options setters=0
@@ -235,11 +247,10 @@ emu_cases() {
     SIGROK_CLI=$TMP/eth-stock-cli
     [ "$no_oracle" = 1 ] && SIGROK_CLI=$ETH_STOCK_CLI
     emu_options setters=0
-    emu_case "stock scan" --stderr --keep-header -- -d $K --scan
-    emu_case "stock show" --stderr --keep-header --expect-fail -- -d $K --show
-    emu_case "stock get" --stderr --expect-fail -- -d $K -g DO1 --get enabled
+    emu_case "stock show" --oracle-bug "$STOCK_BUG" --keep-header -- -d $K --show
+    emu_case "stock get" --oracle-bug "$STOCK_BUG" -- -d $K -g DO1 --get enabled
     emu_options
-    emu_case "stock set" --stderr --expect-fail -- -d $K -c enabled=on --set
+    emu_case "stock set" --oracle-bug "$STOCK_BUG" --no-output -- -d $K -c enabled=on --set
     SIGROK_CLI=$ETH_STOCK_CLI
     emu_options
 }

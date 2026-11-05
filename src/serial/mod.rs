@@ -38,6 +38,7 @@
 
 pub mod hid;
 pub mod record;
+pub mod tcpraw;
 
 use crate::core::{Error, Result};
 use std::time::Duration;
@@ -512,12 +513,15 @@ fn read_result(read: std::io::Result<usize>) -> Result<usize> {
 }
 
 /// Opens the port `name` with `params`: a device path, or a HID cable
-/// as `hid[/CHIP][/sn=SERIAL]` (see [`hid`]). With
+/// as `hid[/CHIP][/sn=SERIAL]` (see [`hid`]), or raw TCP as
+/// `tcp-raw/HOST/PORT` (see [`tcpraw`]). With
 /// `OXROK_SERIAL_RECORD=FILE` in the environment the session is
 /// recorded to that file.
 pub fn open(name: &str, params: Params) -> Result<Box<dyn Port>> {
     let native: Box<dyn Port> = if hid::is_hid_name(name) {
         hid::open(name, params)?
+    } else if tcpraw::is_tcpraw_name(name) {
+        Box::new(tcpraw::TcpRaw::open(name)?)
     } else {
         Box::new(Native::open(name, params)?)
     };
