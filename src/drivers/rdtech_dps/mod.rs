@@ -27,6 +27,10 @@
 //! Each `get` reads all of the state. In what order settings go out is the
 //! caller's: the CLI sends `enabled=on` last, once every setpoint was taken.
 //!
+//! A value's scale is its range's. Outside a capture a write of one first reads
+//! which range is on, where C uses the one it last read, and `-c` sends `range`
+//! before the settings that depend on it.
+//!
 //! A capture reads the state 10 ms after the last read ended, and each read
 //! sends a frame of V, I and P, then metadata for what has changed. A setting
 //! during a capture goes out between two reads.
@@ -1345,6 +1349,9 @@ mod tests {
         NoWrite,
     }
 
+    /// A device, the frames it wrote, its registers and its mode.
+    type SwitchedDevice = (RdtechDevice, Shared<Vec<Vec<u8>>>, Shared<[u16; 256]>, Shared<Mode>);
+
     /// A supply whose state a test changes under a capture.
     struct Switched {
         registers: Shared<[u16; 256]>,
@@ -1408,10 +1415,7 @@ mod tests {
         }
     }
 
-    fn switched_on(
-        family: Family,
-        id: u16,
-    ) -> (RdtechDevice, Shared<Vec<Vec<u8>>>, Shared<[u16; 256]>, Shared<Mode>) {
+    fn switched_on(family: Family, id: u16) -> SwitchedDevice {
         let registers = Arc::new(Mutex::new([0; 256]));
         let writes = Arc::new(Mutex::new(Vec::new()));
         let mode = Arc::new(Mutex::new(Mode::Good));
@@ -1426,7 +1430,7 @@ mod tests {
         (d, writes, registers, mode)
     }
 
-    fn switchable() -> (RdtechDevice, Shared<Vec<Vec<u8>>>, Shared<[u16; 256]>, Shared<Mode>) {
+    fn switchable() -> SwitchedDevice {
         switched_on(Family::Dps, 5005)
     }
 
