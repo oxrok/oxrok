@@ -57,6 +57,9 @@ const FIRST_BYTE: Duration = Duration::from_millis(500);
 const FUNCTION_CODE: Duration = Duration::from_millis(100);
 const CRC_BYTES: Duration = Duration::from_millis(100);
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
+/// The pause after a read that gave nothing before its time, as a hung up tty's
+/// does at once: `serial::read_blocking` has the same.
+const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
 
 /// `sr_crc16` over `data`, going on from `crc`.
 fn crc16_update(crc: u16, data: &[u8]) -> u16 {
@@ -178,6 +181,7 @@ impl Modbus {
         let mut last = Instant::now();
         while filled < wanted {
             let left = READ_TIMEOUT.saturating_sub(last.elapsed());
+            let asked = Instant::now();
             let n = match self.port.read(&mut reply[filled..wanted], left) {
                 Ok(n) => n,
                 Err(e) => {
@@ -192,6 +196,8 @@ impl Modbus {
             } else if last.elapsed() >= READ_TIMEOUT {
                 log::error!("Timed out waiting for Modbus response.");
                 return Err(failed("timed out"));
+            } else if asked.elapsed() < left {
+                std::thread::sleep(EMPTY_READ_PAUSE);
             }
         }
         self.read_end(crc)
@@ -689,6 +695,45 @@ mod tests {
         let (mut m, _) = on(vec![]);
         assert!(m.read_holding_registers(0, &mut [0; 1]).is_err());
         assert!(!m.request_unsent(), "a silence is not that");
+    }
+
+    #[test]
+    fn a_read_that_gives_0_at_once_does_not_spin() {
+        /// Two bytes of a reply, then what a hung up tty gives: 0, at once.
+        struct HungUp {
+            left: VecDeque<u8>,
+            reads: Arc<Mutex<u32>>,
+        }
+        impl Port for HungUp {
+            fn name(&self) -> &'static str {
+                "hung up"
+            }
+            fn set_params(&mut self, _: Params) -> Result<()> {
+                Ok(())
+            }
+            fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+                Ok(())
+            }
+            fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+                *self.reads.lock().unwrap() += 1;
+                let Some(b) = self.left.pop_front() else { return Ok(0) };
+                buf[0] = b;
+                Ok(1)
+            }
+            fn write(&mut self, _: &[u8]) -> Result<()> {
+                Ok(())
+            }
+            fn purge(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let reads = Arc::new(Mutex::new(0));
+        let left = [1u8, 3, 4].into_iter().collect();
+        let mut m = Modbus::new(Box::new(HungUp { left, reads: Arc::clone(&reads) }), 1);
+        assert!(m.read_holding_reply(&mut [0; 2]).is_err());
+        // A second at a millisecond each: a spin would be millions.
+        let n = *reads.lock().unwrap();
+        assert!(n <= 1100, "{n} reads");
     }
 
     #[test]
