@@ -17,7 +17,12 @@
 //!   16) and improwis.com's `RD60xx` notes, only through search snippets and
 //!   a summary: the PDF itself could not be fetched or read here.
 //! - The model numbers and each one's digits: `api.c`'s tables, the only
-//!   source for most of them.
+//!   source for most of them. Where sources part, this serves the driver's
+//!   reading: a DPS5015's and DPS5020's current in hundredths (`esphome-dps`
+//!   too; `rdserialtool` has thousandths on every model, tested on a DPS5005
+//!   alone) and power in hundredths on the RD P models (the `riden` library has
+//!   thousandths, with register 12 as a high word). So these goldens cannot
+//!   settle which is right.
 //! - The bridge: an RD has a CH340E (sigrok wiki). A DPS has a USB or
 //!   Bluetooth module on a TTL header. The ids here are the shell's stand-in,
 //!   since a real CH340's would bring the `ch341` driver and no ttyACM.

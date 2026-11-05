@@ -256,9 +256,13 @@ fn scaled(raw: u16, multiplier: f64) -> f32 {
     (f64::from(raw) / multiplier) as f32
 }
 
-/// The two blocks of a DPS. The thresholds are in the scale of the settings
-/// (`rfinnie/rdserialtool` reads them so, and `rdtech_dps_set_state` writes
-/// them so); `protocol.c:421` and `:423` multiply where they should divide.
+/// The two blocks of a DPS. The thresholds divide, in the scale of the settings:
+/// `rdtech_dps_set_state` writes them so and the RD's path reads them so
+/// (`protocol.c:478`, `:480`); `protocol.c:421` and `:423` multiply. The scale
+/// itself is `api.c`'s and unproven on a DPS5015 and a DPS5020: `api.c` and
+/// `esphome-dps` have a current in hundredths there, `rfinnie/rdserialtool` in
+/// thousandths on every model, and it was tested on a DPS5005 alone. The DPS5020
+/// protocol V1.2 was not read. Power is in hundredths, as in C.
 pub fn decode_dps(block: &[u16; DPS_BLOCK], thresholds: &[u16; 2], link: &Multipliers) -> State {
     State {
         voltage_target: scaled(block[0], link.voltage),
@@ -277,7 +281,10 @@ pub fn decode_dps(block: &[u16; DPS_BLOCK], thresholds: &[u16; 2], link: &Multip
 }
 
 /// The two blocks of an RD. `block` runs from `VOLT_TGT`: with two more
-/// registers on a model with ranges, the preset and the range.
+/// registers on a model with ranges, the preset and the range. Power is register
+/// 13 in hundredths, as in C, and this is unproven: the `riden` Python library
+/// has thousandths on the P models and register 12 as its high word, which C and
+/// this ignore.
 pub fn decode_rd(block: &[u16], thresholds: &[u16; 2], link: &Multipliers) -> State {
     State {
         voltage_target: scaled(block[0], link.voltage),
