@@ -1,0 +1,2 @@
+sr: modbus_serial: CRC error (0x0B81 vs 0x0B80).
+Failed to set device option 'voltage_target': data is invalid.

@@ -1,0 +1,6 @@
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
+sr: session: Could not start rdtech-rd device (null) acquisition.
+sr: session: Cannot remove non-existing event source P.
+Failed to start session.

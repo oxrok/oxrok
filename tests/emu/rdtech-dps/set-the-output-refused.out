@@ -1,0 +1,2 @@
+sr: modbus: SLAVE DEVICE BUSY error executing WRITE_MULTIPLE_REGISTERS function.
+Failed to set device option 'enabled': data is invalid.
