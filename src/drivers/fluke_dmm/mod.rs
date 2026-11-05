@@ -395,10 +395,9 @@ impl Capture {
                         return;
                     }
                 }
-                if let Some(ask) = &handled.ask {
-                    if !send(port, ask.as_bytes(), "Cannot send QM (measurement).") {
-                        return;
-                    }
+                let complaint = "Cannot send QM (measurement).";
+                if handled.ask.is_some_and(|ask| !send(port, ask.as_bytes(), complaint)) {
+                    return;
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
