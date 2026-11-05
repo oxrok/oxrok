@@ -1,0 +1,25 @@
+META output_frequency: 1000.000000
+META equiv_circuit_model: SERIES
+FRAME-BEGIN
+P1: 12.345 nF
+P2: 0.123 
+FRAME-END
+META equiv_circuit_model: PARALLEL
+FRAME-BEGIN
+P1: 12.345 nF
+P2: 0.123 
+FRAME-END
+META equiv_circuit_model: AUTO
+FRAME-BEGIN
+P1: 12.345 nF
+P2: 0.123 
+FRAME-END
+FRAME-BEGIN
+P1: 12.345 nF
+P2: 0.123 
+FRAME-END
+META equiv_circuit_model: NONE
+FRAME-BEGIN
+P1: 1.234 Ω
+P2: 0.123 
+FRAME-END

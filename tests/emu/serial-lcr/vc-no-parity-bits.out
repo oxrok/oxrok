@@ -1,0 +1,6 @@
+META output_frequency: 1000.000000
+META equiv_circuit_model: PARALLEL
+FRAME-BEGIN
+P1: 1.2345 H AUTO
+P2: 1.34  AUTO
+FRAME-END

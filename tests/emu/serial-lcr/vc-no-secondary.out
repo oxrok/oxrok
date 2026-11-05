@@ -1,0 +1,5 @@
+META output_frequency: 1000.000000
+META equiv_circuit_model: NONE
+FRAME-BEGIN
+P1: 12.345 kΩ AUTO
+FRAME-END
