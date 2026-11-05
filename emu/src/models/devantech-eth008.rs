@@ -60,6 +60,7 @@ use crate::model::DeviceModel;
 use crate::options::parse_number;
 use crate::shells::cdc::{Cdc, Faults, Identity, LineEvent, Port, Serial};
 use crate::{Error, Result};
+use std::fmt::Write;
 
 /// The model name.
 pub const NAME: &str = "devantech-eth008";
@@ -423,7 +424,10 @@ impl Relays {
 }
 
 fn show(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    bytes.iter().fold(String::new(), |mut text, b| {
+        let _ = write!(text, "{b:02x}");
+        text
+    })
 }
 
 impl Serial for Relays {
@@ -495,15 +499,12 @@ mod tests {
         ] {
             let mut h = relays(&[("board", id)]);
             assert_eq!(ask(&mut h, &[0x24]).len(), outputs, "board {id}");
-            match inputs {
-                Some(width) => {
-                    assert_eq!(ask(&mut h, &[0x25]).len(), width, "board {id}");
-                    assert_eq!(violations(&mut h), 0);
-                }
-                None => {
-                    assert_eq!(ask(&mut h, &[0x25]), b"", "board {id}");
-                    assert_eq!(violations(&mut h), 1);
-                }
+            if let Some(width) = inputs {
+                assert_eq!(ask(&mut h, &[0x25]).len(), width, "board {id}");
+                assert_eq!(violations(&mut h), 0);
+            } else {
+                assert_eq!(ask(&mut h, &[0x25]), b"", "board {id}");
+                assert_eq!(violations(&mut h), 1);
             }
         }
     }
