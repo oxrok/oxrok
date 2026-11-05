@@ -783,7 +783,7 @@ if [ $emu = 1 ]; then
     # emu_hex TEXT: TEXT as hex, printf's backslash escapes included, for a
     # model's option: an option's value can hold no space.
     emu_hex() {
-        printf "$1" | od -An -tx1 | tr -d ' \n'
+        printf "$1" | od -v -An -tx1 | tr -d ' \n'
     }
     # emu_tty_closing_wait CENTISECONDS, in a scenario, before a case whose
     # device stops reading: how long the kernel holds a tool's close for
@@ -1073,6 +1073,8 @@ flush()
     #   transactions cut where they start repeating (emu_hang_cut), runs
     #   of a repeated output line counted once; sigrok-cli's stdout is
     #   lost with it, so such a case compares --stderr or --no-output.
+    #   --oracle-env VAR=VALUE, in sigrok-cli's environment alone, to make
+    #   a crash that depends on what the heap holds come every time;
     #   --no-oracle-only, a case that runs only under --no-oracle, for
     #   what sigrok-cli cannot run first (a flag it lacks, an address its
     #   upload would move); its goldens are written by hand, as a bless
@@ -1104,7 +1106,7 @@ flush()
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -1128,6 +1130,7 @@ flush()
                 --oxrok) libsig_full=1 ;;
                 --tx-filter) tx_filter=$2; shift ;;
                 --no-oracle-only) no_oracle_only=1 ;;
+                --oracle-env) oracle_env=$2; shift ;;
                 --bound) bound=$2; shift ;;
                 *) emu_fail "$name: emu_case has no flag $1"; return ;;
             esac
@@ -1246,6 +1249,9 @@ flush()
             esac
             if { [ $hangs = 1 ] || [ $oracle_hangs = 1 ]; } && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
                 set -- env LD_PRELOAD="$EMU_TERM_EXIT" "$@"
+            fi
+            if [ -n "$oracle_env" ] && [ $t = a ]; then
+                set -- env "$oracle_env" "$@"
             fi
             if [ $record = 1 ] && [ $t = b ]; then
                 rm -f "$TMP/rec.usb" "$TMP/rec.hid"
