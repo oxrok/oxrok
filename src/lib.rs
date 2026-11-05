@@ -107,6 +107,7 @@ pub mod drivers {
     pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod manson_hcs_3xxx;
+    pub mod mastech_ms6514;
     pub mod maynuo_m97;
     pub mod microchip_pickit2;
     pub mod motech_lps_30x;
@@ -143,6 +144,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
+    registry.register(Box::new(drivers::mastech_ms6514::MastechMs6514Driver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
