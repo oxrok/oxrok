@@ -355,7 +355,7 @@ impl Link {
     pub fn read_ack(&mut self) -> Result<()> {
         let deadline = Instant::now() + REPLY_TIMEOUT;
         loop {
-            match self.read_lines(1, deadline)? {
+            match self.read_lines(1, deadline)?.0 {
                 line if is_reading(first_line(&line)) => {
                     log::debug!("A late reading in the way: '{}'.", line.escape_ascii());
                     self.read_lines(1, deadline)?;
@@ -367,8 +367,7 @@ impl Link {
     }
 
     fn read_reply_by(&mut self, lines: usize, deadline: Instant) -> Result<Vec<u8>> {
-        let reply = self.read_lines(lines, deadline)?;
-        let seen = reply.iter().filter(|c| **c == b'\r').count();
+        let (reply, seen) = self.read_lines(lines, deadline)?;
         if seen == lines && c_string(&reply).ends_with(OK) {
             Ok(reply)
         } else {
@@ -376,8 +375,8 @@ impl Link {
         }
     }
 
-    /// `lines` lines, or as much as [`REPLY_MAX`] takes.
-    fn read_lines(&mut self, lines: usize, deadline: Instant) -> Result<Vec<u8>> {
+    /// `lines` lines, or as much as [`REPLY_MAX`] takes, and how many came.
+    fn read_lines(&mut self, lines: usize, deadline: Instant) -> Result<(Vec<u8>, usize)> {
         let mut reply = Vec::with_capacity(REPLY_MAX);
         let mut seen = 0;
         while seen < lines && reply.len() < REPLY_MAX {
@@ -388,7 +387,7 @@ impl Link {
             seen += usize::from(byte == b'\r');
             reply.push(byte);
         }
-        Ok(reply)
+        Ok((reply, seen))
     }
 
     /// A question whose answer is one line and `OK`.
