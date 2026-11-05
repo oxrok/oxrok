@@ -15,6 +15,7 @@ emu_cases() {
     HANG_BUG="C asks nothing with no answer to its last request (protocol.c:213-214) or part of one in hand (protocol.c:211-212), and waits for ever; oxrok ends the capture after 5 s with no reply"
     HUP_BUG="receive_data reads only on exactly G_IO_IN (protocol.c:339), so a hung up port is never read, and it drops poll's result (protocol.c:352) and waits for ever; oxrok ends the capture on the read's error"
     CHANNEL_BUG="handle_poll_data sends every channel whatever -C said (protocol.c:266-274 has no ch->enabled); oxrok sends those asked for"
+    LATE_BOUND="C waits for a reply however late (protocol.c:213-214), and a frame limit alone would never end if none came; so oxrok gives up after 5 s and loses a later one"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What a scan reads of the reply: the name, the version, the serial.
@@ -150,6 +151,13 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_case "short reply no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
     emu_options extra=2:10
     emu_case "extra bytes no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
+
+    # A reply later than the 5 s of oxrok's bound (350 offers, about 7 s). With a
+    # time limit both tools wait and get it, kept up to it as the polls after
+    # it depend on the clock. A frame limit alone has oxrok give up: one frame.
+    emu_options late=3:350
+    emu_case "late reply with a time limit" --timeout 20 --filter '13,$d' --tx-filter '/^bulk_in 82 192 -> /{x;s/^/x/;/^xxx/{x;q};x}' -- -d $K --time 11s
+    emu_case "late reply with a frame limit" --oracle-differs "$LATE_BOUND" --timeout 20 -- -d $K --frames 2
 
     # The USB side misbehaving, the shell's options.
     emu_options chunk=1

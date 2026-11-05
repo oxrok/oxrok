@@ -15,9 +15,12 @@
 //! A capture asks `getva` at most every 100 ms, and only with no part of a
 //! reply in hand and something received since the last request, as C does.
 //! A reply is a frame of six analog channels. So a meter that keeps a reply
-//! back is asked nothing more. In C that wait has no end: here a reply owed
-//! for [`NO_REPLY_BOUND`] ends the capture, and so does a request that cannot
-//! go out, where C keeps trying. A bad reply ends it too, as in C.
+//! back is asked nothing more, and C waits for it with no end. Under `--time`
+//! or `--continuous` so does this driver, as a late reply recovers there. Only
+//! a frame limit alone could then never end the capture, so there a reply owed
+//! for [`NO_REPLY_BOUND`] does. That has a price: a reply later than that loses
+//! what C would still get. A request that cannot go out ends the capture too,
+//! where C keeps trying. A bad reply ends it, as in C.
 //!
 //! C's Bluetooth ports (`bt/...`, `bgetva\r\n`) are not here: `serial::open`
 //! has none.
@@ -55,9 +58,10 @@ const POLL_PERIOD: Duration = Duration::from_millis(100);
 /// The period of `serial_source_add`'s timeout: one look at the limits, the
 /// stop and the next request, whatever comes or does not.
 const SOURCE_PERIOD: Duration = Duration::from_millis(50);
-/// How long a reply may be owed before a capture ends. C has no bound: the
-/// session goes on without a request until a time limit, or for ever. A real
-/// meter's pace is not known; this leaves it room many times its 2 Hz display.
+/// How long a reply may be owed before a capture with only a frame limit ends.
+/// C has no bound: the session goes on without a request for ever, and takes a
+/// reply however late. A real meter's pace is not known; this leaves it room
+/// many times its 2 Hz display. A time limit or a client's stop ends the rest.
 pub const NO_REPLY_BOUND: Duration = Duration::from_secs(5);
 /// The pause after a read that gave nothing before its time, as a hung up tty
 /// gives 0 at once.
@@ -466,7 +470,8 @@ impl Capture {
     /// or with none of it come, the next request once the period is over.
     fn poll(&self, port: &mut dyn Port, rx: &mut Rx) -> Pass {
         if rx.len > 0 || rx.since_request == 0 {
-            if rx.quiet_since.elapsed() > self.no_reply_bound {
+            let only_frames_can_end = self.limit_frames > 0 && self.limit.is_none();
+            if only_frames_can_end && rx.quiet_since.elapsed() > self.no_reply_bound {
                 log::error!("No reply from the device for {:?}.", self.no_reply_bound);
                 return Pass::End;
             }
@@ -666,11 +671,39 @@ mod tests {
     }
 
     #[test]
+    fn a_time_limit_goes_past_the_bound() {
+        let (fake, seen) = Fake::new(vec![Vec::new()]);
+        let mut d = device(fake);
+        d.set(&Key::LimitMsec, &Value::U64(600), None).unwrap();
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let started = Instant::now();
+        let packets = capture(&mut d);
+        assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+        assert_eq!(frames(&packets), 0);
+        assert_eq!(writes(&seen), 1);
+    }
+
+    #[test]
+    fn with_no_limit_a_silent_meter_waits_for_the_stop() {
+        let (fake, seen) = Fake::new(vec![Vec::new()]);
+        let mut d = device(fake);
+        let rx = start(&mut d);
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND).unwrap().1, Packet::Header { .. }));
+        let waited = d.no_reply_bound * 3;
+        assert!(rx.recv_timeout(waited).is_err(), "nothing, not an End, well past the bound");
+        d.stop().unwrap();
+        to_end(&rx);
+        assert_eq!(writes(&seen), 1);
+    }
+
+    #[test]
     fn part_of_a_reply_in_hand_stops_the_requests() {
         let mut cut = good();
         cut.truncate(100);
         let (fake, seen) = Fake::new(vec![cut, good()]);
-        let packets = capture(&mut device(fake));
+        let mut d = device(fake);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        let packets = capture(&mut d);
         assert_eq!(frames(&packets), 0);
         assert_eq!(writes(&seen), 1, "a second request would be answered");
     }
@@ -680,7 +713,9 @@ mod tests {
         let mut long = good();
         long.extend_from_slice(&[0xa5; 10]);
         let (fake, seen) = Fake::new(vec![long, good()]);
-        let packets = capture(&mut device(fake));
+        let mut d = device(fake);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        let packets = capture(&mut d);
         assert_eq!(frames(&packets), 1);
         assert_eq!(writes(&seen), 1, "a second request would be answered");
     }

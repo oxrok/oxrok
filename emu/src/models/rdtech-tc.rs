@@ -62,10 +62,15 @@
 //! - `cut=REPLY:LEN`, only the first LEN bytes of that reply go out;
 //! - `extra=REPLY:N`, N more bytes after it, 0xa5;
 //! - `again=REPLY`, that reply goes out twice;
+//! - `late=REPLY:OFFERS`, that reply waits for this many of the host's offers
+//!   of a read with nothing queued, which [`Serial::tick`] counts: about 20 ms
+//!   each, so how long a wait lasts depends on the host, as nothing here has a
+//!   clock. A stand-in for a meter that is slow once;
 //! - `answers=N`, replies per power on, then silence and the event point.
 //!
 //! The pedantic checks: only `getva`, nothing else and nothing left of it when
-//! a tool opens.
+//! a tool opens, and no `getva` while a late reply is owed, which no C path
+//! sends.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
@@ -79,7 +84,7 @@ pub const NAME: &str = "rdtech-tc";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "An RDTech TC66C USB power meter on CDC-ACM; name=HEX, fw=HEX, sn=, v=, \
                          i=, dp=, dm=, e0=, e1=, flip=REPLY:BYTE, cut=REPLY:LEN, extra=REPLY:N, \
-                         again=REPLY, answers=, and the shell's stall=, chunk=, in-limit=, \
+                         again=REPLY, late=REPLY:OFFERS, answers=, and the shell's stall=, chunk=, in-limit=, \
                          in-stall=, out-hold=";
 
 /// See the module's documentation for where this comes from.
@@ -117,6 +122,13 @@ fn at_reply(key: &str, value: &str) -> Result<(u32, u32)> {
     Ok((reply, parse_number(key, n, 0..=4096)?))
 }
 
+/// `REPLY:OFFERS`, with REPLY from 1.
+fn at_reply_offers(key: &str, value: &str) -> Result<(u32, u32)> {
+    let invalid = || Error(format!("{key}={value}: as in 2:300, the reply counted from 1"));
+    let (reply, offers) = value.split_once(':').ok_or_else(invalid)?;
+    Ok((parse_number(key, reply, 1..=u32::MAX)?, parse_number(key, offers, 1..=1_000_000)?))
+}
+
 fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
     let mut faults = Faults::default();
     let mut config = Config::default();
@@ -150,6 +162,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
                 config.extras.push((reply, n as usize));
             }
             "again" => config.again.push(parse_number(k, v, 1..=u32::MAX)?),
+            "late" => config.late.push(at_reply_offers(k, v)?),
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
@@ -174,6 +187,7 @@ struct Config {
     cuts: Vec<(u32, usize)>,
     extras: Vec<(u32, usize)>,
     again: Vec<u32>,
+    late: Vec<(u32, u32)>,
     answers: Option<u32>,
 }
 
@@ -193,6 +207,7 @@ impl Default for Config {
             cuts: Vec::new(),
             extras: Vec::new(),
             again: Vec::new(),
+            late: Vec::new(),
             answers: None,
         }
     }
@@ -222,11 +237,13 @@ struct Meter {
     replies: u32,
     /// What has come of a command so far.
     pending: Vec<u8>,
+    /// A late reply and the offers it still waits for.
+    held: Option<(u32, Vec<u8>)>,
 }
 
 impl Meter {
     fn new(config: Config) -> Meter {
-        Meter { config, replies: 0, pending: Vec::new() }
+        Meter { config, replies: 0, pending: Vec::new(), held: None }
     }
 
     /// The reply in the clear, for the `n`-th reply from 0.
@@ -291,12 +308,20 @@ impl Meter {
     }
 
     fn poll(&mut self, port: &mut Port<'_>) {
+        if self.held.is_some() {
+            port.violation("getva while a late reply is owed");
+            return;
+        }
         if self.config.answers.is_some_and(|n| self.replies >= n) {
             port.mark_event_point();
             return;
         }
         self.replies += 1;
-        port.send(&self.wire(self.replies));
+        let wire = self.wire(self.replies);
+        match self.config.late.iter().find(|(r, _)| *r == self.replies) {
+            Some((_, offers)) => self.held = Some((*offers, wire)),
+            None => port.send(&wire),
+        }
     }
 }
 
@@ -325,6 +350,17 @@ impl Serial for Meter {
         if event.opened() && !self.pending.is_empty() {
             port.violation(format!("'{}': a command left unfinished", show(&self.pending)));
             self.pending.clear();
+        }
+    }
+
+    fn tick(&mut self, port: &mut Port<'_>) {
+        let Some((offers, wire)) = &mut self.held else {
+            return;
+        };
+        *offers -= 1;
+        if *offers == 0 {
+            port.send(wire);
+            self.held = None;
         }
     }
 
@@ -486,6 +522,37 @@ mod tests {
     }
 
     #[test]
+    fn a_late_reply_waits_for_its_offers() {
+        let mut h = meter(&[("late", "2:3")]);
+        assert_eq!(poll(&mut h).len(), REPLY_LEN);
+        h.write(POLL);
+        h.offer();
+        h.offer();
+        assert_eq!(h.cdc.model.held.as_ref().map(|(n, _)| *n), Some(1), "two offers taken");
+        assert_eq!(h.read().len(), REPLY_LEN, "the third offer brings it");
+        assert_eq!(h.cdc.model.held, None);
+        assert_eq!(poll(&mut h).len(), REPLY_LEN, "the next is on time");
+        assert_eq!(violations(&mut h), 0);
+    }
+
+    #[test]
+    fn a_request_with_a_late_reply_owed_is_flagged() {
+        let mut h = meter(&[("late", "1:5")]);
+        h.write(POLL);
+        assert_eq!(violations(&mut h), 0);
+        h.write(POLL);
+        assert_eq!(violations(&mut h), 1);
+    }
+
+    #[test]
+    fn power_on_forgets_a_late_reply() {
+        let mut h = meter(&[("late", "1:5")]);
+        h.write(POLL);
+        h.cdc.model.reset();
+        assert_eq!(h.cdc.model.held, None);
+    }
+
+    #[test]
     fn answers_runs_out_and_marks_the_point() {
         let mut h = meter(&[("answers", "1")]);
         assert_eq!(poll(&mut h).len(), REPLY_LEN);
@@ -561,6 +628,9 @@ mod tests {
             ("cut", "1:x"),
             ("extra", "x:1"),
             ("again", "0"),
+            ("late", "0:5"),
+            ("late", "1:0"),
+            ("late", "1"),
             ("answers", "x"),
             ("nothing", "1"),
         ] {
