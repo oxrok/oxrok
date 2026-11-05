@@ -13,8 +13,9 @@
 //!   the inputs and of an analog value high byte first. The supply is a byte in
 //!   tenths of a volt, the serial number the 6 bytes of the MAC.
 //! - Inputs: the ETH484-B's document gives 2 bytes whose first is always 0, the
-//!   ETH8020-B's gives 4 whose first three are. Its Python module reads 2 and
-//!   then indexes a fourth, so it can't be a witness here.
+//!   ETH8020-B's gives 4 whose first three are. Its Python module asks for 2 of
+//!   the ETH8020, but `read` is a `recv(2048)` that takes what has come, so that's
+//!   a lower bound, and it then indexes the fourth: it fits the document's 4.
 //! - The board table (ids, how many outputs, inputs and analog inputs, and the
 //!   widths): the ETH documents for 19, 20 and 21, the Python module for 18 to
 //!   21. The other ids are what libsigrok's driver says of them. So a WIFI board
