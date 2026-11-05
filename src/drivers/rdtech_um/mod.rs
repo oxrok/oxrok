@@ -21,7 +21,10 @@
 //! - A reply that stays incomplete, or that has no id, holds back every later
 //!   poll in C (`protocol.c:166-167`), so a lost byte stops a capture for good.
 //!   Here an incomplete reply goes after [`Pace::stall`] with a warning, and
-//!   bytes ahead of an id go as they come (see [`protocol::Assembly`]).
+//!   bytes ahead of an id go as they come (see [`protocol::Assembly`]). The tail
+//!   of what was dropped may still come and hold what looks like an id, so a
+//!   failed check right after a drop looks for the next id
+//!   ([`MAX_RESYNCS`] times), where any other ends the capture, as in C.
 //! - After an unplug C logs a failed poll without end (`protocol.c:350`, 365:
 //!   a hung up port is not read, and the failure is dropped). Here a port that
 //!   fails ends the capture.
@@ -64,6 +67,10 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(1000);
 /// `WRITE_TO_MS`.
 const WRITE_TIMEOUT: Duration = Duration::from_millis(1);
 
+/// Failed checks a capture takes after dropping part of a reply, until a dump
+/// passes one, so that a meter gone wrong still ends it.
+const MAX_RESYNCS: u32 = 16;
+
 /// The times of a capture; tests take shorter ones.
 #[derive(Clone, Copy, Debug)]
 pub struct Pace {
@@ -73,7 +80,8 @@ pub struct Pace {
     /// a stop and the period are looked at.
     pub wait: Duration,
     /// How long part of a reply may stand before it is dropped. C has no such
-    /// thing; this is its probe's wait for a whole reply.
+    /// thing. It is well above a link's hiccup, as a reply that goes on is
+    /// better kept; the figure is a choice, with no recording behind it.
     pub stall: Duration,
     /// How long a capture that only a frame limit can end waits for a dump.
     pub silence: Duration,
@@ -84,7 +92,7 @@ impl Default for Pace {
         Pace {
             period: Duration::from_millis(100),
             wait: Duration::from_millis(50),
-            stall: PROBE_TIMEOUT,
+            stall: Duration::from_secs(10),
             silence: Duration::from_secs(5),
         }
     }
@@ -401,6 +409,7 @@ impl Capture {
         let mut polled = Instant::now();
         let mut last_byte = polled;
         let mut last_dump = polled;
+        let mut resyncs_left = 0;
         loop {
             if stop.load(Ordering::SeqCst) {
                 return;
@@ -424,11 +433,19 @@ impl Capture {
                 }
             }
             while let Some(dump) = assembly.next_dump() {
+                if !self.profile.check_ok(&dump) && resyncs_left > 0 {
+                    resyncs_left -= 1;
+                    log::warn!("A false id after a dropped reply, trying to synchronize.");
+                    let synced = assembly.resync(&dump);
+                    log::debug!("Skipping {} bytes in attempt to sync.", synced.skipped);
+                    continue;
+                }
                 if !self.profile.check_ok(&dump) {
                     log::error!("Packet checksum verification failed.");
                     log::error!("Processing response packet failed.");
                     return;
                 }
+                resyncs_left = 0;
                 if !self.send_frame(&dump, sink) {
                     return;
                 }
@@ -445,6 +462,7 @@ impl Capture {
             if assembly.accumulating() && last_byte.elapsed() >= self.pace.stall {
                 log::warn!("Dropping {} bytes of a reply that stopped.", assembly.held());
                 assembly.drop_partial();
+                resyncs_left = MAX_RESYNCS;
             }
             let empty = last_dump.elapsed();
             if self.limit_frames > 0 && self.limit_msec == 0 && empty >= self.pace.silence {
@@ -811,6 +829,62 @@ mod tests {
         assert!(seen.polls[1] - seen.polls[0] >= QUICK.stall, "none while it stood");
         drop(seen);
         d.close().unwrap();
+    }
+
+    /// A dump whose current looks like the UM24C's id, in the reviewer's shape.
+    fn id_in_the_current(energy: u32) -> Vec<u8> {
+        let mut d = dump(energy);
+        d[4..6].copy_from_slice(&[0x09, 0x63]);
+        d
+    }
+
+    #[test]
+    fn a_false_id_in_the_tail_of_a_dropped_reply_does_not_end_the_capture() {
+        let (mut fake, seen) = Fake::new();
+        let d0 = id_in_the_current(9);
+        let gap = QUICK.stall + QUICK.period;
+        fake.script.push_back(Reply::Parts(d0[..3].to_vec(), gap, d0[3..].to_vec()));
+        fake.script.push_back(Reply::Bytes(id_in_the_current(0)));
+        fake.after = Some(Reply::Bytes(id_in_the_current(1)));
+        let (mut d, rx) = capture(fake, 2, 0);
+        assert_eq!(energies(&until_end(&rx)), [0.0, 0.001], "the dropped one is lost");
+        assert!(seen.lock().unwrap().polls.len() >= 3);
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_failed_check_ends_the_capture_again_once_a_dump_has_passed() {
+        let (mut fake, seen) = Fake::new();
+        let d0 = id_in_the_current(9);
+        let gap = QUICK.stall + QUICK.period;
+        let mut bad = dump(5);
+        bad[129] = 0xf0;
+        fake.script.push_back(Reply::Parts(d0[..3].to_vec(), gap, d0[3..].to_vec()));
+        fake.script.push_back(Reply::Dump);
+        fake.script.push_back(Reply::Bytes(bad));
+        let (mut d, rx) = capture(fake, 0, 0);
+        assert_eq!(energies(&until_end(&rx)), [0.0]);
+        assert_eq!(seen.lock().unwrap().polls.len(), 3);
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_meter_gone_wrong_after_a_drop_still_ends_the_capture() {
+        let (mut fake, seen) = Fake::new();
+        let mut bad = dump(5);
+        bad[129] = 0xf0;
+        fake.script.push_back(Reply::Bytes(bad[..60].to_vec()));
+        fake.after = Some(Reply::Bytes(bad));
+        let (mut d, rx) = capture(fake, 0, 0);
+        assert_eq!(frame_count(&until_end(&rx)), 0);
+        let polls = seen.lock().unwrap().polls.len();
+        assert_eq!(polls, 1 + MAX_RESYNCS as usize + 1, "each took its failure");
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_stall_is_well_above_a_hiccup() {
+        assert!(Pace::default().stall >= Duration::from_secs(5), "well above a hiccup");
     }
 
     #[test]

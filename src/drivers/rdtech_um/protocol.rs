@@ -245,6 +245,14 @@ impl Assembly {
         Some(dump)
     }
 
+    /// Takes back a dump whose id was false: all but its first byte, then finds
+    /// the next id. There is room, as a dump left at most 126 bytes held.
+    pub fn resync(&mut self, dump: &[u8; DUMP]) -> Synced {
+        self.held.splice(0..0, dump[1..].iter().copied());
+        self.warned = false;
+        self.feed(&[])
+    }
+
     /// Gives up on a reply that stays incomplete: the next starts afresh.
     pub fn drop_partial(&mut self) {
         self.held.clear();
@@ -415,6 +423,21 @@ mod tests {
         assert_eq!(a.feed(&stream).skipped, 0);
         let false_dump = a.next_dump().unwrap();
         assert!(!find_profile(0x0963).unwrap().check_ok(&false_dump));
+    }
+
+    #[test]
+    fn a_false_id_goes_back_and_the_next_is_found() {
+        let d = dump(0x0963);
+        let mut a = Assembly::new(0x0963);
+        // The tail of a dump whose current is 0x0963, then a whole one.
+        let mut stream = vec![0x09, 0x63];
+        stream.extend_from_slice(&[0; 124]);
+        stream.extend_from_slice(&d);
+        a.feed(&stream);
+        let false_dump = a.next_dump().unwrap();
+        assert_eq!(a.resync(&false_dump), Synced { skipped: 125, warn: true });
+        assert_eq!(a.next_dump().unwrap(), d);
+        assert!(!a.accumulating());
     }
 
     #[test]

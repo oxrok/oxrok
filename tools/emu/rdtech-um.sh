@@ -14,7 +14,7 @@ emu_cases() {
     L='s/^oxrok: (err|warn): oxrok::drivers::rdtech_um: /sr: rdtech-um: /'
     # What oxrok adds after the error sigrok-cli names.
     A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
-    STUCK_BUG="an incomplete reply, or two bytes a failed sync left, hold back every later poll (protocol.c:166-167 returns while buflen is set), so nothing more ever comes; oxrok drops them and asks again"
+    STUCK_BUG="an incomplete reply, or two bytes a failed sync left, hold back every later poll (protocol.c:166-167 returns while buflen is set), so nothing more ever comes; oxrok drops an incomplete one after 10 s, or at once what has no id, and asks again"
     HUP_BUG="a hung up port is not read, as its events are not plain G_IO_IN (protocol.c:350), and the failed poll is dropped (protocol.c:365), so it logs that for ever; oxrok ends the capture"
     SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 5 s, where only that limit could"
     DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
@@ -116,11 +116,11 @@ emu_cases() {
     emu_case "an id ahead of a frame" --stderr --filter "$L" -- -d $U --frames 3
     # An answer that stays incomplete holds back every later poll.
     emu_options short=2:60
-    emu_case "a short answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 4 -- -d $U --frames 2
+    emu_case "a short answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 13 -- -d $U --frames 2
     emu_options short=3:60
     emu_case "a short answer time limit" -- -d $U --time 300ms
     emu_options short=2:1
-    emu_case "one byte of an answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 4 -- -d $U --frames 2
+    emu_case "one byte of an answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 13 -- -d $U --frames 2
     # What does not sync leaves two bytes behind, which count as accumulating.
     emu_options junk=2:130
     emu_case "junk for an answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 4 -- -d $U --frames 2
