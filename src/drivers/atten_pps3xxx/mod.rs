@@ -186,11 +186,12 @@ impl Shared {
     /// What the next set frame does to what the device reports, once per
     /// capture, or once at a close.
     fn warn_of_what_it_turns_off(&mut self) {
+        if self.warned {
+            return;
+        }
         if let Some(warning) = frame_warning(&self.reported, &self.settings) {
-            if !self.warned {
-                self.warned = true;
-                log::warn!("{warning}");
-            }
+            self.warned = true;
+            log::warn!("{warning}");
         }
     }
 
@@ -978,7 +979,7 @@ mod tests {
         set(&mut d, "CH1", Key::Enabled, Value::Bool(false)).unwrap();
         d.set(&Key::OverCurrentProtectionEnabled, &Value::Bool(false), None).unwrap();
         d.set(&Key::ChannelConfig, &Value::from("Independent"), None).unwrap();
-        assert!(d.shared().unsent.is_empty());
+        assert_eq!(d.shared().unsent, Vec::<String>::new());
     }
 
     #[test]
@@ -988,7 +989,7 @@ mod tests {
         set(&mut d, "CH1", Key::Enabled, Value::Bool(false)).unwrap();
         set(&mut d, "CH1", Key::VoltageTarget, Value::F64(5.0)).unwrap();
         d.shared().send_settings().unwrap();
-        assert!(d.shared().unsent.is_empty(), "the frame carried it");
+        assert_eq!(d.shared().unsent, Vec::<String>::new(), "the frame carried it");
         assert_eq!(writes(&seen)[0][15], 0);
     }
 

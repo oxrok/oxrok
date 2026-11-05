@@ -150,6 +150,7 @@ emu_cases() {
     emu_options answers=3 output=7 ocp=1 mode=1 load=10
     emu_case "one reading on a live supply" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
     # What was set goes out at the close.
+    emu_options answers=2 replies=$R
     emu_case "capture with setpoints" -- -d $A -c $A1:voltage_target=5:current_limit=0.5:enabled=on --continuous
     emu_case "capture with a setting" -- -d $A -c ocp_enabled=on --continuous
     emu_case "capture with a bad setpoint" --stderr --expect-fail --filter "$F" -- -d $A -c $A1:enabled=on:voltage_target=99 --continuous
