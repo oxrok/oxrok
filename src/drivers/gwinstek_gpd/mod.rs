@@ -1154,7 +1154,7 @@ mod tests {
     #[test]
     fn a_reply_within_the_bound_carries_on_under_a_sample_limit() {
         let (mut fake, _) = Fake::new(b"\r\n");
-        fake.late = Some((2, REPLY_BOUND - Duration::from_millis(500)));
+        fake.late = Some((2, Duration::from_millis(1500)));
         let mut d = device(fake);
         d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
         let rx = start(&mut d);
