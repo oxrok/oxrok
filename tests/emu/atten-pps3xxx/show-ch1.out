@@ -1,0 +1,16 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+atten-pps3203 - Atten PPS3203T-3S with 3 channels: CH1 CH2 CH3
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    CH3: channel CH3
+Supported configuration options on channel group CH1:
+    voltage: 0.000000 (current)
+    voltage_target: 0.000000 (current), 32.000000, 0.010000
+    current: 0.000000 (current)
+    current_limit: 0.000000 (current), 3.000000, 0.001000
+    enabled: on, off (current)

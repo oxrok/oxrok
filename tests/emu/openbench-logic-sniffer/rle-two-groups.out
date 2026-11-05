@@ -1,0 +1,17 @@
+Acquisition with 16/32 channels at 200 kHz
+8:ff ff ff ff ff ff ff fe 
+9:ff ff ff ff ff ff ff fe 
+10:ff ff ff ff ff ff ff fe 
+11:ff ff ff ff ff ff ff fe 
+12:ff ff ff ff ff ff ff fe 
+13:00 00 00 00 00 00 00 01 
+14:00 00 00 00 00 00 00 00 
+15:00 00 00 00 00 00 00 00 
+24:00 00 00 00 00 00 00 01 
+25:00 00 00 00 00 00 00 01 
+26:00 00 00 00 00 00 00 01 
+27:00 00 00 00 00 00 00 01 
+28:00 00 00 00 00 00 00 01 
+29:ff ff ff ff ff ff ff fe 
+30:ff ff ff ff ff ff ff ff 
+31:00 00 00 00 00 00 00 00 

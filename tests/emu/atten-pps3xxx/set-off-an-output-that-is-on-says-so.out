@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::atten_pps3xxx: enabled=off on CH1 sent nothing: the device reports the output on, and IT STAYS ON. A setpoint with it sends a frame, which sets everything.
