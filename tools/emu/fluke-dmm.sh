@@ -49,10 +49,11 @@ emu_cases() {
     QM_287='/^bulk_out 02 (514d0d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d312e30333237453[0-9a-f]*0d)+$/d'
     FIRST='2,$d'
     NO_STATE_BUG="fluke-28x.c:196 reads tokens[3] of a line of two tokens, past the NULL that ends g_strsplit's array, and strcmp dies on what it finds; oxrok takes it for a line with no state, so no sample"
-    # oxrok's log prefix on its side only, then what the driver itself says:
-    # the rest of a log is the core's or libserialport's, and goes.
+    # oxrok's log prefix on its side only, then libserialport's lines, which
+    # only sigrok-cli has, by name. Anything else, a panic or a CLI error,
+    # stays and fails the case.
     L='s/^oxrok: (err|warn): oxrok::drivers::fluke_dmm(::protocol)?: /sr: fluke-dmm: /
-/^sr: fluke-dmm: /!d'
+/^sr: serial-libsp: /d'
     # C's 199B sends no flags (FLAGS_BUG), so these cases compare the samples:
     # the flags go from the end of a line, under both tools. The differs
     # cases and a unit test hold the flags.
