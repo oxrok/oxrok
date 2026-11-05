@@ -1060,6 +1060,10 @@ would have cost a user a long afternoon.
   conversion unread.
 - A shared scratchpad needs unique file names: a generic one can run
   another agent's script in its worktree.
+- `in-stall=N` belongs on a scan's last read with no reopen after it: `cdc_acm` recovers from the stall in a work
+  item that races the next open, which then fails with EIO, and its clear-halt lands anywhere among later transfers.
+  Moved into a capture, the stall's position and a hang in the tools vary too.
+- Build with `--all-features` before merging, as CI does: `pyo3`'s `PartialEq` impls make `assert_eq!(v, [])` ambiguous.
 
 ## Porting a decoder
 

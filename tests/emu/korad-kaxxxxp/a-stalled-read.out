@@ -1,4 +1,2 @@
-I: 0 mA DC
-V: 12.34 V DC
-I: 0 mA DC
-V: 12.34 V DC
+The following devices were found:
+korad-kaxxxxp:conn=/dev/ttyACMN - Korad KA3005P with 2 channels: V I
