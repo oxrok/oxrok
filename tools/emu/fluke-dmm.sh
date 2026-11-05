@@ -380,7 +380,7 @@ $FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_i
     emu_case "287 limit_time in -c" --libsigrok --oxrok --filter "$FIRST" --tx-filter "$QM_287" -- -d $F -c limit_time=350 --continuous
 
     # The meter stops reading. A write has 1 ms there (protocol.h:28), and C
-    # goes on; oxrok's sees the queue full and goes on too. Only the close
+    # goes on, and so does oxrok, whose write has the same. Only the close
     # waits, for closing_wait.
     emu_options out-hold=2
     emu_tty_closing_wait 100

@@ -240,6 +240,9 @@ pub fn parse_identity(line: &[u8]) -> Option<Identity> {
     Some(Identity { profile, version: shown(&version[spaces..]) })
 }
 
+/// `SERIAL_WRITE_TIMEOUT_MS`: what a write waits for room.
+pub const WRITE_TIMEOUT: Duration = Duration::from_millis(1);
+
 /// One measurement.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reading {
@@ -584,9 +587,10 @@ fn fields_reading(tokens: &[&[u8]]) -> Option<Reading> {
 ///
 /// # Errors
 ///
-/// When the port's write fails, which is one of the tries gone.
+/// When the port's write fails, which is one of the tries gone. A write with
+/// no room in its time is none: then no answer comes, as in C.
 pub fn ask_identity(port: &mut dyn Port) -> Result<Option<Identity>> {
-    port.write(b"ID\r")?;
+    port.write_timeout(b"ID\r", WRITE_TIMEOUT)?;
     let ack = read_line(port, SCAN_LINE_MAX, Duration::from_millis(150));
     if ack != b"0" {
         return Ok(None);

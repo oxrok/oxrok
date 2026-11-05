@@ -41,7 +41,7 @@ use crate::core::{
     OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::serial::{Params, Port, read_blocking};
-use protocol::{Decoder, LINE_MAX, Profile};
+use protocol::{Decoder, LINE_MAX, Profile, WRITE_TIMEOUT};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -59,10 +59,6 @@ const BETWEEN_LINES: Duration = Duration::from_millis(5);
 /// `serial_source_add`'s 50 ms: how long the capture waits for a byte
 /// before it looks at its limits and timers.
 const POLL: Duration = Duration::from_millis(50);
-/// How long a command waits for the last to leave. A queue that does not empty
-/// is a meter or cable not taking bytes, and a write then could block for
-/// `WRITE_TIMEOUT` in `crate::serial`: this keeps a stop from waiting for that.
-const QUEUE_WAIT: Duration = Duration::from_millis(50);
 const SET: Access = Access { get: false, set: true, list: false };
 static DEV_OPTIONS: [OptionDesc; 3] = [
     OptionDesc::new(Key::Continuous, Access::NONE),
@@ -432,20 +428,22 @@ impl Capture {
 }
 
 /// A command, and whether the capture can go on: only a port that is gone ends
-/// it. A write that times out is `complaint` and the next `QM` tries again, as
-/// C carries on (`protocol.c:72-73`, `132-133`).
+/// it. With 1 ms for a write, as C has, a meter not taking bytes holds no stop;
+/// the next `QM` tries again. C says nothing of a short write, as it is no
+/// error there (`protocol.c:72`, `132`); this logs it.
 fn send(port: &mut dyn Port, data: &[u8], complaint: &str) -> bool {
-    let sent = match port.drain(QUEUE_WAIT) {
-        Err(Error::Timeout) => Err(Error::Timeout),
-        _ => port.write(data),
-    };
-    let Err(e) = sent else { return true };
-    log::debug!("{e}");
-    log::error!("{complaint}");
-    match e {
-        Error::Timeout => true,
-        Error::Io(io) => io.kind() == std::io::ErrorKind::TimedOut,
-        _ => false,
+    match port.write_timeout(data, WRITE_TIMEOUT) {
+        Ok(n) => {
+            if n < data.len() {
+                log::warn!("{n} of {} bytes of a command went out.", data.len());
+            }
+            true
+        }
+        Err(e) => {
+            log::debug!("{e}");
+            log::error!("{complaint}");
+            false
+        }
     }
 }
 
@@ -520,11 +518,10 @@ mod tests {
         answer: Answer,
         fail_writes_from: Option<usize>,
         fail_reads: bool,
-        /// Writes of these numbers wait this long and then time out.
+        /// Writes of these numbers find no room: a plain write would block
+        /// for `write_blocks_for`, one with a timeout gives up at that.
         blocked_writes: std::ops::Range<usize>,
         write_blocks_for: Duration,
-        /// The output queue does not empty, so `drain` times out.
-        stuck_queue: bool,
     }
 
     impl Fake {
@@ -538,9 +535,21 @@ mod tests {
                 fail_reads: false,
                 blocked_writes: 0..0,
                 write_blocks_for: Duration::ZERO,
-                stuck_queue: false,
             };
             (fake, seen)
+        }
+    }
+
+    impl Fake {
+        /// Notes a write: whether it finds no room, and its number.
+        fn log_write(&mut self, data: &[u8]) -> Result<(bool, usize)> {
+            let mut seen = self.seen.lock().unwrap();
+            let n = seen.writes.len();
+            if self.fail_writes_from.is_some_and(|from| n >= from) {
+                return Err(Error::device("write failed"));
+            }
+            seen.writes.push((Instant::now(), data.to_vec()));
+            Ok((self.blocked_writes.contains(&n), n))
         }
     }
 
@@ -576,26 +585,22 @@ mod tests {
             Ok(0)
         }
         fn write(&mut self, data: &[u8]) -> Result<()> {
-            let mut seen = self.seen.lock().unwrap();
-            let n = seen.writes.len();
-            if self.fail_writes_from.is_some_and(|from| n >= from) {
-                return Err(Error::device("write failed"));
-            }
-            seen.writes.push((Instant::now(), data.to_vec()));
-            if self.blocked_writes.contains(&n) {
-                drop(seen);
+            let (blocked, n) = self.log_write(data)?;
+            if blocked {
                 std::thread::sleep(self.write_blocks_for);
                 return Err(Error::Io(std::io::ErrorKind::TimedOut.into()));
             }
             self.input.extend((self.answer)(n, data));
             Ok(())
         }
-        fn drain(&mut self, timeout: Duration) -> Result<()> {
-            if self.stuck_queue {
+        fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+            let (blocked, n) = self.log_write(data)?;
+            if blocked {
                 std::thread::sleep(timeout);
-                return Err(Error::Timeout);
+                return Ok(0);
             }
-            Ok(())
+            self.input.extend((self.answer)(n, data));
+            Ok(data.len())
         }
         fn purge(&mut self) -> Result<()> {
             self.seen.lock().unwrap().purges += 1;
@@ -783,7 +788,6 @@ mod tests {
     fn a_write_that_times_out_is_tried_again_at_the_next_qm() {
         let (mut fake, seen) = Fake::new(reading);
         fake.blocked_writes = 0..2;
-        fake.write_blocks_for = Duration::from_millis(5);
         let mut d = device(&QUICK, fake);
         d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
         let packets = packets_to_end(&start(&mut d));
@@ -793,21 +797,20 @@ mod tests {
     }
 
     #[test]
-    fn a_stuck_queue_writes_nothing_and_a_stop_comes_soon() {
+    fn a_blocked_write_ends_nothing_and_holds_no_stop() {
         let (mut fake, seen) = Fake::new(reading);
-        fake.stuck_queue = true;
         fake.blocked_writes = 0..usize::MAX;
         fake.write_blocks_for = BOUND * 2;
         let mut d = device(&QUICK, fake);
         let rx = start(&mut d);
         rx.recv_timeout(BOUND).unwrap();
         std::thread::sleep(QUICK.timeout * 2);
-        assert!(rx.try_recv().is_err(), "a stuck queue ends nothing");
+        assert!(rx.try_recv().is_err(), "a blocked write ends nothing");
         let asked = Instant::now();
         d.stop().unwrap();
         packets_to_end(&rx);
         assert!(asked.elapsed() < Duration::from_millis(500), "{:?}", asked.elapsed());
-        assert_eq!(writes(&seen).len(), 0);
+        assert!(writes(&seen).len() >= 2, "it tries again");
         d.close().unwrap();
     }
 
