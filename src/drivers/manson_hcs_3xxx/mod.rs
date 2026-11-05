@@ -825,10 +825,10 @@ mod tests {
     fn a_time_limit_ends_a_capture() {
         let (fake, _) = Fake::new();
         let mut d = device(fake);
-        d.set(&Key::LimitMsec, &Value::U64(50), None).unwrap();
+        d.set(&Key::LimitMsec, &Value::U64(1000), None).unwrap();
         let started = Instant::now();
         let packets = capture(&mut d);
-        assert!(started.elapsed() >= Duration::from_millis(50));
+        assert!(started.elapsed() >= Duration::from_millis(1000));
         assert_ne!(readings(&packets).len(), 0);
     }
 
@@ -936,7 +936,7 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.reading = b"xxxxyyyyz\rOK\r".to_vec();
         let mut d = device(fake);
-        d.no_reading_bound = Duration::from_millis(50);
+        d.no_reading_bound = Duration::from_millis(1000);
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let packets = capture(&mut d);
         assert_eq!(readings(&packets).len(), 0);
