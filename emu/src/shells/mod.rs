@@ -13,3 +13,5 @@
 //! USBTMC comes next (`docs/ROADMAP.md`, "Emulation plan").
 
 pub use vusb::shells::{ftdi, hid};
+
+pub mod ezusb;

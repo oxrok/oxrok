@@ -34,7 +34,7 @@ const KEYWORDS: &[&str] = &[
 ];
 
 /// The models on vusb so far; the move goes shell by shell.
-const MIGRATED: &[&str] = &["usbrelay", "ftdi-la"];
+const MIGRATED: &[&str] = &["usbrelay", "ftdi-la", "fx2lafw"];
 
 /// The module identifier of a model file name.
 fn ident(name: &str) -> String {

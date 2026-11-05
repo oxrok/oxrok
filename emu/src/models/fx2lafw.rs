@@ -243,10 +243,10 @@ impl Faults {
     /// Takes the option `k=v` when it is a fault; false when `k` is no
     /// fault option.
     fn parse(&mut self, k: &str, v: &str) -> Result<bool> {
-        let count = |v: &str| v.parse::<u32>().map_err(|_| Error(format!("{k}={v}: a count")));
+        let count = |v: &str| v.parse::<u32>().map_err(|_| Error::Invalid(format!("{k}={v}: a count")));
         match k {
             "version" => {
-                let bad = || Error(format!("version={v}: MAJOR.MINOR, each 0 to 255"));
+                let bad = || Error::Invalid(format!("version={v}: MAJOR.MINOR, each 0 to 255"));
                 let (major, minor) = v.split_once('.').ok_or_else(bad)?;
                 let major = major.parse().map_err(|_| bad())?;
                 let minor = minor.parse().map_err(|_| bad())?;
@@ -259,7 +259,7 @@ impl Faults {
                         "version" => CMD_GET_FW_VERSION,
                         "start" => CMD_START,
                         "revid" => CMD_GET_REVID_VERSION,
-                        _ => return Err(Error(format!("stall={name}: version, start or revid"))),
+                        _ => return Err(Error::Invalid(format!("stall={name}: version, start or revid"))),
                     });
                 }
             }
@@ -269,7 +269,7 @@ impl Faults {
                 let mut list = Vec::new();
                 for i in v.split(',').filter(|i| !i.is_empty()) {
                     list.push(i.parse::<u8>().ok().filter(|i| *i <= 3).ok_or_else(|| {
-                        Error(format!("{k}={i}: a string index, 0 to 3"))
+                        Error::Invalid(format!("{k}={i}: a string index, 0 to 3"))
                     })?);
                 }
                 if k == "stall_string" {
@@ -282,6 +282,11 @@ impl Faults {
         }
         Ok(true)
     }
+}
+
+/// Firmware chunks of 4 KiB and transfers of up to 240 KiB.
+pub fn log_rules(_: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules::digest_above(crate::txlog::HASH_ABOVE)
 }
 
 /// A board from the `-o` options: `profile=cypress-fx2|saleae-logic|sigrok-fx2-8ch|usbee-ax`,
@@ -304,17 +309,17 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             "profile" => {
                 profile = *PROFILES.iter().find(|p| p.key == v).ok_or_else(|| {
                     let keys: Vec<&str> = PROFILES.iter().map(|p| p.key).collect();
-                    Error(format!("profile={v}: one of {}", keys.join(", ")))
+                    Error::Invalid(format!("profile={v}: one of {}", keys.join(", ")))
                 })?;
             }
             "flashed" => {
                 flashed = match v.as_str() {
                     "0" => false,
                     "1" => true,
-                    _ => return Err(Error(format!("flashed={v}: 0 or 1"))),
+                    _ => return Err(Error::Invalid(format!("flashed={v}: 0 or 1"))),
                 }
             }
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let mut model = Fx2lafw::new(profile, flashed);
@@ -462,7 +467,7 @@ impl Fx2lafw {
             return Reply::Stall;
         };
         if started {
-            loader.check_ezusb_c(&image, v);
+            ezusb::check_ezusb_c(loader, &image, v);
             // The firmware disconnects and comes back as itself.
             self.stage = Stage::Running(None);
             self.renumerate = true;
@@ -664,11 +669,6 @@ impl DeviceModel for Fx2lafw {
         if let Stage::Running(acq) = &mut self.stage {
             *acq = None;
         }
-    }
-
-    /// Firmware chunks of 4 KiB and transfers of up to 240 KiB.
-    fn log_digest_above(&self) -> Option<usize> {
-        Some(crate::txlog::HASH_ABOVE)
     }
 
     fn take_renumeration(&mut self) -> bool {
