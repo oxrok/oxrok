@@ -248,6 +248,11 @@ impl ScpiTransport for Recorder {
         self.inner.purge()
     }
 
+    /// No step in a fixture: a replay has no late bytes to read.
+    fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        self.inner.discard(timeout)
+    }
+
     fn send(&mut self, data: &[u8]) -> Result<()> {
         self.finish_response(false);
         self.fixture.lock().expect("fixture lock").steps.push(Step::Send(data.to_vec()));

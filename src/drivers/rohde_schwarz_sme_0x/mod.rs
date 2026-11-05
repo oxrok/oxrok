@@ -12,7 +12,10 @@
 //! A scan sends a bare LF for remote control, asks `*IDN?` and closes. An open
 //! and a close send nothing. `--get` asks the device each time, and a setting
 //! is a line with no answer, so a value the device does not take goes unnoticed.
-//! With no `serialcomm=`, the port's line stays what it is, as in C.
+//! With no `serialcomm=`, the port's speed, frame and flow control stay what they
+//! are, as in C, but on Windows and on a HID cable, where it is 9600/8n1. The
+//! manual has 8n1 fixed, 1200 to 115200 baud at the panel, 9600 at reset, and
+//! RTS/CTS preferred to XON/XOFF or none.
 //!
 //! The device acquires nothing and has no channels: it has no limit keys, so a
 //! command line asking for a capture is refused, and a session refuses to start
@@ -29,13 +32,16 @@
 //!   drops the result and says OK (`api.c:203`, `207`).
 //! - A NaN is refused, where it passes `protocol.c:71`'s and `:85`'s comparisons
 //!   and goes out as `FREQ nanHz`.
-//! - An empty reply is no reading, and what is not finite is none, where
-//!   `sr_atod_ascii` gives 0 and `inf`.
-//! - A reply that cannot be the query's answer is an error. See [`protocol`].
-//! - The SME06's top is 6 GHz: [`protocol::MODELS`].
+//! - An empty reply is no reading, where `sr_atod_ascii` gives 0. What is not
+//!   finite is none, and hexadecimal is none, which it takes: both are choices,
+//!   as the manual's replies are neither.
+//! - A `POW?` reply beyond any level the manual's units reach is an error, and the
+//!   next query on a serial port waits for the line. See [`protocol`], also for
+//!   what is left.
+//! - The SME06's top is 6 GHz, by the manual: [`protocol::MODELS`].
 //! - With no `conn=`, only USBTMC devices are probed. C also opens serial ports
 //!   by a table of USB ids (`scpi_serial.c:43-52`), with a line each, none of
-//!   them this instrument's, which has no USB.
+//!   them this instrument's: the manual has the IEC bus and RS-232.
 //! - A setting stays a double, as in the driver. sigrok-cli's `strtof`
 //!   (`session.c:570`) narrows it first, so 123456789 Hz goes out from sigrok-cli
 //!   as 123456792.0 and from here as 123456789.0.
@@ -297,7 +303,7 @@ mod tests {
     use super::protocol::tests::Fake;
     use super::*;
 
-    const IDN: &[u8] = b"Rohde&Schwarz,SME02,12345,1.2\n";
+    const IDN: &[u8] = b"Rohde&Schwarz, SME02,12345, 1.2\n";
 
     fn device(replies: &[Option<&[u8]>]) -> (SmeDevice, Fake) {
         let mut all: Vec<Option<&[u8]>> = vec![Some(IDN)];
@@ -388,6 +394,23 @@ mod tests {
         device.close().unwrap();
         assert!(device.get(&Key::Amplitude, None).is_err());
         assert!(device.link().scpi.is_none());
+    }
+
+    /// `serialcomm` goes with the device, to each open.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_open_uses_the_scans_serialcomm() {
+        use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY).unwrap();
+        grantpt(&master).unwrap();
+        unlockpt(&master).unwrap();
+        let slave = ptsname(&master, Vec::new()).unwrap();
+        let slave = slave.to_str().unwrap().to_owned();
+        let id = scpi::HwInfo::default();
+        let mut device =
+            SmeDevice::new(&id, protocol::MODELS[0], slave, Some("1200/8n1".to_owned()));
+        device.open().unwrap();
+        assert_eq!(rustix::termios::tcgetattr(&master).unwrap().input_speed(), 1200);
     }
 
     #[test]

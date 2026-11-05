@@ -57,6 +57,14 @@ pub trait ScpiTransport: Send {
     fn purge(&mut self) -> Result<()> {
         Ok(())
     }
+    /// Reads what arrives within `timeout` and drops it, leaving no step in a
+    /// recording, for a transport where a read is only a read and sends nothing.
+    /// How much came, or `None` where a transport has no such read: USBTMC asks
+    /// the device for each message, so a look at the line is a request.
+    fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        let _ = timeout;
+        Ok(None)
+    }
 }
 
 /// The identification an instrument gives for `*IDN?`.
@@ -97,6 +105,11 @@ impl Scpi {
     /// Drops what has arrived unasked; see [`ScpiTransport::purge`].
     pub fn purge(&mut self) -> Result<()> {
         self.transport.purge()
+    }
+
+    /// Reads and drops what arrives; see [`ScpiTransport::discard`].
+    pub fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        self.transport.discard(timeout)
     }
 
     /// Sends `command`, adding the newline when it lacks one.
@@ -421,7 +434,9 @@ fn recording(transport: Box<dyn ScpiTransport>) -> Box<dyn ScpiTransport> {
 }
 
 /// [`open`], but with no `serialcomm` a serial port keeps the line it has, as
-/// `scpi_serial_open` does when it has none, where [`open`] has a default.
+/// `scpi_serial_open` does when it has none, where [`open`] has a default. It does
+/// not look in `scpi_serial.c`'s table of USB ids: see
+/// [`crate::serial::open_keeping_line`], also for where it has no line to keep.
 pub fn open_keeping_line(resource: &Resource, serialcomm: Option<&str>) -> Result<Scpi> {
     match (resource, serialcomm) {
         (Resource::Serial(path), None) => {

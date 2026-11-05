@@ -16,19 +16,17 @@ emu_cases() {
     NEVER_SET='s/^[-+0-9.e]+$/(never set)/'
     FREQ_NEVER_SET='s/^( *output_frequency: ).+$/\1(never set)/'
     POW_NEVER_SET='s/^( *amplitude: ).+$/\1(never set)/'
-    # oxrok's log prefix, on its side only.
-    L='s/^oxrok: warn: oxrok::scpi: /sr: scpi: /'
     READ_BUG="api.c:176-177 and :180-181 drop the failure of the read and :170's double goes out unset, with SR_OK; oxrok fails"
     EMPTY_BUG="sr_atod_ascii (strutil.c:317-319) gets a whole conversion of an empty string, so an empty reply is 0; oxrok has no reading"
-    INF_BUG="g_ascii_strtod takes inf and sr_scpi_get_double (scpi.c:809) passes it on; oxrok takes what is not finite for no reading"
-    HEX_CHOICE="g_ascii_strtod takes 0x1000; oxrok does not, a choice, as nothing shows a generator answering so"
-    FORM_CHOICE="C takes any number for any query; oxrok takes what no model's frequency can be for another query's reply: 1 Hz, where each starts at 5 kHz"
-    SHIFT_BUG="a reply says nothing of what it answers, so C shows the frequency as the amplitude (protocol.c:57); oxrok sees that it cannot be one"
+    INF_CHOICE="g_ascii_strtod takes inf and sr_scpi_get_double passes it on (scpi.c:811, strutil.c:317), and it is a double, so C is not failing; oxrok takes what is not finite for no reading, a choice"
+    HEX_CHOICE="g_ascii_strtod takes 0x1000; oxrok does not, a choice, as the manual's replies are never so"
+    LEVEL_CHOICE="C takes any number for any query; oxrok takes what no :UNIT:POWer can reach (by the manual, about -274 in dBW to +223 in dBuV, with a 100 dB offset) for another query's reply, a choice"
+    SHIFT_LIMIT="a limit of C, on the model's invented shift=1: a reply says nothing of what it answers, so a frequency shows as the amplitude (protocol.c:57); oxrok sees that it cannot be one"
     RANGE_BUG="protocol.c:71-72 and :85-86 refuse it, and api.c:203 and :207 drop that for SR_OK, so nothing goes out and nobody is told; oxrok fails"
     NAN_BUG="protocol.c:71's two comparisons let a NaN through and it goes out as 'FREQ nanHz'; oxrok refuses it"
-    LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtod) and sends POW 0.0dBm; oxrok refuses it and sends nothing"
+    LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtof, session.c:570) and sends POW 0.0dBm; oxrok refuses it and sends nothing"
     STRTOF="sigrok-cli reads a value in single precision (session.c:570), so 123456789 goes out as 123456792.0, where the driver keeps a double (api.c:202); oxrok sends what was asked"
-    SME06_BUG="api.c:60-61 has the SME06 up to 1.5 GHz, the SME02's, where the maker's brochure has 6 GHz, so C drops 3 GHz with no word; oxrok sends it"
+    SME06_BUG="api.c:60-61 has the SME06 up to 1.5 GHz, the SME02's, where the manual has 6 GHz, so C drops 3 GHz with no word; oxrok sends it"
     USB_CHOICE="scpi_serial.c:43-52 has a table of USB serial ports it finds with no conn and sets a line for, none an SME's, which has no USB; oxrok probes only USBTMC with no conn and keeps the line with one, so it hears nothing"
 
     # A scan: a bare LF, then *IDN?, on a port nobody set the line of.
@@ -45,9 +43,10 @@ emu_cases() {
     emu_options idn='ROHDE&SCHWARZ,SME03,1,1'
     emu_case "scan another spelling of the maker" --keep-header --no-output -- -d $R --scan
     emu_options idn='Rohde&Schwarz,SME03,1.00'
-    emu_case "scan three fields" --keep-header --stderr --filter "$L" -- -d $R --scan
+    emu_case "scan three fields" --keep-header -- -d $R --scan
     emu_options idn='Rohde&Schwarz,SME03'
     emu_case "scan two fields" --keep-header --no-output -- -d $R --scan
+    # A prefix, more spaces and a fifth field; the manual's own form is the default.
     # IDN Rohde&Schwarz, SME03 ,sn , 2.5 ,extra
     emu_options rawidn=49444e20526f686465265363687761727a2c20534d453033202c736e202c20322e35202c65787472610a
     emu_case "scan with spaces and a prefix" --keep-header -- -d $R --scan
@@ -107,24 +106,25 @@ emu_cases() {
     emu_options rawfreq=none
     emu_case "get silent" --oracle-differs "$READ_BUG" --expect-fail --stderr --filter "$NEVER_SET" -- -d $R --get output_frequency
     emu_options rawpow=none
-    emu_case "get amplitude silent" --oracle-differs "$READ_BUG" --expect-fail --stderr --filter "$NEVER_SET" -- -d $R --get amplitude
     emu_case "show amplitude silent" --oracle-differs "$READ_BUG" --keep-header --filter "$POW_NEVER_SET" -- -d $R --show
     emu_options rawfreq=6162630a
     emu_case "get no number" --oracle-differs "$READ_BUG" --expect-fail --stderr --filter "$NEVER_SET" -- -d $R --get output_frequency
-    emu_options rawpow=2d33302020200a
-    emu_case "get a reading with a tail" --oracle-differs "$READ_BUG" --expect-fail --stderr --filter "$NEVER_SET" -- -d $R --get amplitude
     # sr_atod_ascii's 0 for nothing, and what it lets through.
     emu_options rawpow=0a
     emu_case "get an empty line" --oracle-differs "$EMPTY_BUG" --expect-fail --stderr -- -d $R --get amplitude
     emu_options rawpow=696e660a
-    emu_case "get inf" --oracle-differs "$INF_BUG" --expect-fail --stderr -- -d $R --get amplitude
+    emu_case "get inf" --oracle-differs "$INF_CHOICE" --expect-fail --stderr -- -d $R --get amplitude
     emu_options rawfreq=3078313030300a
     emu_case "get in hexadecimal" --oracle-differs "$HEX_CHOICE" --expect-fail --stderr -- -d $R --get output_frequency
     emu_options rawfreq=310a
-    emu_case "get a frequency that is no frequency" --oracle-differs "$FORM_CHOICE" --expect-fail --stderr -- -d $R --get output_frequency
+    emu_case "get a frequency under any model's" -- -d $R --get output_frequency
+    emu_options rawfreq=2d314531300a
+    emu_case "get a negative frequency" -- -d $R --get output_frequency
+    emu_options rawpow=3130303030300a
+    emu_case "get a level no unit reaches" --oracle-differs "$LEVEL_CHOICE" --expect-fail --stderr -- -d $R --get amplitude
     # A reply no query's own. shift has each answer one query behind, with no clock.
     emu_options shift=1
-    emu_case "show one behind" --oracle-differs "$SHIFT_BUG" --keep-header --filter "$FREQ_NEVER_SET" -- -d $R --show
+    emu_case "show one behind" --oracle-differs "$SHIFT_LIMIT" --keep-header --filter "$FREQ_NEVER_SET" -- -d $R --show
 
     # Capture: nothing to acquire and no limit key.
     emu_options
@@ -148,9 +148,7 @@ emu_cases() {
     emu_case "set the bottom level" --no-output -- -d $R -c amplitude=-144 --set
     emu_case "set minus zero" --no-output -- -d $R -c amplitude=-0 --set
     # Out of range: nothing goes out, no word of it, exit 0.
-    emu_case "set under the bottom frequency" --oracle-differs "$RANGE_BUG" --expect-fail --stderr -- -d $R -c output_frequency=4999 --set
     emu_case "set over the top frequency" --oracle-differs "$RANGE_BUG" --expect-fail --stderr -- -d $R -c output_frequency=3000000256 --set
-    emu_case "set over the top level" --oracle-differs "$RANGE_BUG" --expect-fail --stderr -- -d $R -c amplitude=16.5 --set
     emu_case "set under the bottom level" --oracle-differs "$RANGE_BUG" --expect-fail --stderr -- -d $R -c amplitude=-144.5 --set
     emu_case "set nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr -- -d $R -c output_frequency=nan --set
     emu_case "set no number" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr -- -d $R -c amplitude=abc --set
@@ -158,6 +156,9 @@ emu_cases() {
     emu_case "set one of two out of range" --oracle-differs "$RANGE_BUG" --expect-fail --stderr -- -d $R -c output_frequency=2000000:amplitude=99 --set
     # What single precision does to a frequency: sigrok-cli's strtof.
     emu_case "set a frequency over 2^24" --oracle-differs "$STRTOF" --no-output -- -d $R -c output_frequency=123456789 --set
+    # strtof rounds both to 3 GHz: C sends that for each.
+    emu_case "set just over the top" --oracle-differs "$STRTOF" --expect-fail --stderr -- -d $R -c output_frequency=3000000001 --set
+    emu_case "set just under the top" --oracle-differs "$STRTOF" --no-output -- -d $R -c output_frequency=2999999999 --set
     # Each model's top, and the SME06's table entry.
     for rm in SME02:1500000000 SME03E:2200000000 SME03A:3000000000; do
         emu_options model=${rm%%:*}

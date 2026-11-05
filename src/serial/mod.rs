@@ -368,19 +368,26 @@ fn as_libserialport(file: &std::fs::File) -> Result<()> {
     tcsetattr(file, OptionalActions::Now, &termios).map_err(io)
 }
 
-/// The frame and speed `file` has now, as far as [`Params`] says them: what
-/// [`open_keeping_line`] sets again. `None` when it has no termios or no speed.
+/// The speed, frame and flow control `file` has now, as far as [`Params`] says
+/// them: what [`open_keeping_line`] sets again. `None` when it has no termios or
+/// no speed.
 #[cfg(unix)]
 fn line_of(file: &std::fs::File) -> Option<Params> {
     let termios = rustix::termios::tcgetattr(file).ok()?;
     let baud = termios.input_speed();
-    (baud != 0).then(|| frame_of(baud, termios.control_modes))
+    (baud != 0).then(|| frame_of(baud, termios.control_modes, termios.input_modes))
 }
 
-/// `modes`' frame at `baud`.
+/// `modes`' frame at `baud`, with the flow control `modes` and `input` have.
+/// [`Params`] holds one kind, so RTS/CTS wins over both set, and XON alone comes
+/// back with XOFF as well.
 #[cfg(unix)]
-fn frame_of(baud: u32, modes: rustix::termios::ControlModes) -> Params {
-    use rustix::termios::ControlModes;
+fn frame_of(
+    baud: u32,
+    modes: rustix::termios::ControlModes,
+    input: rustix::termios::InputModes,
+) -> Params {
+    use rustix::termios::{ControlModes, InputModes};
     let size = modes & ControlModes::CSIZE;
     let data_bits = if size == ControlModes::CS5 {
         5
@@ -399,7 +406,14 @@ fn frame_of(baud: u32, modes: rustix::termios::ControlModes) -> Params {
         Parity::Even
     };
     let stop_bits = if modes.contains(ControlModes::CSTOPB) { 2 } else { 1 };
-    Params { baud, data_bits, parity, stop_bits, flow: Flow::None, rts: None, dtr: None }
+    let flow = if modes.contains(ControlModes::CRTSCTS) {
+        Flow::RtsCts
+    } else if input.intersects(InputModes::IXON | InputModes::IXOFF) {
+        Flow::XonXoff
+    } else {
+        Flow::None
+    };
+    Params { baud, data_bits, parity, stop_bits, flow, rts: None, dtr: None }
 }
 
 impl Native {
@@ -564,11 +578,16 @@ pub fn open(name: &str, params: Params) -> Result<Box<dyn Port>> {
     Ok(native)
 }
 
-/// Opens `name` leaving its speed and frame as they are, as `serial_open` does
-/// with no `serialcomm`. [`open`] sets all of it, so the settings are read first,
-/// on a descriptor that stays open through it: a last close would drop the lines
-/// under `HUPCL`. Where they cannot be read (Windows, a HID cable, which has none
-/// to keep) it is 9600/8n1.
+/// Opens `name` leaving its speed, frame and flow control as they are, as
+/// `serial_open` does with no `serialcomm`. [`open`] sets all of it, so the
+/// settings are read first, on a descriptor that stays open through it: a last
+/// close would drop the lines under `HUPCL`. Where they cannot be read (Windows,
+/// a HID cable, which has none to keep) it is 9600/8n1, so on those it does not
+/// keep anything.
+///
+/// It stops at the port: `scpi_serial.c:95-104`'s use of its table, which gives some USB ids
+/// a line of their own when there is no `serialcomm`, is not looked up, which a
+/// driver whose devices are in that table would have to add.
 ///
 /// # Errors
 ///
@@ -754,7 +773,9 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    /// Linux only, as a speed on a pty fails on macOS: `iossiospeed` gives
+    /// `ENOTTY` (serialport's `posix/termios.rs:93-96`).
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_kept_line_is_what_the_port_had() {
         use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
@@ -773,12 +794,19 @@ mod tests {
             drop(open_keeping_line(slave).unwrap());
             assert_eq!(line_of(&held).unwrap().to_text(), text, "kept");
         }
+        for text in ["19200/8n1/flow=1", "19200/8n1/flow=2", "19200/8n1"] {
+            let want = Params::parse(text).unwrap();
+            drop(Native::open(slave, want).unwrap());
+            assert_eq!(line_of(&held).unwrap().to_text(), text);
+            drop(open_keeping_line(slave).unwrap());
+            assert_eq!(line_of(&held).unwrap().to_text(), text, "kept");
+        }
     }
 
     #[cfg(unix)]
     #[test]
     fn the_frame_of_a_port() {
-        use rustix::termios::ControlModes as C;
+        use rustix::termios::{ControlModes as C, InputModes as I};
         for (modes, text) in [
             (C::CS8, "9600/8n1"),
             (C::CS7 | C::PARENB, "9600/7e1"),
@@ -786,8 +814,18 @@ mod tests {
             (C::CS6 | C::CSTOPB, "9600/6n2"),
             (C::CS5, "9600/5n1"),
             (C::CS8 | C::CREAD | C::CLOCAL, "9600/8n1"),
+            (C::CS8 | C::CRTSCTS, "9600/8n1/flow=1"),
         ] {
-            assert_eq!(frame_of(9600, modes).to_text(), text);
+            assert_eq!(frame_of(9600, modes, I::empty()).to_text(), text);
         }
+        for (input, text) in [
+            (I::IXON, "9600/8n1/flow=2"),
+            (I::IXOFF, "9600/8n1/flow=2"),
+            (I::IXON | I::IXOFF, "9600/8n1/flow=2"),
+            (I::ICRNL, "9600/8n1"),
+        ] {
+            assert_eq!(frame_of(9600, C::CS8, input).to_text(), text);
+        }
+        assert_eq!(frame_of(9600, C::CS8 | C::CRTSCTS, I::IXON).to_text(), "9600/8n1/flow=1");
     }
 }

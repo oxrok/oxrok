@@ -76,4 +76,9 @@ impl ScpiTransport for Serial {
     fn purge(&mut self) -> Result<()> {
         self.port.purge()
     }
+
+    fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        let mut buf = [0u8; 256];
+        self.port.read(&mut buf, timeout).map(Some)
+    }
 }

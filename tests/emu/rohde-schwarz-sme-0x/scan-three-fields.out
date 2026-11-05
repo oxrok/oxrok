@@ -1,1 +1,2 @@
-sr: scpi: Short IDN response, assume missing serial number.
+The following devices were found:
+rohde-schwarz-sme-0x - Rohde&Schwarz SME03 1.00 [S/N: Unknown] 
