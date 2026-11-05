@@ -65,8 +65,8 @@
 //!   event point;
 //! - `lines=HEX[,HEX...]`, what monitoring sends first, in turn, ahead of its
 //!   readings;
-//! - `count=N`, the lines monitoring sends per power on, then silence and the
-//!   event point on the next offer;
+//! - `count=N`, the lines monitoring sends per power on, then silence, and the
+//!   event point when the next line would have gone, at a quiet time;
 //! - `period=N`, offers from line to line instead of the interval's own;
 //! - `gap=LINE:POS:OFFERS`, monitoring's line number LINE (from 1) stops after
 //!   POS bytes for that many offers;
@@ -423,14 +423,15 @@ impl Serial for Load {
             return;
         }
         let Some(period) = self.period else { return };
-        if self.config.count.is_some_and(|n| self.sent >= n) {
-            port.mark();
-            return;
-        }
+        let held = self.config.count.is_some_and(|n| self.sent >= n);
         self.offers += 1;
         if self.offers >= period {
             self.offers = 0;
-            self.monitor_line(port);
+            if held {
+                port.mark();
+            } else {
+                self.monitor_line(port);
+            }
         }
     }
 
