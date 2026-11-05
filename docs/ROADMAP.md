@@ -25,7 +25,7 @@
 | 9c | FTDI family: `chronovu-la`, `ftdi-la`, `asix-sigma`, `ikalogic-scanaplus`, `pipistrello-ols` | emulator-verified, per the criteria below. Started 2026-11-03: the FTDI shell (`emu/src/shells/ftdi.rs`) with fault options, and `ftdi-la` as oracle cases (44, gcov 86.4%), ported in batch 4 (46 cases, all full) over `src/ftdi/libftdi.rs`, whose divisor matches the libftdi 1.5 binary on every chip type. Batch 3 modelled the rest; batch 5 (2026-11-03) ported them over `src/ftdi/libftdi.rs`: `chronovu-la` (52 cases, gcov 87.0%), `asix-sigma` (110, 89.4%), `ikalogic-scanaplus` (53, 93.8%), `pipistrello-ols` (107, 97.0%, its model checked against the author's firmware source). All of 9c is ported and emulator-verified; none on hardware, and the chips are inferred from the C drivers |
 | 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%). Ported: `saleae-logic16` (87 cases, batch 4), `kingst-la2016` (151) and `dreamsourcelab-dslogic` (94, batch 5); Batch 4: `lecroy-logicstudio` modelled (83 oracle cases, 56 of them library-verified through `tools/libsigrok-run.c`, as sigrok-cli cannot capture with it; gcov 95.9%). Batch 6 (2026-11-04) ported the rest: `lecroy-logicstudio` (94 cases, gcov 95.9%, its captures full against `tools/libsigrok-run.c`), `hantek-dso` (148, 96.2%), `hantek-6xxx` (102, 91.0%). All of 9d is ported and emulator-verified; none on hardware |
 | 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified. Batch 4 (2026-11-03): `saleae-logic-pro` (102 oracle cases, gcov 97.0%) and `hantek-4032l` (121, 90.7%) modelled. Batch 5: `zeroplus-logic-cube` (121, 87.6%) and `sysclk-lwla` (130, 90.4%) modelled. Batch 6 (2026-11-04) ported `hantek-4032l` (135 cases, gcov 91.4%), `sysclk-lwla` (141, 91.1%), `zeroplus-logic-cube` (134, 87.6%) and `saleae-logic-pro` (107, 97.1%), none on hardware, and modelled `sysclk-sla5032` (142 oracle cases, 91.0%) and `ikalogic-scanalogic2` (134, 88.6%), ready for their ports. Batch 7 (2026-11-04) ported the rest: `uni-t-dmm` raw USB (78 cases, gcov 97.4%), `testo` (70, 91.3%), `sysclk-sla5032` (165, 91.5%), `ikalogic-scanalogic2` (143, 88.6%), `kecheng-kc-330b` (129, 79.3%), `lascar-el-usb` (152, 93.9%), `greatfet` (131, 84.8%). All of 9e is ported and emulator-verified; none on hardware |
-| 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host. Shell, tty harness and pilot done 2026-11-04: `serial-dmm` (29 cases, gcov 71.3%) and the first new driver on it, `korad-kaxxxxp` (130, 88.6%), neither on hardware; about 36 drivers to go. The emulated cases replace the `--hw` EMIT cases' parser and stream checks, not the real UART, adapter driver or handshake lines: keep at least one EMIT case |
+| 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host. Shell, tty harness and pilot done 2026-11-04: `serial-dmm` (29 cases, gcov 71.3%) and the first new driver on it, `korad-kaxxxxp` (130, 88.6%), neither on hardware. Batch 8 (2026-11-05): `ols` (213 cases, gcov 94.7%), `rdtech-dps` with `src/modbus` (226, 89.2%), `rdtech-um` (90, 93.7%), `rdtech-tc` (73, 93.8%), `manson-hcs-3xxx` (171, 91.9%), `fluke-dmm` (159, 98.6%), `atten-pps3xxx` (133, 90.5%), `gwinstek-gpd` (141, 95.6%), none on hardware; about 29 drivers to go. The emulated cases replace the `--hw` EMIT cases' parser and stream checks, not the real UART, adapter driver or handshake lines: keep at least one EMIT case |
 | 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
 | 9h | the odd transports: GPIB shim, parallel port shim, sysfs root, vendor CLI stub, BLE on the ESP32 | each driver either emulator-verified or listed as hardware-only with the reason |
 | 9i | Pico backend for the same models, replacing the C firmware in `hil/pico-hidcable` | one model runs on the host over USB/IP and on the Pico; the bench cases pass on both |
@@ -340,6 +340,28 @@ each with where it belongs:
 - Goldens hold "timeout: the monitored command dumped core", which
   differs on a host with a plain core_pattern and limit 0: normalise it
   in the harness.
+- From batch 8: `korad-kaxxxxp` has the old silence bound on `--time` and
+  `--continuous`, holds its lock across a send, and ignores `-C`.
+- `-O csv` makes up 0 for channels absent from a packet and appends per
+  channel, so a driver sending one packet per reading (`gwinstek-gpd`)
+  mixes units in a column. Decide a format.
+- `-C D-` reads as a range, in both tools, so a channel named `D-`
+  cannot be selected alone: try the exact name first.
+- `-c` checks parsing, scope and access before sending, not a driver's
+  ranges, so `voltage_target=5:current_limit=99` sends the voltage
+  before the refusal.
+- The CLI closes a device only on its happy path, and `ctrlc` is built
+  without `termination`: a device that writes at close (`rdtech-dps`'s
+  panel lock) needs its own `Drop`. Close on every exit.
+- `tools/diffcli.sh`'s `to_cmp` ignores `sed` and `mv` failures: a full
+  disk failed a case falsely, and could pass one.
+- A CP210x shell (`10c4:ea60`, vendor class) and using the FTDI shell
+  for serial models: Manson, GPD and Atten run on a CDC-ACM stand-in, so
+  `cp210x`, `ftdi_sio` and `/dev/ttyUSBn` are not exercised.
+- `p-ols` has the `Busy` on a second capture that `ols` fixed by reaping
+  once the port is back.
+- `-O ols` is absent, and `0x10` and `3.3V` as values are refused where
+  sigrok-cli's `strtof` takes them.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).

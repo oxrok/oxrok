@@ -1,0 +1,33 @@
+FRAME-BEGIN
+V: 5.000 V DC
+I: 0.0 mA DC
+P: 0.00 W
+FRAME-END
+META ovp_active: 1
+FRAME-BEGIN
+V: 5.000 V DC
+I: 0.0 mA DC
+P: 0.00 W
+FRAME-END
+META ovp_active: 0
+META regulation: CC
+META enabled: 0
+FRAME-BEGIN
+V: 0 mV DC
+I: 0.0 mA DC
+P: 0.00 W
+FRAME-END
+META ocp_active: 1
+META enabled: 1
+FRAME-BEGIN
+V: 5.000 V DC
+I: 0.0 mA DC
+P: 0.00 W
+FRAME-END
+META ocp_active: 0
+META regulation: CV
+FRAME-BEGIN
+V: 5.000 V DC
+I: 0.0 mA DC
+P: 0.00 W
+FRAME-END

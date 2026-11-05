@@ -909,6 +909,157 @@ would have cost a user a long afternoon.
 - A hand-run `sigrok-cli --scan` on the emulator's box reads strings
   from every device (testo's scan has no vendor filter) and lands in a
   session's `.tx`.
+- An SI-prefixed value shows float rounding: C multiplies by `powf(10,
+  -3p)`, and dividing is off by one float at kilo. Unit tests written
+  from memory can pin the wrong one; a case with a kV value settles it.
+- Under ECB, a one-bit `flip=` ruins 16 bytes, so its byte position
+  chooses the magic or the checksum check.
+- A driver with no `SR_CONF_CONN` in `devopts` wants `DeviceInfo::conn:
+  None`, or the scan line differs.
+- A bound can hide a limit: three time-limit cases passed with the limit
+  ignored because the bound ended oxrok first. Try a limit's cases
+  against a mutant, and give them a `--timeout` short enough that an
+  ignored limit shows.
+- A model can be late without a clock by counting `Serial::tick` offers;
+  leave margin on both sides, since offers vary with the host.
+- The SI prefix is a float product with `powf`, not a quotient. The
+  difference shows only in the low digits of large values, so include a
+  corner above 2^24 in an energy case.
+- A C write with a timeout is not an error when it times out:
+  `serial_write_blocking` returns 0, and `ret < 0` passes it. Use
+  `Port::write_timeout` where the C gives one. `Port::write`'s 5 s bound
+  turned this into a capture that ended early with exit 0, and
+  `--no-output` alone did not show it: add `--stderr`.
+- Dropping part of a reply leaves its tail on the way, and the tail may
+  hold what looks like an id. The first failed check after a drop must
+  resync, within a bound.
+- Don't search for an id behind a dump before its check: what follows a
+  false id is the real dump.
+- `chunk=` cuts a reply finely but not at a fixed time, so a case on how
+  reads fall on it is a race. Check an `--oracle-differs` on it over
+  many runs; a pause counted in `Serial::tick` offers is stable.
+- When a C driver's two error lines repeat in turn, `.oracle`'s repeat
+  folding can't hold them: run the case at `-l 0` and pin the lines in a
+  `--libsigrok --hangs --filter '3,$d'` case.
+- A bound on a frame limit should count whole dumps, not bytes: a meter
+  sending junk for ever defeats a byte clock.
+- A bound for a Bluetooth link needs to outlast the link's own recovery,
+  so it differs from a USB device's.
+- A C path that only sets a value on one branch needs a model with each
+  branch: only the single-range models showed the multipliers at 0.0.
+- A failed set cannot be `--oracle-differs`; mask the value with
+  `--tx-filter` and pin it in a case that succeeds.
+- A mutant replacing a constant passes a test that compares with the
+  same constant: assert the literal.
+- sigrok-cli's logger exits on a critical, so its error paths skip the
+  close: a driver that writes at open and close shows it. Check what the
+  C really sends before calling a port's missing write a regression.
+- A count of failures is no measure of time, as another slave's reply
+  fails at its first byte: put a bound in elapsed time, and only where
+  nothing else can end the capture.
+- A value's scale can change under the driver: read it before a scaled
+  write, and send the setting that changes it first.
+- A thread a close joins must not block on a queue no one reads:
+  `PacketSink::send_while`.
+- A device whose set frame carries all state has no such thing as a
+  partial setting: read what `-c` then does to the channels it did not
+  name, and to a capture that polls with that frame.
+- `libsigrok-run` has no channel groups, so `-c channel_group=...`
+  cannot run through it. Pin those cases with sigrok-cli up to the
+  close.
+- Check a float setpoint in sigrok-cli's single precision: 3.3 truncates
+  to 329 where double precision gives 330.
+- A `--tx-filter` that lets a full case pass can delete the difference
+  that matters. Before filtering a frame, ask what that frame does to
+  the device.
+- A warning on a frame should compare the frame with what the device
+  reported, not with what the command line named.
+- Decide a "nothing went out" notice at the close, not at the set: a
+  later setting may still send a frame.
+- `emu_options` carries to the following cases, so a case added ahead of
+  others needs their options restated.
+- A mutant loop that restores a file with an older mtime leaves the
+  mutant's binary for the next build: cargo sees nothing new. Touch the
+  sources afterwards. It showed as a good test failing on good code.
+- An `--oracle-bug` hang whose C logs two alternating lines defeats
+  `uniq`: one `.oracle` came to 33 MB. Check golden sizes, and give C a
+  `--time` limit so the case can be `--oracle-differs`.
+- A CP210x device cannot keep its real ids on the CDC shell, as `cp210x`
+  binds them by id whatever the class.
+- A `Mutex` is not fair. A worker that takes it again straight after an
+  empty read can starve a client's get or set for as long as it reads.
+  Pause with the lock free after an empty read, and don't hold the lock
+  over a send to a bounded queue.
+- A bound on silence belongs only where a sample limit alone could end
+  the capture, and in elapsed time. In requests it dies in 70 ms of
+  noise on an hour's log.
+- An interrupt case proves the stop only if the model offers data
+  afterwards. A silent model ends by itself, so use one missed answer
+  (`gap=N`).
+- After a request expires, a setting's reply wait can meet the late
+  reply. Purging doesn't cover a reply still on its way, so recognise a
+  reading by its form and pass over it.
+- A second open of a port the scan left open fails from libserialport
+  0.1.2 (released 2024; its commit is from 2020: check a release, not
+  the commit date). Check a driver's scan for `serial_close`. Stock
+  sigrok-cli then runs only `--scan`, while 0.1.1 users still reach the
+  rest.
+- When a C path is unreachable only because of a lock, a preload that
+  disables the lock through `SIGROK_CLI`, for one model only, runs the
+  unmodified driver. Keep stock cases that pin the failure.
+- A bound on a silent device belongs only where a sample limit alone
+  could end the capture, in elapsed time. Test it with a time limit
+  above it, and with a late reply on a fake port.
+- Assert literal times, not the constant, or a changed constant passes.
+  Assert on the least gap, as a loaded box only stretches one.
+- A driver cannot see the output module: `Device::note_output` tells it,
+  for a warning.
+- A `reply[0] = 0` before a read clears one byte: after a failed read
+  `sscanf` can parse the rest of the old reply.
+- An answer list in a model is also consumed by the scan: give the scan
+  its own first entry.
+- A crash that depends on what the heap holds can pass by luck. Repeat a
+  crash case before pinning it, and try
+  `GLIBC_TUNABLES=glibc.malloc.perturb=165`, which made this one
+  certain. Then `--oracle-bug --oracle-env` pins it. A run or two of
+  `--expect-fail` proves nothing.
+- A filter that keeps only the driver's lines also hides a panic. Delete
+  other sources' lines by name.
+- A filter that hides a difference needs a unit test beside it, or a
+  mutant in the hidden part survives.
+- `emu_hex` goes through `printf`: write `%` as `%%`, or the byte is
+  lost and the case tests something else. gcov showed it.
+- A test helper that drains packets needs an overall deadline: a
+  per-packet timeout never fires on a capture that keeps sending, so a
+  limit mutant hangs instead of failing.
+- A `Drop` in a fake must not unwrap a lock: a failed test holding it
+  aborts the whole run.
+- To test an order around `End`, use a queue of one left unread: `End`
+  cannot be sent, so what must come before it has to be visible. A loop
+  of quick restarts passed the mutant 300 times.
+- A driver that drains each command stops at the first one a device
+  won't read. That makes the closing_wait case its own path.
+- A "--unplug model" point marked inside the write that arms a capture
+  isn't quiet: the tool is still draining. Mark it from `Serial::tick`.
+- A device's surplus after a limit keeps arriving while the tool writes,
+  so keep a capture within one 128-byte bulk IN when the driver stops
+  reading early.
+- `in-stall=` on a protocol that doesn't ask again loses the reply by
+  timing.
+- SIGINT mid capture races a silence-ended capture: test that drop on a
+  fake Port.
+- A count sent minus 1 in a narrower field wraps at the cap as well as
+  at 0: try the limit just past the field, not only a large one.
+- A "finished?" check on a worker can say no just after End. The
+  resource being back says it is done.
+- A time bound needs tests from both sides: a constant of 2000 ms passed
+  every test.
+- A signal lands in the serial crate's ppoll as EINTR: `Native::read`
+  takes it as no data.
+- Only SR_TRIGGER_ONE sets a value in ols: don't reuse a sibling's
+  conversion unread.
+- A shared scratchpad needs unique file names: a generic one can run
+  another agent's script in its worktree.
 
 ## Porting a decoder
 

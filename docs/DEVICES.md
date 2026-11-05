@@ -1942,6 +1942,202 @@ A capture that loses the device, or ends for silence, exits 0.
 No serial replay fixture, as the harness records USB and HID only. Not
 checked on hardware.
 
+## RDTech TC66C (rdtech-tc)
+
+`rdtech-tc` (TC66C): emulated and ported, CDC-ACM model `rdtech-tc`, 73
+cases (63 full, 5 `--oracle-bug`, 5 `--oracle-differs`), gcov 93.8%.
+Options: `name=`, `fw=`, `sn=`, `v= i= dp= dm= e0= e1=`,
+`flip=REPLY:BYTE`, `cut=REPLY:LEN`, `extra=REPLY:N`, `again=REPLY`,
+`late=REPLY:OFFERS`, `answers=N`, plus the shell's. `conn=` is required.
+Replies are AES-256 ECB under a key shared by all meters. It is a
+protocol fact from the wiki, TC66C.py and protocol.c. Not emulated:
+failed writes in the scan and between polls, read errors. No USB ids are
+known for the real meter. Bluetooth is not available. `-C D-` cannot be
+selected, in either tool.
+
+## RDTech UM series (rdtech-um)
+
+RDTech UM24C, UM25C, UM34C (`rdtech-um`). Energy meters that report over
+Bluetooth SPP; use `conn=/dev/rfcommN`, as `bt/rfcomm/MAC` is not
+supported. Default 115200/8n1, which an RFCOMM tty ignores. Channels V,
+I, D+, D-, T, E, one frame per poll at about 100 ms; use `--frames` or
+`--time`. `-C D-` is refused, as in sigrok-cli (the dash reads as a
+range). Emulator-verified on a CDC-ACM stand-in (the real meters have no
+USB data side); not verified on hardware. The model's layout comes from
+the sigrok wiki and the C driver. 90 cases: 72 full, 7 `--oracle-bug`, 7
+`--oracle-differs`, 4 library; gcov 93.7%.
+
+## RDTech DPS and RD power supplies (rdtech-dps, rdtech-rd)
+
+rdtech-dps, rdtech-rd: model `rdtech-dps` on the CDC-ACM shell, a Modbus
+RTU slave behind a UART; 226 cases, 137 full; gcov 89.2%; not on
+hardware. libsigrok leaves a one-range model's multipliers at 0.0, so
+all but the RD6012P read inf or -nan and write 0; oxrok uses the scale
+in `api.c`'s table. That table is unproven in places: `api.c` and
+esphome-dps have the DPS5015's and DPS5020's current in hundredths,
+rdserialtool in thousandths on every model (tested on a DPS5005 only),
+and the DPS5020 V1.2 PDF was not read. Power is register 13 in
+hundredths, as in C, where the `riden` library has thousandths on the P
+models and register 12 as a high word. The DPS8005's 5 A is `api.c`'s;
+the sigrok wiki says 5.1 A. The modbus layer is `src/modbus`.
+
+An open of a DPS locks its panel, and a close or a drop unlocks it. An
+unplug, SIGTERM, SIGHUP, a SIGINT before the handler is set, or a crash
+leaves it locked; the sigrok wiki says to hold the dial for 3 s to
+recover the panel.
+
+## Atten PPS3203T-3S (atten-pps3203)
+
+Ported and emulated on the CDC-ACM shell. Model `atten-pps3xxx`
+(`vset=`, `iset=`, `output=`, `ocp=`, `mode=`, `load=`, `replies=`,
+`answers=`, `setters=`, `uart=`, and the shell's faults), 133 cases,
+2026-11-05: 86 full, 20 `--oracle-differs`, 14 `--oracle-bug`, 13
+library. gcov 90.5% of the driver. The real device is an FT232R; the
+model is a CDC-ACM stand-in, as ftdi_sio would take the real ids. Not
+checked on hardware.
+
+A frame sets all setpoints, outputs, protection and mode at once, and
+setpoints cannot be read back. So settings queue and go out as one frame
+at the close or the next poll, and an output never comes on ahead of its
+setpoints. What no option named goes out as 0 V, 0 A and off.
+
+Polls are such frames too: **a capture zeroes and turns off whatever its
+command line did not set**. This is as in C with stdin held open;
+sigrok-cli under an EOF on stdin stops before its first poll and leaves
+the supply alone, and oxrok does not read stdin, so it sends that poll.
+A warning says what the frame changes from what the device reported
+(outputs going off, protection, mode) and gives the setpoints it writes.
+
+As in C, only a change from what this run set makes a frame. `-c
+enabled=off` alone on an output that is on sends nothing and the output
+stays on, and oxrok says so on stderr at the close. Likewise
+`ocp_enabled=off` and `channel_config=Independent`. Sending any setpoint
+with it sends a frame, which sets everything.
+
+That the `aa aa` frame of a scan and a capture's start changes nothing
+is an inference. `api.c:116` says only that the vendor software scans
+so; biot's trace on EEVblog shows that software sending it ahead of its
+`aa 20` frames, with a sum of `54` where C sends 0; pps-tools calls byte
+1 an unused address and the sigrok wiki has it fixed at `20`, so neither
+knows of an `aa` command. pps-tools polls with set frames as well, but
+programs from a user's file that gives each channel's values.
+
+`--get` and `--show` give the scan's answer for `voltage`, `current`,
+`enabled`, `ocp_enabled` and `channel_config`. `voltage_target` and
+`current_limit` give what this run set, 0 if nothing. `--samples`,
+`--time` and `--frames` are refused, as in C: a capture is
+`--continuous` and ends on Ctrl-C, or after 2 s without an answer (exit
+0 for now). An answer without its header, or with readings over twice a
+channel's range, gives no reading and leaves the state alone.
+
+## Manson HCS-3xxx power supplies (manson-hcs-3xxx)
+
+Ported and emulated on the CDC-ACM shell, not run on hardware. Model
+`manson-hcs-3xxx` (`model=`, `gmod=`, `vmax=`, `imax=`, `vset=`,
+`iset=`, `output=`, `load=`, `gmod-raw=`, `gmax-raw=`, `getd-raw=`,
+`ack-raw=`, `answers=`, `gap=`, `setters=`). 171 cases: 134 full, 17
+`--oracle-bug`, 20 `--oracle-differs`; gcov 91.9%. A real one is a
+CP2102 at 9600/8n1 on /dev/ttyUSBn; the model is CDC-ACM behind a UART
+at that line. `voltage_target` and `current_limit` read 0 until set, as
+nothing asks the device, so a library client that gets `current_limit`
+to put it back writes `CURR000`. `enabled` is read from the voltage, so
+a short circuit reads as off. A `GMAX` that makes no number or is not
+finite is a limit of 0; a finite one above the rating is not caught. A
+reading must be eight digits and a mode, by the wiki's format and no
+recording: firmware that sends another form gives warnings and no
+samples. libsigrok waits for ever on a silent device, overruns its
+buffer on over 50 bytes with no OK, and joins a fragment of a reply to
+the next, each reporting made-up values.
+
+## GW Instek GPD series (gwinstek-gpd)
+
+GW Instek GPD-2303S and GPD-3303S (`gwinstek-gpd`): ported and emulated
+on the CDC-ACM shell, model `gwinstek-gpd`, 141 cases: 107 full, 17
+`--oracle-differs`, 15 `--oracle-bug`, 2 oxrok-only. gcov 95.6% of the
+driver. Every case but the four named `stock` runs sigrok-cli with
+locking disabled. From libserialport 0.1.2 (2024-09-10), stock
+sigrok-cli can only `--scan` this driver: `api.c:255` returns with the
+port open, and `dev_open`'s second open is refused by the exclusive open
+(`serialport.c:589`, `:599`, commit ffbfc5c). It was seen with
+libserialport-unreleased-104-g21b3dfe. On 0.1.1 the driver works, so the
+shim compares a path real users reach there. The scenario builds a
+preload that makes `flock` and `ioctl(TIOCEXCL)` no-ops, applied only to
+this model's sigrok-cli through a wrapper; the C driver is unmodified.
+The stock cases pin the failure with its stderr. oxrok closes the port
+after the scan and opens it again. Csv is a known limit: one packet per
+reading gives four rows a round, a current under the volts' label and
+made-up zeros, and the driver warns. Never on hardware; the vendor
+manual could not be read; line ends and reply shape are from PyGPD3303S.
+
+## Fluke meters (fluke-dmm)
+
+Fluke 87, 89, 187, 189, 199B, 287, 289 (`fluke-dmm`): ported and
+emulated on the CDC-ACM shell. Model `fluke-dmm` (`model=`,
+`uart=LINE|native`, `id=HEX|none`, `qm=HEX`, `data=HEX`, `answers=`, and
+the shell's faults), 159 cases, 2026-11-05: 148 full, 5
+`--oracle-differs`, 5 `--oracle-bug`, 1 library. gcov 98.6% of the
+driver. Not emulated: a write failing at the first QM or a `QM N`
+(`api.c:220-221`, `protocol.c:73`; an unplug there is a race), and the
+real IR cable, which is a USB serial adapter, not CDC-ACM.
+
+A scan tries 115200, 9600, 1200 Bd, three IDs each, so a 199B takes
+about a second and a half unless given `serialcomm=1200/8n1`. Sources
+disagree on the 8x and 18x text: a copy of Fluke's specification shows
+`+47.66 KOhms` and `-121.43 VDC`, which the C driver reads as 47.66 Ω
+and as no sample, while its list of units has what the driver expects.
+No recording was found: check a reading against the display. A 199B
+reads as fast as the meter answers, each answer asking for the next,
+plus a QM each second.
+
+A meter that gives no sample is waited for without a bound, unlike the
+other serial ports: `protocol.c:127` has the retry there to recover from
+temporary disconnects. So `--samples` on a silent meter, or on one that
+answers and never has a sample (`BLANK`, a 199B reading exactly 0, which
+is refused as in C with "Invalid float"), ends only at a time limit,
+Ctrl-C or a port that is gone: use `--time`. A meter that stops taking
+bytes costs each write 1 ms, as in C, and is logged. Only a port that is
+gone ends a capture.
+
+## Open Bench Logic Sniffer (ols)
+
+`ols`: the Open Bench Logic Sniffer and SUMP compatibles on a serial
+port. Ported (src/drivers/ols), sharing `p-ols`' commands, metadata
+reader, channel groups and sample decoder.
+`tools/emu/openbench-logic-sniffer.sh` runs 213 cases: 184 full, 10
+`--oracle-bug`, 15 `--oracle-differs`, 4 library; gcov 94.7%. Model
+`openbench-logic-sniffer` on the CDC-ACM shell (`04d8:fc92`), options
+id=, meta=, name=, fpga=, channels=, rate=, protocol=, memory=, slow=,
+sends=, uart=. Facts from jawi/ols, gillham/logic_analyzer, pysump and a
+Pipistrello fork's Verilog (hand read); the board's own 3.07 source not
+read, no bench.
+
+Where oxrok differs from libsigrok:
+- A board without a channel count captures (C's sample size of 0 hangs
+  its output).
+- A capture with no sample sends no packet (C crashes).
+- No marker beyond or before the samples (C crashes, or sends bytes from
+  before its buffer).
+- Without a memory key the read count comes from the limit, up to
+  0xffff, with a warning beyond it (C always sends 0xffff).
+- Where C's delay is 0 and goes out as 0xffff, one unit goes out, with
+  the marker from that delay, on the oldest word if the whole read
+  follows the match. Any other delay is C's.
+- Without RLE a limit that cuts the read doesn't move the marker. Under
+  RLE the marker is C's.
+- A drain gives up after 1 s.
+- A board below 200 kHz starts at the highest rate the clock gives at or
+  below its maximum (C reads 0 Hz, divider 0).
+
+Decisions with no evidence: the 1 s drain bound, counting from the limit
+without a memory key, one unit for C's delay of 0, and a slow board's
+starting rate.
+
+Unverified, from the fork's source only:
+- Under RLE the delay counts stored words, so C's marker sample is not
+  the match when runs or a limit are involved. oxrok keeps C's.
+- The driver leaves unused stages cleared, which raises the level at the
+  first word, so a multi-stage trigger waits only for its later stages.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

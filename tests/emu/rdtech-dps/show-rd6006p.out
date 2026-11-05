@@ -1,0 +1,21 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+    modbusaddr
+rdtech-rd - RDTech RD6006P v1.16 [S/N: 12345] with 3 channels: V I P
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    voltage: 0.000000 (current)
+    voltage_target: 0.000000, 60.000000, 0.001000
+    current: 0.000000 (current)
+    current_limit: 0.000000, 6.000000, 0.000100
+    enabled: on, off (current)
+    regulation: CV (current)
+    ovp_active: on, off (current)
+    ovp_threshold: 40.000000 (current)
+    ocp_active: on, off (current)
+    ocp_threshold: 6.000000 (current)

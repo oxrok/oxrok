@@ -69,6 +69,7 @@ pub mod ezusb;
 pub mod formats;
 pub mod ftdi;
 pub mod hid;
+pub mod modbus;
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub mod pydecode;
 pub mod scpi;
@@ -104,6 +105,7 @@ pub mod drivers {
     pub mod ols;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
+    pub mod rdtech_dps;
     pub mod rdtech_tc;
     pub mod rdtech_um;
     pub mod rigol_ds;
@@ -129,6 +131,8 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
+    registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
+    registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));

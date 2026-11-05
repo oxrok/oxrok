@@ -718,6 +718,8 @@ kernel until it detaches.
   without DRV runs the case unbound, with a note.
 - The `.oracle` of `--oracle-bug` masks the address in the core's
   "device N.M acquisition." line.
+- `--oracle-env VAR=VALUE` sets a variable in sigrok-cli's environment
+  alone, to make a crash that depends on the heap come every time.
 - Which signal killed sigrok-cli is not compared, by decision of
   2026-11-05: a case needs only that it failed, and its stderr. To pin
   signals again, revert the commit found by
