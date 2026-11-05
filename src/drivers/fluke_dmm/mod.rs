@@ -717,7 +717,7 @@ mod tests {
         d.set(&Key::LimitMsec, &Value::U64(400), None).unwrap();
         let rx = start(&mut d);
         let packets = packets_to_end(&rx);
-        assert_eq!(values(&packets), []);
+        assert_eq!(values(&packets), [0.0_f32; 0]);
         let seen = seen.lock().unwrap();
         assert!(seen.writes.len() >= 2, "{}", seen.writes.len());
         for pair in seen.writes.windows(2) {

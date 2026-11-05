@@ -304,8 +304,8 @@ $B"
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 output=1 chunk=1
     emu_case "one byte per transfer" -- -d $K --samples 2
-    emu_options setters=0 output=1 in-stall=1
-    emu_case "a stalled read" -- -d $K --samples 2
+    emu_options setters=0 output=1 in-stall=2
+    emu_case "a stalled read" --keep-header -- -d $K --scan
     emu_options setters=0 stall=line
     emu_case "line coding stalled" --keep-header -- -d $K --scan
     emu_options setters=0 stall=lines

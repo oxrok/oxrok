@@ -270,8 +270,8 @@ $A" --expect-fail -- -d $K -g CH1 -c voltage_target=32.1 --set
     emu_case "samples with CR" -- -d $K --samples 2
     emu_options setters=0 output=1 eol=lf
     emu_case "samples with LF" -- -d $K --samples 2
-    emu_options setters=0 output=1 in-stall=1
-    emu_case "a stalled read" -- -d $K --samples 2
+    emu_options setters=0 output=1 in-stall=9
+    emu_case "a stalled read" --keep-header -- -d $K --scan
     emu_options setters=0 stall=line
     emu_case "line coding stalled" --keep-header -- -d $K --scan
     emu_options setters=0 stall=lines

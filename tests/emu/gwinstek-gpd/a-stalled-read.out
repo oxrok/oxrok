@@ -1,8 +1,2 @@
-CH1: 0 mA
-CH1: 12.000 V DC
-CH2: 0 mA
-CH2: 5.000 V DC
-CH1: 0 mA
-CH1: 12.000 V DC
-CH2: 0 mA
-CH2: 5.000 V DC
+The following devices were found:
+gwinstek-gpd - GW Instek GPD-2303S with 2 channels: CH1 CH2

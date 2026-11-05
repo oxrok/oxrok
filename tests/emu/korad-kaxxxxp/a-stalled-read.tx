@@ -13,13 +13,3 @@ bulk_out 02 56534554313f -> 6
 bulk_in 82 5 -> 31322e3334
 bulk_out 02 5354415455533f -> 7
 bulk_in 82 1 -> 51
-bulk_out 02 494f5554313f -> 6
-bulk_in 82 5 -> 302e303030
-bulk_out 02 564f5554313f -> 6
-bulk_in 82 5 -> 31322e3334
-bulk_out 02 5354415455533f -> 7
-bulk_in 82 1 -> 51
-bulk_out 02 494f5554313f -> 6
-bulk_in 82 5 -> 302e303030
-bulk_out 02 564f5554313f -> 6
-bulk_in 82 5 -> 31322e3334

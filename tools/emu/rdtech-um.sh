@@ -34,7 +34,7 @@ emu_cases() {
         emu_options model=$m chunk=1
         emu_case "scan $m a byte per transfer" --keep-header -- -d $U --scan
         emu_options model=$m in-stall=1
-        emu_case "$m a stalled read" -- -d $U --frames 2
+        emu_case "$m a stalled read" --keep-header -- -d $U --scan
     done
     emu_options model=um24c id=0d4c
     emu_case "scan um34c id without its sum" --stderr --filter "$L" --keep-header -- -d $U --scan

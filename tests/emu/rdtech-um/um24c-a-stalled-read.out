@@ -1,12 +1,2 @@
-V: 5.12 V
-I: 250 mA
-D+: 0.59 V
-D-: 0.58 V
-T: 27 °C
-E: 1.235 Wh
-V: 5.12 V
-I: 250 mA
-D+: 0.59 V
-D-: 0.58 V
-T: 27 °C
-E: 1.236 Wh
+The following devices were found:
+rdtech-um - RDTech UM24C with 6 channels: V I D+ D- T E

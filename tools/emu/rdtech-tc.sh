@@ -170,7 +170,7 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_options chunk=100
     emu_case "chunks of 100" -- -d $K --frames 2
     emu_options in-stall=1
-    emu_case "a stalled read" -- -d $K --frames 2
+    emu_case "a stalled read" --keep-header -- -d $K --scan
     emu_options stall=line
     emu_case "line coding stalled" --keep-header -- -d $K --scan
     emu_options stall=lines

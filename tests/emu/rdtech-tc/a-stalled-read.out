@@ -1,12 +1,2 @@
-V: 5.0136 V
-I: 124.46 mA
-D+: 0.62 V
-D-: 0.61 V
-E0: 1.001 Wh
-E1: 2.002 Wh
-V: 5.0149 V
-I: 125.47 mA
-D+: 0.62 V
-D-: 0.61 V
-E0: 1.002 Wh
-E1: 2.004 Wh
+The following devices were found:
+rdtech-tc - RDTech TC66 1.14 [S/N: 00001234] with 6 channels: V I D+ D- E0 E1
