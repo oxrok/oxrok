@@ -15,7 +15,8 @@
 //! `conn=` names the port and `serialcomm=` overrides 9600/8n1. A scan asks
 //! `GMOD`, `GETD` and `GMAX` and sets nothing. `--get` and `--show` answer what
 //! is known and send nothing, so `voltage_target` and `current_limit` read 0
-//! until they have been set: as in C, as no command of its reads them.
+//! until they have been set: as in C, as no command of its reads them. A
+//! library client that gets `current_limit` to put it back writes `CURR000`.
 //!
 //! A capture asks `GETD` again as soon as the last reply has come, or
 //! 500 ms after an unanswered one, and a sample is a voltage and a current.
