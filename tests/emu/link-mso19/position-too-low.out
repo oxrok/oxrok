@@ -1,0 +1,2 @@
+sr: link-mso19: Trigger position (-10.500000) should be between -10.0 and 1.0
+Failed to set device option 'horiz_triggerpos': invalid argument.

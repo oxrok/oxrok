@@ -1,0 +1,12 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+link-mso19 - Link Instruments MSO-19 r2 [S/N: 428743435001200012342874343500] with 9 channels: 0 1 2 3 DSO 4 5 6 7
+Channel groups:
+    DSO: channel DSO
+    LA: channels 0 1 2 3 4 5 6 7
+Supported configuration options on channel group LA:
+    triggerslope: F->T (current), T->F
+    logic_threshold: 1.2V Logic, 1.5V Logic, 1.8V Logic, 2.5V Logic, 3.0V Logic, 3.3V/5.0V Logic (current)

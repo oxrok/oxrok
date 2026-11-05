@@ -1,0 +1,4 @@
+sr: link-mso19: Invalid status byte 7f
+sr: session: Could not start link-mso19 device (null) acquisition.
+sr: session: Cannot remove non-existing event source.
+Failed to start session.
