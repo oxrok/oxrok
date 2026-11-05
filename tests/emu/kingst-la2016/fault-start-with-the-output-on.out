@@ -1,0 +1,3 @@
+High USB stream bandwidth: 3200Mbps.
+Cannot write 0 bytes to USB: LIBUSB_ERROR_PIPE.
+The capture failed with the output on: it was left on.

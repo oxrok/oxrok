@@ -265,6 +265,11 @@ fn send_configs(device: &mut dyn Device, items: &[ConfigItem]) -> Result<()> {
 }
 
 impl ConfigPlan {
+    /// Whether this switches an output on.
+    pub fn turns_on(&self) -> bool {
+        self.enables.iter().any(|item| item.is_enabled(true))
+    }
+
     /// Sends everything but what switches an output on, stopping at the
     /// first error.
     pub fn send_settings(&self, device: &mut dyn Device) -> Result<()> {
@@ -667,6 +672,20 @@ mod tests {
             assert!(matches!(&e, Error::Arg(m) if m == "Invalid channel group ''"), "{e}");
             assert_eq!(sent, [] as [&str; 0]);
         }
+    }
+
+    #[test]
+    fn a_plan_knows_whether_it_turns_an_output_on() {
+        use clap::Parser as _;
+        let dev = Recorder::new(&std::sync::Arc::default());
+        let turns_on = |c: &str| {
+            let args = Args::try_parse_from(["oxrok", "--set", "-c", c]).unwrap();
+            plan_configs(&dev, &args).unwrap().turns_on()
+        };
+        assert!(turns_on("enabled=on"));
+        assert!(turns_on("channel_group=R1:enabled"));
+        assert!(!turns_on("enabled=off"));
+        assert!(!turns_on("voltage_target=5"));
     }
 
     #[test]

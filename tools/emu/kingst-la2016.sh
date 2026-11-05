@@ -344,6 +344,9 @@ emu_cases() {
     emu_case "fault download start" --oracle-bug "protocol.c:1654-1657 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-reset@2
     emu_case "fault stream bulk reset" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    # With the output on: as sigrok-cli it stays on, and oxrok says so.
+    kingst_options mcu=1 stall=bulk-reset@2
+    emu_case "fault start with the output on" --oracle-bug "it says nothing of the output it leaves on" --expect-fail --stderr --filter "$N; /kingst-la2016: |left on/!d; s/^.*kingst-la2016: //" -- -d $K -c channel_group=PWM1:enabled=on -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=write:0x00@1
     emu_case "fault stream run" --oracle-bug "protocol.c:1613-1617 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-start@1

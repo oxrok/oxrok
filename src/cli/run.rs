@@ -317,6 +317,11 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     for mut d in devices {
         let _ = d.close_after_capture();
     }
+    // As sigrok-cli and as after a finished capture: the state before is not
+    // known, and the device may be gone. So say it, whatever the -l.
+    if result.is_err() && plan.turns_on() {
+        eprintln!("The capture failed with the output on: it was left on.");
+    }
     result?;
     pipeline.check_limit(limit_samples);
     Ok(())
