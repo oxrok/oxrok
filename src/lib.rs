@@ -78,6 +78,7 @@ pub mod usb;
 /// The device drivers, one module per family.
 pub mod drivers {
     pub mod asix_sigma;
+    pub mod atten_pps3xxx;
     pub mod chronovu_la;
     pub mod dcttech_usbrelay;
     pub mod demo;
@@ -116,6 +117,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
+    registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));

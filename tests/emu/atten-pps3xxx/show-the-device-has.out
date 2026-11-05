@@ -10,5 +10,5 @@ Channel groups:
     CH3: channel CH3
 Supported configuration options across all channel groups:
     continuous: on, off
-    channel_config: Independent (current), Series, Parallel
-    ocp_enabled: on, off (current)
+    channel_config: Independent, Series (current), Parallel
+    ocp_enabled: on (current), off
