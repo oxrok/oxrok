@@ -83,6 +83,7 @@ Emulator and replay only, never run on hardware:
 | `lecroy-logicstudio` | 94 | 95.9% |
 | `manson-hcs-3xxx` | 171 | 91.9% |
 | `gwinstek-psp` | 154 | 92.5% |
+| `icstation-usbrelay` | 43 | 83.0% |
 | `juntek-jds6600` | 229 | 89.2% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |

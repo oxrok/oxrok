@@ -2322,6 +2322,56 @@ on protocol.c's comment, and the frame at 10 A is a guess. The model
 answers at once, so a real unit's timing is tested only with a
 byte-paced fake in the unit tests.
 
+## ICStation USB relay boards (icstation-usbrelay)
+
+**One command per power cycle, and a second can switch relays.**
+`--show`, `--get`, `--set` and a capture each put the board in command
+mode at their open, even when they then fail (a bad group, a capture
+with no limit). Only a power cycle leaves it; a `--scan` alone doesn't
+enter it. The next run's identification request is then a relay byte. A
+run meant to switch a relay off can switch relays on: all four on an
+ICSE012A, R1 to R4, R6 and R8 on an ICSE014A. It then exits 1 after a
+second, warning that relays may have switched. The request is both the
+probe and the harm, so it can't be held back. libsigrok does the same,
+without the warning.
+
+`icstation-usbrelay` switches the ICSE012A (4 relays), ICSE013A (2) and
+ICSE014A (8), through a USB serial port (a PL2303, `067b:2303`, per
+sigrok's wiki). `conn=` is required; `serialcomm=` defaults to 9600/8n1.
+Each relay is a group `R1` to `Rn` with `enabled`; without a group
+`enabled` switches them all.
+
+    oxrok -d icstation-usbrelay:conn=/dev/ttyUSB0 -g R2 --set -c enabled=on
+
+The relays can't be read: a get reads what this process last set, from
+all off. Two sources say all are on at power up; none measures it.
+
+**ICSE013A polarity is unsettled.** oxrok keeps libsigrok's wire, 0 for
+on. The programs written for that board (`brightlight`, `icserelay`,
+`piswitcher`) and the `delendanet` post have 1 for on. If they are
+right, `-g R1 --set -c enabled=on` sends `02`, turning R2 on and R1 off
+while `--get` says R1 is on, and `enabled=off` for all sends `03`,
+turning both on. On the ICSE012A and ICSE014A the sources mostly have 0
+for on; `icsectl` has 1 on all three (it also swaps two ids) and
+`LalunePierr0t/usbrelay` says both. No recording settles it.
+
+**A reopen sends no second start**, unlike libsigrok, on outside
+evidence and with no recording. A library client that closes and reopens
+one device object keeps its relays: libsigrok's reopen, by that
+evidence, sets R1 off and R2 to R4 on behind its cache on an ICSE012A.
+The cost: the board has only USB power, so a replug between a close and
+a reopen is a power cycle. oxrok then sends no start, a set returns Ok,
+the cache says on, and nothing switched.
+
+The model is `emu/src/models/icstation-usbrelay.rs`, a CDC-ACM stand-in
+with test ids; cases `tools/emu/icstation-usbrelay.sh`, goldens
+`tests/emu/icstation-usbrelay` (43 cases: 36 full, 2 `--oracle-bug`, 3
+`--oracle-differs`, 1 `--libsigrok`, 1 `--no-oracle-only`). gcov of the
+C driver over them is 83.0%; the rest is argument checks, defaults that
+libsigrok refuses first, and write failures, which an unplug reaches
+only by a race and a fake `Port` covers. No factory firmware source was
+found. Not run on a real board.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

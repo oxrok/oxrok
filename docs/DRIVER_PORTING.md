@@ -298,6 +298,24 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A `break` in a first switch can fall into a second whose default
+  refuses: the key is advertised and never answered. sigrok-cli's scan
+  line loses its `:conn=` through the same get (`show.c:314`), so a bare
+  scan line can be a bug, not a choice of the driver's.
+- When the probe itself is the harm, it can't be refused: warn on the
+  path that shows it, and pin the warning in a `--no-oracle-only` case,
+  since a filter may not hide it and `--oracle-differs` ignores stderr.
+  Cases that pass through it then stop comparing stderr, so say which C
+  line no case compares any more.
+- A byte protocol with modes: a request is only a request in its mode. A
+  model option (`started=1`) stands in for the earlier run, since the
+  harness replaces the model before each tool.
+- Before a claim that no program does something, read them all. Say
+  which way a source reads when its names are swapped: read the bits,
+  and list a source that says both as saying both.
+- A reopen can miss the scan's settings: a case with the model behind
+  another line (`uart=`) and a setting through the open is what kills
+  it, since a scan-only case never reopens.
 - A stop can land with a reply on its way, and at 2400 baud it usually
   does. Note what is unread, and wait it out and purge ahead of the next
   command, or every later read is one reply behind. A fake that answers

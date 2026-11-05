@@ -576,6 +576,21 @@ Deliberate, and kept small:
 - `gwinstek-psp`: a `--get` after a set answers what was set until the
   next `L`; with the output on, a target set stays as set, as no `L`
   tells it. libsigrok answers the last `L`.
+- `icstation-usbrelay`: **a board can be identified once per power
+  cycle.** A run after any `--show`, `--get`, `--set` or capture, failed
+  ones too, sends a request the board takes as a relay byte, then exits
+  1. oxrok warns of it on stderr; sigrok-cli doesn't. See
+  `docs/DEVICES.md` for what it switches.
+- `icstation-usbrelay`: `--get conn` answers, and `--show` lists its
+  value. libsigrok advertises the key and then returns "not applicable"
+  (api.c:138-140, 153-154). The scan line stays as sigrok-cli's, with no
+  conn: `show.c:314` adds it only when that get succeeds, and here the
+  choice is to keep the line, since the user named the only board.
+- `icstation-usbrelay`: a library client's second open of one device
+  object sends no `51`, where `dev_open` does (api.c:225-226).
+- `icstation-usbrelay`: `-c channel_group=R1:enabled=on -c enabled=off`
+  sends one byte (`0f`) where sigrok-cli sends two (`0e 0f`), from the
+  shared CLI's plan, so R1 doesn't pulse.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
