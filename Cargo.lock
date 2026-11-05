@@ -1816,6 +1816,7 @@ dependencies = [
 name = "oxrok"
 version = "0.1.0-alpha.1"
 dependencies = [
+ "aes",
  "async-hid",
  "async-io",
  "chrono",

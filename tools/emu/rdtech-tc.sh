@@ -4,11 +4,18 @@
 EMU_MODEL=rdtech-tc
 EMU_CDC=1
 EMU_DRIVER=rdtech-tc
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=rdtech-tc
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 emu_cases() {
     emu_conns
+    # oxrok's log prefix, on its side only.
+    L='s/^oxrok: err: oxrok::drivers::rdtech_tc(::protocol)?: /sr: rdtech-tc: /'
+    HANG_BUG="C asks nothing with no answer to its last request (protocol.c:213-214) or part of one in hand (protocol.c:211-212), and waits for ever; oxrok ends the capture after 5 s with no reply"
+    HUP_BUG="receive_data reads only on exactly G_IO_IN (protocol.c:339), so a hung up port is never read, and it drops poll's result (protocol.c:352) and waits for ever; oxrok ends the capture on the read's error"
+    CHANNEL_BUG="handle_poll_data sends every channel whatever -C said (protocol.c:266-274 has no ch->enabled); oxrok sends those asked for"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What a scan reads of the reply: the name, the version, the serial.
     emu_case "scan" --keep-header -- -d $K --scan
@@ -27,13 +34,16 @@ emu_cases() {
     emu_case "show without a device" --keep-header --stderr --expect-fail -- -d rdtech-tc --show
 
     # The log's dump of what the reply decrypts to, at spew only.
-    emu_case "spew dumps the reply" --stderr --filter '/rdtech-tc: (check passed|[0-9a-f]{4}  )/!d
+    emu_case "spew dumps the reply" --stderr --filter 's/^oxrok: spew: oxrok::drivers::rdtech_tc::protocol: /sr: rdtech-tc: /
+/rdtech-tc: (check passed|[0-9a-f]{4}  )/!d
 s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
 
     # The line: native USB does not mind.
     emu_case "serialcomm 9600" --keep-header -- -d $K:serialcomm=9600/8n1 --scan
     emu_case "serialcomm 115200 8n2" --keep-header -- -d $K:serialcomm=115200/8n2 --scan
-    emu_case "serialcomm no such thing" --keep-header --no-output -- -d $K:serialcomm=fast --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses
+    # them first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
 
     # The options there are, and what is not.
     for key in limit_frames limit_time; do
@@ -49,22 +59,22 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     # those holding each magic first, each block's data after.
     for at in 0 64 128; do
         emu_options flip=1:$at
-        emu_case "scan magic wrong at $at" --stderr --keep-header -- -d $K --scan
+        emu_case "scan magic wrong at $at" --stderr --filter "$L" --keep-header -- -d $K --scan
     done
     for at in 20 100 176; do
         emu_options flip=1:$at
-        emu_case "scan checksum wrong at $at" --stderr --keep-header -- -d $K --scan
+        emu_case "scan checksum wrong at $at" --stderr --filter "$L" --keep-header -- -d $K --scan
     done
     # Bad data in a block both magics of which are good: a bit in the last
     # block of each is the checksum's own.
     emu_options flip=1:48
-    emu_case "scan checksum field wrong" --stderr --keep-header -- -d $K --scan
+    emu_case "scan checksum field wrong" --stderr --filter "$L" --keep-header -- -d $K --scan
     emu_options answers=0
-    emu_case "scan no answer" --stderr --keep-header -- -d $K --scan
+    emu_case "scan no answer" --stderr --filter "$L" --keep-header -- -d $K --scan
     emu_options cut=1:100
-    emu_case "scan a short answer" --stderr --keep-header -- -d $K --scan
+    emu_case "scan a short answer" --stderr --filter "$L" --keep-header -- -d $K --scan
     emu_options cut=1:191
-    emu_case "scan one byte short" --stderr --keep-header -- -d $K --scan
+    emu_case "scan one byte short" --stderr --filter "$L" --keep-header -- -d $K --scan
     # What comes after the 192 bytes is for no one, and the reopen flushes it.
     emu_options extra=1:10
     emu_case "scan with more than asked" --keep-header -- -d $K --frames 1
@@ -79,15 +89,17 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_case "frames from config" -- -d $K -c limit_frames=2 --frames 2
     emu_case "frames analog" --keep-header -- -d $K --frames 2 -O analog
     emu_case "frames csv" -- -d $K --frames 3 -O csv:header=false:time=false
-    emu_case "channels V and I" -- -d $K -C V,I --frames 2
-    emu_case "channels E0 only" -- -d $K -C E0 --frames 2
+    emu_case "channels V and I" --oracle-differs "$CHANNEL_BUG" -- -d $K -C V,I --frames 2
+    emu_case "channels E0 only" --oracle-differs "$CHANNEL_BUG" -- -d $K -C E0 --frames 2
     emu_case "channels D+ csv" -- -d $K -C D+ --frames 2 -O csv:header=false:time=false
     # sigrok-cli reads the - of a channel's name as a range.
-    emu_case "channel D-" --stderr --expect-fail -- -d $K -C D- --frames 2
+    emu_case "channel D-" --stderr --expect-fail --filter "s/^Failed to set channels: invalid argument: Invalid channel range 'D-'.\$/Invalid channel 'D'./" -- -d $K -C D- --frames 2
     emu_case "samples is not a limit here" --stderr --expect-fail -- -d $K --samples 2
     # hwdriver.c's check_key takes a 0 for frames, and refuses it for time.
     emu_case "config limit_frames 0" -- -d $K -c limit_frames=0 --frames 1
-    emu_case "config limit_time 0" --stderr --expect-fail -- -d $K -c limit_time=0 --frames 1
+    Z='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./
+/^sr: hwdriver: Cannot set/d'
+    emu_case "config limit_time 0" --stderr --expect-fail --filter "$Z" -- -d $K -c limit_time=0 --frames 1
 
     # A time limit: how many polls that is depends on the clock, so both are
     # kept up to the first of the capture.
@@ -100,20 +112,25 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_case "values in turn" -- -d $K --frames 6 -O csv:header=false:time=false
     emu_case "values in turn analog" -- -d $K --frames 6
 
+    # analog.c:412 multiplies by a float power of ten: 1.5000001 kV, not 1.5.
+    emu_options v=15000000
+    emu_case "1500 volts" -- -d $K -C V --frames 1 -O csv:header=false:time=false
+    emu_case "1500 volts analog" --oracle-differs "$CHANNEL_BUG" -- -d $K -C V --frames 1
+
     # Replies gone wrong in a capture: the frames before stay, the capture
     # ends with a message and sigrok-cli's exit status 0.
     emu_options flip=2:0
-    emu_case "capture magic wrong" --stderr -- -d $K --frames 2
+    emu_case "capture magic wrong" --stderr --filter "$L" -- -d $K --frames 2
     emu_case "capture magic wrong output" --no-output -- -d $K --frames 2
     emu_options flip=3:100
-    emu_case "capture checksum wrong" --stderr -- -d $K --frames 5
+    emu_case "capture checksum wrong" --stderr --filter "$L" -- -d $K --frames 5
     emu_case "capture checksum wrong output" -- -d $K --frames 5
     # A reply twice: the second is a frame of its own, without a request.
     emu_options again=2
     emu_case "capture a reply twice" -- -d $K --frames 2
     # 256 bytes fit C's buffer: the rest of a reply waits for the next read.
     emu_options extra=2:192
-    emu_case "capture garbage after a reply" --stderr -- -d $K --frames 3
+    emu_case "capture garbage after a reply" --stderr --filter "$L" -- -d $K --frames 3
     emu_options
 
     # A time limit ends what would otherwise wait for ever.
@@ -128,11 +145,11 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     # or for the rest of it, or asks no more with a part in its buffer
     # (protocol.c:211-212).
     emu_options answers=1
-    emu_case "silence no limit" --hangs --timeout 2 --no-output -- -d $K --frames 2
+    emu_case "silence no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
     emu_options cut=2:100
-    emu_case "short reply no limit" --hangs --timeout 2 --no-output -- -d $K --frames 2
+    emu_case "short reply no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
     emu_options extra=2:10
-    emu_case "extra bytes no limit" --hangs --timeout 2 -- -d $K --frames 2
+    emu_case "extra bytes no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
 
     # The USB side misbehaving, the shell's options.
     emu_options chunk=1
@@ -149,7 +166,11 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_options answers=0
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $K --scan
     emu_options answers=2
-    emu_case "unplug in a capture" --hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --frames 5
+    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $K --frames 5
+    # A quiet point: the third request goes unanswered, the signal lands in
+    # its wait.
+    emu_options answers=2
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
     emu_options
 }
 
