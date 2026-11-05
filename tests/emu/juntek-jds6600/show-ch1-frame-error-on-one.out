@@ -1,0 +1,15 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+juntek-jds6600:conn=/dev/ttyACMN - Juntek JDS6600 [S/N: 1234567890] with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options on channel group CH1:
+    enabled: on, off
+    pattern: sine, square, pulse, triangle, partial-sine, cmos, dc, half-wave, full-wave, pos-ladder, neg-ladder, noise, exp-rise, exp-decay, multi-tone, sinc, lorenz, arb-01, arb-02, arb-03 (current), arb-04, arb-05, arb-06, arb-07, arb-08, arb-09, arb-10, arb-11, arb-12, arb-13, arb-14, arb-15, arb-16, arb-17, arb-18, arb-19, arb-20, arb-21, arb-22, arb-23, arb-24, arb-25, arb-26, arb-27, arb-28, arb-29, arb-30, arb-31, arb-32, arb-33, arb-34, arb-35, arb-36, arb-37, arb-38, arb-39, arb-40, arb-41, arb-42, arb-43, arb-44, arb-45, arb-46, arb-47, arb-48, arb-49, arb-50, arb-51, arb-52, arb-53, arb-54, arb-55, arb-56, arb-57, arb-58, arb-59, arb-60
+    output_frequency: 0.010000, 60000000.000000, 0.010000
+    amplitude: 5.000000 (current)
+    offset: 0.000000 (current)
+    output_duty_cycle: 0.000000, 1.000000, 0.001000

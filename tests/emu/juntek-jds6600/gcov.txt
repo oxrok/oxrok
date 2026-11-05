@@ -1,0 +1,85 @@
+gcov juntek-jds6600 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        89.9%  232 of 258
+  protocol.c   88.9%  551 of 620
+  total        89.2%  783 of 878
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 75
+    config_get: 148, 153, 160-161, 166, 169, 172, 218-219
+    config_set: 242, 254, 261-262, 268, 271, 288, 323-324
+    config_list: 341-342, 347, 350, 373-374
+    clear_helper: 383
+  protocol.c
+    serial_send_textline: 328, 331, 333, 347, 360, 363, 369
+    serial_recv_textline: 404, 407, 410, 412, 431, 434, 497-499, 523
+    append_insn_write_para_dots: never called (550-558)
+    quick_send_read_then_recv: 835, 838, 847
+    quick_send_write_then_recv_ok: 878, 881, 883, 892, 898
+    jds6600_get_chans_enable: 922
+    jds6600_get_waveform: 961, 964, 967
+    jds6600_get_frequency: 1063, 1065
+    jds6600_get_amplitude: 1095, 1097
+    jds6600_get_offset: 1127, 1129
+    jds6600_get_dutycycle: 1159, 1161
+    jds6600_get_phase_chans: 1190
+    jds6600_set_chans_enable: 1218, 1221
+    jds6600_set_waveform: 1248, 1251, 1253
+    jds6600_set_frequency: 1359, 1362, 1364
+    jds6600_set_amplitude: 1395, 1398, 1400
+    jds6600_set_offset: 1424, 1427, 1429
+    jds6600_set_dutycycle: 1453, 1456, 1458
+    jds6600_set_phase_chans: 1481, 1484
+    jds6600_identify: 1514, 1517
+    jds6600_setup_devc: 1559, 1562, 1586-1588
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/serial.c         26.9%  108 of 402
+  src/serial_libsp.c   23.0%  59 of 256
+  total                25.4%  167 of 658
+never reached, by function (line ranges hold no reached line):
+  src/serial.c
+    dev_is_supported: never called (59-64)
+    serial_open: 87-88, 99, 101, 103, 107, 122, 130, 140, 142
+    serial_close: 162-163, 169, 173-174
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 292
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: 461-462, 466
+    serial_read_nonblocking: never called (510-513)
+    serial_set_params: 541-542, 548
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: 651-656, 664-704, 715-716
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: 963, 967-972
+    serial_source_add: never called (987-1004)
+    serial_source_remove: never called (1009-1020)
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    sr_serial_find_usb: never called (1119-1137)
+    serial_timeout: never called (1141-1166)
+  src/serial_libsp.c
+    sr_ser_libsp_open: 70-71, 76-84
+    sr_ser_libsp_close: 96-97, 103-111
+    sr_ser_libsp_flush: 126-127, 133-141
+    sr_ser_libsp_drain: never called (147-167)
+    sr_ser_libsp_write: 178-179, 183, 188-195
+    sr_ser_libsp_read: 209-210, 214, 219-226
+    sr_ser_libsp_set_params: 242-243, 253-260, 276-284
+    sr_ser_libsp_set_handshake: never called (290-311)
+    sr_ser_libsp_source_add_int: never called (320-383)
+    sr_ser_libsp_source_add: never called (386-400)
+    sr_ser_libsp_source_remove: never called (405-411)
+    sr_ser_libsp_list: never called (414-432)
+    sr_ser_libsp_find_usb: never called (435-458)
+    sr_ser_libsp_get_frame_format: never called (461-503)
+    sr_ser_libsp_get_rx_avail: never called (506-517)
