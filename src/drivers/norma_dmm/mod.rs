@@ -7,7 +7,7 @@
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
-//! Norma DM9x0 bench multimeters, sold by Siemens as the B102x, on a serial port
+//! Norma `DM9x0` bench multimeters, sold by Siemens as the B102x, on a serial port
 //! at 4800 baud. C registers two drivers from one directory, `norma-dmm` and
 //! `siemens-b102x`, which differ only in the names they give a meter, and so does
 //! this.
@@ -431,6 +431,16 @@ impl LineBuffer {
     }
 }
 
+/// What a turn of the read loop came to.
+enum Pass {
+    /// Nothing has come, and no pass of C's callback is due.
+    NotYet,
+    /// A pass, with no whole line.
+    NoLine,
+    /// A pass that read a line.
+    Line(Vec<u8>),
+}
+
 /// One capture, on its own thread: `norma_dmm_receive_data`.
 struct Capture {
     link: Arc<Mutex<Link>>,
@@ -460,41 +470,44 @@ impl Capture {
         self.link.lock().expect("link lock").open_request = requests.sent_at;
     }
 
-    /// Reads up to the end of a line, as a pass of C's callback: `None` when it
-    /// has not come to a pass yet, `Some(None)` when it has with no line. C's
-    /// read loop stops with the line, or with what is there.
-    fn pass(&self, buffer: &mut LineBuffer, due: Instant) -> Option<Option<Vec<u8>>> {
+    /// Reads up to the end of a line, as a pass of C's callback, whose read loop
+    /// stops with the line or with what is there.
+    fn pass(&self, buffer: &mut LineBuffer, due: Instant) -> Pass {
+        let due_now = || if Instant::now() >= due { Pass::NoLine } else { Pass::NotYet };
         let mut link = self.link.lock().expect("link lock");
-        let port = link.port.as_mut()?.as_mut();
+        let Some(port) = link.port.as_mut() else {
+            return due_now();
+        };
+        let port = port.as_mut();
         let mut byte = [0];
         let wait = due.saturating_duration_since(Instant::now()).min(STOP_CHECK);
         match read_blocking(port, &mut byte, wait) {
             Ok(1) => {}
-            Ok(_) => return (Instant::now() >= due).then_some(None),
+            Ok(_) => return due_now(),
             Err(e) => {
                 // A port that has gone: revents is no G_IO_IN, so C reads nothing
                 // and its next request is what fails.
                 log::debug!("Read failed: {e}.");
                 drop(link);
                 std::thread::sleep(STOP_CHECK);
-                return (Instant::now() >= due).then_some(None);
+                return due_now();
             }
         }
         if let Some(line) = buffer.push(byte[0]) {
-            return Some(Some(line));
+            return Pass::Line(line);
         }
         // The most one line can be, so a flood gives way to the checks.
         for _ in 0..BUFSIZE {
             match read_blocking(port, &mut byte, Duration::ZERO) {
                 Ok(1) => {
                     if let Some(line) = buffer.push(byte[0]) {
-                        return Some(Some(line));
+                        return Pass::Line(line);
                     }
                 }
                 _ => break,
             }
         }
-        Some(None)
+        Pass::NoLine
     }
 
     /// What a finished line says: a sample to send, if it holds one.
@@ -534,8 +547,10 @@ impl Capture {
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            let Some(line) = self.pass(&mut buffer, due) else {
-                continue;
+            let line = match self.pass(&mut buffer, due) {
+                Pass::NotYet => continue,
+                Pass::NoLine => None,
+                Pass::Line(line) => Some(line),
             };
             due = Instant::now() + POLL_INTERVAL;
             if let Some(line) = line

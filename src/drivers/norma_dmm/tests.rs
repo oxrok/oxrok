@@ -137,13 +137,8 @@ impl Port for Fake {
                 return Ok(buf.len());
             }
             s.reads += 1;
-            let room = if s.pace == 0 {
-                buf.len()
-            } else if s.reads % s.pace == 0 {
-                1
-            } else {
-                0
-            };
+            let room =
+                if s.pace == 0 { buf.len() } else { usize::from(s.reads.is_multiple_of(s.pace)) };
             let n = s.input.len().min(buf.len()).min(room);
             for b in &mut buf[..n] {
                 *b = s.input.pop_front().expect("counted");

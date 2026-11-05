@@ -7,7 +7,7 @@
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
-//! The DM9x0's two questions and what its answers mean.
+//! The `DM9x0`'s two questions and what its answers mean.
 //!
 //! `IDN?` gets `1834 065 V1.06,IF V1.02`: digit 7 of the string is the type, 1 to
 //! 5 for the DM910 to DM950 (B1024 to B1028), and what follows the type's place
@@ -101,7 +101,7 @@ pub fn c_string(reply: &[u8]) -> &[u8] {
     &reply[..n]
 }
 
-/// The regular expression `^1834 [^,]*,IF V*`, whose `V*` takes nothing. GLib
+/// The regular expression `^1834 [^,]*,IF V*`, whose `V*` takes nothing. `GLib`
 /// matches UTF-8, and fails on what is not.
 fn matches_id(id: &str) -> bool {
     id.strip_prefix("1834 ")
@@ -364,7 +364,7 @@ mod tests {
             assert_eq!(parse_id(no), None, "{}", no.escape_ascii());
         }
         // A NUL ends the string.
-        assert_eq!(parse_id(b"1834 06\01,IF "), None);
+        assert_eq!(parse_id(b"1834 06\x001,IF "), None);
         assert_eq!(parse_id(b"1834 065,IF \0more"), Some((5, "IF ".to_owned())));
     }
 
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn sign_and_digits() {
         assert_eq!(reading("00000000013100000000").value, 1.0f32 * 1e-5f32);
-        assert_eq!(reading("00000400013100000000").value, -1.0f32 * 1e-5f32);
+        assert_eq!(reading("00000400013100000000").value, -1e-5f32);
         assert!(reading("00000400003100000000").value.is_sign_negative());
         assert_eq!(reading("00200000003100000000").value, 0.0);
         // The first digit is two bits: 9 has the 1 of them.
@@ -534,7 +534,7 @@ mod tests {
             b"00000000013100000000 \r\n",
             b"000000000131000000000\r\n",
             b"0303002403030024913100400040\r\n",
-            b"0000000001310000\0000\r\n",
+            b"0000000001310000\x00000\r\n",
         ] {
             assert_eq!(process_line(bad, 5), None, "{}", bad.escape_ascii());
         }
