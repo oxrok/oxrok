@@ -80,6 +80,9 @@ emu_cases() {
     emu_case "lib stop" --libsigrok --tx-filter "$TAIL" -- -d $H --continuous --stop-after 1
     emu_options period=2 burst=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter "$TAIL" -- -d $H --samples 5
+    # A long period: the event point is a period behind the last record, and a hangup
+    # loses bytes the tool has not read yet. At 2 offers, 1 run of 15 lost one under load.
+    emu_options period=10 burst=2
     emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 --tx-filter "$TAIL" -- -d $H --samples 5
     emu_options
 }

@@ -154,6 +154,9 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "lib stop" --libsigrok -- -d $A --continuous --stop-after 1
     emu_options period=2 burst=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --samples 5
+    # A long period: the event point is a period behind the last record, and a hangup
+    # loses bytes the tool has not read yet. At 2 offers, 1 run of 15 lost one under load.
+    emu_options period=10 burst=2
     emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 -- -d $A --samples 5
     emu_case "unplug says so" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 --stderr --filter "$F" -- -d $A --samples 5
     emu_options
