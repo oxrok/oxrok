@@ -1,0 +1,13 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+itech-it8500 - ITECH 8500 1.23 [S/N: 0123456789] with 3 channels: V1 I1 P1
+Channel groups:
+    1: channels V1 I1 P1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    samplerate

@@ -97,6 +97,7 @@ pub mod drivers {
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
+    pub mod itech_it8500;
     pub mod juntek_jds6600;
     pub mod kecheng_kc_330b;
     pub mod kingst_la2016;
@@ -136,6 +137,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
     registry.register(Box::new(drivers::agilent_dmm::AgilentDmmDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
+    registry.register(Box::new(drivers::itech_it8500::ItechIt8500Driver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
