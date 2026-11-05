@@ -132,17 +132,22 @@ emu_cases() {
     emu_case "config limit_samples" --stderr --expect-fail -- -d $A -c limit_samples=1 --continuous
 
     # sigrok-cli stops a --continuous at the EOF on its stdin: the first
-    # answer ends the capture, and no poll follows it. oxrok does not read
-    # stdin: it polls, and the silence ends it. So POLL drops that poll,
-    # from either tool; the interrupt cases below pin it.
-    POLL='/^bulk_out 02 aa20/d'
+    # answer ends the capture, and no poll follows it, so it sends no set frame
+    # and leaves the supply alone. oxrok does not read stdin: it polls with a
+    # set frame, which zeroes the supply, and the silence ends it. The readings
+    # agree; the frame in the .tx is the difference, and it is what matters.
+    EOF_DIFF="sigrok-cli stops at the EOF on stdin (anykey.c:50,83) before its first poll, so under /dev/null it sends no 20 frame and the supply is untouched; oxrok does not read stdin, sends its first poll and zeroes it"
     emu_options answers=2 replies=$R
-    emu_case "one reading" --tx-filter "$POLL" -- -d $A --continuous
-    emu_case "one reading analog" --tx-filter "$POLL" -- -d $A --continuous -O analog
-    emu_case "one reading csv" --tx-filter "$POLL" -- -d $A --continuous -O csv:header=false:time=false
-    emu_case "one reading CH1" --tx-filter "$POLL" -- -d $A -C CH1 --continuous
-    emu_case "one reading CH2 CH3" --tx-filter "$POLL" -- -d $A -C CH2,CH3 --continuous
-    emu_case "one reading CH3 csv" --tx-filter "$POLL" -- -d $A -C CH3 --continuous -O csv:header=false:time=false
+    emu_case "one reading" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
+    emu_case "one reading analog" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O analog
+    emu_case "one reading csv" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O csv:header=false:time=false
+    emu_case "one reading CH1" --oracle-differs "$EOF_DIFF" -- -d $A -C CH1 --continuous
+    emu_case "one reading CH2 CH3" --oracle-differs "$EOF_DIFF" -- -d $A -C CH2,CH3 --continuous
+    emu_case "one reading CH3 csv" --oracle-differs "$EOF_DIFF" -- -d $A -C CH3 --continuous -O csv:header=false:time=false
+    # On a live supply, with an answer to that frame: oxrok's second reading
+    # shows it all gone, where sigrok-cli has ended with the supply as it was.
+    emu_options answers=3 output=7 ocp=1 mode=1 load=10
+    emu_case "one reading on a live supply" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
     # What was set goes out at the close.
     emu_case "capture with setpoints" -- -d $A -c $A1:voltage_target=5:current_limit=0.5:enabled=on --continuous
     emu_case "capture with a setting" -- -d $A -c ocp_enabled=on --continuous
