@@ -5,20 +5,30 @@
 //! serial remote port, on the CDC-ACM shell: lines of text, a reply only to a
 //! query.
 //!
-//! The device, and how sure this is:
+//! The device, and how sure this is. The manual is the maker's operating manual,
+//! edition 14 (1038.6002.02), by PDF page:
 //!
-//! - The commands and the maker's and models' names: the C driver, and nothing
-//!   else. No recording and no copy of the instrument's remote control chapter
-//!   was to hand (the maker's PDF could not be fetched), so these are stand-ins:
-//!   the form of the `*IDN?` fields past the model, the text of a `FREQ?` and a
-//!   `POW?` reply, LF as the reply's end, and the UART's 9600/8n1. `raw*=`,
-//!   `eol=` and `uart=` give the other forms.
-//! - The frequency ranges: a dealer's copy of the maker's brochure has 5 kHz to
-//!   1.5, 3, 2.2 and 6 GHz for the SME02, SME03, SME03E and SME06. It has no
-//!   SME03A, which is from the driver, as is the level range. The driver's table
-//!   has the SME06 at 1.5 GHz.
-//! - The USB side is none of the instrument's, which has no USB: the serial
-//!   port is reached through an adapter. The ids and strings are stand-ins.
+//! - The commands: the C driver's, which the manual's short forms cover.
+//! - `*IDN?`: `Rohde&Schwarz, SME03,00000001, 1.03`, spaces and all (231). Only the
+//!   model field changes here; a real unit's serial number and version will not be
+//!   these.
+//! - Replies have no unit: `FREQuency? Response: 1E6 for 1 MHz` (section 3.5.4).
+//!   That one example is all it shows, so `-3E1` for -30 is the same form by
+//!   extension, and LF as a reply's end is a stand-in: the table of RS-232
+//!   controls has CR and LF as terminators and does not say which a reply gets.
+//!   C's reader needs an LF at the end of a read. `rawfreq=` and `eol=` give others.
+//! - The line: 8 data bits, no parity, 1 stop bit, fixed; 1200 to 115200 baud,
+//!   9600 at reset (199, 220). `uart=` sets it. Handshake is OFF, RTS/CTS or
+//!   XON/XOFF there, and the shell has none of it.
+//! - Remote: RS-232 goes remote on a CR or an LF (section 3.3), which is C's bare
+//!   LF.
+//! - Reset: 100 MHz and -30 dBm (281, 305).
+//! - The ranges: 5 kHz to 1.5 GHz, the SME03E, 03 and 06 to 2.2, 3 and 6 GHz (281,
+//!   248), -144 to +16 dBm (305). The manual's list does not name the SME03A, and
+//!   the C driver has 3 GHz for it. The driver's table has the SME06 at 1.5 GHz.
+//! - The USB side is none of the instrument's, which has the IEC bus and RS-232:
+//!   the serial port is reached through an adapter. The ids and strings are
+//!   stand-ins.
 //!
 //! Emulation artifacts:
 //!
@@ -27,6 +37,7 @@
 //!   says nothing, as a command has no reply. A real SCPI device would keep an
 //!   error in a queue that nothing here reads.
 //! - Remote state is only a flag for the check below.
+//! - No offsets (282, 305), which the driver never sets, so a query is the setting.
 //! - `shift=` is a late reply with no clock. A real delay is left to the driver's
 //!   tests on a fake port: C's window for it is a race, as its next query goes
 //!   out the moment its 1 s ends.
@@ -38,7 +49,8 @@
 //! Options, besides the shell's ([`Faults`]):
 //!
 //! - `model=NAME`, the model field of `*IDN?` and the range it brings;
-//! - `idn=TEXT`, all of what `*IDN?` says, before the end of line;
+//! - `idn=TEXT`, all of what `*IDN?` says, before the end of line, and with no
+//!   space in it, as the emulator's options stop there (`rawidn=` can);
 //! - `freq=HZ` and `pow=DBM`, the state at power on;
 //! - `rawidn=`, `rawfreq=` and `rawpow=` take `HEX|none`, what that query gets
 //!   instead of its reply, whole line included: a device gone wrong, or silence;
@@ -74,8 +86,8 @@ pub const ABOUT: &str = "A Rohde&Schwarz SME signal generator, SCPI over a seria
 const LONGEST: usize = 512;
 /// The longest reply an option may set.
 const LONGEST_RAW: usize = 1024;
-/// `idn=` of a stand-in serial number and version.
-const IDN_TAIL: &str = "000000/000,1.00";
+/// The manual's example of `*IDN?`, past the model.
+const IDN_TAIL: &str = "00000001, 1.03";
 /// The bottom of every model's range, in Hz.
 const FREQ_MIN: f64 = 5e3;
 /// The level range of every model, in dBm.
@@ -236,7 +248,7 @@ impl Generator {
             .config
             .idn
             .clone()
-            .unwrap_or_else(|| format!("Rohde&Schwarz,{},{IDN_TAIL}", self.config.model));
+            .unwrap_or_else(|| format!("Rohde&Schwarz, {},{IDN_TAIL}", self.config.model));
         port.send(&self.line_of(&text));
     }
 
@@ -247,7 +259,7 @@ impl Generator {
             return;
         }
         self.queries += 1;
-        let reply = raw.unwrap_or_else(|| self.line_of(&value.to_string()));
+        let reply = raw.unwrap_or_else(|| self.line_of(&format!("{value:E}")));
         if self.config.shift {
             if let Some(before) = self.held.replace(reply) {
                 port.send(&before);
@@ -359,13 +371,13 @@ mod tests {
     #[test]
     fn the_scan_and_the_state() {
         let mut h = remote(&[]);
-        assert_eq!(ask(&mut h, "*IDN?"), b"Rohde&Schwarz,SME03,000000/000,1.00\n");
-        assert_eq!(ask(&mut h, "FREQ?"), b"100000000\n");
-        assert_eq!(ask(&mut h, "POW?"), b"-30\n");
+        assert_eq!(ask(&mut h, "*IDN?"), b"Rohde&Schwarz, SME03,00000001, 1.03\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"1E8\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-3E1\n");
         assert_eq!(ask(&mut h, "FREQ 1000000.5Hz"), b"");
         assert_eq!(ask(&mut h, "POW -10.5dBm"), b"");
-        assert_eq!(ask(&mut h, "FREQ?"), b"1000000.5\n");
-        assert_eq!(ask(&mut h, "POW?"), b"-10.5\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"1.0000005E6\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-1.05E1\n");
         assert_eq!(violations(&mut h), 0);
     }
 
@@ -377,31 +389,31 @@ mod tests {
         {
             assert_eq!(ask(&mut h, line), b"");
         }
-        assert_eq!(ask(&mut h, "FREQ?"), b"100000000\n");
-        assert_eq!(ask(&mut h, "POW?"), b"-30\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"1E8\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-3E1\n");
         assert_eq!(violations(&mut h), 0);
         for line in ["FREQ 1500000000.0Hz", "FREQ 5000.0Hz", "POW 16.0dBm", "POW -144.0dBm"] {
             ask(&mut h, line);
         }
-        assert_eq!(ask(&mut h, "FREQ?"), b"5000\n");
-        assert_eq!(ask(&mut h, "POW?"), b"-144\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"5E3\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-1.44E2\n");
     }
 
     #[test]
     fn the_ranges_of_the_models() {
-        for (model, top, over) in [
-            ("SME02", "1500000000", "1500000000.1"),
-            ("SME03E", "2200000000", "2200000000.1"),
-            ("SME03A", "3000000000", "3000000000.1"),
-            ("SME03", "3000000000", "3000000000.1"),
-            ("SME06", "6000000000", "6000000000.1"),
+        for (model, top, over, reply) in [
+            ("SME02", "1500000000", "1500000000.1", "1.5E9"),
+            ("SME03E", "2200000000", "2200000000.1", "2.2E9"),
+            ("SME03A", "3000000000", "3000000000.1", "3E9"),
+            ("SME03", "3000000000", "3000000000.1", "3E9"),
+            ("SME06", "6000000000", "6000000000.1", "6E9"),
         ] {
             let mut h = remote(&[("model", model)]);
             ask(&mut h, &format!("FREQ {top}.0Hz"));
-            assert_eq!(ask(&mut h, "FREQ?"), format!("{top}\n").as_bytes(), "{model}");
+            assert_eq!(ask(&mut h, "FREQ?"), format!("{reply}\n").as_bytes(), "{model}");
             ask(&mut h, "FREQ 5000.0Hz");
             ask(&mut h, &format!("FREQ {over}Hz"));
-            assert_eq!(ask(&mut h, "FREQ?"), b"5000\n", "{model}");
+            assert_eq!(ask(&mut h, "FREQ?"), b"5E3\n", "{model}");
         }
     }
 
@@ -435,13 +447,16 @@ mod tests {
         let mut h = remote(&[]);
         h.write(&[b'x'; LONGEST + 1]);
         assert_eq!(violations(&mut h), 1);
+        // It went with the flag, and the next line is taken.
+        assert_eq!(ask(&mut h, "POW?"), b"-3E1\n");
+        assert_eq!(violations(&mut h), 0);
     }
 
     #[test]
     fn the_remote_line_stays_across_an_open() {
         let mut h = remote(&[]);
         h.set_lines(true, true);
-        assert_eq!(ask(&mut h, "POW?"), b"-30\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-3E1\n");
         assert_eq!(violations(&mut h), 0);
     }
 
@@ -452,17 +467,17 @@ mod tests {
         h.set_lines(true, true);
         assert_eq!(violations(&mut h), 1);
         // It went with the open.
-        assert_eq!(ask(&mut h, "POW?"), b"-30\n");
+        assert_eq!(ask(&mut h, "POW?"), b"-3E1\n");
     }
 
     #[test]
     fn options_change_the_replies() {
         let mut h = remote(&[("model", "SME06"), ("eol", "crlf")]);
-        assert_eq!(ask(&mut h, "*IDN?"), b"Rohde&Schwarz,SME06,000000/000,1.00\r\n");
+        assert_eq!(ask(&mut h, "*IDN?"), b"Rohde&Schwarz, SME06,00000001, 1.03\r\n");
         let mut h = remote(&[("idn", "a,b"), ("eol", "lfcr"), ("freq", "5e3"), ("pow", "1.5")]);
         assert_eq!(ask(&mut h, "*IDN?"), b"a,b\n\r");
-        assert_eq!(ask(&mut h, "FREQ?"), b"5000\n\r");
-        assert_eq!(ask(&mut h, "POW?"), b"1.5\n\r");
+        assert_eq!(ask(&mut h, "FREQ?"), b"5E3\n\r");
+        assert_eq!(ask(&mut h, "POW?"), b"1.5E0\n\r");
         let mut h =
             remote(&[("rawidn", "410a"), ("rawfreq", "420a"), ("rawpow", "none")]);
         assert_eq!(ask(&mut h, "*IDN?"), b"A\n");
@@ -474,7 +489,7 @@ mod tests {
     fn answers_then_silence() {
         let mut h = remote(&[("answers", "1")]);
         assert_ne!(ask(&mut h, "*IDN?").len(), 0);
-        assert_eq!(ask(&mut h, "FREQ?"), b"100000000\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"1E8\n");
         assert_eq!(ask(&mut h, "POW?"), b"");
         assert_eq!(ask(&mut h, "FREQ?"), b"");
     }
@@ -483,8 +498,8 @@ mod tests {
     fn shift_answers_the_one_before() {
         let mut h = remote(&[("shift", "1")]);
         assert_eq!(ask(&mut h, "FREQ?"), b"");
-        assert_eq!(ask(&mut h, "POW?"), b"100000000\n");
-        assert_eq!(ask(&mut h, "FREQ?"), b"-30\n");
+        assert_eq!(ask(&mut h, "POW?"), b"1E8\n");
+        assert_eq!(ask(&mut h, "FREQ?"), b"-3E1\n");
     }
 
     #[test]
