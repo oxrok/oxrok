@@ -1,1 +1,1 @@
-Failed to set device option 'voltage_target': generic/unspecified error.
+Failed to set device option 'voltage_target': invalid argument.

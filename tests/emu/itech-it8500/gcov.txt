@@ -1,12 +1,12 @@
 gcov itech-it8500 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        92.9%  407 of 438
+  api.c        93.8%  411 of 438
   protocol.c   93.2%  192 of 206
-  total        93.0%  599 of 644
+  total        93.6%  603 of 644
 never reached, by function (line ranges hold no reached line):
   api.c
     scan: 116
     config_get: 315, 434-438
-    config_set: 459, 463, 479-480, 531-535
+    config_set: 459, 463, 479-480
     config_list: 559, 571-574, 586, 592, 597, 602, 607-610
     dev_acquisition_start: 623
     dev_acquisition_stop: 644
