@@ -365,10 +365,11 @@ each with where it belongs:
   `atten-pps3xxx` did under load. `PacketSink::send_while` is the fix;
   `rdtech-dps` uses it, and whether the rest get it one by one or through
   a shared change is undecided.
-- 12 unit tests fail with every sleep at six times, a harsher test than
-  CI's macOS runner, where they pass today: `ols` (3), `gwinstek-gpd` (2),
+- 9 unit tests fail with every sleep at six times, a harsher test than
+  CI's macOS runner, where they pass today: `gwinstek-gpd` (2),
   `atten-pps3xxx` (3), `rdtech-dps` (2), `rdtech-um` (1), `manson-hcs-3xxx`
-  (1). A candidate to widen if macOS starts to flake on them.
+  (1). `ols` had 3 of them, two of which did fail on macOS. Widen these if
+  macOS starts to flake on them.
 - Several drivers narrow settings to `f32` because sigrok-cli parses
   values with `strtof` (`session.c:570`), where C's driver keeps a
   double, so a library client gets a different request:

@@ -240,6 +240,9 @@ pub struct OlsDevice {
     trigger: Option<Trigger>,
     port: Arc<Mutex<Option<Box<dyn Port>>>>,
     worker: Option<Worker>,
+    /// The silence that ends a capture: [`END_OF_DATA`], or more for a test
+    /// that must not race it.
+    end_of_data: Duration,
 }
 
 struct Worker {
@@ -295,6 +298,7 @@ impl OlsDevice {
             trigger: None,
             port: Arc::new(Mutex::new(None)),
             worker: None,
+            end_of_data: END_OF_DATA,
         };
         dev.use_rate(protocol::starting_rate(dev.max_samplerate));
         dev
@@ -608,6 +612,7 @@ impl Device for OlsDevice {
         };
         let capture = Capture {
             decoder: Decoder::plain(plan.flags, self.limit_samples, plan.trigger_word),
+            end_of_data: self.end_of_data,
             trigger_sample: plan.trigger_sample,
             unit_size: self.unit_size,
         };
@@ -638,6 +643,8 @@ impl Device for OlsDevice {
 /// `ols_receive_data` on its own thread.
 struct Capture {
     decoder: Decoder,
+    /// [`OlsDevice::end_of_data`].
+    end_of_data: Duration,
     /// [`protocol::Plan::trigger_sample`].
     trigger_sample: Option<u64>,
     unit_size: usize,
@@ -667,7 +674,7 @@ impl Capture {
             }
             match port.read(&mut buf, STOP_CHECK) {
                 Ok(0) => {
-                    if last.is_some_and(|at: Instant| at.elapsed() >= END_OF_DATA) {
+                    if last.is_some_and(|at: Instant| at.elapsed() >= self.end_of_data) {
                         return true;
                     }
                 }
@@ -898,7 +905,7 @@ mod tests {
     #[test]
     fn a_reply_that_comes_after_the_delay_is_no_reply() {
         fn late(data: &[u8]) -> Option<(Duration, Vec<u8>)> {
-            (data == [CMD_ID]).then(|| (Duration::from_millis(60), b"1SLO".to_vec()))
+            (data == [CMD_ID]).then(|| (Duration::from_secs(2), b"1SLO".to_vec()))
         }
         let (mut fake, _) = Fake::new(late);
         assert!(probe(&mut fake, params(), "x").is_none());
@@ -936,11 +943,11 @@ mod tests {
     fn a_capture_waits_then_ends_at_the_limit_at_once() {
         let (fake, seen) = Fake::new(board);
         let mut dev = device(fake);
+        // Far longer than any stall here, so it can only end at the limit.
+        dev.end_of_data = Duration::from_secs(3600);
         let (s, rx) = sink();
         dev.start(s).unwrap();
-        let at = Instant::now();
         let packets = until_end(&rx);
-        assert!(at.elapsed() < END_OF_DATA, "no silence to wait for at the limit");
         dev.stop().unwrap();
         // Oldest first.
         let expected: Vec<u8> = (0..8u32).flat_map(u32::to_le_bytes).collect();
@@ -1049,11 +1056,18 @@ mod tests {
         fn slow(data: &[u8]) -> Option<(Duration, Vec<u8>)> {
             (data == [protocol::CMD_RUN]).then(|| (Duration::ZERO, vec![1, 0, 0, 0]))
         }
-        let (fake, _) = Fake::new(slow);
+        let (fake, seen) = Fake::new(slow);
         let mut dev = device(fake);
+        // No silence ends it, however late the stop comes.
+        dev.end_of_data = Duration::from_secs(3600);
         let (s, rx) = sink();
         dev.start(s).unwrap();
-        std::thread::sleep(STOP_CHECK);
+        // The second read began, so the first took what came.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while seen.lock().unwrap().reads_from.len() < 2 {
+            assert!(Instant::now() < deadline, "no second read");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         dev.stop().unwrap();
         assert_eq!(logic(&until_end(&rx)), [0u8; 0]);
     }
