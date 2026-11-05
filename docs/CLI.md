@@ -591,6 +591,29 @@ Deliberate, and kept small:
 - `icstation-usbrelay`: `-c channel_group=R1:enabled=on -c enabled=off`
   sends one byte (`0f`) where sigrok-cli sends two (`0e 0f`), from the
   shared CLI's plan, so R1 doesn't pulse.
+- `itech-it8500`: an error leaves the load in local mode; sigrok-cli
+  exits with it in remote mode and its panel locked.
+- `itech-it8500`: a status of success is no reading (an inference from
+  the manuals); sigrok-cli reads 0.128 V from it, and lists a device for
+  it in a scan.
+- `itech-it8500`: an extra byte shifts nothing, and a scan with a
+  27-byte first answer finds the load. In sigrok-cli such a scan finds
+  nothing, and in a capture every later answer fails with no sample
+  while it polls without waiting.
+- `itech-it8500`: a capture of a silent load ends at its time limit, or
+  after 5 s with only a sample limit; sigrok-cli waits for ever. Under
+  `--continuous` both wait.
+- `itech-it8500`: a setpoint that fits no int (`nan`, `inf`, `1e10`) is
+  refused and nothing is sent; sigrok-cli sends 0x80000000. A negative
+  one goes out in both.
+- `itech-it8500`: after a timed-out command oxrok waits for a quiet line
+  before the next one; sigrok-cli does not. The wire is the same.
+- `itech-it8500`: a `--get` after a change of state logs nothing;
+  sigrok-cli logs "session was NULL".
+- `itech-it8500`: the barcode at `-l 4` is the 22 bytes; sigrok-cli
+  reads on into the heap.
+- `itech-it8500`: a library's `value as f32` sends 3299 for 3.3 where
+  libsigrok sends 3300, as with Manson. sigrok-cli sends 3299 too.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

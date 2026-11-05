@@ -298,6 +298,26 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- `.` in a sed filter does not match an invalid UTF-8 byte, so a filter
+  masking bytes read past a buffer fails at random. Replace the whole
+  line with `c`.
+- A driver test binary picked by "newest with this test" after a failed
+  build is the last mutant's. Check that the build succeeded before a
+  loop: a full disk gave 100 false failures.
+- A queue of one is not full at the header. To test a blocking first
+  send, fill the queue before the start.
+- A status packet that satisfies every command makes readings of its own
+  data. Say which commands return data, and call it an inference if a
+  manual only implies it.
+- An interrupt case on a poll with no answer passes without load and
+  fails with it (9 of 15 here): filter what the clock lets out after the
+  event point, and keep what must come last.
+- A fake that delivers a late answer by the timeout a read asks for
+  tests a reply timeout with no real time, so it holds under a stall or
+  a slow clock.
+- A byte left unread keeps `G_IO_IN` firing, so a C driver on
+  `serial_source_add` polls without its period. Before stating how long
+  a C fault lasts, measure it: an inferred 8 s was 0.19 s.
 - A `break` in a first switch can fall into a second whose default
   refuses: the key is advertised and never answered. sigrok-cli's scan
   line loses its `:conn=` through the same get (`show.c:314`), so a bare

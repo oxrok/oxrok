@@ -84,6 +84,7 @@ Emulator and replay only, never run on hardware:
 | `manson-hcs-3xxx` | 171 | 91.9% |
 | `gwinstek-psp` | 154 | 92.5% |
 | `icstation-usbrelay` | 43 | 83.0% |
+| `itech-it8500` | 223 | 93.6% |
 | `juntek-jds6600` | 229 | 89.2% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |

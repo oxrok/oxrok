@@ -2372,6 +2372,23 @@ libsigrok refuses first, and write failures, which an unplug reaches
 only by a race and a fake `Port` covers. No factory firmware source was
 found. Not run on a real board.
 
+## ITECH IT8500 series, BK Precision 8500 series (itech-it8500)
+
+Electronic load on its TTL serial port. Emulator only (`itech-it8500`
+model on CDC-ACM, 223 cases, 2026-11-05, gcov 93.6%), never on hardware.
+`conn=` is required. Without `serialcomm=` a scan tries 9600, 38400,
+19200 and 4800, and the line caps the sample rate at 10 to 60 Hz.
+Options other than the limits and sample rate are in channel group `1`:
+`-g 1` or `channel_group=1`. An open puts the load in remote mode and a
+close in local mode, on error paths too. Sources: BK Precision's 8500
+manual (version 032218) and ITECH's IT8500+ Programming Guide; `01`'s
+units and that a load answers a broadcast `6a` rest on the C driver
+alone. No packet says which command it answers, so an answer later than
+its 100 ms can pass for the next command's: oxrok waits for a quiet line
+after a timeout, which narrows this and does not remove it, and C has it
+too. Not emulated: allocation failures, and paths `check_key()` refuses
+first.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,
