@@ -10,10 +10,13 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 # api.c's scan returns with the port open (no serial_close before
 # std_scan_complete), and dev_open opens it again, which libserialport's
-# exclusive open refuses (serialport.c:589 flock, :599 TIOCEXCL): on this
-# oracle stock sigrok-cli runs nothing but --scan with this driver. So every
-# full case below runs sigrok-cli with locking disabled: a preload makes flock()
-# and the one ioctl TIOCEXCL no-ops, and the C driver itself is unmodified. It
+# exclusive open refuses (serialport.c:589 flock, :599 TIOCEXCL, first released
+# in libserialport 0.1.2, 2024-09-10): from that version, which this oracle
+# builds (libserialport-unreleased-104-g21b3dfe), stock sigrok-cli runs nothing
+# but --scan with this driver. On 0.1.1 it works, and users there reach the
+# paths the cases compare. So every full case below runs sigrok-cli with locking
+# disabled: a preload makes flock() and the one ioctl TIOCEXCL no-ops, and the C
+# driver itself is unmodified. It
 # is set on the exec of this model's sigrok-cli only, by a wrapper that
 # SIGROK_CLI names for the length of emu_cases, and neither oxrok nor the
 # harness runs under it. The "stock" cases at the end run without it and pin
@@ -49,7 +52,7 @@ emu_cases() {
     # hwdriver.c's check_key refuses it ahead of the driver, and logs that.
     Z="$A
 /^sr: hwdriver: Cannot set/d"
-    LOCK_BUG="api.c:255 returns with the scan's port open, so dev_open's second open is refused by libserialport's exclusive open (serialport.c:589, :599): every path but --scan fails on stock sigrok-cli; oxrok closes the port after the scan and opens it again"
+    LOCK_BUG="api.c:255 returns with the scan's port open, so dev_open's second open is refused by the exclusive open of libserialport 0.1.2 and later (serialport.c:589, :599): every path but --scan fails on stock sigrok-cli there, and works on 0.1.1; oxrok closes the port after the scan and opens it again"
     STALE_BUG="api.c:229, :236, :242, :248 drop gpd_receive_reply's result, and protocol.c:64-65 leaves the buffer as it was, so a reply that did not come is parsed from the last one; oxrok has no reply, so no device"
     STATUS_MSG="s/^(sr: gwinstek-gpd: Invalid reply to STATUS: ').*(')/\1\2/"
     OLD_BYTES_BUG="protocol.c:133 and :155 drop gpd_receive_reply's result; reply[0] is cleared but what follows is not, so after a leftover LF a read that failed parses the last reply less its first byte, and counts a sample; oxrok ends the capture"

@@ -15,8 +15,9 @@
 //! `*IDN?` up to three times, since junk in the device's buffer spoils the
 //! first, then `STATUS?` and each channel's values, and sets nothing. The port
 //! closes after the scan and an open opens it again. C leaves it open
-//! (`api.c:255`, no `serial_close` before `std_scan_complete`), and its
-//! `dev_open` then finds it locked: stock sigrok-cli runs only `--scan` here.
+//! (`api.c:255`, no `serial_close` before `std_scan_complete`) and opens it a
+//! second time. libserialport 0.1.1 let it; from 0.1.2 (2024-09-10), whose
+//! exclusive open refuses that, sigrok-cli runs only `--scan` here.
 //!
 //! `--get` and `--show` answer what the scan read and what was set since, and
 //! put nothing on the wire. A setting is one line with no answer.
