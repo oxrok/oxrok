@@ -16,6 +16,16 @@
 //! the broadcast a scan asks on, whose answer names the address to use.
 //!
 //! Numbers are little endian: mV, 0.1 mA, mW and mOhm.
+//!
+//! No packet says which command it answers, beyond its number, and every status
+//! packet looks alike, so nothing can tell a late answer from the next one. An
+//! answer that comes after its 100 ms, to setting A, can pass for the answer to
+//! setting B: A is told failure though the load applied it, and B, which the
+//! load may have refused, is told success. C has this too. What is done about
+//! it: after a command that timed out, [`settle`] waits for the line to be quiet
+//! before the next one, and the input queue goes before each. An answer later
+//! than that wait still misleads. Readings cannot shift for good, as each
+//! command starts from an empty queue.
 
 use crate::core::Error;
 use crate::serial::{Params, Port, read_blocking, serial_timeout};
@@ -30,6 +40,10 @@ const PREAMBLE: u8 = 0xaa;
 pub const BROADCAST: u8 = 0xff;
 /// How long an answer may take, `itech_it8500_send_cmd`'s 100.
 pub const REPLY_TIMEOUT: Duration = Duration::from_millis(100);
+/// How long the line must be silent for an answer that was late to be over.
+pub const QUIET: Duration = Duration::from_millis(100);
+/// The longest [`settle`] waits, for a line that does not go quiet.
+pub const SETTLE_MAX: Duration = Duration::from_secs(1);
 
 /// The commands the driver sends, by number; the manual's names.
 #[allow(missing_docs)]
@@ -130,6 +144,11 @@ pub fn max_samplerate(baud: u32) -> u64 {
     SAMPLERATES.into_iter().take_while(|r| *r <= safe).last().unwrap_or(SAMPLERATES[0])
 }
 
+/// The time between polls: `serial_source_add`'s timeout, in whole milliseconds.
+pub fn poll_period(samplerate: u64) -> Duration {
+    Duration::from_millis(1000 / samplerate.max(1))
+}
+
 /// The sum that ends a packet.
 pub fn checksum(packet: &[u8; PACKET_LEN]) -> u8 {
     packet[..PACKET_LEN - 1].iter().fold(0, |sum, b| sum.wrapping_add(*b))
@@ -160,16 +179,18 @@ pub fn scaled(value: f64, unit: f64) -> Option<i32> {
 pub enum Failed {
     /// The port itself failed: nothing more will go through it.
     Port(Error),
-    /// The answer was late, or wrong, or the write found no room. The next
-    /// command may do better.
+    /// The answer was wrong, or the write found no room. The next command may
+    /// do better.
     Answer,
+    /// No whole answer came in time. It may yet come: see [`settle`].
+    Late,
 }
 
 impl From<Failed> for Error {
     fn from(failed: Failed) -> Error {
         match failed {
             Failed::Port(e) => e,
-            Failed::Answer => Error::device("generic/unspecified error"),
+            Failed::Answer | Failed::Late => Error::device("generic/unspecified error"),
         }
     }
 }
@@ -183,9 +204,12 @@ pub struct Reply {
     pub data: [u8; DATA_LEN],
 }
 
-/// Checks an answer to `command`: `itech_it8500_send_cmd`. A status packet of
-/// success answers a command that returns data, too, by the C: `wants_data`
-/// says when that would make readings out of nothing.
+/// Checks an answer to `command`: `itech_it8500_send_cmd`, but for a status of
+/// success to a command that returns data, which C takes and reads 0x80 from,
+/// and a late `80` of a setting would read as 0.128 V. That no load answers a
+/// read so is an inference: BK's manual, p. 47, and ITECH's guide, p. 28, have a
+/// read return its data or a status of failure. If some firmware answers `01`
+/// with a success, C finds the load and this does not.
 ///
 /// # Errors
 ///
@@ -252,9 +276,29 @@ pub fn exchange(
     let got = read_blocking(port, &mut buf, REPLY_TIMEOUT).map_err(Failed::Port)?;
     if got < PACKET_LEN {
         log::debug!("Timeout waiting response to command: {got}");
-        return Err(Failed::Answer);
+        return Err(Failed::Late);
     }
     parse_reply(command, wants_data, &buf)
+}
+
+/// Waits for what a late answer has left on its way, and drops it: until the
+/// line has been quiet for [`QUIET`], or for [`SETTLE_MAX`]. It only reads, so a
+/// load that answers in time never sees it.
+///
+/// # Errors
+///
+/// [`Failed::Port`] on a port that fails.
+pub fn settle(port: &mut dyn Port) -> std::result::Result<(), Failed> {
+    const LOOK: Duration = Duration::from_millis(5);
+    let began = std::time::Instant::now();
+    let mut last = began;
+    let mut buf = [0; PACKET_LEN];
+    while last.elapsed() < QUIET && began.elapsed() < SETTLE_MAX {
+        if port.read(&mut buf, LOOK).map_err(Failed::Port)? > 0 {
+            last = std::time::Instant::now();
+        }
+    }
+    Ok(())
 }
 
 /// What a `GET_MODEL_INFO` says.
@@ -453,11 +497,26 @@ mod tests {
             (14400, 20),
             (19200, 30),
             (28800, 40),
+            (33600, 50),
             (38400, 60),
             (115_200, 60),
         ] {
             assert_eq!(max_samplerate(baud), rate, "{baud}");
         }
+    }
+
+    #[test]
+    fn the_period_of_a_rate() {
+        for (rate, ms) in [(1, 1000), (7, 142), (10, 100), (15, 66), (60, 16)] {
+            assert_eq!(poll_period(rate), Duration::from_millis(ms), "{rate}");
+        }
+    }
+
+    #[test]
+    fn the_times_are_what_they_say() {
+        assert_eq!(REPLY_TIMEOUT, Duration::from_millis(100));
+        assert_eq!(QUIET, Duration::from_millis(100));
+        assert_eq!(SETTLE_MAX, Duration::from_secs(1));
     }
 
     #[test]

@@ -26,9 +26,14 @@
 //! sample limit could end stops after [`NO_READING_BOUND`] with no reading.
 //!
 //! A status packet of success is no answer to a read, where C makes readings
-//! of it, and the input queue is dropped before each command, where one byte
-//! too many shifts every answer in C until 26 such bytes have come round. A
-//! value `int` cannot hold is refused, where C's conversion is undefined.
+//! of it: an inference, see [`protocol::parse_reply`]. The input queue is dropped
+//! before each command. In C a byte too many makes every later answer fail: it
+//! polls flat out with no sample, as the byte left unread fires `G_IO_IN`, and by
+//! the count of bytes only 25 more such faults would bring it back. A value `int`
+//! cannot hold is refused, where C's conversion is undefined. A negative one goes
+//! out as in C: the range is the load's to check.
+//!
+//! An answer later than its 100 ms can pass for the next one's: see [`protocol`].
 //!
 //! See [`protocol`].
 
@@ -231,11 +236,29 @@ struct Link {
     address: u8,
     limits: Limits,
     status: Status,
+    /// `sr_sw_limits`, which a capture reads at each check, as C's does: a client
+    /// can change them under it.
+    limit_samples: u64,
+    limit_msec: u64,
+    /// A capture has been started and has not said it is over.
+    capturing: bool,
+    /// The last command timed out, and its answer may be on its way.
+    late: bool,
 }
 
 impl Link {
     fn new(params: Params, address: u8) -> Link {
-        Link { port: None, params, address, limits: Limits::default(), status: Status::default() }
+        Link {
+            port: None,
+            params,
+            address,
+            limits: Limits::default(),
+            status: Status::default(),
+            limit_samples: 0,
+            limit_msec: 0,
+            capturing: false,
+            late: false,
+        }
     }
 
     fn exchange(
@@ -245,7 +268,12 @@ impl Link {
     ) -> std::result::Result<protocol::Reply, Failed> {
         let port =
             self.port.as_mut().ok_or_else(|| Failed::Port(Error::device("device is not open")))?;
-        protocol::exchange(port.as_mut(), &self.params, self.address, command, data)
+        if std::mem::take(&mut self.late) {
+            protocol::settle(port.as_mut())?;
+        }
+        let result = protocol::exchange(port.as_mut(), &self.params, self.address, command, data);
+        self.late = matches!(result, Err(Failed::Late));
+        result
     }
 
     /// `itech_it8500_get_status`, without its meta packets.
@@ -275,8 +303,6 @@ pub struct ItechIt8500Device {
     groups: Vec<ChannelGroup>,
     conn: String,
     samplerate: u64,
-    limit_samples: u64,
-    limit_msec: u64,
     /// [`NO_READING_BOUND`], but for tests.
     no_reading_bound: Duration,
     /// A port to use instead of opening `conn`, for tests.
@@ -312,8 +338,6 @@ impl ItechIt8500Device {
             groups: vec![ChannelGroup { name: GROUP.to_owned(), channels: vec![0, 1, 2] }],
             conn,
             samplerate: protocol::DEFAULT_SAMPLERATE,
-            limit_samples: 0,
-            limit_msec: 0,
             no_reading_bound: NO_READING_BOUND,
             pending: None,
             link: Arc::new(Mutex::new(link)),
@@ -408,8 +432,8 @@ impl Device for ItechIt8500Device {
     /// As `config_get`, which does not look at the group.
     fn get(&self, key: &Key, _group: Option<&str>) -> Result<Value> {
         Ok(match key {
-            Key::LimitSamples => Value::U64(self.limit_samples),
-            Key::LimitMsec => Value::U64(self.limit_msec),
+            Key::LimitSamples => Value::U64(self.link().limit_samples),
+            Key::LimitMsec => Value::U64(self.link().limit_msec),
             Key::Samplerate => Value::U64(self.samplerate),
             Key::Enabled => Value::Bool(self.status()?.load_on()),
             Key::Regulation => Value::Str(self.status()?.mode().name().to_owned()),
@@ -451,10 +475,10 @@ impl Device for ItechIt8500Device {
             // `core::config_set` refuses a 0 and says so; this is for a library
             // caller that comes straight here.
             Key::LimitSamples => {
-                self.limit_samples = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
+                self.link().limit_samples = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
             }
             Key::LimitMsec => {
-                self.limit_msec = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
+                self.link().limit_msec = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
             }
             Key::Samplerate => {
                 let rate = value.as_u64().ok_or_else(bad)?;
@@ -549,6 +573,7 @@ impl Device for ItechIt8500Device {
             let _ = worker.handle.join();
         }
         let mut link = self.link();
+        link.capturing = false;
         if link.port.is_some() {
             link.remote(false, "Failed to set unit back to local mode: -1");
         }
@@ -557,40 +582,49 @@ impl Device for ItechIt8500Device {
     }
 
     fn start(&mut self, sink: PacketSink) -> Result<()> {
-        if let Some(worker) = &self.worker {
-            if !worker.handle.is_finished() {
+        let reported = {
+            let mut link = self.link();
+            if link.capturing {
                 return Err(Error::Busy);
             }
-            let worker = self.worker.take().expect("just seen");
-            let _ = worker.handle.join();
-        }
-        let reported = {
-            let link = self.link();
             if link.port.is_none() {
                 return Err(Error::device("device is not open"));
             }
+            link.capturing = true;
             link.status
         };
+        // Over, by what it said ahead of its End, and maybe still sending that.
+        if let Some(worker) = self.worker.take() {
+            worker.stop.store(true, Ordering::SeqCst);
+            let _ = worker.handle.join();
+        }
         let capture = Capture {
             link: Arc::clone(&self.link),
-            limit_samples: self.limit_samples,
-            limit_msec: self.limit_msec,
-            // `serial_source_add`'s timeout, a whole number of milliseconds.
-            period: Duration::from_millis(1000 / self.samplerate),
+            period: protocol::poll_period(self.samplerate),
             no_reading_bound: self.no_reading_bound,
             reported,
         };
+        let link = Arc::clone(&self.link);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
-        let handle = std::thread::Builder::new()
+        let spawned = std::thread::Builder::new()
             .name("itech-it8500 acquisition".to_owned())
             .spawn(move || {
                 capture.run(&sink, &stop2);
+                // Ahead of the End, so that a client that sees it can start again.
+                link.lock().expect("link lock").capturing = false;
                 send_end(&sink, &stop2);
-            })
-            .map_err(Error::Io)?;
-        self.worker = Some(Worker { stop, handle });
-        Ok(())
+            });
+        match spawned {
+            Ok(handle) => {
+                self.worker = Some(Worker { stop, handle });
+                Ok(())
+            }
+            Err(e) => {
+                self.link().capturing = false;
+                Err(Error::Io(e))
+            }
+        }
     }
 
     /// Asks the thread to end, and does not wait: it may be sending.
@@ -615,8 +649,6 @@ impl Drop for ItechIt8500Device {
 /// One capture, on its own thread: `itech_it8500_receive_data`.
 struct Capture {
     link: Arc<Mutex<Link>>,
-    limit_samples: u64,
-    limit_msec: u64,
     period: Duration,
     no_reading_bound: Duration,
     /// The state the last meta packets go by.
@@ -630,8 +662,6 @@ impl Capture {
             return;
         }
         let started = Instant::now();
-        let limit = Duration::from_millis(self.limit_msec);
-        let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         let mut samples = 0u64;
         let mut last_good = started;
         loop {
@@ -640,7 +670,10 @@ impl Capture {
             }
             // The lock is held for the poll alone: a client's setting gets in
             // between two, and a full queue holds up nobody.
-            let polled = self.link.lock().expect("link lock").refresh();
+            let (polled, limit_samples, limit_msec) = {
+                let mut link = self.link.lock().expect("link lock");
+                (link.refresh(), link.limit_samples, link.limit_msec)
+            };
             match polled {
                 Ok(status) => {
                     last_good = Instant::now();
@@ -655,17 +688,18 @@ impl Capture {
                     log::error!("Acquisition failed: {e}.");
                     return;
                 }
-                Err(Failed::Answer) => {
+                Err(Failed::Answer | Failed::Late) => {
+                    let only_samples_can_end = limit_samples > 0 && limit_msec == 0;
                     if only_samples_can_end && last_good.elapsed() >= self.no_reading_bound {
                         log::error!("No reading from the load for {:?}.", self.no_reading_bound);
                         return;
                     }
                 }
             }
-            if self.limit_samples > 0 && samples >= self.limit_samples {
+            if limit_samples > 0 && samples >= limit_samples {
                 return;
             }
-            if self.limit_msec > 0 && started.elapsed() >= limit {
+            if limit_msec > 0 && started.elapsed() >= Duration::from_millis(limit_msec) {
                 return;
             }
         }
@@ -781,6 +815,14 @@ mod tests {
         status: Vec<(u8, u8)>,
         /// The address in answers.
         address: u8,
+        /// The answer to this command comes late: past a wait of 10 ms or more,
+        /// so past any that a read for a whole answer asks, and it is there for
+        /// the next short look at the line or, if none, ahead of the next answer.
+        late: Option<u8>,
+        withheld: Vec<u8>,
+        /// A read that waits for less than this finds no answer yet: the answer
+        /// comes this late.
+        answer_after: Option<Duration>,
         /// All silent after this many writes.
         answers: Option<usize>,
         fail_writes_after: Option<usize>,
@@ -806,6 +848,9 @@ mod tests {
                 silent: Vec::new(),
                 status: Vec::new(),
                 address: 0,
+                late: None,
+                withheld: Vec::new(),
+                answer_after: None,
                 answers: None,
                 fail_writes_after: None,
             };
@@ -865,6 +910,19 @@ mod tests {
             Ok(())
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            if self.input.is_empty() && !self.withheld.is_empty() {
+                if timeout <= Duration::from_millis(10) {
+                    self.input.extend(self.withheld.drain(..));
+                } else {
+                    // All of the wait: a read for an answer asks no more.
+                    std::thread::sleep(timeout);
+                    return Ok(0);
+                }
+            }
+            if self.answer_after.is_some_and(|after| timeout < after) {
+                std::thread::sleep(timeout);
+                return Ok(0);
+            }
             if self.input.is_empty() {
                 std::thread::sleep(timeout.min(Duration::from_millis(5)));
                 return Ok(0);
@@ -887,7 +945,13 @@ mod tests {
             if self.answers.is_some_and(|n| writes > n) || self.silent.contains(&data[2]) {
                 return Ok(());
             }
+            // What was on its way gets here first.
+            self.input.extend(self.withheld.drain(..));
             let answer = self.answer(data[2]);
+            if self.late == Some(data[2]) {
+                self.withheld = answer;
+                return Ok(());
+            }
             self.input.extend(answer);
             Ok(())
         }
@@ -1183,7 +1247,7 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.states = VecDeque::from([state(1000, 0, 64), state(2000, 0, 64)]);
         let mut d = device(fake);
-        d.limit_samples = 2;
+        d.link().limit_samples = 2;
         let packets = capture(&mut d);
         assert_eq!(voltages(&packets), [1.0, 2.0]);
         assert_eq!(polls(&seen), 2);
@@ -1207,7 +1271,7 @@ mod tests {
         fake.states = states.iter().cloned().collect();
         let mut d = device(fake);
         d.link().refresh().unwrap();
-        d.limit_samples = states.len() as u64 - 1;
+        d.link().limit_samples = states.len() as u64 - 1;
         d.samplerate = 15;
         let mut out = Vec::new();
         for p in capture(&mut d) {
@@ -1257,7 +1321,7 @@ mod tests {
         fake.states = VecDeque::from([state(0, 8, 64)]);
         let mut d = device(fake);
         d.get(&Key::Enabled, None).unwrap();
-        d.limit_samples = 1;
+        d.link().limit_samples = 1;
         let packets = capture(&mut d);
         assert!(!packets.iter().any(|p| matches!(p, Packet::Meta(_))));
     }
@@ -1266,7 +1330,7 @@ mod tests {
     fn polls_keep_their_period_and_the_first_waits_for_one() {
         let (fake, seen) = Fake::new();
         let mut d = device(fake);
-        d.limit_samples = 3;
+        d.link().limit_samples = 3;
         d.set(&Key::Samplerate, &Value::U64(5), None).unwrap();
         let started = Instant::now();
         capture(&mut d);
@@ -1296,7 +1360,7 @@ mod tests {
             state(2000, 0, 64),
         ]);
         let mut d = device(fake);
-        d.limit_samples = 2;
+        d.link().limit_samples = 2;
         d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
         assert_eq!(voltages(&capture(&mut d)), [1.0, 2.0]);
         assert_eq!(polls(&seen), 7);
@@ -1309,7 +1373,7 @@ mod tests {
         let (mut fake, _) = Fake::new();
         fake.states = VecDeque::from([long, state(2000, 0, 64), state(3000, 0, 64)]);
         let mut d = device(fake);
-        d.limit_samples = 3;
+        d.link().limit_samples = 3;
         d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
         assert_eq!(voltages(&capture(&mut d)), [1.0, 2.0, 3.0]);
     }
@@ -1319,7 +1383,7 @@ mod tests {
         let (mut fake, _) = Fake::new();
         fake.answers = Some(1);
         let mut d = device(fake);
-        d.limit_samples = 2;
+        d.link().limit_samples = 2;
         d.no_reading_bound = Duration::from_millis(400);
         d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
         let started = Instant::now();
@@ -1336,7 +1400,7 @@ mod tests {
         // Remote mode and three polls answered, then silence.
         fake.answers = Some(4);
         let mut d = device(fake);
-        d.limit_samples = 5;
+        d.link().limit_samples = 5;
         d.no_reading_bound = Duration::from_millis(600);
         d.set(&Key::Samplerate, &Value::U64(5), None).unwrap();
         let started = Instant::now();
@@ -1350,8 +1414,8 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.answers = Some(1);
         let mut d = device(fake);
-        d.limit_msec = 300;
-        d.limit_samples = 2;
+        d.link().limit_msec = 300;
+        d.link().limit_samples = 2;
         d.no_reading_bound = Duration::from_secs(60);
         d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
         let started = Instant::now();
@@ -1366,7 +1430,7 @@ mod tests {
     fn a_time_limit_ends_a_capture_that_answers() {
         let (fake, _) = Fake::new();
         let mut d = device(fake);
-        d.limit_msec = 250;
+        d.link().limit_msec = 250;
         d.set(&Key::Samplerate, &Value::U64(1), None).unwrap();
         let n = voltages(&capture(&mut d)).len();
         assert_eq!(n, 1, "the first poll comes after 1 s, and the limit is over by then");
@@ -1455,6 +1519,185 @@ mod tests {
         drop(rx);
         assert_eq!(commands(&seen).last(), Some(&0x20), "the local mode went out");
         assert_eq!(polls(&seen), 1, "blocked on the first sample until the stop");
+    }
+
+    #[test]
+    fn an_answer_is_waited_for_100_ms() {
+        for (after, in_time) in [(60, true), (150, false)] {
+            let (mut fake, _) = Fake::new();
+            fake.answer_after = Some(Duration::from_millis(after));
+            let d = device(fake);
+            assert_eq!(d.get(&Key::PowerTarget, None).is_ok(), in_time, "{after} ms");
+        }
+    }
+
+    #[test]
+    fn a_late_answer_does_not_pass_for_the_next() {
+        let (mut fake, seen) = Fake::new();
+        fake.late = Some(0x2a);
+        fake.status = vec![(0x2c, 0xa0)];
+        let mut d = device(fake);
+        assert!(d.set(&Key::CurrentLimit, &Value::F64(1.0), None).is_err(), "no answer in time");
+        assert!(
+            d.set(&Key::VoltageTarget, &Value::F64(5.0), None).is_err(),
+            "the first one's 80 is not the second one's"
+        );
+        assert_eq!(commands(&seen), [0x20, 0x2a, 0x2c]);
+    }
+
+    #[test]
+    fn without_the_wait_a_late_answer_misleads_as_the_module_says() {
+        let (mut fake, _) = Fake::new();
+        fake.late = Some(0x2a);
+        fake.status = vec![(0x2c, 0xa0)];
+        let mut d = device(fake);
+        assert!(d.set(&Key::CurrentLimit, &Value::F64(1.0), None).is_err());
+        d.link().late = false;
+        assert!(d.set(&Key::VoltageTarget, &Value::F64(5.0), None).is_ok());
+    }
+
+    #[test]
+    fn only_a_timeout_waits_for_the_line() {
+        let (mut fake, seen) = Fake::new();
+        fake.status = vec![(0x2c, 0xa0)];
+        let mut d = device(fake);
+        assert!(d.set(&Key::VoltageTarget, &Value::F64(5.0), None).is_err());
+        assert!(!d.link().late, "an answer came");
+        let (mut fake2, _) = Fake::new();
+        fake2.silent = vec![0x2c];
+        let mut d2 = device(fake2);
+        assert!(d2.set(&Key::VoltageTarget, &Value::F64(5.0), None).is_err());
+        assert!(d2.link().late);
+        drop(d2);
+        assert_eq!(commands(&seen), [0x20, 0x2c]);
+    }
+
+    #[test]
+    fn a_line_that_never_goes_quiet_ends_the_wait() {
+        struct Noisy;
+        impl Port for Noisy {
+            fn name(&self) -> &'static str {
+                "/dev/ttyNOISE"
+            }
+            fn set_params(&mut self, _: Params) -> Result<()> {
+                Ok(())
+            }
+            fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+                Ok(())
+            }
+            fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+                std::thread::sleep(Duration::from_millis(1));
+                buf[0] = 0x55;
+                Ok(1)
+            }
+            fn write(&mut self, _: &[u8]) -> Result<()> {
+                Ok(())
+            }
+            fn purge(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let started = Instant::now();
+        protocol::settle(&mut Noisy).map_err(Error::from).unwrap();
+        assert!(started.elapsed() >= Duration::from_secs(1));
+        assert!(started.elapsed() < CAPTURE_BOUND);
+    }
+
+    #[test]
+    fn a_get_goes_through_while_a_capture_waits_on_a_full_queue() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
+        // The header fits and the first sample does not.
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_polls(&seen, 1);
+        let (answer, got) = sync_channel(1);
+        std::thread::spawn(move || {
+            // With a lock held over the send, this blocks for good.
+            answer.send(d.get(&Key::Voltage, None).is_ok()).unwrap();
+            d
+        });
+        assert_eq!(got.recv_timeout(CAPTURE_BOUND), Ok(true), "the get is held up");
+        drop(rx);
+    }
+
+    #[test]
+    fn a_time_limit_outlasts_a_shorter_bound() {
+        let (mut fake, _) = Fake::new();
+        fake.answers = Some(1);
+        let mut d = device(fake);
+        d.link().limit_samples = 2;
+        d.link().limit_msec = 1200;
+        d.no_reading_bound = Duration::from_millis(100);
+        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
+        let started = Instant::now();
+        capture(&mut d);
+        assert!(started.elapsed() >= Duration::from_millis(1200), "the bound ended it");
+    }
+
+    #[test]
+    fn a_limit_set_during_a_capture_counts() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_polls(&seen, 2);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        assert!(matches!(until_end(&rx).last(), Some(Packet::End)));
+    }
+
+    #[test]
+    fn a_meta_comes_ahead_of_its_frame() {
+        let old = Status { operation: 0, demand: 64, ..Status::default() };
+        let new = Status { operation: 8, demand: 64, ..Status::default() };
+        let packets = sample_packets(&old, &new);
+        assert!(matches!(packets[0], Packet::Meta(_)));
+        assert!(matches!(packets[1], Packet::FrameBegin));
+        assert_eq!(packets.len(), 6);
+    }
+
+    #[test]
+    fn a_start_is_no_busy_while_the_old_thread_waits_to_send_its_end() {
+        let (fake, _) = Fake::new();
+        let mut d = device(fake);
+        d.link().limit_samples = 1;
+        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        // The frame's end stays in the queue, so the End cannot go.
+        for _ in 0..5 {
+            rx.recv_timeout(CAPTURE_BOUND).expect("a packet in time");
+        }
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while d.link().capturing {
+            assert!(Instant::now() < deadline, "the capture does not say it is over");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (tx2, rx2) = sync_channel(4096);
+        d.start(PacketSink::new(tx2, 0)).unwrap();
+        assert_eq!(voltages(&until_end(&rx2)), [12.0]);
+        // Told to stop and joined: its End was given up and its sink is gone.
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::FrameEnd))));
+        assert_eq!(
+            rx.recv_timeout(CAPTURE_BOUND).err(),
+            Some(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        );
+    }
+
+    #[test]
+    fn a_start_right_after_an_end_is_no_busy() {
+        let (fake, _) = Fake::new();
+        let mut d = device(fake);
+        d.link().limit_samples = 1;
+        // Faster than the line allows, for the many rounds.
+        d.samplerate = 1000;
+        for round in 0..300 {
+            let (tx, rx) = sync_channel(64);
+            d.start(PacketSink::new(tx, 0)).unwrap_or_else(|e| panic!("round {round}: {e}"));
+            until_end(&rx);
+        }
     }
 
     #[test]

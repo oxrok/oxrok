@@ -18,10 +18,12 @@
 //!   is ASCII there, in fields this model does not look into.
 //! - That an answer to a request that fails is a status packet, for reads too:
 //!   the manual.
-//! - `01`, the limits, is in no manual found: its layout is what the C driver
-//!   reads. So is `ff` as a broadcast address (the manual allows addresses up
-//!   to `fe`) and that a load answers a broadcast `6a` with its own address.
-//!   These rest on the driver alone, whose author had the hardware.
+//! - `01`, the limits, and `ff` as the broadcast address: ITECH's IT8500+
+//!   Programming Guide, pp. 5, 6 and 18, which lists `ff` for most commands and
+//!   addresses 0 to 31, where BK's manual has up to `fe`. The guide's `01` gives
+//!   the order of the fields and no units: those are what the C driver reads.
+//!   That a load answers a broadcast `6a`, and with its own address, rests on
+//!   the driver alone, whose author had the hardware.
 //! - The ranges a load refuses: the manual gives the code, `a0`, and not when.
 //!   That it refuses a setting beyond its limits is an inference.
 //! - The limits at power on are a BK 8500's, 120 V, 30 A, 300 W (the sigrok
@@ -64,6 +66,13 @@
 //! a broadcast of anything but `6a`, a setting while not in remote mode, and
 //! nothing left of a packet when a tool opens. A packet for another address gets
 //! no answer, and no violation: a load on a shared bus sees those.
+//!
+//! Two of these are inferences, and flag what the driver does not do, not what a
+//! load is known to refuse, so each still answers. The guide lists `ff` for most
+//! commands, so a broadcast of another is no fault of the device's. And the guide,
+//! p. 8, asks for command `20` ahead of controlling the input ("please setting
+//! electronic load to PC control state"); what a load does without it, neither
+//! it nor BK's manual says.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
