@@ -242,7 +242,9 @@ $!d'
     emu_case "the same target twice" --oracle-differs "$STALE_LIMIT_BUG" --no-output -- -d $K -c voltage_target=5 -c voltage_target=5 --set
     # Read back straight after. Inside the 245 ms C answers what the last L said, and
     # a slower box asks again after the settings: what the L after the first is the clock's.
-    AGAIN='1,/^bulk_in /!{/^bulk_out 02 4c0d0a -> 3$/d;/^bulk_in /d;}'
+    # The harness joins writes in a row, so that L may be on the end of a setting's
+    # line, and the count then differs.
+    AGAIN='1,/^bulk_in /!{s/^(bulk_out 02 [0-9a-f]*0d0a)4c0d0a -> [0-9]+$/\1/;s/^(bulk_out 02 [0-9a-f]+) -> [0-9]+$/\1/;/^bulk_out 02 4c0d0a$/d;/^bulk_in /d;}'
     emu_case "set then get voltage" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c voltage_target=5 --get voltage_target
     emu_case "set then get current" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c current_limit=0.5 --get current_limit
     emu_case "set then get enabled" --oracle-differs "$READBACK_BUG" --tx-filter "$AGAIN" -- -d $K -c enabled=on --get enabled
