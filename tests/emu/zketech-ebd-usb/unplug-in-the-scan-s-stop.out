@@ -1,0 +1,4 @@
+sr: serial-libsp: Write error (5): Input/output error.
+sr: zketech-ebd-usb: Error sending command: -1.
+sr: serial-libsp: Error getting port from name /dev/ttyACMN: (2) No such file or directory.
+Failed to open device.
