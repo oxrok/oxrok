@@ -8,6 +8,11 @@ release may change the library API.
 
 ### Changed
 
+- A capture that fails exits 1 and says `capture failed: WHY` last on stderr,
+  on every driver and port, where sigrok-cli and earlier oxrok exit 0
+  (`docs/CLI.md`, "Exit status"). For the library, `Packet::Failed` is a new
+  variant, `PacketSink::end` is how an acquisition finishes, and
+  `Session::run` returns `Error::CaptureFailed` after the last packet.
 - `emu/` is on the `vusb` crate: the contract, the bus, the shells, USB/IP
   and the control socket are vusb's, and `emu/` keeps the models, the `.tx`
   log as an observer, `hidcable` and the checks on a firmware upload. The

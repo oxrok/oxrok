@@ -10,7 +10,7 @@ use crate::cli::decode::Decoding;
 use crate::cli::parse;
 use oxrok::core::{Channel, Error, Packet, Result};
 use oxrok::formats::output::{self, Options, Output, OutputContext};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 
 const DEFAULT_OUTPUT_NOFILE: &str = "bits:width=64";
 const DEFAULT_OUTPUT_FILE: &str = "srzip";
@@ -30,6 +30,11 @@ pub struct Pipeline {
     /// Logic and analog samples received.
     pub received_logic: u64,
     pub received_analog: u64,
+}
+
+/// A write to a reader that has gone: no fault of the output's.
+fn reader_gone(e: &Error) -> bool {
+    matches!(e, Error::Io(io) if io.kind() == ErrorKind::BrokenPipe)
 }
 
 impl Pipeline {
@@ -100,7 +105,8 @@ impl Pipeline {
         })
     }
 
-    /// Handles one packet. False when the output can no longer be written.
+    /// Handles one packet. False when the output can no longer be written,
+    /// or its reader has gone, which only stops the run: `oxrok ... | head`.
     pub fn handle(&mut self, packet: &Packet) -> bool {
         match packet {
             // For the run's result, not for the outputs.
@@ -116,8 +122,10 @@ impl Pipeline {
         if let Some(d) = &mut self.decoding {
             let mut stdout = std::io::stdout();
             if let Err(e) = d.handle(packet, &mut stdout) {
-                log::error!("decoding: {e}");
-                self.failure.get_or_insert_with(|| format!("decoding: {e}"));
+                if !reader_gone(&e) {
+                    log::error!("decoding: {e}");
+                    self.failure.get_or_insert_with(|| format!("decoding: {e}"));
+                }
                 return false;
             }
         }
@@ -126,8 +134,10 @@ impl Pipeline {
         match main.receive(packet, &mut self.buf) {
             Ok(()) => {}
             Err(e) => {
-                log::error!("output: {e}");
-                self.failure.get_or_insert_with(|| format!("output: {e}"));
+                if !reader_gone(&e) {
+                    log::error!("output: {e}");
+                    self.failure.get_or_insert_with(|| format!("output: {e}"));
+                }
                 return false;
             }
         }
@@ -140,13 +150,15 @@ impl Pipeline {
             && let Some(sink) = &mut self.sink
             && let Err(e) = sink.write_all(&self.buf).and_then(|()| sink.flush())
         {
-            self.failure.get_or_insert_with(|| format!("output: {e}"));
+            if e.kind() != ErrorKind::BrokenPipe {
+                self.failure.get_or_insert_with(|| format!("output: {e}"));
+            }
             return false;
         }
         true
     }
 
-    /// The reason the output stopped being written, if it did.
+    /// The reason the output could no longer be written, if so.
     pub fn failure(&self) -> Option<&str> {
         self.failure.as_deref()
     }

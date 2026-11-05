@@ -372,7 +372,7 @@ impl Capture<'_> {
         self.bad += 1;
         if self.bad >= MAX_BAD {
             log::error!("Too many damaged answers.");
-            return Ok(true);
+            return Err(crate::core::Error::device("too many damaged answers"));
         }
         if self.limit_reached() {
             return Ok(true);

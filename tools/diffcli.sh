@@ -1081,12 +1081,13 @@ flush()
     #   goldens, and a sigrok-cli that matches oxrok fails the case
     #   ("oracle fixed?"). --expect-fail and --stderr then apply to
     #   oxrok alone (an oxrok that refuses what sigrok-cli runs).
-    #   --oxrok-fails, a full case whose capture fails (WHY: how), for which
-    #   sigrok-cli exits as ever: oxrok must exit 1 and say `capture failed: `
-    #   on stderr, or give the error of a refused start, its last line, when
-    #   the fault gets there before the capture; that line is taken out, and
-    #   the rest is compared as always, --no-oracle too. In a --record case
-    #   the fixture says `# fails: WHY`.
+    #   --oxrok-fails, a full case whose capture fails, for which sigrok-cli
+    #   exits as ever: oxrok must exit 1 and say `capture failed: ` on stderr
+    #   with WHY in its text (A|B when either can come, as the pace has it).
+    #   In an --unplug case the last line of a refused start does as well,
+    #   when the unplug gets there before the capture. That line is taken
+    #   out, and the rest is compared as always, --no-oracle too. In a
+    #   --record case the fixture says `# fails: WHY`.
     #   --unplug and --interrupt arm the emulator's event at WHEN
     #   (in=EP:N, out=EP:N or model; docs/USB.md) for each tool's run,
     #   which must fire it: the device leaves the bus and comes back
@@ -1131,6 +1132,13 @@ flush()
     #   them, so a recording that is not deterministic fails. The name
     #   neither starts nor ends with white space and holds no tab or
     #   newline: it is the section name in the log.
+    # Whether the text $1 holds one of the |-separated reasons of $2.
+    emu_fails_says() {
+        printf '%s\n' "$2" | tr '|' '\n' | grep -qF -f - -- /dev/fd/3 3<<EOF
+$1
+EOF
+    }
+
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
@@ -1333,13 +1341,19 @@ flush()
                 [ $st = 0 ] || why="$why; sigrok-cli exited $st, where --oracle-differs says it exits 0"
             elif [ -n "$ofails" ] && [ $t = b ]; then
                 [ $st = 1 ] || why="$why; oxrok exited $st, where --oxrok-fails says it exits 1 ($ofails)"
-                # What a start refused says, for an unplug that gets there first.
+                # The reason goes before anything is compared. An unplug can
+                # get there before the capture does: the error of the start
+                # it refused, the last line, instead.
                 if grep -q '^capture failed: .' "$TMP/b.err"; then
+                    ofails_said=$(grep '^capture failed: .' "$TMP/b.err" | tail -n 1)
                     sed -i '/^capture failed: /d' "$TMP/b.err"
-                elif [ -s "$TMP/b.err" ]; then
-                    sed -i '$d' "$TMP/b.err"
                 else
-                    why="$why; oxrok said nothing ($ofails)"
+                    case $event in unplug*) ofails_said=$(tail -n 1 "$TMP/b.err"); sed -i '$d' "$TMP/b.err" ;; *) ofails_said="" ;; esac
+                fi
+                if [ -z "$ofails_said" ]; then
+                    why="$why; oxrok gave no 'capture failed: ' line ($ofails)"
+                elif ! emu_fails_says "$ofails_said" "$ofails"; then
+                    why="$why; oxrok said '$ofails_said', where --oxrok-fails says '$ofails'"
                 fi
             elif [ $hangs = 1 ]; then
                 # 137: timeout's KILL, 5 s after a TERM that did not end it.

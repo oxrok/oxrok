@@ -322,7 +322,7 @@ emu_cases() {
     # 28 (bit 4), the chunk; write-reg 29 (R14).
     for f in stall=read-reg:14 stall=read-reg:15 stall=read-reg:16 stall_reply=read-reg:14 short_reply=read-reg:16 stall=write-reg:24 stall=write-reg:25 stall=read-data stall=write-reg:26 stall=read-reg:23 stall=write-reg:27 stall=read-reg:24 stall=write-reg:28; do
         sla_options configured=1 $f
-        emu_case "fault capture $f" --oxrok-fails "command 3 failed: LIBUSB_ERROR_PIPE or command 4 failed: LIBUSB_ERROR_PIPE ..." --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+        emu_case "fault capture $f" --oxrok-fails "LIBUSB_ERROR_PIPE|endpoint stalled|short register read" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     done
     # What only the debug log says in the C.
     sla_options configured=1 stall=read-reg:14

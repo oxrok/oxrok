@@ -190,10 +190,14 @@ fn replay(path: &Path) -> Result<(), String> {
     let got = out.join().unwrap().replace("\r\n", "\n");
     let err = err.join().unwrap();
     // `# fails: WHY`, from emu_case --oxrok-fails: the capture fails, and says
-    // so last.
-    if fixture.lines().any(|l| l.starts_with("# fails: ")) {
-        if status.code() != Some(1) || !err.lines().any(|l| l.starts_with("capture failed: ")) {
-            return Err(format!("the capture should fail, but exited with {status}:\n{err}"));
+    // why last (A|B when either can come).
+    if let Some(why) = fixture.lines().find_map(|l| l.strip_prefix("# fails: ")) {
+        let said = err.lines().rfind(|l| l.starts_with("capture failed: "));
+        let said_why = said.is_some_and(|said| why.split('|').any(|w| said.contains(w)));
+        if status.code() != Some(1) || !said_why {
+            return Err(format!(
+                "the capture should fail ({why}), but exited with {status}:\n{err}"
+            ));
         }
     } else if !status.success() {
         return Err(format!("oxrok exited with {status}:\n{err}"));

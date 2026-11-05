@@ -1699,7 +1699,7 @@ whose records end on a packet boundary (about 1 in 256) would hit the 2
 s timeout, and protocol.c:749 drops the chunk with exit 0. What the
 driver shows: it ignores a failed key step (protocol.c:646), has no time
 limit on a trigger that never fires, ends a capture with exit 0 on
-errors. T goes on the first match in memory, whatever the
+errors (oxrok: exit 1). T goes on the first match in memory, whatever the
 depth; the distance from the hardware's trigger is unknown. It sums
 device records into an `int` unchecked (protocol.c:782): a total from
 2^31 up to 2^32 goes negative and fails the allocation, and one that

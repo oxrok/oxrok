@@ -226,7 +226,7 @@ emu_cases() {
     testo_options in-stall=2
     emu_case "testo hang in stalls in capture" --oxrok-fails "endpoint stalled" --oracle-bug "api.c:294-297 resubmits after any error, for ever" $H --stderr --filter "$E" -- -d $D --samples 1
     testo_options units=1 units2=$U17,1 swap=1
-    emu_case "testo hang overrun in capture" --oracle-bug "api.c:238-243 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang overrun in capture" --oxrok-fails "too many damaged answers" --oracle-bug "api.c:238-243 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
     # Two temperatures: i goes back to the first channel each time.
     testo_options units=1,1
     emu_case "testo hang same unit twice" --oracle-bug "$I, and two of a unit send the second for ever" $H -- -d $D --samples 1

@@ -576,6 +576,8 @@ enum Next {
     End,
     /// The FX2 gave up: too many transfers failed or brought nothing.
     GaveUp,
+    /// A transfer that holds half a word.
+    OddLength,
 }
 
 /// The counters of `struct dev_context` a capture keeps.
@@ -620,6 +622,10 @@ impl Acquisition {
                     )));
                     break;
                 }
+                Next::OddLength => {
+                    outcome = Err(Error::device("a transfer of an odd number of bytes"));
+                    break;
+                }
             }
         }
         if let Err(e) = link.abort_acquisition() {
@@ -634,7 +640,7 @@ impl Acquisition {
     fn transfer(&mut self, transfer: Result<Vec<u8>>, s: &mut State, sink: &PacketSink) -> Next {
         // A timeout counts as an empty transfer, any other failure as a
         // failed one.
-        let (data, mut failed) = match transfer {
+        let (data, failed) = match transfer {
             Ok(d) => (d, false),
             Err(Error::Timeout) => (Vec::new(), false),
             Err(e) => {
@@ -644,8 +650,7 @@ impl Acquisition {
         };
         if data.len() % 2 != 0 {
             log::error!("Got an odd number of bytes from the device. This should not happen.");
-            failed = true;
-            s.empty = MAX_EMPTY_TRANSFERS;
+            return Next::OddLength;
         }
         if data.is_empty() || failed {
             s.empty += 1;
@@ -732,7 +737,7 @@ mod tests {
         let mut s = State { sent: 0, empty: 10, fired: true };
         assert_eq!(a.transfer(Ok(words(&[1])), &mut s, &sink), Next::Continue);
         assert_eq!(s.empty, 0);
-        assert_eq!(a.transfer(Ok(vec![1, 2, 3]), &mut s, &sink), Next::GaveUp);
+        assert_eq!(a.transfer(Ok(vec![1, 2, 3]), &mut s, &sink), Next::OddLength);
     }
 
     #[test]

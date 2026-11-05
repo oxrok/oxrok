@@ -287,7 +287,7 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # A chunk that fails: what came is kept, and the log is not cleared.
     for f in stall-out=07@2 stall-in=07@2 silent=07@2 garbage=07@2 short=07@2; do
         kc_options stored=100 $f
-        emu_case "log chunk $f" --oxrok-fails "endpoint stalled or failed to read the log: an invalid answer ..." --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
+        emu_case "log chunk $f" --oxrok-fails "endpoint stalled|timeout|failed to read the log: an invalid answer" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
     done
     kc_options
 

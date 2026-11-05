@@ -323,9 +323,11 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
     emu_case "unplug in the scan" --unplug out=2:2 --timeout 10 --keep-header --no-output -- -d $O --scan
     # The hangup ends the capture with no sample: an empty logic packet, and
     # the output's loop runs off (hex.c:163).
+    # oxrok fails it either way, by the pace: in the start's last drain (I/O
+    # error, no capture) or in the capture (Broken pipe). The .out and .tx are alike.
     emu_options sends=0
-    emu_case "unplug waiting" --oxrok-fails "Broken pipe" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
-    emu_case "unplug waiting trigger" --oxrok-fails "Broken pipe" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
+    emu_case "unplug waiting" --oxrok-fails "Broken pipe|serial port: I/O error" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
+    emu_case "unplug waiting trigger" --oxrok-fails "Broken pipe|serial port: I/O error" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
     # A write of the start failing: the scan writes 7, a capture the stage's
     # 3 first. Later than this the unplug and the run race, and C's hangup
     # has it end by a crash or an error as the pace has it.

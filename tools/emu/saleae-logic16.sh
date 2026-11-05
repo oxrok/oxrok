@@ -202,7 +202,7 @@ emu_cases() {
     logic16_options flashed=1 stall_in=2
     emu_case "fault bulk in stall" -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 short_in=1
-    emu_case "fault odd length" --oxrok-fails "over 64 sample transfers in a row failed or brought nothing" --no-output -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault odd length" --oxrok-fails "a transfer of an odd number of bytes" --no-output -- -d $F -C 0 --samples 8 -O hex
     # One word with 16 channels: no complete sample yet, the driver
     # resubmits and the stream goes on.
     logic16_options flashed=1 short_in=2

@@ -416,6 +416,27 @@ mod tests {
     }
 
     #[test]
+    fn too_many_damaged_answers_fail_the_capture() {
+        let start = START.replacen("33e2", "ffff", 1);
+        let again = "bulk_out 02 12000000010155d1b7 -> 9\n\
+            bulk_in 81 128 -> 0160210000000100020000ae4101000000003642030000ffff\n";
+        let mut d = device(&format!("{SCAN}{start}{}", again.repeat(15)));
+        d.open().unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let (tx, rx) = sync_channel(16);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let packets: Vec<Packet> = rx.iter().map(|p| p.1).collect();
+        assert!(
+            matches!(
+                &packets[1..],
+                [Packet::Failed(why), Packet::End] if why.contains("too many damaged answers")
+            ),
+            "{packets:?}"
+        );
+        d.close().unwrap();
+    }
+
+    #[test]
     fn a_failed_baud_rate_fails_the_start_with_no_packet() {
         let mut d = device(&format!("{SCAN}ctl_out 40 03 001a 0000 - -> err timeout\n"));
         d.open().unwrap();

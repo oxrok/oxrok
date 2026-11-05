@@ -264,7 +264,7 @@ emu_cases() {
     done
     for f in stall=write-reg:10 stall=read-lregs:2 stall_reply=read-lregs:2 short_reply=read-lregs:2 stall=write-reg:14 stall=read-reg:7 stall_reply=read-reg:7 short_reply=read-reg:7 stall=write-reg:19 stall=read-mem:1 stall_reply=read-mem:1 short_reply=read-mem:1; do
         lwla_options $f
-        emu_case "fault capture $f" --oxrok-fails "endpoint stalled or received size 1006 does not match expected size 1008 ..." --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
+        emu_case "fault capture $f" --oxrok-fails "endpoint stalled|match expected size" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
     # The samples are out by then: logged, and no failure.
     lwla_options stall=write-reg:22
@@ -349,6 +349,6 @@ emu_cases() {
     done
     for f in stall=write-reg:15 stall=read-reg:3 stall_reply=read-reg:4 short_reply=read-reg:3 stall=write-reg:16 short_reply=read-mem:3 stall=read-mem:3; do
         lwla_options model=1016 $f
-        emu_case "1016 fault capture $f" --oxrok-fails "endpoint stalled or received size 2 doesn't match expected size 4 ..." --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
+        emu_case "1016 fault capture $f" --oxrok-fails "endpoint stalled|match expected size" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
 }

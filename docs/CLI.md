@@ -839,10 +839,13 @@ other than
 So these fail: a device that leaves, a read or write error that ends the
 capture, a poll or retry limit giving up, a bound on silence that ends a
 capture whose limit was not met, a stream with no limit that runs out
-(saleae-logic-pro), and an output that can no longer be written (a full disk,
-or a pipe whose reader has gone: `oxrok ... | head` can end in `capture
-failed: output: Broken pipe`, where sigrok-cli dies of the signal). Errors a
-driver retries past or only warns about do not.
+(saleae-logic-pro), and an output that can no longer be written (a full disk).
+Errors a driver retries past or only warns about do not. A reader that goes,
+`oxrok ... | head`, stops the capture as Ctrl-C does: exit 0, where sigrok-cli
+dies of the signal. oxrok does not read stdin, where sigrok-cli takes any key or its end as a stop:
+`--continuous` ends on a signal, a failure or a reader that goes. With `-i` there is
+no capture, but an output that can no longer be written exits 1 with
+`output: WHY` all the same.
 
 A failed capture says so on one line, the last one it writes:
 
