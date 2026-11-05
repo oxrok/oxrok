@@ -97,6 +97,7 @@ pub mod drivers {
     pub mod lascar_el_usb;
     pub mod lecroy_logicstudio;
     pub mod logicport;
+    pub mod manson_hcs_3xxx;
     pub mod microchip_pickit2;
     pub mod ols;
     pub mod pipistrello_ols;
@@ -123,6 +124,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
+    registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));
