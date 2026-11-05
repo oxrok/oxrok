@@ -1,2 +1,5 @@
-sr: serial-libsp: Error getting port from name /dev/ttyACM97: (2) No such file or directory.
-Failed to open device.
+Driver functions:
+    Frequency counter
+Scan options:
+    conn
+bkprecision-1856d - BK Precision bk-1856d with 1 channel: P1

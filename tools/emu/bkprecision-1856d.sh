@@ -4,6 +4,7 @@
 EMU_MODEL=bkprecision-1856d
 EMU_CDC=1
 EMU_DRIVER=bkprecision-1856d
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=bkprecision-1856d
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -11,18 +12,26 @@ emu_cases() {
     emu_conns
     # A frame of the 15 bytes the parser reads, as the model's replies= wants it.
     R() { emu_hex "$1"; }
+    # oxrok's log prefix, on its side only.
+    L='s/^oxrok: err: oxrok::drivers::bkprecision_1856d: /sr: bkprecision-1856d: /'
+    UNLISTED="sr_driver_scan drops a scan option the driver does not list and finds nothing (hwdriver.c:584-585), with exit 0; oxrok says what is wrong"
+    TIMER="a choice, not a bug of C, which still gets the reading: after an expiry its next 100 ms include the sleep after G (session.c:108-109, :134), so at 10 s G3 and D0 go a third time; oxrok's 100 ms run from the request"
+    QUEUED="the driver reads what lies queued as the answer to the request it just sent (protocol.c:330); oxrok flushes ahead of a request after a reading, so what lies there stays out of the next reading"
+    SILENT="protocol.c:316-324 restarts for ever on a counter that stopped answering, and --samples never ends; oxrok ends a capture with only a sample limit after 5 s with no usable answer"
+    GONE="protocol.c:316-324 goes on writing to a port that left, and logs two errors per round for ever; oxrok ends after four failed writes"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # A scan does not open the port and takes any name (api.c's scan).
     emu_options
     emu_case "scan" --keep-header -- -d $B --scan
     emu_case "scan no conn" --keep-header --no-output -- -d bkprecision-1856d --scan
     emu_case "scan no such node" --keep-header -- -d bkprecision-1856d:conn=/dev/ttyACM97 --scan
-    # serialcomm is not in scanopts, and a scan with it finds nothing.
-    emu_case "scan serialcomm is not its option" --keep-header --no-output -- -d $B:serialcomm=2400/8n1 --scan
+    # serialcomm is not in scanopts.
+    emu_case "scan serialcomm is not its option" --oracle-differs "$UNLISTED" --expect-fail --stderr -- -d $B:serialcomm=2400/8n1 --scan
 
     # --show and --get: what the settings say with no capture, and nothing on the wire.
     emu_case "show" --keep-header -- -d $B --show
-    emu_case "show no such node" --stderr --expect-fail --keep-header -- -d bkprecision-1856d:conn=/dev/ttyACM97 --show
+    emu_case "show no such node" --expect-fail --keep-header -- -d bkprecision-1856d:conn=/dev/ttyACM97 --show
     emu_case "get gate_time" -- -d $B --get gate_time
     emu_case "get data_source" -- -d $B --get data_source
     emu_case "get limit_samples is not gettable" --stderr --expect-fail -- -d $B --get limit_samples
@@ -32,19 +41,19 @@ emu_cases() {
         emu_case "set gate_time $g reads back" -- -d $B -c gate_time=$g --get gate_time
     done
     emu_case "show gate_time 10s" --keep-header -- -d $B -c gate_time=10s --show
-    emu_case "set gate_time not in the list" --stderr --expect-fail -- -d $B -c gate_time=2s --get gate_time
-    emu_case "set gate_time 1000ms" --stderr --expect-fail -- -d $B -c gate_time=1000ms --get gate_time
-    emu_case "set gate_time 0.1s" --stderr --expect-fail -- -d $B -c gate_time=0.1s --get gate_time
-    emu_case "set gate_time no number" --stderr --expect-fail -- -d $B -c gate_time=abc --get gate_time
+    emu_case "set gate_time not in the list" --no-output --expect-fail -- -d $B -c gate_time=2s --get gate_time
+    emu_case "oxrok says: no such gate" --no-oracle-only --stderr --expect-fail -- -d $B -c gate_time=2s --get gate_time
+    emu_case "set gate_time no number" --no-output --expect-fail -- -d $B -c gate_time=abc --get gate_time
     for s in A C; do
         emu_case "set data_source $s reads back" -- -d $B -c data_source=$s --get data_source
     done
     emu_case "show data_source A" --keep-header -- -d $B -c data_source=A --show
-    emu_case "set data_source not in the list" --stderr --expect-fail -- -d $B -c data_source=B --get data_source
-    emu_case "set data_source a small letter" --stderr --expect-fail -- -d $B -c data_source=a --get data_source
+    emu_case "set data_source not in the list" --no-output --expect-fail -- -d $B -c data_source=B --get data_source
+    emu_case "set data_source a small letter" --no-output --expect-fail -- -d $B -c data_source=a --get data_source
     emu_case "set no such key" --stderr --expect-fail -- -d $B -c volage=1 --get gate_time
     emu_case "set limit_samples" --no-output -- -d $B -c limit_samples=5 --set
-    emu_case "set limit_samples 0" --stderr --expect-fail -- -d $B -c limit_samples=0 --set
+    emu_case "oxrok says: no such source" --no-oracle-only --stderr --expect-fail -- -d $B -c data_source=B --get data_source
+    emu_case "set limit_samples 0" --no-output --expect-fail -- -d $B -c limit_samples=0 --set
     emu_case "set continuous has no set" --stderr --expect-fail -- -d $B -c continuous=on --set
 
     # A capture: F, G, D, and for each reading G and D again.
@@ -55,8 +64,9 @@ emu_cases() {
     emu_case "samples no number" --stderr --expect-fail -- -d $B --samples abc
     emu_case "time is not offered" --stderr --expect-fail -- -d $B --time 100ms
     emu_case "frames is not offered" --stderr --expect-fail -- -d $B --frames 2
-    emu_case "no such channel" --stderr --expect-fail -- -d $B -C Z --samples 1
-    emu_case "no such node" --stderr --expect-fail -- -d bkprecision-1856d:conn=/dev/ttyACM97 --samples 1
+    emu_case "no such channel" --no-output --expect-fail -- -d $B -C Z --samples 1
+    emu_case "no such node" --no-output --expect-fail -- -d bkprecision-1856d:conn=/dev/ttyACM97 --samples 1
+    emu_case "oxrok says: no such node" --no-oracle-only --stderr --expect-fail -- -d bkprecision-1856d:conn=/dev/ttyACM97 --samples 1
 
     # What -c changes on the wire, and in the reading.
     for g in 100ms 1s 10s; do
@@ -94,6 +104,12 @@ emu_cases() {
     emu_case "frame Hz" -- -d $B --samples 1
     emu_options replies=$(R '   1.00000GHz \r')
     emu_case "frame GHz has no factor" -- -d $B --samples 1
+    # The manual writes KHz, and C tests for k: 1000 times low, if a counter sends it.
+    emu_options replies=$(R '   1.00000KHz \r')
+    emu_case "frame KHz has no factor" -- -d $B --samples 1
+    # The top of the range in a float: not what the frame says.
+    emu_options replies=$(R ' 3700.0001MHz \r')
+    emu_case "frame at the top of the range" -- -d $B --samples 1
     emu_options replies=$(R '  12345678 Hz \r')
     emu_case "frame no point Hz" -- -d $B --samples 1
     emu_options replies=$(R '      1234MHz \r')
@@ -162,34 +178,34 @@ emu_cases() {
     emu_options replies=$(R '             0\r'),$(R '   1.00000 Hz \r')
     emu_case "empty a zero last" -- -d $B --samples 1
     emu_options replies=$(R '     0  0     \r'),$(R '   1.00000 Hz \r')
-    emu_case "two zeros are no empty message" --stderr -- -d $B --samples 1
+    emu_case "two zeros are no empty message" --stderr --filter "$L" -- -d $B --samples 1
     emu_options replies=$(R '     \000        \r'),$(R '   1.00000 Hz \r')
-    emu_case "a NUL is no empty message" --stderr -- -d $B --samples 1
+    emu_case "a NUL is no empty message" --stderr --filter "$L" -- -d $B --samples 1
 
     # What fails the checks, each followed by a good frame: its log, and what goes
     # out again.
     emu_options replies=$(R '   1.00000 Hz \n'),$(R '   1.00000 Hz \r')
-    emu_case "no CR at the end" --stderr -- -d $B --samples 1
+    emu_case "no CR at the end" --stderr --filter "$L" -- -d $B --samples 1
     for unit in ms-'us  ' tail-' Hz_' left-'Hz  ' none-'    '; do
         emu_options replies=$(R "   1.00000${unit#*-}\r"),$(R '   1.00000 Hz \r')
-        emu_case "not a frequency ${unit%%-*}" --stderr -- -d $B --samples 1
+        emu_case "not a frequency ${unit%%-*}" --stderr --filter "$L" -- -d $B --samples 1
     done
     emu_options replies=$(R '   1.00000 Hz \r'),$(R '   1.00000 s  \r'),$(R '   2.00000 Hz \r')
     emu_case "not a frequency, the wire" -- -d $B --samples 2
     emu_options replies=$(R '   1.00000 Hz\000\r'),$(R '   1.00000 Hz \r')
-    emu_case "not a frequency a NUL in the unit" --stderr -- -d $B --samples 1
+    emu_case "not a frequency a NUL in the unit" --stderr --filter "$L" -- -d $B --samples 1
     # A frame in pieces, and two in one.
     emu_options chunk=1
     emu_case "one byte per transfer" -- -d $B --samples 2
     emu_options replies=$(R '   1.00000 Hz \r   2.00000 Hz \r')
-    emu_case "two frames at once" -- -d $B --samples 2
+    emu_case "two frames at once" --oracle-differs "$QUEUED" -- -d $B --samples 2
     # A frame too short waits for the rest, and the next frame is out of step.
     G2=$(R '   2.00000 Hz \r')
     emu_options replies=$(R '   1.00000 Hz\r'),$G2,$G2,$G2,$G2
-    emu_case "a frame too short" --tx-filter "$FOLD" --stderr -- -d $B --samples 1
+    emu_case "a frame too short" --tx-filter "$FOLD" --stderr --filter "$L" -- -d $B --samples 1
     # A frame too long: its surplus goes in the flush if it has come.
     emu_options replies=$(R '   1.00000 Hz \r\r'),$(R '   2.00000 Hz \r')
-    emu_case "a frame too long" --stderr -- -d $B --samples 2
+    emu_case "a frame too long" --oracle-differs "$QUEUED" -- -d $B --samples 2
 
     # A request with no answer: 100 ms, then G and D again. The count of those
     # goes by the clock.
@@ -197,36 +213,46 @@ emu_cases() {
     emu_case "one answer missing" --tx-filter "$FOLD" -- -d $B --samples 1
     emu_options replies=$(R '   1.00000 Hz \r'),,$(R '   2.00000 Hz \r')
     emu_case "a later answer missing" --tx-filter "$FOLD" -- -d $B --samples 2
+    # Where it comes in a round goes by the clock, up to the first reading: that is
+    # the end of the capture, and the fake port in the unit tests has what follows.
     emu_options late=1:15
-    emu_case "a late answer" --tx-filter "$FOLD" -- -d $B --samples 1
-    emu_options late=2:15
-    emu_case "a late answer later" --tx-filter "$FOLD" -- -d $B --samples 2
+    emu_case "a late answer" --tx-filter "$LATE" -- -d $B --samples 1
     # After an expiry C's timer has gone by when G3's sleep ends, so G3 and D0 go
     # again before the answer can have come. session.c:108-109 took the time, in
     # fd_source_check, and :134 reuses it. After a reading the check took no time.
-    emu_options replies=,$(R '   1.00000 Hz \r')
+    # The answer comes a few offers after its request: at once, C's look at the line
+    # right after D0 finds it about one time in thirty, and no third G3 goes.
+    emu_options replies=,$(R '   1.00000 Hz \r') late=2:2
     emu_case "lib an expiry at gate 10s" --libsigrok -- -d $B -c gate_time=10s --samples 1
+    emu_case "an expiry at gate 10s" --oracle-differs "$TIMER" -- -d $B -c gate_time=10s --samples 1
     # A silent counter: C goes on for ever.
     emu_options answers=0
     emu_case "lib silent never ends" --libsigrok --hangs --timeout 2 --no-output --tx-filter "$FOLD" -- -d $B --samples 1
-    emu_case "silent never ends" --hangs --timeout 2 --no-output --tx-filter "$FOLD" -- -d $B --samples 1
+    emu_case "silent ends after the bound" --oxrok-fails "no usable answer from the device for 5s" --oracle-bug "$SILENT" --oracle-hangs --timeout 8 --stderr --filter "$L" --tx-filter "$FOLD" -- -d $B --samples 1
 
-    # The stops sigrok-cli has: --continuous at stdin's end, at once, and none else.
+    # The stops. sigrok-cli has none it can be held to, so its side runs as a library.
+    # --continuous under sigrok-cli stops at stdin's end, and oxrok has no such stop.
+    emu_options answers=2
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --timeout 3 --interrupt model --tx-filter "$LATE_SIGNAL" -- -d $B --samples 1000
+    emu_case "continuous and an interrupt" --oracle-bug "$SIGINT_BUG" --timeout 3 --interrupt model --tx-filter "$LATE_SIGNAL" -- -d $B --continuous
     emu_options
-    emu_case "continuous ends at stdin" --no-output --tx-filter "$CONTINUOUS" -- -d $B --continuous
     emu_case "lib stop" --libsigrok -- -d $B --continuous --stop-after 2
     emu_case "lib stop at the header" --libsigrok --tx-filter "$CONTINUOUS" --no-output -- -d $B --continuous --stop-after 0
 
     # The port going.
     emu_options answers=2
-    emu_case "unplug in a capture" --hangs --timeout 3 --stderr --unplug model -- -d $B --samples 3
+    emu_case "lib unplug in a capture" --libsigrok --hangs --timeout 3 --stderr --filter '3,$d' --unplug model -- -d $B --samples 3
+    # At -l 0, as C's two lines in turn defeat the folding of an .oracle: the case
+    # above pins them.
+    emu_case "unplug in a capture" --oxrok-fails "commands could not go out" --oracle-bug "$GONE" --oracle-hangs --timeout 8 --unplug model -- -d $B -l 0 --samples 3
+    emu_case "oxrok says: the port went" --oxrok-fails "commands could not go out" --no-oracle-only --stderr --timeout 8 --unplug model -- -d $B --samples 3
 
     # The USB side misbehaving, the shell's options.
     emu_options stall=line
     # The kernel takes the stall and the line stays at 9600.
     emu_case "line coding stalled" -- -d $B --samples 1
     emu_options stall=lines
-    emu_case "control lines stalled" --stderr --expect-fail -- -d $B --samples 1
+    emu_case "control lines stalled" --no-output --expect-fail -- -d $B --samples 1
     emu_options
 }
 
@@ -236,6 +262,12 @@ emu_conns() {
     # A run of G and D with no answer between, one .tx line whose length goes by
     # the clock.
     FOLD='s/^bulk_out 02 ((46[0-9]{2}0d)?47[0-9]{2}0d44300d)(47[0-9]{2}0d44300d)+ -> [0-9]+$/bulk_out 02 \1 AGAIN/'
+    # A signal that a stalled tool takes after an answer's 100 ms: G and D go once more
+    # after the event, and anything else there still fails the case.
+    LATE_SIGNAL='/^interrupt$/,$ { /^bulk_out 02 (47300d44300d)+ -> [0-9]+$/d; }'
+    # All that goes out up to the first answer, cut anywhere.
+    LATE='s/^bulk_out 02 46320d(47300d|44300d)* -> [0-9]+$/bulk_out 02 F THEN G AND D/
+/^bulk_in/q'
     # D alone and what it gets, on a counter with nothing to show.
     NO_SIGNAL='/^bulk_in 82 15 -> 20202020202020202030202020200d$/d
 /^bulk_out 02 44300d -> 3$/d'

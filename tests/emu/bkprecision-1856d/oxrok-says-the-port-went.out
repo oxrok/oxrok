@@ -1,0 +1,6 @@
+oxrok: err: oxrok::drivers::bkprecision_1856d: unable to send gate time command
+oxrok: err: oxrok::drivers::bkprecision_1856d: unable to send request data command
+oxrok: err: oxrok::drivers::bkprecision_1856d: unable to send gate time command
+oxrok: err: oxrok::drivers::bkprecision_1856d: unable to send request data command
+oxrok: err: oxrok::drivers::bkprecision_1856d: Acquisition failed: 4 commands could not go out.
+oxrok: warn: oxrok::cli::pipeline: Device only sent 2 samples.
