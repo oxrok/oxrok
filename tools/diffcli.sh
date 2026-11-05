@@ -259,6 +259,7 @@ case_ "demo time limit" -- -d $D4 -g Logic -c pattern=walking-one --time 1ms -O 
 case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic -c pattern=walking-one --samples 5 -O bits
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
+case_ "demo group any case" -- -d demo -g logic -c pattern=sine --get pattern
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
 case_ "demo scan option without a value" --stderr -- -d demo:logic_channels --scan
 case_ "demo option without a value" --stderr -- -d demo -c samplerate= --set

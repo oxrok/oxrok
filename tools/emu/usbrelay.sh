@@ -31,7 +31,7 @@ emu_cases() {
     # sr_parse_boolstring() reads a prefix: sigrok-cli switches R2 on.
     emu_case "relay malformed boolean" --oracle-differs "sr_parse_boolstring() takes 1x as on (strutil.c:1315-1319), oxrok refuses it" --keep-header --expect-fail --stderr -- -d $R -g R2 --set -c enabled=1x
     # A mistake in a later -c: nothing goes out. sigrok-cli has switched R1.
-    emu_case "relay no such group after one" --oracle-bug "lookup_channel_group() says so and goes on with the device (device.c:108), so it switches both; oxrok sends nothing" --keep-header --expect-fail --stderr -- -d $R --set -c channel_group=R1:enabled=on -c channel_group=R9:enabled=on
+    emu_case "relay no such group after one" --oracle-bug "it switches R1, then finds R9 missing (device.c:108); oxrok sends nothing" --keep-header --expect-fail --stderr -- -d $R --set -c channel_group=R1:enabled=on -c channel_group=R9:enabled=on
     # channel_group is the scope only as the first element.
     emu_case "relay channel_group later" --oracle-bug "it switches R1 in its hash table order (session.c:700-701), then finds channel_group unknown" --keep-header --expect-fail --stderr -- -d $R --set -c channel_group=R1:enabled=on:channel_group=R2
     emu_case "relay channel_group last" --oracle-bug "it switches all relays in its hash table order (session.c:700-701), then finds channel_group unknown" --keep-header --expect-fail --stderr -- -d $R --set -c enabled=on:channel_group=R1
@@ -42,6 +42,11 @@ emu_cases() {
     emu_case "relay get after enabled" --keep-header -- -d $R -g R1 -c enabled=on --get enabled
     # No pulse on an output a later device-wide off overrides.
     emu_case "relay R1 on then all off" --oracle-differs "it switches R1 on, then all off; oxrok only all off" --keep-header --no-output -- -d $R --set -c channel_group=R1:enabled=on -c enabled=off
+    # Group names without case, as lookup_channel_group(); global is the device.
+    emu_case "relay group any case" --keep-header --no-output -- -d $R -g r2 --set -c enabled=on
+    emu_case "relay get group any case" --keep-header -- -d $R -g r1 --get enabled
+    emu_case "relay show group any case" --keep-header -- -d $R -g r1 --show
+    emu_case "relay global" --keep-header --no-output -- -d $R -g R1 --set -c channel_group=GLOBAL:enabled=on
     emu_case "relay by serial" --keep-header -- -d $R:conn=sn=ABCDE -g R2 --get enabled
     # The node the emulator got, as the READY line reported it.
     emu_case "relay by path" --keep-header -- -d $R:conn=$EMU_HIDRAW -g R1 --get enabled

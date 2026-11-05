@@ -43,7 +43,7 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     // A name nothing knows is found before `-c` reaches the device.
     for get in &args.gets {
         let parsed = parse::option_args(get)?;
-        let group = parsed.scope.or_else(|| args.channel_group.clone());
+        let group = parse::resolve_scope(device.as_ref(), parsed.scope.as_deref(), args)?;
         for (name, _) in parsed.items {
             parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
         }
@@ -52,13 +52,12 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     plan.send_enables(device.as_mut())?;
     for get in &args.gets {
         let parsed = parse::option_args(get)?;
-        let group = parsed.scope.or_else(|| args.channel_group.clone());
+        let group = parse::resolve_scope(device.as_ref(), parsed.scope.as_deref(), args)?;
         for (name, _) in parsed.items {
             let key = parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
             // sigrok-cli's maybe_config_get() (main.c:81-84) asks the
             // driver only for a key it lists as GET in this scope:
-            // SR_ERR_NA for a key without GET and for one not listed. A
-            // group the device lacks stays the driver's error.
+            // SR_ERR_NA for a key without GET and for one not listed.
             let readable = device
                 .options(group.as_deref())
                 .map(|l| l.iter().any(|o| o.key == key && o.access.get));

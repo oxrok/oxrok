@@ -135,16 +135,10 @@ struct ConfigItem {
 }
 
 impl ConfigItem {
-    /// Whether `other` sets the same key in the same scope. A device
-    /// compares its group names without case
-    /// ([`Device::group_positions`]).
+    /// Whether `other` sets the same key in the same scope. A group is as
+    /// the device spells it ([`resolve_scope`]).
     fn same_setting(&self, other: &ConfigItem) -> bool {
-        self.key == other.key
-            && match (&self.group, &other.group) {
-                (None, None) => true,
-                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                _ => false,
-            }
+        self.key == other.key && self.group == other.group
     }
 
     fn is_enabled(&self, on: bool) -> bool {
@@ -207,19 +201,31 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     ConfigPlan { settings: offs, enables }
 }
 
-/// The scope of a `-c` or `--get`: its own `channel_group=`, else `-g`.
-/// Refused as sigrok-cli's `lookup_channel_group()` words it (device.c), where
-/// that goes on to use the device.
-fn resolve_scope(device: &dyn Device, own: Option<&str>, args: &Args) -> Result<Option<String>> {
+/// The scope of a `-c`, a `--get` or a `--show`: its own `channel_group=`,
+/// else `-g`, as the device spells it whatever the case given, and `None` for
+/// the device, `global` in any case, as sigrok-cli's `lookup_channel_group()`
+/// (device.c). Refused in its words, which end sigrok-cli too (a critical
+/// message exits, main.c:46-47), though after what it already sent. An empty
+/// name, device-wide there, is refused too: a shell variable that came out
+/// empty should not switch every output.
+pub fn resolve_scope(
+    device: &dyn Device,
+    own: Option<&str>,
+    args: &Args,
+) -> Result<Option<String>> {
     let Some(name) = own.or(args.channel_group.as_deref()) else { return Ok(None) };
+    if name.eq_ignore_ascii_case("global") {
+        return Ok(None);
+    }
     let groups = device.channel_groups();
-    if groups.is_empty() {
+    if !name.is_empty() && groups.is_empty() {
         return Err(Error::arg("This device does not have any channel groups."));
     }
-    if !groups.iter().any(|g| g.name.eq_ignore_ascii_case(name)) {
-        return Err(Error::Arg(format!("Invalid channel group '{name}'")));
-    }
-    Ok(Some(name.to_owned()))
+    groups
+        .iter()
+        .find(|g| !name.is_empty() && g.name.eq_ignore_ascii_case(name))
+        .map(|g| Some(g.name.clone()))
+        .ok_or_else(|| Error::Arg(format!("Invalid channel group '{name}'")))
 }
 
 /// Resolves and checks every `-c` option: its scope, its key, its value,
@@ -611,6 +617,59 @@ mod tests {
     }
 
     #[test]
+    fn a_group_goes_to_the_device_as_it_spells_it() {
+        let (sent, result) = run_configs(&["-g", "r1", "-c", "enabled=on"]);
+        result.unwrap();
+        assert_eq!(sent, ["R1:enabled=true"]);
+        let (sent, result) = run_configs(&["-c", "CHANNEL_GROUP=ch2:enabled=on"]);
+        result.unwrap();
+        assert_eq!(sent, ["CH2:enabled=true"]);
+    }
+
+    #[test]
+    fn global_is_the_device() {
+        for argv in [
+            &["-g", "global", "-c", "enabled=on"][..],
+            &["-c", "channel_group=GLOBAL:enabled=on"][..],
+            // Over -g, as a -c's own scope is.
+            &["-g", "R1", "-c", "channel_group=global:enabled=on"][..],
+        ] {
+            let (sent, result) = run_configs(argv);
+            result.unwrap();
+            assert_eq!(sent, ["enabled=true"], "{argv:?}");
+        }
+        // The same scope as none, for the last word and the order.
+        let (sent, _) =
+            run_configs(&["-c", "channel_group=global:enabled=on", "-c", "enabled=off"]);
+        assert_eq!(sent, ["enabled=false"]);
+        let (sent, _) = run_configs(&[
+            "-c",
+            "channel_group=global:enabled=on",
+            "-c",
+            "channel_group=R1:enabled=off",
+        ]);
+        assert_eq!(sent, ["enabled=true", "R1:enabled=false"]);
+        let (sent, _) = run_configs(&[
+            "-c",
+            "channel_group=R1:enabled=on",
+            "-c",
+            "channel_group=global:enabled=off",
+        ]);
+        assert_eq!(sent, ["enabled=false"]);
+    }
+
+    #[test]
+    fn an_empty_group_is_refused() {
+        for argv in [&["-c", "channel_group=:enabled=on"][..], &["-g", "", "-c", "enabled=on"][..]]
+        {
+            let (sent, result) = run_configs(argv);
+            let e = result.unwrap_err();
+            assert!(matches!(&e, Error::Arg(m) if m == "Invalid channel group ''"), "{e}");
+            assert_eq!(sent, [] as [&str; 0]);
+        }
+    }
+
+    #[test]
     fn a_device_without_groups_has_no_scope() {
         use clap::Parser as _;
         let sent = std::sync::Arc::default();
@@ -696,7 +755,7 @@ mod tests {
         ]);
         assert_eq!(sent, ["R2:enabled=false", "R1:enabled=true"]);
         // Groups that do not overlap: off first, on last. -g and a group
-        // named another way are the same scope.
+        // named another way are the same scope, and global is the device's.
         let (sent, _) = run_configs(&[
             "-c",
             "channel_group=CH1:enabled=on",
