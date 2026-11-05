@@ -5,6 +5,7 @@
 EMU_MODEL=norma-dmm
 EMU_CDC=1
 EMU_DRIVER="norma-dmm siemens-b102x"
+EMU_FULL="norma-dmm siemens-b102x"
 EMU_GCOV=norma-dmm
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -14,6 +15,18 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # 18-19 flag pairs.
 emu_cases() {
     emu_conns
+    # oxrok's log prefix, on its side only, at any level. C's serial layer has a
+    # line of its own for a failed write, which oxrok's port does not log.
+    L='s/^oxrok: (err|warn|info): oxrok::drivers::norma_dmm(::protocol)?: /sr: norma-dmm: /
+/^sr: serial-libsp: /d'
+    # sr_strerror's words against core::config_set's reason.
+    A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    HEX="protocol.c:67-74: xgittoint gives a to f as 0 to 5, so its modes 0xa and 0xb (:248-258) and its defaults (:164-166, :258) never run, and a letter reads as another digit; oxrok gives each its value"
+    PAIR="protocol.c:282, :300 and :316 shift a pair's first digit by 8, so no mask above 0x08 ever holds (:287, :304, :319-320 never ran): no beep, always AUTO, no warning; the wiki's real line has 0x40, remote mode, in its last pair, so a pair is a byte; oxrok shifts by 4"
+    CUT="protocol.c:97 cuts a line at 20 digits with no look at the rest, so what ran into another line passes as a reading neither held; oxrok takes it as a bad line"
+    KEEP="protocol.c:417-421 sets nothing back when a request expires, so the part of a line stays and the next reply adds to it; oxrok drops the part"
+    FULL_BUF="protocol.c:393 stops reading at 255 bytes with no LF, and the buffer never empties, so no more of the meter is read; oxrok takes it as one bad line"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     D950=1834_065_V1.06,IF_V1.02
     # The wiki's: 24.91 V DC.
     S=03030024913100400040
@@ -26,7 +39,9 @@ emu_cases() {
     emu_case "serialcomm fits" --keep-header -- -d $K:serialcomm=4800/8n1 --scan
     emu_case "no such node" --keep-header --no-output -- -d norma-dmm:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d norma-dmm --scan
-    emu_case "serialcomm no such thing" --keep-header --no-output -- -d $K:serialcomm=fast --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses them
+    # first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
     # 14 s in each tool: the one case of seven tries running out on silence.
     emu_case "serialcomm does not fit" --keep-header --no-output -- -d $K:serialcomm=9600/8n1 --scan
     # The table: each type on each driver.
@@ -44,10 +59,10 @@ emu_cases() {
     emu_options idn=1834_06a_V1.04,IF_V1.02
     emu_case "scan type a" --keep-header -- -d $K --scan
     emu_options idn=1834_06b_V1.04,IF_V1.02
-    emu_case "scan type b" --keep-header -- -d $K --scan
+    emu_case "scan type b" --oracle-differs "$HEX" --keep-header -- -d $K --scan
     # The least the regular expression takes: the type's place is the F of IF.
     emu_options idn=1834_,IF_
-    emu_case "scan the shortest id" --keep-header -- -d $K --scan
+    emu_case "scan the shortest id" --oracle-differs "$HEX" --keep-header -- -d $K --scan
     emu_options idn=1834_065,IF_V
     emu_case "scan with no version" --keep-header -- -d $K --scan
     emu_options idn=1834_065_V1.06,IF_V1.02_with_words_up_to_the_end_of_the_buffer_and_on
@@ -84,7 +99,7 @@ emu_cases() {
     emu_options in-stall=1
     emu_case "a stalled read" --keep-header -- -d $K --scan
     emu_options answers=0
-    emu_case "unplug in the scan" --stderr --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $K --scan
+    emu_case "unplug in the scan" --stderr --filter "$L" --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $K --scan
 
     # --show, and what the driver has no answer to: config_get is NULL.
     emu_options
@@ -95,9 +110,9 @@ emu_cases() {
     done
     emu_case "set limit_samples" --no-output -- -d $K -c limit_samples=2 --set
     emu_case "set limit_time" --no-output -- -d $K -c limit_time=100 --set
-    emu_case "set limit_samples 0" --stderr --expect-fail -- -d $K -c limit_samples=0 --set
-    emu_case "set continuous" --stderr --expect-fail -- -d $K -c continuous=1 --set
-    emu_case "set samplerate" --stderr --expect-fail -- -d $K -c samplerate=1 --set
+    emu_case "set limit_samples 0" --stderr --filter "$A" --expect-fail -- -d $K -c limit_samples=0 --set
+    emu_case "set continuous" --stderr --filter "$L" --expect-fail -- -d $K -c continuous=1 --set
+    emu_case "set samplerate" --stderr --filter "$L" --expect-fail -- -d $K -c samplerate=1 --set
 
     # A capture: the first STATUS? at the source's first 100 ms, each next one
     # when the last has its line.
@@ -143,38 +158,39 @@ emu_cases() {
     emu_case "invalid overload duplicate" -- -d $K --samples 5 -O analog
     # A device error is no sample, and an unknown status still is one.
     emu_options "status=$(norma_st 0 3 0 0 2491 34);$(norma_st 0 3 0 0 2491 30);$(norma_st 0 3 0 0 2491 35);$(norma_st 0 3 0 0 2491 39)"
-    emu_case "device status" --stderr -- -d $K --samples 3
+    emu_case "device status" --stderr --filter "$L" -- -d $K --samples 3
     emu_case "device status samples" -- -d $K --samples 3 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 32);$(norma_st 0 3 0 0 2491 33)"
-    emu_case "input loop and TRANS" --stderr -- -d $K --samples 2
+    emu_case "input loop and TRANS" -- -d $K --samples 2
     # Hex letters: C's digit conversion gives a to f as 0 to 5.
-    emu_options "status=$(norma_st a 0 0 0 0001);$(norma_st f 0 0 0 0001)"
-    emu_case "value type letters" -- -d $K --samples 2 -O analog
+    emu_options "status=$(norma_st a 0 0 0 0001);$(norma_st f 0 0 0 0001);$S"
+    emu_case "value type letters" --oracle-differs "$HEX" -- -d $K --samples 2 -O analog
     emu_options "status=$(norma_st 0 a 0 0 0001);$(norma_st 0 f 0 0 0001)"
-    emu_case "range letters" -- -d $K --samples 2 -O analog
-    emu_options "status=$(norma_st 0 3 0 0 2491 a1);$(norma_st 0 3 0 0 2491 b1);$(norma_st 0 3 0 0 2491 c1);$(norma_st 0 3 0 0 2491 f1)"
-    emu_case "mode letters" -- -d $K --samples 4 -O analog
+    emu_case "range letters" --oracle-differs "$HEX" -- -d $K --samples 2 -O analog
+    emu_options "status=$(norma_st 0 3 0 0 2491 a1);$(norma_st 0 3 0 0 2491 b1);$(norma_st 0 3 0 0 2491 c1);$(norma_st 0 3 0 0 2491 f1);$S"
+    emu_case "mode letters" --oracle-differs "$HEX" -- -d $K --samples 4 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 3e);$S"
-    emu_case "device status letter" --stderr -- -d $K --samples 1
+    emu_case "device status letter" --oracle-differs "$HEX" --stderr --filter "$L" -- -d $K --samples 1
     # The first digit of a pair counts for nothing in C.
     emu_options "status=$(norma_st 0 0 0 0 0001 51 20000000)"
-    emu_case "continuity beep" -- -d $K --samples 1 -O analog
+    emu_case "continuity beep" --oracle-differs "$PAIR" -- -d $K --samples 1 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 31 00800000)"
-    emu_case "manual range" -- -d $K --samples 1 -O analog
+    emu_case "manual range" --oracle-differs "$PAIR" -- -d $K --samples 1 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 31 00001000)"
-    emu_case "low battery warning" -- -d $K --samples 1
+    emu_case "low battery" -- -d $K --samples 1
+    emu_case "low battery warning" --oracle-differs "$PAIR" --stderr --filter "$L" -- -d $K --samples 1
 
     # Lines gone wrong: each is an error, and the next request goes.
     emu_options "status=abc;$S"
-    emu_case "a short line" --stderr -- -d $K --samples 1
+    emu_case "a short line" --stderr --filter "$L" -- -d $K --samples 1
     emu_case "a short line, its sample" -- -d $K --samples 1
     emu_options "status=0303002491310040004x;$S"
-    emu_case "not hex" --stderr -- -d $K --samples 1
+    emu_case "not hex" --stderr --filter "$L" -- -d $K --samples 1
     emu_options "status=;$S"
-    emu_case "an empty line" --stderr -- -d $K --samples 1
+    emu_case "an empty line" --stderr --filter "$L" -- -d $K --samples 1
     # A line longer than 20 digits is cut to them.
     emu_options "status=${S}99;$S"
-    emu_case "a line too long" -- -d $K --samples 1 -O analog
+    emu_case "a line too long" --oracle-differs "$CUT" -- -d $K --samples 1 -O analog
 
     # No answer: a request expires at 2 s, and the next goes.
     emu_options "status=~;$S"
@@ -182,11 +198,11 @@ emu_cases() {
     # Part of a line, and what comes next carries on from it: 24.91 V DC reads
     # as 2.4 Hz, as C cuts the line at 20 digits.
     emu_options "status=03030024~;$S"
-    emu_case "part of a line" -- -d $K --samples 1 -O analog
+    emu_case "part of a line" --oracle-differs "$KEEP" -- -d $K --samples 1 -O analog
     # A line the buffer cannot hold never ends for C.
     L100=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
     emu_options "status=$L100$L100$L100;$S"
-    emu_case "a line of 300" --no-output --tx-filter "$Q1" -- -d $K --time 300ms
+    emu_case "a line of 300" --oracle-bug "$FULL_BUF" --oracle-hangs --timeout 4 -- -d $K --samples 1
     # A reply late by more than the 2 s, with the request after it unanswered.
     # Far past 2 s at any pace; whichever comes first, the samples are the same.
     emu_options late=1:150 "status=$S;~;$(norma_st 0 3 0 0 0001);$S"
@@ -198,8 +214,11 @@ emu_cases() {
     emu_options answers=1
     emu_case "silent from the capture on" --no-output --tx-filter "$Q1" -- -d $K --time 300ms
 
+    # A quiet point: the request goes unanswered, the signal lands in its wait.
     emu_options answers=1
-    emu_case "unplug in a capture" --stderr --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
+    emu_options answers=1
+    emu_case "unplug in a capture" --stderr --filter "$L" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 1
     emu_options
 }
 
