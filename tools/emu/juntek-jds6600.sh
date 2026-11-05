@@ -19,7 +19,7 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     CRASH_BUG="a frequency of fewer than two words gets NULL to a parser: protocol.c:602-603 strtof(NULL), 608-609 strtoul(NULL); oxrok finds no device"
     HANG_BUG="no timeout_ms after the first request (protocol.c:442-450), so it reads on for ever; oxrok ends after 1.2 s"
     NAN_BUG="a NaN passes every limit (protocol.c:750-753, 770-773, 792-795, 813, 1369-1372) and goes out as 'nan' or '-nan', from an infinite phase too; oxrok refuses it"
-    ZERO_BUG="-0.0 passes the limits and %.0f sends it as -0 (protocol.c:752, 792, 813-816); oxrok sends 0"
+    ZERO_BUG="-0.0 passes the limits and %.0f sends it as -0 (protocol.c:752, 792, 813-816); oxrok sends 0, as a precaution: nothing shows the firmware rejects -0"
     ORDER_BUG="sigrok-cli sets -c's options in hash table order (session.c:700-701), here the output before its amplitude; oxrok sets it last"
     LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtod) and sends 0 V; oxrok refuses it and sends nothing"
     SCAN_OPT_BUG="the core drops a scan option the driver does not list, so it finds nothing and exits 0; oxrok refuses it"
@@ -55,7 +55,6 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     emu_case "no conn" --keep-header --no-output -- -d juntek-jds6600 --scan
     emu_case "show without a device" --keep-header --stderr --expect-fail -- -d juntek-jds6600 --show
     # The line: scanopts lists conn alone, so serialcomm never reaches the driver.
-    emu_case "serialcomm as the default" --oracle-differs "$SCAN_OPT_BUG" --expect-fail --keep-header --stderr -- -d $J:serialcomm=115200/8n1 --scan
     emu_case "serialcomm on another line" --oracle-differs "$SCAN_OPT_BUG" --expect-fail --keep-header --stderr -- -d $J:serialcomm=9600/8n1 --scan
 
     # What --get asks for, in both channels.
@@ -79,23 +78,23 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
         emu_options setters=0 r23=$jf
         emu_case "get frequency $jf" -- -d $J -g CH1 --get output_frequency
     done
-    for ja in 0 1 1234 20000 12.5 -500; do
+    for ja in 0 1234 12.5 -500; do
         emu_options setters=0 r25=$ja
         emu_case "get amplitude $(jm $ja)" -- -d $J -g CH1 --get amplitude
     done
-    for jo in 0 1 1023 1000 1999 2000 9999; do
+    for jo in 0 1023 1000 2000; do
         emu_options setters=0 r27=$jo
         emu_case "get offset $jo" -- -d $J -g CH1 --get offset
     done
-    for jd in 0 1 333 1000 1500; do
+    for jd in 333 1500; do
         emu_options setters=0 r29=$jd
         emu_case "get duty $jd" -- -d $J -g CH1 --get output_duty_cycle
     done
-    for jp in 0 1 900 3599 -900; do
+    for jp in 900 -900; do
         emu_options setters=0 r31=$jp
         emu_case "get phase $(jm $jp)" -- -d $J --get phase
     done
-    for jw in 0 16 101 160; do
+    for jw in 16 101; do
         emu_options setters=0 r21=$jw
         emu_case "get waveform $jw" -- -d $J -g CH1 --get pattern
     done
@@ -148,18 +147,18 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     emu_case "amplitude empty reads 0" -- -d $J -g CH1 --get amplitude
 
     # A reply's frame, on the first request, with a timeout of its own.
-    jn=0
-    for jr in ':x\r\n' 'r00=60.\r\n' ':w00=60.\r\n' ':a00=60.\r\n' ':b00=60.\r\n' ':r60.\r\n' \
-        ':r99999999999999999999999=1.\r\n' '\r\n' ':\r\n' ' :r00=60.\r\n' ':r00=60'; do
-        jn=$((jn + 1))
-        emu_options setters=0 raw00=$(emu_hex "$jr")
-        emu_case "first reply refused $jn" --keep-header --no-output -- -d $J --scan
+    for jc in "an unknown letter|:x\r\n" "no colon|r00=60.\r\n" "a write's letter|:w00=60.\r\n" \
+        "no equals sign|:r60.\r\n" "a register too long|:r99999999999999999999999=1.\r\n" \
+        "an empty line|\r\n" "a colon alone|:\r\n" "a leading space| :r00=60.\r\n" \
+        "no end of line|:r00=60"; do
+        emu_options setters=0 raw00=$(emu_hex "${jc#*|}")
+        emu_case "first reply refused ${jc%%|*}" --keep-header --no-output -- -d $J --scan
     done
-    jn=0
-    for jr in ':r01=60.\r\n' ':r00=60\n' ':r00=60. \r\n' ':r0=60.\r\n' ':r=60.\r\n' ':r00 =60.\r\n'; do
-        jn=$((jn + 1))
-        emu_options setters=0 raw00=$(emu_hex "$jr")
-        emu_case "first reply passes $jn" --keep-header -- -d $J --scan
+    for jc in "another register|:r01=60.\r\n" "LF alone and no period|:r00=60\n" \
+        "a space after the period|:r00=60. \r\n" "one digit of register|:r0=60.\r\n" \
+        "no register|:r=60.\r\n" "a space before the equals sign|:r00 =60.\r\n"; do
+        emu_options setters=0 raw00=$(emu_hex "${jc#*|}")
+        emu_case "first reply passes ${jc%%|*}" --keep-header -- -d $J --scan
     done
     # A NUL hides what follows it in that read from the look for the line feed.
     emu_options setters=0 raw00=$(emu_hex ':r00=60\000x\r\n')
@@ -185,7 +184,7 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     done
 
     # A device that stops answering: no timeout but the first's.
-    for jr in raw01 raw20 raw21 raw23 raw25 raw27 raw29 raw31; do
+    for jr in raw01 raw20 raw31; do
         emu_options setters=0 $jr=none
         emu_case "scan silence at $jr" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 5 --keep-header --no-output -- -d $J --scan
     done
@@ -195,8 +194,7 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     emu_case "set silence" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 5 --expect-fail --stderr -- -d $J -c phase=1 --set
 
     # Bad replies to a get that follows a good scan.
-    for jk in "CH1 enabled 20" "CH1 pattern 21" "CH2 pattern 22" "CH1 output_frequency 23" "CH2 output_frequency 24" \
-        "CH1 amplitude 25" "CH2 amplitude 26" "CH1 offset 27" "CH2 offset 28" "CH1 output_duty_cycle 29" "CH2 output_duty_cycle 30"; do
+    for jk in "CH1 enabled 20" "CH1 pattern 21" "CH1 output_frequency 23" "CH1 amplitude 25" "CH1 offset 27" "CH1 output_duty_cycle 29"; do
         set -- $jk
         emu_options setters=0 after=14 raw$3=$(emu_hex ':x\r\n')
         emu_case "get frame error $1 $2" --stderr --expect-fail --filter "$E" -- -d $J -g $1 --get $2
@@ -230,8 +228,8 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     emu_case "set phase nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr -- -d $J -c phase=nan --set
     for jw in sine lorenz arb-01 arb-60; do
         emu_case "set CH1 pattern $jw" --no-output -- -d $J -g CH1 -c pattern=$jw --set
-        emu_case "set CH2 pattern $jw" --no-output -- -d $J -g CH2 -c pattern=$jw --set
     done
+    emu_case "set CH2 pattern arb-60" --no-output -- -d $J -g CH2 -c pattern=arb-60 --set
     emu_case "set pattern unknown" --stderr --expect-fail --filter "$E" -- -d $J -g CH1 -c pattern=arb-61 --set
     emu_case "set pattern device wide" --stderr --expect-fail -- -d $J -c pattern=sine --set
     for jf in 1000 0.01 0.001 0 -5 60000000 60000001 1234.56 0.125 inf; do

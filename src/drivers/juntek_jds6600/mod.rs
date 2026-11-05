@@ -13,9 +13,9 @@
 //! waits for `:ok`.
 //!
 //! The device acquires nothing: it has no limit keys, so a command line asking
-//! for a capture is refused. In C a library client's session refuses too, as the
-//! channels start disabled; here a client that starts one gets a header and an
-//! end at once.
+//! for a capture is refused. The channels start disabled, so a session refuses
+//! to start one (`Session::run`, as `sr_session_start` in C). Only a client that
+//! calls [`Device::start`] itself gets a header and an end at once.
 //!
 //! Where this leaves `api.c`:
 //!
@@ -24,6 +24,13 @@
 //!   value elsewhere is cut to the limit, as there.
 //! - An enable the device did not take is not kept, where `api.c:246` and
 //!   `277` keep it for the next write to send.
+//! - Every setting is narrowed to single precision, which is sigrok-cli's
+//!   `strtof` (`session.c:570`) and not the driver's: `api.c:296` and
+//!   `protocol.c:731-734` keep a double. It gives a full comparison with
+//!   sigrok-cli, and costs a library client digits: 12345678.91 Hz goes out as
+//!   `1234567900,0` here and `1234567891,0` in C, and a phase of 1e300 is
+//!   refused here as it narrows to infinity. Narrowing in the CLI's parsing
+//!   instead would be a shared change.
 //!
 //! See [`protocol`].
 
@@ -222,7 +229,7 @@ fn on(value: &Value) -> Result<bool> {
 
 /// A setting's number, in the single precision sigrok-cli reads it in, so that
 /// the same text gives the same request (0.0005 V is 1 mV in it, 0 in a
-/// double). See the module's documentation on a NaN.
+/// double). See the module's documentation on what that costs and on a NaN.
 fn number(key: &Key, value: &Value) -> Result<f64> {
     let refused = || Error::Arg(format!("{} takes a number", key.id()));
     let v = f64::from(value.as_f64().ok_or_else(refused)? as f32);
@@ -455,6 +462,16 @@ mod tests {
             assert!(d.set(&key, &value, group).is_err(), "{key} {group:?}");
             assert_eq!(sent(&fake), Vec::<String>::new(), "{key} {group:?}");
         }
+    }
+
+    #[test]
+    fn a_library_clients_number_is_narrowed_too() {
+        let (mut d, fake) = device(&[":ok\r\n"]);
+        d.set(&Key::OutputFrequency, &Value::F64(12_345_678.91), Some("CH1")).unwrap();
+        assert_eq!(sent(&fake), [":w23=1234567900,0.\r\n"]);
+        let (mut d, fake) = device(&[":ok\r\n"]);
+        assert!(d.set(&Key::Phase, &Value::F64(1e300), None).is_err());
+        assert_eq!(sent(&fake), Vec::<String>::new());
     }
 
     #[test]

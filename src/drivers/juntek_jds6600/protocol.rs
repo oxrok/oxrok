@@ -21,12 +21,32 @@
 //!   wait but the first one has no end (`timeout_ms` 0, `protocol.c:442-450`).
 //! - A frequency of fewer than two words is an error here. There the next
 //!   parser gets NULL and the program dies (`protocol.c:602-603`, `608-609`).
-//! - The first wait is [`IDENTIFY_TIMEOUT`], for a host that is busy or a USB
-//!   path that is slow, where C has 10 ms, measured at the device's UART.
+//! - The first wait is [`IDENTIFY_TIMEOUT`], where C has 10 ms, measured at the
+//!   device's UART. It only accepts more devices and refuses none, for 90 ms
+//!   more on a silent port. That a busy host or a slow USB path needs it is an
+//!   inference: the emulator passes at 10 ms. Only a unit test
+//!   shows the difference, as the model has no clock.
 //! - The input queue is dropped before each request, which costs nothing on
 //!   the wire, so one late reply does not shift all that follow.
 //! - Hexadecimal floats and `nan(...)` in a reply are refused. `strtof` takes
 //!   them, and no device was seen to send them.
+//! - A `-0` goes out as `0`. A precaution, not a fix: nothing shows that the
+//!   firmware rejects `-0`.
+//! - A reply of `-nan` reads as a NaN, which `--get` prints as `nan` where C
+//!   prints `-nan`.
+//! - A serial number that is not UTF-8 goes through
+//!   [`String::from_utf8_lossy`], where C keeps the raw bytes.
+//!
+//! Kept from `protocol.c` but doubtful:
+//!
+//! - The scale code of a frequency divides here as there (`protocol.c:617-618`),
+//!   so `100,3` reads as 1000 Hz. `on1arf/jds6600_python` multiplies by the same
+//!   table (0.001 Hz), and its notes on codes 3 and 4 fit only that. No recording
+//!   settles it. The writes are not touched: they always send scale 0, so only a
+//!   reading of a scale set some other way can be wrong.
+//! - A negative phase goes out with its sign. `protocol.c:811` says 0 to 360, but
+//!   `fmod` keeps the sign. The Python code sends -90 as 35100, which only hints
+//!   at what the firmware takes.
 
 use crate::core::{Error, Result};
 use crate::serial::{self, Port};
@@ -184,7 +204,8 @@ fn words(rhs: &[u8]) -> Vec<&[u8]> {
     body.split(|c| is_space(*c) || *c == b',').filter(|w| !w.is_empty()).collect()
 }
 
-/// `parse_freq_text`: centihertz and a scale code.
+/// `parse_freq_text`: centihertz and a scale code, which divides as there. See
+/// the module's documentation: the Python code multiplies instead.
 pub fn parse_frequency(rhs: &[u8]) -> Result<f64> {
     /// `scales_freq`.
     const SCALES: [f64; 5] = [1.0, 1.0, 1.0, 1e-3, 1e-6];
@@ -221,8 +242,8 @@ pub fn parse_phase(rhs: &[u8]) -> Result<f64> {
     Ok(c_atod(rhs)? / 10.0)
 }
 
-/// `%.0f`, but for a negative zero, where C sends `-0`: nothing says the
-/// firmware reads that.
+/// `%.0f`, but for a negative zero, where C sends `-0`. A precaution: nothing
+/// says whether the firmware reads that.
 fn whole(value: f64) -> String {
     let text = format!("{value:.0}");
     if text == "-0" { "0".to_owned() } else { text }
@@ -329,12 +350,23 @@ pub struct Link {
     pub top_frequency: u64,
     /// The serial number the scan read.
     pub serial: String,
+    /// How long the scan's first request waits: [`IDENTIFY_TIMEOUT`].
+    identify_wait: Duration,
+    /// How long any other request waits: [`REPLY_BOUND`].
+    reply_wait: Duration,
 }
 
 impl Link {
     /// A link on `port`, knowing nothing yet.
     pub fn new(port: Option<Box<dyn Port>>) -> Link {
-        Link { port, enabled: [false; CHANNELS], top_frequency: 0, serial: String::new() }
+        Link {
+            port,
+            enabled: [false; CHANNELS],
+            top_frequency: 0,
+            serial: String::new(),
+            identify_wait: IDENTIFY_TIMEOUT,
+            reply_wait: REPLY_BOUND,
+        }
     }
 
     fn port(&mut self) -> Result<&mut Box<dyn Port>> {
@@ -386,20 +418,20 @@ impl Link {
     }
 
     fn read(&mut self, register: usize) -> Result<Vec<u8>> {
-        self.read_register(register, REPLY_BOUND)
+        self.read_register(register, self.reply_wait)
     }
 
     /// `quick_send_write_then_recv_ok`.
     fn write(&mut self, register: usize, value: &str) -> Result<()> {
         self.send(&format!(":w{register:02}={value}"))?;
-        let line = self.receive(REPLY_BOUND)?;
+        let line = self.receive(self.reply_wait)?;
         check_ok(&line)
     }
 
     /// `jds6600_identify`: the type, which is the model's top frequency in
     /// MHz, in the width C keeps it, and the serial number.
     fn identify(&mut self) -> Result<u32> {
-        let reply = self.read_register(REG_TYPE, IDENTIFY_TIMEOUT)?;
+        let reply = self.read_register(REG_TYPE, self.identify_wait)?;
         let (kind, _) = c_strtoul(&reply)?;
         log::debug!("identify, device type '{}'", reply.escape_ascii());
         let reply = self.read(REG_SERIAL)?;
@@ -558,8 +590,12 @@ pub(crate) mod tests {
         pub(crate) writes: Vec<String>,
         pub(crate) purges: usize,
         input: Vec<u8>,
-        /// A reply to come only this long after its request.
-        pub(crate) late: Option<(Vec<u8>, Instant)>,
+        /// Bytes that come on the Nth read from now, for a reply that takes a
+        /// while, whatever the clock says.
+        pub(crate) late: Option<(Vec<u8>, usize)>,
+        /// Bytes that come one piece per `read_blocking`: each read that gives
+        /// a piece lasts past the end of that call's 2 ms.
+        pub(crate) pieces: VecDeque<Vec<u8>>,
     }
 
     #[derive(Clone, Default)]
@@ -598,11 +634,20 @@ pub(crate) mod tests {
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
             {
                 let mut s = self.0.lock().unwrap();
-                if let Some((_, when)) = &s.late
-                    && Instant::now() >= *when
+                if let Some((_, reads)) = &mut s.late {
+                    *reads = reads.saturating_sub(1);
+                    if *reads == 0 {
+                        let (bytes, _) = s.late.take().unwrap();
+                        s.input.extend(bytes);
+                    }
+                }
+                if s.input.is_empty()
+                    && let Some(piece) = s.pieces.pop_front()
                 {
-                    let (bytes, _) = s.late.take().unwrap();
-                    s.input.extend(bytes);
+                    drop(s);
+                    buf[..piece.len()].copy_from_slice(&piece);
+                    std::thread::sleep(PAST_A_CHUNK);
+                    return Ok(piece.len());
                 }
                 if !s.input.is_empty() {
                     let n = s.input.len().min(buf.len());
@@ -631,6 +676,9 @@ pub(crate) mod tests {
             Ok(())
         }
     }
+
+    /// Longer than `READ_CHUNK`, so that the `read_blocking` in progress ends.
+    const PAST_A_CHUNK: Duration = Duration::from_millis(5);
 
     /// The replies of a whole scan of a 60 MHz device.
     pub(crate) const SCAN: [&str; 14] = [
@@ -771,18 +819,46 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_reply_slower_than_c_would_wait_is_still_taken_in_a_scan() {
+    fn a_reply_after_many_empty_reads_is_taken_while_the_wait_lasts() {
         let fake = Fake::default();
-        fake.0.lock().unwrap().late =
-            Some((b":r00=60.\r\n".to_vec(), Instant::now() + Duration::from_millis(30)));
-        let reply = fake.link().read_register(0, IDENTIFY_TIMEOUT).unwrap();
-        assert_eq!(reply, b"60.".strip_suffix(b".").unwrap());
+        fake.0.lock().unwrap().late = Some((b":r00=60.\r\n".to_vec(), 30));
+        let reply = fake.link().read_register(0, Duration::from_secs(50)).unwrap();
+        assert_eq!(reply, b"60");
+        assert!(fake.0.lock().unwrap().late.is_none());
+    }
+
+    /// Which wait each step takes, with no real time in it: the one that is
+    /// short ends the probe, the other would outlast `bounded`.
+    #[test]
+    fn the_first_request_alone_has_the_first_wait() {
+        let fake = Fake::default();
+        let mut link = fake.link();
+        link.identify_wait = Duration::from_millis(1);
+        link.reply_wait = Duration::from_secs(600);
+        assert!(matches!(bounded(move || link.probe()), Err(Error::Timeout)));
+
+        let fake = Fake::with(&SCAN[..1]);
+        fake.0.lock().unwrap().replies.push_back(None);
+        let mut link = fake.link();
+        link.identify_wait = Duration::from_secs(600);
+        link.reply_wait = Duration::from_millis(1);
+        assert!(matches!(bounded(move || link.probe()), Err(Error::Timeout)));
+        assert_eq!(fake.writes(), requests(&[0, 1]));
+    }
+
+    #[test]
+    fn a_read_that_gave_something_does_not_look_at_the_clock() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().pieces =
+            [&b":r0"[..], b"0=", b"60.\r\n"].iter().map(|p| p.to_vec()).collect();
+        let reply = fake.link().read_register(0, Duration::ZERO).unwrap();
+        assert_eq!(reply, b"60");
     }
 
     #[test]
     fn an_endless_line_ends_at_the_buffer_with_no_clock_involved() {
         let fake = Fake::default();
-        let long = vec![b'x'; 2 * REPLY_BUFFER];
+        let long = vec![b'x'; 20_000];
         fake.0.lock().unwrap().replies.push_back(Some(long));
         let mut link = fake.link();
         let result = bounded(move || {
@@ -791,7 +867,7 @@ pub(crate) mod tests {
         });
         let Err(Error::Device(why)) = result.0 else { panic!("{:?}", result.0) };
         assert!(why.contains("no end of line"), "{why}");
-        assert_eq!(fake.0.lock().unwrap().input.len(), REPLY_BUFFER, "read to the byte");
+        assert_eq!(fake.0.lock().unwrap().input.len(), 20_000 - 16_383, "read to the byte");
     }
 
     #[test]
@@ -815,19 +891,17 @@ pub(crate) mod tests {
     fn a_line_in_pieces_is_put_together() {
         let fake = Fake::default();
         let mut link = fake.link();
-        fake.0.lock().unwrap().late =
-            Some((b"60.\r\n".to_vec(), Instant::now() + Duration::from_millis(20)));
-        fake.0.lock().unwrap().replies.push_back(Some(b":r00=".to_vec()));
-        assert_eq!(link.read_register(0, IDENTIFY_TIMEOUT).unwrap(), b"60");
+        fake.0.lock().unwrap().pieces = [b":r00=".to_vec(), b"60.\r\n".to_vec()].into();
+        assert_eq!(link.read_register(0, Duration::from_secs(50)).unwrap(), b"60");
     }
 
     #[test]
     fn a_nul_cuts_a_line_and_hides_a_line_feed_behind_it_in_that_read() {
-        let fake = Fake::with(&[":r31=9\0x\r\n"]);
-        fake.0.lock().unwrap().late =
-            Some((b"\n".to_vec(), Instant::now() + Duration::from_millis(20)));
+        let fake = Fake::default();
+        fake.0.lock().unwrap().pieces = [b":r31=9\0x\r\n".to_vec(), b"\n".to_vec()].into();
         assert_eq!(fake.link().get_phase().unwrap(), 0.9);
-        assert!(fake.0.lock().unwrap().late.is_none(), "it waited for the second line feed");
+        let left = fake.0.lock().unwrap().pieces.len();
+        assert_eq!(left, 0, "it waited for the second line feed");
     }
 
     #[test]
