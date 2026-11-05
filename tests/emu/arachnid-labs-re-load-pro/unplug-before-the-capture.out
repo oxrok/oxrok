@@ -1,2 +1,2 @@
-sr: arachnid-labs-re-load-pro: Unable to send 'monitor' command: -1.
-Failed to start session.
+sr: arachnid-labs-re-load-pro: A read failed.
+Failed to set device option 'current_limit': device error: no answer to 'set 1000'.

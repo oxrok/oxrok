@@ -19,10 +19,17 @@
 //! - An `err` line refuses a request, where C's check looks at the wrong bytes
 //!   (`protocol.c:59`), and takes the error's text for the value.
 //! - A value with no answer fails `--get`, where C reads 0, or dies on `read`.
-//!   A setting with no answer stays a success, as in C, with a warning.
+//! - A setting with no answer fails, outside a capture, where C takes it for a
+//!   success. The firmware answers each of them every time (`comms.c`), so
+//!   `enabled=off` with no answer may have left the current flowing. In a capture
+//!   a setting only writes, as in C, for the capture has the port.
 //! - A line that comes to a request and is not its answer is passed over, as
-//!   the device speaks by itself, and the input is dropped ahead of a request.
-//! - A line in two pieces more than 250 ms apart is one line.
+//!   the device speaks by itself. What has arrived ahead of a request or a capture
+//!   is read first, where C takes it for the answer, and only `overtemp` and
+//!   `undervolt` are kept of it: as active flags, and in a capture as META too.
+//! - A line in two pieces more than 250 ms apart is one line, in a capture and
+//!   within a request's wait. A line that nothing ended by the end of that wait
+//!   is no answer, where C takes `set 15` of `set 1500` for the value.
 //! - A short `read` line is passed over, where C dies.
 //! - A time limit counts when nothing comes, and so does a port gone, where C
 //!   looks at neither (`protocol.c:425`), and a capture that only a sample
@@ -72,7 +79,8 @@ const SET_ONLY: Access = Access { get: false, set: true, list: false };
 const GET_LIST: Access = Access { get: true, set: false, list: true };
 /// The one channel group, holding both channels.
 const GROUP: &str = "1";
-/// `api.c`'s version check, as a float.
+/// `api.c`'s version check, as a float. It refuses no firmware that gets this
+/// far: `version` came with v1.6, and 1.6 to 1.9 compare above this.
 const MIN_VERSION: f64 = 1.10;
 /// The wait after `monitor 0`: the firmware's queue of commands holds one.
 const AFTER_MONITOR_STOP: Duration = Duration::from_millis(50);
@@ -164,17 +172,14 @@ impl Driver for ReloadProDriver {
 /// `serial_write_blocking` with `serial_timeout`, all or an error.
 fn write_all(port: &mut dyn Port, params: Params, data: &[u8]) -> Result<()> {
     let timeout = serial_timeout(&params, u32::try_from(data.len()).unwrap_or(u32::MAX));
-    let sent = port.write_timeout(data, timeout).map_err(|e| {
-        log::debug!("A write failed: {e}.");
-        Error::device("the port failed")
-    })?;
+    let sent = port.write_timeout(data, timeout)?;
     if sent < data.len() {
         return Err(Error::device("the device did not take the whole command"));
     }
     Ok(())
 }
 
-/// Drops the input ahead of a request. C has no such step, so a port that fails
+/// Drops the input ahead of the version. C has no such step, so a port that fails
 /// here has the write that follows to say so, with C's words.
 fn drop_input(port: &mut dyn Port) {
     if let Err(e) = port.purge() {
@@ -222,6 +227,8 @@ struct Link {
     threshold: f32,
     otp_active: bool,
     uvc_active: bool,
+    /// What [`protocol::absorb`] has of a line still coming.
+    started: Vec<u8>,
     /// Lines of each kind so far, which a `get` in a capture waits on.
     readings: u64,
     limits: u64,
@@ -240,6 +247,7 @@ impl Link {
             threshold: 0.0,
             otp_active: false,
             uvc_active: false,
+            started: Vec::new(),
             readings: 0,
             limits: 0,
             thresholds: 0,
@@ -262,14 +270,27 @@ impl Link {
         }
     }
 
+    /// Reads what has arrived, for the flags it may hold, unless a capture has the
+    /// port.
+    fn absorb(&mut self) {
+        if self.running {
+            return;
+        }
+        let Some(port) = self.port.as_deref_mut() else { return };
+        let mut noted = Vec::new();
+        protocol::absorb(port, &mut self.started, &mut |line| noted.push(*line));
+        for line in &noted {
+            self.note(line);
+        }
+    }
+
     /// A request's write, and its answer unless a capture has the port.
     fn request(&mut self, command: &[u8], awaited: Awaited) -> Result<Answer> {
+        self.absorb();
         let params = self.params;
         let running = self.running;
+        let started = std::mem::take(&mut self.started);
         let port = self.port.as_deref_mut().ok_or_else(|| Error::device("device is not open"))?;
-        if !running {
-            drop_input(port);
-        }
         if let Err(e) = write_all(port, params, command) {
             log::error!("Unable to send command.");
             return Err(e);
@@ -278,7 +299,7 @@ impl Link {
             return Ok(Answer::None);
         }
         let mut noted = Vec::new();
-        let answer = protocol::await_answer(port, awaited, &mut |line| noted.push(*line));
+        let answer = protocol::await_answer(port, awaited, started, &mut |line| noted.push(*line));
         for line in &noted {
             self.note(line);
         }
@@ -367,9 +388,9 @@ impl ReloadProDevice {
         self.shared.link.lock().expect("link lock")
     }
 
-    /// A setting's request. C takes no answer for a success, and so does this,
-    /// with a word about it; but an `err` line is a refusal, where C's check
-    /// reads the wrong bytes (`protocol.c:59`).
+    /// A setting's request. No answer outside a capture is a failure, where C
+    /// takes it for a success, and an `err` line a refusal, where C's check reads
+    /// the wrong bytes (`protocol.c:59`).
     fn apply(&self, command: &[u8], awaited: Awaited, complaint: &str) -> Result<()> {
         let (answer, running) = {
             let mut link = self.link();
@@ -377,18 +398,14 @@ impl ReloadProDevice {
         };
         match answer {
             Ok(Answer::Line(_)) => Ok(()),
-            Ok(Answer::None) => {
-                if !running {
-                    log::warn!("No answer to '{}'.", command.trim_ascii().escape_ascii());
-                }
-                Ok(())
-            }
+            Ok(Answer::None) if running => Ok(()),
+            Ok(Answer::None) => Err(no_answer(command)),
             Ok(Answer::Refused(text)) => {
                 log::error!("Device replied with an error: '{text}'.");
                 Err(Error::device(text))
             }
             Err(e) => {
-                log::error!("{complaint}: -1.");
+                log::error!("{complaint}: {e}.");
                 Err(e)
             }
         }
@@ -400,8 +417,8 @@ impl ReloadProDevice {
         let mut link = self.link();
         let running = link.running;
         let seen = link.lines_seen(awaited);
-        let answer = link.request(command, awaited).inspect_err(|_| {
-            log::error!("{complaint}: -1.");
+        let answer = link.request(command, awaited).inspect_err(|e| {
+            log::error!("{complaint}: {e}.");
         })?;
         if running {
             let (link, _) = self
@@ -431,7 +448,8 @@ impl ReloadProDevice {
                 log::error!("Device replied with an error: '{text}'.");
                 Err(Error::device(text))
             }
-            Answer::Line(_) | Answer::None => Err(Error::device("no answer from the device")),
+            Answer::Line(_) => Err(Error::device("a reading with too few numbers")),
+            Answer::None => Err(no_answer(command)),
         }
     }
 
@@ -458,9 +476,17 @@ impl ReloadProDevice {
             Key::OverVoltageProtectionEnabled
             | Key::OverCurrentProtectionEnabled
             | Key::OverTemperatureProtection => Value::Bool(true),
-            Key::OverTemperatureProtectionActive => Value::Bool(self.link().otp_active),
+            Key::OverTemperatureProtectionActive => {
+                let mut link = self.link();
+                link.absorb();
+                Value::Bool(link.otp_active)
+            }
             Key::UnderVoltageCondition => Value::Bool(self.threshold()? != 0.0),
-            Key::UnderVoltageConditionActive => Value::Bool(self.link().uvc_active),
+            Key::UnderVoltageConditionActive => {
+                let mut link = self.link();
+                link.absorb();
+                Value::Bool(link.uvc_active)
+            }
             Key::UnderVoltageConditionThreshold => Value::F64(f64::from(self.threshold()?)),
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         })
@@ -519,20 +545,30 @@ impl ReloadProDevice {
             let worker = self.worker.take().expect("just seen");
             let _ = worker.handle.join();
         }
-        {
+        // What has arrived ahead of the capture: a line of the last capture's or a
+        // request's that came late goes, but C's capture would report these.
+        let mut opening = Vec::new();
+        let started = {
             let mut link = self.link();
+            let link = &mut *link;
             let params = link.params;
             let port =
                 link.port.as_deref_mut().ok_or_else(|| Error::device("device is not open"))?;
-            // A line of the last capture's, or a request's that came late.
-            drop_input(port);
+            protocol::absorb(port, &mut link.started, &mut |line| {
+                if matches!(line, Line::OverTemperature | Line::UnderVoltage) {
+                    opening.push(*line);
+                }
+            });
             if let Err(e) = write_all(port, params, protocol::MONITOR_START) {
-                log::error!("Unable to send 'monitor' command: -1.");
+                log::error!("Unable to send 'monitor' command: {e}.");
                 return Err(e);
             }
             link.running = true;
-        }
+            std::mem::take(&mut link.started)
+        };
         let capture = Capture {
+            opening,
+            started,
             shared: Arc::clone(&self.shared),
             limit_samples: self.limit_samples,
             limit_msec: self.limit_msec,
@@ -675,9 +711,9 @@ impl Device for ReloadProDevice {
         let mut link = self.link();
         let params = link.params;
         if let Some(port) = link.port.as_deref_mut()
-            && write_all(port, params, protocol::MONITOR_STOP).is_err()
+            && let Err(e) = write_all(port, params, protocol::MONITOR_STOP)
         {
-            log::debug!("Unable to stop monitoring.");
+            log::debug!("Unable to stop monitoring: {e}.");
         }
         link.port = None;
         Ok(())
@@ -708,6 +744,10 @@ impl Drop for ReloadProDevice {
 
 /// One capture, on its own thread: `reloadpro_receive_data`.
 struct Capture {
+    /// `overtemp` and `undervolt` lines that came ahead of it.
+    opening: Vec<Line>,
+    /// What had come of a line ahead of it.
+    started: Vec<u8>,
     shared: Arc<Shared>,
     limit_samples: u64,
     limit_msec: u64,
@@ -720,12 +760,17 @@ impl Capture {
         if !sink.send_while(Packet::header(), go_on) {
             return;
         }
+        for line in &self.opening {
+            if self.handle_line(*line, "", sink, stop).is_none() {
+                return;
+            }
+        }
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
         let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         let mut samples = 0u64;
         let mut last_reading = started;
-        let mut pending = Vec::with_capacity(protocol::LINE_MAX);
+        let mut pending = self.started.clone();
         let mut chunk = [0u8; 64];
         loop {
             if !go_on() {
@@ -734,10 +779,6 @@ impl Capture {
             // C looks at a time limit only when a line has come
             // (`protocol.c:425`).
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
-            }
-            if only_samples_can_end && last_reading.elapsed() >= self.no_reading {
-                log::error!("Acquisition failed: no reading for {:?}.", self.no_reading);
                 return;
             }
             let read = {
@@ -754,10 +795,6 @@ impl Capture {
                     return;
                 }
             };
-            if n == 0 {
-                std::thread::sleep(EMPTY_READ_PAUSE);
-                continue;
-            }
             for &byte in &chunk[..n] {
                 let ended = matches!(byte, b'\r' | b'\n');
                 if !ended {
@@ -776,15 +813,33 @@ impl Capture {
                     }
                 }
             }
+            // After the read: a machine that stalled has lines to look at first.
+            if only_samples_can_end && last_reading.elapsed() >= self.no_reading {
+                log::error!("Acquisition failed: no reading for {:?}.", self.no_reading);
+                return;
+            }
+            if n == 0 {
+                std::thread::sleep(EMPTY_READ_PAUSE);
+            }
         }
     }
 
     /// `handle_packet`: whether the line was a sample, or `None` when the
     /// packets have nowhere to go.
     fn handle(&self, raw: &[u8], sink: &PacketSink, stop: &AtomicBool) -> Option<bool> {
-        let go_on = || !stop.load(Ordering::SeqCst);
         let text = String::from_utf8_lossy(protocol::c_string(raw));
-        let parsed = protocol::parse(raw);
+        self.handle_line(protocol::parse(raw), &text, sink, stop)
+    }
+
+    /// [`Capture::handle`], for a line already parsed.
+    fn handle_line(
+        &self,
+        parsed: Line,
+        text: &str,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+    ) -> Option<bool> {
+        let go_on = || !stop.load(Ordering::SeqCst);
         let mut link = self.shared.link.lock().expect("link lock");
         let mut sample = false;
         let packets = match parsed {
@@ -842,6 +897,11 @@ impl Capture {
         self.shared.line.notify_all();
         packets.into_iter().all(|p| sink.send_while(p, go_on)).then_some(sample)
     }
+}
+
+/// The error of a request that nothing answered.
+fn no_answer(command: &[u8]) -> Error {
+    Error::device(format!("no answer to '{}'", command.trim_ascii().escape_ascii()))
 }
 
 fn analog(channel: usize, value: f32, mq: Mq, unit: Unit) -> Packet {
@@ -906,16 +966,20 @@ mod tests {
     }
 
     impl State {
-        fn usual(data: &[u8]) -> &'static [u8] {
+        fn usual(data: &[u8]) -> Vec<u8> {
             match data {
-                b"version\r\n" => b"version 1.11\r\n",
-                b"read\n" => b"read 1499 12345 7 8\r\n",
-                b"set\n" | b"set 1500\n" => b"set 1500\r\n",
-                b"uvlo\n" | b"uvlo 3300\n" => b"uvlo 3300\r\n",
-                b"on\n" | b"off\n" => b"ok\r\n",
-                b"set 0\n" => b"set 0\r\n",
-                b"uvlo 0\n" => b"uvlo 0\r\n",
-                _ => b"",
+                b"version\r\n" => b"version 1.11\r\n".to_vec(),
+                b"read\n" => b"read 1499 12345 7 8\r\n".to_vec(),
+                b"set\n" => b"set 1500\r\n".to_vec(),
+                b"uvlo\n" => b"uvlo 3300\r\n".to_vec(),
+                b"on\n" | b"off\n" => b"ok\r\n".to_vec(),
+                // `set N` and `uvlo N` tell the value that now holds.
+                setting if setting.starts_with(b"set ") || setting.starts_with(b"uvlo ") => {
+                    let mut echo = setting.trim_ascii_end().to_vec();
+                    echo.extend_from_slice(b"\r\n");
+                    echo
+                }
+                _ => Vec::new(),
             }
         }
 
@@ -991,7 +1055,7 @@ mod tests {
                     Vec::new()
                 }
                 None if s.silent => Vec::new(),
-                None => State::usual(data).to_vec(),
+                None => State::usual(data),
             };
             s.queue(Duration::ZERO, &answer);
             Ok(data.len())
@@ -1155,10 +1219,10 @@ mod tests {
     fn a_value_out_of_range_or_nan_sends_nothing() {
         let (f, state) = fake();
         let mut d = device(f);
-        for v in [6.001, -1.0, f64::NAN, f64::INFINITY] {
+        for v in [6.0005, 6.001, -1.0, f64::NAN, f64::INFINITY] {
             assert!(set(&mut d, Key::CurrentLimit, Value::F64(v)).is_err(), "{v}");
         }
-        for v in [60.001, -1.0, f64::NAN] {
+        for v in [60.0005, 60.001, -1.0, f64::NAN] {
             let threshold = Key::UnderVoltageConditionThreshold;
             assert!(set(&mut d, threshold, Value::F64(v)).is_err(), "{v}");
         }
@@ -1166,20 +1230,79 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_setting_fails_and_a_silent_one_does_not() {
+    fn a_refused_setting_fails_and_so_does_a_silent_one() {
         let (f, state) = fake();
         let mut d = device(f);
         state.lock().unwrap().answers.push_back(b"err Unknown command 'on'\r\n".to_vec());
         assert!(set(&mut d, Key::Enabled, Value::Bool(true)).is_err());
         state.lock().unwrap().silent = true;
-        assert!(set(&mut d, Key::Enabled, Value::Bool(true)).is_ok(), "as in C");
+        for (key, value, word) in [
+            (Key::Enabled, Value::Bool(false), "off"),
+            (Key::CurrentLimit, Value::F64(1.5), "set 1500"),
+            (Key::UnderVoltageConditionThreshold, Value::F64(3.3), "uvlo 3300"),
+        ] {
+            let e = set(&mut d, key, value).unwrap_err().to_string();
+            assert!(e.contains(&format!("no answer to '{word}'")), "{e}");
+        }
     }
 
     #[test]
-    fn a_setting_whose_write_fails_is_an_error() {
+    fn a_setting_cut_short_fails() {
+        let (f, state) = fake();
+        let mut d = device(f);
+        state.lock().unwrap().answers.push_back(b"set 15".to_vec());
+        assert!(set(&mut d, Key::CurrentLimit, Value::F64(1.5)).is_err());
+        state.lock().unwrap().answers.push_back(b"o".to_vec());
+        assert!(set(&mut d, Key::Enabled, Value::Bool(false)).is_err());
+    }
+
+    #[test]
+    fn a_get_cut_short_fails() {
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().answers.push_back(b"set 15".to_vec());
+        assert!(d.get(&Key::CurrentLimit, Some(GROUP)).is_err());
+    }
+
+    #[test]
+    fn a_setting_whose_read_fails_fails_at_once() {
+        let (f, state) = fake();
+        let mut d = device(f);
+        state.lock().unwrap().fail_reads = true;
+        let started = Instant::now();
+        assert!(set(&mut d, Key::Enabled, Value::Bool(false)).is_err());
+        assert!(started.elapsed() < protocol::REPLY_WAIT, "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_setting_whose_write_fails_gives_the_ports_error() {
         let (f, state) = fake();
         let mut d = device(f);
         state.lock().unwrap().fail_writes_after = Some(0);
+        let e = set(&mut d, Key::Enabled, Value::Bool(true)).unwrap_err().to_string();
+        assert!(e.contains("Broken pipe"), "{e}");
+    }
+
+    /// Monitoring left on by a capture: lines ahead of the answer, by any count.
+    #[test]
+    fn a_backlog_ahead_of_the_echo_is_read_through() {
+        let (f, state) = fake();
+        let mut d = device(f);
+        let mut reply = b"read 1 2 3 4\r\n".repeat(40);
+        reply.extend_from_slice(b"set 1500\r\n");
+        state.lock().unwrap().answers.push_back(reply.clone());
+        assert_eq!(d.get(&Key::CurrentLimit, Some(GROUP)).unwrap(), Value::F64(1.5));
+        state.lock().unwrap().answers.push_back(reply);
+        set(&mut d, Key::CurrentLimit, Value::F64(1.5)).unwrap();
+    }
+
+    #[test]
+    fn a_monitor_line_is_not_the_echo_of_a_setting() {
+        let (f, state) = fake();
+        let mut d = device(f);
+        state.lock().unwrap().answers.push_back(b"read 1 2\r\n".to_vec());
+        assert!(set(&mut d, Key::CurrentLimit, Value::F64(1.5)).is_err());
+        state.lock().unwrap().answers.push_back(b"read 1 2\r\n".to_vec());
         assert!(set(&mut d, Key::Enabled, Value::Bool(true)).is_err());
     }
 
@@ -1251,6 +1374,105 @@ mod tests {
         let active = |key: Key| d.get(&key, Some(GROUP)).unwrap();
         assert_eq!(active(Key::OverTemperatureProtectionActive), Value::Bool(true));
         assert_eq!(active(Key::UnderVoltageConditionActive), Value::Bool(true));
+    }
+
+    fn flags(d: &ReloadProDevice) -> (Value, Value) {
+        let active = |key: Key| d.get(&key, Some(GROUP)).unwrap();
+        (active(Key::OverTemperatureProtectionActive), active(Key::UnderVoltageConditionActive))
+    }
+
+    /// The two lines saying that the load turned itself off, queued ahead of each
+    /// thing that reads the input.
+    #[test]
+    fn what_came_ahead_of_a_get_is_noted() {
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"overtemp\r\nundervolt\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(d.get(&Key::CurrentLimit, Some(GROUP)).unwrap(), Value::F64(1.5));
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(true)));
+    }
+
+    #[test]
+    fn what_came_ahead_of_a_setting_is_noted() {
+        let (f, state) = fake();
+        let mut d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"undervolt\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        set(&mut d, Key::Enabled, Value::Bool(false)).unwrap();
+        assert_eq!(flags(&d), (Value::Bool(false), Value::Bool(true)));
+    }
+
+    #[test]
+    fn the_flags_read_what_has_arrived_and_send_nothing() {
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"overtemp\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(false)));
+        state.lock().unwrap().queue(Duration::ZERO, b"undervolt\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(true)));
+        assert_eq!(writes(&state), [] as [String; 0]);
+    }
+
+    /// Each flag on its own, since either one's look finds both.
+    #[test]
+    fn each_flag_looks_for_itself() {
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"undervolt\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        let uvc = Key::UnderVoltageConditionActive;
+        assert_eq!(d.get(&uvc, Some(GROUP)).unwrap(), Value::Bool(true));
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"overtemp\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        let otp = Key::OverTemperatureProtectionActive;
+        assert_eq!(d.get(&otp, Some(GROUP)).unwrap(), Value::Bool(true));
+    }
+
+    #[test]
+    fn a_line_split_across_two_requests_is_still_noted() {
+        let (f, state) = fake();
+        let d = device(f);
+        state.lock().unwrap().queue(Duration::ZERO, b"overt");
+        std::thread::sleep(Duration::from_millis(2));
+        assert_eq!(flags(&d), (Value::Bool(false), Value::Bool(false)));
+        state.lock().unwrap().answers.push_back(b"emp\r\nset 1500\r\n".to_vec());
+        assert_eq!(d.get(&Key::CurrentLimit, Some(GROUP)).unwrap(), Value::F64(1.5));
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(false)));
+    }
+
+    #[test]
+    fn what_came_ahead_of_a_capture_is_reported_by_it() {
+        let (f, state) = fake();
+        stream(&state, &[(0, b"read 2000 2000\r\n")]);
+        let mut d = device(f);
+        d.limit_samples = 1;
+        state.lock().unwrap().queue(Duration::ZERO, b"overtemp\r\nread 1 1\r\nundervolt\r\n");
+        std::thread::sleep(Duration::from_millis(2));
+        let packets = capture(&mut d);
+        assert!(matches!(packets[0], Packet::Header { .. }), "{:?}", packets[0]);
+        let Packet::Meta(first) = &packets[1] else { panic!("{:?}", packets[1]) };
+        assert_eq!(first[0], (Key::OverTemperatureProtectionActive, Value::Bool(true)));
+        let Packet::Meta(second) = &packets[2] else { panic!("{:?}", packets[2]) };
+        assert_eq!(second[0], (Key::UnderVoltageConditionActive, Value::Bool(true)));
+        assert_eq!(readings(&packets), [(0, 2.0), (1, 2.0)], "the stale reading goes");
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(true)));
+    }
+
+    #[test]
+    fn a_line_cut_by_a_capture_start_is_still_noted() {
+        let (f, state) = fake();
+        stream(&state, &[(0, b"emp\r\nread 2000 2000\r\n")]);
+        let mut d = device(f);
+        d.limit_samples = 1;
+        state.lock().unwrap().queue(Duration::ZERO, b"overt");
+        std::thread::sleep(Duration::from_millis(2));
+        capture(&mut d);
+        assert_eq!(flags(&d), (Value::Bool(true), Value::Bool(false)));
     }
 
     #[test]
@@ -1459,20 +1681,24 @@ mod tests {
         stream(
             &state,
             &[
-                (250, b"read 1000 1000\r\n"),
-                (250, b"read 1000 1000\r\n"),
-                (250, b"read 1000 1000\r\n"),
-                (0, b"nonsense\r\n"),
-                (250, b"nonsense\r\n"),
-                (250, b"nonsense\r\n"),
-                (250, b"read 1000 1000\r\n"),
+                (200, b"read 1000 1000\r\n"),
+                (200, b"read 1000 1000\r\n"),
+                (200, b"read 1000 1000\r\n"),
+                (600, b"nonsense\r\n"),
+                (600, b"nonsense\r\n"),
+                (600, b"nonsense\r\n"),
+                // Within the bound of the last line, past it of the last reading.
+                (600, b"read 1000 1000\r\n"),
             ],
         );
         let mut d = device(f);
         d.limit_samples = 100;
-        d.no_reading = Duration::from_millis(500);
+        d.no_reading = Duration::from_secs(1);
+        let started = Instant::now();
         let packets = capture(&mut d);
         assert_eq!(readings(&packets).len(), 6, "three readings, and lines that are none");
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(1600), "from the third reading: {took:?}");
     }
 
     #[test]
@@ -1519,7 +1745,8 @@ mod tests {
         }
         d.stop().unwrap();
         let rest = until_end(&rx);
-        assert!(rest.len() < 100, "{}", rest.len());
+        // 4 packets a line, 8000 in all: a stall may let some more through.
+        assert!(rest.len() < 4000, "{}", rest.len());
     }
 
     #[test]
@@ -1535,15 +1762,21 @@ mod tests {
     #[test]
     fn a_get_in_a_capture_takes_the_line_the_capture_sees() {
         let (f, state) = fake();
+        // The feeder's lines alone answer: a usual one too would be a stale line
+        // for the next get.
+        state.lock().unwrap().silent = true;
         let mut d = device(f);
         let rx = start(&mut d);
         assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::Header { .. }))));
         let shared = Arc::clone(&state);
         let feeder = std::thread::spawn(move || {
             // Each once its request has gone.
-            for (done, reply) in
-                [(2, &b"read 1499 12345\r\n"[..]), (3, b"set 1500\r\n"), (4, b"uvlo 3300\r\n")]
-            {
+            for (done, reply) in [
+                (2, &b"read 1499 12345\r\n"[..]),
+                (3, b"read 2000 12345\r\n"),
+                (4, b"set 1500\r\n"),
+                (5, b"uvlo 3300\r\n"),
+            ] {
                 let deadline = Instant::now() + CAPTURE_BOUND;
                 while shared.lock().unwrap().writes.len() < done && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(1));
@@ -1554,13 +1787,14 @@ mod tests {
         let started = Instant::now();
         let get = |key: Key| d.get(&key, Some(GROUP)).unwrap();
         assert_eq!(get(Key::Voltage), Value::F64(f64::from(12.345f32)));
+        assert_eq!(get(Key::Current), Value::F64(2.0));
         assert_eq!(get(Key::CurrentLimit), Value::F64(1.5));
         assert_eq!(get(Key::UnderVoltageConditionThreshold), Value::F64(f64::from(3.3f32)));
         // Each is woken by its line, not by the 5 s it may wait.
         assert!(started.elapsed() < Duration::from_secs(5), "{:?}", started.elapsed());
         feeder.join().unwrap();
         d.stop().unwrap();
-        assert_eq!(writes(&state), ["monitor 200\r\n", "read\n", "set\n", "uvlo\n"]);
+        assert_eq!(writes(&state), ["monitor 200\r\n", "read\n", "read\n", "set\n", "uvlo\n"]);
         d.close().unwrap();
     }
 
@@ -1591,19 +1825,44 @@ mod tests {
         stopper.join().unwrap();
     }
 
+    /// No answer is no failure here, and the answer is the capture's to see: a
+    /// setting that waited would hold the link and read it first.
     #[test]
     fn a_setting_in_a_capture_only_writes() {
         let (f, state) = fake();
-        // Nothing answers: a setting that waited would take a second.
-        state.lock().unwrap().silent = true;
         let mut d = device(f);
         let rx = start(&mut d);
         assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::Header { .. }))));
-        let started = Instant::now();
         set(&mut d, Key::CurrentLimit, Value::F64(1.5)).unwrap();
-        assert!(started.elapsed() < Duration::from_millis(500));
+        let (_, meta) = rx.recv_timeout(CAPTURE_BOUND).expect("the capture sees the echo");
+        let Packet::Meta(meta) = meta else { panic!("{meta:?}") };
+        assert_eq!(meta[0], (Key::CurrentLimit, Value::F64(1.5)));
+        state.lock().unwrap().silent = true;
+        set(&mut d, Key::CurrentLimit, Value::F64(1.5)).unwrap();
         d.stop().unwrap();
-        assert_eq!(writes(&state), ["monitor 200\r\n", "set 1500\n"]);
+        assert_eq!(writes(&state), ["monitor 200\r\n", "set 1500\n", "set 1500\n"]);
+    }
+
+    /// Each reading queued ahead of a request is the capture's. A request that read
+    /// the input itself would take some of them, with the link in its hands.
+    #[test]
+    fn a_request_in_a_capture_leaves_the_input_to_it() {
+        const ROUNDS: usize = 50;
+        let (f, state) = fake();
+        state.lock().unwrap().silent = true;
+        let mut d = device(f);
+        d.limit_samples = u64::try_from(ROUNDS).unwrap();
+        let rx = start(&mut d);
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::Header { .. }))));
+        for _ in 0..ROUNDS {
+            {
+                // With the link held the capture is not in a read.
+                let _link = d.link();
+                state.lock().unwrap().queue(Duration::ZERO, b"read 1000 1000\r\n");
+            }
+            set(&mut d, Key::CurrentLimit, Value::F64(1.5)).unwrap();
+        }
+        assert_eq!(readings(&until_end(&rx)).len(), ROUNDS * 2);
     }
 
     #[test]
@@ -1652,6 +1911,24 @@ mod tests {
         assert!(done_rx.recv_timeout(CAPTURE_BOUND).is_ok(), "the close hangs");
         closer.join().unwrap();
         assert_eq!(writes(&state).last().map(String::as_str), Some("monitor 0\r\n"));
+        drop(rx);
+    }
+
+    /// A sender with no room waits for [`END_AFTER_STOP`] after the stop, which a
+    /// close must see out: its thread holds the last other reference.
+    #[test]
+    fn a_close_joins_the_capture() {
+        let (f, state) = fake();
+        stream(&state, &[(0, b"read 1000 1000\r\n")]);
+        let mut d = device(f);
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while !state.lock().unwrap().input.is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        d.close().unwrap();
+        assert_eq!(Arc::strong_count(&d.shared), 1, "the thread goes on");
         drop(rx);
     }
 

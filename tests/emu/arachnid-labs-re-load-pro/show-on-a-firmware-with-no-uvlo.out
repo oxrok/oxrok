@@ -11,7 +11,7 @@ Supported configuration options on channel group 1:
     regulation: CC (current)
     voltage: 12.000000 (current)
     current: 0.000000 (current)
-    current_limit: 0.000000 (current), 6.000000, 0.001000
+    current_limit: 0.000000, 6.000000, 0.001000
     ovp_enabled: on (current), off
     ocp_enabled: on (current), off
     otp: on (current), off

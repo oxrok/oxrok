@@ -1,0 +1,5 @@
+META otp_active: 1
+FRAME-BEGIN
+V: 12.345 V DC
+I: 500 mA DC
+FRAME-END

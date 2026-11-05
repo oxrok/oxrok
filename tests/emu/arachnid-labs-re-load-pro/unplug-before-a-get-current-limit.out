@@ -1,3 +1,2 @@
-sr: arachnid-labs-re-load-pro: Unable to send command.
-sr: arachnid-labs-re-load-pro: Error sending current limit query: -1.
-Failed to get 'current_limit': generic/unspecified error
+sr: arachnid-labs-re-load-pro: A read failed.
+Failed to set device option 'enabled': device error: no answer to 'on'.

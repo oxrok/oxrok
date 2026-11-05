@@ -15,11 +15,11 @@ emu_cases() {
     # What it adds after the error sigrok-cli names.
     A="$L
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*\$/\\1./"
-    # A port that went: libsigrok's own line, and sigrok-cli's words for the error.
+    # A port that went. Of sigrok-cli's lines, libsigrok's own, with the OS's words
+    # in it. Of oxrok's, the OS's words in its read error, for the line to stay.
     G="$L
 /^sr: serial-libsp: /d
-/^sr: arachnid-labs-re-load-pro: No answer to /d
-s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
+s/^oxrok: warn: oxrok::drivers::arachnid_labs_re_load_pro::protocol: (A read failed): .*\$/sr: arachnid-labs-re-load-pro: \\1./"
     # hwdriver.c's check_key refuses it ahead of the driver, and logs that.
     Z="$A
 /^sr: hwdriver: Cannot set/d"
@@ -27,6 +27,12 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     ERR_BUG="protocol.c:59 looks for 'err ' in the bytes of the pointer bufptr (&bufptr), not in the reply, so an err line is a success; oxrok fails"
     SILENT_BUG="protocol.c:180 and 216 take a reply that did not come, or an err line, for a value: strtod of an empty buffer or of the error's text is 0; oxrok fails --get"
     ORDER_BUG="sigrok-cli sets -c's options in hash table order (session.c:700-701), here on before uvlo; oxrok sets enabled=on last"
+    NOANS_BUG="the C takes a setting with no answer for a success, but the firmware answers each every time (comms.c), so the line was lost or the link is down, and enabled=off may have left the current flowing; oxrok fails"
+    GONE_BUG="the C takes the silence ahead of the unplug for a success and goes on to a write that fails; oxrok has failed at the silence"
+    CUT_BUG="protocol.c:51 takes what a read found in its time for a whole line, here a number cut short; oxrok fails"
+    BACKLOG_BUG="protocol.c:51 takes the first line for the answer, here a reading left by monitoring, whose current it gives as the limit; oxrok reads on to the answer"
+    FLAG_BUG="the C looks at overtemp and undervolt only in a capture, and only asks the flag it holds; oxrok reads what has arrived"
+    NOVALUE_BUG="api.c:230, 246 and 253 return SR_OK with no value when the query failed, and sigrok-cli dies on it; protocol.c:167 and 203 also leave the mutex locked; oxrok has failed at the silence ahead of it"
     RETRY_BUG="protocol.c:54 retries once, and a CR LF ahead of the reply is two empty lines, so the reply is left unread and 0 is taken; oxrok passes over empty lines"
     SHORT_BUG="protocol.c:336 hands the token that g_strsplit did not make to g_ascii_strtod, whose assertion kills sigrok-cli; oxrok passes over the line"
     READ_BUG="protocol.c:254 reads tokens[2] past the end of what g_strsplit made of an empty reply, and sigrok-cli dies; oxrok fails --get"
@@ -48,7 +54,8 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     emu_case "show without a device" --keep-header --stderr --expect-fail -- -d arachnid-labs-re-load-pro --show
 
     # What the version check lets through: it compares as a float, so 1.9 and
-    # 1.2 pass though they come before 1.10.
+    # 1.2 pass though they come before 1.10. No real firmware meets the refusal:
+    # `version` came with v1.6, and 1.6 to 1.9 compare above 1.10.
     for v in 1.10 1.11 1.9 1.2 2.0 1.1 1.11x; do
         emu_options setters=0 version=$v
         emu_case "scan version $v" --keep-header -- -d $K --scan
@@ -115,12 +122,13 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     emu_case "set two" --no-output -- -d $K -g 1 -c current_limit=1.5:uvc_threshold=3.3 --set
     emu_options version=1.8
     emu_case "set uvc_threshold on a firmware with no uvlo" --oracle-differs "$ERR_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 -c uvc_threshold=3.3 --set
-    emu_options replies=$(emu_hex "err Unknown command 'on'\r\n")
+    emu_options version=1.9
     emu_case "set enabled refused" --oracle-differs "$ERR_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 -c enabled=on --set
     emu_options answers=0
-    emu_case "set enabled no answer" --no-output -- -d $K -g 1 -c enabled=on --set
-    emu_case "set enabled no answer warns" --oracle-differs "the C says nothing of a setting with no answer; oxrok warns, and succeeds as it does" --stderr --filter "$L" -- -d $K -g 1 -c enabled=on --set
-    emu_case "set current_limit no answer" --no-output -- -d $K -g 1 -c current_limit=1 --set
+    emu_case "set enabled no answer" --oracle-differs "$NOANS_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 -c enabled=on --set
+    emu_case "set current_limit no answer" --oracle-differs "$NOANS_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 -c current_limit=1 --set
+    emu_options replies=$(emu_hex 'set 10')
+    emu_case "set current_limit cut short" --oracle-differs "$CUT_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 -c current_limit=1 --set
     emu_options
 
     # Answers gone wrong, to what asks for a value.
@@ -136,9 +144,15 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     emu_case "get current_limit err" --oracle-differs "$SILENT_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 --get current_limit
     emu_options setters=0 replies=$(emu_hex "err Unknown command 'read'\r\n")
     emu_case "get voltage err" --oracle-differs "$SILENT_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 --get voltage
-    emu_options setters=0 replies=$(emu_hex 'read 1000 12000\r\n')
-    emu_case "get voltage old reply" -- -d $K -g 1 --get voltage
-    emu_case "get current old reply" -- -d $K -g 1 --get current
+    emu_options setters=0 fields=4 volts=12345 amps=1499
+    emu_case "get voltage four numbers" -- -d $K -g 1 --get voltage
+    emu_case "get current four numbers" -- -d $K -g 1 --get current
+    emu_options setters=0 replies=$(emu_hex 'set 15')
+    emu_case "get current_limit cut short" --oracle-differs "$CUT_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g 1 --get current_limit
+    # Monitoring left on by a capture: lines ahead of the answer.
+    B=$(i=0; while [ $i -lt 24 ]; do printf 'read 1 2\\r\\n'; i=$((i + 1)); done)
+    emu_options setters=0 replies=$(emu_hex "${B}set 1500\r\n")
+    emu_case "get with readings ahead of the answer" --oracle-differs "$BACKLOG_BUG" -- -d $K -g 1 --get current_limit
     emu_options setters=0 replies=$(emu_hex 'read x y\r\n')
     emu_case "get voltage garbage" -- -d $K -g 1 --get voltage
 
@@ -148,6 +162,8 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     emu_case "samples 1" -- -d $K --samples 1
     emu_case "samples 1 csv" -- -d $K --samples 1 -O csv:header=false:time=false
     emu_case "samples 1 analog" --keep-header -- -d $K --samples 1 -O analog
+    emu_options setters=0 fields=4 volts=12345 amps=1499 count=1
+    emu_case "samples 1 four numbers" -- -d $K --samples 1
     emu_options setters=0 set=1500 volts=12345 amps=1499 count=3
     emu_case "samples 3" -- -d $K --samples 3
     emu_case "channel V only" -- -d $K -C V --samples 3
@@ -162,6 +178,13 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     # The readings a float holds, from small to the largest in the field.
     emu_options setters=0 count=4 lines=$(emu_hex 'read 1 1 0 0\r\n'),$(emu_hex 'read 3 3 0 0\r\n'),$(emu_hex 'read 6000 60000 123 456\r\n'),$(emu_hex 'read 0 0\r\n')
     emu_case "readings in turn" -- -d $K --samples 4
+    # A line of the load's own, come ahead of what reads next: the only word that
+    # it turned itself off. It stays in the input behind a setting's answer.
+    emu_options volts=12345 count=1 replies=$(emu_hex 'set 500\r\novertemp\r\n')
+    emu_case "overtemp ahead of a capture" --keep-header -- -d $K -g 1 -c current_limit=0.5 --samples 1 -O analog
+    emu_case "overtemp ahead of a get" --oracle-differs "$FLAG_BUG" -- -d $K -g 1 -c current_limit=0.5 --get otp_active
+    emu_options replies=$(emu_hex 'set 500\r\nundervolt\r\n')
+    emu_case "undervolt ahead of a get" --oracle-differs "$FLAG_BUG" -- -d $K -g 1 -c current_limit=0.5 --get uvc_active
     # A time limit: how many lines that is depends on the clock, so the output
     # is kept up to the first sample, and the lines' length not at all.
     emu_options setters=0 period=5
@@ -207,24 +230,24 @@ s/: device error: the port failed(\\.?)\$/: generic\\/unspecified error\\1/"
     emu_case "unplug in the scan" --unplug out=2:1 --timeout 30 --keep-header --no-output -- -d $K --scan
     # An unplug while a setting waits for its answer, and what comes next.
     emu_options answers=0
-    S="$G
-/^sr: session: /d
-/^sr: std: /d
-s/^device error: the port failed\$/Failed to start session./"
-    emu_case "unplug before the capture" --unplug model --timeout 15 --expect-fail --stderr --filter "$S" -- -d $K -g 1 -c current_limit=1 --samples 1
-    emu_case "unplug before a set current_limit" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c uvc_threshold=1 -c current_limit=1 --set
-    emu_case "unplug before a set enabled" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 -c enabled=on --set
-    emu_case "unplug before a set uvc_threshold" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 -c uvc_threshold=1 --set
-    emu_case "unplug before a get voltage" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 --get voltage
-    emu_case "unplug before a get current" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 --get current
-    # api.c:230 and 246 return SR_OK with no value when the query failed, and
-    # sigrok-cli prints what its stack held: it dies, with a stderr that changes
-    # from run to run (1 in about 30), so these two run on oxrok alone, which
-    # fails --get. protocol.c:167 and 203 also leave the mutex locked.
+    # Each C path that writes to a port gone comes here, past a setting it takes
+    # for done. oxrok fails at that setting, so its own failed writes are only in
+    # the unit tests: no event falls between an answer and the next write.
+    emu_case "unplug before the capture" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 --samples 1
+    emu_case "unplug before a set current_limit" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c uvc_threshold=1 -c current_limit=1 --set
+    emu_case "unplug before a set enabled" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 -c enabled=on --set
+    emu_case "unplug before a set uvc_threshold" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 -c uvc_threshold=1 --set
+    emu_case "unplug before a get voltage" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 --get voltage
+    emu_case "unplug before a get current" --oracle-bug "$GONE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c current_limit=1 --get current
+    # api.c:230 and 253 hand sigrok-cli no value, and it prints what its stack held.
+    # It dies, and now and then in GLib, with a stderr no golden can hold: seen on
+    # each of these two, 1 run in over 100 under load. So they run on oxrok alone.
+    # `uvc` (api.c:246) is the same path, and has not shown it in 55 runs.
     emu_case "unplug before a get current_limit" --no-oracle-only --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c enabled=on --get current_limit
-    emu_case "unplug before a get uvc" --no-oracle-only --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c enabled=on --get uvc
-    # The close's write then fails too.
-    emu_case "unplug before the close" --unplug model --timeout 15 --no-output -- -d $K -g 1 -c enabled=on --set
+    emu_case "unplug before a get uvc" --oracle-bug "$NOVALUE_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c enabled=on --get uvc
+    emu_case "unplug before a get uvc_threshold" --no-oracle-only --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c enabled=on --get uvc_threshold
+    # The C's close then fails its write too, and it says nothing of either.
+    emu_case "unplug before the close" --oracle-differs "$NOANS_BUG" --unplug model --timeout 15 --expect-fail --stderr --filter "$G" -- -d $K -g 1 -c enabled=on --set
     # No answer to a read: C reads past what g_strsplit gave it.
     emu_options setters=0 answers=0
     emu_case "get voltage no answer" --oracle-bug "$READ_BUG" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 --expect-fail --stderr -- -d $K -g 1 --get voltage

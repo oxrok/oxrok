@@ -1,1 +1,1 @@
-Failed to get 'current_limit': device error: no answer from the device
+Failed to get 'current_limit': device error: no answer to 'set'

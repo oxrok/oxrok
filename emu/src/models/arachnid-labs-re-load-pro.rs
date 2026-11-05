@@ -7,23 +7,30 @@
 //!
 //! The device, and how sure this is:
 //!
-//! - The commands and their answers: the firmware's own source,
-//!   `arachnidlabs/reload-pro` at 0b7adce (`firmware/Reload Pro.cydsn/`,
-//!   `comms.c`, `utils.c`, `config.h`, `tasks.h`), the newest there is, v1.11.
-//!   A line ends at CR or LF, empty lines and NULs count for nothing, and a
-//!   word and its argument are split at the first space. Every answer ends in
-//!   CR LF. `read` gives four numbers: milliamperes, millivolts, microampere
-//!   hours and microwatt hours. `monitor` has no answer. `set` and `uvlo` with
-//!   no argument tell the value, and with one out of range give an `err` line
-//!   and then the same line as ever. `uvlo 0` turns the limit off, which then
-//!   reads 0. An unknown word gives `err Unknown command`.
-//! - `set` with no argument and `uvlo`: the changelog says both came with
-//!   v1.9, so `uvlo` is unknown to a `version=` below that. `on` and `off`: the
-//!   changelog's v1.10 speaks of toggling the load, and whether a serial
-//!   command came with it was not examined, so `replies=` plays their refusal.
-//! - `set` with no argument hands the firmware's handler a null argument,
-//!   and what its address 0 holds decides what it does. The changelog says
-//!   it answers, so this answers.
+//! - The commands and their answers: the firmware's own source and history,
+//!   `arachnidlabs/reload-pro` (`firmware/Reload Pro.cydsn/`, `comms.c`,
+//!   `commands.h`, `utils.c`, `config.h`, `tasks.h`). A line ends at CR or LF,
+//!   empty lines and NULs count for nothing, and a word and its argument are
+//!   split at the first space. Every answer ends in CR LF. `read` gives
+//!   milliamperes and millivolts. `monitor` has no answer. `set` and `uvlo` with no
+//!   argument tell the value, and with one out of range give an `err` line and
+//!   then the same line as ever. `uvlo 0` turns the limit off, which then reads 0.
+//!   An unknown word gives `err Unknown command`.
+//! - What came when, from the firmware's history:
+//!   - `version` came with v1.6 (1a60fd1), so the C driver's float check refuses
+//!     no real firmware: v1.6 to v1.9 all compare above 1.10, and earlier firmware
+//!     fails at the `version ` prefix. A `version=` below 1.6 is for that check.
+//!   - `uvlo` came with v1.9, and so did `set` and `uvlo` always telling the value
+//!     (v1.8's `command_set`, `comms.c:109-120`). Below that, bare `set` gives
+//!     `err set usage: set <num>`, and `set` out of range the `err` line alone.
+//!   - `on` and `off` came with v1.10 (88b2dd0, an ancestor of 0514ff1, "released
+//!     1.10"), and answer `ok`.
+//!   - Two more numbers on `read`, microampere hours and microwatt hours, came
+//!     after v1.11's release (59b72d4, 2015) in 2162231, 2016. So `read` here has
+//!     two numbers, and `fields=4` plays a build of later source.
+//! - `set` with no argument hands the firmware's handler a null argument, and
+//!   what its address 0 holds decides what it does. A zero byte is taken here, at
+//!   any version; so too `uvlo`.
 //! - The USB side: an FT230X, `0403:6015`, "Arachnid Labs Ltd", "Re:load Pro"
 //!   (`firmware/Reload Pro FTDI Config.xml`), between USB and the chip's UART,
 //!   so the line must fit. Its rate is the C driver's, and the default of the
@@ -37,9 +44,13 @@
 //!   in its scan. A model has no clock, so nothing here checks pacing; the
 //!   port's is checked by a unit test.
 //! - A monitoring interval is counted in [`Serial::tick`] offers, about 20 ms
-//!   each, and the first line comes one interval after the command, as in the
-//!   firmware. `count=` holds the stream after so many lines, where a tool's
-//!   stop would otherwise race the next line.
+//!   each. The first line comes at once, as in the firmware: `next_event` tests
+//!   `now - last_tick > interval` on a `last_tick` that nothing has moved since
+//!   the last line, so only a `monitor` within an interval of that line waits.
+//!   `period=` is an artifact: it holds the first line back too, which is how
+//!   `time before the first line` gets a capture with nothing in it yet. `count=`
+//!   holds the stream after so many lines, where a tool's stop would otherwise
+//!   race the next line.
 //! - `volts=` and `amps=` are stand-ins for what is on the terminals. There is
 //!   no analog side, so `overtemp` and `undervolt` come only when `lines=`
 //!   plays them, and nothing turns off with them.
@@ -67,7 +78,9 @@
 //!   readings;
 //! - `count=N`, the lines monitoring sends per power on, then silence, and the
 //!   event point when the next line would have gone, at a quiet time;
-//! - `period=N`, offers from line to line instead of the interval's own;
+//! - `period=N`, offers from line to line instead of the interval's own, and
+//!   ahead of the first;
+//! - `fields=2|4`, the numbers on a `read` line;
 //! - `gap=LINE:POS:OFFERS`, monitoring's line number LINE (from 1) stops after
 //!   POS bytes for that many offers;
 //! - `setters=0`, which flags any setting, for the cases that show a tool
@@ -89,7 +102,8 @@ pub const NAME: &str = "arachnid-labs-re-load-pro";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "An Arachnid Labs Re:load Pro electronic load on CDC-ACM; \
                          version=TEXT|none, banner=, stale=, set=, uvlo=, on=, volts=, amps=, \
-                         replies=, answers=, lines=, count=, period=, gap=, setters=, and the \
+                         replies=, answers=, lines=, count=, period=, fields=, gap=, setters=, \
+                         and the \
                          shell's stall=, chunk=, in-limit=, in-stall=, out-hold=";
 
 /// The firmware's 40 byte line buffer, less the NUL.
@@ -104,6 +118,10 @@ const C_NAN: i64 = -2_147_483_648;
 const MS_PER_OFFER: u32 = 20;
 /// The one interval the C driver asks for.
 const INTERVAL_MS: u32 = 200;
+/// The version with `uvlo`, and whose `set` and `uvlo` always tell the value.
+const SETTINGS_TELL: (u32, u32) = (1, 9);
+/// The version with `on` and `off`.
+const ON_OFF: (u32, u32) = (1, 10);
 
 /// A load from the `-o` options.
 ///
@@ -148,6 +166,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Load>> {
             "lines" => config.lines = parse_hex_list(k, v, 1, 256)?,
             "count" => config.count = Some(parse_number(k, v, 0..=100_000)?),
             "period" => config.period = Some(parse_number(k, v, 1..=100_000)?),
+            "fields" => config.four_fields = parse_number(k, v, 2..=4)? == 4,
             "gap" => config.gap = Some(parse_gap(v)?),
             "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
@@ -183,6 +202,8 @@ struct Config {
     lines: Vec<Vec<u8>>,
     count: Option<u32>,
     period: Option<u32>,
+    /// The two numbers that later source added to `read`.
+    four_fields: bool,
     gap: Option<Gap>,
     setters: bool,
 }
@@ -203,6 +224,7 @@ impl Default for Config {
             lines: Vec::new(),
             count: None,
             period: None,
+            four_fields: false,
             gap: None,
             setters: true,
         }
@@ -248,15 +270,16 @@ impl Load {
 
     fn reading(&self) -> Vec<u8> {
         let amps = if self.on { self.config.amps.unwrap_or(self.set) } else { 0 };
-        format!("read {amps} {} 0 0\r\n", self.config.volts).into_bytes()
+        let tail = if self.config.four_fields { " 0 0" } else { "" };
+        format!("read {amps} {}{tail}\r\n", self.config.volts).into_bytes()
     }
 
-    /// `uvlo` needs v1.9, by the changelog.
-    fn knows_uvlo(&self) -> bool {
+    /// Whether `version=` is this or later; so is what names no number.
+    fn at_least(&self, wanted: (u32, u32)) -> bool {
         let Some(version) = &self.config.version else { return true };
         let mut parts = version.split('.').map(str::parse::<u32>);
         match (parts.next(), parts.next()) {
-            (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= (1, 9),
+            (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= wanted,
             _ => true,
         }
     }
@@ -319,8 +342,14 @@ impl Load {
             ("monitor", Some("200")) => {
                 self.period = Some(self.config.period.unwrap_or(INTERVAL_MS / MS_PER_OFFER));
                 self.offers = 0;
+                if self.config.period.is_none() && !self.held() {
+                    self.monitor_line(port);
+                }
             }
             ("read", None) => self.answer(&self.reading(), port),
+            ("set", None) if !self.at_least(SETTINGS_TELL) => {
+                self.answer(b"err set usage: set <num>\r\n", port);
+            }
             ("set", None) => self.answer(format!("set {}\r\n", self.set).as_bytes(), port),
             ("set", Some(argument)) => {
                 self.setting(&text, port);
@@ -332,10 +361,12 @@ impl Load {
                         reply.extend_from_slice(b"err set current must be between 0 and 6000\r\n");
                     }
                 }
-                reply.extend_from_slice(format!("set {}\r\n", self.set).as_bytes());
+                if v >= 0 || self.at_least(SETTINGS_TELL) {
+                    reply.extend_from_slice(format!("set {}\r\n", self.set).as_bytes());
+                }
                 self.answer(&reply, port);
             }
-            ("uvlo", _) if !self.knows_uvlo() => {
+            ("uvlo", _) if !self.at_least(SETTINGS_TELL) => {
                 self.answer(b"err Unknown command 'uvlo'\r\n", port);
             }
             ("uvlo", None) => self.answer(format!("uvlo {}\r\n", self.uvlo).as_bytes(), port),
@@ -352,6 +383,10 @@ impl Load {
                 reply.extend_from_slice(format!("uvlo {}\r\n", self.uvlo).as_bytes());
                 self.answer(&reply, port);
             }
+            ("on" | "off", None) if !self.at_least(ON_OFF) => {
+                self.setting(&text, port);
+                self.answer(format!("err Unknown command '{word}'\r\n").as_bytes(), port);
+            }
             ("on" | "off", None) => {
                 self.setting(&text, port);
                 self.on = word == "on";
@@ -359,6 +394,11 @@ impl Load {
             }
             _ => port.violation(format!("'{text}': no path of the C driver sends this")),
         }
+    }
+
+    /// Whether `count=` holds the stream.
+    fn held(&self) -> bool {
+        self.config.count.is_some_and(|n| self.sent >= n)
     }
 
     /// The next of monitoring's lines goes, or its first part.
@@ -423,7 +463,7 @@ impl Serial for Load {
             return;
         }
         let Some(period) = self.period else { return };
-        let held = self.config.count.is_some_and(|n| self.sent >= n);
+        let held = self.held();
         self.offers += 1;
         if self.offers >= period {
             self.offers = 0;
@@ -504,17 +544,17 @@ mod tests {
     fn settings_answer_and_take_effect() {
         let mut h = load(&[("volts", "5000")]);
         h.write(b"read\n");
-        assert_eq!(h.read(), b"read 0 5000 0 0\r\n");
+        assert_eq!(h.read(), b"read 0 5000\r\n");
         h.write(b"set 1500\n");
         assert_eq!(h.read(), b"set 1500\r\n");
         h.write(b"set\n");
         assert_eq!(h.read(), b"set 1500\r\n");
         h.write(b"read\n");
-        assert_eq!(h.read(), b"read 1500 5000 0 0\r\n");
+        assert_eq!(h.read(), b"read 1500 5000\r\n");
         h.write(b"off\n");
         assert_eq!(h.read(), b"ok\r\n");
         h.write(b"read\n");
-        assert_eq!(h.read(), b"read 0 5000 0 0\r\n");
+        assert_eq!(h.read(), b"read 0 5000\r\n");
         h.write(b"on\n");
         assert_eq!(h.read(), b"ok\r\n");
         h.write(b"uvlo 3300\n");
@@ -563,6 +603,44 @@ mod tests {
             h.write(b"uvlo\n");
             assert_eq!(h.read(), b"uvlo 0\r\n", "{known}");
         }
+    }
+
+    #[test]
+    fn set_tells_its_value_from_v1_9() {
+        let mut h = load(&[("version", "1.8"), ("set", "100")]);
+        h.write(b"set\n");
+        assert_eq!(h.read(), b"err set usage: set <num>\r\n");
+        h.write(b"set 200\n");
+        assert_eq!(h.read(), b"set 200\r\n");
+        h.write(b"set -2147483648\n");
+        assert_eq!(h.read(), b"err set current must be between 0 and 6000\r\n");
+        let mut h = load(&[("version", "1.9"), ("set", "100")]);
+        h.write(b"set\n");
+        assert_eq!(h.read(), b"set 100\r\n");
+    }
+
+    #[test]
+    fn on_and_off_came_with_v1_10() {
+        let mut h = load(&[("version", "1.9")]);
+        h.write(b"on\n");
+        assert_eq!(h.read(), b"err Unknown command 'on'\r\n");
+        h.write(b"off\n");
+        assert_eq!(h.read(), b"err Unknown command 'off'\r\n");
+        for known in ["1.10", "1.11", "2.0", "x"] {
+            let mut h = load(&[("version", known)]);
+            h.write(b"on\n");
+            assert_eq!(h.read(), b"ok\r\n", "{known}");
+        }
+    }
+
+    #[test]
+    fn read_has_two_numbers_unless_asked_for_four() {
+        let mut h = load(&[("version", "1.11")]);
+        h.write(b"read\n");
+        assert_eq!(h.read(), b"read 0 12000\r\n");
+        let mut h = load(&[("fields", "4")]);
+        h.write(b"read\n");
+        assert_eq!(h.read(), b"read 0 12000 0 0\r\n");
     }
 
     #[test]
@@ -627,12 +705,23 @@ mod tests {
         let mut h = load(&[("set", "1000")]);
         assert_eq!(offers(&mut h, 100), b"", "off until asked");
         h.write(b"monitor 200\r\n");
-        assert_eq!(offers(&mut h, 9), b"", "no answer, and an interval to wait");
-        assert_eq!(offers(&mut h, 1), b"read 1000 12000 0 0\r\n");
-        assert_eq!(offers(&mut h, 10), b"read 1000 12000 0 0\r\n");
+        assert_eq!(offers(&mut h, 1), b"read 1000 12000\r\n", "the first at once");
+        assert_eq!(offers(&mut h, 9), b"", "then an interval to wait");
+        assert_eq!(offers(&mut h, 1), b"read 1000 12000\r\n");
+        assert_eq!(offers(&mut h, 10), b"read 1000 12000\r\n");
         h.write(b"monitor 0\r\n");
         assert_eq!(offers(&mut h, 100), b"");
         assert_eq!(violations(&mut h), 0);
+    }
+
+    #[test]
+    fn a_count_of_0_sends_nothing_and_marks_later() {
+        let mut h = load(&[("count", "0")]);
+        h.write(b"monitor 200\r\n");
+        assert_eq!(h.read(), b"");
+        assert!(!h.cdc.mark());
+        assert_eq!(offers(&mut h, 10), b"");
+        assert!(h.cdc.mark());
     }
 
     #[test]
@@ -641,17 +730,17 @@ mod tests {
         h.write(b"monitor 200\r\n");
         assert_eq!(offers(&mut h, 2), b"overte");
         assert!(!h.cdc.mark());
-        assert_eq!(offers(&mut h, 2), b"read 0 12000 0 0\r\n");
+        assert_eq!(offers(&mut h, 2), b"read 0 12000\r\n");
         assert_eq!(offers(&mut h, 20), b"", "count= holds it");
         assert!(h.cdc.mark());
 
         let mut h = load(&[("period", "1"), ("gap", "2:5:3")]);
         h.write(b"monitor 200\r\n");
-        assert_eq!(offers(&mut h, 1), b"read 0 12000 0 0\r\n");
+        assert_eq!(offers(&mut h, 1), b"read 0 12000\r\n");
         assert_eq!(offers(&mut h, 1), b"read ");
         assert_eq!(offers(&mut h, 3), b"");
-        assert_eq!(offers(&mut h, 1), b"0 12000 0 0\r\n");
-        assert_eq!(offers(&mut h, 1), b"read 0 12000 0 0\r\n");
+        assert_eq!(offers(&mut h, 1), b"0 12000\r\n");
+        assert_eq!(offers(&mut h, 1), b"read 0 12000\r\n");
     }
 
     #[test]
@@ -681,7 +770,7 @@ mod tests {
         h.write(b"version\r\n");
         assert_eq!(h.read(), b"version 1.11\r\n", "not counted");
         h.write(b"read\n");
-        assert_eq!(h.read(), b"read 0 12000 0 0\r\n");
+        assert_eq!(h.read(), b"read 0 12000\r\n");
         assert!(!h.cdc.mark());
         h.write(b"read\n");
         assert_eq!(h.read(), b"");
@@ -701,7 +790,7 @@ mod tests {
     fn a_reset_goes_back_to_power_on() {
         let mut h = load(&[("replies", "61"), ("count", "1"), ("period", "1")]);
         h.write(b"set 100\nmonitor 200\r\n");
-        assert_eq!(h.read(), b"aread 100 12000 0 0\r\n");
+        assert_eq!(h.read(), b"aread 100 12000\r\n");
         h.cdc.model.reset();
         h.write(b"set\n");
         assert_eq!(h.read(), b"a");
@@ -723,6 +812,7 @@ mod tests {
             ("gap", "1:0:3"),
             ("gap", "1:2:3:4"),
             ("gap", "a:b:c"),
+            ("fields", "1"),
             ("nothing", "1"),
         ] {
             let o = vec![(bad.0.to_owned(), bad.1.to_owned())];

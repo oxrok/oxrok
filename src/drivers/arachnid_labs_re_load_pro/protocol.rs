@@ -19,7 +19,7 @@
 //! | `version` | `version 1.11` |
 //! | `monitor 200` | none; `read ...` every 200 ms from then on |
 //! | `monitor 0` | none |
-//! | `read` | `read MA MV UAH UWH` (older firmware: `read MA MV`) |
+//! | `read` | `read MA MV`; firmware built after v1.11's release adds `UAH UWH` |
 //! | `set` | `set MA` |
 //! | `set MA` | `set MA`, after `err ...` when out of range |
 //! | `uvlo` | `uvlo MV`, with 0 for off |
@@ -28,8 +28,16 @@
 //!
 //! The device speaks by itself too: `overtemp` and `undervolt` when it turns
 //! off, and `set MA` when the knob is turned. So a line that comes to a request
-//! need not be its answer. `err Unknown command 'x'` comes for a word the
-//! firmware does not know: `uvlo` came with v1.9.
+//! need not be its answer, and `overtemp` and `undervolt` must not be lost: they
+//! are the only word that the load has turned itself off. `err Unknown command
+//! 'x'` comes for a word the firmware does not know: `uvlo` came with v1.9, `on`
+//! and `off` with v1.10.
+//!
+//! Each of those commands is answered every time, so silence means that the
+//! line was lost, which the firmware's one-slot queue of commands can do, or that
+//! the link is down. An answer later than [`REPLY_WAIT`] stays in the input: the
+//! next request reads it first if it has come by then, and otherwise, on a device
+//! that lags by more than the wait, may take it for its own.
 
 use crate::core::Result;
 use crate::serial::{Port, read_blocking};
@@ -48,14 +56,12 @@ pub const VERSION: &[u8] = b"version\r\n";
 pub const LINE_MAX: usize = 99;
 /// How long a scan waits for the version line.
 pub const VERSION_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long a request waits for a line.
-pub const REPLY_TIMEOUT: Duration = Duration::from_millis(500);
-/// Silent reads that make a request unanswered, as the C's retry has it.
-const SILENT_READS: u32 = 2;
-/// Lines passed over before a request counts as unanswered: the device's own
-/// and empty ones, each CR LF being two. It speaks far less often than this in
-/// the time of a reply.
-const OTHER_LINES: u32 = 16;
+/// How long a request waits for its answer: the C's two reads of 500 ms. Time
+/// and not lines, since monitoring left on by a capture can leave dozens of
+/// lines ahead of the answer, which take little time to read.
+pub const REPLY_WAIT: Duration = Duration::from_secs(1);
+/// The most [`absorb`] takes in one go, from a device that never stops.
+const BACKLOG_MAX: usize = 64 * 1024;
 
 /// `serial_readline`: up to CR or LF, which goes, up to [`LINE_MAX`] bytes, or
 /// what has come by the time. An empty result is an empty line or nothing.
@@ -64,18 +70,19 @@ const OTHER_LINES: u32 = 16;
 ///
 /// What the port's read gives, which in C is a read that found nothing.
 pub fn read_line(port: &mut dyn Port, timeout: Duration) -> Result<Vec<u8>> {
-    Ok(read_line_ended(port, timeout)?.0)
+    Ok(read_line_on(port, Vec::new(), timeout)?.0)
 }
 
-/// [`read_line`], and whether something ended the line before the time did.
-fn read_line_ended(port: &mut dyn Port, timeout: Duration) -> Result<(Vec<u8>, bool)> {
+/// [`read_line`] on what has come of the line so far, and whether something
+/// ended the line before the time did. Past the time it still takes what is there.
+fn read_line_on(
+    port: &mut dyn Port,
+    mut line: Vec<u8>,
+    timeout: Duration,
+) -> Result<(Vec<u8>, bool)> {
     let deadline = Instant::now() + timeout;
-    let mut line = Vec::new();
     while line.len() < LINE_MAX {
         let left = deadline.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Ok((line, false));
-        }
         let mut byte = [0];
         if read_blocking(port, &mut byte, left)? == 0 {
             return Ok((line, false));
@@ -103,7 +110,8 @@ pub fn version_of(line: &[u8]) -> Option<&[u8]> {
 }
 
 /// `g_ascii_strtod`, with 0 where it converts nothing. Firmware >= 1.10 is what
-/// C asks, as a float: 1.9 is above it, and so 1.2.
+/// C asks, as a float: 1.6 to 1.9 are above it, and `version` came with v1.6, so
+/// the check refuses no firmware that gets this far.
 pub fn number(text: &[u8]) -> f64 {
     crate::core::util::g_ascii_strtod(c_string(text)).unwrap_or(0.0)
 }
@@ -216,39 +224,80 @@ pub enum Answer {
     None,
 }
 
-/// The answer to a request, up to [`OTHER_LINES`] of what else comes going to
-/// `note`: the lines the device sent by itself.
-///
-/// A read that fails finds nothing, as in `serial_readline`. A setting's next
-/// write says what became of the port.
-pub fn await_answer(port: &mut dyn Port, awaited: Awaited, note: &mut dyn FnMut(&Line)) -> Answer {
-    let mut silent = 0;
-    let mut others = 0;
-    while silent < SILENT_READS && others < OTHER_LINES {
-        let (line, ended) = read_line_ended(port, REPLY_TIMEOUT).unwrap_or_else(|e| {
-            log::debug!("A read failed: {e}.");
-            (Vec::new(), false)
-        });
-        if line.is_empty() {
-            if ended {
-                others += 1;
-            } else {
-                silent += 1;
+/// What has arrived ahead of a request, read without waiting. C has no such step,
+/// and so reads such lines as its answers. Each whole line goes to `note`, and
+/// `line` keeps the one that is still coming. A read that fails ends this, for the
+/// write that follows to say so.
+pub fn absorb(port: &mut dyn Port, line: &mut Vec<u8>, note: &mut dyn FnMut(&Line)) {
+    let mut chunk = [0u8; 64];
+    let mut taken = 0;
+    while taken < BACKLOG_MAX {
+        let n = match read_blocking(port, &mut chunk, Duration::ZERO) {
+            Ok(n) => n,
+            Err(e) => {
+                log::debug!("A read failed: {e}.");
+                return;
             }
-            continue;
+        };
+        if n == 0 {
+            return;
         }
-        let parsed = parse(&line);
-        if awaited.answered_by(&parsed) {
-            return Answer::Line(parsed);
+        taken += n;
+        for &byte in &chunk[..n] {
+            let ended = matches!(byte, b'\r' | b'\n');
+            if !ended {
+                line.push(byte);
+            }
+            if (ended && !line.is_empty()) || line.len() >= LINE_MAX {
+                log::debug!("Ahead of a request: '{}'.", String::from_utf8_lossy(line));
+                note(&parse(line));
+                line.clear();
+            }
         }
-        if parsed == Line::Refused {
-            return Answer::Refused(String::from_utf8_lossy(c_string(&line)).into_owned());
-        }
-        log::debug!("Passed over: '{}'.", String::from_utf8_lossy(&line));
-        note(&parsed);
-        others += 1;
     }
-    Answer::None
+}
+
+/// The answer to a request within [`REPLY_WAIT`], on what `started` holds of a
+/// line, with the other lines that come going to `note`: what the device sent by
+/// itself.
+///
+/// A line that nothing ended by the time is no answer: it may be any number cut
+/// short. A read that fails ends the wait.
+pub fn await_answer(
+    port: &mut dyn Port,
+    awaited: Awaited,
+    started: Vec<u8>,
+    note: &mut dyn FnMut(&Line),
+) -> Answer {
+    let deadline = Instant::now() + REPLY_WAIT;
+    let mut started = started;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let (line, ended) = match read_line_on(port, std::mem::take(&mut started), left) {
+            Ok(read) => read,
+            Err(e) => {
+                log::warn!("A read failed: {e}.");
+                return Answer::None;
+            }
+        };
+        if !ended {
+            return Answer::None;
+        }
+        if !line.is_empty() {
+            let parsed = parse(&line);
+            if awaited.answered_by(&parsed) {
+                return Answer::Line(parsed);
+            }
+            if parsed == Line::Refused {
+                return Answer::Refused(String::from_utf8_lossy(c_string(&line)).into_owned());
+            }
+            log::debug!("Passed over: '{}'.", String::from_utf8_lossy(&line));
+            note(&parsed);
+        }
+        if Instant::now() >= deadline {
+            return Answer::None;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -384,7 +433,7 @@ mod tests {
     fn answer(input: &[u8], awaited: Awaited) -> (Answer, Vec<Line>) {
         let mut p = bytes(input);
         let mut noted = Vec::new();
-        let got = await_answer(&mut p, awaited, &mut |line| noted.push(*line));
+        let got = await_answer(&mut p, awaited, Vec::new(), &mut |line| noted.push(*line));
         (got, noted)
     }
 
@@ -410,35 +459,143 @@ mod tests {
         );
         assert_eq!(answer(b"", Awaited::Done).0, Answer::None);
         assert_eq!(answer(b"nonsense\r\n", Awaited::Done).0, Answer::None);
+        assert_eq!(answer(b"ok \r\n", Awaited::Done).0, Answer::None);
     }
 
     #[test]
-    fn what_is_passed_over_is_bounded() {
-        let mut input = b"overtemp\n".repeat(16);
-        input.extend_from_slice(b"ok\r\n");
-        let (got, noted) = answer(&input, Awaited::Done);
+    fn a_monitor_line_is_no_answer_to_a_setting() {
+        for (awaited, reply, want) in [
+            (Awaited::CurrentLimit, &b"set 15\r\n"[..], Line::CurrentLimit(0.015)),
+            (Awaited::Threshold, b"uvlo 15\r\n", Line::Threshold(0.015)),
+            (Awaited::Done, b"ok\r\n", Line::Done),
+        ] {
+            let mut input = b"read 1 2\r\n".to_vec();
+            input.extend_from_slice(reply);
+            let (got, noted) = answer(&input, awaited);
+            assert_eq!(got, Answer::Line(want));
+            assert_eq!(noted, [Line::Reading { voltage: 0.002, current: 0.001 }]);
+        }
+    }
+
+    #[test]
+    fn a_backlog_of_any_length_does_not_end_the_wait() {
+        let mut input = b"read 1 2\r\n".repeat(2000);
+        input.extend_from_slice(b"\r\n\r\nset 15\r\n");
+        let (got, noted) = answer(&input, Awaited::CurrentLimit);
+        assert_eq!(got, Answer::Line(Line::CurrentLimit(0.015)));
+        assert_eq!(noted.len(), 2000);
+    }
+
+    /// Lines for ever, none the answer.
+    struct Flood;
+
+    impl Port for Flood {
+        fn name(&self) -> &'static str {
+            "flood"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+            buf.fill(b'\n');
+            Ok(buf.len())
+        }
+        fn write(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn lines_for_ever_are_bounded_by_the_time() {
+        let started = Instant::now();
+        assert_eq!(await_answer(&mut Flood, Awaited::Done, Vec::new(), &mut |_| ()), Answer::None);
+        let took = started.elapsed();
+        assert!(took >= REPLY_WAIT, "{took:?}");
+        assert!(took < REPLY_WAIT * 10, "{took:?}");
+        let mut line = Vec::new();
+        absorb(&mut Flood, &mut line, &mut |_| ());
+        assert_eq!(line, b"");
+    }
+
+    #[test]
+    fn a_line_nothing_ended_is_no_answer() {
+        assert_eq!(answer(b"set 15", Awaited::CurrentLimit).0, Answer::None);
+        assert_eq!(answer(b"ok", Awaited::Done).0, Answer::None);
+        assert_eq!(answer(b"read 1 2", Awaited::Reading).0, Answer::None);
+        let (got, noted) = answer(b"overtemp", Awaited::Done);
         assert_eq!(got, Answer::None);
-        assert_eq!(noted.len(), 16);
-        let mut input = b"\n".repeat(16);
-        input.extend_from_slice(b"ok\r\n");
-        assert_eq!(answer(&input, Awaited::Done).0, Answer::None);
-        let mut input = b"\n".repeat(15);
-        input.extend_from_slice(b"ok\r\n");
-        assert_eq!(answer(&input, Awaited::Done).0, Answer::Line(Line::Done));
+        assert_eq!(noted, [], "nor anything else");
     }
 
     #[test]
-    fn a_read_that_fails_finds_nothing() {
+    fn an_answer_goes_on_from_what_was_started() {
+        let mut p = bytes(b"500\r\n");
+        let got = await_answer(&mut p, Awaited::CurrentLimit, b"set 1".to_vec(), &mut |_| ());
+        assert_eq!(got, Answer::Line(Line::CurrentLimit(1.5)));
+    }
+
+    #[test]
+    fn a_read_that_fails_ends_the_wait() {
         let mut p = bytes(b"ok\r\n");
         p.fail = true;
-        assert_eq!(await_answer(&mut p, Awaited::Done, &mut |_| ()), Answer::None);
+        let started = Instant::now();
+        assert_eq!(await_answer(&mut p, Awaited::Done, Vec::new(), &mut |_| ()), Answer::None);
+        assert!(started.elapsed() < REPLY_WAIT, "{:?}", started.elapsed());
     }
 
     #[test]
-    fn a_silent_device_takes_two_reads() {
+    fn a_silent_device_takes_the_whole_wait() {
         let started = Instant::now();
         assert_eq!(answer(b"", Awaited::Done).0, Answer::None);
-        let took = started.elapsed();
-        assert!(took >= Duration::from_millis(1000), "{took:?}");
+        assert!(started.elapsed() >= REPLY_WAIT, "{:?}", started.elapsed());
+        assert_eq!(REPLY_WAIT, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn what_is_absorbed_is_noted_and_what_is_coming_is_kept() {
+        let mut p = bytes(b"\noverTemp\r\novertemp\r\nread 1 2\r\nunder");
+        let mut line = Vec::new();
+        let mut noted = Vec::new();
+        absorb(&mut p, &mut line, &mut |l| noted.push(*l));
+        assert_eq!(
+            noted,
+            [
+                Line::Unknown,
+                Line::OverTemperature,
+                Line::Reading { voltage: 0.002, current: 0.001 }
+            ]
+        );
+        assert_eq!(line, b"under");
+        let mut p = bytes(b"volt\r\n");
+        noted.clear();
+        absorb(&mut p, &mut line, &mut |l| noted.push(*l));
+        assert_eq!(noted, [Line::UnderVoltage]);
+        assert_eq!(line, b"");
+    }
+
+    #[test]
+    fn absorbing_a_line_too_long_cuts_it_where_a_read_does() {
+        let mut input = vec![b'x'; 99];
+        input.extend_from_slice(b"overtemp\r\n");
+        let mut line = Vec::new();
+        let mut noted = Vec::new();
+        absorb(&mut bytes(&input), &mut line, &mut |l| noted.push(*l));
+        assert_eq!(noted, [Line::Unknown, Line::OverTemperature]);
+    }
+
+    #[test]
+    fn absorbing_from_a_port_that_fails_finds_nothing() {
+        let mut p = bytes(b"overtemp\r\n");
+        p.fail = true;
+        let mut line = Vec::new();
+        let mut noted = Vec::new();
+        absorb(&mut p, &mut line, &mut |l| noted.push(*l));
+        assert_eq!(noted, []);
     }
 }
