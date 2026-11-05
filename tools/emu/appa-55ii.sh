@@ -8,6 +8,7 @@
 EMU_MODEL=appa-55ii
 EMU_CDC=1
 EMU_DRIVER=appa-55ii
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=appa-55ii
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -15,6 +16,14 @@ emu_cases() {
     emu_conns
     # How oxrok's log line and sr_strerror's read.
     F='s/^oxrok: [a-z]+: oxrok::drivers::appa_55ii(::protocol)?: /sr: appa-55ii: /'
+    SHIFT_BUG="a frame with a wrong sum is skipped (protocol.c:245-247) and the pieces left are joined (:209-213), so each later record is read from the wrong bytes: 0.3 degrees where the log holds 20.3; oxrok warns and takes no more records from that log"
+    SHORT_BUG="appa_55ii_live_data reads at fixed places whatever the frame's size (protocol.c:79-81, :59, called from :251), so here it takes the next frame's sync as T1's value, -32768; oxrok warns and makes no sample"
+    SPIN_BUG="with no record due, appa_55ii_log_data_parse takes nothing (protocol.c:159) and at a full log_buf s is 0, so while (size > 0) in appa_55ii_log_data never ends (:208-216); oxrok drops those bytes and goes on to the log's end"
+    NO_META_BUG="$SPIN_BUG, here as the metadata's frame was lost and the count stayed 0"
+    SILENT_BUG="receive_data returns at a timeout, whose revents are 0, before it checks its limits (protocol.c:282-283, :311), so a time limit never fires on a device that is silent; oxrok's does"
+    HUP_BUG="receive_data takes a hung up port for a timeout (protocol.c:282, revents != G_IO_IN), so its read error at :289-291 is never reached; oxrok's read fails and ends the capture"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    ANYKEY="sigrok-cli stops a --continuous at stdin's end (anykey.c), which here is at once, before the first frame; oxrok has no such stop, so the time limit ends it"
     G=$(appa_live)
     W=$(appa_live | sed 's/..$/00/')
 
@@ -29,13 +38,17 @@ emu_cases() {
     emu_case "set live then get" --keep-header -- -d $A -c data_source=Live --get data_source
     emu_case "set limit then get" --keep-header -- -d $A -c limit_samples=7 --get limit_samples
     emu_case "set time then get" --keep-header -- -d $A -c limit_time=7 --get limit_time
-    emu_case "set no such source" --expect-fail --stderr -- -d $A -c data_source=memory --set
+    # strcmp's refusal, so sent nothing. Each tool has its own words for it, and a
+    # unit test holds oxrok's.
+    emu_case "set no such source" --expect-fail --no-output -- -d $A -c data_source=memory --set
     emu_case "no conn" --keep-header --no-output -- -d appa-55ii --scan
     emu_case "no such node" --keep-header --no-output -- -d appa-55ii:conn=/dev/ttyACM97 --scan
     emu_case "serialcomm as it is" --keep-header -- -d $A:serialcomm=9600/8n1 --scan
     emu_case "serialcomm misset" --keep-header --no-output -- -d $A:serialcomm=19200/8n1 --scan
-    emu_case "serialcomm no such" --tx-filter '/^ctl_out/d' --keep-header --no-output -- -d $A:serialcomm=fast --scan
+    # sigrok-cli opens the port before it reads the setting, oxrok does not. No
+    # frame comes, as how long C's open lasts would decide if one is in the .tx.
     emu_options burst=0
+    emu_case "serialcomm no such" --tx-filter '/^ctl_out/d' --keep-header --no-output -- -d $A:serialcomm=fast --scan
     emu_case "scan silent" --keep-header --no-output -- -d $A --scan
 
     # 50 bytes are all a scan looks at, and one try per byte from the 25th, so
@@ -74,10 +87,14 @@ emu_cases() {
     emu_case "every flag" -- -d $A --samples 12
 
     # A time limit, and a stream that runs on: the count is the time's, so the
-    # .tx says only that bytes came, and the output its first line.
+    # .tx leaves out what came, and the output says that some did, by its first line.
+    # Not which, as a free stream's first reading varied under sigrok-cli: 23.4, 23.5
+    # or 137.2 in 15 runs.
+    # C overruns to the next frame and oxrok does not, which only this count shows.
     emu_options period=2
-    T='s/^bulk_in 82 [0-9]+ -> .*$/bulk_in 82 N -> .../'
-    emu_case "time on a stream" --filter '2,$d' --timeout 10 --tx-filter "$T" -- -d $A --time 1s
+    T='/^bulk_in /d'
+    emu_case "time on a stream" --filter 's/^T1: .*$/T1: a reading/
+2,$d' --timeout 10 --tx-filter "$T" -- -d $A --time 1s
 
     # What a line can do to the frames.
     emu_options burst=2 period=2 packet=$(appa_noise 7)$G
@@ -135,25 +152,38 @@ s/^sr: \[[^]]*\] /sr: /
     emu_options period=2
     emu_case "memory but no log" --no-output --timeout 10 --tx-filter "$T" -- -d $A $M --time 1s
 
-    # What C does at the edges, to pin once seen.
+    # A limit and the log's end in one read: C sends its end twice (protocol.c:227
+    # and :311-312), which sigrok-cli takes in its stride.
     emu_options burst=1 records=1 piece=20 gap=0
     emu_case "log limit and end in one read" -- -d $A $M --samples 1
-    emu_options burst=2 packet=$G,$(appa_frame 00 0102)$G
-    emu_case "a live frame too short" -- -d $A --samples 3
+    # Nothing can come of a size over 32: the buffer fills and the capture ends
+    # (protocol.c:306-309). oxrok warns on stderr, which this case does not compare.
     emu_options burst=2 period=2 packet=$G,$(appa_size_over)$G$G
     emu_case "a size over 32 ends it" --timeout 4 -- -d $A --samples 5
-    emu_options burst=1 records=5 bad=1
-    emu_case "log with its metadata broken" --hangs --timeout 4 --no-output -- -d $A $M --samples 100
-    emu_options burst=1 records=8 claim=1
-    emu_case "log with more than it says" --hangs --timeout 4 -- -d $A $M --samples 100
+    emu_case "a size over 32 says so" --oracle-differs "protocol.c:306-309 ends the capture and says nothing; oxrok warns" --stderr --filter "$F" --timeout 4 -- -d $A --samples 5
+
+    # Where C is wrong.
+    emu_options burst=2 packet=$G,$(appa_frame 00 0102)$G
+    emu_case "a live frame too short" --oracle-differs "$SHORT_BUG" -- -d $A --samples 2
     emu_options burst=1 records=6 bad=3
-    emu_case "log with a piece broken" -- -d $A $M --samples 100
+    emu_case "log with a piece broken" --oracle-differs "$SHIFT_BUG" -- -d $A $M --samples 100
+    emu_options burst=1 records=5 bad=1
+    emu_case "log with its metadata broken" --oracle-bug "$NO_META_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A $M --samples 100
+    emu_options burst=1 records=8 claim=1
+    emu_case "log with more than it says" --oracle-bug "$SPIN_BUG" --oracle-hangs --timeout 4 -- -d $A $M --samples 100
     emu_options mute=1
-    emu_case "time on a silent device" --hangs --timeout 4 --no-output -- -d $A --time 300ms
-    emu_case "silent with no limit" --hangs --timeout 4 --no-output -- -d $A --samples 3
+    emu_case "time on a silent device" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A --time 300ms
     emu_options burst=1
-    emu_case "unplug" --hangs --unplug model --timeout 6 -- -d $A --samples 5
-    emu_case "continuous" --no-output -- -d $A --continuous
+    emu_case "unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $A --samples 5
+
+    # A device that falls silent, and a log no one starts, wait for the user: both
+    # tools do, and a stop ends oxrok's.
+    emu_options mute=1
+    emu_case "lib silent with no time limit" --libsigrok --hangs --timeout 3 --no-output -- -d $A --samples 3
+    emu_case "interrupt on a silent device" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 8 -- -d $A --samples 3
+    emu_options burst=1
+    emu_case "interrupt waiting for a log" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 8 -- -d $A $M --samples 3
+    emu_case "continuous and a time limit" --oracle-differs "$ANYKEY" -- -d $A --continuous --time 1s
     emu_options
 }
 

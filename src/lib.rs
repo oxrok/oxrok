@@ -79,6 +79,7 @@ pub mod usb;
 /// The device drivers, one module per family.
 pub mod drivers {
     pub mod agilent_dmm;
+    pub mod appa_55ii;
     pub mod arachnid_labs_re_load_pro;
     pub mod asix_sigma;
     pub mod atten_pps3xxx;
@@ -146,6 +147,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
+    registry.register(Box::new(drivers::appa_55ii::Appa55iiDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
