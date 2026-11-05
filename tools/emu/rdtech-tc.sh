@@ -134,13 +134,14 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_case "capture garbage after a reply" --stderr --filter "$L" -- -d $K --frames 3
     emu_options
 
-    # A time limit ends what would otherwise wait for ever.
+    # A time limit ends what would otherwise wait for ever: with the bound off
+    # under one, nothing else can, so an ignored limit runs into the --timeout.
     emu_options answers=1
-    emu_case "silence with a time limit" --no-output -- -d $K --time 300ms
+    emu_case "silence with a time limit" --timeout 5 --no-output -- -d $K --time 300ms
     emu_options cut=2:100
-    emu_case "short reply with a time limit" --no-output -- -d $K --time 300ms
+    emu_case "short reply with a time limit" --timeout 5 --no-output -- -d $K --time 300ms
     emu_options extra=2:10
-    emu_case "extra bytes with a time limit" --filter '7,$d' --tx-filter '/^bulk_in 82 202 -> /q' -- -d $K --time 300ms
+    emu_case "extra bytes with a time limit" --timeout 5 --filter '7,$d' --tx-filter '/^bulk_in 82 202 -> /q' -- -d $K --time 300ms
 
     # C waits for ever for a reply to its last request (protocol.c:213-214),
     # or for the rest of it, or asks no more with a part in its buffer
