@@ -303,12 +303,9 @@ impl Device for FlukeDevice {
         if self.capturing.load(Ordering::SeqCst) {
             return Err(Error::Busy);
         }
-        let mut port = self
-            .port
-            .lock()
-            .expect("port lock")
-            .take()
-            .ok_or_else(|| Error::device("device is not open"))?;
+        if self.port.lock().expect("port lock").is_none() {
+            return Err(Error::device("device is not open"));
+        }
         self.capturing.store(true, Ordering::SeqCst);
         let capture = Capture {
             profile: self.profile,
@@ -320,15 +317,25 @@ impl Device for FlukeDevice {
         let stop2 = Arc::clone(&stop);
         let slot = Arc::clone(&self.port);
         let capturing = Arc::clone(&self.capturing);
-        let handle = std::thread::Builder::new()
-            .name("fluke-dmm acquisition".to_owned())
-            .spawn(move || {
-                capture.run(port.as_mut(), &sink, &stop2);
-                *slot.lock().expect("port lock") = Some(port);
+        // The thread takes the port from the slot, so a spawn that fails leaves
+        // it there, for a later start and for close.
+        let spawned =
+            std::thread::Builder::new().name("fluke-dmm acquisition".to_owned()).spawn(move || {
+                let port = slot.lock().expect("port lock").take();
+                if let Some(mut port) = port {
+                    capture.run(port.as_mut(), &sink, &stop2);
+                    *slot.lock().expect("port lock") = Some(port);
+                }
                 capturing.store(false, Ordering::SeqCst);
                 sink.send(Packet::End);
-            })
-            .map_err(Error::Io)?;
+            });
+        let handle = match spawned {
+            Ok(handle) => handle,
+            Err(e) => {
+                self.capturing.store(false, Ordering::SeqCst);
+                return Err(Error::Io(e));
+            }
+        };
         // A worker that came before has given its port back and sent, or is
         // sending, its End: it holds nothing that this one needs.
         self.worker = Some(Worker { stop, handle });

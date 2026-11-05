@@ -206,9 +206,6 @@ pub fn read_line(port: &mut dyn Port, max: usize, timeout: Duration) -> Vec<u8> 
             std::thread::sleep(Duration::from_millis(2).min(left));
         }
     }
-    if !line.is_empty() {
-        log::debug!("Received {}: '{}'.", line.len(), shown(c_string(&line)));
-    }
     line
 }
 
