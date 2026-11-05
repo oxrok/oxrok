@@ -1367,9 +1367,9 @@ mod tests {
         let (fake, _) = Fake::new();
         let mut d = device(fake);
         d.limit_msec = 250;
-        d.set(&Key::Samplerate, &Value::U64(5), None).unwrap();
+        d.set(&Key::Samplerate, &Value::U64(1), None).unwrap();
         let n = voltages(&capture(&mut d)).len();
-        assert_eq!(n, 2, "a sample at 200 ms, and at 400 ms the check");
+        assert_eq!(n, 1, "the first poll comes after 1 s, and the limit is over by then");
     }
 
     #[test]
@@ -1415,14 +1415,8 @@ mod tests {
         assert_eq!(polls(&seen), 2);
     }
 
-    #[test]
-    fn a_close_ends_a_capture_blocked_on_a_full_queue() {
-        let (fake, seen) = Fake::new();
-        let mut d = device(fake);
-        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
-        // No one reads: a queue of one is full at the header.
-        let (tx, rx) = sync_channel(1);
-        d.start(PacketSink::new(tx, 0)).unwrap();
+    /// A close, on a queue no one reads, within the bound.
+    fn close_returns(mut d: ItechIt8500Device) {
         let handle = std::thread::spawn(move || {
             d.close().unwrap();
             d
@@ -1433,8 +1427,34 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn a_close_ends_a_capture_blocked_on_its_header_and_its_end() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        // No one reads, and the queue is full before the header.
+        let (tx, rx) = sync_channel(1);
+        tx.send((0, Packet::FrameBegin)).unwrap();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        close_returns(d);
         drop(rx);
         assert_eq!(commands(&seen).last(), Some(&0x20), "the local mode went out");
+    }
+
+    #[test]
+    fn a_close_ends_a_capture_blocked_on_its_samples() {
+        let (fake, seen) = Fake::new();
+        let mut d = device(fake);
+        d.set(&Key::Samplerate, &Value::U64(15), None).unwrap();
+        // The header fits and the first sample does not.
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_polls(&seen, 1);
+        close_returns(d);
+        drop(rx);
+        assert_eq!(commands(&seen).last(), Some(&0x20), "the local mode went out");
+        assert_eq!(polls(&seen), 1, "blocked on the first sample until the stop");
     }
 
     #[test]
