@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 316 100" width="316" role="img" aria-label="oxrok"><title>oxrok</title>
+<style>.j{fill:#1f2328}@media (prefers-color-scheme: dark){.j{fill:#e6edf3}}</style>
+<g transform="translate(0 6) scale(.88)"><path d="M6.25 62.5H25V31.25H56.25V62.5H68.75V31.25H93.75V18.75A12.5 12.5 0 0 0 81.25 6.25H18.75A12.5 12.5 0 0 0 6.25 18.75Z" fill="#557a9c"/><path d="M6.25 68.75H31.25V37.5H50V68.75H75V37.5H93.75V81.25A12.5 12.5 0 0 1 81.25 93.75H18.75A12.5 12.5 0 0 1 6.25 81.25Z" fill="#c8501e"/></g>
+<g transform="translate(100 10)"><path class="j" d="M6 19h28a6 6 0 0 1 6 6v30a6 6 0 0 1-6 6h-28a6 6 0 0 1-6-6v-30a6 6 0 0 1 6-6zm3 9v24h22v-24zM48 19H59L82 61H71ZM71 19H82L59 61H48ZM134 19h28a6 6 0 0 1 6 6v30a6 6 0 0 1-6 6h-28a6 6 0 0 1-6-6v-30a6 6 0 0 1 6-6zm3 9v24h22v-24zM176-1H185V61H176ZM185 36L198 19H209L185 49ZM192 40L199 31L211 61H200Z"/><path d="M92 19H120V28H101V61H92Z" fill="#c8501e"/></g>
+</svg>

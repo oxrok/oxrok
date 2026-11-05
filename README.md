@@ -1,4 +1,4 @@
-# oxrok
+<p align="center"><img src="https://raw.githubusercontent.com/mangelajo/oxrok/main/docs/logo/lockup.svg" alt="oxrok" width="250"></p>
 
 An experimental sigrok compatible stack for logic analyzers, scopes and
 meters, in Rust: a library, drivers and a command line tool. It builds
