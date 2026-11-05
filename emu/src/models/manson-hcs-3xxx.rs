@@ -59,6 +59,8 @@
 //!   turn; an empty one is no reply;
 //! - `answers=N`, commands answered per power on, then silence and the event
 //!   point;
+//! - `gap=N`, the command after N answers gets none and marks the event point,
+//!   and the next go on as before: a capture has data on offer after an event;
 //! - `setters=0`, which flags any setting, for the cases that show a tool
 //!   changes nothing it was not asked to.
 //!
@@ -80,7 +82,7 @@ pub const NAME: &str = "manson-hcs-3xxx";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A Manson HCS-3xxx power supply on CDC-ACM; model=, gmod=, vmax=, imax=, \
                          vset=, iset=, output=, load=, gmod-raw=, gmax-raw=, getd-raw=, ack-raw=, \
-                         answers=, setters=, and the shell's stall=, chunk=, in-limit=, \
+                         answers=, gap=, setters=, and the shell's stall=, chunk=, in-limit=, \
                          in-stall=, out-hold=";
 
 /// The line the bridge's UART runs at.
@@ -175,6 +177,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
                 config.ack_raw = Some(Packets::new(parse_hex_list(k, v, 0, REPLY_MAX)?));
             }
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
+            "gap" => config.gap = Some(parse_number(k, v, 0..=100_000)?),
             "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
             other => return Err(Error(format!("{NAME} has no option {other}"))),
         }
@@ -204,6 +207,7 @@ struct Config {
     getd_raw: Option<Packets>,
     ack_raw: Option<Packets>,
     answers: Option<u32>,
+    gap: Option<u32>,
     setters: bool,
 }
 
@@ -220,6 +224,7 @@ impl Default for Config {
             getd_raw: None,
             ack_raw: None,
             answers: None,
+            gap: None,
             setters: true,
         }
     }
@@ -233,6 +238,7 @@ struct Supply {
     /// What has come of a command so far.
     pending: Vec<u8>,
     answered: u32,
+    gap_taken: bool,
 }
 
 impl Supply {
@@ -244,6 +250,7 @@ impl Supply {
             config,
             pending: Vec::new(),
             answered: 0,
+            gap_taken: false,
         }
     }
 
@@ -342,6 +349,11 @@ impl Supply {
             }
         }
         if self.config.answers.is_some_and(|n| self.answered >= n) {
+            port.mark_event_point();
+            return;
+        }
+        if self.config.gap == Some(self.answered) && !self.gap_taken {
+            self.gap_taken = true;
             port.mark_event_point();
             return;
         }
@@ -580,6 +592,17 @@ mod tests {
         assert!(!h.cdc.take_event_point());
         assert_eq!(ask(&mut h, b"GETD\r"), b"");
         assert!(h.cdc.take_event_point());
+    }
+
+    #[test]
+    fn a_gap_misses_one_answer_and_marks_the_point() {
+        let mut h = supply(&[("gap", "1")]);
+        assert_eq!(ask(&mut h, b"GMOD\r"), b"3202\rOK\r");
+        assert!(!h.cdc.take_event_point());
+        assert_eq!(ask(&mut h, b"GETD\r"), b"");
+        assert!(h.cdc.take_event_point());
+        assert_eq!(ask(&mut h, b"GETD\r"), b"000000000\rOK\r", "and on it goes");
+        assert!(!h.cdc.take_event_point());
     }
 
     #[test]

@@ -320,9 +320,11 @@ $B"
     W="$L
 /^oxrok: warn: /d"
     emu_case "unplug in a capture" --oracle-differs "$HUP_BUG" --unplug model --timeout 10 --stderr --filter "$W" --tx-filter '/^unplug$/q' -- -d $K --time 2s
-    # A quiet point: the GETD goes unanswered, the signal lands in its wait.
-    emu_options setters=0 output=1 answers=5
-    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
+    # A quiet point: one GETD goes unanswered and the signal lands in its wait.
+    # The next would be answered, and on: a capture that ignored the stop runs
+    # into the timeout, and its next request shows in the .tx.
+    emu_options setters=0 output=1 gap=5
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $K --continuous
     emu_options
 }
 

@@ -1140,9 +1140,13 @@ mod tests {
     fn a_running_capture_closes() {
         let (fake, _) = Fake::new();
         let mut d = device(fake);
-        let (tx, _rx) = sync_channel(4096);
+        let (tx, rx) = sync_channel(4096);
         d.start(PacketSink::new(tx, 0)).unwrap();
-        d.close().unwrap();
-        assert!(d.link().port.is_none());
+        // Read, so that only a stop that bites can let the close join.
+        std::thread::spawn(move || while rx.recv().is_ok() {});
+        within_bound("close", move || {
+            d.close().unwrap();
+            assert!(d.link().port.is_none());
+        });
     }
 }
