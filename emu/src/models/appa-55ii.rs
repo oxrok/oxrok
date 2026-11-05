@@ -151,7 +151,6 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Thermometer>> {
         frames: Packets::new(frames),
         period,
         due: 0,
-        running: false,
         opens: 0,
         burst,
         mute,
@@ -160,13 +159,12 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Thermometer>> {
         quiet: 0,
         marked: false,
         log,
-        log_now: false,
+        log_at: LogAt::Never,
         after,
         gap,
         played: 0,
         queue: VecDeque::new(),
         wait: 0,
-        log_due: false,
     };
     let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "APPA 55II cable");
     let line = Line::parse("9600/8n1").expect("the line parses");
@@ -274,8 +272,6 @@ struct Thermometer {
     period: u32,
     /// Offers until the next live frame.
     due: u32,
-    /// There has been an open.
-    running: bool,
     opens: u32,
     burst: Option<u32>,
     mute: bool,
@@ -285,8 +281,8 @@ struct Thermometer {
     quiet: u32,
     marked: bool,
     log: Vec<Vec<u8>>,
-    /// The log plays on this open.
-    log_now: bool,
+    /// When the log starts on this open.
+    log_at: LogAt,
     after: u32,
     gap: u32,
     /// Live frames since the open.
@@ -294,8 +290,17 @@ struct Thermometer {
     /// What is left of the log.
     queue: VecDeque<Vec<u8>>,
     wait: u32,
-    /// `after=0`: the log's wait starts at the first offer.
-    log_due: bool,
+}
+
+/// When a log starts.
+#[derive(Clone, Copy, PartialEq)]
+enum LogAt {
+    /// Not on this open.
+    Never,
+    /// At the first offer.
+    FirstOffer,
+    /// With the `after`th live frame.
+    AfterLive,
 }
 
 impl Thermometer {
@@ -344,7 +349,6 @@ impl Serial for Thermometer {
             }
             self.scan = self.opens == 1 && (self.burst.is_some() || self.mute);
             let scan = self.scan;
-            self.running = true;
             self.frames = self.all_frames.clone();
             self.due = LEAD;
             self.marked = false;
@@ -357,19 +361,23 @@ impl Serial for Thermometer {
             self.quiet = 0;
             self.played = 0;
             self.queue.clear();
-            self.log_now = !scan && !self.log.is_empty();
-            self.log_due = self.log_now && self.after == 0;
+            self.log_at = match (scan || self.log.is_empty(), self.after) {
+                (true, _) => LogAt::Never,
+                (false, 0) => LogAt::FirstOffer,
+                (false, _) => LogAt::AfterLive,
+            };
         }
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
-        if std::mem::take(&mut self.log_due) {
+        if self.log_at == LogAt::FirstOffer {
+            self.log_at = LogAt::Never;
             self.start_log();
         }
         if self.play_log(port) {
             return;
         }
-        if !self.running {
+        if self.opens == 0 {
             return;
         }
         if self.burst_left != Some(0) {
@@ -381,7 +389,7 @@ impl Serial for Thermometer {
                 if let Some(left) = &mut self.burst_left {
                     *left -= 1;
                 }
-                if self.log_now && self.played == self.after {
+                if self.log_at == LogAt::AfterLive && self.played == self.after {
                     self.start_log();
                 }
             }
