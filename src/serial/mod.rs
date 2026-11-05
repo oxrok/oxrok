@@ -433,11 +433,7 @@ impl Port for Native {
 
     fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
         self.port.set_timeout(timeout).map_err(|e| map_err(&e))?;
-        match std::io::Read::read(&mut self.port, buf) {
-            Ok(n) => Ok(n),
-            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(0),
-            Err(e) => Err(Error::Io(e)),
-        }
+        read_result(std::io::Read::read(&mut self.port, buf))
     }
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
@@ -464,6 +460,24 @@ impl Port for Native {
 
     fn purge(&mut self) -> Result<()> {
         self.port.clear(serialport::ClearBuffer::Input).map_err(|e| map_err(&e))
+    }
+}
+
+/// What a read of the port comes to. Time up is no data, and so is a signal
+/// landing in the crate's `ppoll` (EINTR): the caller reads again, as
+/// libserialport retries it. Neither is the port failing.
+fn read_result(read: std::io::Result<usize>) -> Result<usize> {
+    match read {
+        Ok(n) => Ok(n),
+        Err(e)
+            if matches!(
+                e.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted
+            ) =>
+        {
+            Ok(0)
+        }
+        Err(e) => Err(Error::Io(e)),
     }
 }
 
@@ -537,6 +551,15 @@ mod tests {
         fn purge(&mut self) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[test]
+    fn a_read_cut_by_time_or_a_signal_is_no_data_and_a_hangup_an_error() {
+        use std::io::{Error as IoError, ErrorKind};
+        assert_eq!(read_result(Ok(3)).unwrap(), 3);
+        assert_eq!(read_result(Err(ErrorKind::TimedOut.into())).unwrap(), 0);
+        assert_eq!(read_result(Err(ErrorKind::Interrupted.into())).unwrap(), 0);
+        assert!(read_result(Err(IoError::from(ErrorKind::BrokenPipe))).is_err());
     }
 
     #[test]
