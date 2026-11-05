@@ -191,6 +191,15 @@ pub trait Port: Send {
     fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
     /// Writes all of `data`.
     fn write(&mut self, data: &[u8]) -> Result<()>;
+    /// `serial_write_blocking` with its timeout: writes what room `timeout`
+    /// gives and says how much went, none being no error, so a device that
+    /// stopped reading looks as it does in C. A port that fails is an error. A
+    /// port with no room to wait for (a replay, a HID cable) writes it all.
+    fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+        let _ = timeout;
+        self.write(data)?;
+        Ok(data.len())
+    }
     /// Discards pending input.
     fn purge(&mut self) -> Result<()>;
     /// Waits until what was written has left, `serial_drain`, for at most
@@ -441,6 +450,27 @@ impl Port for Native {
         // No drain, as `serial_write_blocking` has none; see `drain`.
         self.port.set_timeout(WRITE_TIMEOUT).map_err(|e| map_err(&e))?;
         std::io::Write::write_all(&mut self.port, data).map_err(Error::Io)
+    }
+
+    /// The crate's write polls for room with the port's timeout and gives
+    /// `TimedOut` when there is none, `BrokenPipe` on a hung up tty.
+    fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut done = 0;
+        while done < data.len() {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            self.port.set_timeout(whole_millis(left)).map_err(|e| map_err(&e))?;
+            match std::io::Write::write(&mut self.port, &data[done..]) {
+                Ok(n) => done += n,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Ok(done),
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) => return Err(Error::Io(e)),
+            }
+            if left.is_zero() {
+                break;
+            }
+        }
+        Ok(done)
     }
 
     /// `tcdrain` has no bound (a device that stopped reading held oxrok

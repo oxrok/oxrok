@@ -102,6 +102,7 @@ pub mod drivers {
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
     pub mod rdtech_tc;
+    pub mod rdtech_um;
     pub mod rigol_ds;
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
@@ -121,6 +122,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
+    registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));

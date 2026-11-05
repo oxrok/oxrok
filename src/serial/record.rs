@@ -198,6 +198,15 @@ impl Port for Recorder {
         self.inner.write(data)
     }
 
+    /// What went, which a replay's `write` then matches.
+    fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+        let n = self.inner.write_timeout(data, timeout)?;
+        if n > 0 {
+            self.fixture.steps.push(Step::Write(data[..n].to_vec()));
+        }
+        Ok(n)
+    }
+
     fn purge(&mut self) -> Result<()> {
         self.fixture.steps.push(Step::Purge);
         self.inner.purge()
@@ -355,6 +364,51 @@ read 8 -> 3132
         let mut r =
             Replay::from_text("# oxrok serial fixture 1\nport p 9600/8n1\nwrite 01\n").unwrap();
         assert!(r.write(&[2]).is_err());
+    }
+
+    #[test]
+    fn a_recorder_notes_what_a_timed_write_sent() {
+        struct Half(Duration);
+        impl Port for Half {
+            fn name(&self) -> &str {
+                "half"
+            }
+            fn set_params(&mut self, _: Params) -> Result<()> {
+                Ok(())
+            }
+            fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+                Ok(())
+            }
+            fn read(&mut self, _: &mut [u8], _: Duration) -> Result<usize> {
+                Ok(0)
+            }
+            fn write(&mut self, _: &[u8]) -> Result<()> {
+                panic!("a timed write must reach the port's own")
+            }
+            fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+                assert_eq!(timeout, self.0);
+                Ok(data.len() / 2)
+            }
+            fn purge(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let wait = Duration::from_millis(1);
+        let params = Params::parse("9600/8n1").unwrap();
+        let mut rec = Recorder::in_memory(Box::new(Half(wait)), params);
+        assert_eq!(rec.write_timeout(&[1, 2], wait).unwrap(), 1);
+        assert_eq!(rec.write_timeout(&[3], wait).unwrap(), 0);
+        assert_eq!(
+            rec.fixture().to_text(),
+            "# oxrok serial fixture 1\nport half 9600/8n1\nwrite 01\n"
+        );
+    }
+
+    #[test]
+    fn a_port_with_no_room_to_wait_for_writes_it_all() {
+        let mut r =
+            Replay::from_text("# oxrok serial fixture 1\nport p 9600/8n1\nwrite 01\n").unwrap();
+        assert_eq!(r.write_timeout(&[1], Duration::from_millis(1)).unwrap(), 1);
     }
 
     #[test]
