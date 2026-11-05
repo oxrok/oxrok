@@ -32,7 +32,12 @@
 //!   where a real one passes garbage.
 //! - It answers at once, unless `late=` holds an answer back.
 //! - A send mode meter sends a block per `period` offers of a read (about 20 ms
-//!   each), the first after `lead`; its rate is set in its menu, 50 ms at best.
+//!   each), counted from each open so that a tool that closes within one has
+//!   caused what it read. Its rate is set in its menu, 50 ms at best.
+//! - The first block since power on comes after `lead`, for a scan that has a
+//!   second to find it, and the next not before another open. A real meter goes on
+//!   sending, but offers go on while a tty closes, for longer than a period here,
+//!   and a tool that keeps its port would see what one that closes it does not.
 //! - `msgs=`, `status=`, `meas=` and `frames=` are stand-ins for what a meter
 //!   measures, and for a meter or a line gone wrong.
 //!
@@ -264,6 +269,8 @@ struct Meter {
     sent: u32,
     /// Blocks since power on.
     total: u32,
+    /// An open has come since the first block.
+    reopened: bool,
     quiet: u32,
     answered: u32,
     /// An answer held back: the offers it still waits, and its bytes.
@@ -282,6 +289,7 @@ impl Meter {
             started: false,
             sent: 0,
             total: 0,
+            reopened: false,
             quiet: 0,
             answered: 0,
             held: None,
@@ -427,6 +435,9 @@ impl Meter {
             }
             return;
         }
+        if self.started && !self.reopened {
+            return;
+        }
         self.polls += 1;
         let due = if self.started { self.c.period } else { self.c.lead };
         if self.polls >= due {
@@ -463,9 +474,9 @@ impl Serial for Meter {
                 self.wire.clear();
             }
             self.polls = 0;
-            self.started = false;
             self.sent = 0;
             self.quiet = 0;
+            self.reopened = self.started;
         }
     }
 
@@ -710,13 +721,17 @@ mod tests {
         let mut h = meter(&[("mode", "send"), ("lead", "2"), ("period", "3"), ("msgs", "01,02")]);
         assert_eq!(h.offer(), Reply::Nak);
         assert_eq!(h.offer(), Reply::Data(vec![1]));
+        for _ in 0..10 {
+            assert_eq!(h.offer(), Reply::Nak, "the scan's block, and none until an open");
+        }
+        // An open starts the count over, at a period, and not the list.
+        h.set_lines(true, true);
         assert_eq!(h.offer(), Reply::Nak);
         assert_eq!(h.offer(), Reply::Nak);
         assert_eq!(h.offer(), Reply::Data(vec![2]));
-        // An open starts the count over and not the list.
-        h.set_lines(true, true);
         assert_eq!(h.offer(), Reply::Nak);
-        assert_eq!(h.offer(), Reply::Data(vec![1]));
+        assert_eq!(h.offer(), Reply::Nak);
+        assert_eq!(h.offer(), Reply::Data(vec![1]), "then on, each period");
         h.write(b"x");
         assert_eq!(h.v.drain().len(), 1);
     }
