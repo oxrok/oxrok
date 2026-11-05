@@ -22,15 +22,17 @@
 //!   five lines for one answer. So each line here ends CR LF and has one empty
 //!   line after it (`blank=1`), a guess that fits that and nothing else.
 //! - The width of a reading (`12.000`, `0.2500`): a guess, from the manual's
-//!   example and the driver's formats. No recording was found.
+//!   example and the driver's formats. No recording was found. That `VOUT1`
+//!   reads 0 with the output off is a guess too.
 //!
 //! Emulation artifacts:
 //!
 //! - The USB side is the shell's CDC-ACM with a test id, where the real one is
 //!   a 9 pin RS-232 port: only the byte stream and the line settings are the
 //!   device's.
-//! - It answers at once, so the manual's rejection of a command before `OK`
-//!   cannot happen here.
+//! - It answers at once, unless `late=` holds an answer back; a command while
+//!   one is held is rejected as the manual says, with no answer, which it does
+//!   not spell out.
 //! - It has no load: the current reads 0 unless `iout1=` says otherwise.
 //! - `model=`, `version=`, `status=`, `vout1=`, `iout1=` and `set=` are stand-ins
 //!   for a load that changes and for a device gone wrong.
@@ -50,6 +52,7 @@
 //! - `output=0|1`, `v1=`, `i1=`, the state at power on, as `5.000` and `0.2500`;
 //! - `answers=N`, commands answered per power on, then silence and the event
 //!   point;
+//! - `late=N:T`, the Nth `VOUT1` answered after T offers of a read;
 //! - `setters=0`, which flags any setting.
 //!
 //! The pedantic checks: only the commands the driver has for an LPS-301, each
@@ -72,7 +75,7 @@ pub const NAME: &str = "motech-lps-30x";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A Motech LPS-301 supply on CDC-ACM; model=, version=, status=, vout1=, \
                          iout1=, set= (answers in turn), uart=, eol=, blank=, output=, v1=, i1=, \
-                         answers=, setters=, and the shell's stall=, chunk=, in-limit=, \
+                         answers=, late=, setters=, and the shell's stall=, chunk=, in-limit=, \
                          in-stall=, out-hold=";
 
 /// More than the longest command; what is longer is flagged.
@@ -135,6 +138,15 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Supply>> {
             "v1" => config.power_on.millivolts = set_point(k, v, 3)?,
             "i1" => config.power_on.tenth_milliamps = set_point(k, v, 4)?,
             "answers" => config.answers = Some(parse_number(k, v, 0..=100_000)?),
+            "late" => {
+                let (nth, offers) = v
+                    .split_once(':')
+                    .ok_or_else(|| Error::Invalid(format!("late={v}: as in 2:40")))?;
+                config.late = Some((
+                    parse_number(k, nth, 1..=100_000)?,
+                    parse_number(k, offers, 1..=100_000)?,
+                ));
+            }
             "setters" => config.setters = flag(k, v)?,
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
@@ -168,6 +180,8 @@ struct Config {
     blank: u32,
     power_on: Panel,
     answers: Option<u32>,
+    /// Which `VOUT1`, from 1, and for how many offers of a read.
+    late: Option<(u32, u32)>,
     setters: bool,
 }
 
@@ -186,6 +200,7 @@ impl Default for Config {
             blank: 1,
             power_on: Panel { millivolts: 12_000, tenth_milliamps: 10_000, output: false },
             answers: None,
+            late: None,
             setters: true,
         }
     }
@@ -200,6 +215,9 @@ struct Supply {
     /// A CR came, so the LF is due.
     after_cr: bool,
     answered: u32,
+    volts_asked: u32,
+    /// An answer held back: the offers it still waits, and its bytes.
+    held: Option<(u32, Vec<u8>)>,
 }
 
 impl Supply {
@@ -211,6 +229,8 @@ impl Supply {
             after_cr: false,
             config,
             answered: 0,
+            volts_asked: 0,
+            held: None,
         }
     }
 
@@ -230,9 +250,12 @@ impl Supply {
 
     /// An answer, in the form the module's documentation has.
     fn say(&self, answer: &[u8], port: &mut Port<'_>) {
+        port.send(&self.bytes_of(answer));
+    }
+
+    fn bytes_of(&self, answer: &[u8]) -> Vec<u8> {
         if let Some(raw) = answer.strip_suffix(b"~") {
-            port.send(raw);
-            return;
+            return raw.to_vec();
         }
         let (lines, closed) = match answer.strip_suffix(b"^") {
             Some(lines) => (lines, false),
@@ -247,7 +270,7 @@ impl Supply {
         if closed {
             self.end_line(b"OK", &mut out);
         }
-        port.send(&out);
+        out
     }
 
     fn query(&mut self, command: Query, port: &mut Port<'_>) {
@@ -262,7 +285,15 @@ impl Supply {
             Query::Volts => {
                 let millivolts = if output { self.now.millivolts } else { 0 };
                 let own = format!("{}.{:03}", millivolts / 1000, millivolts % 1000).into_bytes();
-                self.lists.vout.as_mut().map_or(own, Packets::take)
+                let text = self.lists.vout.as_mut().map_or(own, Packets::take);
+                self.volts_asked += 1;
+                if let Some((nth, offers)) = self.config.late
+                    && nth == self.volts_asked
+                {
+                    self.held = Some((offers, self.bytes_of(&text)));
+                    return;
+                }
+                text
             }
             Query::Amps => {
                 let own = b"0.0000".to_vec();
@@ -287,6 +318,9 @@ impl Supply {
     }
 
     fn line(&mut self, line: &[u8], port: &mut Port<'_>) {
+        if self.held.is_some() {
+            return;
+        }
         if self.config.answers.is_some_and(|n| self.answered >= n) {
             port.mark();
             return;
@@ -417,6 +451,16 @@ impl Serial for Supply {
             port.violation(format!("'{}': a command left unfinished", show(&self.pending)));
             self.pending.clear();
             self.after_cr = false;
+        }
+    }
+
+    fn tick(&mut self, port: &mut Port<'_>) {
+        if let Some((offers, bytes)) = &mut self.held {
+            *offers -= 1;
+            if *offers == 0 {
+                port.send(bytes);
+                self.held = None;
+            }
         }
     }
 
@@ -623,6 +667,26 @@ mod tests {
         h.write(b"VERSION\r\n");
         assert_eq!(h.read(), b"");
         assert!(h.cdc.mark());
+    }
+
+    #[test]
+    fn a_late_answer_waits_for_its_offers_and_a_command_meanwhile_is_rejected() {
+        let mut h = supply(&[("blank", "0"), ("late", "2:5"), ("vout1", "1.000,2.000,3.000")]);
+        h.write(b"VOUT1\r\n");
+        assert_eq!(h.read(), b"1.000\r\nOK\r\n");
+        h.write(b"VOUT1\r\n");
+        // Each read ends on an offer with nothing queued.
+        for _ in 0..4 {
+            assert_eq!(h.read(), b"");
+        }
+        h.write(b"IOUT1\r\n");
+        let mut got = h.read();
+        got.extend(h.read());
+        assert_eq!(got, b"2.000\r\nOK\r\n");
+        h.write(b"IOUT1\r\nVOUT1\r\n");
+        assert_eq!(h.read(), b"0.0000\r\nOK\r\n3.000\r\nOK\r\n");
+        assert_eq!(violations(&mut h), 0);
+        assert!(build(&[("late".to_owned(), "2".to_owned())]).is_err());
     }
 
     #[test]
