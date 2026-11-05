@@ -1,0 +1,14 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+atten-pps3203 - Atten PPS3203T-3S with 3 channels: CH1 CH2 CH3
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    CH3: channel CH3
+Supported configuration options across all channel groups:
+    continuous: on, off
+    channel_config: Independent (current), Series, Parallel
+    ocp_enabled: on, off (current)
