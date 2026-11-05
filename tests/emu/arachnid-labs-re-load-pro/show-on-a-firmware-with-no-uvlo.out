@@ -16,6 +16,6 @@ Supported configuration options on channel group 1:
     ocp_enabled: on (current), off
     otp: on (current), off
     otp_active: on, off (current)
-    uvc: on, off (current)
+    uvc: on, off
     uvc_active: on, off (current)
-    uvc_threshold: 0.000000 (current), 60.000000, 0.001000
+    uvc_threshold: 0.000000, 60.000000, 0.001000

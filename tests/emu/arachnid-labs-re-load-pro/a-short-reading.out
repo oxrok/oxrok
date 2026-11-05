@@ -1,1 +1,2 @@
-g_ascii_strtod: assertion 'nptr != NULL' failed
+V: 2 mV DC
+I: 1 mA DC

@@ -1,2 +1,1 @@
-sr: hwdriver: Cannot set 'limit_samples' to 0.
 Failed to set device option 'limit_samples': invalid argument.

@@ -1,0 +1,2 @@
+sr: arachnid-labs-re-load-pro: Device replied with an error: 'err Unknown command 'uvlo''.
+Failed to set device option 'uvc_threshold': device error: err Unknown command 'uvlo'.

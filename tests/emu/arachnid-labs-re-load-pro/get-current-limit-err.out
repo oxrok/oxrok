@@ -1,1 +1,2 @@
-0.0
+sr: arachnid-labs-re-load-pro: Device replied with an error: 'err Unknown command 'set''.
+Failed to get 'current_limit': device error: err Unknown command 'set'

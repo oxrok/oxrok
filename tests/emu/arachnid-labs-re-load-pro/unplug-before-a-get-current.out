@@ -1,4 +1,3 @@
-sr: serial-libsp: Write error (5): Input/output error.
 sr: arachnid-labs-re-load-pro: Unable to send command.
 sr: arachnid-labs-re-load-pro: Error sending voltage/current query: -1.
 Failed to get 'current': generic/unspecified error
