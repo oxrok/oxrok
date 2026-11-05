@@ -4,6 +4,7 @@
 EMU_MODEL=agilent-dmm
 EMU_CDC=1
 EMU_DRIVER=agilent-dmm
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=agilent-dmm
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -55,7 +56,17 @@ emu_cases() {
     # A refused start: what the core says after the driver, by name, one line
     # of it with an address. The driver's own line stays.
     REFUSED="$L
-/^sr: (session|std): /d"
+/^sr: (session|std): /d
+s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
+/^Failed to start session\\.$/d"
+    # The C's sr_strerror alone, and oxrok's reason after it.
+    BADSET="s/^(Failed to set device option '[a-z_]+': invalid argument): .*/\\1./"
+    WEDGED_BUG="once a line fills the buffer with no LF, protocol.c:188's loop never reads again, and no sample limit can end the run; oxrok drops the line and reads the next"
+    NUL_BUG="api.c:145-146: a line that is empty as a string splits to an empty vector, and strcmp gets tokens[0], NULL; oxrok finds no device"
+    HUP_BUG="a port gone: protocol.c:226-228 logs a failed write, and the job's next try does the same, for ever; oxrok ends the capture"
+    SILENT_BUG="a silent meter: only a time limit ends a capture in C (protocol.c:112-116 tries for ever); oxrok ends one that only a sample limit could end, after 10 s"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    CSV_BUG="output/csv.c:713 dumps a row once channels_seen reaches channel_count, and csv.c:191 counts the disabled channels too, so with a display off rows are overwritten before they go out; oxrok writes them all"
 
     # The series, each with its identity and displays.
     for _agm in U1231A U1232A U1233A U1241A U1242A U1241B U1242B U1241C U1242C \
@@ -82,9 +93,9 @@ emu_cases() {
     emu_case "set then get limit_samples" --keep-header -- -d $F -c limit_samples=7 --get limit_samples
     emu_case "set then show" --keep-header -- -d $F -c samplerate=10 --show
     emu_case "set samplerate" --keep-header --no-output -- -d $F --set -c samplerate=20
-    emu_case "samplerate too high" --keep-header --stderr --expect-fail -- -d $F --set -c samplerate=21
-    emu_case "samplerate too low" --keep-header --stderr --expect-fail -- -d $F --set -c samplerate=0
-    emu_case "data_source unknown" --keep-header --stderr --expect-fail -- -d $F --set -c data_source=Nope
+    emu_case "samplerate too high" --keep-header --stderr --expect-fail --filter "$BADSET" -- -d $F --set -c samplerate=21
+    emu_case "samplerate too low" --keep-header --stderr --expect-fail --filter "$BADSET" -- -d $F --set -c samplerate=0
+    emu_case "data_source unknown" --keep-header --stderr --expect-fail --filter "$BADSET" -- -d $F --set -c data_source=Nope
     emu_case "no such node" --keep-header --no-output -- -d agilent-dmm:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d agilent-dmm --scan
     emu_case "show without a device" --keep-header --stderr --expect-fail -- -d agilent-dmm --show
@@ -254,7 +265,9 @@ emu_cases() {
     # FETC's values.
     emu_options fetc=$(ag_list '+9.90000000E+37' '-9.90000000E+37' '+9.90000000E+36' '-1.23475000E-03' '+0.00000000E+00')
     emu_case "values and overloads" -- -d $F -C P1 --samples 5
-    emu_case "values and overloads csv" -- -d $F -C P1 --samples 5 -O csv:header=false
+    emu_case "values and overloads csv with displays off" --oracle-differs "$CSV_BUG" -- -d $F -C P1 --samples 5 -O csv:header=false
+    emu_options model=U1232A fetc=$(ag_list '+9.90000000E+37' '-9.90000000E+37' '+9.90000000E+36' '-1.23475000E-03' '+0.00000000E+00')
+    emu_case "values and overloads csv" -- -d $F --samples 5 -O csv:header=false
     emu_options model=U1272A conf=$(ag_h '"MV,1,DC"') fetc=$(ag_list '+1.23475000E+02' '+9.90000000E+37')
     emu_case "U1272A millivolts and overload" -- -d $F -C P1 --samples 2
     emu_options fetc=$(ag_list '+1.00000000E+39' '-1.00000000E+39' '+1.00000000E-50')
@@ -396,7 +409,9 @@ emu_cases() {
     emu_case "time limit" -- -d $F -C P1 --time 500ms
     emu_case "limit_time in -c" --libsigrok --oxrok -- -d $F -C P1 -c limit_time=500 --continuous
 
-    # Silence: a job is given up after 300 ms and the next one runs.
+    # Silence: a job is given up after 300 ms. CONF and STAT are in their
+    # second then, so the next runs a pass later. FETC's interval is over, so it
+    # goes again at once and for good, with no more CONF (protocol.c:112-116).
     emu_options answers=0
     emu_case "silent" --no-output -- -d $F -C P1 --time 1100ms
     emu_options answers=3
@@ -409,14 +424,14 @@ emu_cases() {
     emu_options fetc=$(ag_h "$(printf 'x%.0s' $(seq 1 253))"),$(ag_h '+1.23475000E+00')
     emu_case "a line of 255 bytes" --timeout 15 -- -d $F -C P1 --samples 1
     emu_options fetc=$(ag_h "$(printf 'x%.0s' $(seq 1 254))"),$(ag_h '+1.23475000E+00')
-    emu_case "a line of 256 bytes" --hangs --timeout 3 --no-output -- -d $F -C P1 --samples 1
+    emu_case "a line of 256 bytes" --oracle-bug "$WEDGED_BUG" --oracle-hangs --timeout 3 -- -d $F -C P1 --samples 1
     # A log entry that never is one, asked for ever.
     emu_options model=U1282A log=$(ag_h '"14123450000000"')
     emu_case "lib log entry that never is one" --libsigrok --hangs --timeout 3 --no-output -- -d $F -c data_source=Log-Hand --samples 1
     # A NUL first leaves g_strsplit an empty string, an empty vector, and
     # api.c:146 hands strcmp its NULL.
     emu_options id=$(emu_hex '\000\r\n')
-    emu_case "id only a NUL" --keep-header --expect-fail --no-output -- -d $F --scan
+    emu_case "id only a NUL" --oracle-bug "$NUL_BUG" --keep-header --no-output -- -d $F --scan
 
     # The meter stops reading. The tty holds 16 writes; after those each gets
     # 1 ms and "Failed to send." (protocol.c:226-228), which leaves the job
@@ -426,7 +441,15 @@ emu_cases() {
     emu_case "stops reading" --no-output --timeout 15 --tx-filter '/^bulk_(out|in) /d' -- -d $F -C P1 --time 6000ms
     emu_tty_closing_wait 3000
     emu_options answers=3
-    emu_case "unplug in a capture" --hangs --unplug model --timeout 4 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3
+    # C's two error lines repeat in turn, as often as time allows, so this one
+    # is quiet, and the next holds them. A unit test holds oxrok's.
+    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3 -l 0
+    emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --stderr --filter '3,$d' --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3
+    emu_options answers=4
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F -C P1 --samples 9
+    # oxrok's bound on silence, and C's wait, of which "lib silent" has the wire.
+    emu_options answers=0
+    emu_case "silent with only a sample limit" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
     emu_options id=none
     emu_case "unplug in the scan" --unplug model --timeout 15 --keep-header --no-output --tx-filter '/^unplug$/q' -- -d $F --scan
 
