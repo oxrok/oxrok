@@ -86,6 +86,7 @@ pub mod drivers {
     pub mod ftdi_la;
     pub mod fx2lafw;
     pub mod greatfet;
+    pub mod gwinstek_gpd;
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
@@ -125,6 +126,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
+    registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));

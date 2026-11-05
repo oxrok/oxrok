@@ -1,0 +1,1 @@
+sr: gwinstek-gpd: Resulting CSV output data may be incomplete or incorrect: each reading gets a row of its own, with 0 for the other channel. Use -O analog.

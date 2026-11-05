@@ -305,6 +305,11 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     }
 
     device.check_capture(trigger.as_ref())?;
+    if let Some(module) =
+        args.output_format.as_ref().and_then(|s| parse::generic_args(s, true).scope)
+    {
+        device.note_output(&module);
+    }
     let samplerate = device.get(&Key::Samplerate, None).ok().and_then(|v| v.as_u64());
     let channels = device.channels().to_vec();
     let title = registry.find(device.info().driver).map_or("unknown", |d| d.long_name()).to_owned();
