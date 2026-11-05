@@ -109,7 +109,7 @@ fn main() {
          /// # Errors\n\
          ///\n\
          /// When no model has that name, or the model rejects an option.\n\
-         pub fn build(name: &str, options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {\n",
+         #[allow(clippy::too_many_lines)]\n         pub fn build(name: &str, options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {\n",
     );
     for id in models.keys() {
         writeln!(out, "    if name == {id}::NAME {{\n        return {id}::build(options);\n    }}")
