@@ -150,10 +150,21 @@ pub fn is_scan_answer(frame: &[u8]) -> bool {
     frame.len() == FRAME && frame[0] == HEADER && frame[1] == COMMAND_ASK
 }
 
-/// Whether a frame starts as all of them do. C reads any 24 bytes as an
-/// answer, so a stream that slipped gives made up readings.
-pub fn has_header(frame: &[u8; FRAME]) -> bool {
+/// Whether a frame starts as all of them do and holds readings a supply could
+/// give. C reads any 24 bytes as an answer, so a stream that slipped gives
+/// made up readings: a stray `aa` ahead of a frame gives 435.24 V. Byte 1 is
+/// not looked at, as no source agrees on what it holds in an answer.
+///
+/// The bound is twice each range. No source says what a channel reports in
+/// series or in parallel, where the sum may be, and this drops readings, so it
+/// is for what no supply could say and not for what the panel allows.
+pub fn is_answer(frame: &[u8; FRAME]) -> bool {
+    let value = |at: usize| f64::from(u16::from_be_bytes([frame[at], frame[at + 1]]));
     frame[0] == HEADER
+        && (0..CHANNELS).all(|i| {
+            value(2 + i * 4) / 100.0 <= VOLTAGE[i][1] * 2.0
+                && value(4 + i * 4) / 1000.0 <= CURRENT[i][1] * 2.0
+        })
 }
 
 #[cfg(test)]
@@ -243,8 +254,30 @@ mod tests {
         assert!(!is_scan_answer(&f[..23]));
         f[1] = 0x20;
         assert!(!is_scan_answer(&f), "a set's answer");
-        assert!(has_header(&f));
+        assert!(is_answer(&f), "byte 1 is not looked at");
         f[0] = 0x55;
-        assert!(!has_header(&f));
+        assert!(!is_answer(&f));
+    }
+
+    #[test]
+    fn a_stray_byte_ahead_of_a_frame_is_no_answer() {
+        // aa, then a frame of 12.34 V: the 435.24 V C reads from it.
+        let mut f = [0; FRAME];
+        f[..6].copy_from_slice(&[0xaa, 0xaa, 0xaa, 0x04, 0xd2, 0x01]);
+        assert!(!is_answer(&f));
+    }
+
+    #[test]
+    fn the_bound_is_twice_each_range() {
+        let frame = |at: usize, value: u16| {
+            let mut f = [0; FRAME];
+            f[0] = 0xaa;
+            f[at..at + 2].copy_from_slice(&value.to_be_bytes());
+            f
+        };
+        for (at, top) in [(2, 6400), (6, 6400), (10, 1200), (4, 6000), (8, 6000), (12, 6000)] {
+            assert!(is_answer(&frame(at, top)), "{at} {top}");
+            assert!(!is_answer(&frame(at, top + 1)), "{at} {top}");
+        }
     }
 }

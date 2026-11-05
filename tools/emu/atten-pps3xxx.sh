@@ -205,6 +205,11 @@ emu_cases() {
     emu_case "lib an answer without its header" --libsigrok -- -d $A --continuous --stop-after 4 -O csv:header=false:time=false
     emu_options answers=4 replies=$R,$G,$R
     emu_case "interrupt an answer without its header" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous -O csv:header=false:time=false
+    # A stray aa ahead of a frame reads as 435.24 V in C, and shifts the rest.
+    emu_options replies=$R,aa$R,$R
+    emu_case "lib a stray byte" --libsigrok -- -d $A --continuous --stop-after 4 -O csv:header=false:time=false
+    emu_options answers=4 replies=$R,aa$R,$R
+    emu_case "interrupt a stray byte" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous -O csv:header=false:time=false
     emu_options answers=4 chunk=1
     emu_case "interrupt one byte per transfer" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous
     # Silence. sigrok-cli has stopped at its EOF by then and waits for an

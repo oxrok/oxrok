@@ -160,7 +160,12 @@ fn probe(mut port: Box<dyn Port>) -> Option<Reported> {
         return None;
     }
     let mut reported = Reported::default();
-    reported.update(&answer);
+    if protocol::is_answer(&answer) {
+        reported.update(&answer);
+    } else {
+        // Its header is good, so it is a device; C finds one here too.
+        log::warn!("The scan's answer holds readings no supply could give: {answer:02x?}.");
+    }
     Some(reported)
 }
 
@@ -633,7 +638,7 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
                 return;
             }
         };
-        if protocol::has_header(&frame) {
+        if protocol::is_answer(&frame) {
             let reported = {
                 let mut s = shared.lock().expect("state lock");
                 s.reported.update(&frame);
@@ -643,7 +648,7 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
                 return;
             }
         } else {
-            log::warn!("An answer without its header dropped.");
+            log::warn!("An answer no supply could give dropped: {frame:02x?}.");
         }
         if stop.load(Ordering::SeqCst) {
             return;
@@ -1267,6 +1272,35 @@ mod tests {
         assert_eq!(blocks(&packets), [[12.34, 5.0, 3.3]], "the second answer");
         assert!(writes(&seen).len() >= 2);
         d.close().unwrap();
+    }
+
+    #[test]
+    fn a_stray_byte_gives_no_reading_and_leaves_what_was_reported() {
+        let (mut fake, _seen) = Fake::new();
+        let mut stray = vec![0xaa];
+        stray.extend(reading());
+        fake.scripted = vec![(1, vec![(Duration::ZERO, stray)])];
+        let mut d = device(fake);
+        let rx = start(&mut d);
+        let mut packets = Vec::new();
+        for _ in 0..4 {
+            packets.extend(until(&rx, is_analog, CAPTURE_BOUND));
+        }
+        d.close().unwrap();
+        for pair in blocks(&packets).chunks(2) {
+            assert_eq!(pair[0], [12.34, 5.0, 3.3], "no 435.24");
+            assert_eq!(pair[1], [0.5, 1.25, 0.025]);
+        }
+    }
+
+    #[test]
+    fn a_scan_answer_no_supply_could_give_is_a_device_with_no_state() {
+        let (mut fake, _seen) = Fake::new();
+        let mut wild = reading();
+        wild[2] = 0xaa;
+        fake.scripted = vec![(0, vec![(Duration::ZERO, wild)])];
+        let reported = probe(Box::new(fake)).expect("a device, as C finds one");
+        assert_eq!(reported, Reported::default());
     }
 
     #[test]
