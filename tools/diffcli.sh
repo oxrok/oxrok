@@ -1502,14 +1502,6 @@ flush()
         # host's core pattern and limit. libsigrok may have written its
         # "sr: " first. The exit status has shown it failed.
         sed -i -E '/timeout: the monitored command dumped core$/d; ${/^sr: *$/d;}' "$TMP/a.err"
-        # So the golden still says it died, from the exit status, which no
-        # core pattern changes: timeout gives 128 + the signal, or dies of
-        # it itself, and the shell says the same. 124 and 137 are timeout's
-        # own stop. A line cut by the death ends here.
-        if [ "$a_st" -gt 128 ] && [ "$a_st" != 137 ]; then
-            [ -z "$(tail -c 1 "$TMP/a.err")" ] || echo >>"$TMP/a.err"
-            echo "oracle died: signal $((a_st - 128))" >>"$TMP/a.err"
-        fi
         # The core's line on a refused start, for a driver whose connection
         # id is the address that changes with each attach (greatfet).
         sed -i -E 's/( device )[0-9]+\.[0-9]+( acquisition\.)$/\1BUS.ADDR\2/' "$TMP/a.err"
