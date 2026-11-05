@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
-//! A Norma DM9x0 bench multimeter (Siemens B102x) with its RS-232 interface
+//! A Norma `DM9x0` bench multimeter (Siemens B102x) with its RS-232 interface
 //! board, on the CDC-ACM shell. It answers two questions: `IDN?` and `STATUS?`.
 //!
 //! The device, and how sure this is:
