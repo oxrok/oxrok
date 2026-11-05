@@ -120,6 +120,7 @@ pub mod drivers {
     pub mod testo;
     pub mod uni_t_dmm;
     pub mod zeroplus_logic_cube;
+    pub mod zketech_ebd_usb;
 }
 
 /// Registers every driver.
@@ -164,6 +165,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::lecroy_logicstudio::LogicStudioDriver));
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
     registry.register(Box::new(drivers::zeroplus_logic_cube::ZeroplusDriver));
+    registry.register(Box::new(drivers::zketech_ebd_usb::ZketechEbdUsbDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
     registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
 }

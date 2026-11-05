@@ -1,0 +1,11 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+zketech-ebd-usb - ZKETECH EBD-USB with 4 channels: V.VBUS I.VBUS V.D+ V.D-
+Supported configuration options:
+    continuous: on, off
+    current_limit: 0.000000 (current), 4.000000, 0.001000
+    uvc_threshold: 0.000000 (current), 21.000000, 0.010000
+    limit_samples: 0 (current)
