@@ -16,7 +16,7 @@ emu_cases() {
     NAN_BUG="api.c:273 and 280 compare a NaN and let it through, and protocol.c:121,124 convert it to an int, 0 on x86, so the frame turns the rest off too; oxrok refuses it and sends nothing"
     TRUNC_BUG="protocol.c:121,124 truncate: sigrok-cli's 3.3 in single precision is 329, and 5.1 is 509, so the supply gives 10 mV less than asked; oxrok takes the nearest step"
     SCAN_BUG="scan drops the answer it reads (api.c:129-138), so all reads 0 and off before a capture's first answer, with the outputs on; oxrok takes it as the state"
-    OFF_BUG="api.c:250,257,287 compare a setting with what was last set, so with the device's output on, enabled=off sends nothing and it stays on, likewise protection and the mode; oxrok compares with what the device said too"
+    OFF_SAYS="api.c:250,257,287 compare a setting with what was last set, so with the device's output on, enabled=off sends nothing and it stays on, likewise protection and the mode. oxrok sends what C sends and says so on stderr; sigrok-cli says nothing"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     STOP_BUG="only an answer ends the capture (protocol.c:158-172), so a device that stays silent holds it for ever, a stop or none; oxrok ends it after a bound"
     # A frame of readings: CH1 12.34 V 0.500 A, CH2 5.00 V 1.250 A, CH3 3.30 V
@@ -113,11 +113,15 @@ emu_cases() {
     # sigrok-cli sets each -c in turn: the first has been accepted by then.
     emu_case "output then a refused -c" --stderr --expect-fail -- -d $A -c $A1:enabled=on -c voltage_target=5 --set
     emu_case "setpoint then a refused -c" --stderr --expect-fail --filter "$F" -- -d $A -c $A1:voltage_target=5 -c channel_group=CH3:voltage_target=7 --set
-    # Off when the device says it is on; C thinks it has nothing to do.
+    # Off when the device says it is on: only a change from what this run set
+    # makes a frame, so nothing goes out, and oxrok says so on stderr.
     emu_options replies=$R
-    emu_case "set off an output that is on" --oracle-differs "$OFF_BUG" --no-output -- -d $A -g CH1 -c enabled=off --set
-    emu_case "set ocp off when on" --oracle-differs "$OFF_BUG" --no-output -- -d $A -c ocp_enabled=off --set
-    emu_case "set Independent when series" --oracle-differs "$OFF_BUG" --no-output -- -d $A -c channel_config=Independent --set
+    emu_case "set off an output that is on" --no-output -- -d $A -g CH1 -c enabled=off --set
+    emu_case "set ocp off when on" --no-output -- -d $A -c ocp_enabled=off --set
+    emu_case "set Independent when series" --no-output -- -d $A -c channel_config=Independent --set
+    emu_case "set off an output that is on says so" --oracle-differs "$OFF_SAYS" --stderr -- -d $A -g CH1 -c enabled=off --set
+    emu_case "set ocp off when on says so" --oracle-differs "$OFF_SAYS" --stderr -- -d $A -c ocp_enabled=off --set
+    emu_case "set Independent when series says so" --oracle-differs "$OFF_SAYS" --stderr -- -d $A -c channel_config=Independent --set
 
     # The limits a capture does not have.
     emu_options setters=0

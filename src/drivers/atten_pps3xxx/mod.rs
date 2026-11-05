@@ -167,6 +167,9 @@ struct Shared {
     /// Channels something was set on.
     named: [bool; CHANNELS],
     warned: bool,
+    /// What to say at the close if no frame has gone out by then: settings
+    /// that made none, though the device reports otherwise.
+    unsent: Vec<String>,
 }
 
 impl Shared {
@@ -199,6 +202,7 @@ impl Shared {
         self.warn_of_what_it_turns_off();
         self.send(&self.settings.frame())?;
         self.dirty = false;
+        self.unsent.clear();
         Ok(())
     }
 }
@@ -267,6 +271,7 @@ impl AttenPpsDevice {
                 dirty: false,
                 named: [false; CHANNELS],
                 warned: false,
+                unsent: Vec::new(),
             })),
             worker: None,
         }
@@ -295,19 +300,31 @@ impl AttenPpsDevice {
                     .position(|m| *m == name)
                     .ok_or_else(|| Error::Arg(format!("channel_config has no mode '{name}'")))?;
                 let mode = u8::try_from(mode).expect("three modes");
-                // `api.c:250` asks what was set alone. If the device says
-                // otherwise there is something to do, or the setting is lost.
-                if mode != s.settings.mode || mode != s.reported.mode {
+                // As `api.c:250`: only a change from what this run set makes a
+                // frame, whatever the device says.
+                if mode != s.settings.mode {
                     s.settings.mode = mode;
                     s.dirty = true;
+                } else if mode != s.reported.mode {
+                    let was = MODES[usize::from(s.reported.mode)];
+                    s.unsent.push(format!(
+                        "channel_config={name} sent nothing: the device reports {was}, and it \
+                         stays so."
+                    ));
                 }
             }
             Key::OverCurrentProtectionEnabled => {
                 let on = value.as_bool().ok_or_else(|| Error::arg("ocp_enabled"))?;
                 // As for the mode (`api.c:257`).
-                if on != s.settings.ocp || on != s.reported.ocp {
+                if on != s.settings.ocp {
                     s.settings.ocp = on;
                     s.dirty = true;
+                } else if on != s.reported.ocp {
+                    let (asked, was) = if on { ("on", "off") } else { ("off", "on") };
+                    s.unsent.push(format!(
+                        "ocp_enabled={asked} sent nothing: the device reports it {was}, and it \
+                         stays {was}."
+                    ));
                 }
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -328,11 +345,17 @@ impl AttenPpsDevice {
             }
             Key::Enabled => {
                 let on = value.as_bool().ok_or_else(|| Error::arg("enabled"))?;
-                // `api.c:287` compares with what was set alone, and a supply
-                // that is on stays on for `enabled=off`.
-                if on != s.settings.channels[channel].enabled || on != s.reported.enabled[channel] {
+                // As `api.c:287`, so a supply that is on stays on for
+                // `enabled=off` alone, and the close says so.
+                if on != s.settings.channels[channel].enabled {
                     s.settings.channels[channel].enabled = on;
                     s.dirty = true;
+                } else if !on && s.reported.enabled[channel] {
+                    s.unsent.push(format!(
+                        "enabled=off on {} sent nothing: the device reports the output on, and \
+                         IT STAYS ON. A setpoint with it sends a frame, which sets everything.",
+                        GROUPS[channel]
+                    ));
                 }
             }
             other => return Err(Error::UnknownKey(other.id().to_owned())),
@@ -455,6 +478,9 @@ impl Device for AttenPpsDevice {
         }
         let mut s = self.shared();
         let sent = if s.dirty && s.port.is_some() { s.send_settings() } else { Ok(()) };
+        for notice in std::mem::take(&mut s.unsent) {
+            log::warn!("{notice}");
+        }
         s.port = None;
         sent
     }
@@ -869,24 +895,48 @@ mod tests {
     }
 
     #[test]
-    fn off_goes_out_for_a_device_that_says_on() {
+    fn off_for_a_device_that_says_on_sends_nothing_and_says_so() {
         let on = reading();
         let (fake, seen) = Fake::new();
         let mut d = device_of(fake, &on);
         set(&mut d, "CH1", Key::Enabled, Value::Bool(false)).unwrap();
+        let notices = d.shared().unsent.clone();
+        assert!(notices[0].contains("CH1") && notices[0].contains("STAYS ON"), "{notices:?}");
         d.close().unwrap();
-        assert_eq!(writes(&seen).len(), 1, "C keeps this output on");
-        assert_eq!(writes(&seen)[0][15], 0);
-        for (key, value) in [
-            (Key::OverCurrentProtectionEnabled, Value::Bool(false)),
-            (Key::ChannelConfig, Value::from("Independent")),
+        assert_eq!(writes(&seen).len(), 0, "as C: no frame it does not send");
+        for (key, value, says) in [
+            (Key::OverCurrentProtectionEnabled, Value::Bool(false), "stays on"),
+            (Key::ChannelConfig, Value::from("Independent"), "reports Series"),
         ] {
             let (fake, seen) = Fake::new();
             let mut d = device_of(fake, &on);
             d.set(&key, &value, None).unwrap();
+            let notices = d.shared().unsent.clone();
+            assert!(notices[0].contains(says), "{key:?}: {notices:?}");
             d.close().unwrap();
-            assert_eq!(writes(&seen).len(), 1, "{key:?}");
+            assert_eq!(writes(&seen).len(), 0, "{key:?}");
         }
+    }
+
+    #[test]
+    fn a_device_that_agrees_gets_no_notice() {
+        let (fake, _seen) = Fake::new();
+        let mut d = device(fake);
+        set(&mut d, "CH1", Key::Enabled, Value::Bool(false)).unwrap();
+        d.set(&Key::OverCurrentProtectionEnabled, &Value::Bool(false), None).unwrap();
+        d.set(&Key::ChannelConfig, &Value::from("Independent"), None).unwrap();
+        assert!(d.shared().unsent.is_empty());
+    }
+
+    #[test]
+    fn a_frame_takes_the_notice_back() {
+        let (fake, seen) = Fake::new();
+        let mut d = device_of(fake, &reading());
+        set(&mut d, "CH1", Key::Enabled, Value::Bool(false)).unwrap();
+        set(&mut d, "CH1", Key::VoltageTarget, Value::F64(5.0)).unwrap();
+        d.shared().send_settings().unwrap();
+        assert!(d.shared().unsent.is_empty(), "the frame carried it");
+        assert_eq!(writes(&seen)[0][15], 0);
     }
 
     #[test]
