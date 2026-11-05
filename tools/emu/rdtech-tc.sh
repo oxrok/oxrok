@@ -16,6 +16,7 @@ emu_cases() {
     HUP_BUG="receive_data reads only on exactly G_IO_IN (protocol.c:339), so a hung up port is never read, and it drops poll's result (protocol.c:352) and waits for ever; oxrok ends the capture on the read's error"
     CHANNEL_BUG="handle_poll_data sends every channel whatever -C said (protocol.c:266-274 has no ch->enabled); oxrok sends those asked for"
     LATE_BOUND="C waits for a reply however late (protocol.c:213-214), and a frame limit alone would never end if none came; so oxrok gives up after 5 s and loses a later one"
+    NAME_BYTES="protocol.c:189 passes the name's bytes on as they are; oxrok's DeviceInfo holds text, so a byte that is not UTF-8 shows as U+FFFD"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What a scan reads of the reply: the name, the version, the serial.
@@ -29,6 +30,8 @@ emu_cases() {
     emu_case "scan a name and version cut at a NUL" --keep-header -- -d $K --scan
     emu_options name=$(emu_hex 'XY12') fw=$(emu_hex '9.99')
     emu_case "scan another name" --keep-header -- -d $K --scan
+    emu_options name=ff434336
+    emu_case "scan a name that is not UTF-8" --oracle-differs "$NAME_BYTES" --keep-header -- -d $K --scan
     emu_options
     emu_case "no such node" --keep-header --no-output -- -d rdtech-tc:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d rdtech-tc --scan
