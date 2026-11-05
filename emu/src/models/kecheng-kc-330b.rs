@@ -144,7 +144,7 @@ struct Fault {
 
 impl Fault {
     fn parse(key: &str, value: &str) -> Result<Fault> {
-        let bad = || Error(format!("{key}={value}: CC or CC@N, CC two hex digits and N from 1"));
+        let bad = || Error::Invalid(format!("{key}={value}: CC or CC@N, CC two hex digits and N from 1"));
         let (command, nth) = match value.split_once('@') {
             Some((c, n)) => (c, Some(n.parse().ok().filter(|n| *n > 0).ok_or_else(bad)?)),
             None => (value, None),
@@ -203,7 +203,6 @@ pub struct Kc330b {
     /// Samples in the log.
     stored: u16,
     log_info: [u8; 6],
-    digest: bool,
     faults: Vec<(Action, Fault)>,
     answers: VecDeque<Answer>,
     /// Times each command came, for `@N`.
@@ -215,6 +214,14 @@ pub struct Kc330b {
     clock: Option<[u8; 6]>,
 }
 
+/// `digest=1` logs long data as its digest.
+pub fn log_rules(options: &[(String, String)]) -> crate::txlog::Rules {
+    crate::txlog::Rules {
+        digest_above: options.iter().any(|(k, v)| k == "digest" && v == "1").then_some(DIGEST_ABOVE),
+        undefined: None,
+    }
+}
+
 /// A meter from the `-o` options; see the module documentation.
 ///
 /// # Errors
@@ -224,12 +231,12 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let mut dev = Kc330b::new();
     for (k, v) in options {
         let byte = |max: u8| -> Result<u8> {
-            v.parse().ok().filter(|n| *n <= max).ok_or_else(|| Error(format!("{k}={v}: 0 to {max}")))
+            v.parse().ok().filter(|n| *n <= max).ok_or_else(|| Error::Invalid(format!("{k}={v}: 0 to {max}")))
         };
         match k.as_str() {
             "model" => {
                 if v.len() > 60 || !v.is_ascii() {
-                    return Err(Error(format!("model={v}: ASCII, at most 60 bytes")));
+                    return Err(Error::Invalid(format!("model={v}: ASCII, at most 60 bytes")));
                 }
                 v.as_bytes().clone_into(&mut dev.model);
             }
@@ -239,20 +246,23 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
                     .parse()
                     .ok()
                     .filter(|n| *n <= MAX_STORED)
-                    .ok_or_else(|| Error(format!("stored={v}: 0 to {MAX_STORED}")))?;
+                    .ok_or_else(|| Error::Invalid(format!("stored={v}: 0 to {MAX_STORED}")))?;
             }
             "log-interval" => dev.log_info[0] = byte(7)?,
             "log-time" => dev.log_info[3] = byte(1)?,
             "log-freq" => dev.log_info[4] = byte(1)?,
             "log-source" => dev.log_info[5] = byte(255)?,
             "id-length" => dev.id_length = Some(byte(255)?),
-            "digest" => dev.digest = byte(1)? == 1,
+            // log_rules reads it; 0 and 1 are all build takes.
+            "digest" => {
+                byte(1)?;
+            }
             "stall-out" => dev.faults.push((Action::StallOut, Fault::parse(k, v)?)),
             "silent" => dev.faults.push((Action::Silent, Fault::parse(k, v)?)),
             "stall-in" => dev.faults.push((Action::StallIn, Fault::parse(k, v)?)),
             "short" => dev.faults.push((Action::Short, Fault::parse(k, v)?)),
             "garbage" => dev.faults.push((Action::Garbage, Fault::parse(k, v)?)),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     Ok(Box::new(dev))
@@ -294,7 +304,6 @@ impl Kc330b {
             inactive: false,
             stored: 100,
             log_info: [2, 40, 120, 1, 1, 0],
-            digest: false,
             faults: Vec::new(),
             answers: VecDeque::new(),
             seen: [0; 256],
@@ -514,10 +523,6 @@ impl DeviceModel for Kc330b {
         // The log and the clock are the meter's own; an answer is not.
         self.answers.clear();
     }
-
-    fn log_digest_above(&self) -> Option<usize> {
-        self.digest.then_some(DIGEST_ABOVE)
-    }
 }
 
 #[cfg(test)]
@@ -719,9 +724,9 @@ mod tests {
             Reply::Data(vec![0x85, 7, 40, 120, 0, 0, 17, 1, 44])
         );
         assert!(v.is_empty());
-        assert_eq!(dev.log_digest_above(), None);
-        let dev = build(&opts(&[("digest", "1")])).unwrap();
-        assert_eq!(dev.log_digest_above(), Some(DIGEST_ABOVE));
+        assert_eq!(log_rules(&[]).digest_above, None);
+        assert_eq!(log_rules(&opts(&[("digest", "1")])).digest_above, Some(DIGEST_ABOVE));
+        assert_eq!(log_rules(&opts(&[("digest", "0")])).digest_above, None);
         for bad in [
             ("stored", "32001"),
             ("log-interval", "8"),
