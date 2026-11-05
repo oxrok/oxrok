@@ -1,0 +1,12 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+juntek-jds6600:conn=/dev/ttyACMN - Juntek JDS6600 [S/N: 1234567890] with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options across all channel groups:
+    conn: /dev/ttyACMN (current)
+    enabled: on, off
+    phase: 0.000000 (current)

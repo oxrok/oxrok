@@ -1,0 +1,2 @@
+sr: session: juntek-jds6600 device /dev/ttyACMN has no enabled channels.
+Failed to start session.
