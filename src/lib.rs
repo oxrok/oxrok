@@ -78,6 +78,7 @@ pub mod usb;
 
 /// The device drivers, one module per family.
 pub mod drivers {
+    pub mod agilent_dmm;
     pub mod asix_sigma;
     pub mod atten_pps3xxx;
     pub mod chronovu_la;
@@ -131,6 +132,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::juntek_jds6600::JdsDriver));
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
+    registry.register(Box::new(drivers::agilent_dmm::AgilentDmmDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));

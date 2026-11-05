@@ -1,0 +1,12 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+agilent-dmm - Keysight U1242C V1.20 with 2 channels: P1 P2
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    samplerate (1 Hz - 20 Hz in steps of 1 Hz)
+    data_source: Live (current), Log-Hand, Log-Trig, Log-Auto, Log-Export
