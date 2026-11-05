@@ -334,9 +334,8 @@ on Windows; attaching a device is Linux only.
   `pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>>`,
   which parses the `-o KEY=VALUE` options and rejects unknown ones. A
   model whose data is not all logged byte by byte also exports
-  `pub fn log_rules(options: &[(String, String)]) -> txlog::Rules`, on a
-  line of its own at the start of a line, which is how `build.rs` finds
-  it. A unit test checks that each `NAME` is its file name and that each
+  `pub fn log_rules(options: &[(String, String)]) -> txlog::Rules`, at
+  the start of a line, which is how `build.rs` finds it. A unit test checks that each `NAME` is its file name and that each
   model builds with no options.
 - `sudo oxrok-emu serve MODEL --attach --open-devices --log FILE`
   listens on TCP (`--listen`, port 0 picks a free one), imports the
