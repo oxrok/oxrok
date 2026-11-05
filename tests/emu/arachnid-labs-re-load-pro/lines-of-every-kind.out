@@ -1,0 +1,10 @@
+META otp_active: 1
+META uvc_active: 1
+META current_limit: 1.234000
+META uvc: 1
+META uvc_threshold: 3.300000
+META uvc: 0
+FRAME-BEGIN
+V: 2 mV DC
+I: 1 mA DC
+FRAME-END

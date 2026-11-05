@@ -1,0 +1,4 @@
+sr: serial-libsp: Write error (5): Input/output error.
+sr: arachnid-labs-re-load-pro: Unable to send command.
+sr: arachnid-labs-re-load-pro: Error sending current limit command: -1.
+Failed to set device option 'current_limit': generic/unspecified error.
