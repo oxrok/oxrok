@@ -76,8 +76,9 @@
 //! (`api.c:210-211`, `243-244`, `263-264`), which the core's key checks stop
 //! first; the two null checks of `agdmm_receive_data` (`protocol.c:180`, `183`);
 //! `agdmm_send`'s `*IDN?` (`protocol.c:223`), which no job sends; and the failed
-//! float of `recv_fetc` (`protocol.c:474-476`), which its tables' form leaves no
-//! way to.
+//! float of `recv_fetc` (`protocol.c:474-476`), the unknown names of
+//! `recv_conf_u123x` (`protocol.c:625`, `643`) and the failed value of `recv_log`
+//! (`protocol.c:877-879`), which the form the tables ask for leaves no way to.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
