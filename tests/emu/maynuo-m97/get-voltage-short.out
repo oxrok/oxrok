@@ -1,0 +1,2 @@
+sr: modbus: Timed out waiting for Modbus response.
+Failed to get 'voltage': generic/unspecified error

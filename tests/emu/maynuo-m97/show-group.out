@@ -1,0 +1,24 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+    modbusaddr
+maynuo-m97 - Maynuo M9710 v12.3 with 2 channels: V1 I1
+Channel groups:
+    1: channels V1 I1
+Supported configuration options on channel group 1:
+    enabled: on, off (current)
+    regulation: CC (current)
+    voltage: 12.000000 (current)
+    voltage_target: 0.000000, 150.000000, 0.001000
+    current: 0.000000 (current)
+    current_limit: 0.000000, 30.000000, 0.000100
+    ovp_enabled: on (current), off
+    ovp_active: on, off (current)
+    ovp_threshold: 150.000000 (current)
+    ocp_enabled: on (current), off
+    ocp_active: on, off (current)
+    ocp_threshold: 30.000000 (current)
+    otp: on (current), off
+    otp_active: on, off (current)

@@ -1,0 +1,2 @@
+sr: modbus: Timed out waiting for Modbus response.
+Failed to set device option 'current_limit': generic/unspecified error.
