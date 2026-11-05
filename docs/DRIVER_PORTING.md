@@ -298,6 +298,66 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- Read a C capture's start and its callback together, and when they
+  don't fit, read the driver's history: maynuo-m97's callback reads the
+  reply (address -1) to a request a 2025 commit stopped sending. A
+  golden of C's `--time` that is empty is a finding, not a pass. `git
+  log -S` on the name of the missing function finds the commit, and
+  turns an inference into a citation.
+- Before calling two sources a conflict, read how each gets its bytes:
+  ATZ9712's "high byte" was the register's low one, filled in wire order
+  into a little endian u16.
+- When no C run reaches a driver's frames, a model option that sends the
+  answers unasked gives their format an oracle, with `--tx-filter`
+  taking the port's polls out and other cases pinning them. Name it as
+  no device, and say that a request's purge drops them, so the cases
+  compare C's unasked frames with the port's polled ones.
+- A case that fails only because sigrok-cli skips its close is not an
+  `--oracle-bug` of the driver. Filter the closing frame from the `.tx`,
+  make it a full case, and pin the close in a few cases. A frame with no
+  answer shares a `.tx` line with the next one, so strip the tail, not
+  the line.
+- A `--tx-filter` that cuts the log at an event also cuts what the event
+  must cause. Fold what varies instead.
+- `--continuous` under sigrok-cli stops at stdin's end, so on a driver
+  that takes no sample it exits 0 with nothing. An event armed on it
+  never fires. Mark the event from `Serial::tick`, and use `--samples`
+  for the interrupt and unplug cases.
+- A capture test can hang rather than fail: a stop that does not bite
+  fails the wait for the End, then the device's drop joins for ever. Run
+  such tests on their own thread with a bound. Don't assert while
+  holding a fake's lock: the drop writes through it, and a second panic
+  aborts the binary.
+- A count that races a mode change is exact if the test takes it under
+  the same lock. An upper limit needs a reason that holds at any speed.
+- A `.gcda` truncated by a full disk puts a libgcov line on sigrok-cli's
+  stderr and fails stderr cases. `GCOV_PREFIX` sends the writes
+  elsewhere while you find out.
+- A timeout that reaches 0 can mean "no timeout": `serial_read_blocking`
+  takes 0 as for ever, and `serial_readline` then waits for one byte.
+  Check every computed timeout for 0. A real-time stamp compared with a
+  monotonic clock never expires; gcov showed the timeout's lines
+  unreached.
+- `sr_dev_acquisition_stop()` leaves the status ACTIVE, so a callback
+  that checks it after a stop may send one more request. The `.tx` shows
+  it, and it depends on whether the bytes came in that pass, so port the
+  pass loop rather than the request list.
+- A multi-model C directory may register one driver with the model
+  fixed: check `SR_REGISTER_DEV_DRIVER` before porting tables.
+- A request/reply protocol with no ids has no way to tell a late answer
+  from the next one. Fixing a timeout that C never ran brings that in:
+  after an expiry a purge drops only what has come, so wait for the
+  line, and treat a reply of the wrong form as out of step. Also keep
+  each sample from rounds begun in step: an answer dropped between two
+  requests can bring the step back within a round, and its good status
+  then vouches for the wrong reading. Three versions of this fix looked
+  right before a pty and a load loop showed otherwise.
+- A fake that answers instantly cannot show any of that. Keep a
+  byte-paced fake at the line's real rate, one with queued output in a
+  burst as well, and test on it what a capture leaves behind for the
+  next capture or setting.
+- When a wait starts, drop what has come of a line: it would be read as
+  the head of the next answer.
 - Protocols with sequence numbers in their replies cannot have polls
   invented by the replay; make the loops count reads.
 - The FTDI status bytes come with every USB packet, not every read;

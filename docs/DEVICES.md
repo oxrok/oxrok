@@ -2138,6 +2138,77 @@ Unverified, from the fork's source only:
 - The driver leaves unused stages cleared, which raises the level at the
   first word, so a multi-stage trigger waits only for its later stages.
 
+## Maynuo M97 and M98 electronic loads (maynuo-m97)
+
+maynuo-m97: model `maynuo-m97` on the CDC-ACM shell, a Modbus RTU slave
+behind a UART; 210 cases, 172 full; gcov 95.8%; not on hardware. A scan
+finds the two models of `api.c`'s table (M9710, id 28, and M9812, id
+101), whose ids its comment calls guessed. Settings and state are in
+channel group `1`: `-g 1`.
+
+libsigrok's commit 524ec154 (2025, "Synchronize read and write
+operations") deleted `maynuo_m97_capture_start`, which since ffb580cf
+(2015) sent four registers from `U` at the start and after every read.
+At the pinned commit a capture sends no request and reads the reply to
+it (`api.c:376-383`, `protocol.c:227`), so it has no samples:
+`--samples` never ends, and `--time` ends with nothing. oxrok sends the
+deleted frame. No recording of it is known, and no run of the pinned
+commit shows it. Differences from the older C: the first request goes 10
+ms after the start, where C sent it at once; later ones go 10 ms after a
+read ends, where C sent one right after a read; and the next request's
+purge drops a late reply, where C's close waited for the last one.
+
+C's frames have an oracle only through the model's `unasked=`, replies
+no device sends. oxrok's request purges them, so those cases compare C's
+unasked frames with the frames of oxrok's polls.
+
+An open sets `PC1`, which locks the front panel, and a close or a drop
+clears it. An unplug, SIGTERM, SIGHUP or a crash leaves it set.
+sigrok-cli leaves it set on an error, so 49 failing cases are full with
+PC1 off filtered from the `.tx`, and six `way out` cases pin the off.
+
+The channels have indexes 0 and 1, where C gives both 0 (`api.c:150`,
+`153`); no output shows it.
+
+## Motech LPS-300 series (motech-lps-301)
+
+Motech LPS-301 (`motech-lps-301`; libsigrok registers only that driver
+from `motech-lps-30x`, with the model fixed, so any `LPS-` answer shows
+as an LPS-301 with one channel): ported and emulated on the CDC-ACM
+shell, model `motech-lps-30x` (`model=`, `version=`, `status=`,
+`vout1=`, `iout1=`, `set=` answer lists; `uart=`, `eol=`, `blank=`,
+`output=`, `v1=`, `i1=`, `answers=`, `late=`, `setters=`, and the
+shell's faults), 149 cases, 2026-11-05: 116 full, 20 `--oracle-bug`, 13
+`--oracle-differs`. gcov 79.3% of the driver. Not emulated: other
+models' paths, which `scan_lps301` cannot reach (channels 2 and 3,
+`TRACK`, `VDD`, model detection), library-only guards, a set after a
+capture (`api.c:553`), and a failing write (`api.c:134`, `:167`,
+`:200`). The request timeout (`protocol.c:201-203`) is dead code in C.
+Commands, 2400 8n1 and status bits are from the series' manual, chapter
+5; the answer form is from the C driver; line ends, reading widths,
+`VOUT1` reading 0 with the output off, and how firmware 1.17 fails
+`VERSION` are guesses. Never on hardware.
+
+C waits for as long as a device stays silent: `calc_timeout_ms` gives 0
+once 250 ms are up, and 0 is no timeout to `serial_read_blocking`, so a
+wrong `conn=` or rate holds the scan; a late reply then fails after five
+tries. In a capture `protocol.c:199` subtracts a real time (`:239`) from
+a monotonic one, so a request never expires. oxrok fails an answer at
+250 ms. In a capture it expires the request and sends nothing more until
+the line is free: a line saying `OK`, or 400 ms of silence, at most 1 s.
+No line says which request it answers, so an answer later than that
+shows as a status that is no number, which makes no sample and waits
+again, and no round makes a sample until a good status has come after
+the expiry. A device printing readings as bare integers would not show
+the shift; the manual's examples have decimals. With only a sample limit
+it gives up after 2 s with no sample. A reading that is no number gives
+no sample for that round, where C sends 0; a status that is no number
+with no expiry before it keeps C's sample. A bare `OK` or a 48 byte line
+does not hold the capture. Settings work after a capture, where C never
+clears `acq_running`, and they and a second capture wait out an answer
+the last capture left on its way. When a limit ends a capture in the
+pass that read an `OK`, one more `VOUT1` goes out, as in C.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,
