@@ -34,7 +34,7 @@ s/^data is invalid$/Failed to start session./"
     PARTIAL_BUG="sigrok-cli sets -c's options one at a time in hash table order (session.c:700-707), so the output goes on before a later option is refused; oxrok checks them first, or sets the output last, and leaves it off"
     PURGE_BUG="modbus_serial_rtu_read_begin takes one byte of what a bad reply left (modbus_serial_rtu.c:114-116) and nothing clears the rest, so the tries after it fail too and each adds a reply; oxrok drops the input queue before a request"
     ADDR_BUG="modbus_serial_rtu_dev_inst_new keeps the low byte of modbusaddr (modbus_serial_rtu.c:47), so 257 talks to slave 1; oxrok refuses it"
-    HANG_BUG="rdtech_dps_receive_data returns a failed read's negative result (protocol.c:740-741), which the session takes for true, before it checks a limit, so a device that went silent never ends the capture; oxrok ends it after 5 reads"
+    HANG_BUG="rdtech_dps_receive_data returns a failed read's negative result (protocol.c:740-741), which the session takes for true, before it checks a limit, so a device that went silent never ends a capture whose only limit is its samples, which may never come; oxrok ends that one after 5 s with no good read, and one whose request cannot go out. Under --time and --continuous it waits and recovers as C does"
     NO_CLOSE_BUG="sigrok-cli's logger exits on a critical (main.c:46-47), before its sr_dev_close (main.c:130 then 201, session.c:708), so an error leaves a DPS's panel locked; oxrok unlocks it"
     LOCK_BUG="dev_open returns on a failed lock with no unlock and sigrok-cli sends no close (api.c:315-317), so a lost reply can leave the panel locked; oxrok tries the unlock"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
@@ -325,14 +325,22 @@ s/^data is invalid$/Failed to start session./"
     emu_case "a poll retried" --driver rdtech-rd -- -d $R --samples 2
     emu_options setters=0 id=60125 faults=5:extra
     emu_case "a poll with two bytes too many" --driver rdtech-rd --oracle-differs "$PURGE_BUG" -- -d $R --samples 2
+    # How many tries the 5 s take goes by the clock, a run of them being one
+    # .tx line, so their count is hidden.
+    N='s/^bulk_out 02 (01030008000d05cd)+ -> [0-9]+$/bulk_out 02 01030008000d05cd... -> N/'
+    # Two polls lost under a time limit, then the readings again, in both tools:
+    # up to the third read of the thresholds, as what follows goes by the clock.
+    emu_options setters=0 id=60125 output=1 uset=12000 faults=5:silent,6:silent,7:silent,8:silent,9:silent,10:silent
+    emu_case "time recovers after failed reads" --driver rdtech-rd --filter '4,$d' \
+        --tx-filter '/^bulk_in 82 9 -> /{x;s/^/x/;/^xxx/{x;q};x}' -- -d $R --time 4s
     # A poll that fails three times: the C returns its negative result to the
     # session as a truth, takes no sample and asks again.
     emu_options setters=0 id=60125 faults=5:silent,6:silent,7:silent
     emu_case "a poll lost" --driver rdtech-rd -- -d $R --samples 1
     emu_options setters=0 id=60125 answers=4
-    emu_case "silent in a capture" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --no-output -- -d $R --samples 2
+    emu_case "silent in a capture" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" --no-output -- -d $R --samples 2
     emu_options setters=0 id=60125 answers=6
-    emu_case "silent after a sample" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 -- -d $R --samples 3
+    emu_case "silent after a sample" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" -- -d $R --samples 3
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 id=60125 chunk=1

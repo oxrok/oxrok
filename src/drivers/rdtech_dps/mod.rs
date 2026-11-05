@@ -38,9 +38,14 @@
 //! - A DPS's thresholds read in their scale, see [`protocol::decode_dps`].
 //! - A setting rounds, and what the register does not hold, or the model's
 //!   list does not, is refused, see [`protocol::register_value`].
-//! - A capture ends after [`MAX_FAILED_POLLS`] reads in a row that fail. C goes
-//!   on for ever, as its callback's negative result counts as true to the
-//!   session and no limit is checked on that path (`protocol.c:740-741`).
+//! - A capture with only a sample limit ends after [`NO_REPLY_BOUND`] with no
+//!   good read, as that limit may never come. C goes on for ever, as its
+//!   callback's negative result counts as true to the session and no limit is
+//!   checked on that path (`protocol.c:740-741`). Under `--time` or
+//!   `--continuous` a device that went quiet is waited for, and a capture goes
+//!   on when it comes back, as in C; the time limit is checked on that path too.
+//!   [`MAX_UNSENT_POLLS`] reads in a row whose request cannot go out end any
+//!   capture: the port has gone.
 //!
 //! See [`protocol`].
 
@@ -84,8 +89,11 @@ static DEV_OPTIONS: [OptionDesc; 14] = [
 /// The session source's timeout, `api.c`'s `dev_acquisition_start`: the time
 /// from one read's end to the next.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-/// Reads in a row that fail, each of three tries, that end a capture.
-pub const MAX_FAILED_POLLS: u32 = 5;
+/// How long a capture whose only limit is a sample count waits for a good read
+/// before it ends: without one that limit never comes.
+pub const NO_REPLY_BOUND: Duration = Duration::from_secs(5);
+/// Reads in a row whose request cannot go out that end a capture.
+pub const MAX_UNSENT_POLLS: u32 = 5;
 /// How often a wait between two reads looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(2);
 
@@ -203,6 +211,7 @@ pub struct RdtechDevice {
     slave: u8,
     limit_samples: u64,
     limit_msec: u64,
+    no_reply_bound: Duration,
     /// A port to use instead of opening `conn`, for tests.
     pending: Option<Box<dyn Port>>,
     link: Arc<Mutex<Link>>,
@@ -244,6 +253,7 @@ impl RdtechDevice {
             slave,
             limit_samples: 0,
             limit_msec: 0,
+            no_reply_bound: NO_REPLY_BOUND,
             pending: None,
             link: Arc::new(Mutex::new(link)),
             worker: None,
@@ -474,6 +484,7 @@ impl Device for RdtechDevice {
             limit_samples: self.limit_samples,
             limit_msec: self.limit_msec,
             interval: POLL_INTERVAL,
+            no_reply_bound: self.no_reply_bound,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -521,6 +532,7 @@ struct Capture {
     limit_samples: u64,
     limit_msec: u64,
     interval: Duration,
+    no_reply_bound: Duration,
 }
 
 impl Capture {
@@ -530,8 +542,10 @@ impl Capture {
         }
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
+        let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         let mut samples = 0u64;
-        let mut failed = 0;
+        let mut last_good = started;
+        let mut unsent = 0;
         loop {
             if !wait(self.interval, stop) {
                 return;
@@ -540,21 +554,30 @@ impl Capture {
             // between two, and the packets go out with no lock.
             let polled = {
                 let mut link = self.link.lock().expect("link lock");
-                link.read_state().map(|state| (state, poll_packets(&mut link, &state)))
+                let polled = link.read_state();
+                if link.request_unsent() {
+                    unsent += 1;
+                } else {
+                    unsent = 0;
+                }
+                polled.map(|state| poll_packets(&mut link, &state))
             };
             match polled {
-                Ok((_, packets)) => {
-                    failed = 0;
+                Ok(packets) => {
+                    last_good = Instant::now();
                     if !packets.into_iter().all(|p| sink.send(p)) {
                         return;
                     }
                     samples += 1;
                 }
                 Err(e) => {
-                    failed += 1;
                     log::debug!("A read failed: {e}.");
-                    if failed >= MAX_FAILED_POLLS {
-                        log::error!("Acquisition failed: {failed} reads in a row failed.");
+                    if unsent >= MAX_UNSENT_POLLS {
+                        log::error!("Acquisition failed: {unsent} requests could not go out.");
+                        return;
+                    }
+                    if only_samples_can_end && last_good.elapsed() >= self.no_reply_bound {
+                        log::error!("No reply from the device for {:?}.", self.no_reply_bound);
                         return;
                     }
                 }
@@ -1140,16 +1163,193 @@ mod tests {
     }
 
     #[test]
-    fn reads_that_keep_failing_end_a_capture_with_no_limit() {
+    fn a_sample_limit_on_a_silent_supply_ends_at_the_bound() {
         let (mut fake, seen, _) = Fake::new();
         // The lock and the seed's two reads, then silence.
         fake.answers = Some(3);
         let mut d = dps(fake);
+        d.no_reply_bound = Duration::from_millis(1200);
+        set(&mut d, &Key::LimitSamples, 2_u64).unwrap();
+        let started = Instant::now();
         let packets = capture(&mut d);
+        assert!(started.elapsed() >= Duration::from_millis(1200));
         assert!(!packets.iter().any(|p| matches!(p, Packet::FrameBegin)));
-        assert!(matches!(packets.last(), Some(Packet::End)));
-        let tries = 3 + 3 * usize::try_from(MAX_FAILED_POLLS).unwrap();
-        assert_eq!(writes(&seen).len(), tries, "no more than the bound");
+        assert_eq!(
+            writes(&seen).len(),
+            3 + 3,
+            "one poll's tries pass the bound: {:?}",
+            d.no_reply_bound
+        );
+    }
+
+    #[test]
+    fn five_fast_failures_are_no_time_at_all() {
+        // Another slave's reply fails at its first byte, so failed reads come in
+        // milliseconds: the bound is in time, not in reads.
+        let (mut d, _, _, mode) = switchable();
+        set(&mut d, &Key::LimitSamples, 1000_u64).unwrap();
+        d.no_reply_bound = Duration::from_millis(600);
+        let (tx, rx) = sync_channel(1024);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        *mode.lock().unwrap() = Mode::OtherSlave;
+        let started = Instant::now();
+        packets_until_end(&rx);
+        assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_time_limit_goes_past_the_bound_and_recovers() {
+        let (mut d, _, _, mode) = switchable();
+        set(&mut d, &Key::LimitMsec, 2500_u64).unwrap();
+        d.no_reply_bound = Duration::from_millis(100);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        *mode.lock().unwrap() = Mode::Silent;
+        std::thread::sleep(Duration::from_millis(1000));
+        *mode.lock().unwrap() = Mode::Good;
+        let started = Instant::now();
+        let packets = packets_until_end(&rx);
+        assert!(started.elapsed() >= Duration::from_millis(500), "{:?}", started.elapsed());
+        let last_frame = packets.iter().rposition(|p| matches!(p, Packet::FrameBegin));
+        assert!(last_frame.is_some(), "frames again after the quiet");
+    }
+
+    #[test]
+    fn continuous_goes_on_through_a_quiet_and_recovers() {
+        let (mut d, _, _, mode) = switchable();
+        d.no_reply_bound = Duration::from_millis(100);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        *mode.lock().unwrap() = Mode::Silent;
+        std::thread::sleep(Duration::from_millis(900));
+        while rx.try_recv().is_ok() {}
+        *mode.lock().unwrap() = Mode::Good;
+        // Frames again: it did not end, and it needed nothing to go on.
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+    }
+
+    #[test]
+    fn requests_that_cannot_go_out_end_any_capture() {
+        let (mut d, seen, _, mode) = switchable();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        *mode.lock().unwrap() = Mode::NoWrite;
+        let before = seen.lock().unwrap().len();
+        packets_until_end(&rx);
+        let tries = seen.lock().unwrap().len() - before;
+        assert!(tries <= 3 * usize::try_from(MAX_UNSENT_POLLS).unwrap() + 2, "{tries}");
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mode {
+        Good,
+        Silent,
+        OtherSlave,
+        NoWrite,
+    }
+
+    /// A supply whose state a test changes under a capture.
+    struct Switched {
+        registers: Shared<[u16; 256]>,
+        writes: Shared<Vec<Vec<u8>>>,
+        mode: Shared<Mode>,
+        input: VecDeque<u8>,
+    }
+
+    impl Port for Switched {
+        fn name(&self) -> &'static str {
+            "/dev/ttySWITCHED"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            if self.input.is_empty() {
+                std::thread::sleep(timeout.min(Duration::from_millis(1)));
+                return Ok(0);
+            }
+            let n = buf.len().min(self.input.len());
+            for b in &mut buf[..n] {
+                *b = self.input.pop_front().expect("counted");
+            }
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            let mode = *self.mode.lock().unwrap();
+            if mode == Mode::NoWrite {
+                self.writes.lock().unwrap().push(data.to_vec());
+                return Err(Error::device("Broken pipe"));
+            }
+            self.writes.lock().unwrap().push(data.to_vec());
+            if mode == Mode::Silent {
+                return Ok(());
+            }
+            let body = &data[..data.len() - 2];
+            let address = usize::from(u16::from_be_bytes([body[2], body[3]]));
+            let count = usize::from(u16::from_be_bytes([body[4], body[5]]));
+            let mut registers = self.registers.lock().unwrap();
+            let out = if body[1] == 3 {
+                let mut out = vec![3, u8::try_from(count * 2).unwrap()];
+                for r in &registers[address..address + count] {
+                    out.extend_from_slice(&r.to_be_bytes());
+                }
+                out
+            } else {
+                registers[address] = u16::from_be_bytes([body[7], body[8]]);
+                body[1..6].to_vec()
+            };
+            let slave = if mode == Mode::OtherSlave { 2 } else { 1 };
+            self.input.extend(frame(slave, &out));
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.input.clear();
+            Ok(())
+        }
+    }
+
+    fn switched_on(
+        family: Family,
+        id: u16,
+    ) -> (RdtechDevice, Shared<Vec<Vec<u8>>>, Shared<[u16; 256]>, Shared<Mode>) {
+        let registers = Arc::new(Mutex::new([0; 256]));
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let mode = Arc::new(Mutex::new(Mode::Good));
+        let port = Switched {
+            registers: Arc::clone(&registers),
+            writes: Arc::clone(&writes),
+            mode: Arc::clone(&mode),
+            input: VecDeque::new(),
+        };
+        let mut d = RdtechDevice::from_port(model(family, id), Box::new(port));
+        d.open().unwrap();
+        (d, writes, registers, mode)
+    }
+
+    fn switchable() -> (RdtechDevice, Shared<Vec<Vec<u8>>>, Shared<[u16; 256]>, Shared<Mode>) {
+        switched_on(Family::Dps, 5005)
+    }
+
+    fn wait_for_frame(rx: &Receiver<(usize, Packet)>) {
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(!left.is_zero(), "no frame after {CAPTURE_BOUND:?}");
+            let (_, p) = rx.recv_timeout(left).expect("a packet in time");
+            assert!(!matches!(p, Packet::End), "the capture ended");
+            if matches!(p, Packet::FrameEnd) {
+                return;
+            }
+        }
     }
 
     #[test]

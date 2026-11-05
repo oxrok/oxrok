@@ -373,6 +373,11 @@ impl Link {
         self.modbus.as_mut().ok_or_else(|| Error::device("device is not open"))
     }
 
+    /// Whether the last request could not go out.
+    pub fn request_unsent(&self) -> bool {
+        self.modbus.as_ref().is_some_and(Modbus::request_unsent)
+    }
+
     /// The range now on.
     pub fn current_range(&self) -> &'static Range {
         &self.model.ranges[self.range]

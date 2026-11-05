@@ -126,12 +126,13 @@ fn is_exception(reply: &[u8]) -> bool {
 pub struct Modbus {
     port: Box<dyn Port>,
     slave: u8,
+    unsent: bool,
 }
 
 impl Modbus {
     /// A slave at address `slave`, on a port that is open.
     pub fn new(port: Box<dyn Port>, slave: u8) -> Modbus {
-        Modbus { port, slave }
+        Modbus { port, slave, unsent: false }
     }
 
     /// The name of the port.
@@ -148,8 +149,15 @@ impl Modbus {
         if pdu.is_empty() {
             return Err(Error::arg("an empty Modbus request"));
         }
-        self.port.purge()?;
-        self.port.write(&frame(self.slave, pdu))
+        let sent = self.port.purge().and_then(|()| self.port.write(&frame(self.slave, pdu)));
+        self.unsent = sent.is_err();
+        sent
+    }
+
+    /// Whether the last request could not go out, where a failure to read
+    /// says nothing of the kind: the port has gone, not the slave's reply.
+    pub fn request_unsent(&self) -> bool {
+        self.unsent
     }
 
     /// Reads a reply PDU of at most `reply`'s length, its CRC checked:
@@ -649,6 +657,38 @@ mod tests {
         assert!(m.read_holding_registers(0, &mut [0; 2]).is_err());
         let took = started.elapsed();
         assert!(took >= READ_TIMEOUT, "{took:?}");
+    }
+
+    #[test]
+    fn a_request_that_cannot_go_out_says_so() {
+        struct NoWrite;
+        impl Port for NoWrite {
+            fn name(&self) -> &'static str {
+                "no write"
+            }
+            fn set_params(&mut self, _: Params) -> Result<()> {
+                Ok(())
+            }
+            fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+                Ok(())
+            }
+            fn read(&mut self, _: &mut [u8], _: Duration) -> Result<usize> {
+                Ok(0)
+            }
+            fn write(&mut self, _: &[u8]) -> Result<()> {
+                Err(Error::device("Broken pipe"))
+            }
+            fn purge(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+        let mut m = Modbus::new(Box::new(NoWrite), 1);
+        assert!(!m.request_unsent());
+        assert!(m.request(&[3]).is_err());
+        assert!(m.request_unsent());
+        let (mut m, _) = on(vec![]);
+        assert!(m.read_holding_registers(0, &mut [0; 1]).is_err());
+        assert!(!m.request_unsent(), "a silence is not that");
     }
 
     #[test]
