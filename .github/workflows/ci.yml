@@ -114,9 +114,14 @@ jobs:
           fi
 
   emulator:
-    name: emulator (oxrok against the goldens)
+    name: emulator (oxrok against the goldens, ${{ matrix.shard }})
     needs: emulator-probe
     if: needs.emulator-probe.outputs.vhci == 'true'
+    # One job takes over an hour. A new model joins a shard by itself.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -147,4 +152,8 @@ jobs:
       # No sigrok-cli: full cases run oxrok alone against the committed
       # .out and .tx goldens, oracle-only cases are skipped and counted.
       # The harness runs oxrok-emu under sudo -n.
-      - run: sh tools/diffcli.sh --no-oracle
+      - run: |
+          models=$(ls tools/emu/*.sh | xargs -n1 basename -s .sh |
+            awk -v i=${{ matrix.shard }} 'NR % 6 == i' | paste -sd, -)
+          echo "$models"
+          sh tools/diffcli.sh --no-oracle --emu-model "$models"

@@ -862,7 +862,9 @@ mod tests {
         assert!(started.elapsed() >= d.no_reading_bound);
         assert_eq!(readings(&packets).len(), 0);
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.writes.len(), 4, "at 0, 0.5, 1 and 1.5 s");
+        // At 0, 0.5, 1 and 1.5 s, or one fewer where sleeps run long.
+        let asked = seen.writes.len();
+        assert!((3..=4).contains(&asked), "{asked}");
         for pair in seen.writes.windows(2) {
             let gap = pair[1].0 - pair[0].0;
             assert!(gap >= protocol::REQ_TIMEOUT, "{gap:?}");
@@ -895,7 +897,8 @@ mod tests {
         d.start(PacketSink::new(tx, 0)).unwrap();
         assert!(matches!(rx.recv_timeout(CAPTURE_BOUND).unwrap().1, Packet::Header { .. }));
         assert!(rx.recv_timeout(Duration::from_millis(1100)).is_err(), "no End past the bound");
-        assert!(getds(&seen) >= 3, "and it goes on asking");
+        // Each 500 ms, and sleeps can run long.
+        assert!(getds(&seen) >= 2, "and it goes on asking");
         d.stop().unwrap();
         let _ = until_end(&rx);
     }

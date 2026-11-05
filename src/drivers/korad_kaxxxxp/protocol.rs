@@ -405,6 +405,10 @@ impl Link {
     /// `korad_kaxxxxp_read_chars`: up to `count` bytes. The first may take
     /// a hundred times the line's time for all of them; after it, a pause
     /// of three bytes' time ends the reply. A reply may stay empty.
+    ///
+    /// The attempts are also bound by the time they should take: where a
+    /// system's sleeps run long, a macOS runner's by six times, C's count
+    /// alone would stretch 1.5 s of silence to 10.
     pub fn read_chars(&mut self, count: usize) -> Result<Vec<u8>> {
         let mut buf = vec![0; count];
         let width = u32::try_from(count).unwrap_or(u32::MAX);
@@ -413,6 +417,7 @@ impl Link {
         let mut received = 0;
         let mut timeout = first;
         let mut retries = RETRIES_FIRST;
+        let first_by = Instant::now() + first * RETRIES_FIRST;
         while received < count && retries > 0 {
             retries -= 1;
             let n = self.read_blocking(&mut buf[received..], timeout).inspect_err(|e| {
@@ -420,6 +425,9 @@ impl Link {
             })?;
             if n == 0 {
                 if received > 0 {
+                    break;
+                }
+                if Instant::now() >= first_by {
                     break;
                 }
                 continue;

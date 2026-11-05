@@ -645,7 +645,7 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
                 s.reported.update(&frame);
                 s.reported
             };
-            if !send_readings(&reported, sink) {
+            if !send_readings(&reported, sink, stop) {
                 return;
             }
         } else {
@@ -662,7 +662,8 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
 }
 
 /// `handle_packet`: all channels at once, volts and then amperes.
-fn send_readings(reported: &Reported, sink: &PacketSink) -> bool {
+fn send_readings(reported: &Reported, sink: &PacketSink, stop: &AtomicBool) -> bool {
+    let go_on = || !stop.load(Ordering::SeqCst);
     let block = |samples: [f32; CHANNELS], mq, flags, unit, digits| {
         Packet::Analog(AnalogData {
             channels: (0..CHANNELS).collect(),
@@ -673,8 +674,11 @@ fn send_readings(reported: &Reported, sink: &PacketSink) -> bool {
             digits,
         })
     };
-    sink.send(block(reported.voltage, Mq::Voltage, MqFlags::DC, Unit::Volt, 2))
-        && sink.send(block(reported.current, Mq::Current, MqFlags::empty(), Unit::Ampere, 3))
+    sink.send_while(block(reported.voltage, Mq::Voltage, MqFlags::DC, Unit::Volt, 2), go_on)
+        && sink.send_while(
+            block(reported.current, Mq::Current, MqFlags::empty(), Unit::Ampere, 3),
+            go_on,
+        )
 }
 
 #[cfg(test)]
@@ -1329,10 +1333,15 @@ mod tests {
         set(&mut d, "CH1", Key::VoltageTarget, Value::F64(5.0)).unwrap();
         let rx = start(&mut d);
         until(&rx, is_analog, CAPTURE_BOUND);
+        // The settings go back after the readings.
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while writes(&seen).len() < 2 {
+            assert!(Instant::now() < deadline, "the setting never went");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         d.stop().unwrap();
         until(&rx, is_end, CAPTURE_BOUND);
         let during = writes(&seen).len();
-        assert!(during >= 2);
         d.close().unwrap();
         assert_eq!(writes(&seen).len(), during, "the poll took it");
     }

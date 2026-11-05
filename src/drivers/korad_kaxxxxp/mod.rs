@@ -608,6 +608,8 @@ mod tests {
         input: VecDeque<(Instant, u8)>,
         status: u8,
         fail_writes_after: Option<usize>,
+        /// How much longer than asked an empty read takes.
+        overshoot: Duration,
         /// The answer to the write of this number instead of the usual one.
         scripted: Vec<(usize, Answer)>,
     }
@@ -620,6 +622,7 @@ mod tests {
                 input: VecDeque::new(),
                 status: 0x51,
                 fail_writes_after: None,
+                overshoot: Duration::ZERO,
                 scripted: Vec::new(),
             };
             (fake, seen)
@@ -665,6 +668,7 @@ mod tests {
                     return Ok(n);
                 }
                 if now >= deadline {
+                    std::thread::sleep(self.overshoot);
                     return Ok(0);
                 }
                 let next = self.input.front().map_or(deadline, |(at, _)| *at);
@@ -1024,26 +1028,37 @@ mod tests {
         let (mut fake, _seen) = Fake::new();
         fake.scripted = vec![(
             0,
-            vec![(Duration::ZERO, b"12.".to_vec()), (Duration::from_millis(60), b"34".to_vec())],
+            vec![(Duration::ZERO, b"12.".to_vec()), (Duration::from_millis(400), b"34".to_vec())],
         )];
         let mut link = link_on(fake);
         assert!(link.get_value(Target::Voltage).unwrap());
         assert_eq!(link.voltage, 12.0);
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(500));
         assert!(link.get_value(Target::VoltageTarget).unwrap());
         assert_eq!(link.voltage_target, 5.0);
     }
 
     #[test]
+    fn silence_takes_its_time_even_where_sleeps_run_long() {
+        let (mut fake, _seen) = silent_for(1);
+        fake.overshoot = Duration::from_millis(100);
+        let mut link = link_on(fake);
+        let begun = Instant::now();
+        assert!(!link.get_value(Target::Current).unwrap());
+        // A count of 100 tries alone would take 11.5 s.
+        assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+    }
+
+    #[test]
     fn one_late_reply_does_not_shift_the_readings_after_it() {
-        // 1.7 s late, past the 100 tries of 15 ms.
+        // 2.5 s late, past the 100 tries of 15 ms, however long a try takes.
         let (mut fake, _seen) = Fake::new();
-        fake.scripted = vec![(0, vec![(Duration::from_millis(1700), b"0.500".to_vec())])];
+        fake.scripted = vec![(0, vec![(Duration::from_millis(2500), b"0.500".to_vec())])];
         let mut link = link_on(fake);
         assert!(!link.get_value(Target::Current).unwrap(), "it missed its time");
         // What is owed comes together: this one may read the late one.
         link.get_value(Target::Voltage).unwrap();
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(1100));
         for _ in 0..3 {
             link.get_value(Target::Current).unwrap();
             assert_eq!(link.current, 0.5);
