@@ -98,6 +98,7 @@ pub mod drivers {
     pub mod lecroy_logicstudio;
     pub mod logicport;
     pub mod microchip_pickit2;
+    pub mod ols;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
     pub mod rdtech_tc;
@@ -119,6 +120,7 @@ pub fn register_all(registry: &mut core::Registry) {
     drivers::serial_dmm::register_all(registry);
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
+    registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));

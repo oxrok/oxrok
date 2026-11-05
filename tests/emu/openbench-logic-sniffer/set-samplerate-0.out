@@ -1,0 +1,2 @@
+sr: hwdriver: Cannot set 'samplerate' to 0.
+Failed to set device option 'samplerate': invalid argument.
