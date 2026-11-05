@@ -22,9 +22,12 @@
 //! A setting during a capture waits out the reply on its way and drops it.
 //!
 //! No reply is no reading, where C waits for ever (a scan, a setting) or asks
-//! for ever (a capture): a scan finds nothing, a setting fails, and a capture
-//! ends after [`MAX_NO_READING`] requests in a row that give none. A field that
-//! makes no number is no reading either, where C makes up 0 V.
+//! for ever (a capture): a scan finds nothing and a setting fails. A capture
+//! that only a sample limit could end ends after [`NO_READING_BOUND`] with no
+//! reading. Under a time limit or with no limit it keeps asking, as C does, and
+//! goes on when the device answers again: a log survives a supply that went
+//! quiet, or a burst of noise. A field that makes no number is no reading
+//! either, where C makes up 0 V.
 //!
 //! See [`protocol`].
 
@@ -60,9 +63,10 @@ static DEV_OPTIONS: [OptionDesc; 8] = [
 /// How long one pass of a capture waits for a byte: the session's timeout in
 /// `serial_source_add`, and what a stop waits for at worst.
 const POLL: Duration = Duration::from_millis(10);
-/// Requests in a row with no reading that end a capture. C has no bound, so a
-/// `--samples` capture of a silent device never ends. Silent, this is 2.5 s.
-pub const MAX_NO_READING: u32 = 5;
+/// How long a capture that only a sample limit could end goes without a
+/// reading. C has no bound, so such a capture of a silent device never ends. A
+/// time limit or a client's stop ends the rest.
+pub const NO_READING_BOUND: Duration = Duration::from_secs(5);
 
 /// The `manson-hcs-3xxx` driver.
 pub struct MansonDriver;
@@ -154,6 +158,8 @@ pub struct MansonDevice {
     params: Params,
     limit_samples: u64,
     limit_msec: u64,
+    /// [`NO_READING_BOUND`], but for tests.
+    no_reading_bound: Duration,
     /// A port to use instead of opening `conn`, for tests.
     pending: Option<Box<dyn Port>>,
     link: Arc<Mutex<Link>>,
@@ -181,6 +187,7 @@ impl MansonDevice {
             params,
             limit_samples: 0,
             limit_msec: 0,
+            no_reading_bound: NO_READING_BOUND,
             pending: None,
             link: Arc::new(Mutex::new(link)),
             worker: None,
@@ -377,6 +384,7 @@ impl Device for MansonDevice {
             link: Arc::clone(&self.link),
             limit_samples: self.limit_samples,
             limit_msec: self.limit_msec,
+            no_reading_bound: self.no_reading_bound,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -406,18 +414,16 @@ struct Capture {
     link: Arc<Mutex<Link>>,
     limit_samples: u64,
     limit_msec: u64,
+    no_reading_bound: Duration,
 }
 
 /// What a pass has learnt.
-#[derive(Default)]
 struct Progress {
     samples: u64,
     /// When the request on its way went out.
     sent_at: Option<Instant>,
-    /// That request has given a reading.
-    read: bool,
-    /// Requests in a row that gave none.
-    no_reading: u32,
+    /// Since when there has been no reading.
+    quiet_since: Instant,
 }
 
 impl Capture {
@@ -425,7 +431,8 @@ impl Capture {
         sink.send(Packet::header());
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
-        let mut progress = Progress::default();
+        let mut progress = Progress { samples: 0, sent_at: None, quiet_since: started };
+        let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         while !stop.load(Ordering::SeqCst) {
             if !self.pass(sink, &mut progress) {
                 return;
@@ -434,6 +441,10 @@ impl Capture {
                 return;
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
+                return;
+            }
+            if only_samples_can_end && progress.quiet_since.elapsed() > self.no_reading_bound {
+                log::error!("Acquisition failed: no reading for {:?}.", self.no_reading_bound);
                 return;
             }
             if !self.request(&mut progress) {
@@ -459,8 +470,7 @@ impl Capture {
         if reply.is_empty() || !link.take_getd(&reply) {
             return true;
         }
-        progress.read = true;
-        progress.no_reading = 0;
+        progress.quiet_since = Instant::now();
         progress.samples += 1;
         send_sample(sink, link.voltage, link.current)
     }
@@ -475,16 +485,6 @@ impl Capture {
             }
             return true;
         }
-        if progress.sent_at.is_some() && !progress.read {
-            progress.no_reading += 1;
-            if progress.no_reading >= MAX_NO_READING {
-                log::error!(
-                    "Acquisition failed: {} requests with no reading.",
-                    progress.no_reading
-                );
-                return false;
-            }
-        }
         // C goes on after a port that failed, for ever without a time limit
         // (`protocol.c:245`, its result only ends that pass).
         if let Err(e) = link.send("GETD\r") {
@@ -492,7 +492,6 @@ impl Capture {
             return false;
         }
         progress.sent_at = Some(Instant::now());
-        progress.read = false;
         link.reply_pending = true;
         true
     }
@@ -825,14 +824,18 @@ mod tests {
     }
 
     #[test]
-    fn silence_asks_again_each_500_ms_and_then_gives_up() {
+    fn under_a_sample_limit_silence_asks_again_each_500_ms_and_ends_at_the_bound() {
         let (mut fake, seen) = Fake::new();
         fake.reading = Vec::new();
         let mut d = device(fake);
+        d.no_reading_bound = Duration::from_millis(1600);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let started = Instant::now();
         let packets = capture(&mut d);
+        assert!(started.elapsed() >= d.no_reading_bound);
         assert_eq!(readings(&packets).len(), 0);
         let seen = seen.lock().unwrap();
-        assert_eq!(seen.writes.len(), MAX_NO_READING as usize);
+        assert_eq!(seen.writes.len(), 4, "at 0, 0.5, 1 and 1.5 s");
         for pair in seen.writes.windows(2) {
             let gap = pair[1].0 - pair[0].0;
             assert!(gap >= protocol::REQ_TIMEOUT, "{gap:?}");
@@ -841,29 +844,73 @@ mod tests {
     }
 
     #[test]
-    fn a_good_reading_starts_the_bound_afresh() {
+    fn under_a_time_limit_silence_goes_past_the_bound_and_readings_resume() {
         let (mut fake, seen) = Fake::new();
-        let bad = || b"xxxxyyyyz\rOK\r".to_vec();
-        // Four bad, a good one, four bad, a good one: never five in a row.
-        fake.getd = [bad(), bad(), bad(), bad()].into_iter().collect();
-        fake.getd.push_back(b"050000251\rOK\r".to_vec());
-        fake.getd.extend([bad(), bad(), bad(), bad()]);
+        fake.reading = Vec::new();
+        fake.getd = [Vec::new(), Vec::new(), b"050000251\rOK\r".to_vec()].into_iter().collect();
         let mut d = device(fake);
-        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        d.no_reading_bound = Duration::from_millis(100);
+        d.set(&Key::LimitMsec, &Value::U64(1700), None).unwrap();
+        let started = Instant::now();
         let packets = capture(&mut d);
-        assert_eq!(readings(&packets), [5.0, 0.25, 5.0, 0.25]);
-        assert_eq!(getds(&seen), 10);
+        assert!(started.elapsed() >= Duration::from_millis(1700), "the time limit ended it");
+        assert_eq!(readings(&packets), [5.0, 0.25], "after two requests went unanswered");
+        assert!(getds(&seen) >= 4, "and it went on asking");
     }
 
     #[test]
-    fn nothing_but_garbage_sends_no_sample_and_gives_up() {
+    fn with_no_limit_silence_waits_for_the_stop() {
+        let (mut fake, seen) = Fake::new();
+        fake.reading = Vec::new();
+        let mut d = device(fake);
+        d.no_reading_bound = Duration::from_millis(100);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND).unwrap().1, Packet::Header { .. }));
+        assert!(rx.recv_timeout(Duration::from_millis(1100)).is_err(), "no End past the bound");
+        assert!(getds(&seen) >= 3, "and it goes on asking");
+        d.stop().unwrap();
+        let _ = until_end(&rx);
+    }
+
+    #[test]
+    fn with_no_limit_garbage_goes_on_too() {
+        let (mut fake, _) = Fake::new();
+        fake.reading = b"xxxxyyyyz\rOK\r".to_vec();
+        let mut d = device(fake);
+        d.no_reading_bound = Duration::from_millis(50);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND).unwrap().1, Packet::Header { .. }));
+        assert!(rx.recv_timeout(Duration::from_millis(200)).is_err(), "no End past the bound");
+        d.stop().unwrap();
+        let _ = until_end(&rx);
+    }
+
+    #[test]
+    fn a_reading_starts_the_bound_afresh() {
+        let (mut fake, seen) = Fake::new();
+        let good = || b"050000251\rOK\r".to_vec();
+        // Each is 500 ms late, the bound is 700 ms, and they take 1 s in all.
+        fake.getd = [Vec::new(), good(), Vec::new(), good()].into_iter().collect();
+        let mut d = device(fake);
+        d.no_reading_bound = Duration::from_millis(700);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(readings(&packets), [5.0, 0.25, 5.0, 0.25]);
+        assert_eq!(getds(&seen), 4);
+    }
+
+    #[test]
+    fn nothing_but_garbage_sends_no_sample_and_ends_at_the_bound() {
         let (mut fake, seen) = Fake::new();
         fake.reading = b"xxxxyyyyz\rOK\r".to_vec();
         let mut d = device(fake);
+        d.no_reading_bound = Duration::from_millis(50);
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let packets = capture(&mut d);
         assert_eq!(readings(&packets).len(), 0);
-        assert_eq!(getds(&seen), MAX_NO_READING as usize);
+        assert!(getds(&seen) > 1);
     }
 
     #[test]

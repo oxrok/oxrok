@@ -34,7 +34,7 @@ $A
 $B"
     SCAN_HANG="hcs_read_reply reads with serial_read_blocking's timeout 0 (protocol.c:73), which waits for ever, also on a tty that left; oxrok gives up after 2 s and finds no device"
     SET_HANG="config_set's hcs_read_reply (api.c:249, 260, 271) waits for ever for a reply; oxrok gives up after 2 s and fails the setting"
-    NOREPLY_BUG="hcs_receive_data asks again every 500 ms for ever (protocol.c:239, 245), so a limit in samples never comes; oxrok ends the capture after 5 requests"
+    NOREPLY_BUG="hcs_receive_data asks again every 500 ms for ever (protocol.c:239, 245), so a limit in samples never comes; oxrok ends a capture only a sample limit could end after 5 s with no reading"
     HUP_BUG="hcs_receive_data takes no revents but G_IO_IN as data (protocol.c:223) and ignores a failed send (protocol.c:245-246), so with the device gone it spins until a time limit; oxrok ends the capture"
     GARBAGE_BUG="hcs_parse_volt_curr_mode takes what makes no number for 0 (protocol.c:99, 105), so a garbled reply is a 0 V sample, and reads past a short line (protocol.c:104); oxrok drops the reply"
     OVERRUN_BUG="handle_new_data has no bound (protocol.c:184): over 50 bytes with no OK it overwrites devc->buflen behind buf (protocol.h:78-79) and goes on from wherever that says, then reports made up values; oxrok drops the reply"
@@ -274,17 +274,24 @@ $B"
     emu_options setters=0 getd-raw=$(ok 123401000),$(emu_hex "$L1K$L1K$L1K$L1K"),$(ok 123601000)
     emu_case "4 KB with no OK" --oracle-differs "$OVERRUN_BUG" --timeout 8 -- -d $K --samples 3
 
-    # Nothing but garbage: C sends 0 V and is done, oxrok gives up after 5.
+    # Nothing but garbage: C sends 0 V and is done, oxrok gives up after 5 s. How
+    # many requests that is depends on the clock, so both are kept to the third.
     emu_options setters=0 getd-raw=$(ok xxxxyyyyz)
     emu_case "only garbage" --oracle-differs "$GARBAGE_BUG" --stderr --filter "$L
-/^oxrok: warn: /d" -- -d $K --samples 2
+/^oxrok: warn: /d" --tx-filter '/^bulk_in 82 13 -> /{x;s/^/x/;/^xxx/{x;q};x}' --timeout 15 -- -d $K --samples 2
 
     # Silence: GETD again each 500 ms, for ever (protocol.c:239, 245).
     emu_options setters=0 answers=3
-    emu_case "silent from the capture on" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 5 --no-output -- -d $K --samples 1
+    # Their number depends on the clock: a unit test holds their pace.
+    emu_case "silent from the capture on" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --no-output --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 1
     emu_case "silent with a time limit" --no-output -- -d $K --time 700ms
     emu_options setters=0 answers=5
-    emu_case "silent after two" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 5 -- -d $K --samples 3
+    emu_case "silent after two" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 3
+
+    # A gap of 6 s of silence, longer than the bound, then readings, then silence: a time
+    # limit lets it go on as C does. Its last requests depend on the clock.
+    emu_options setters=0 answers=17 getd-raw=$(ok 123401000),,,,,,,,,,,,,$(ok 123501000),$(ok 123601000)
+    emu_case "silence then readings under a time limit" --timeout 15 --tx-filter '/^bulk_in 82 13 -> /{x;s/^/x/;/^xxx/{x;q};x}' -- -d $K --time 7s
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 output=1 chunk=1
