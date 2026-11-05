@@ -1,0 +1,13 @@
+Driver functions:
+    Sound level meter
+Scan options:
+    conn
+pce-322a - PCE PCE-322A with 1 channel: SPL
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    spl_weight_freq: A (current), C
+    spl_weight_time: F (current), S
+    spl_meas_range: 30-130 (current), 30-80, 50-100, 80-130
+    power_off: on, off (current)
+    data_source: Live (current), Memory

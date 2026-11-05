@@ -1,0 +1,9 @@
+ctl_out 21 20 0000 0000 00c20100000008 -> ok
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 acffcaffadda -> 6
+bulk_in 82 9 -> d1050001d200010220
+bulk_out 02 d3da0000 -> 4
+bulk_in 82 256 -> 7ff701000a2611051200308e028f02ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+bulk_out 02 d3da0100 -> 4
+bulk_in 82 2 -> ffff
+bulk_out 02 caff -> 2
