@@ -420,12 +420,14 @@ impl Capture<'_> {
         let mut errors = 0;
         while !stop.load(Ordering::SeqCst) && !self.limit_reached() {
             match self.t.bulk_in(EP_IN, MAX_REPLY_SIZE, READ_TIMEOUT) {
-                Err(crate::core::Error::Disconnected) => return Ok(()),
+                Err(crate::core::Error::Disconnected) => {
+                    return Err(crate::core::Error::Disconnected);
+                }
                 // A held read, for as long as an idle chip.
                 Err(crate::core::Error::Timeout) => {
                     if patience.spent() {
                         log::error!("The device stopped answering.");
-                        return Ok(());
+                        return Err(crate::core::Error::device("the device stopped answering"));
                     }
                 }
                 // An error, "which is fine" (api.c:293), until it is not.
@@ -434,7 +436,7 @@ impl Capture<'_> {
                     errors += 1;
                     if errors >= MAX_ERRORS {
                         log::error!("The device stopped answering.");
-                        return Ok(());
+                        return Err(e);
                     }
                 }
                 Ok(raw) => {
@@ -443,7 +445,7 @@ impl Capture<'_> {
                     if payload.is_empty() {
                         if patience.spent() {
                             log::error!("The device stopped answering.");
-                            return Ok(());
+                            return Err(crate::core::Error::device("the device stopped answering"));
                         }
                     } else {
                         patience.restart();
@@ -477,10 +479,11 @@ pub fn run(
         bad: 0,
         start: Instant::now(),
     };
-    if let Err(e) = capture.run(stop) {
+    let outcome = capture.run(stop);
+    if let Err(e) = &outcome {
         log::debug!("acquisition ended: {e}");
     }
-    sink.send(Packet::End);
+    sink.end(outcome);
 }
 
 #[cfg(test)]

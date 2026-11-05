@@ -628,7 +628,7 @@ impl Device for LwlaDevice {
 }
 
 /// A capture's failure, which ended it; the log has said why.
-struct Failed;
+struct Failed(Error);
 type Step<T = ()> = std::result::Result<T, Failed>;
 
 /// One capture, on its own thread: `transfer_event()` and its callbacks as
@@ -646,39 +646,39 @@ struct Acquisition {
 
 /// A failed write of a capture: `submit_transfer()` when the device is
 /// gone, else `transfer_out_completed()`.
-fn out_failed(state: u32, e: &Error) -> Failed {
+fn out_failed(state: u32, e: Error) -> Failed {
     if matches!(e, Error::Disconnected) {
         log::error!("Submit transfer failed: LIBUSB_ERROR_NO_DEVICE.");
     } else {
         log::error!(
             "Transfer to device failed (state {state}): {}.",
-            protocol::transfer_status_name(e)
+            protocol::transfer_status_name(&e)
         );
     }
-    Failed
+    Failed(e)
 }
 
 /// A failed read of a capture: `transfer_in_completed()`.
-fn in_failed(state: u32, e: &Error) -> Failed {
+fn in_failed(state: u32, e: Error) -> Failed {
     if matches!(e, Error::Disconnected) {
         log::error!("Submit transfer failed: LIBUSB_ERROR_NO_DEVICE.");
     } else {
         log::error!(
             "Transfer from device failed (state {state}): {}.",
-            protocol::transfer_status_name(e)
+            protocol::transfer_status_name(&e)
         );
     }
-    Failed
+    Failed(e)
 }
 
 impl Acquisition {
     fn run(mut self, link: &mut Link, sink: &PacketSink) {
         sink.send(Packet::header());
-        // The failure has been logged. The C ends such a capture as any
-        // other, and so does its exit status (protocol.c:299-309).
-        let _ = self.capture(link, sink);
+        // The C ends such a capture as any other, and its exit status stays
+        // 0 (protocol.c:299-309).
+        let outcome = self.capture(link, sink).map_err(|Failed(e)| e);
         log::info!("Acquisition stopped.");
-        sink.send(Packet::End);
+        sink.end(outcome);
     }
 
     fn cancelled(&self) -> bool {
@@ -697,7 +697,7 @@ impl Acquisition {
     fn write_seq(link: &mut Link, state: u32, regs: &[(u16, u32)]) -> Step {
         for &(reg, value) in regs {
             link.send_async(&protocol::write_reg_command(reg, value))
-                .map_err(|e| out_failed(state, &e))?;
+                .map_err(|e| out_failed(state, e))?;
         }
         Ok(())
     }
@@ -705,11 +705,14 @@ impl Acquisition {
     /// A register read: its request and reply (`next_reg_read()`,
     /// `read_reg_response()`).
     fn read_reg(link: &mut Link, state: u32, reg: u16) -> Step<u32> {
-        link.send_async(&protocol::read_reg_command(reg)).map_err(|e| out_failed(state, &e))?;
-        let reply = link.receive_async().map_err(|e| in_failed(state, &e))?;
+        link.send_async(&protocol::read_reg_command(reg)).map_err(|e| out_failed(state, e))?;
+        let reply = link.receive_async().map_err(|e| in_failed(state, e))?;
         if reply.len() != 4 {
             log::error!("Received size {} doesn't match expected size 4.", reply.len());
-            return Err(Failed);
+            return Err(Failed(Error::device(format!(
+                "received size {} doesn't match expected size 4",
+                reply.len()
+            ))));
         }
         Ok(protocol::decode32(&reply))
     }
@@ -719,11 +722,14 @@ impl Acquisition {
         match protocol::status_request(self.model) {
             StatusRequest::LongRegs(command) => {
                 let state = STATE_STATUS_REQUEST;
-                link.send_async(&command).map_err(|e| out_failed(state, &e))?;
-                let reply = link.receive_async().map_err(|e| in_failed(state, &e))?;
+                link.send_async(&command).map_err(|e| out_failed(state, e))?;
+                let reply = link.receive_async().map_err(|e| in_failed(state, e))?;
                 if reply.len() != 40 {
                     log::error!("Received size {} doesn't match expected size 40.", reply.len());
-                    return Err(Failed);
+                    return Err(Failed(Error::device(format!(
+                        "received size {} doesn't match expected size 40",
+                        reply.len()
+                    ))));
                 }
                 Ok(protocol::status_1034(&reply, self.capture.clock_boost()))
             }
@@ -752,7 +758,7 @@ impl Acquisition {
     fn capture(&mut self, link: &mut Link, sink: &PacketSink) -> Step {
         let start = std::mem::take(&mut self.start);
         std::mem::replace(&mut self.first, Ok(()))
-            .map_err(|e| out_failed(STATE_START_CAPTURE, &e))?;
+            .map_err(|e| out_failed(STATE_START_CAPTURE, e))?;
         Self::write_seq(link, STATE_START_CAPTURE, &start[1..])?;
         log::info!("Acquisition started.");
         let stop = protocol::stop_regs(self.model);
@@ -825,7 +831,9 @@ impl Acquisition {
         };
         let mut emit = send;
         Self::read_blocks(&mut readout, link, &|| self.cancelled(), &mut emit)?;
-        Self::write_seq(link, STATE_READ_FINISH, &finish)
+        // The samples are out: what fails from here is logged and no failure.
+        let _ = Self::write_seq(link, STATE_READ_FINISH, &finish);
+        Ok(())
     }
 
     /// The memory reads, until the limit, the end or a stop. What was
@@ -860,11 +868,14 @@ impl Acquisition {
     ) -> Step {
         let state = STATE_READ_REQUEST;
         let command = readout.next_request();
-        link.send_async(&command).map_err(|e| out_failed(state, &e))?;
-        let reply = link.receive_async().map_err(|e| in_failed(state, &e))?;
+        link.send_async(&command).map_err(|e| out_failed(state, e))?;
+        let reply = link.receive_async().map_err(|e| in_failed(state, e))?;
         readout.take(&reply, cancelled, emit).map_err(|w| {
             log::error!("Received size {} does not match expected size {}.", w.got, w.want);
-            Failed
+            Failed(Error::device(format!(
+                "received size {} does not match expected size {}",
+                w.got, w.want
+            )))
         })
     }
 }

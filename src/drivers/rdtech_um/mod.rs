@@ -373,9 +373,9 @@ impl Device for UmDevice {
             .name("rdtech-um acquisition".to_owned())
             .spawn(move || {
                 let mut port = port;
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("port lock") = Some(port);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -402,7 +402,7 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let started = Instant::now();
         let time_limit = Duration::from_millis(self.limit_msec);
@@ -410,23 +410,21 @@ impl Capture {
         let mut buffer = [0u8; protocol::BUFFER];
         let mut frames = 0u64;
         // `dev_acquisition_start`'s forced poll.
-        if !poll(port) {
-            return;
-        }
+        poll(port)?;
         let mut polled = Instant::now();
         let mut last_byte = polled;
         let mut last_dump = polled;
         let mut resyncs_left = 0;
         loop {
             if stop.load(Ordering::SeqCst) {
-                return;
+                return Ok(());
             }
             let room = assembly.room();
             let got = match port.read(&mut buffer[..room], self.pace.wait) {
                 Ok(got) => got,
                 Err(e) => {
                     log::error!("Reading the port failed: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             if got > 0 {
@@ -444,22 +442,22 @@ impl Capture {
                 if !self.profile.check_ok(&dump) {
                     log::error!("Packet checksum verification failed.");
                     log::error!("Processing response packet failed.");
-                    return;
+                    return Err(Error::device("packet checksum verification failed"));
                 }
                 resyncs_left = 0;
                 log_sync(assembly.passed());
                 if !self.send_frame(&dump, sink) {
-                    return;
+                    return Ok(());
                 }
                 frames += 1;
                 last_dump = Instant::now();
                 // Before the next dump, where C sends that too, after its End.
                 if self.limit_frames > 0 && frames >= self.limit_frames {
-                    return;
+                    return Ok(());
                 }
             }
             if self.limit_msec > 0 && started.elapsed() > time_limit {
-                return;
+                return Ok(());
             }
             if assembly.accumulating() && last_byte.elapsed() >= self.pace.stall {
                 log::warn!("Dropping {} bytes of a reply that stopped.", assembly.held());
@@ -469,12 +467,13 @@ impl Capture {
             let empty = last_dump.elapsed();
             if self.limit_frames > 0 && self.limit_msec == 0 && empty >= self.pace.silence {
                 log::error!("No answer from the device for {} s.", empty.as_secs());
-                return;
+                return Err(Error::device(format!(
+                    "no answer from the device for {} s",
+                    empty.as_secs()
+                )));
             }
             if !assembly.accumulating() && polled.elapsed() >= self.pace.period {
-                if !poll(port) {
-                    return;
-                }
+                poll(port)?;
                 polled = Instant::now();
             }
         }
@@ -513,17 +512,17 @@ fn log_sync(synced: protocol::Synced) {
     }
 }
 
-/// One poll: false when the port failed. C drops that in a capture and tries
+/// One poll: an error when the port failed. C drops that in a capture and tries
 /// again, without end on a port that left; here it ends the capture. No room
 /// in the time is no failure, in C too (`ret < 0` at `protocol.c:179`), and its
 /// period starts over as C's does.
-fn poll(port: &mut dyn Port) -> bool {
+fn poll(port: &mut dyn Port) -> Result<()> {
     match port.write_timeout(&[POLL], WRITE_TIMEOUT) {
-        Ok(_) => true,
+        Ok(_) => Ok(()),
         Err(e) => {
             log::debug!("{e}");
             log::error!("Unable to send poll request.");
-            false
+            Err(e)
         }
     }
 }

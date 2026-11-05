@@ -278,7 +278,7 @@ fn run_live(
     sink: &PacketSink,
     stop: &AtomicBool,
     (interval, limit, mut sent, flags): (Duration, u64, Instant, MqFlags),
-) {
+) -> Result<()> {
     let mut samples = 0u64;
     let mut bad = 0;
     loop {
@@ -288,14 +288,14 @@ fn run_live(
                     bad = 0;
                     samples = samples.saturating_add(1);
                     if !sink.send(analog(vec![level], flags)) || (limit != 0 && samples >= limit) {
-                        return;
+                        return Ok(());
                     }
                 } else {
                     log::debug!("Received invalid SPL packet.");
                     bad += 1;
                 }
             }
-            Err(Error::Disconnected) => return,
+            Err(Error::Disconnected) => return Err(Error::Disconnected),
             Err(e) => {
                 log::debug!("Failed to read a level: {}", libusb_error_name(&e));
                 bad += 1;
@@ -303,34 +303,34 @@ fn run_live(
         }
         if bad >= MAX_BAD_ANSWERS {
             log::error!("{bad} bad answers in a row: giving up.");
-            return;
+            return Err(Error::device(format!("{bad} bad answers in a row")));
         }
         while sent.elapsed() <= interval {
             if stop.load(Ordering::SeqCst) {
-                return;
+                return Ok(());
             }
             std::thread::sleep(POLL.min(interval.saturating_sub(sent.elapsed())));
         }
         if stop.load(Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
         if let Err(e) = t.bulk_out(protocol::EP_OUT, &[protocol::LIVE], protocol::OUT_TIMEOUT) {
             log::debug!("Failed to request new acquisition: {}", libusb_error_name(&e));
-            return;
+            return Err(e);
         }
         sent = Instant::now();
     }
 }
 
 /// The log's chunks, the first one's request gone out. Whether every
-/// sample of `total` came.
+/// sample of `total` came, or a stop came first; an error ends it too.
 fn run_log(
     t: &mut dyn Transport,
     sink: &PacketSink,
     stop: &AtomicBool,
     total: usize,
     flags: MqFlags,
-) -> bool {
+) -> Result<bool> {
     let mut done = 0;
     loop {
         let want = protocol::log_request(done, total);
@@ -342,13 +342,13 @@ fn run_log(
             Ok(a) => a,
             Err(e) => {
                 log::error!("Failed to read the log: {}.", libusb_error_name(&e));
-                return false;
+                return Err(e);
             }
         };
         let Some(levels) = protocol::parse_log_data(&answer) else {
             log::debug!("Received invalid stored SPL packet.");
             log::error!("Failed to read the log: an invalid answer.");
-            return false;
+            return Err(Error::device("failed to read the log: an invalid answer"));
         };
         let got = levels.len();
         if got != usize::from(want[3]) {
@@ -356,22 +356,25 @@ fn run_log(
             if got > 0 {
                 sink.send(analog(levels, flags));
             }
-            return false;
+            return Err(Error::device(format!(
+                "failed to read the log: {got} samples of {}",
+                want[3]
+            )));
         }
         if !sink.send(analog(levels, flags)) {
-            return false;
+            return Ok(false);
         }
         done += got;
         if done >= total {
-            return true;
+            return Ok(true);
         }
         if stop.load(Ordering::SeqCst) {
-            return false;
+            return Ok(false);
         }
         let next = protocol::log_request(done, total);
         if let Err(e) = t.bulk_out(protocol::EP_OUT, &next, protocol::OUT_TIMEOUT) {
             log::error!("Failed to request next chunk: {}.", libusb_error_name(&e));
-            return false;
+            return Err(e);
         }
     }
 }
@@ -700,21 +703,23 @@ impl Device for Kc330bDevice {
                     sink.send(Packet::Meta(meta));
                 }
                 let mut read_all = false;
-                match job {
+                let outcome = match job {
                     Job::Live { interval, limit, sent, flags } => {
-                        run_live(t.as_mut(), &sink, &stop2, (interval, limit, sent, flags));
+                        run_live(t.as_mut(), &sink, &stop2, (interval, limit, sent, flags))
                     }
                     Job::Log { total, whole, flags } => {
-                        read_all = run_log(t.as_mut(), &sink, &stop2, total, flags) && whole;
+                        run_log(t.as_mut(), &sink, &stop2, total, flags).map(|complete| {
+                            read_all = complete && whole;
+                        })
                     }
-                    Job::Nothing => {}
-                }
+                    Job::Nothing => Ok(()),
+                };
                 // The transport first: whoever sees the end may use it.
                 let mut s = shared.lock().expect("kc-330b state lock");
                 s.transport = Some(t);
                 s.read_all = read_all;
                 drop(s);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });

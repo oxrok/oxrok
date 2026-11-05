@@ -673,10 +673,11 @@ impl Device for RigolDevice {
             .name("rigol-ds acquisition".to_owned())
             .spawn(move || {
                 let mut scpi = scpi;
-                if let Err(e) = acq.run(&mut scpi, &sink, &stop2) {
+                let outcome = acq.run(&mut scpi, &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("scpi lock") = Some(scpi);
             })
             .map_err(Error::Io)?;

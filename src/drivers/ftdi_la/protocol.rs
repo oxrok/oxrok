@@ -48,10 +48,11 @@ pub fn to_send(sent: u64, n: u64, limit: u64) -> (u64, bool) {
 /// last, whatever happens.
 pub fn run(ctx: &mut Context, limit: u64, sink: &PacketSink, stop: &AtomicBool) {
     sink.send(Packet::header());
-    if let Err(e) = receive(ctx, limit, sink, stop) {
+    let outcome = receive(ctx, limit, sink, stop);
+    if let Err(e) = &outcome {
         log::debug!("acquisition ended: {e}");
     }
-    sink.send(Packet::End);
+    sink.end(outcome);
 }
 
 fn receive(ctx: &mut Context, limit: u64, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {

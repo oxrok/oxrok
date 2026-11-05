@@ -301,9 +301,9 @@ emu_cases() {
     # endpoint. oxrok gives up after 30 reads: 3 s of timeouts.
     N="protocol.c:558-566 resubmits for ever"
     el_options log-stop=0
-    emu_case "device stops sending" --oracle-bug "$N" --oracle-hangs --timeout 8 --stderr --filter "$E" -- -d $C --samples 10
+    emu_case "device stops sending" --oxrok-fails "the device stopped sending its log after 0 of 32768 bytes" --oracle-bug "$N" --oracle-hangs --timeout 8 --stderr --filter "$E" -- -d $C --samples 10
     el_options halt-in=6
-    emu_case "endpoint halted" --oracle-bug "$N" --oracle-hangs --timeout 4 --stderr --filter "$E" -- -d $C --samples 10
+    emu_case "endpoint halted" --oxrok-fails "the device stopped sending its log after 0 of 32768 bytes" --oracle-bug "$N" --oracle-hangs --timeout 4 --stderr --filter "$E" -- -d $C --samples 10
     # sigrok-cli has no SIGINT handler. Held, so that the signal lands first.
     el_options log-stop=0
     emu_case "interrupted download" --oracle-bug "sigrok-cli has no SIGINT handler" --interrupt in=2:5 --no-output -- -d $C --samples 10
@@ -311,7 +311,7 @@ emu_cases() {
 
     # Unplugs.
     emu_case "unplug at the scan" --unplug out=2:1 --no-output -- -d $C --scan
-    emu_case "unplug mid log" --unplug in=2:8 -- -d $C --samples 100
+    emu_case "unplug mid log" --oxrok-fails "device disconnected" --unplug in=2:8 -- -d $C --samples 100
     emu_case "unplug at the log command" --unplug out=2:3 --expect-fail --no-output -- -d $C --samples 100
     emu_case "unplug at the log header" --unplug in=2:5 --expect-fail --no-output -- -d $C --samples 100
     emu_case "unplug at the save" --unplug out=2:3 --expect-fail --stderr --filter "$E" -- -d $C -l 4 --set -c datalog=on

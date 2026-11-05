@@ -67,7 +67,7 @@ emu_cases() {
     # branch fails, its source goes, and the session ends after the
     # first sample.
     bu86x_options meter=bm52x stall=3
-    emu_case "bm52x request stalled" -- -d $B52 --samples 3
+    emu_case "bm52x request stalled" --oxrok-fails "hid: Broken pipe (os error 32)" -- -d $B52 --samples 3
     bu86x_options
 }
 

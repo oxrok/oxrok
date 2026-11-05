@@ -446,8 +446,8 @@ impl Device for GpdDevice {
         let handle = std::thread::Builder::new()
             .name("gwinstek-gpd acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = capture.run(&sink, &stop2);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -482,13 +482,16 @@ enum Wait {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let started = Instant::now();
         let mut samples = 0u64;
-        if let Err(e) = self.rounds(sink, stop, started, &mut samples) {
+        let mut invalid = None;
+        let outcome = self.rounds(sink, stop, started, &mut samples, &mut invalid);
+        if let Err(e) = &outcome {
             log::error!("Acquisition failed: {e}.");
         }
+        invalid.map_or(outcome, Err)
     }
 
     fn time_up(&self, started: Instant) -> bool {
@@ -501,6 +504,7 @@ impl Capture {
         stop: &AtomicBool,
         started: Instant,
         samples: &mut u64,
+        invalid: &mut Option<Error>,
     ) -> Result<()> {
         loop {
             match self.idle(stop, started)? {
@@ -521,7 +525,7 @@ impl Capture {
                 Wait::Go(first) => first,
                 Wait::End => return Ok(()),
             };
-            if !self.round(sink, first)? {
+            if !self.round(sink, first, invalid)? {
                 return Ok(());
             }
             *samples += 1;
@@ -598,12 +602,18 @@ impl Capture {
         }
     }
 
-    /// Reads a round and sends it: false when an answer is no number, which
-    /// ends the capture, as this round's lines no longer say which is which.
-    fn round(&self, sink: &PacketSink, mut first: Option<u8>) -> Result<bool> {
+    /// Reads a round and sends it: false when nobody listens any more, or an
+    /// answer is no number (`invalid` then says so), which ends the capture,
+    /// as this round's lines no longer say which is which.
+    fn round(
+        &self,
+        sink: &PacketSink,
+        mut first: Option<u8>,
+        invalid: &mut Option<Error>,
+    ) -> Result<bool> {
         let mut link = self.link.lock().expect("link lock");
         for ch in 0..CHANNELS {
-            let Some(amps) = reading(&mut link, first.take(), "IOUT1?")? else {
+            let Some(amps) = reading(&mut link, first.take(), "IOUT1?", invalid)? else {
                 return Ok(false);
             };
             link.channels[ch].current = amps;
@@ -612,7 +622,7 @@ impl Capture {
             {
                 return Ok(false);
             }
-            let Some(volts) = reading(&mut link, None, "VOUT1?")? else {
+            let Some(volts) = reading(&mut link, None, "VOUT1?", invalid)? else {
                 return Ok(false);
             };
             link.channels[ch].voltage = volts;
@@ -627,11 +637,18 @@ impl Capture {
 }
 
 /// A line that must be a number. Both channels' errors name channel 1, as C's.
-fn reading(link: &mut Link, first: Option<u8>, name: &str) -> Result<Option<f32>> {
+fn reading(
+    link: &mut Link,
+    first: Option<u8>,
+    name: &str,
+    invalid: &mut Option<Error>,
+) -> Result<Option<f32>> {
     let reply = link.read_line(CAPTURE_BUFFER, first)?.unwrap_or_default();
     let value = protocol::scan_f32(&reply);
     if value.is_none() {
-        log::error!("Invalid reply to {name}: '{}'.", String::from_utf8_lossy(&reply));
+        let reply = String::from_utf8_lossy(&reply);
+        log::error!("Invalid reply to {name}: '{reply}'.");
+        *invalid = Some(Error::device(format!("invalid reply to {name}: '{reply}'")));
     }
     Ok(value)
 }

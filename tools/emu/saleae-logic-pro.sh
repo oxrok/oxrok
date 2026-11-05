@@ -139,8 +139,8 @@ emu_cases() {
     emu_case "bad conn" --oracle-differs "$W" --stderr --filter 's/^sr: usb: //; s/^oxrok: [a-z]+: [a-z0-9_:]+: //' -- -d $F:conn=nonsense --scan
     emu_case "bad conn lists" --oracle-differs "$W" --keep-header --no-output --filter "$C" -- -d $F:conn=nonsense --scan
     emu_case "show" --keep-header --filter "$C" -- -d $F --show
-    emu_case "by ids" --digest --filter "$B4" -- -d $F:conn=21a9.1006 -C $D4 --continuous -O bits
-    emu_case "unflashed 16ch 10M" --digest --filter "$B16" -- -d $F --continuous -O bits
+    emu_case "by ids" --oxrok-fails "no transfer for 1 s" --digest --filter "$B4" -- -d $F:conn=21a9.1006 -C $D4 --continuous -O bits
+    emu_case "unflashed 16ch 10M" --oxrok-fails "no transfer for 1 s" --digest --filter "$B16" -- -d $F --continuous -O bits
     # The boot stage's strings are not known: with strings, each
     # strcmp() of scan_firmware() fails in turn, and the upload follows.
     logicpro_options boot_strings=Cypress/WestBridge
@@ -177,18 +177,18 @@ emu_cases() {
     # holds. libsigrok's debug line shows sr_usb_find() matching it.
     A=$EMU_USB
     emu_case "by address" --keep-header --filter "$C" -- -d $F:conn=$A --scan
-    emu_case "by address capture" --digest --filter "$B4" -- -d $F:conn=$A -C $D4 --continuous -O bits
+    emu_case "by address capture" --oxrok-fails "no transfer for 1 s" --digest --filter "$B4" -- -d $F:conn=$A -C $D4 --continuous -O bits
     emu_case "get conn" --filter "s/'[0-9]+[.][0-9]+'/'BUS.ADDR'/" -- -d $F --get conn
     emu_case "get samplerate" -- -d $F --get samplerate
-    emu_case "1ch 1M" --digest --filter "$B1" -- -d $F -C 0 -c samplerate=1M --continuous -O bits
-    emu_case "3ch 2M" --digest --filter '1,/^15:/!d' -- -d $F -C 0,7,15 -c samplerate=2M --continuous -O bits
-    emu_case "4ch 2.5M" --digest --filter "$B4" -- -d $F -C $D4 -c samplerate=2500k --continuous -O bits
-    emu_case "8ch 10M" --digest --filter '1,/^15:/!d' -- -d $F -C 8,9,10,11,12,13,14,15 --continuous -O bits
-    emu_case "16ch 25M" --digest --filter "$B16" -- -d $F -c samplerate=25M --continuous -O bits
-    emu_case "5ch 50M" --digest --filter '1,/^14:/!d' -- -d $F -C 1,3,5,9,14 -c samplerate=50M --continuous -O bits
-    emu_case "16ch 50M hex" --digest --filter '1,/^15:/!d' -- -d $F -c samplerate=50M --continuous -O hex
+    emu_case "1ch 1M" --oxrok-fails "no transfer for 1 s" --digest --filter "$B1" -- -d $F -C 0 -c samplerate=1M --continuous -O bits
+    emu_case "3ch 2M" --oxrok-fails "no transfer for 1 s" --digest --filter '1,/^15:/!d' -- -d $F -C 0,7,15 -c samplerate=2M --continuous -O bits
+    emu_case "4ch 2.5M" --oxrok-fails "no transfer for 1 s" --digest --filter "$B4" -- -d $F -C $D4 -c samplerate=2500k --continuous -O bits
+    emu_case "8ch 10M" --oxrok-fails "no transfer for 1 s" --digest --filter '1,/^15:/!d' -- -d $F -C 8,9,10,11,12,13,14,15 --continuous -O bits
+    emu_case "16ch 25M" --oxrok-fails "no transfer for 1 s" --digest --filter "$B16" -- -d $F -c samplerate=25M --continuous -O bits
+    emu_case "5ch 50M" --oxrok-fails "no transfer for 1 s" --digest --filter '1,/^14:/!d' -- -d $F -C 1,3,5,9,14 -c samplerate=50M --continuous -O bits
+    emu_case "16ch 50M hex" --oxrok-fails "no transfer for 1 s" --digest --filter '1,/^15:/!d' -- -d $F -c samplerate=50M --continuous -O hex
     # The csv header holds the time: none.
-    emu_case "csv" --digest --filter '1,/^0,/!d' -- -d $F -C 0,1 -c samplerate=1M --continuous -O csv:header=false
+    emu_case "csv" --oxrok-fails "no transfer for 1 s" --digest --filter '1,/^0,/!d' -- -d $F -C 0,1 -c samplerate=1M --continuous -O csv:header=false
     # The driver lists no sample or time limit (api.c devopts).
     emu_case "samples refused" --expect-fail --stderr -- -d $F -C 0 --samples 100 -O bits
     emu_case "time refused" --expect-fail --stderr --filter "$N" -- -d $F -C 0 --time 10 -O bits
@@ -197,19 +197,19 @@ emu_cases() {
     # sequence goes out all the same.
     emu_case "bad rate" --expect-fail --stderr --filter "$N" -- -d $F -C 0 -c samplerate=3M --continuous -O bits
     logicpro_options flashed=1 transfers=5
-    emu_case "five transfers" --digest --filter "$B1" -- -d $F -C 4 -c samplerate=50M --continuous -O bits
+    emu_case "five transfers" --oxrok-fails "no transfer for 1 s" --digest --filter "$B1" -- -d $F -C 4 -c samplerate=50M --continuous -O bits
     logicpro_options flashed=1 fpga=1
-    emu_case "fpga configured" --digest --filter "$B4" -- -d $F -C $D4 --continuous -O bits
+    emu_case "fpga configured" --oxrok-fails "no transfer for 1 s" --digest --filter "$B4" -- -d $F -C $D4 --continuous -O bits
     # The recorded captures: a transfer from a board with its FPGA up, and
     # one that takes the bitstream first (tests/fixtures/saleae_logic_pro).
     logicpro_options flashed=1 fpga=1 transfers=1
-    emu_case "recorded capture" --record --digest --filter '1,/^3:/!d' -- -d $F -C $D4 --continuous -O hex
+    emu_case "recorded capture" --oxrok-fails "no transfer for 1 s" --record --digest --filter '1,/^3:/!d' -- -d $F -C $D4 --continuous -O hex
     logicpro_options flashed=1 transfers=1
-    emu_case "recorded bitstream upload" --record --digest --filter '1,/^0:/!d' -- -d $F -C 0 --continuous -O hex
+    emu_case "recorded bitstream upload" --oxrok-fails "no transfer for 1 s" --record --digest --filter '1,/^0:/!d' -- -d $F -C 0 --continuous -O hex
     logicpro_options flashed=1 fpga=1
     # The driver's debug lines: the firmware version, the temperature
     # and the authentication (the values are the model's invention).
-    emu_case "debug lines" --stderr --filter "$N"'; /saleae-logic-pro: (fw-version|temperature|random|nonce|sig|Authenticate|[0-9]+ channels|Skipping)/!d; s/ \[[0-9:.]+\]//' -- -l 5 -d $F -C 0,1 --continuous -O bits
+    emu_case "debug lines" --oxrok-fails "no transfer for 1 s" --stderr --filter "$N"'; /saleae-logic-pro: (fw-version|temperature|random|nonce|sig|Authenticate|[0-9]+ channels|Skipping)/!d; s/ \[[0-9:.]+\]//' -- -l 5 -d $F -C 0,1 --continuous -O bits
 
     # A claim held by another program: dev_open() fails to claim.
     # emu_case begins with a reset, which re-attaches the board when the
@@ -271,23 +271,23 @@ emu_cases() {
     G="$N"'; /saleae-logic-pro: (Failed|Authenticate)/!d; s/ \[[0-9:.]+\]//'
     for f in wake-i2c read-i2c:1 write-i2c:1 read-i2c:2 write-i2c:2 read-i2c:3 write-i2c:3 read-i2c:4 write-i2c:4 read-i2c:5; do
         logicpro_options flashed=1 fpga=1 stall_reply=$f
-        emu_case "fault auth stall reply $f" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
+        emu_case "fault auth stall reply $f" --oxrok-fails "no transfer for 1 s" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
     done
     for f in wake-i2c write-i2c read-i2c; do
         logicpro_options flashed=1 fpga=1 bad_status=$f
-        emu_case "fault auth status $f" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
+        emu_case "fault auth status $f" --oxrok-fails "no transfer for 1 s" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
     done
     # The chip's wake answer: the message prints the count byte, not
     # the status (protocol.c:341).
     logicpro_options flashed=1 fpga=1 wake=0x00
-    emu_case "fault auth wake answer" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
+    emu_case "fault auth wake answer" --oxrok-fails "no transfer for 1 s" --stderr --filter "$G" -- -l 5 -d $F -C 0 --continuous -O bits
 
     # The stop: the status read fails, or reads a capture error; the
     # driver logs it and the capture ends as usual.
     logicpro_options flashed=1 fpga=1 stall_reply=read-reg:10
-    emu_case "fault stop status read" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    emu_case "fault stop status read" --oxrok-fails "no transfer for 1 s" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     logicpro_options flashed=1 fpga=1 capture_status=0x00
-    emu_case "fault capture error" --stderr --filter "$N; /Capture error/!d" -- -d $F -C 0 --continuous -O bits
+    emu_case "fault capture error" --oxrok-fails "no transfer for 1 s" --stderr --filter "$N; /Capture error/!d" -- -d $F -C 0 --continuous -O bits
 
     # Ctrl-C: sigrok-cli has no SIGINT handler, while oxrok sends the stop's
     # requests and ends the capture. The idle timeout would end it as well
@@ -302,12 +302,12 @@ emu_cases() {
     # stop, so nothing else ends the capture after the model's transfers.
     # sigrok-cli's stdin is /dev/null, so it never gets here.
     logicpro_options flashed=1 fpga=1
-    emu_case "lib idle stop" --libsigrok --oxrok --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    emu_case "lib idle stop" --oxrok-fails "no transfer for 1 s" --libsigrok --oxrok --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
 
     # oxrok's --strict makes the warning of a failed authentication a
     # failed run; sigrok-cli has no such flag.
     logicpro_options flashed=1 fpga=1 bad_status=wake-i2c
-    emu_case "strict on a failed authentication" --no-oracle-only --expect-fail --stderr --filter "$N; /No authentication|treated as error/!d" -- --strict -d $F -C 0 --continuous -O bits
+    emu_case "strict on a failed authentication" --oxrok-fails "no transfer for 1 s" --no-oracle-only --expect-fail --stderr --filter "$N; /No authentication|treated as error/!d" -- --strict -d $F -C 0 --continuous -O bits
 
     # The sample stream.
     logicpro_options flashed=1 fpga=1 halt_in=1
@@ -317,9 +317,9 @@ emu_cases() {
     # its STALL lands on either side of the answer, by timing. The stalled
     # IN lines between the data and the next write move to the end of the
     # log, so their number still counts.
-    emu_case "fault halt after one" --tx-filter '/^bulk_in 82 16384 -> @/,/^bulk_out/{/err stall/{H;d}}; ${G}' --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    emu_case "fault halt after one" --oxrok-fails "endpoint stalled" --tx-filter '/^bulk_in 82 16384 -> @/,/^bulk_out/{/err stall/{H;d}}; ${G}' --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     logicpro_options flashed=1 fpga=1 halt_in=0
-    emu_case "fault halt at once" --no-output -- -d $F -C 0 --continuous -O bits
+    emu_case "fault halt at once" --oxrok-fails "endpoint stalled" --no-output -- -d $F -C 0 --continuous -O bits
     # A short transfer: receive_data() converts all 16 KiB of the buffer
     # whatever the transfer's length (protocol.c:906), so 4 bytes of
     # samples come out as 131072 samples, all but the first 32 from a
@@ -327,13 +327,13 @@ emu_cases() {
     # the header, the first line (32 samples, the 4 bytes sent) and the
     # number of the last line: 4096 lines of 32 samples after the header.
     logicpro_options flashed=1 fpga=1 short_in=4 transfers=1
-    emu_case "fault short transfer" --oracle-differs "protocol.c:906 converts 16 * 1024 / 4 words whatever transfer->actual_length" --filter '1,2p; $=; d' -- -d $F -C 0 --continuous -O bits:width=32
+    emu_case "fault short transfer" --oxrok-fails "no transfer for 1 s" --oracle-differs "protocol.c:906 converts 16 * 1024 / 4 words whatever transfer->actual_length" --filter '1,2p; $=; d' -- -d $F -C 0 --continuous -O bits:width=32
     # Unplugged at the third transfer: the transfers then end with
     # LIBUSB_TRANSFER_NO_DEVICE, which the driver drops, and the stop's
     # requests fail; how many of the driver's debug lines that makes
     # depends on timing, so only the first line of the output is kept.
     logicpro_options flashed=1 fpga=1 transfers=4
-    emu_case "unplug mid capture" --unplug in=2:3 --filter '2,$d' -- -d $F -C 0,1 --continuous -O bits
+    emu_case "unplug mid capture" --oxrok-fails "device disconnected" --unplug in=2:3 --filter '2,$d' -- -d $F -C 0,1 --continuous -O bits
 
     # The scan cannot read the running firmware's strings: it takes it
     # for the boot loader and uploads, which the firmware refuses; the
@@ -344,7 +344,7 @@ emu_cases() {
     logicpro_options flashed=1 fpga=1 short_string=2
     emu_case "fault product unreadable" --stderr --filter "$U" -- -l 4 -d $F --scan
     logicpro_options flashed=1 fpga=1 stall_string=2
-    emu_case "fault product unreadable capture" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
+    emu_case "fault product unreadable capture" --oxrok-fails "no transfer for 1 s" --digest --filter "$B1" -- -d $F -C 0 --continuous -O bits
     # The boot loader refuses a part: the upload fails, and the second
     # pass lists the board in its boot stage, whose open fails.
     logicpro_options stall_load=2

@@ -234,12 +234,12 @@ emu_cases() {
     # The configure refused: the C driver does not notice, and the
     # board, never configured, answers status 0 for ever.
     h4032l_options stall=out@2
-    emu_case "fault configure stall" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
+    emu_case "fault configure stall" --oxrok-fails "endpoint stalled" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # The get refused (OUT #5): the board goes on answering the status,
     # which the driver drops while it waits for the start word, for
     # ever.
     h4032l_options stall=out@5
-    emu_case "fault get stall" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
+    emu_case "fault get stall" --oxrok-fails "endpoint stalled" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # A trigger the counter never meets (A0 high and B0 rising: B0 rises
     # where A0 is low): status 1 for ever. This runs libsigrok alone, through
     # the runner, as sigrok-cli has no way to stop it. oxrok waits the same
@@ -278,12 +278,12 @@ emu_cases() {
     h4032l_options
     # Unplugged while the driver polls the status (after IN #3), and in
     # the middle of the data (after IN #9 of a 64k sample capture).
-    emu_case "unplug while polling" --stderr --filter "$E" --unplug in=6:3 -- -d $H --samples $S
+    emu_case "unplug while polling" --oxrok-fails "device disconnected" --stderr --filter "$E" --unplug in=6:3 -- -d $H --samples $S
     # In the data the C driver logs one line per transfer in flight (32
     # here, resubmit_transfer() failing for each) and oxrok, whose stream
     # reports the device gone once, one. The filter keeps the first of the C's
     # and words it as oxrok's; only those repeats and that wording go.
     D="$E; /^resubmit_transfer: /{x; /seen/{x;d}; s/.*/seen/; x; s/^resubmit_transfer: (LIBUSB_ERROR_NO_DEVICE)\$/Data transfer failed: \1./}"
-    emu_case "unplug mid data" --stderr --filter "$D" --unplug in=6:9 -- -d $H -C A0 --samples 64k -O bits
+    emu_case "unplug mid data" --oxrok-fails "device disconnected" --stderr --filter "$D" --unplug in=6:9 -- -d $H -C A0 --samples 64k -O bits
     h4032l_options
 }

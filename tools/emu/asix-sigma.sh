@@ -213,7 +213,7 @@ s/^(Failed to open device).*$/\1./'
     # A forced stop that takes longer than oxrok waits: sigrok-cli's poll
     # has no limit.
     asix_sigma_options stop-polls=1200
-    emu_case "stop never seen" --oracle-differs "protocol.c:1995-2001 poll the mode register after a forced stop for ever" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+    emu_case "stop never seen" --oxrok-fails "the forced stop did not complete in 1000 mode reads" --oracle-differs "protocol.c:1995-2001 poll the mode register after a forced stop for ever" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
     # A late stop register in the middle of a cluster (the model's doc):
     # with no sample limit to hide it, both tools decode up to the
     # decremented position, and stay out of what was not written.
@@ -248,7 +248,7 @@ s/^(Failed to open device).*$/\1./'
     done
     for n in 3 4 5 6 7; do
         asix_sigma_options in-stall=$n
-        emu_case "read fails after $n" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+        emu_case "read fails after $n" --oxrok-fails "USB data transfer failed" --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     asix_sigma_options
     # Unplugged after the Nth bulk OUT transfer: the bulk write that
@@ -263,7 +263,7 @@ s/^(Failed to open device).*$/\1./'
         emu_case "unplug after write $n" --unplug out=2:$n --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     for n in 53 60; do
-        emu_case "unplug after write $n" --unplug out=2:$n --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+        emu_case "unplug after write $n" --oxrok-fails "USB data transfer failed" --unplug out=2:$n --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     # Unplugged after the Nth bulk IN transfer, where a write follows a
     # read: 3 the netlist's answer (trigger programming fails), 4 the
@@ -272,10 +272,10 @@ s/^(Failed to open device).*$/\1./'
     # positions (the memory row).
     emu_case "unplug after read 3" --unplug in=1:3 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=50m --samples 20 -O hex
     for n in 4 5 6 7; do
-        emu_case "unplug after read $n" --unplug in=1:$n --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+        emu_case "unplug after read $n" --oxrok-fails "USB data transfer failed" --unplug in=1:$n --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
     done
     # At 100 MHz (one more bitstream transfer): the 0x81 after entering
     # trigger programming.
     emu_case "unplug 100 MHz after write 16" --unplug out=2:16 --stderr --expect-fail --filter "$F" -- -d $D -c samplerate=100m --samples 20 -O hex
-    emu_case "unplug at the first poll" --unplug model --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
+    emu_case "unplug at the first poll" --oxrok-fails "USB data transfer failed" --unplug model --stderr --filter "$E" -- -d $D -c samplerate=50m --samples 20 -O hex
 }

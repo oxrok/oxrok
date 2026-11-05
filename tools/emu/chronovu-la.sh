@@ -185,24 +185,24 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # at least 16 ms apart, 631 after the first), report the timeout and
     # reset the device. This takes 20 s or so of the session.
     chronovu_options no-trigger=1
-    emu_case "no trigger" --oracle-differs "$WAIT" --no-output -- -d $D --triggers 0=1 --samples 10
+    emu_case "no trigger" --oxrok-fails "failed to read data block 0: 0 bytes of 4096" --oracle-differs "$WAIT" --no-output -- -d $D --triggers 0=1 --samples 10
     chronovu_options
     # The FIFO runs dry for one read in the middle of block 0, then of
     # block 2: libftdi returns what it has, the driver takes it for a
     # trigger timeout and resets the device.
     chronovu_options gap=1
-    emu_case "gap in block 0" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
+    emu_case "gap in block 0" --oxrok-fails "failed to read data block 0: 3968 bytes of 4096" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
     chronovu_options gap=3
-    emu_case "gap in block 2" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
+    emu_case "gap in block 2" --oxrok-fails "failed to read data block 2: 3712 bytes of 4096" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
     # The bulk IN endpoint halts: the read fails.
     chronovu_options in-stall=4
-    emu_case "read error" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
+    emu_case "read error" --oxrok-fails "failed to read data block 1: -9 bytes of 4096" --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
     # The same, recorded for the replay tests (the whole readout would
     # be 17 MB of fixture): the open, the command, the polls, a block,
     # the failed read and the reset; nothing on stdout.
-    emu_case "read error record" --record --no-output -- -d $D -c samplerate=1m --triggers 7=1 --samples 100 -O hex
+    emu_case "read error record" --oxrok-fails "failed to read data block 1: -9 bytes of 4096" --record --no-output -- -d $D -c samplerate=1m --triggers 7=1 --samples 100 -O hex
     chronovu_options model=la16 in-stall=4
-    emu_case "la16 read error record" --record --no-output -- -d $D --triggers 1=r,0=0 --samples 100 -O hex
+    emu_case "la16 read error record" --oxrok-fails "failed to read data block 1: -9 bytes of 4096" --record --no-output -- -d $D --triggers 1=r,0=0 --samples 100 -O hex
     # The requests of the open, each STALLed: libftdi's reset in
     # ftdi_usb_open_desc, its 9600 Bd, the purges, the flow control.
     chronovu_options stall=reset/0
@@ -220,7 +220,7 @@ s/(^|\n)(Failed to get .limit_samples.): unknown option: limit_samples/\1\2: not
     # oxrok logs the failed write, purge and reset once each, and no
     # failed close: nusb 0.2.8 cannot report a failed release
     # (linux_usbfs/device.rs:721-731).
-    emu_case "unplug in readout" --oracle-bug "$RECURSE" --unplug in=1:10 --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
+    emu_case "unplug in readout" --oxrok-fails "failed to read data block 7: -4 bytes of 4096" --oracle-bug "$RECURSE" --unplug in=1:10 --stderr --filter "$UNIQ" -- -d $D --samples 100 -O hex
     # Unplugged right after the last transfer of the readout (2 status-only
     # reads, then 2115): the capture is complete, and the close fails.
     # libsigrok logs "Failed to close FTDI device (-1): all fine." (libusb's

@@ -241,14 +241,14 @@ emu_cases() {
     hantek_options profile=6022be flashed=1 stall_in=2
     emu_case "fault stalled after the flush hangs" --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 -- -d $H -c samplerate=100k --samples 256 -O analog
     hantek_options profile=6022be flashed=1 empty=1000
-    emu_case "fault always empty" --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
+    emu_case "fault always empty" --oxrok-fails "64 transfers without data" --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
     hantek_options profile=6022be flashed=1 stall_in=1000
-    emu_case "fault always stalled" --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
+    emu_case "fault always stalled" --oxrok-fails "64 transfers without data" --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
     # The start STALLed: logged, and the driver reads all the same. The
     # scope does not sample: the flush runs out after 4 s, and so does
     # the next transfer, on which the C driver stops as above, oxrok ends.
     hantek_options profile=6022be flashed=1 stall=trigger/1
-    emu_case "fault start stall" --oracle-bug "api.c:753 ignores the failed start, then api.c:647-649" --oracle-hangs --timeout 15 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
+    emu_case "fault start stall" --oxrok-fails "no data for 4s" --oracle-bug "api.c:753 ignores the failed start, then api.c:647-649" --oracle-hangs --timeout 15 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
     # A transfer that outlasts the timeout: both take what it held, the
     # flush after 4 s, the samples after 4 more. The next one is not
     # needed: 256 samples are past the limit.
@@ -297,7 +297,7 @@ emu_cases() {
     # Unplugged with the first transfer of samples in flight: it fails,
     # no next one, and the C driver waits for ever; oxrok ends.
     hantek_options profile=6022be flashed=1
-    emu_case "unplug during the capture" --unplug in=6:1 --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
+    emu_case "unplug during the capture" --oxrok-fails "device disconnected" --unplug in=6:1 --oracle-bug "api.c:647-649 returns without the next transfer" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 50 -O analog
     # A limit past 2^31 bytes: data_amount() rounds in 32 bits, wraps to
     # 0 and never ends (api.c:540-541), spinning right after the flush.
     # oxrok asks for 12 MiB transfers, 64 empty ones here so the case
@@ -305,7 +305,7 @@ emu_cases() {
     # driver as well (api.c:647-649), so the hang alone does not tell the
     # two apart; the size does, with huge_limits_take_the_maximum.
     hantek_options profile=6022be flashed=1 empty=1000
-    emu_case "limit past 2G bytes" --oracle-bug "api.c:540-541: the uint32_t that rounds up wraps to 0" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 1500000000 -O analog
+    emu_case "limit past 2G bytes" --oxrok-fails "64 transfers without data" --oracle-bug "api.c:540-541: the uint32_t that rounds up wraps to 0" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $H -c samplerate=100k --samples 1500000000 -O analog
     # Ctrl-C. Three transfers: the flush, two at 200 bytes each; the next
     # is held, so the count is known, and comes when its timeout runs out.
     hantek_options profile=6022be flashed=1 short=200 slow=3

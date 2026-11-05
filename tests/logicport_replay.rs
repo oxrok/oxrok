@@ -7,7 +7,7 @@
 //! driver through sigrok-cli byte for byte.
 
 use oxrok::core::session::Flow;
-use oxrok::core::{Device, Key, Packet, Session, Trigger, TriggerMatch, Value};
+use oxrok::core::{Device, Error, Key, Packet, Session, Trigger, TriggerMatch, Value};
 use oxrok::drivers::logicport::LogicPortDevice;
 use oxrok::usb::record::Replay;
 
@@ -155,14 +155,14 @@ fn a_different_setting_fails_the_replay() {
     let mut session = Session::new();
     session.add_device(Box::new(dev));
     let mut ended = false;
-    session
-        .run(|_, p| {
-            if matches!(p, Packet::End) {
-                ended = true;
-            }
-            Flow::Continue
-        })
-        .unwrap();
-    // The acquisition thread logs the mismatch and ends the stream.
+    let result = session.run(|_, p| {
+        if matches!(p, Packet::End) {
+            ended = true;
+        }
+        Flow::Continue
+    });
+    // The acquisition thread logs the mismatch and ends the stream, and the
+    // run says it failed.
     assert!(ended);
+    assert!(matches!(result, Err(Error::CaptureFailed(_))), "{result:?}");
 }

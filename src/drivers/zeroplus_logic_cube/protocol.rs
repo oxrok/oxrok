@@ -797,7 +797,7 @@ impl Readout {
 enum Wait {
     Data,
     Stopped,
-    Failed { gone: bool },
+    Failed { gone: bool, why: Error },
 }
 
 /// `analyzer_wait_data()`, bounded and stoppable. It polls as fast as the
@@ -811,11 +811,13 @@ fn wait_data(link: &mut Link, stop: &AtomicBool, pause: Duration) -> Wait {
         match link.read_status() {
             Ok(status) if status & STATUS_BUSY == 0 => return Wait::Data,
             Ok(_) => failed = 0,
-            Err(Error::Disconnected) => return Wait::Failed { gone: true },
-            Err(_) => {
+            Err(Error::Disconnected) => {
+                return Wait::Failed { gone: true, why: Error::Disconnected };
+            }
+            Err(why) => {
                 failed += 1;
                 if failed >= MAX_FAILED_POLLS {
-                    return Wait::Failed { gone: false };
+                    return Wait::Failed { gone: false, why };
                 }
                 std::thread::sleep(pause);
             }
@@ -834,9 +836,9 @@ fn read_addresses(link: &mut Link) -> Result<(u8, u32, u32, u32)> {
 
 /// The end of a capture. The link goes back first, so that whoever sees
 /// the end can use the device.
-fn end(link: Link, slot: &mut dyn FnMut(Link), sink: &PacketSink) {
+fn end(link: Link, slot: &mut dyn FnMut(Link), sink: &PacketSink, outcome: Result<()>) {
     slot(link);
-    sink.send(Packet::End);
+    sink.end(outcome);
 }
 
 /// `dev_acquisition_start()` from `analyzer_configure()` on, on its own
@@ -859,16 +861,16 @@ pub fn run(
         Wait::Stopped => {
             link.reset();
             sink.send(Packet::header());
-            end(link, give_back, sink);
+            end(link, give_back, sink, Ok(()));
             return;
         }
-        Wait::Failed { gone } => {
+        Wait::Failed { gone, why } => {
             log::error!("Lost the board while waiting for the data: no samples.");
             if !gone {
                 link.reset();
             }
             sink.send(Packet::header());
-            end(link, give_back, sink);
+            end(link, give_back, sink, Err(why));
             return;
         }
     }
@@ -877,7 +879,7 @@ pub fn run(
         Err(e) => {
             log::error!("Cannot read where the capture is ({e}): no samples.");
             sink.send(Packet::header());
-            end(link, give_back, sink);
+            end(link, give_back, sink, Err(e));
             return;
         }
     };
@@ -893,33 +895,34 @@ pub fn run(
     sink.send(Packet::header());
     // An empty capture (api.c:548).
     if status & STATUS_READY != 0 && stop_address == 0 {
-        end(link, give_back, sink);
+        end(link, give_back, sink, Ok(()));
         return;
     }
     link.read_start();
     let wanted = regs.ramsize_trigger.wrapping_add(regs.triggerbar);
     let plan = plan(status, stop_address, now_address, trigger_address, memory_size, wanted);
     log::info!("Need to discard {} samples.", plan.discard);
-    let stopped = read_samples(&mut link, plan, n, sink, stop);
+    let read = read_samples(&mut link, plan, n, sink, stop);
     link.read_stop();
-    if stopped {
+    if matches!(read, Ok(true)) {
         link.reset();
     }
-    end(link, give_back, sink);
+    end(link, give_back, sink, read.map(|_stopped| ()));
 }
 
-/// The readout: api.c:601-650. True when it ended on a stop.
+/// The readout: api.c:601-650. True when it ended on a stop; an error when it
+/// was cut short.
 fn read_samples(
     link: &mut Link,
     plan: Plan,
     memory_bytes: u32,
     sink: &PacketSink,
     stop: &AtomicBool,
-) -> bool {
+) -> Result<bool> {
     let mut readout = Readout::new(plan);
     for _ in 0..memory_bytes as usize / PACKET_SIZE {
         if stop.load(Ordering::SeqCst) {
-            return true;
+            return Ok(true);
         }
         let data = link.read_packet();
         if data.len() != PACKET_SIZE {
@@ -937,7 +940,7 @@ fn read_samples(
                     }),
                 };
                 if !sink.send(packet) {
-                    return true;
+                    return Ok(true);
                 }
             }
         }
@@ -948,13 +951,19 @@ fn read_samples(
                 "The readout is cut short: the capture ends after {} samples.",
                 readout.samples_read()
             );
-            return stop.load(Ordering::SeqCst);
+            if stop.load(Ordering::SeqCst) {
+                return Ok(true);
+            }
+            return Err(Error::device(format!(
+                "the readout was cut short after {} samples",
+                readout.samples_read()
+            )));
         }
         if done {
-            return false;
+            return Ok(false);
         }
     }
-    false
+    Ok(false)
 }
 
 #[cfg(test)]

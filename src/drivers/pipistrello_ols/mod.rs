@@ -607,6 +607,7 @@ impl Device for PolsDevice {
 /// with nothing sent, as in the C driver.
 fn run(ctx: &mut Context, plan: &protocol::Plan, limit: u64, sink: &PacketSink, stop: &AtomicBool) {
     sink.send(Packet::header());
+    let mut outcome = Ok(());
     let mut decoder = protocol::Decoder::new(plan, limit);
     let mut buf = vec![0u8; FTDI_BUF_SIZE];
     let mut received = 0usize;
@@ -627,6 +628,7 @@ fn run(ctx: &mut Context, plan: &protocol::Plan, limit: u64, sink: &PacketSink, 
             }
             Err(e) => {
                 log::error!("Failed to read FTDI data {e}.");
+                outcome = Err(e.into());
                 break;
             }
         }
@@ -648,7 +650,7 @@ fn run(ctx: &mut Context, plan: &protocol::Plan, limit: u64, sink: &PacketSink, 
         }
     }
     reset_five(ctx);
-    sink.send(Packet::End);
+    sink.end(outcome);
 }
 
 #[cfg(test)]
@@ -743,8 +745,9 @@ mod tests {
         let (tx, rx) = sync_channel(16);
         dev.start(PacketSink::new(tx, 0)).unwrap();
         let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
-        assert_eq!(packets.len(), 2, "{packets:?}");
-        assert!(matches!(packets[1], Packet::End));
+        assert_eq!(packets.len(), 3, "{packets:?}");
+        assert!(matches!(packets[1], Packet::Failed(_)));
+        assert!(matches!(packets[2], Packet::End));
         dev.stop().unwrap();
     }
 

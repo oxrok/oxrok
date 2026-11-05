@@ -25,6 +25,8 @@ pub struct Pipeline {
     buf: Vec<u8>,
     wait_trigger: bool,
     triggered: bool,
+    /// Why the output can no longer be written, once it cannot.
+    failure: Option<String>,
     /// Logic and analog samples received.
     pub received_logic: u64,
     pub received_analog: u64,
@@ -49,6 +51,7 @@ impl Pipeline {
                 buf: Vec::new(),
                 wait_trigger: args.wait_trigger,
                 triggered: false,
+                failure: None,
                 received_logic: 0,
                 received_analog: 0,
             });
@@ -91,6 +94,7 @@ impl Pipeline {
             buf: Vec::new(),
             wait_trigger: args.wait_trigger,
             triggered: false,
+            failure: None,
             received_logic: 0,
             received_analog: 0,
         })
@@ -99,6 +103,8 @@ impl Pipeline {
     /// Handles one packet. False when the output can no longer be written.
     pub fn handle(&mut self, packet: &Packet) -> bool {
         match packet {
+            // For the run's result, not for the outputs.
+            Packet::Failed(_) => return true,
             Packet::Trigger => self.triggered = true,
             Packet::Logic(l) => self.received_logic += l.len() as u64,
             Packet::Analog(a) => self.received_analog += a.len() as u64,
@@ -111,6 +117,7 @@ impl Pipeline {
             let mut stdout = std::io::stdout();
             if let Err(e) = d.handle(packet, &mut stdout) {
                 log::error!("decoding: {e}");
+                self.failure.get_or_insert_with(|| format!("decoding: {e}"));
                 return false;
             }
         }
@@ -120,6 +127,7 @@ impl Pipeline {
             Ok(()) => {}
             Err(e) => {
                 log::error!("output: {e}");
+                self.failure.get_or_insert_with(|| format!("output: {e}"));
                 return false;
             }
         }
@@ -130,11 +138,17 @@ impl Pipeline {
         }
         if !self.buf.is_empty()
             && let Some(sink) = &mut self.sink
-            && (sink.write_all(&self.buf).is_err() || sink.flush().is_err())
+            && let Err(e) = sink.write_all(&self.buf).and_then(|()| sink.flush())
         {
+            self.failure.get_or_insert_with(|| format!("output: {e}"));
             return false;
         }
         true
+    }
+
+    /// The reason the output stopped being written, if it did.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 
     /// Warns when fewer samples than asked arrived.

@@ -248,8 +248,8 @@ emu_cases() {
     # fails from then on and is tried again each millisecond. oxrok ends
     # on the disconnect, with what it sent of the frame.
     hantek_options profile=dso-2090 flashed=1
-    emu_case "unplug mid frame hangs" --oracle-bug "api.c:719-721 waits for ever for the transfers that fail empty" --oracle-hangs --timeout 5 --digest --filter "$HD_FRAME" --unplug in=6:20 -- -d $H --frames 1
-    emu_case "unplug while polling hangs" --oracle-bug "api.c:853-854 polls for ever a device that is gone" --oracle-hangs --timeout 5 --stderr --filter '/Lost communication/!d' --unplug in=6:3 -- -d $H --frames 1
+    emu_case "unplug mid frame hangs" --oxrok-fails "the frame's transfers failed: it is incomplete" --oracle-bug "api.c:719-721 waits for ever for the transfers that fail empty" --oracle-hangs --timeout 5 --digest --filter "$HD_FRAME" --unplug in=6:20 -- -d $H --frames 1
+    emu_case "unplug while polling hangs" --oxrok-fails "device disconnected" --oracle-bug "api.c:853-854 polls for ever a device that is gone" --oracle-hangs --timeout 5 --stderr --filter '/Lost communication/!d' --unplug in=6:3 -- -d $H --frames 1
     # A trigger that never fires (EXT with nothing on it): the driver
     # polls, restarts the capture without a force every third empty
     # state, and polls on, as a scope should, until it is stopped. The
@@ -275,7 +275,7 @@ emu_cases() {
     # A DSO-5200's ready frame (state 7, 9 bit samples): "Not yet
     # supported." at each poll, for ever. oxrok gives up.
     hantek_options profile=dso-5200 flashed=1
-    emu_case "5200 capture hangs" --oracle-bug "api.c:898-901 polls for ever a frame it cannot read" --oracle-hangs --timeout 5 --stderr -- -d $H --frames 1
+    emu_case "5200 capture hangs" --oxrok-fails "64 polls in a row answered 9 bit samples, which are not supported" --oracle-bug "api.c:898-901 polls for ever a frame it cannot read" --oracle-hangs --timeout 5 --stderr -- -d $H --frames 1
     # The begin or a command of a capture restart refused: the next poll
     # finds the device still empty, three times, and restarts again.
     # (The begins: 1 to 5 dso_init() and the start, 6 to 9 the polls,

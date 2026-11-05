@@ -236,8 +236,8 @@ emu_cases() {
     # holds the runner to its hang. The errors are oxrok's own lines.
     H='recv_intr_transfer() submits no transfer after a failure or a short packet, protocol.c:926-933'
     emu_case "oxrok no trigger" --libsigrok --oxrok --oracle-bug "without a trigger nothing arms the board and nothing reads its packets, protocol.c:331,1119" --oracle-hangs --timeout 3 --expect-fail --stderr --filter "$P" -- -d $L -c samplerate=1M -O bits
-    emu_case "oxrok unplug mid fetch" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() takes no status, and its resubmit to the gone device fails unchecked, protocol.c:1017-1026, so nothing more completes" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
-    emu_case "oxrok unplug while waiting" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok unplug mid fetch" --oxrok-fails "device disconnected" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() takes no status, and its resubmit to the gone device fails unchecked, protocol.c:1017-1026, so nothing more completes" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok unplug while waiting" --oxrok-fails "device disconnected" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
     # The same capture with bits as "lib 8ch upper wraps ascii", which the
     # C driver's packet of no bytes crashes.
     emu_case "oxrok 8ch upper wraps bits" --libsigrok --oxrok --oracle-bug "send_samples() sends a logic packet of 0 bytes, protocol.c:980-989, and bits.c:158 wraps" --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
@@ -272,11 +272,11 @@ emu_cases() {
     # The same under oxrok, each pinned to its own end: the failed fetch
     # write, the short packet, the halted endpoint.
     ls_options flashed=1 stall=write:31
-    emu_case "oxrok fault stall=write:31" --libsigrok --oxrok --oracle-bug "handle_fetch_samples_done() ignores the status of its write, protocol.c:244-264, and resubmits for ever" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok fault stall=write:31" --oxrok-fails "endpoint stalled" --libsigrok --oxrok --oracle-bug "handle_fetch_samples_done() ignores the status of its write, protocol.c:244-264, and resubmits for ever" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_options flashed=1 intr_short=16
-    emu_case "oxrok fault intr_short=16" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok fault intr_short=16" --oxrok-fails "invalid size of interrupt transfer: 16" --libsigrok --oxrok --oracle-bug "$H" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_options flashed=1 bulk_stall=1
-    emu_case "oxrok fault bulk_stall=1" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
+    emu_case "oxrok fault bulk_stall=1" --oxrok-fails "endpoint stalled" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     # Ctrl-C. Neither sigrok-cli nor the runner has a SIGINT handler, and
     # a trigger that does not fire is waited for until then; the stop
     # writes the arm register (as "lib stop while waiting"), on a board

@@ -673,10 +673,11 @@ impl Device for LogicPortDevice {
             .name("logicport acquisition".into())
             .spawn(move || {
                 let mut link = link;
-                if let Err(e) = acq.run(&mut link, &sink, &stop2) {
+                let outcome = acq.run(&mut link, &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("link lock") = Some(link);
             })
             .map_err(Error::Io)?;

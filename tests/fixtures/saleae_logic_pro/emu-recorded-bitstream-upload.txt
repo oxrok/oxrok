@@ -1,5 +1,6 @@
 # oxrok usb fixture 1
 # emu saleae-logic-pro: recorded bitstream upload
+# fails: no transfer for 1 s
 # arg: -d
 # arg: saleae-logic-pro
 # arg: -C

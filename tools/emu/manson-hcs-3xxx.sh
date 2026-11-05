@@ -285,16 +285,16 @@ $B"
     # Nothing but garbage: C sends 0 V and is done, oxrok gives up after 5 s. How
     # many requests that is depends on the clock, so both are kept to the third.
     emu_options setters=0 getd-raw=$(ok xxxxyyyyz)
-    emu_case "only garbage" --oracle-differs "$GARBAGE_BUG" --stderr --filter "$L
+    emu_case "only garbage" --oxrok-fails "no reading for 5s" --oracle-differs "$GARBAGE_BUG" --stderr --filter "$L
 /^oxrok: warn: /d" --tx-filter '/^bulk_in 82 13 -> /{x;s/^/x/;/^xxx/{x;q};x}' --timeout 15 -- -d $K --samples 2
 
     # Silence: GETD again each 500 ms, for ever (protocol.c:239, 245).
     emu_options setters=0 answers=3
     # Their number depends on the clock: a unit test holds their pace.
-    emu_case "silent from the capture on" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --no-output --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 1
+    emu_case "silent from the capture on" --oxrok-fails "no reading for 5s" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --no-output --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 1
     emu_case "silent with a time limit" --no-output -- -d $K --time 700ms
     emu_options setters=0 answers=5
-    emu_case "silent after two" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 3
+    emu_case "silent after two" --oxrok-fails "no reading for 5s" --oracle-bug "$NOREPLY_BUG" --oracle-hangs --timeout 8 --tx-filter 's/^bulk_out 02 (474554440d)+ -> [0-9]+$/bulk_out 02 GETD repeated/' -- -d $K --samples 3
 
     # A gap of 6 s of silence, longer than the bound, then readings, then silence: a time
     # limit lets it go on as C does. Its last requests depend on the clock.
@@ -319,7 +319,7 @@ $B"
     # can, 33 MB in 5 s, which no .oracle can hold: a time limit ends it, exit 0.
     W="$L
 /^oxrok: warn: /d"
-    emu_case "unplug in a capture" --oracle-differs "$HUP_BUG" --unplug model --timeout 10 --stderr --filter "$W" --tx-filter '/^unplug$/q' -- -d $K --time 2s
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-differs "$HUP_BUG" --unplug model --timeout 10 --stderr --filter "$W" --tx-filter '/^unplug$/q' -- -d $K --time 2s
     # A quiet point: one GETD goes unanswered and the signal lands in its wait.
     # The next would be answered, and on: a capture that ignored the stop runs
     # into the timeout, and its next request shows in the .tx.

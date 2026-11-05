@@ -295,8 +295,8 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
 
     # What the device does wrong.
     emu_options sends=3
-    emu_case "sends 3 of 16" -- -d $O --samples 16 -O hex
-    emu_case "sends 3 ratio 50" --oracle-bug "$WRAP_BUG" -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
+    emu_case "sends 3 of 16" --oxrok-fails "the board went silent after 3 of 16 samples" -- -d $O --samples 16 -O hex
+    emu_case "sends 3 ratio 50" --oxrok-fails "the board went silent after 3 of 16 samples" --oracle-bug "$WRAP_BUG" -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
     emu_options sends=0
     # Nothing ends these but a stop, under either tool: a capture that has
     # not begun has no silence to end on. What oxrok does with the stop.
@@ -324,8 +324,8 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
     # The hangup ends the capture with no sample: an empty logic packet, and
     # the output's loop runs off (hex.c:163).
     emu_options sends=0
-    emu_case "unplug waiting" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
-    emu_case "unplug waiting trigger" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
+    emu_case "unplug waiting" --oxrok-fails "Broken pipe" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O --samples 16 -O hex
+    emu_case "unplug waiting trigger" --oxrok-fails "Broken pipe" --oracle-bug "$EMPTY_BUG" --no-output --unplug model --timeout 10 --tx-filter '/^unplug$/q' -- -d $O -c captureratio=50 --samples 16 -t 4=1 -O hex
     # A write of the start failing: the scan writes 7, a capture the stage's
     # 3 first. Later than this the unplug and the run race, and C's hangup
     # has it end by a crash or an error as the pace has it.

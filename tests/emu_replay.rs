@@ -189,7 +189,13 @@ fn replay(path: &Path) -> Result<(), String> {
     };
     let got = out.join().unwrap().replace("\r\n", "\n");
     let err = err.join().unwrap();
-    if !status.success() {
+    // `# fails: WHY`, from emu_case --oxrok-fails: the capture fails, and says
+    // so last.
+    if fixture.lines().any(|l| l.starts_with("# fails: ")) {
+        if status.code() != Some(1) || !err.lines().any(|l| l.starts_with("capture failed: ")) {
+            return Err(format!("the capture should fail, but exited with {status}:\n{err}"));
+        }
+    } else if !status.success() {
         return Err(format!("oxrok exited with {status}:\n{err}"));
     }
     // As diffcli.sh keeps it: the version line goes.

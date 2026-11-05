@@ -611,10 +611,10 @@ impl Device for HantekDsoDevice {
         let handle = std::thread::Builder::new()
             .name("hantek-dso acquisition".into())
             .spawn(move || {
-                Acquisition::new(settings).run(&mut link, &sink, &stop2);
+                let outcome = Acquisition::new(settings).run(&mut link, &sink, &stop2);
                 // The link first: whoever sees the end may use it.
                 *slot.lock().expect("link lock") = Some(link);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -677,6 +677,8 @@ struct Acquisition {
     unknown_states: usize,
     /// States 127 in a row.
     timeout_states: usize,
+    /// Why the acquisition gave up.
+    failure: Option<Error>,
 }
 
 impl Acquisition {
@@ -690,14 +692,21 @@ impl Acquisition {
             told_9bit: false,
             unknown_states: 0,
             timeout_states: 0,
+            failure: None,
         }
     }
 
+    /// The acquisition ends, failed.
+    fn give_up(&mut self, why: Error) -> Next {
+        self.failure.get_or_insert(why);
+        Next::End
+    }
+
     /// The header, then the state machine, until the frame limit, a stop
-    /// or too many failures. [`Packet::End`] is the caller's.
-    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    /// or too many failures. The end is the caller's.
+    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         if !sink.send(Packet::header()) {
-            return;
+            return Ok(());
         }
         let mut next = Next::Poll;
         while next != Next::End && !stop.load(Ordering::SeqCst) {
@@ -710,6 +719,7 @@ impl Acquisition {
             }
         }
         log::debug!("Stopping acquisition.");
+        self.failure.map_or(Ok(()), Err)
     }
 
     /// The capture started, the trigger enabled, and forced unless a
@@ -731,7 +741,7 @@ impl Acquisition {
                 self.commands.0 = 0;
                 Next::Poll
             }
-            Err(e) if self.commands.failed(&e) => Next::End,
+            Err(e) if self.commands.failed(&e) => self.give_up(e),
             Err(_) => Next::NewCapture,
         }
     }
@@ -740,7 +750,7 @@ impl Acquisition {
     fn poll(&mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Next {
         let (state, offset) = match link.capture_state() {
             Ok(s) => s,
-            Err(e) if self.polls.failed(&e) => return Next::End,
+            Err(e) if self.polls.failed(&e) => return self.give_up(e),
             Err(_) => return Next::Poll,
         };
         log::debug!("Capturestate {state}.");
@@ -785,7 +795,7 @@ impl Acquisition {
                             self.commands.0 = 0;
                             Next::Poll
                         }
-                        Err(e) if self.commands.failed(&e) => Next::End,
+                        Err(e) if self.commands.failed(&e) => self.give_up(e),
                         Err(_) => Next::Poll,
                     };
                 }
@@ -797,7 +807,7 @@ impl Acquisition {
                         self.commands.0 = 0;
                         self.fetch(link, offset, sink, stop)
                     }
-                    Err(e) if self.commands.failed(&e) => Next::End,
+                    Err(e) if self.commands.failed(&e) => self.give_up(e),
                     Err(_) => Next::Poll,
                 }
             }
@@ -813,7 +823,9 @@ impl Acquisition {
             log::error!(
                 "{MAX_FAILURES} polls in a row answered the device's 9 bit samples, giving up."
             );
-            return Next::End;
+            return self.give_up(Error::device(format!(
+                "{MAX_FAILURES} polls in a row answered 9 bit samples, which are not supported"
+            )));
         }
         Next::Poll
     }
@@ -823,7 +835,9 @@ impl Acquisition {
         self.unknown_states += 1;
         if self.unknown_states >= MAX_UNKNOWN_STATES {
             log::error!("{MAX_UNKNOWN_STATES} polls in a row answered unknown states, giving up.");
-            return Next::End;
+            return self.give_up(Error::device(format!(
+                "{MAX_UNKNOWN_STATES} polls in a row answered unknown states"
+            )));
         }
         Next::Poll
     }
@@ -883,7 +897,8 @@ impl Acquisition {
             if lost {
                 log::error!("The frame is incomplete, its pre-trigger samples are dropped.");
                 sink.send(Packet::FrameEnd);
-                return Next::End;
+                return self
+                    .give_up(Error::device("the frame's transfers failed: it is incomplete"));
             }
         }
         log::debug!(
@@ -1020,7 +1035,11 @@ mod tests {
         let r = crate::usb::record::Replay::from_text(&text).unwrap();
         let mut link = Link::new(Box::new(r.clone()), 0x2090, 4, [[[0; 2]; 9]; 2]);
         let (tx, rx) = std::sync::mpsc::sync_channel(1024);
-        Acquisition::new(settings).run(&mut link, &PacketSink::new(tx, 0), &AtomicBool::new(false));
+        let _ = Acquisition::new(settings).run(
+            &mut link,
+            &PacketSink::new(tx, 0),
+            &AtomicBool::new(false),
+        );
         r.finish().unwrap();
         rx.try_iter().map(|(_, p)| p).skip(1).collect()
     }
@@ -1221,7 +1240,11 @@ mod tests {
         let r = crate::usb::record::Replay::from_text(text).unwrap();
         let mut link = Link::new(Box::new(r.clone()), 0x2090, 4, [[[0; 2]; 9]; 2]);
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        Acquisition::new(small()).run(&mut link, &PacketSink::new(tx, 0), &AtomicBool::new(true));
+        let _ = Acquisition::new(small()).run(
+            &mut link,
+            &PacketSink::new(tx, 0),
+            &AtomicBool::new(true),
+        );
         r.finish().unwrap();
         assert_eq!(rx.try_iter().count(), 1);
     }

@@ -62,7 +62,7 @@
 //! - "only N/M bytes written" names the written count first; the C
 //!   message swaps them (`protocol.c:142-143`).
 
-use crate::core::{Packet, PacketSink, Trigger, TriggerMatch};
+use crate::core::{Error, Packet, PacketSink, Trigger, TriggerMatch};
 use crate::ftdi::libftdi::{Context, FtdiError};
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -479,7 +479,7 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
         if stop.load(Ordering::SeqCst) {
             log::debug!("Stopped in block {block}.");
             close_usb_reset_sequencer(ftdi);
-            sink.send(Packet::End);
+            sink.end(Ok(()));
             return None;
         }
         log::trace!("Reading block {block}.");
@@ -498,7 +498,7 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
             if got == 0 && stop.load(Ordering::SeqCst) {
                 log::debug!("Stopped while waiting for the trigger.");
                 close_usb_reset_sequencer(ftdi);
-                sink.send(Packet::End);
+                sink.end(Ok(()));
                 return None;
             }
         }
@@ -506,7 +506,9 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
             log::error!("Trigger timed out. Bytes read: {got}.");
             reset_device(ftdi);
             log::error!("Failed to read data block: -1.");
-            sink.send(Packet::End);
+            sink.end(Err(Error::device(format!(
+                "failed to read data block {block}: {got} bytes of {BS}"
+            ))));
             return None;
         }
         let offset = block * BS;
@@ -536,7 +538,7 @@ pub fn run(mut ftdi: Ftdi, cap: Capture, sink: &PacketSink, stop: &AtomicBool) -
             break;
         }
     }
-    sink.send(Packet::End);
+    sink.end(Ok(()));
     Some(ftdi)
 }
 

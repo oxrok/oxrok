@@ -556,8 +556,8 @@ impl Device for AttenPpsDevice {
         let handle = std::thread::Builder::new()
             .name("atten-pps3xxx acquisition".to_owned())
             .spawn(move || {
-                run_capture(&shared, &sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = run_capture(&shared, &sink, &stop2);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -620,23 +620,23 @@ fn read_frame(shared: &Mutex<Shared>, stop: &AtomicBool) -> Read {
 /// `dev_acquisition_start` and `atten_pps3xxx_receive_data`: asks once, then
 /// each answer gets its readings out and the settings sent back, which is
 /// the next request. After a stop, an answer ends it with nothing sent.
-fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
+fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
     sink.send(Packet::header());
     if let Err(e) = shared.lock().expect("state lock").send(&protocol::ask()) {
         log::error!("Acquisition failed: {e}.");
-        return;
+        return Err(e);
     }
     loop {
         let frame = match read_frame(shared, stop) {
             Read::Frame(frame) => frame,
-            Read::Stopped => return,
+            Read::Stopped => return Ok(()),
             Read::Silent => {
                 log::error!("Acquisition failed: no answer from the device for {SILENCE:?}.");
-                return;
+                return Err(Error::device(format!("no answer from the device for {SILENCE:?}")));
             }
             Read::Failed(e) => {
                 log::error!("Acquisition failed: {e}.");
-                return;
+                return Err(e);
             }
         };
         if protocol::is_answer(&frame) {
@@ -646,17 +646,17 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) {
                 s.reported
             };
             if !send_readings(&reported, sink, stop) {
-                return;
+                return Ok(());
             }
         } else {
             log::warn!("An answer no supply could give dropped: {frame:02x?}.");
         }
         if stop.load(Ordering::SeqCst) {
-            return;
+            return Ok(());
         }
         if let Err(e) = shared.lock().expect("state lock").send_settings() {
             log::error!("Acquisition failed: {e}.");
-            return;
+            return Err(e);
         }
     }
 }

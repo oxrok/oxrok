@@ -568,10 +568,10 @@ impl Device for Hantek4032lDevice {
         let handle = std::thread::Builder::new()
             .name("hantek-4032l acquisition".into())
             .spawn(move || {
-                acq.run(&mut link, &sink, &stop2);
+                let outcome = acq.run(&mut link, &sink, &stop2);
                 // The link first: whoever sees the end may use it.
                 *slot.lock().expect("link lock") = Some(link);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -590,7 +590,12 @@ impl Device for Hantek4032lDevice {
 }
 
 /// Why a capture ended early; what was to say has been logged.
-struct Over;
+enum Over {
+    /// A stop, or nobody listening any more.
+    Stopped,
+    /// A device gone, or an error the capture cannot go on from.
+    Failed(Error),
+}
 
 /// One capture, on its own thread: the states of `h4032l_usb_callback()`
 /// and `h4032l_data_transfer_callback()` written as a sequence.
@@ -622,9 +627,11 @@ impl Acquisition {
         }
     }
 
-    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
-        // Everything to say has been said on the way out.
-        let _ = self.capture(link, sink, stop);
+    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
+        match self.capture(link, sink, stop) {
+            Ok(()) | Err(Over::Stopped) => Ok(()),
+            Err(Over::Failed(e)) => Err(e),
+        }
     }
 
     fn capture(
@@ -639,7 +646,7 @@ impl Acquisition {
         self.vital_command(link, CMD_GET, "get")?;
         // Trigger has been captured.
         if !sink.send(Packet::header()) {
-            return Err(Over);
+            return Err(Over::Stopped);
         }
         let n = self.stream_start(link, stop)?;
         // The first read holds the start word and the first samples.
@@ -663,7 +670,7 @@ impl Acquisition {
             Err(Error::Disconnected) => Err(gone()),
             Err(e) => {
                 log::error!("The {name} command failed: {}.", crate::usb::libusb_error_name(&e));
-                Err(Over)
+                Err(Over::Failed(e))
             }
         }
     }
@@ -775,7 +782,7 @@ impl Acquisition {
         let mut stream: Box<dyn BulkStream> = stream.map_err(|e| {
             log::error!("Failed to submit transfer: {}.", crate::usb::libusb_error_name(&e));
             log::error!("Can not start data transfers: -1");
-            Over
+            Over::Failed(e)
         })?;
         while self.remaining > 0 {
             checked(stop)?;
@@ -783,7 +790,7 @@ impl Acquisition {
                 Ok(data) if !data.is_empty() => data,
                 Err(Error::Disconnected) => {
                     log::error!("Data transfer failed: LIBUSB_ERROR_NO_DEVICE.");
-                    return Err(Over);
+                    return Err(Over::Failed(Error::Disconnected));
                 }
                 other => {
                     if let Err(e) = other {
@@ -820,25 +827,25 @@ impl Acquisition {
             count == 0 || sink.send(Packet::logic(4, samples.to_vec()))
         };
         self.sent += count;
-        if delivered { Ok(()) } else { Err(Over) }
+        if delivered { Ok(()) } else { Err(Over::Stopped) }
     }
 }
 
 /// The stop flag as the end of a capture.
 fn checked(stop: &AtomicBool) -> std::result::Result<(), Over> {
-    if stop.load(Ordering::SeqCst) { Err(Over) } else { Ok(()) }
+    if stop.load(Ordering::SeqCst) { Err(Over::Stopped) } else { Ok(()) }
 }
 
 /// A device gone: in the C driver the next transfer does not go in.
 fn gone() -> Over {
     log::error!("Failed to submit transfer: LIBUSB_ERROR_NO_DEVICE.");
-    Over
+    Over::Failed(Error::Disconnected)
 }
 
 /// [`MAX_FAILURES`] reached.
 fn gave_up() -> Over {
     log::error!("Too many failed transfers, ending the capture.");
-    Over
+    Over::Failed(Error::device(format!("{MAX_FAILURES} transfers in a row failed")))
 }
 
 /// The end word follows the last sample. Protocol.c:194 reads it past
@@ -1042,7 +1049,7 @@ mod tests {
         // The configure line of the fixture answers a STALL.
         let last = text.rfind("-> 84").unwrap();
         let text = format!("{}-> err device \"endpoint stalled\"\n", &text[..last]);
-        assert_eq!(capture(&text), [Packet::End]);
+        assert!(matches!(capture(&text)[..], [Packet::Failed(_), Packet::End]));
     }
 
     #[test]
@@ -1059,7 +1066,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(capture(&fixture(&steps)), [Packet::End]);
+        assert!(matches!(capture(&fixture(&steps))[..], [Packet::Failed(_), Packet::End]));
     }
 
     #[test]
@@ -1230,7 +1237,7 @@ mod tests {
         assert_eq!(got[1], Packet::logic(4, samples(0, 102)));
         assert_eq!(got[2], Packet::Trigger);
         assert_eq!(got[3], Packet::logic(4, samples(102, 25)));
-        assert_eq!(got[4..], [Packet::End]);
+        assert!(matches!(got[4..], [Packet::Failed(_), Packet::End]), "{got:?}");
     }
 
     #[test]
@@ -1238,7 +1245,8 @@ mod tests {
         let steps = up_to_the_data() + "bulk_in 86 2048 -> err disconnected\n";
         let got = capture(&fixture(&steps));
         assert_eq!(got.last(), Some(&Packet::End));
-        assert_eq!(got.len(), 5);
+        assert_eq!(got.len(), 6);
+        assert_eq!(got[4], Packet::Failed("device disconnected".to_owned()));
     }
 
     #[test]

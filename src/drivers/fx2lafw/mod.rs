@@ -805,10 +805,11 @@ impl Device for Fx2lafwDevice {
         let handle = std::thread::Builder::new()
             .name("fx2lafw acquisition".into())
             .spawn(move || {
-                if let Err(e) = acq.run(stream, &sink, &stop2) {
+                let outcome = acq.run(stream, &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("transport lock") = Some(transport);
             })
             .map_err(Error::Io)?;
@@ -906,7 +907,7 @@ impl Acquisition {
                 if empty > MAX_EMPTY_TRANSFERS {
                     // The FX2 gave up.
                     log::warn!("Device stopped sending data.");
-                    return Ok(());
+                    return Err(Error::device("the device stopped sending data"));
                 }
                 continue;
             }

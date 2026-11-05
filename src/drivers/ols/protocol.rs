@@ -171,6 +171,9 @@ pub struct Plan {
     /// Under RLE, that many samples from the oldest, as C, when not negative
     /// (C's -1 is no trigger, and below that it reads before its buffer).
     pub trigger_sample: Option<u64>,
+    /// The samples a download that was not cut short holds. `None` under
+    /// RLE, where what the board sends says nothing of the samples.
+    pub whole: Option<u64>,
 }
 
 /// `convert_trigger()`: conditions on disabled channels are left out. Only
@@ -301,7 +304,14 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
     flags |= !(u16::from(groups) << 2) & 0x3c;
     commands.push(long_command(CMD_SET_FLAGS, u32::from(flags)));
     commands.push(short_command(CMD_RUN));
-    Ok(Plan { commands, flags, trigger_word, trigger_sample })
+    // What the capture holds when the board has sent all it was told to, or
+    // all it has: three groups take four bytes each.
+    let in_memory = match s.max_samples / groups.count_ones().next_power_of_two() {
+        0 => u64::MAX,
+        most => u64::from(most),
+    };
+    let whole = (!rle).then(|| returned.min(s.limit_samples).min(in_memory));
+    Ok(Plan { commands, flags, trigger_word, trigger_sample, whole })
 }
 
 #[cfg(test)]
@@ -454,6 +464,19 @@ mod tests {
         let p = plan(&s, &st).unwrap();
         assert!(hexes(&p).contains(&"8101000000".to_owned()));
         assert_eq!(p.trigger_word, Some(4));
+    }
+
+    #[test]
+    fn a_whole_download_is_what_the_board_can_send() {
+        let stages = convert_trigger(None, u32::MAX).unwrap();
+        let mut s = settings();
+        assert_eq!(plan(&s, &stages).unwrap().whole, Some(16));
+        // Three groups take four bytes each: the list's 8192 are 6144.
+        s.channel_mask = 0x00ff_ffff;
+        s.limit_samples = 8192;
+        assert_eq!(plan(&s, &stages).unwrap().whole, Some(6144));
+        s.flags |= FLAG_RLE;
+        assert_eq!(plan(&s, &stages).unwrap().whole, None);
     }
 
     #[test]

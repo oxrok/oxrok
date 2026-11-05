@@ -324,11 +324,11 @@ emu_cases() {
         emu_case "fault setup $f" --expect-fail --stderr --filter "$E" -- -d $K --samples 8 -O hex
     done
     kingst_options mcu=1 stall=read:0x10
-    emu_case "fault capture info" --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "fault capture info" --oxrok-fails "endpoint stalled" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-reset@2
-    emu_case "fault download bulk reset" --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "fault download bulk reset" --oxrok-fails "endpoint stalled" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=write:0x08
-    emu_case "fault download window" --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "fault download window" --oxrok-fails "endpoint stalled" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     # A libsigrok bug: when la2016_receive_data() fails after the bulk
     # transfers were submitted (a refused bulk start of the download,
     # or of a stream, or its run mode), it returns FALSE with the eight
@@ -340,16 +340,16 @@ emu_cases() {
     # the transfers and ends the capture (exit 0, as sigrok-cli after a
     # failed download start without transfers: "fault capture info").
     kingst_options mcu=1 stall=bulk-start@1
-    emu_case "fault download start" --oracle-bug "protocol.c:1654-1657 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "fault download start" --oxrok-fails "endpoint stalled" --oracle-bug "protocol.c:1654-1657 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-reset@2
     emu_case "fault stream bulk reset" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     # With the output on: as sigrok-cli it stays on, and oxrok says so.
     kingst_options mcu=1 stall=bulk-reset@2
     emu_case "fault start with the output on" --oracle-bug "it says nothing of the output it leaves on" --expect-fail --stderr --filter "$N; /kingst-la2016: |left on/!d; s/^.*kingst-la2016: //" -- -d $K -c channel_group=PWM1:enabled=on -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=write:0x00@1
-    emu_case "fault stream run" --oracle-bug "protocol.c:1613-1617 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    emu_case "fault stream run" --oxrok-fails "endpoint stalled" --oracle-bug "protocol.c:1613-1617 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-start@1
-    emu_case "fault stream start" --oracle-bug "protocol.c:1619-1623 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    emu_case "fault stream start" --oxrok-fails "endpoint stalled" --oracle-bug "protocol.c:1619-1623 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 extra-packets=2
     emu_case "fault packet count" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 empty=2 stall-in=1
@@ -374,7 +374,7 @@ emu_cases() {
     # nothing comes, the transfers time out and the frame is empty.
     kingst_options mcu=1 stall=read:0x00@2
     # oxrok ends the capture there, halting the device.
-    emu_case "fault poll run state" --oracle-differs "protocol.c:912 returns the failed read as a run state, whose idle bit starts a download" --no-output -- -d $K --samples 8 -O hex
+    emu_case "fault poll run state" --oxrok-fails "endpoint stalled" --oracle-differs "protocol.c:912 returns the failed read as a run state, whose idle bit starts a download" --no-output -- -d $K --samples 8 -O hex
     # A transfer that does not fill in the 500 ms timeout: the device
     # sends less than a transfer and no short packet ends it. Both tools
     # cancel it at the timeout and take what it holds ("A USB transfer
@@ -388,8 +388,8 @@ emu_cases() {
     # receive_transfer() takes a stall as empty, protocol.c:1570-1585);
     # oxrok gives up after 64 in a row and says the data is incomplete.
     kingst_options mcu=1 stall-in=2000000000
-    emu_case "bulk in stalls for ever" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K --samples 8 -O hex
-    emu_case "stream bulk in stalls for ever" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    emu_case "bulk in stalls for ever" --oxrok-fails "64 USB transfers failed: the data is incomplete" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K --samples 8 -O hex
+    emu_case "stream bulk in stalls for ever" --oxrok-fails "64 USB transfers failed: the data is incomplete" --oracle-bug "receive_transfer() resubmits a failed transfer for ever, protocol.c:1580-1585" --timeout 6 --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     # Ctrl-C. sigrok-cli has no SIGINT handler and dies; oxrok halts.
     # During a capture, at the first poll of the run state: the next poll
     # halts it, and what it holds is downloaded. The harness's signal lands
@@ -406,6 +406,6 @@ emu_cases() {
     emu_case "interrupt during a download" --interrupt in=6:1 --oracle-bug "$I" --filter '1,/^CH15/!d' -- -d $K -c samplerate=100M --samples 2000000 -O hex
     # Unplugged once the first of two download transfers has come.
     kingst_options mcu=1
-    emu_case "unplug during download" --filter '1,/^CH15/!d' --unplug in=6:1 -- -d $K -c samplerate=100M --samples 2000000 -O hex
+    emu_case "unplug during download" --oxrok-fails "device disconnected" --filter '1,/^CH15/!d' --unplug in=6:1 -- -d $K -c samplerate=100M --samples 2000000 -O hex
     kingst_options
 }

@@ -583,7 +583,10 @@ mod tests {
         let mut dev = device(steps);
         dev.open().unwrap();
         let packets = capture(&mut dev);
-        assert_eq!(packets.len(), 2, "header and end: {packets:?}");
+        assert!(
+            matches!(packets[..], [Packet::Header { .. }, Packet::Failed(_), Packet::End]),
+            "header, failure and end: {packets:?}"
+        );
         // Closed by the reset: nothing left to close.
         assert!(dev.lock().is_none());
         dev.close().unwrap();
@@ -609,7 +612,7 @@ mod tests {
         t.add(0, 0, TriggerMatch::One);
         dev.set_trigger(Some(t)).unwrap();
         let packets = capture(&mut dev);
-        assert_eq!(packets.len(), 2);
+        assert!(matches!(packets[..], [Packet::Header { .. }, Packet::Failed(_), Packet::End]));
         dev.close().unwrap();
     }
 
@@ -696,7 +699,7 @@ mod tests {
             ctl_out 40 00 0000 0001 - -> ok\nrelease 0 -> ok\n";
         let mut dev = device(steps);
         dev.open().unwrap();
-        assert_eq!(capture(&mut dev).len(), 2, "header and end");
+        assert_eq!(capture(&mut dev).len(), 3, "header, failure and end");
         let (tx, _rx) = sync_channel(4);
         let e = dev.start(PacketSink::new(tx, 0)).expect_err("the chip is closed");
         assert!(e.to_string().contains("not open"), "{e}");
@@ -719,7 +722,7 @@ mod tests {
         dev.poll_interval = Duration::from_millis(30);
         dev.open().unwrap();
         let started = std::time::Instant::now();
-        assert_eq!(capture(&mut dev).len(), 2);
+        assert_eq!(capture(&mut dev).len(), 3);
         assert!(started.elapsed() >= Duration::from_millis(190), "{:?}", started.elapsed());
     }
 

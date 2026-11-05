@@ -139,20 +139,20 @@ emu_cases() {
     # agree; the frame in the .tx is the difference, and it is what matters.
     EOF_DIFF="sigrok-cli stops at the EOF on stdin (anykey.c:50,83) before its first poll, so under /dev/null it sends no 20 frame and the supply is untouched; oxrok does not read stdin, sends its first poll and zeroes it"
     emu_options answers=2 replies=$R
-    emu_case "one reading" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
-    emu_case "one reading analog" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O analog
-    emu_case "one reading csv" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O csv:header=false:time=false
-    emu_case "one reading CH1" --oracle-differs "$EOF_DIFF" -- -d $A -C CH1 --continuous
-    emu_case "one reading CH2 CH3" --oracle-differs "$EOF_DIFF" -- -d $A -C CH2,CH3 --continuous
-    emu_case "one reading CH3 csv" --oracle-differs "$EOF_DIFF" -- -d $A -C CH3 --continuous -O csv:header=false:time=false
+    emu_case "one reading" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
+    emu_case "one reading analog" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O analog
+    emu_case "one reading csv" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A --continuous -O csv:header=false:time=false
+    emu_case "one reading CH1" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A -C CH1 --continuous
+    emu_case "one reading CH2 CH3" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A -C CH2,CH3 --continuous
+    emu_case "one reading CH3 csv" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A -C CH3 --continuous -O csv:header=false:time=false
     # On a live supply, with an answer to that frame: oxrok's second reading
     # shows it all gone, where sigrok-cli has ended with the supply as it was.
     emu_options answers=3 output=7 ocp=1 mode=1 load=10
-    emu_case "one reading on a live supply" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
+    emu_case "one reading on a live supply" --oxrok-fails "no answer from the device for 2s" --oracle-differs "$EOF_DIFF" -- -d $A --continuous
     # What was set goes out at the close.
     emu_options answers=2 replies=$R
-    emu_case "capture with setpoints" -- -d $A -c $A1:voltage_target=5:current_limit=0.5:enabled=on --continuous
-    emu_case "capture with a setting" -- -d $A -c ocp_enabled=on --continuous
+    emu_case "capture with setpoints" --oxrok-fails "no answer from the device for 2s" -- -d $A -c $A1:voltage_target=5:current_limit=0.5:enabled=on --continuous
+    emu_case "capture with a setting" --oxrok-fails "no answer from the device for 2s" -- -d $A -c ocp_enabled=on --continuous
     emu_case "capture with a bad setpoint" --stderr --expect-fail --filter "$F" -- -d $A -c $A1:enabled=on:voltage_target=99 --continuous
 
     # The library runs it for longer. A poll of 20 follows each answer, and
@@ -216,9 +216,9 @@ emu_cases() {
     # Silence. sigrok-cli has stopped at its EOF by then and waits for an
     # answer that does not come.
     emu_options answers=1
-    emu_case "silent from the start" --oracle-bug "$STOP_BUG" --oracle-hangs --timeout 5 --no-output -- -d $A --continuous
-    emu_case "silent says so" --oracle-bug "$STOP_BUG" --oracle-hangs --timeout 5 --stderr -- -d $A --continuous
-    emu_case "unplug in a capture" --oracle-bug "$STOP_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --continuous
+    emu_case "silent from the start" --oxrok-fails "no answer from the device for 2s" --oracle-bug "$STOP_BUG" --oracle-hangs --timeout 5 --no-output -- -d $A --continuous
+    emu_case "silent says so" --oxrok-fails "no answer from the device for 2s" --oracle-bug "$STOP_BUG" --oracle-hangs --timeout 5 --stderr -- -d $A --continuous
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$STOP_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --continuous
 
     # A device that leaves.
     emu_options answers=1

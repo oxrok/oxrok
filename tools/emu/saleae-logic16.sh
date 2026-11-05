@@ -198,11 +198,11 @@ emu_cases() {
     logic16_options flashed=1 empty=64
     emu_case "fault 64 empty transfers" -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 empty=65
-    emu_case "fault 65 empty transfers" --no-output -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault 65 empty transfers" --oxrok-fails "over 64 sample transfers in a row failed or brought nothing" --no-output -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 stall_in=2
     emu_case "fault bulk in stall" -- -d $F -C 0 --samples 8 -O hex
     logic16_options flashed=1 short_in=1
-    emu_case "fault odd length" --no-output -- -d $F -C 0 --samples 8 -O hex
+    emu_case "fault odd length" --oxrok-fails "over 64 sample transfers in a row failed or brought nothing" --no-output -- -d $F -C 0 --samples 8 -O hex
     # One word with 16 channels: no complete sample yet, the driver
     # resubmits and the stream goes on.
     logic16_options flashed=1 short_in=2
@@ -210,7 +210,7 @@ emu_cases() {
     logic16_options flashed=1 stall=upload-init:2
     emu_case "fault stall second upload" --expect-fail --stderr --filter "$R" -- -d $F -C 0 -c voltage_threshold=1.4-3.6 --samples 8 -O hex
     logic16_options flashed=1
-    emu_case "unplug mid capture" --unplug in=2:2 --stderr --filter "$N" -- -d $F -C 0,1 -c samplerate=1M --samples 100000 -O hex
+    emu_case "unplug mid capture" --oxrok-fails "device disconnected" --unplug in=2:2 --stderr --filter "$N" -- -d $F -C 0,1 -c samplerate=1M --samples 100000 -O hex
     # Unplugged during the firmware upload in the scan (the Nth control
     # write: SET_CONFIGURATION, the reset hold, the 2 chunks, the
     # release): the scan still lists the device, which is gone when

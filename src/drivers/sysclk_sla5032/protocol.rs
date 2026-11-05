@@ -266,6 +266,11 @@ impl Decoder {
         Decoder { stl, left: limit }
     }
 
+    /// Whether the limit's samples are all out.
+    pub fn limit_met(&self) -> bool {
+        self.left == 0
+    }
+
     /// Passes samples on, cut to what the limit lets out.
     fn cut(&mut self, mut data: Vec<u8>, emit: &mut dyn FnMut(Output)) {
         let room = self.left.saturating_mul(UNIT_SIZE as u64);

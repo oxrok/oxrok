@@ -248,9 +248,9 @@ emu_cases() {
     # the timeout); oxrok ends it with an error, the device stopped.
     TB="protocol.c:1010-1026 frees a trigger transfer that STALLed or came short without ending the capture"
     dslogic_options profile=plus flashed=1 trigger=stall
-    emu_case "fault trigger stall" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
+    emu_case "fault trigger stall" --oxrok-fails "failed to read the trigger position: LIBUSB_ERROR_PIPE" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
     dslogic_options profile=plus flashed=1 trigger=short
-    emu_case "fault trigger short" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
+    emu_case "fault trigger short" --oxrok-fails "failed to read the trigger position: 24 bytes of 512" --oracle-bug "$TB" --timeout 10 --stderr --filter "/trigger/!d; $N" -- -d $D -C $C4 --samples 16 -O hex
     # A trigger that never matches (bit 3 rises on even counts only): the
     # transfer waits. Interrupted after the start (the fifth control write:
     # 0xb3, 0xb8, stop, 0xb4, start), oxrok sends the stop command and ends;
@@ -262,23 +262,23 @@ emu_cases() {
     # empty transfers, so both tools give up after 7 timeouts, with what
     # came. High channels, so that where the data ends shows.
     dslogic_options profile=plus flashed=1 hold=1
-    emu_case "fault capture stops short" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
+    emu_case "fault capture stops short" --oxrok-fails "over 64 sample transfers in a row brought nothing" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
     # The same with a last transfer partly filled, 4096 bytes when it times
     # out: a libusb transfer delivers what it holds (protocol.c:802), 32768
     # samples more.
     dslogic_options profile=plus flashed=1 hold=1 partial=4096
-    emu_case "fault capture stops in a partial transfer" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
+    emu_case "fault capture stops in a partial transfer" --oxrok-fails "over 64 sample transfers in a row brought nothing" --digest --filter '3,$d' -- -d $D -C 12 -c samplerate=1M --samples 400000 -O hex
     # Sample transfers that complete empty, or STALL, count as empty
     # ones; one more than MAX_EMPTY_TRANSFERS (64) in a row and the
     # acquisition ends with no samples.
     dslogic_options profile=plus flashed=1 empty=64
     emu_case "fault 64 empty transfers" -- -d $D -C $C4 --samples 16 -O hex
     dslogic_options profile=plus flashed=1 empty=65
-    emu_case "fault 65 empty transfers" --no-output -- -d $D -C $C4 --samples 16 -O hex
+    emu_case "fault 65 empty transfers" --oxrok-fails "over 64 sample transfers in a row brought nothing" --no-output -- -d $D -C $C4 --samples 16 -O hex
     dslogic_options profile=plus flashed=1 stall_in=3
     emu_case "fault sample stall" -- -d $D -C $C4 --samples 16 -O hex
     dslogic_options profile=plus flashed=1 empty=30 stall_in=35
-    emu_case "fault 65 empty or stalled" --no-output -- -d $D -C $C4 --samples 16 -O hex
+    emu_case "fault 65 empty or stalled" --oxrok-fails "over 64 sample transfers in a row brought nothing" --no-output -- -d $D -C $C4 --samples 16 -O hex
     # A transfer cut mid-atom: libsigrok logs "Invalid transfer
     # length!" and counts the samples by the bytes it has (4 more bytes
     # are 32 samples of the one channel).
@@ -305,7 +305,7 @@ emu_cases() {
     # wants more: the transfers left fail with NO_DEVICE and the
     # acquisition ends with what came.
     dslogic_options profile=plus flashed=1
-    emu_case "unplug mid capture" --unplug in=6:3 -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 20000 -O hex
+    emu_case "unplug mid capture" --oxrok-fails "device disconnected" --unplug in=6:3 -- -d $D -C 0 -c samplerate=10k:continuous=on --samples 20000 -O hex
     # Another program holds the interface: the open reads the version
     # and REVID, then fails to claim it (LIBUSB_ERROR_BUSY).
     if dslogic_hold; then

@@ -490,10 +490,11 @@ impl Device for PicoDevice {
             .name("raspberrypi-pico acquisition".to_owned())
             .spawn(move || {
                 let mut port = port;
-                if let Err(e) = acq.run(port.as_mut(), &sink, &stop2) {
+                let outcome = acq.run(port.as_mut(), &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("port lock") = Some(port);
             })
             .map_err(Error::Io)?;
@@ -836,6 +837,7 @@ impl Acquisition {
         let mut buf: Vec<u8> = Vec::with_capacity(READ_SIZE);
         let mut chunk = vec![0u8; READ_SIZE];
         let mut idle = 0u32;
+        let mut gave_up = Ok(());
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
@@ -845,6 +847,12 @@ impl Acquisition {
                 idle += 1;
                 if idle > 500 {
                     log::warn!("Device stopped sending data.");
+                    // With the limit met it is only the closing count missing.
+                    if !(limit > 0 && sent >= limit) {
+                        gave_up = Err(Error::device(format!(
+                            "the device stopped sending data after {sent} samples"
+                        )));
+                    }
                     break;
                 }
                 continue;
@@ -906,7 +914,7 @@ impl Acquisition {
         }
         drain(port)?;
         log::debug!("Sent {sent} samples.");
-        Ok(())
+        gave_up
     }
 
     /// Sends decoded samples to the session, through the software

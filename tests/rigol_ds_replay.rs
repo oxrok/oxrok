@@ -189,3 +189,23 @@ fn recorded_ds1102e_session() {
     assert!((per_channel[0][0] - 10.0).abs() < 1e-4);
     assert!((per_channel[1][0] - 0.035).abs() < 1e-5);
 }
+
+/// A scope that stops answering after the open fails the capture, with the
+/// end still delivered.
+#[test]
+fn a_scpi_failure_in_a_capture_fails_the_run() {
+    let fixture = format!("# oxrok scpi fixture 1\n{}", open_steps());
+    let mut dev = device(&fixture);
+    dev.open().unwrap();
+    dev.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    let (mut failed, mut ended) = (false, false);
+    let result = session.run(|_, p| {
+        failed |= matches!(p, Packet::Failed(_));
+        ended |= matches!(p, Packet::End);
+        Flow::Continue
+    });
+    assert!(failed && ended);
+    assert!(matches!(result, Err(oxrok::core::Error::CaptureFailed(_))), "{result:?}");
+}

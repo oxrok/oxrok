@@ -1,5 +1,6 @@
 # oxrok usb fixture 1
 # emu chronovu-la: read error record
+# fails: failed to read data block 1: -9 bytes of 4096
 # arg: -d
 # arg: chronovu-la
 # arg: -c

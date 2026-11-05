@@ -276,8 +276,8 @@ On Linux usbhid stays detached after a raw capture, as with sigrok-cli
 (logged at info level). Until a replug, no `conn=` and `conn=hid` find
 no hidraw node and say "No devices found". Raw USB needs write access to
 the usbfs node, not to hidraw (untested). A failed claim logs `Failed to
-claim interface 0` and `HID chip init failed`, and the run exits 0, as
-sigrok-cli does.
+claim interface 0` and `HID chip init failed`, and the capture fails
+(exit 1), where sigrok-cli exits 0.
 
 Off Linux, `conn=VID.PID` of a known cable the HID layer sees goes to
 the twin, since nusb cannot claim it (busy on macOS, unsupported on
@@ -1108,8 +1108,8 @@ What it taught:
   protocol.c:1418-1421: that row is whole.
 - Channel 16 as the external clock overflows the 4-bit pin field into
   `CLKSEL_RISING`.
-- Unplugs and read faults end a capture with "USB data read/write
-  failed" and exit 0.
+- Unplugs and read faults fail a capture with "USB data read/write
+  failed" (exit 1, where sigrok-cli exits 0).
 
 ## IKALOGIC ScanaPLUS (ikalogic-scanaplus)
 
@@ -1267,8 +1267,7 @@ sigrok-cli, 46 full against `tools/libsigrok-run.c` (`emu_case
 tests/fixtures/lecroy_logicstudio. Where oxrok differs from libsigrok: a
 capture with no trigger is refused before the output is opened; a failed
 transfer, a short status packet, a failed fetch write or a silent sample
-endpoint (64 empty transfers) ends the capture with an error, exit
-status 0; a status timeout polls again; no logic packet of 0 bytes; a
+endpoint (64 empty transfers) fails the capture, exit status 1; a status timeout polls again; no logic packet of 0 bytes; a
 refused 0xb3 names the real error; where the C's subtractions would
 wrap, the earliest sample is 0 and the trigger sample 1; `conn=` is
 refused with "Unknown scan option 'conn'.". The whole model passes on
@@ -1641,8 +1640,8 @@ while the limits and the output header use the rate asked for
 the other (`protocol.c:499-519`): `--samples` runs until the memory
 fills, `--time` reads all of it. A time limit shorter than a sample
 makes `samples_max` 0: one read, no samples, exit 0
-(`protocol.c:510-511`, `212-214`). An error during a capture ends it
-with exit 0, and samples not yet sent in a packet are lost
+(`protocol.c:510-511`, `212-214`). An error during a capture fails it
+(exit 1, where the C exits 0), and samples not yet sent in a packet are lost
 (`protocol.c:216-219`, `299-309`). A close from `sr_exit()` goes through
 `std_dev_clear()` with the status still ACTIVE (`std.c:427-428`; only
 `sr_dev_close()` sets INACTIVE first, `device.c:779`), so the FPGA stays
@@ -1668,8 +1667,9 @@ expanded in blocks, so what they claim allocates nothing
 (protocol.c:782, 795); a chunk ended by the 2 s timeout is kept where
 the C drops it (protocol.c:749), which matters only if the firmware
 sends no ZLP, unknown; a failed key step (protocol.c:646) and a failure
-that ends a capture keep the C's good open and exit 0 but warn, and so
-does a chunk that is empty or neither full nor marked
+that ends a capture keep the C's good open but warn, the second also
+failing the capture (exit 1, where the C exits 0), and so does a chunk that
+is empty or neither full nor marked
 (protocol.c:760-765, 851); a stop ends a wait for a reply. The bitstream
 is the vendor's, as `sysclk-sla5032.bit`. A stop while waiting writes
 nothing to the device, as in the C, so sampling stays on in register 14.
@@ -1934,7 +1934,8 @@ A garbage reply keeps the last value, as in C. A reply arriving after
 its timeout can be read once as the next request's answer: nothing in
 the protocol tells them apart.
 
-A capture that loses the device, or ends for silence, exits 0.
+A capture that loses the device, or ends for silence with its limit not
+met, fails (exit 1).
 
 No serial replay fixture, as the harness records USB and HID only. Not
 checked on hardware.
@@ -2023,8 +2024,8 @@ programs from a user's file that gives each channel's values.
 `enabled`, `ocp_enabled` and `channel_config`. `voltage_target` and
 `current_limit` give what this run set, 0 if nothing. `--samples`,
 `--time` and `--frames` are refused, as in C: a capture is
-`--continuous` and ends on Ctrl-C, or after 2 s without an answer (exit
-0 for now). An answer without its header, or with readings over twice a
+`--continuous` and ends on Ctrl-C, or fails after 2 s without an answer
+(exit 1). An answer without its header, or with readings over twice a
 channel's range, gives no reading and leaves the state alone.
 
 ## Manson HCS-3xxx power supplies (manson-hcs-3xxx)

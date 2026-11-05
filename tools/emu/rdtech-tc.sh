@@ -125,17 +125,17 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     # Replies gone wrong in a capture: the frames before stay, the capture
     # ends with a message and sigrok-cli's exit status 0.
     emu_options flip=2:0
-    emu_case "capture magic wrong" --stderr --filter "$L" -- -d $K --frames 2
-    emu_case "capture magic wrong output" --no-output -- -d $K --frames 2
+    emu_case "capture magic wrong" --oxrok-fails "failed to process poll packet" --stderr --filter "$L" -- -d $K --frames 2
+    emu_case "capture magic wrong output" --oxrok-fails "failed to process poll packet" --no-output -- -d $K --frames 2
     emu_options flip=3:100
-    emu_case "capture checksum wrong" --stderr --filter "$L" -- -d $K --frames 5
-    emu_case "capture checksum wrong output" -- -d $K --frames 5
+    emu_case "capture checksum wrong" --oxrok-fails "failed to process poll packet" --stderr --filter "$L" -- -d $K --frames 5
+    emu_case "capture checksum wrong output" --oxrok-fails "failed to process poll packet" -- -d $K --frames 5
     # A reply twice: the second is a frame of its own, without a request.
     emu_options again=2
     emu_case "capture a reply twice" -- -d $K --frames 2
     # 256 bytes fit C's buffer: the rest of a reply waits for the next read.
     emu_options extra=2:192
-    emu_case "capture garbage after a reply" --stderr --filter "$L" -- -d $K --frames 3
+    emu_case "capture garbage after a reply" --oxrok-fails "failed to process poll packet" --stderr --filter "$L" -- -d $K --frames 3
     emu_options
 
     # A time limit ends what would otherwise wait for ever: with the bound off
@@ -151,18 +151,18 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     # or for the rest of it, or asks no more with a part in its buffer
     # (protocol.c:211-212).
     emu_options answers=1
-    emu_case "silence no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
+    emu_case "silence no limit" --oxrok-fails "no reply from the device for 5s" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
     emu_options cut=2:100
-    emu_case "short reply no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
+    emu_case "short reply no limit" --oxrok-fails "no reply from the device for 5s" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
     emu_options extra=2:10
-    emu_case "extra bytes no limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
+    emu_case "extra bytes no limit" --oxrok-fails "no reply from the device for 5s" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 8 --stderr --filter "$L" -- -d $K --frames 2
 
     # A reply later than the 5 s of oxrok's bound (350 offers, about 7 s). With a
     # time limit both tools wait and get it, kept up to it as the polls after
     # it depend on the clock. A frame limit alone has oxrok give up: one frame.
     emu_options late=3:350
     emu_case "late reply with a time limit" --timeout 20 --filter '13,$d' --tx-filter '/^bulk_in 82 192 -> /{x;s/^/x/;/^xxx/{x;q};x}' -- -d $K --time 11s
-    emu_case "late reply with a frame limit" --oracle-differs "$LATE_BOUND" --timeout 20 -- -d $K --frames 2
+    emu_case "late reply with a frame limit" --oxrok-fails "no reply from the device for 5s" --oracle-differs "$LATE_BOUND" --timeout 20 -- -d $K --frames 2
 
     # The USB side misbehaving, the shell's options.
     emu_options chunk=1
@@ -179,7 +179,7 @@ s/^sr: \[[^]]*\] /sr: /' --keep-header -- -l 5 -d $K --scan
     emu_options answers=0
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $K --scan
     emu_options answers=2
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $K --frames 5
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $K --frames 5
     # A quiet point: the third request goes unanswered, the signal lands in
     # its wait.
     emu_options answers=2

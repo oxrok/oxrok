@@ -72,7 +72,7 @@ emu_cases() {
     emu_case "pickit2 fault interrupt while waiting" --interrupt model --oracle-bug "$SIGINT_BUG" --no-output -- -d $P --samples 32 -t pin4=r,pin5=r -O bits
     # The cable pulled after the status and the first READ answer.
     pickit2_options
-    emu_case "pickit2 fault unplug during read-out" --unplug in=1:2 --timeout 3 --oracle-bug "$SPIN_BUG" --no-output -- -d $P --samples 32 -O bits
+    emu_case "pickit2 fault unplug during read-out" --oxrok-fails "device disconnected" --unplug in=1:2 --timeout 3 --oracle-bug "$SPIN_BUG" --no-output -- -d $P --samples 32 -O bits
     # A STALL or a short packet in place of the status, of a READ
     # answer; the answer comes with the next IN transfer.
     pickit2_options stall-in=1

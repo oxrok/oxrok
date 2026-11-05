@@ -42,6 +42,13 @@ pub enum Error {
     /// A key the device does not have.
     #[error("unknown option: {0}")]
     UnknownKey(String),
+    /// A capture that started failed on the way: what
+    /// [`Session::run`](crate::core::Session::run) returns after every packet,
+    /// [`Packet::End`](crate::core::Packet::End) included, reached the
+    /// consumer. The text is what [`Packet::Failed`](crate::core::Packet::Failed)
+    /// held.
+    #[error("capture failed: {0}")]
+    CaptureFailed(String),
     /// The end of the input, e.g. of a decoder's sample stream.
     #[error("end of data")]
     Eof,

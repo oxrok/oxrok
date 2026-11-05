@@ -397,8 +397,8 @@ impl Device for UniTDmmDevice {
         let handle = std::thread::Builder::new()
             .name(format!("{} acquisition", self.model.id))
             .spawn(move || {
-                acq.run(&mut link, &sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = acq.run(&mut link, &sink, &stop2);
+                sink.end(outcome);
                 *slot.lock().expect("link lock") = Some(link);
             })
             .map_err(Error::Io)?;
@@ -487,7 +487,7 @@ impl Acquisition {
 
     /// `uni_t_dmm_receive_data` until a limit, a stop or an error. A
     /// stop may have to wait for the read in progress (up to its 1 s).
-    fn run(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
@@ -495,31 +495,31 @@ impl Acquisition {
         loop {
             std::thread::sleep(POLL_INTERVAL);
             if stop.load(Ordering::SeqCst) {
-                return;
+                return Ok(());
             }
             if !link.ready {
-                if self.chip_init(link).is_err() {
+                if let Err(e) = self.chip_init(link) {
                     log::error!("HID chip init failed: -1.");
-                    return;
+                    return Err(e);
                 }
                 link.ready = true;
                 link.buf.clear();
             }
             match self.poll(link, sink, &mut samples) {
                 Ok(true) => {}
-                Ok(false) => return,
-                Err(_) if stop.load(Ordering::SeqCst) => return,
-                Err(Error::Device(m)) if m == "short report" => return,
+                Ok(false) => return Ok(()),
+                Err(_) if stop.load(Ordering::SeqCst) => return Ok(()),
+                Err(Error::Device(m)) if m == "short report" => return Err(Error::Device(m)),
                 Err(e) => {
                     log::error!("USB receive error: {}.", libusb_error_name(&e));
-                    return;
+                    return Err(e);
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
         }
     }

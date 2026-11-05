@@ -255,7 +255,8 @@ fn stalled_and_empty_transfers_count_alike() {
     let steps = format!("{CHECKS}{start}{stall}{empty}{stall}{data}");
     assert_eq!(run_steps(&steps, 16).unwrap(), [7; 16]);
     let steps = format!("{CHECKS}{start}{}{}{data}", stall.repeat(30), empty.repeat(35));
-    assert_eq!(run_steps(&steps, 16).unwrap(), Vec::<u8>::new());
+    let gave_up = run_steps(&steps, 16).unwrap_err();
+    assert_eq!(gave_up, "capture failed: device error: the device stopped sending data");
     // 64 in a row are not enough.
     let steps = format!("{CHECKS}{start}{}{}{data}", stall.repeat(30), empty.repeat(34));
     assert_eq!(run_steps(&steps, 16).unwrap(), [7; 16]);

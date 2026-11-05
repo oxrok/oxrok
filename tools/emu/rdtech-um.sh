@@ -103,11 +103,11 @@ emu_cases() {
 
     # Answers gone wrong.
     emu_options bad-end=3
-    emu_case "a bad end in a capture" --stderr --filter "$L" -- -d $U --frames 5
+    emu_case "a bad end in a capture" --oxrok-fails "packet checksum verification failed" --stderr --filter "$L" -- -d $U --frames 5
     emu_options bad-end=2
-    emu_case "a bad end at once" --stderr --filter "$L" -- -d $U --frames 5
+    emu_case "a bad end at once" --oxrok-fails "packet checksum verification failed" --stderr --filter "$L" -- -d $U --frames 5
     emu_options model=um34c bad-end=3
-    emu_case "a bad sum in a capture" --stderr --filter "$L" -- -d $U --frames 5
+    emu_case "a bad sum in a capture" --oxrok-fails "packet checksum verification failed" --stderr --filter "$L" -- -d $U --frames 5
     emu_options noise=3:abcd
     emu_case "noise ahead of a frame" --stderr --filter "$L" -- -d $U --frames 3
     emu_case "noise ahead of a frame stdout" -- -d $U --frames 3
@@ -119,7 +119,7 @@ emu_cases() {
     emu_case "noise and a gap" --oracle-differs "$SYNC_BUG" -- -d $U --frames 4
     # A dump's own id ahead of the dump: nothing to resynchronize on.
     emu_options noise=3:0963
-    emu_case "an id ahead of a frame" --stderr --filter "$L" -- -d $U --frames 3
+    emu_case "an id ahead of a frame" --oxrok-fails "packet checksum verification failed" --stderr --filter "$L" -- -d $U --frames 3
     # An answer that stays incomplete holds back every later poll.
     emu_options short=2:60
     emu_case "a short answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 13 -- -d $U --frames 2
@@ -145,7 +145,7 @@ emu_cases() {
     # Silence: it polls on, as often as the time lets it.
     emu_options answers=1
     emu_case "silent time limit" --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --time 300ms
-    emu_case "silent frames" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 34 --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --frames 1
+    emu_case "silent frames" --oxrok-fails "no answer from the device for 30 s" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 34 --no-output --tx-filter 's/^bulk_out 02 (f0)+ -> [0-9]+$/bulk_out 02 f0... -> N/' -- -d $U --frames 1
 
     # The USB side misbehaving, the shell's options.
     emu_options chunk=7
@@ -168,7 +168,7 @@ emu_cases() {
     emu_options answers=2
     # -l 0: its two lines repeat in turn, as often as the time lets them, which
     # the .oracle's count of repeats does not fold. The next case pins them.
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -l 0 -d $U --frames 5
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -l 0 -d $U --frames 5
     emu_case "unplug in a capture what C says" --libsigrok --hangs --unplug model --timeout 4 --stderr --filter '3,$d' --tx-filter '/^unplug$/q' -- -d $U --frames 5
     # A quiet point: the poll goes unanswered, the signal lands in its wait.
     emu_options answers=3

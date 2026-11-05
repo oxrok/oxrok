@@ -445,8 +445,8 @@ impl Device for LogicStudioDevice {
         let handle = std::thread::Builder::new()
             .name("lecroy-logicstudio acquisition".into())
             .spawn(move || {
-                run(&mut link, rate, &sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = run(&mut link, rate, &sink, &stop2);
+                sink.end(outcome);
                 *slot.lock().expect("link lock") = Some(link);
             })
             .map_err(Error::Io)?;
@@ -465,16 +465,16 @@ impl Device for LogicStudioDevice {
 }
 
 /// One capture, on its thread.
-fn run(link: &mut Link, rate: RateInfo, sink: &PacketSink, stop: &AtomicBool) {
+fn run(link: &mut Link, rate: RateInfo, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
     sink.send(Packet::header());
-    let Some(window) = wait_for_capture(link, rate, stop) else {
-        return;
+    let Some(window) = wait_for_capture(link, rate, stop)? else {
+        return Ok(());
     };
     // handle_fetch_samples_done() goes on to read whatever became of its
     // write (protocol.c:244-264), which never ends when it failed.
     if let Err(e) = link.fetch_samples(window.earliest) {
         log::error!("Failed to ask for the samples: {}.", crate::usb::libusb_error_name(&e));
-        return;
+        return Err(e);
     }
     let memory = match link.read_memory(|| stop.load(Ordering::SeqCst)) {
         Ok(m) => m,
@@ -483,7 +483,7 @@ fn run(link: &mut Link, rate: RateInfo, sink: &PacketSink, stop: &AtomicBool) {
             // (protocol.c:1017-1027).
             log::error!("Failed to read the samples: {}.", crate::usb::libusb_error_name(&e));
             stop_if_asked(link, stop);
-            return;
+            return Err(e);
         }
     };
     let mask = link.mask();
@@ -500,6 +500,7 @@ fn run(link: &mut Link, rate: RateInfo, sink: &PacketSink, stop: &AtomicBool) {
         sink.send(Packet::Trigger);
     }
     stop_if_asked(link, stop);
+    Ok(())
 }
 
 /// A stop asked during the fetch: the C driver writes it at once, and
@@ -512,8 +513,8 @@ fn stop_if_asked(link: &mut Link, stop: &AtomicBool) {
     }
 }
 
-/// `recv_intr_transfer()` until the capture is complete: its window, or
-/// `None` when it ended otherwise. The C driver does not submit the
+/// `recv_intr_transfer()` until the capture is complete: its window, `None`
+/// after a stop, or an error. The C driver does not submit the
 /// transfer again after a timeout, a failure or a short packet
 /// (protocol.c:926-933), and then never ends. A timeout here is another
 /// wait, and the others end the capture.
@@ -521,28 +522,31 @@ fn wait_for_capture(
     link: &mut Link,
     rate: RateInfo,
     stop: &AtomicBool,
-) -> Option<protocol::Window> {
+) -> Result<Option<protocol::Window>> {
     loop {
         if stop.load(Ordering::SeqCst) {
             if let Err(e) = link.stop_acquisition() {
                 log::debug!("Stopping the acquisition: {e}.");
             }
-            return None;
+            return Ok(None);
         }
         let packet = match link.read_status() {
             Ok(p) => p,
             Err(Error::Timeout) => continue,
             Err(e) => {
                 log::error!("Failed to read the status: {}.", crate::usb::libusb_error_name(&e));
-                return None;
+                return Err(e);
             }
         };
         if packet.len() != INTR_BUF_SIZE {
             log::error!("Invalid size of interrupt transfer: {}.", packet.len());
-            return None;
+            return Err(Error::device(format!(
+                "invalid size of interrupt transfer: {}",
+                packet.len()
+            )));
         }
         if let Status::Complete(w) = link.status(&packet, rate) {
-            return Some(w);
+            return Ok(Some(w));
         }
     }
 }
@@ -635,24 +639,27 @@ mod tests {
              int_in 81 32 -> 00{31}05\n\
              int_in 81 32 -> err disconnected\n",
         );
-        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(false)).is_none());
+        assert!(matches!(
+            wait_for_capture(&mut l, rate(), &AtomicBool::new(false)),
+            Err(Error::Disconnected)
+        ));
     }
 
     #[test]
     fn a_short_status_packet_ends_the_wait() {
         let mut l = link("int_in 81 32 -> 00{16}\n");
-        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(false)).is_none());
+        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(false)).is_err());
     }
 
     #[test]
     fn a_stop_writes_the_arm_register() {
         let mut l = link("ctl_out 40 b1 0012 1544 070000070002 -> ok\n");
-        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(true)).is_none());
+        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(true)).unwrap().is_none());
     }
 
     #[test]
     fn the_complete_packet_ends_the_wait() {
         let mut l = link("int_in 81 32 -> 00{31}04\n").with_capture();
-        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(false)).is_some());
+        assert!(wait_for_capture(&mut l, rate(), &AtomicBool::new(false)).unwrap().is_some());
     }
 }

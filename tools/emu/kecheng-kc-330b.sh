@@ -215,7 +215,7 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     kc_options stall-out=08@1
     emu_case "first request fails" --expect-fail --stderr --filter "$R" -- -d $S --samples 2
     kc_options stall-out=08@2
-    emu_case "second request fails" -- -d $S --samples 3
+    emu_case "second request fails" --oxrok-fails "endpoint stalled" -- -d $S --samples 3
 
     # An answer that fails or does not parse. oxrok asks again at the next
     # interval and gets its samples.
@@ -226,7 +226,7 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # Every answer bad: oxrok gives up after MAX_BAD_ANSWERS.
     for f in stall-in=08 silent=08 garbage=08 short=08; do
         kc_options $f
-        emu_case "live answers $f" --oracle-bug "$WAITS" --oracle-hangs --timeout 6 --no-output -- -d $S --samples 3
+        emu_case "live answers $f" --oxrok-fails "5 bad answers in a row" --oracle-bug "$WAITS" --oracle-hangs --timeout 6 --no-output -- -d $S --samples 3
     done
     kc_options
 
@@ -240,11 +240,11 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # Pulled out: in the pause after a sample, the next request fails
     # (protocol.c:68), and the close's configure fails too. The fourth IN is
     # the first sample's; the third is the status's, and the start fails.
-    emu_case "unplug between samples" --unplug in=1:4 -- -d $S --samples 3
+    emu_case "unplug between samples" --oxrok-fails "device disconnected" --unplug in=1:4 -- -d $S --samples 3
     emu_case "unplug before the first request" --unplug in=1:3 --expect-fail --stderr --filter "$R" -- -d $S --samples 3
     # Pulled out with the second request's read on its way: the callback sees
     # LIBUSB_TRANSFER_NO_DEVICE (protocol.c:137) and stops.
-    emu_case "unplug during a read" --unplug out=2:5 -- -d $S --samples 3
+    emu_case "unplug during a read" --oxrok-fails "device disconnected" --unplug out=2:5 -- -d $S --samples 3
 
     # The log path. A meter with an empty log: header and end (api.c:357), with
     # nothing configured, as the setting of data_source left it dirty.
@@ -287,7 +287,7 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # A chunk that fails: what came is kept, and the log is not cleared.
     for f in stall-out=07@2 stall-in=07@2 silent=07@2 garbage=07@2 short=07@2; do
         kc_options stored=100 $f
-        emu_case "log chunk $f" --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
+        emu_case "log chunk $f" --oxrok-fails "endpoint stalled or failed to read the log: an invalid answer ..." --oracle-bug "$TUPLE_META" --digest --filter '1,3!d' -- -d $M --continuous
     done
     kc_options
 

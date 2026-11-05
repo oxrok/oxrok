@@ -614,6 +614,7 @@ impl Device for OlsDevice {
             decoder: Decoder::plain(plan.flags, self.limit_samples, plan.trigger_word),
             end_of_data: self.end_of_data,
             trigger_sample: plan.trigger_sample,
+            whole: plan.whole,
             unit_size: self.unit_size,
         };
         let slot = Arc::clone(&self.port);
@@ -622,9 +623,9 @@ impl Device for OlsDevice {
         let handle = std::thread::Builder::new()
             .name("ols acquisition".into())
             .spawn(move || {
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("ols lock") = Some(port);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -647,35 +648,53 @@ struct Capture {
     end_of_data: Duration,
     /// [`protocol::Plan::trigger_sample`].
     trigger_sample: Option<u64>,
+    /// [`protocol::Plan::whole`].
+    whole: Option<u64>,
     unit_size: usize,
 }
 
 impl Capture {
-    fn run(mut self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(mut self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
-        if self.read(port, stop) {
+        let mut outcome = Ok(());
+        if let Some(read) = self.read(port, stop) {
+            outcome = read;
             self.send(sink);
             let _ = port.purge();
         }
         let _ = send_reset(port);
+        outcome
     }
 
-    /// Reads to the limit, or to the silence, or to a port that fails.
-    /// `false` when stopped: a stop sends nothing of what came.
-    fn read(&mut self, port: &mut dyn Port, stop: &AtomicBool) -> bool {
+    /// Whether silence ends the download as it should: the board sends a set
+    /// number of samples and then nothing.
+    fn silence_is_the_end(&self) -> Result<()> {
+        match self.whole {
+            Some(whole) if (self.decoder.len() as u64) < whole => Err(Error::device(format!(
+                "the board went silent after {} of {whole} samples",
+                self.decoder.len()
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Reads to the limit, or to the silence, or to a port that fails, and
+    /// says how that went. `None` when stopped: a stop sends nothing of what
+    /// came.
+    fn read(&mut self, port: &mut dyn Port, stop: &AtomicBool) -> Option<Result<()>> {
         let mut buf = [0u8; 4096];
         let mut last = None;
         loop {
             if stop.load(Ordering::SeqCst) {
-                return false;
+                return None;
             }
             if self.decoder.len() as u64 >= self.decoder.limit() {
-                return true;
+                return Some(Ok(()));
             }
             match port.read(&mut buf, STOP_CHECK) {
                 Ok(0) => {
                     if last.is_some_and(|at: Instant| at.elapsed() >= self.end_of_data) {
-                        return true;
+                        return Some(self.silence_is_the_end());
                     }
                 }
                 Ok(n) => {
@@ -685,7 +704,7 @@ impl Capture {
                 // A hangup: C's source fires with no G_IO_IN and ends so.
                 Err(e) => {
                     log::debug!("The port went: {e}.");
-                    return true;
+                    return Some(Err(e));
                 }
             }
         }
@@ -972,6 +991,7 @@ mod tests {
         dev.stop().unwrap();
         assert!(at.elapsed() >= END_OF_DATA, "after the first byte, 100 ms of nothing");
         assert_eq!(logic(&packets), [8, 0, 0, 0, 9, 0, 0, 0]);
+        assert!(packets.iter().any(|p| matches!(p, Packet::Failed(_))), "cut short: {packets:?}");
     }
 
     /// A capture where a word comes, `gap` of nothing, then another: the bytes

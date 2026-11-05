@@ -270,6 +270,7 @@ impl Sla5032Device {
             decoder: Decoder::new(stl, self.limit_samples),
             stop: Arc::clone(&self.stop),
             sent: false,
+            failure: None,
         })
     }
 
@@ -470,10 +471,10 @@ impl Device for Sla5032Device {
                     .name("sysclk-sla5032 acquisition".into())
                     .spawn(move || {
                         sink.send(Packet::header());
-                        acq.run(&mut link, &sink);
+                        let outcome = acq.run(&mut link, &sink);
                         // Back before End: a client may start again on it.
                         *slot.lock().expect("link lock") = Some(link);
-                        sink.send(Packet::End);
+                        sink.end(outcome);
                     })
                     .map_err(Error::Io)?;
                 self.worker = Some(handle);
@@ -502,11 +503,14 @@ struct Acquisition {
     stop: Arc<AtomicBool>,
     /// Some sample has gone out.
     sent: bool,
+    /// Why the capture ended early.
+    failure: Option<Error>,
 }
 
 impl Acquisition {
-    fn run(mut self, link: &mut Link, sink: &PacketSink) {
+    fn run(mut self, link: &mut Link, sink: &PacketSink) -> Result<()> {
         self.capture(link, sink);
+        self.failure.map_or(Ok(()), Err)
     }
 
     fn stopped(&self) -> bool {
@@ -527,15 +531,15 @@ impl Acquisition {
 
     /// A failure that ends the capture: register 14 written, as on every
     /// way out of the C's callback. The C says so only in its debug log, and
-    /// its exit status stays 0, as it does here: a driver has no way to
-    /// tell the session. A wait for a reply that a stop ended is no failure,
-    /// and a command now would come with that reply unread.
-    fn failed(&self, link: &mut Link, e: &Error) {
+    /// its exit status stays 0. A wait for a reply that a stop ended is no
+    /// failure, and a command now would come with that reply unread.
+    fn failed(&mut self, link: &mut Link, e: Error) {
         if self.stopped() && matches!(e, Error::Timeout) {
             return;
         }
         let _ = link.reg14_zero();
         log::warn!("The capture ended early: {e}.");
+        self.failure = Some(e);
     }
 
     fn capture(&mut self, link: &mut Link, sink: &PacketSink) {
@@ -546,19 +550,20 @@ impl Acquisition {
             match link.poll() {
                 Ok((captured, true)) => break captured,
                 Ok(_) => {}
-                Err(e) => return self.failed(link, &e),
+                Err(e) => return self.failed(link, e),
             }
         };
         log::debug!("acquision done, status: {captured}.");
         if let Err(e) = link.set_read_back() {
-            return self.failed(link, &e);
+            return self.failed(link, e);
         }
         loop {
             let data = match link.read_chunk() {
                 Ok(data) => data,
                 Err(e) => {
-                    self.failed(link, &e);
-                    log::debug!("acquision done, ret: {}.", protocol::ret_code(&e));
+                    let ret = protocol::ret_code(&e);
+                    self.failed(link, e);
+                    log::debug!("acquision done, ret: {ret}.");
                     return;
                 }
             };
@@ -586,6 +591,12 @@ impl Acquisition {
                     "The capture ended early: a chunk of {} bytes has no end marker.",
                     data.len()
                 );
+                if !self.decoder.limit_met() {
+                    self.failure = Some(Error::device(format!(
+                        "a chunk of {} bytes has no end marker",
+                        data.len()
+                    )));
+                }
             }
             if records != RLE_SAMPLES_COUNT || self.stopped() {
                 break;
@@ -598,10 +609,11 @@ impl Acquisition {
     /// The read-back's end with no data in this chunk. After samples it is
     /// the normal end of a capture that filled its last chunk with no
     /// marker; before any, the user should know.
-    fn no_samples(&self, link: &mut Link) {
+    fn no_samples(&mut self, link: &mut Link) {
         let _ = link.reg14_zero();
         if !self.sent {
             log::warn!("The capture ended early: the device sent no samples.");
+            self.failure = Some(Error::device("the device sent no samples"));
         }
     }
 
@@ -679,6 +691,7 @@ mod tests {
             decoder: Decoder::new(None, limit),
             stop: Arc::new(AtomicBool::new(stop)),
             sent: false,
+            failure: None,
         }
     }
 
@@ -822,8 +835,12 @@ mod tests {
     fn stopped_after_a_chunk(steps: &[String]) -> usize {
         let r = replay(steps);
         let stop = Arc::new(AtomicBool::new(false));
-        let mut acq =
-            Acquisition { decoder: Decoder::new(None, 8), stop: Arc::clone(&stop), sent: false };
+        let mut acq = Acquisition {
+            decoder: Decoder::new(None, 8),
+            stop: Arc::clone(&stop),
+            sent: false,
+            failure: None,
+        };
         let mut l = link(&r, &stop);
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
         drop(rx);

@@ -395,7 +395,7 @@ impl Output for Csv {
                 }
                 return Ok(());
             }
-            Packet::FrameEnd => {}
+            Packet::FrameEnd | Packet::Failed(_) => {}
         }
         if self.all_seen() {
             self.dump(out);

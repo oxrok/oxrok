@@ -245,24 +245,24 @@ s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
     # Faults. Each ends the capture at the error, without a df_end from
     # the driver: the session stops as its last source goes.
     unit_options stall-report=1
-    emu_case "fault line setting stalled" --stderr --filter "$N" -- -d $I --samples 1
-    emu_case "fault line setting stalled output" --no-output -- -d $I --samples 1
+    emu_case "fault line setting stalled" --oxrok-fails "endpoint stalled" --stderr --filter "$N" -- -d $I --samples 1
+    emu_case "fault line setting stalled output" --oxrok-fails "endpoint stalled" --no-output -- -d $I --samples 1
     unit_options stall-in=2
-    emu_case "fault in stalled" --stderr --filter "$N" -- -d $I --samples 1
+    emu_case "fault in stalled" --oxrok-fails "endpoint stalled" --stderr --filter "$N" -- -d $I --samples 1
     unit_options short-in=2
-    emu_case "fault in short" --stderr --filter "$N" -- -d $I --samples 1
+    emu_case "fault in short" --oxrok-fails "short report" --stderr --filter "$N" -- -d $I --samples 1
     # After 2 samples the chip stops answering: a read times out after 1 s.
     unit_options idle=0 hold=4
     # oxrok's CLI adds a warning of its own, which the C has not.
-    emu_case "fault chip hangs" --stderr --filter "$N
+    emu_case "fault chip hangs" --oxrok-fails "timeout" --stderr --filter "$N
 /Device only sent 2 samples/d" -- -d $I --samples 3
-    emu_case "fault chip hangs output" -- -d $I --samples 3
+    emu_case "fault chip hangs output" --oxrok-fails "timeout" -- -d $I --samples 3
     # The C ends without a df_end there (protocol.c:282); its csv output
     # loses nothing by it.
-    emu_case "fault chip hangs csv" -- -d $I --samples 3 -O csv:header=false
+    emu_case "fault chip hangs csv" --oxrok-fails "timeout" -- -d $I --samples 3 -O csv:header=false
     # The cable pulled in mid capture.
     unit_options
-    emu_case "fault unplug" --unplug in=2:3 --stderr --filter "$N" -- -d $I --samples 3
+    emu_case "fault unplug" --oxrok-fails "device disconnected" --unplug in=2:3 --stderr --filter "$N" -- -d $I --samples 3
 
     # A stop in mid capture. The chip then hangs, so the read in progress
     # is what the stop has to wait for; the golden holds no "USB receive
@@ -274,7 +274,7 @@ s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
     unit_options
     emu_case "before the claim" -- -d $I --samples 1
     if unit_hold; then
-        emu_case "interface claimed by another program" --stderr --filter "$N" -- -d $I --samples 1
+        emu_case "interface claimed by another program" --oxrok-fails "device is busy" --stderr --filter "$N" -- -d $I --samples 1
         unit_release
     fi
     # A client's stop, between polls: no USB in the C's stop. sigrok-cli
