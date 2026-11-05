@@ -31,8 +31,8 @@
 //! What the two high bits of a dump's byte hold is a guess, which matters:
 //! libsigrok opens the line with XON/XOFF, and the tty takes those bytes out of
 //! the input, so a dump holding one comes up short. mso19fcgi clears `IXON` and
-//! takes "at least 3070 bytes", libsigrok's line was tested on a real unit by its
-//! authors. So a byte here has bit 6 the inverse of its bit 5, as in a word, which
+//! takes "at least 3070 bytes"; libsigrok has XON/XOFF, and its 2022 commits say a
+//! real capture works there. So a byte here has bit 6 the inverse of its bit 5, as in a word, which
 //! holds neither. `raw=1` leaves them 0, and the dump then holds both.
 //!
 //! Emulation artifacts:
