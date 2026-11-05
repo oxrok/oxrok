@@ -149,6 +149,9 @@ fn probe(port: &mut dyn Port, params: Params, conn: &str) -> Option<Found> {
         return Some(Found { vendor: "Sump".to_owned(), metadata: None });
     };
     let mut first = Some(first);
+    // A byte's time for each byte: C allows a 32 bit value `serial_timeout`
+    // of 4 bytes in all, so a board that stalls inside one gets a little more
+    // here. Nothing on the wire shows it.
     let timeout = serial_timeout(&params, 1);
     let mut metadata = protocol::read_metadata(|| {
         first.take().or_else(|| {

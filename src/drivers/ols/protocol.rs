@@ -22,10 +22,11 @@
 //! than 256 KiB), the flags, and the run command. The words come back
 //! newest first, see [`sump::Decoder`].
 //!
-//! Commands, metadata, channel groups, trigger stages and sample decoding are
-//! `p-ols`' ([`crate::drivers::pipistrello_ols::protocol`], the same SUMP).
-//! This driver's own are what `protocol.c` does differently: no edge
-//! registers, no disabled stages, the start bit on the last stage used, the
+//! Commands, metadata, channel groups and sample decoding are `p-ols'`
+//! ([`crate::drivers::pipistrello_ols::protocol`], the same SUMP).
+//! This driver's own are what `protocol.c` does differently: the conversion
+//! of a trigger, with no edges, no disabled stages, the start bit on the last
+//! stage used, the
 //! 16 bit counts, a demux word taken for one sample, a sample rate that may
 //! pass a maximum the clock does not divide to.
 //!
@@ -47,13 +48,14 @@
 //! the match would be that many words from the newest, and with a run or a
 //! limit C's sample is not it. That is an inference, so it changes nothing here.
 
+use crate::core::{Trigger, TriggerMatch};
 use crate::drivers::pipistrello_ols::protocol as sump;
 pub use sump::{
     CLOCK_RATE, CMD_ID, CMD_METADATA, CMD_RESET, CMD_SET_DIVIDER, CMD_SET_FLAGS,
     CMD_SET_TRIGGER_CONFIG, CMD_SET_TRIGGER_MASK, CMD_SET_TRIGGER_VALUE, Decoder,
     FLAG_CLOCK_EXTERNAL, FLAG_DEMUX, FLAG_EXTERNAL_TEST_MODE, FLAG_FILTER, FLAG_INTERNAL_TEST_MODE,
-    FLAG_RLE, FLAG_SWAP_CHANNELS, MIN_NUM_SAMPLES, Metadata, Stages, TRIGGER_START,
-    convert_trigger, group_mask, long_command, read_metadata, short_command,
+    FLAG_RLE, FLAG_SWAP_CHANNELS, MIN_NUM_SAMPLES, Metadata, Stages, TRIGGER_START, group_mask,
+    long_command, read_metadata, short_command,
 };
 
 /// `DEFAULT_SAMPLERATE`.
@@ -171,6 +173,41 @@ pub struct Plan {
     pub trigger_sample: Option<u64>,
 }
 
+/// `convert_trigger()`: conditions on disabled channels are left out. Only
+/// `SR_TRIGGER_ONE` sets a value (`protocol.c:133`), so an edge, which the list
+/// of matches keeps from sigrok-cli and not from a library client, looks for a
+/// level of 0.
+///
+/// # Errors
+///
+/// The message the C driver logs for more than four stages.
+pub fn convert_trigger(trigger: Option<&Trigger>, channel_mask: u32) -> Result<Stages, String> {
+    let mut s = Stages::default();
+    let Some(t) = trigger else { return Ok(s) };
+    if t.stages.len() > sump::NUM_TRIGGER_STAGES {
+        return Err(format!(
+            "This device only supports {} trigger stages.",
+            sump::NUM_TRIGGER_STAGES
+        ));
+    }
+    s.count = t.stages.len();
+    for (i, stage) in t.stages.iter().enumerate() {
+        for c in &stage.conditions {
+            let Some(bit) = u32::try_from(c.channel).ok().and_then(|c| 1u32.checked_shl(c)) else {
+                continue;
+            };
+            if channel_mask & bit == 0 {
+                continue;
+            }
+            s.mask[i] |= bit;
+            if c.matches == TriggerMatch::One {
+                s.value[i] |= bit;
+            }
+        }
+    }
+    Ok(s)
+}
+
 /// The commands of `stage`, of `count` stages used: its level in the config,
 /// and the start bit on the last.
 fn stage_commands(s: &Stages, stage: usize, count: usize) -> [Vec<u8>; 3] {
@@ -270,7 +307,6 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Trigger, TriggerMatch};
 
     fn settings() -> Settings {
         Settings {
@@ -433,6 +469,26 @@ mod tests {
         let s = Settings { capture_ratio: 50, flags: 0, ..s };
         let p = plan(&s, &st).unwrap();
         assert_eq!((p.trigger_word, p.trigger_sample), (Some(64), None));
+    }
+
+    #[test]
+    fn only_a_one_sets_a_value_and_disabled_channels_are_left_out() {
+        let spec = [
+            (0, 1, TriggerMatch::One),
+            (0, 2, TriggerMatch::Zero),
+            (0, 3, TriggerMatch::Rising),
+            (0, 4, TriggerMatch::Falling),
+            (0, 8, TriggerMatch::One),
+        ];
+        let st = stages(&spec, 0xff);
+        assert_eq!((st.mask[0], st.value[0]), (0b1_1110, 0b10));
+        assert_eq!(st.edge[0], 0);
+        let mut t = Trigger::new();
+        for stage in 0..5 {
+            t.add(stage, 0, TriggerMatch::One);
+        }
+        assert!(convert_trigger(Some(&t), 1).is_err());
+        assert_eq!(convert_trigger(None, 1).unwrap().count, 0);
     }
 
     #[test]
