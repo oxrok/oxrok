@@ -1,0 +1,15 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+gwinstek-gpd - GW Instek GPD-2303S with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    channel_config: Independent (current)
+    enabled: on, off (current)
