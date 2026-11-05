@@ -878,9 +878,16 @@ mod tests {
             let r = d.line(b"1.5E0").reading.unwrap();
             assert_eq!((r.mq, r.flags), (Mq::Voltage, flags), "{char}");
         }
-        let mut d = scope(b"11,1,3,2,2,0,1");
-        let r = d.line(b"1.5E0").reading.unwrap();
-        assert_eq!((r.mq, r.unit, r.flags), (Mq::Current, Unit::Ampere, MqFlags::AC));
+        for (char, flags) in [
+            (1, MqFlags::DC),
+            (2, MqFlags::AC),
+            (3, MqFlags::AC | MqFlags::DC),
+            (7, MqFlags::empty()),
+        ] {
+            let mut d = scope(format!("11,1,3,2,{char},0,1").as_bytes());
+            let r = d.line(b"1.5E0").reading.unwrap();
+            assert_eq!((r.mq, r.unit, r.flags), (Mq::Current, Unit::Ampere, flags), "{char}");
+        }
     }
 
     #[test]
