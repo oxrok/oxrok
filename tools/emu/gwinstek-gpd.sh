@@ -279,6 +279,14 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     # Data no one asked for, between two rounds.
     emu_options setters=0 output=1 chatter=hello
     emu_case "chatter" -- -d $K --samples 2
+    # A known limit of oxrok's csv with this driver, not a behaviour to keep: a
+    # packet per reading makes four rows a round, 0.5 A under the volts' label
+    # and made-up zeros, and the driver warns. oxrok alone, by hand: libsigrok's
+    # csv reads past its buffer here and comes out differently from run to run
+    # (garbage values, once SIGSEGV), so no comparison is possible.
+    emu_options setters=0 output=1 load=10 v1=5.000 i1=2.000 v2=3.300 i2=0.100
+    emu_case "csv known limit" --no-oracle-only -- -d $K --samples 2 -O csv:header=false:time=false
+    emu_case "csv known limit warns" --no-oracle-only --stderr --filter "s/^oxrok: warn: oxrok::drivers::gwinstek_gpd(::protocol)?: /sr: gwinstek-gpd: /" -- -d $K --samples 1 -O csv:header=false:time=false
     # A line longer than protocol.c's 50 byte buffer in a capture, and than
     # api.c's 100 in a scan. Each list's first answer goes to the scan.
     emu_options setters=0 output=1 iout2=0.000A,0123456789012345678901234567890123456789012345678901234567890123456789

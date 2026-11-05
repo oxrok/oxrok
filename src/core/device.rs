@@ -207,6 +207,13 @@ pub trait Device: Send {
         Ok(())
     }
 
+    /// The output module a capture was asked to write with (`-O`), told once
+    /// before it starts: for a warning when the driver's packets are known not
+    /// to suit it. By default nothing happens.
+    fn note_output(&self, module: &str) {
+        let _ = module;
+    }
+
     /// Starts acquiring. Packets go to `sink` from the device's own
     /// thread, starting with [`Packet::Header`] and ending with
     /// [`Packet::End`].
