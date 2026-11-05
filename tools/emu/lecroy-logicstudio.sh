@@ -96,7 +96,7 @@ emu_cases() {
     # line goes. sigrok-cli's and the runner's lines do not match.
     D='oxrok: err: oxrok::drivers::lecroy_logicstudio[a-z_:]*:'
     X="s/^$D /sr: lecroy-logicstudio: /; s/^(Failed to open device): .*\$/\\1./; s/^(Failed to set device option 'samplerate'): invalid argument: .*\$/\\1: generic\\/unspecified error./; s/^(Failed to set device option 'captureratio': invalid argument): .*\$/\\1./"
-    E="$X; /LIBUSB_ERROR_ACCESS/d; /^(Failed|This device|sr: |No devices)/!d"
+    E="$X; /LIBUSB_ERROR_ACCESS/d; /LIBUSB_ERROR_NO_DEVICE/d; /^(Failed|This device|sr: |No devices)/!d"
 
     # Without firmware: every run uploads it in the scan, and dev_open()
     # waits (300 ms, then up to 3 s) for the renumerated device.
