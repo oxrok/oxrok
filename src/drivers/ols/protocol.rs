@@ -30,8 +30,9 @@
 //! pass a maximum the clock does not divide to.
 //!
 //! Where this differs from the C driver:
-//! - a read count comes from the limit where the board reports no memory
-//!   (`protocol.c:597-599` takes the 0, and 656 sends it minus 1, 0xffff);
+//! - a read count comes from the limit where the board reports no memory, up
+//!   to the 0xffff that C always sends there (`protocol.c:597-599` takes the
+//!   0, and 656 sends it minus 1); a limit beyond that gets a warning;
 //! - the delay count is at least one unit (`protocol.c:617` gives 0 for
 //!   `captureratio=100`, and 650-657 send it minus 1: all of the capture
 //!   after the trigger, against the marker);
@@ -65,6 +66,10 @@ pub const CMD_CAPTURE_READCOUNT: u8 = sump::CMD_CAPTURE_READCOUNT;
 pub const FLAG_INVERT_EXT_CLOCK: u16 = 1 << 7;
 /// A board with more memory than this takes the long counts.
 const SMALL_MEMORY: u32 = 256 * 1024;
+/// The most `CMD_CAPTURE_SIZE`'s 16 bits say, in units of 4 words. A board
+/// with no memory key gets this form too, so a limit beyond it is cut here,
+/// or the count minus 1 would wrap to a small one.
+const MAX_SHORT_COUNT: u64 = 0x1_0000;
 
 /// A sample rate as `ols_set_samplerate()` sets it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,7 +174,16 @@ pub fn plan(s: &Settings, stages: &Stages) -> Result<Plan, String> {
         0 => s.limit_samples,
         most => u64::from(most).min(s.limit_samples),
     };
-    let readcount = u32::try_from(samplecount.div_ceil(4)).unwrap_or(u32::MAX).max(1);
+    let mut units = samplecount.div_ceil(4).max(1);
+    if s.max_samples <= SMALL_MEMORY {
+        units = units.min(MAX_SHORT_COUNT);
+    }
+    let readcount = u32::try_from(units).unwrap_or(u32::MAX);
+    let returned = u64::from(readcount) * 4;
+    // With RLE a word can stand for many samples, so nothing is known.
+    if s.flags & FLAG_RLE == 0 && s.limit_samples > returned {
+        log::warn!("The board returns {returned} samples of the {} asked for.", s.limit_samples);
+    }
     let mut commands = Vec::new();
     let delaycount;
     let trigger_word;
@@ -304,6 +318,39 @@ mod tests {
     fn no_memory_reported_counts_from_the_limit() {
         let s = Settings { max_samples: 0, ..settings() };
         assert!(hexes(&plan(&s, &Stages::default()).unwrap()).contains(&"8103000300".to_owned()));
+    }
+
+    #[test]
+    fn no_memory_reported_stops_at_what_the_short_counts_hold() {
+        let counts = |limit: u64, ratio: u64, st: &Stages| {
+            let s = Settings {
+                max_samples: 0,
+                limit_samples: limit,
+                capture_ratio: ratio,
+                ..settings()
+            };
+            let p = plan(&s, st).unwrap();
+            hexes(&p).into_iter().find(|c| c.starts_with("81")).unwrap()
+        };
+        let none = Stages::default();
+        assert_eq!(counts(262_140, 0, &none), "81feff feff".replace(' ', ""));
+        // Each of these wrapped: 262148 samples to a read count of 0.
+        for limit in [262_144, 262_145, 262_148, 300_000, 1 << 20, u64::MAX] {
+            assert_eq!(counts(limit, 0, &none), "81ffffffff", "{limit}");
+        }
+        // The delay comes from the count that goes out, so it is never above.
+        let st = stages(&[(0, 4, TriggerMatch::One)], u32::MAX);
+        assert_eq!(counts(300_000, 50, &st), "81ffffff7f");
+        // A reported memory at the edge of the short form holds as many.
+        let s = Settings { max_samples: 262_144, limit_samples: 262_144, ..settings() };
+        let s = Settings { channel_mask: 0xff, ..s };
+        let p = plan(&s, &none).unwrap();
+        assert!(hexes(&p).contains(&"81ffffffff".to_owned()));
+        // The long form has no such bound.
+        let s = Settings { max_samples: 1 << 24, limit_samples: 1 << 24, ..settings() };
+        let s = Settings { channel_mask: 0xff, ..s };
+        let p = plan(&s, &none).unwrap();
+        assert!(hexes(&p).contains(&"84ffff3f00".to_owned()));
     }
 
     #[test]

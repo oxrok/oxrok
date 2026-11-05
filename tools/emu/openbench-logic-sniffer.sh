@@ -29,6 +29,7 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     EMPTY_BUG="a capture with no sample sends a logic packet of length 0, and hex.c:163's length - unitsize wraps: SIGSEGV; oxrok sends no packet"
     SLOW_BUG="the scan's ols_set_samplerate(DEFAULT_SAMPLERATE) (api.c:224) fails on a board below 200 kHz, leaving 0 Hz, divider 0 and no noise filter flag; oxrok starts at the maximum"
     DRAIN_BUG="serial_drain has no bound (serial_libsp.c:157, sp_drain), so a device that stops reading holds the scan; oxrok gives up after a second, no device"
+    SAYS_SO="libsigrok has no word for a limit beyond what the counts hold, only sigrok-cli's 'Device only sent' at the end; oxrok warns ahead"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # The token block's pieces, as hex.
     NAME=014f4c5300
@@ -160,6 +161,10 @@ s/^(Failed to set device option .(limit_samples|pattern).): invalid argument: .*
     # More than the memory: sigrok-cli's g_critical is fatal.
     emu_case "samples 7000" --stderr --expect-fail -- -d $O --samples 7000 -O hex
     emu_case "time 1ms" -- -d $O --time 1ms -O hex
+    # Beyond the memory: no g_critical on this path, and what the board has.
+    emu_case "time beyond the memory" --stderr --filter "/^(0|[1-9][0-9]*):/d
+$W
+/^oxrok: warn: oxrok::drivers::ols::protocol: The board returns /d" -- -d $O --time 100ms -O hex
     emu_case "time 100us" --keep-header -- -d $O -c samplerate=1m --time 1ms -O hex
     for spec in 0-7 8-15 16-23 24-31 0-15 16-31 0-7,16-23 8-15,24-31 0-23 8-31 0-7,16-31 0,31 4; do
         emu_case "channels $spec" -- -d $O -C $spec --samples 8 -O hex
@@ -263,6 +268,17 @@ $W" -- -d $O -C 0-23 --samples 8192 -O hex
     # 656), so the board sends all it has and C keeps the newest.
     emu_options memory=64 meta=${NAME}402000
     emu_case "no memory key capture" --oracle-differs "$MEMORY_BUG" -- -d $O --samples 8 -O hex
+    # Past what the 16 bit counts hold, both tools send 0xffff, and the board
+    # gives its 2^18 words. A memory of 1 MiB holds them. oxrok says so.
+    emu_options memory=1048576 meta=${NAME}402000
+    emu_case "no memory key 262144" --digest --filter '$=; d' --timeout 120 -- -d $O --samples 262144 -O hex
+    emu_case "no memory key 262148" --digest --filter '$=; d' --timeout 120 -- -d $O --samples 262148 -O hex
+    emu_case "no memory key 300000" --digest --filter '$=; d' --timeout 120 -- -d $O --samples 300000 -O hex
+    emu_case "no memory key 300000 says so" --oracle-differs "$SAYS_SO" --stderr --filter "/^(0|[1-9][0-9]*):/d
+$W" --timeout 120 -- -d $O --samples 300000 -O hex
+    # A time is a limit like any other: 2 s at 200 kHz is 400000.
+    emu_case "no memory key time" --digest --filter '$=; d' --timeout 120 -- -d $O --time 2s -O hex
+    emu_case "no memory key trigger" --oracle-differs "$MEMORY_BUG" --digest --filter '$=; d' --timeout 120 -- -d $O -c captureratio=50 --samples 300000 -t 4=1 -O hex
     emu_options meta=${NAME}20000000402100006000
     emu_case "64 channels capture" -- -d $O --samples 8 -O hex
     emu_options
