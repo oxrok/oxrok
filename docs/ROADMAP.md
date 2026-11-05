@@ -234,10 +234,8 @@ each with where it belongs:
   serial-dmm's unreached lines.
 - The emulator runs on the `vusb` crate, and the harness drives it
   through `vusb-ctl`. The goldens keep the fixture dialect, written by
-  `emu/src/txlog.rs` as an observer. `Cargo.toml` still points `vusb` at a
-  branch (`[patch.crates-io]`, `session::Builder::observer` and `pairs`
-  in the `options` command) until a release has them; the patch goes then, and with it the path outside the
-  repository.
+  vusb's `observer::fixture::Log`; `emu/src/txlog.rs` gives it each
+  model's rules.
 - The emulator tier has a CI job (`.github/workflows/ci.yml`,
   `emulator`): it loads vhci-hcd (installing
   `linux-modules-extra-$(uname -r)` if needed) and runs

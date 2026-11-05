@@ -9,10 +9,10 @@
 //! whichever crate holds them. What is oxrok's own:
 //!
 //! - [`models`]: the devices, one file each, found by `build.rs`.
-//! - [`txlog`]: the transaction log, an observer of the bus: one line
-//!   per completed transfer in the dialect of oxrok's USB fixtures, and
-//!   a `! violation:` line whenever the host leaves the protocol as the
-//!   model defines it. `tests/emu` holds this format.
+//! - [`txlog`]: the transaction log, vusb's fixture log under the rules
+//!   of the model: one line per completed transfer, and a `! violation:`
+//!   line whenever the host leaves the protocol as the model defines it.
+//!   `tests/emu` holds this format.
 //! - [`shells::hidcable`] and the checks on a firmware upload in
 //!   [`shells::ezusb`], which know sigrok's fixtures.
 //!

@@ -26,10 +26,11 @@
 //! once that process is gone, so a harness that is killed leaves no
 //! server behind.
 //!
-//! The log (`--log`) is the transaction log of `tests/emu`, [`TxLog`],
-//! not vusb's. In it an armed event shows as `unplug`, or as the name of
-//! the mark; `tools/diffcli.sh` arms `mark interrupt` for an interrupt
-//! of the tool under test, which it delivers itself.
+//! The log (`--log`) is the transaction log of `tests/emu`, [`TxLog`]:
+//! vusb's fixture format, under the rules of the model. In it an armed
+//! event shows as `unplug`, or as the name of the mark; `tools/diffcli.sh`
+//! arms `mark interrupt` for an interrupt of the tool under test, which
+//! it delivers itself.
 //!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
@@ -39,7 +40,8 @@
 //! session holds it; a session cleaning up under its own lock says so
 //! with `--locked`, and `--force` cleans up regardless.
 
-use std::io;
+use std::fs::File;
+use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -48,7 +50,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use oxrok_emu::models;
-use oxrok_emu::txlog::TxLog;
+use oxrok_emu::txlog::{self, TxLog};
 use serde_json::Value;
 use vusb::attach::vhci;
 use vusb::control::{Address, ListenOptions};
@@ -232,18 +234,13 @@ fn finish_process(stopper: &Stopper) -> ! {
 }
 
 fn serve(args: &Serve) -> Result<u8> {
-    let log = Arc::new(Mutex::new(TxLog::new(args.log.as_deref(), args.verbose)?));
-    let name = args.model.clone();
-    let rules = Arc::clone(&log);
+    let out: Box<dyn Write + Send> = match &args.log {
+        Some(path) => Box::new(BufWriter::new(File::create(path)?)),
+        None => Box::new(io::sink()),
+    };
+    let log = Arc::new(Mutex::new(TxLog::new(out, args.verbose)));
+    let factory = txlog::factory(&args.model, Arc::clone(&log));
     let observer: SharedObserver = log;
-    // `options` builds a model too, to refuse what it cannot take, so the
-    // rules can be a `reset` ahead of the model; nothing compares what
-    // goes between the two.
-    let factory = Box::new(move |options: &[(String, String)]| {
-        let model = models::build(&name, options)?;
-        rules.lock().expect("log lock").set_rules(models::log_rules(&name, options));
-        Ok(model)
-    });
     let mut builder = Builder::new(factory)
         .options(options::parse(&args.options)?)
         .listen(&args.listen)

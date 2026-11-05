@@ -143,7 +143,7 @@ jobs:
           fi
       - run: cargo build -p oxrok -p oxrok-emu
       # What the harness drives the server with.
-      - run: cargo install vusb-cli --version 0.1.1 --locked
+      - run: cargo install vusb-cli --version 0.2.1 --locked
       # No sigrok-cli: full cases run oxrok alone against the committed
       # .out and .tx goldens, oracle-only cases are skipped and counted.
       # The harness runs oxrok-emu under sudo -n.

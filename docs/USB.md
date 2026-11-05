@@ -165,8 +165,9 @@ the workspace (`cargo build -p oxrok-emu`), is that server, on the
 contract, the bus, the shells, the USB/IP server, the attach path and
 the control socket; [its documentation](https://docs.rs/vusb) and its
 repository's `docs/design.md` and `docs/control.md` describe them. `emu/`
-holds what is oxrok's own: the device models, the transaction log in the
-fixture dialect (`emu/src/txlog.rs`), `shells/hidcable.rs` and the
+holds what is oxrok's own: the device models, the rules each gives the
+transaction log (the log itself is vusb's `observer::fixture::Log`, and
+`emu/src/txlog.rs` wires it in), `shells/hidcable.rs` and the
 checks on a firmware upload in `shells/ezusb.rs`, which know sigrok's
 fixtures, and the `oxrok-emu` commands. It re-exports vusb's paths, so a
 model says `crate::model` or `crate::shells::cdc` whichever crate holds
@@ -334,7 +335,7 @@ on Windows; attaching a device is Linux only.
   `pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>>`,
   which parses the `-o KEY=VALUE` options and rejects unknown ones. A
   model whose data is not all logged byte by byte also exports
-  `pub fn log_rules(options: &[(String, String)]) -> txlog::Rules`, at
+  `pub fn log_rules(options: &[(String, String)]) -> crate::txlog::Rules`, at
   the start of a line, which is how `build.rs` finds it. A unit test checks that each `NAME` is its file name and that each
   model builds with no options.
 - `sudo oxrok-emu serve MODEL --attach --open-devices --log FILE`
@@ -354,7 +355,7 @@ on Windows; attaching a device is Linux only.
   second settle; `vhci::open_device` does all of it and is what a
   device that reappears under a new address (EZ-USB renumeration)
   calls again. With `--control PATH`, `vusb-ctl -s PATH` drives the run
-  (`cargo install vusb-cli --version 0.1.1 --locked`; vusb's
+  (`cargo install vusb-cli --version 0.2.1 --locked`; vusb's
   `docs/control.md` has the commands), and exits 0 once the server has
   taken the command and 1 if it refused: `section name=NAME` marks the
   log, `reset` puts a fresh model behind the attached device (its
@@ -389,8 +390,10 @@ on Windows; attaching a device is Linux only.
   session (`diffcli.sh`'s, or a script run under `flock`) passes
   `--locked`; `--force` detaches regardless. An ad hoc cleanup run
   outside the lock used to kill sessions midway.
-- The transaction log (`emu/src/txlog.rs`, an `Observer` on vusb's bus)
-  is the fixture dialect above, not vusb's own log, one line per
+- The transaction log is vusb's `observer::fixture::Log` (vusb's
+  `docs/log.md`), the fixture dialect above; `emu/src/txlog.rs` gives it
+  the rules of the model each time the model is built, and in verbose
+  mode says on standard error what it writes as comments. One line per
   completed transfer: `ctl_in 21 01 0300 0000 8 -> 4142434445000000`,
   `ctl_out 21 09 0300 0000 ff02000000000000 -> ok`, `int_in`,
   `bulk_out`, `-> err stall`. A transfer the model NAKs is held, as a

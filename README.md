@@ -408,7 +408,7 @@ drives the server through vusb's `vusb-ctl`:
 
 ```sh
 sudo modprobe vhci-hcd
-cargo install vusb-cli --version 0.1.1 --locked
+cargo install vusb-cli --version 0.2.1 --locked
 cargo build --workspace
 
 # oxrok against the committed goldens; no sigrok needed.

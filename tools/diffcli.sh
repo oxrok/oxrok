@@ -20,7 +20,7 @@
 # model through vhci-hcd, and the file's emu_case lines run against it,
 # the commands to the server going through VUSB_CTL (default
 # target/debug/vusb-ctl when there is one, else vusb-ctl on PATH:
-# cargo install vusb-cli --version 0.1.1 --locked).
+# cargo install vusb-cli --version 0.2.1 --locked).
 # A case is full when oxrok has the case's driver (both tools, outputs
 # and transactions compared) and oracle-only when it does not
 # (sigrok-cli alone, checked against the goldens in tests/emu/MODEL);
@@ -443,7 +443,7 @@ if [ $emu = 1 ]; then
         [ ! -x "$TOOLS/../target/debug/vusb-ctl" ] || VUSB_CTL=$TOOLS/../target/debug/vusb-ctl
     fi
     command -v "$VUSB_CTL" >/dev/null \
-        || echo "note: no $VUSB_CTL: cargo install vusb-cli --version 0.1.1 --locked" >&2
+        || echo "note: no $VUSB_CTL: cargo install vusb-cli --version 0.2.1 --locked" >&2
     # The control socket. Not under TMP: TMPDIR may be long, and a
     # socket's path has a low limit.
     EMU_CTL_DIR=$(mktemp -d /tmp/oxrok-emu.XXXXXX)
