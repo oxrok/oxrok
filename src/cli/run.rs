@@ -42,7 +42,7 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     let plan = parse::plan_configs(device.as_ref(), args)?;
     // A name nothing knows is found before `-c` reaches the device.
     for get in &args.gets {
-        let parsed = parse::generic_args(get, false);
+        let parsed = parse::option_args(get)?;
         let group = parsed.scope.or_else(|| args.channel_group.clone());
         for (name, _) in parsed.items {
             parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
@@ -51,7 +51,7 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     plan.send_settings(device.as_mut())?;
     plan.send_enables(device.as_mut())?;
     for get in &args.gets {
-        let parsed = parse::generic_args(get, false);
+        let parsed = parse::option_args(get)?;
         let group = parsed.scope.or_else(|| args.channel_group.clone());
         for (name, _) in parsed.items {
             let key = parse::resolve_key(device.as_ref(), &name, group.as_deref())?;

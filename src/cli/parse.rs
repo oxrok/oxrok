@@ -19,7 +19,8 @@ pub struct GenericArgs {
 
 /// Splits `text` on `:` into key value pairs. With `first_is_scope` the
 /// first element is a bare scope name (an output module id, a driver
-/// id). Otherwise an element `channel_group=X` becomes the scope.
+/// id). Otherwise a first element `channel_group=X` is the scope; later on
+/// it is a key like any other, which no device has (parsers.c:362-371).
 pub fn generic_args(text: &str, first_is_scope: bool) -> GenericArgs {
     let mut scope = None;
     let mut items = Vec::new();
@@ -35,13 +36,23 @@ pub fn generic_args(text: &str, first_is_scope: bool) -> GenericArgs {
             Some((k, v)) => (k.to_owned(), Some(v.to_owned())),
             None => (element.to_owned(), None),
         };
-        if k.eq_ignore_ascii_case("channel_group") {
+        if i == 0 && k.eq_ignore_ascii_case("channel_group") {
             scope = v;
             continue;
         }
         items.push((k, v));
     }
     GenericArgs { scope, items }
+}
+
+/// The argument of a `-c` or `--get`, whose first element may be the scope.
+/// An empty one is refused: sigrok-cli dies on an assertion there
+/// (parsers.c:363-364).
+pub fn option_args(text: &str) -> Result<GenericArgs> {
+    if text.starts_with(':') {
+        return Err(Error::Arg(format!("Invalid option '{text}': its first element is empty.")));
+    }
+    Ok(generic_args(text, false))
 }
 
 /// An option's value from `-c` or `-d`, as sigrok-cli's `opt_to_gvar()`:
@@ -213,7 +224,7 @@ fn resolve_scope(device: &dyn Device, own: Option<&str>, args: &Args) -> Result<
 pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
     let mut items = Vec::new();
     for (config, text) in args.configs.iter().enumerate() {
-        let parsed = generic_args(text, false);
+        let parsed = option_args(text)?;
         let group = resolve_scope(device, parsed.scope.as_deref(), args)?;
         for (name, v) in parsed.items {
             let key = resolve_key(device, &name, group.as_deref())?;
@@ -325,6 +336,44 @@ mod tests {
         assert_eq!(g.scope.as_deref(), Some("Logic"));
         assert_eq!(g.items.len(), 2);
         assert_eq!(g.items[1], ("rle".to_owned(), None));
+    }
+
+    #[test]
+    fn channel_group_is_the_scope_only_as_the_first_element() {
+        let g = generic_args("CHANNEL_GROUP=R1:enabled=on", false);
+        assert_eq!(g.scope.as_deref(), Some("R1"));
+        assert_eq!(g.items, [("enabled".to_owned(), Some("on".to_owned()))]);
+        let g = generic_args("enabled=on:channel_group=R1", false);
+        assert_eq!(g.scope, None);
+        assert_eq!(g.items[1], ("channel_group".to_owned(), Some("R1".to_owned())));
+        let g = generic_args("channel_group=R1:enabled=on:channel_group=R2", false);
+        assert_eq!(g.scope.as_deref(), Some("R1"));
+        assert_eq!(g.items[1], ("channel_group".to_owned(), Some("R2".to_owned())));
+        // An output's or a driver's own: an element like any other.
+        let g = generic_args("bits:channel_group=R1", true);
+        assert_eq!(g.scope.as_deref(), Some("bits"));
+        assert_eq!(g.items.len(), 1);
+    }
+
+    #[test]
+    fn a_misplaced_scope_sends_nothing() {
+        for bad in ["channel_group=R1:enabled=on:channel_group=R2", "enabled=on:channel_group=R1"] {
+            let (sent, result) = run_configs(&["-c", bad]);
+            let e = result.unwrap_err();
+            assert!(
+                matches!(&e, Error::Arg(m) if m == "Unknown device option 'channel_group'."),
+                "{bad}: {e}"
+            );
+            assert_eq!(sent, [] as [&str; 0], "{bad}");
+        }
+        let (sent, result) = run_configs(&["-c", ":enabled=on"]);
+        let e = result.unwrap_err();
+        assert!(matches!(&e, Error::Arg(m) if m.contains("first element is empty")), "{e}");
+        assert_eq!(sent, [] as [&str; 0]);
+        // An empty element further on is skipped, as in sigrok-cli.
+        let (sent, result) = run_configs(&["-c", "enabled=on::"]);
+        result.unwrap();
+        assert_eq!(sent, ["enabled=true"]);
     }
 
     fn demo(logic: i32) -> Box<dyn Device> {
