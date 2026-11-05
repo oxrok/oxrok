@@ -391,10 +391,25 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
             }
             ValueKind::RangeU64 => {
                 print!("    {id}: ");
-                if let Some(Value::RangeU64(lo, hi)) = get() {
-                    print!("{lo}-{hi} (current)");
+                let current = match get() {
+                    Some(Value::RangeU64(lo, hi)) => Some((lo, hi)),
+                    _ => None,
+                };
+                if let Some(ValueList::RangeU64(pairs)) = list() {
+                    let parts: Vec<String> = pairs
+                        .iter()
+                        .map(|&(lo, hi)| {
+                            let mark = if current == Some((lo, hi)) { " (current)" } else { "" };
+                            format!("{lo}-{hi}{mark}")
+                        })
+                        .collect();
+                    println!("{}", parts.join(", "));
+                } else {
+                    if let Some((lo, hi)) = current {
+                        print!("{lo}-{hi} (current)");
+                    }
+                    println!();
                 }
-                println!();
             }
             ValueKind::RationalPeriod | ValueKind::RationalVolt => {
                 // sigrok-cli: the key alone when there is no list, else
