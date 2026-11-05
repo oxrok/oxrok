@@ -204,6 +204,8 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_case "open: PC1 refused" -- -d $M -g 1 --get voltage
     emu_options setters=0 faults=2:silent
     emu_case "open: PC1 no answer" -- -d $M -g 1 --get voltage
+    emu_options setters=0 faults=2:count
+    emu_case "open: PC1 a wrong echo" -- -d $M -g 1 --get voltage
     emu_options setters=0 faults=4:exc04
     emu_case "close: PC1 refused" -- -d $M -g 1 --get voltage
     emu_options setters=0 faults=4:silent

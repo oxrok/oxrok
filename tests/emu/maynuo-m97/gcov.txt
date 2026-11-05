@@ -14,11 +14,11 @@ never reached, by function (line ranges hold no reached line):
     maynuo_m97_receive_data: 221
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/crc.c                        90.9%  10 of 11
-  src/modbus/modbus.c              90.2%  221 of 245
+  src/modbus/modbus.c              90.6%  222 of 245
   src/modbus/modbus_serial_rtu.c   94.2%  65 of 69
   src/serial.c                     27.9%  112 of 402
   src/serial_libsp.c               35.2%  90 of 256
-  total                            50.7%  498 of 983
+  total                            50.8%  499 of 983
 never reached, by function (line ranges hold no reached line):
   src/crc.c
     sr_crc16: 30
@@ -31,7 +31,7 @@ never reached, by function (line ranges hold no reached line):
     sr_modbus_request_reply: 312
     sr_modbus_read_coils: 406, 415
     sr_modbus_read_holding_registers: 455, 464
-    sr_modbus_write_coil: 498, 511
+    sr_modbus_write_coil: 498
     sr_modbus_write_multiple_registers: 535
   src/modbus/modbus_serial_rtu.c
     modbus_serial_rtu_send: 92, 96, 103
