@@ -60,7 +60,8 @@
 //!   point;
 //! - `faults=N:KIND[,N:KIND...]`, what happens to the answer to the Nth frame
 //!   addressed here: `silent`, `crc`, `addr` (another slave's), `short`
-//!   (three bytes short), `count` (a wrong byte count or echo), `func` (a
+//!   (three bytes short), `nocrc` (all but its CRC), `first` (its first byte
+//!   alone), `count` (a wrong byte count or echo), `func` (a
 //!   wrong function code), `extra` (two bytes more) or `excXX` (exception XX);
 //! - `setters=0`, which flags any write but the panel lock, for the cases
 //!   that show a tool changes nothing it was not asked to.
@@ -198,6 +199,8 @@ enum Kind {
     Crc,
     Addr,
     Short,
+    NoCrc,
+    AddressOnly,
     Count,
     Func,
     Extra,
@@ -210,6 +213,8 @@ fn parse_kind(text: &str) -> Option<Kind> {
         "crc" => Kind::Crc,
         "addr" => Kind::Addr,
         "short" => Kind::Short,
+        "nocrc" => Kind::NoCrc,
+        "first" => Kind::AddressOnly,
         "count" => Kind::Count,
         "func" => Kind::Func,
         "extra" => Kind::Extra,
@@ -555,6 +560,11 @@ impl Supply {
             Some(Kind::Crc) => bad_crc = true,
             Some(Kind::Addr) => address = address.wrapping_add(1),
             Some(Kind::Short) => cut = 3,
+            Some(Kind::NoCrc) => cut = 2,
+            Some(Kind::AddressOnly) => {
+                port.send(&[address]);
+                return;
+            }
             Some(Kind::Count) => answer[1] = answer[1].wrapping_add(2),
             Some(Kind::Func) => answer[0] ^= 0x01,
             Some(Kind::Extra) => extra = true,
@@ -948,6 +958,8 @@ mod tests {
         assert_ne!(crc, good);
         assert_eq!(reply("1:addr")[0], 2);
         assert_eq!(reply("1:short"), good[..good.len() - 3]);
+        assert_eq!(reply("1:nocrc"), good[..good.len() - 2]);
+        assert_eq!(reply("1:first"), good[..1]);
         assert_eq!(reply("1:count")[2], good[2] + 2);
         assert_eq!(reply("1:func")[1], READ_HOLDING ^ 1);
         assert_eq!(reply("1:extra")[..good.len()], good[..]);
