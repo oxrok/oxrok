@@ -13,8 +13,9 @@
 //!
 //! A scan polls once and goes by the id in the answer. A capture polls again
 //! at least 100 ms after the last, never while a reply is coming, and gives
-//! one frame per dump with a sample on each of six channels, whichever are
-//! enabled, as in C. The meter is only ever asked; nothing here changes it.
+//! one frame per dump with a sample on each channel that is enabled, where C
+//! sends all six whatever `-C` said (`protocol.c:213-220`). The meter is only
+//! ever asked; nothing here changes it.
 //!
 //! Where C ends up stuck, here the capture goes on or ends:
 //!
@@ -360,6 +361,7 @@ impl Device for UmDevice {
         }
         let capture = Capture {
             profile: self.profile,
+            enabled: self.channels.iter().map(|c| c.enabled).collect(),
             limit_frames: self.limit_frames,
             limit_msec: self.limit_msec,
             pace: self.pace,
@@ -393,6 +395,7 @@ impl Device for UmDevice {
 /// One capture, on its own thread: `rdtech_um_receive_data`.
 struct Capture {
     profile: &'static Profile,
+    enabled: Vec<bool>,
     limit_frames: u64,
     limit_msec: u64,
     pace: Pace,
@@ -482,12 +485,13 @@ impl Capture {
         }
     }
 
-    /// `process_data`'s frame: every channel, in order.
+    /// `process_data`'s frame: the channels that are on, in order.
     fn send_frame(&self, dump: &[u8; DUMP], sink: &PacketSink) -> bool {
         if !sink.send(Packet::FrameBegin) {
             return false;
         }
-        for (i, channel) in self.profile.channels.iter().enumerate() {
+        let on = self.profile.channels.iter().enumerate().filter(|(i, _)| self.enabled[*i]);
+        for (i, channel) in on {
             let sent = sink.send(Packet::Analog(AnalogData {
                 channels: vec![i],
                 samples: vec![channel.value(dump)],
@@ -751,6 +755,31 @@ mod tests {
         assert_eq!(seen.polls.len(), 1);
         assert_eq!(seen.other_writes, 0);
         assert_eq!(seen.purges, 1, "an open purges");
+    }
+
+    #[test]
+    fn a_frame_has_only_the_channels_that_are_on() {
+        let (fake, seen) = Fake::new();
+        let mut d = UmDevice::from_port(um24c(), Box::new(fake), QUICK);
+        d.limit_frames = 2;
+        for pos in [0, 2, 3, 4] {
+            d.enable_channel(pos, false).unwrap();
+        }
+        d.open().unwrap();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let packets = until_end(&rx);
+        let channels: Vec<usize> = packets
+            .iter()
+            .filter_map(|p| match p {
+                Packet::Analog(a) => Some(a.channels[0]),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(channels, [1, 5, 1, 5]);
+        assert_eq!(frame_count(&packets), 2, "the frames are counted all the same");
+        assert_eq!(seen.lock().unwrap().polls.len(), 2);
+        d.close().unwrap();
     }
 
     #[test]

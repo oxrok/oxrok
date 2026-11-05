@@ -18,6 +18,7 @@ emu_cases() {
     HUP_BUG="a hung up port is not read, as its events are not plain G_IO_IN (protocol.c:350), and the failed poll is dropped (protocol.c:365), so it logs that for ever; oxrok ends the capture"
     SILENT_BUG="a meter that does not answer is polled for ever, and the frame limit is never reached (protocol.c:365); oxrok ends the capture after 30 s, where only that limit could"
     DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
+    CHANNEL_BUG="process_data sends every channel whatever -C said (protocol.c:213-220 has no ch->enabled), and the analog output prints them; the man page has -C as the channels to be used, and csv and other drivers honour it; oxrok sends those asked for"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # What a scan finds, in each model's dump.
     for m in um24c um25c um34c; do
@@ -75,14 +76,14 @@ emu_cases() {
     # A capture: a frame per poll, a channel apiece.
     emu_case "frames 5" -- -d $U --frames 5
     emu_case "config limit_frames" --libsigrok --oxrok -- -d $U -c limit_frames=2 --continuous -O analog
-    emu_case "channel V" -- -d $U -C V --frames 2
-    emu_case "channel I" -- -d $U -C I --frames 2
-    emu_case "channel D plus" -- -d $U -C D+ --frames 2
+    emu_case "channel V" --oracle-differs "$CHANNEL_BUG" -- -d $U -C V --frames 2
+    emu_case "channel I" --oracle-differs "$CHANNEL_BUG" -- -d $U -C I --frames 2
+    emu_case "channel D plus" --oracle-differs "$CHANNEL_BUG" -- -d $U -C D+ --frames 2
     # sigrok-cli reads the dash as a range, whose end is missing.
     emu_case "channel D minus" --oracle-bug "$DASH_BUG" --stderr --expect-fail -- -d $U -C D- --frames 2
-    emu_case "channel T" -- -d $U -C T --frames 2
-    emu_case "channel E" -- -d $U -C E --frames 2
-    emu_case "channels V and E" -- -d $U -C V,E --frames 2
+    emu_case "channel T" --oracle-differs "$CHANNEL_BUG" -- -d $U -C T --frames 2
+    emu_case "channel E" --oracle-differs "$CHANNEL_BUG" -- -d $U -C E --frames 2
+    emu_case "channels V and E" --oracle-differs "$CHANNEL_BUG" -- -d $U -C V,E --frames 2
     emu_case "channel E csv" -- -d $U -C E --frames 2 -O csv:header=false:time=false
     # The readings' corners, in single precision and scaled by a double.
     emu_options volts=0,1,12,512,2000,65535 amps=0,1,999,1000,3000,65535 dplus=0,1,330,65535 dminus=65535,330,1,0 celsius=0,1,85,65535 energy=0,1,16777217,4294967295
