@@ -22,11 +22,13 @@
 //! put nothing on the wire. A setting is one line with no answer.
 //!
 //! A capture asks `IOUTn?` and `VOUTn?` of each channel every 100 ms after the
-//! last answer, and a sample counts at each round. An answer that is no number,
-//! or a round that does not come, ends the capture with the C's message, where
-//! C sends no more queries and never ends under a sample limit. A round not
-//! begun after [`REPLY_BOUND`] is such a one (`req_sent_at` is there in C, but
-//! nothing reads it).
+//! last answer, and a sample counts at each round. An answer that is no number
+//! ends the capture with the C's message, where C sends no more queries and
+//! never ends under a sample limit. A round that does not begin ends it only
+//! where a sample limit alone could have ended it, after [`REPLY_BOUND`]
+//! (`req_sent_at` is there in C, but nothing reads it). Under a time limit, or
+//! with no limit, it waits as C does, for the limit or a stop, and a late reply
+//! carries on.
 //!
 //! See [`protocol`].
 
@@ -70,9 +72,10 @@ static GROUP_OPTIONS: [OptionDesc; 4] = [
 
 /// The session source's timeout in `dev_acquisition_start`.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// How long a round's first byte may take. C waits for ever. No device says
-/// what is right; a reply is 250 ms at most once begun, and a supply busy on
-/// its panel should not end a capture.
+/// How long a round's first byte may take when only a sample limit could end
+/// the capture, where C waits for ever. No device says what is right; a reply
+/// is 250 ms at most once begun, and a supply busy on its panel should not end
+/// a capture.
 pub const REPLY_BOUND: Duration = Duration::from_secs(2);
 /// How often a wait looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(5);
@@ -548,8 +551,16 @@ impl Capture {
         }
     }
 
-    /// Up to [`REPLY_BOUND`] for a round to begin, where C waits for ever. Only
-    /// its timer's passes look at the limits there: every 100 ms.
+    /// Whether a device that stops answering would keep this capture for ever:
+    /// nothing but samples can end it. `--time` and `--continuous` end by their
+    /// own limit or a stop, and wait as C does.
+    fn bounded(&self) -> bool {
+        self.limit_samples > 0 && self.limit_msec == 0
+    }
+
+    /// For a round to begin: up to [`REPLY_BOUND`] if [`Self::bounded`], where C
+    /// waits for ever. Only its timer's passes look at the limits there: every
+    /// 100 ms.
     fn first_byte(&self, stop: &AtomicBool, started: Instant) -> Result<Wait> {
         let asked = Instant::now();
         let mut next_check = asked + POLL_INTERVAL;
@@ -567,7 +578,7 @@ impl Capture {
                 }
                 next_check += POLL_INTERVAL;
             }
-            if asked.elapsed() >= REPLY_BOUND {
+            if self.bounded() && asked.elapsed() >= REPLY_BOUND {
                 return Err(Error::device("no reply to the readings"));
             }
         }
@@ -639,7 +650,8 @@ mod tests {
     /// A supply that answers as the protocol says, noting each write and when.
     struct Fake {
         seen: Seen,
-        input: VecDeque<u8>,
+        /// Each byte and when it arrives.
+        input: VecDeque<(Instant, u8)>,
         eol: &'static [u8],
         fail_writes_after: Option<usize>,
         /// Queries after which no more are answered.
@@ -648,6 +660,10 @@ mod tests {
         replies: VecDeque<Vec<u8>>,
         /// A line after each `VOUT2?`.
         chatter: Option<&'static [u8]>,
+        /// How long after the query the chatter comes.
+        chatter_pause: Duration,
+        /// The answers to the write of this number come this much later.
+        late: Option<(usize, Duration)>,
     }
 
     impl Fake {
@@ -661,8 +677,20 @@ mod tests {
                 answers: None,
                 replies: VecDeque::new(),
                 chatter: None,
+                chatter_pause: Duration::ZERO,
+                late: None,
             };
             (fake, seen)
+        }
+
+        /// Bytes that are there now.
+        fn offer(&mut self, bytes: &[u8]) {
+            let now = Instant::now();
+            self.input.extend(bytes.iter().map(|b| (now, *b)));
+        }
+
+        fn arrived(&self, now: Instant) -> usize {
+            self.input.iter().take_while(|(at, _)| *at <= now).count()
         }
 
         fn answer(query: &[u8]) -> Vec<u8> {
@@ -693,13 +721,16 @@ mod tests {
             Ok(())
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-            if self.input.is_empty() {
-                std::thread::sleep(timeout);
+            let now = Instant::now();
+            let n = self.arrived(now).min(buf.len());
+            if n == 0 {
+                let until = now + timeout;
+                let next = self.input.front().map_or(until, |(at, _)| *at);
+                std::thread::sleep(next.min(until).saturating_duration_since(now));
                 return Ok(0);
             }
-            let n = self.input.len().min(buf.len());
             for b in &mut buf[..n] {
-                *b = self.input.pop_front().expect("counted");
+                *b = self.input.pop_front().expect("counted").1;
             }
             Ok(n)
         }
@@ -708,7 +739,14 @@ mod tests {
             if self.fail_writes_after.is_some_and(|n| seen.len() >= n) {
                 return Err(Error::device("Broken pipe"));
             }
-            seen.push((Instant::now(), data.to_vec()));
+            let now = Instant::now();
+            seen.push((now, data.to_vec()));
+            let at = match self.late {
+                Some((number, late)) if number == seen.len() - 1 => now + late,
+                _ => now,
+            };
+            // A device answers in order: nothing overtakes what it owes.
+            let at = self.input.back().map_or(at, |(last, _)| at.max(*last));
             for query in data.split(|c| *c == b'\n').filter(|q| q.ends_with(b"?")) {
                 if self.answers == Some(0) {
                     continue;
@@ -717,17 +755,17 @@ mod tests {
                     *n -= 1;
                 }
                 let reply = self.replies.pop_front().unwrap_or_else(|| Fake::answer(query));
-                self.input.extend(reply);
-                self.input.extend(self.eol);
+                self.input.extend(reply.iter().chain(self.eol).map(|b| (at, *b)));
                 if let (b"VOUT2?", Some(chatter)) = (query, self.chatter) {
-                    self.input.extend(chatter);
-                    self.input.extend(self.eol);
+                    let later = at + self.chatter_pause;
+                    self.input.extend(chatter.iter().chain(self.eol).map(|b| (later, *b)));
                 }
             }
             Ok(())
         }
         fn purge(&mut self) -> Result<()> {
-            self.input.clear();
+            let n = self.arrived(Instant::now());
+            self.input.drain(..n);
             Ok(())
         }
     }
@@ -837,23 +875,23 @@ mod tests {
     #[test]
     fn a_line_stops_at_the_buffer_and_at_its_time() {
         let (mut fake, _) = Fake::new(b"\n");
-        fake.input.extend(vec![b'1'; 51]);
-        fake.input.extend(b"\nrest\n");
+        fake.offer(&[b'1'; 51]);
+        fake.offer(b"\nrest\n");
         let mut link = Link::new(Some(Box::new(fake)), params(), &protocol::MODELS[0]);
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap(), None, "51 of 50");
         // C reads the same 51 bytes and no more: the line end is what comes next.
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap().unwrap(), b"rest");
 
         let (mut fake, _) = Fake::new(b"\n");
-        fake.input.extend(vec![b'1'; 50]);
-        fake.input.extend(b"\n");
+        fake.offer(&[b'1'; 50]);
+        fake.offer(b"\n");
         let mut link = Link::new(Some(Box::new(fake)), params(), &protocol::MODELS[0]);
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap().unwrap().len(), 50);
 
         // Line ends without an end: a device can't hold the read past its time.
         let (mut fake, _) = Fake::new(b"\n");
-        fake.input.extend(vec![b'\n'; 1 << 20]);
-        fake.input.extend(b"late\n");
+        fake.offer(&vec![b'\n'; 1 << 20]);
+        fake.offer(b"late\n");
         let mut link = Link::new(Some(Box::new(Slow(fake))), params(), &protocol::MODELS[0]);
         let began = Instant::now();
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap(), None);
@@ -940,7 +978,22 @@ mod tests {
     }
 
     #[test]
-    fn a_time_limit_ends_a_wait_for_a_silent_device_ahead_of_the_bound() {
+    fn a_time_limit_outlasts_the_bound_on_a_silent_device() {
+        let (mut fake, seen) = Fake::new(b"\r\n");
+        fake.answers = Some(0);
+        let mut d = device(fake);
+        let limit = REPLY_BOUND + Duration::from_millis(500);
+        d.set(&Key::LimitMsec, &Value::U64(limit.as_millis() as u64), None).unwrap();
+        let began = Instant::now();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), NOTHING);
+        assert!(began.elapsed() >= limit, "ended at {:?}", began.elapsed());
+        assert!(began.elapsed() < limit + Duration::from_secs(2));
+        assert_eq!(seen.lock().unwrap().len(), 2, "asked once, as C");
+    }
+
+    #[test]
+    fn a_time_limit_ends_a_wait_for_a_silent_device() {
         let (mut fake, _) = Fake::new(b"\r\n");
         fake.answers = Some(0);
         let mut d = device(fake);
@@ -949,6 +1002,67 @@ mod tests {
         let rx = start(&mut d);
         assert_eq!(readings(&rx), NOTHING);
         assert!(began.elapsed() < REPLY_BOUND);
+    }
+
+    #[test]
+    fn a_samples_and_time_capture_waits_for_its_time_not_the_bound() {
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.answers = Some(0);
+        let mut d = device(fake);
+        let limit = REPLY_BOUND + Duration::from_millis(500);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        d.set(&Key::LimitMsec, &Value::U64(limit.as_millis() as u64), None).unwrap();
+        let began = Instant::now();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), NOTHING);
+        assert!(began.elapsed() >= limit, "ended at {:?}", began.elapsed());
+    }
+
+    #[test]
+    fn with_no_limit_a_silent_device_is_waited_for_until_a_stop() {
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.answers = Some(0);
+        let mut d = device(fake);
+        let rx = start(&mut d);
+        std::thread::sleep(REPLY_BOUND + Duration::from_millis(500));
+        assert!(
+            !matches!(rx.try_recv(), Ok((_, Packet::End)))
+                && !d.worker.as_ref().unwrap().handle.is_finished(),
+            "the bound ended it"
+        );
+        d.stop().unwrap();
+        assert_eq!(readings(&rx), NOTHING);
+    }
+
+    #[test]
+    fn a_reply_later_than_the_bound_carries_on_with_no_sample_limit() {
+        // The round after the first comes 2.5 s late.
+        for time_limit in [false, true] {
+            let (mut fake, _) = Fake::new(b"\r\n");
+            fake.late = Some((2, REPLY_BOUND + Duration::from_millis(500)));
+            let mut d = device(fake);
+            if time_limit {
+                d.set(&Key::LimitMsec, &Value::U64(3500), None).unwrap();
+            }
+            let rx = start(&mut d);
+            if !time_limit {
+                std::thread::sleep(REPLY_BOUND + Duration::from_millis(900));
+                d.stop().unwrap();
+            }
+            let got = readings(&rx);
+            assert!(got.len() >= 8, "{time_limit}: {got:?}");
+            assert_eq!(got[..8], [ROUND, ROUND].concat()[..], "{time_limit}");
+        }
+    }
+
+    #[test]
+    fn a_reply_within_the_bound_carries_on_under_a_sample_limit() {
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.late = Some((2, REPLY_BOUND - Duration::from_millis(500)));
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [ROUND, ROUND].concat());
     }
 
     #[test]

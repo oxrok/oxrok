@@ -54,7 +54,7 @@ emu_cases() {
     STATUS_MSG="s/^(sr: gwinstek-gpd: Invalid reply to STATUS: ').*(')/\1\2/"
     OLD_BYTES_BUG="protocol.c:133 and :155 drop gpd_receive_reply's result; reply[0] is cleared but what follows is not, so after a leftover LF a read that failed parses the last reply less its first byte, and counts a sample; oxrok ends the capture"
     STUCK_BUG="protocol.c:137 and :159 return ahead of the limit's check at :190 with reply_pending still set (:186), and :181 sends no query while it is set: a --samples capture never ends; oxrok ends it with the same message"
-    SILENT_BUG="req_sent_at (protocol.c:185) is never read, so a reply that never comes (:181) leaves a --samples capture waiting for ever; oxrok gives up after 2 s"
+    SILENT_BUG="req_sent_at (protocol.c:185) is never read, so a reply that never comes (:181) leaves a --samples capture waiting for ever; with only a sample limit oxrok gives up after 2 s. Under --time or --continuous both wait"
     LONG_BUG="protocol.c:62 reads one byte past buflen and :87 writes one more, and :133's result is dropped, so a line too long reads as two readings and shifts all that follow; oxrok ends the capture"
     NAN_BUG="api.c:350-351 and :360-361's two comparisons let a NaN through, and :353 sends 'VSET1:  nan' to a live output; oxrok refuses it"
     ZERO_BUG="api.c:350 lets -0.0 through and :353 sends it as -0.000; oxrok sends 0"
@@ -303,6 +303,10 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     emu_case "silent from the capture on" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 4 -- -d $K --samples 1
     # A time limit does end those: the timer's branch checks it.
     emu_case "silent from the capture on, time" --no-output --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/q' -- -d $K --time 300ms
+    # Past oxrok's 2 s bound, which a time limit does not have: how long each
+    # ran is a unit test's, as a .tx has no clock. A signal ends the same wait
+    # with no limit (the "interrupt" case).
+    emu_case "silent past the bound, time" --no-output --timeout 10 --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/q' -- -d $K --time 3s
     # goto error frees match_info and regex (api.c:258-261), and no path clears
     # them for the next rate: a later error path frees them again. Here it
     # corrupts the heap some runs ("malloc(): smallbin double linked list
