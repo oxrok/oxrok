@@ -13,9 +13,8 @@
 //! - The answers' shape: `PyGPD3303S` drops one unit letter from a number,
 //!   `A` or `V`. The widths here (`2.000A`, `12.000V`) are a guess from that:
 //!   the vendor's manual could not be read (its copies refused the download).
-//! - The line ends: `PyGPD3303S`'s "by default, \r is the delimiter, but
-//!   newer GPD3303S uses \r\n instead", so `eol=crlf` by default and `eol=cr`
-//!   for the old firmware. `eol=lf` is what `protocol.c`'s reader takes too;
+//! - The line ends: `PyGPD3303S` looks for CR first and takes CR LF on newer
+//!   units, so `eol=crlf` by default and `eol=cr` for the old firmware. `eol=lf` is what `protocol.c`'s reader takes too;
 //!   nothing shows a unit does it.
 //! - The ID: `api.c`'s comment, `GW INSTEK,GPD-2303S,SN:ER915277,V2.10`.
 //! - The status: `api.c`'s `sscanf`, eight digits in the order CH1 mode, CH2
