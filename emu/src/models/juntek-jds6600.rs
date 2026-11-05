@@ -14,8 +14,9 @@
 //!   commas, `.`, end of line. `r` reads a register and `w` writes one; `a`
 //!   and `b` move arbitrary waveforms. `protocol.c`'s notes and examples,
 //!   and the same framing and register numbers in Kristoff Bonne's
-//!   `on1arf/jds6600_python` (which ends a line in LF alone). A read's `=0`
-//!   means nothing certain; the notes say any value worked. The Joy-IT
+//!   `on1arf/jds6600_python` (which ends a line in LF alone). What a read's
+//!   `=0` means is open: the notes say 0 worked, and so did leaving it out at
+//!   a terminal. In the Python code `=N` reads N+1 registers. The Joy-IT
 //!   protocol PDF could not be fetched, so it is not used here.
 //! - The replies: `:rNN=VALUE.` with CR LF on a read, `:ok` with CR LF on a
 //!   write, byte for byte in `protocol.c`'s examples. The Python code also
@@ -24,7 +25,13 @@
 //!   number, 20 two enable flags, 21 and 22 a waveform (0 to 16 built in,
 //!   101 to 160 arbitrary), 23 and 24 centihertz and a scale code, 25 and 26
 //!   millivolts, 27 and 28 tens of millivolts plus 10 V, 29 and 30 tenths of
-//!   a percent, 31 tenths of a degree. Both sources agree.
+//!   a percent, 31 tenths of a degree. Both sources agree on these, but for
+//!   the scale code, on which they disagree: `protocol.c` divides by its
+//!   table (1, 1, 1, 1e-3, 1e-6) and the Python code multiplies by the same
+//!   table, so `100,3` is 1000 Hz to one and 0.001 Hz to the other. The notes
+//!   beside the Python code, that codes 3 and 4 give a finer precision, fit
+//!   only that reading. No recording settles it. This model only stores the
+//!   text, so a `--get` shows the driver's reading and not the device's.
 //! - What a serial number looks like: neither source shows one. `1234567890`
 //!   is a stand-in, as is the rest of the state at power on, but for `60`,
 //!   `1,1` and `103`, which `protocol.c`'s examples show.
@@ -35,7 +42,8 @@
 //!   UART, so this is close, and a model has no clock to check more with.
 //! - A write is stored as its text and read back so. A real one may clip or
 //!   move a value (the notes say amplitude and offset depend on the rest of
-//!   the state, and the Python code says offsets stop at 2.5 V).
+//!   the state, and a comment in the Python code says offsets seem to stop at
+//!   2.5 V).
 //! - The notes say a request typed by hand gets its `:ok` and does nothing.
 //!   Nothing here tells a person from a program.
 //!
@@ -60,13 +68,16 @@
 //!   changes nothing it was not asked to.
 //!
 //! The pedantic checks: only the registers above, reads with `=0`, every line
-//! ending in `.` CR LF, each value in the form and range its register has;
-//! nothing left of a line when a tool opens. Some values are taken although
-//! nothing shows a real one accepts them, as a device that says `:ok` to
-//! what it cannot do has no way to refuse: `nan` and `-nan` on what a
-//! driver's limits do not catch, changing nothing, and `-0` and negative
-//! phases, kept as they came (the Python code sends a negative phase plus
-//! 360 degrees, which suggests the firmware might not take the sign).
+//! ending in `.` CR LF, each value in the form and within the range `protocol.c`
+//! sends; nothing left of a line when a tool opens. Those ranges are the C
+//! driver's limits and not the device's: the Python code's requests send offsets
+//! 0 and 2000 and phases of 3600 and more, which are flagged here though a real
+//! one may well take them. Some values are taken although nothing shows a real
+//! one accepts them, as a device that says `:ok` to what it cannot do has no way
+//! to refuse: `nan` and `-nan` on what a driver's limits do not catch, changing
+//! nothing, and `-0` and negative phases, kept as they came. On a negative phase
+//! the Python code adds 3600 to the degrees before it multiplies by 10, so -90
+//! goes out as 35100. That only hints that the firmware might not take a sign.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
