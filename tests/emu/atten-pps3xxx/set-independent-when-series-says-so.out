@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::atten_pps3xxx: channel_config=Independent sent nothing: the device reports Series, and it stays so.
