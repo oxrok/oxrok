@@ -19,8 +19,9 @@
 //! or `--continuous` so does this driver, as a late reply recovers there. Only
 //! a frame limit alone could then never end the capture, so there a reply owed
 //! for [`NO_REPLY_BOUND`] does. That has a price: a reply later than that loses
-//! what C would still get. A request that cannot go out ends the capture too,
-//! where C keeps trying. A bad reply ends it, as in C.
+//! what C would still get. A request that fails is tried again on the next
+//! pass, as in C, which goes on for ever: here [`MAX_WRITE_FAILURES`] in a row
+//! end the capture. A bad reply ends it, as in C.
 //!
 //! C's Bluetooth ports (`bt/...`, `bgetva\r\n`) are not here: `serial::open`
 //! has none.
@@ -63,6 +64,9 @@ const SOURCE_PERIOD: Duration = Duration::from_millis(50);
 /// reply however late. A real meter's pace is not known; this leaves it room
 /// many times its 2 Hz display. A time limit or a client's stop ends the rest.
 pub const NO_REPLY_BOUND: Duration = Duration::from_secs(5);
+/// Failed requests in a row that end a capture. Each pass tries again, so with
+/// nothing to read they are a [`SOURCE_PERIOD`] apart, a quarter of a second.
+pub const MAX_WRITE_FAILURES: u32 = 5;
 /// The pause after a read that gave nothing before its time, as a hung up tty
 /// gives 0 at once.
 const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
@@ -364,6 +368,8 @@ struct Rx {
     requested: Instant,
     /// Since when nothing has come of a reply owed.
     quiet_since: Instant,
+    /// Requests that failed since the last that went out.
+    write_failures: u32,
 }
 
 enum Pass {
@@ -382,6 +388,7 @@ impl Capture {
             since_request: 0,
             requested: started,
             quiet_since: started,
+            write_failures: 0,
         };
         let mut frames = 0;
         let mut guard = self.port.lock().expect("port lock");
@@ -483,8 +490,10 @@ impl Capture {
         if let Err(e) = port.write(POLL_REQUEST) {
             log::error!("Unable to send poll request.");
             log::debug!("{e}");
-            return Pass::End;
+            rx.write_failures += 1;
+            return if rx.write_failures >= MAX_WRITE_FAILURES { Pass::End } else { Pass::Go };
         }
+        rx.write_failures = 0;
         rx.requested = Instant::now();
         rx.quiet_since = rx.requested;
         rx.since_request = 0;
@@ -507,6 +516,8 @@ mod tests {
     #[derive(Default)]
     struct Seen {
         writes: Vec<(Instant, Vec<u8>)>,
+        /// Writes tried, those that failed too.
+        attempts: usize,
     }
 
     /// A meter: each write brings the next scripted answer, the last again
@@ -516,6 +527,8 @@ mod tests {
         input: VecDeque<u8>,
         answers: Vec<Vec<u8>>,
         fail_writes_after: Option<usize>,
+        /// The attempts, from 0, that fail.
+        fail_attempts: Vec<usize>,
         fail_reads: bool,
     }
 
@@ -527,6 +540,7 @@ mod tests {
                 input: VecDeque::new(),
                 answers,
                 fail_writes_after: None,
+                fail_attempts: Vec::new(),
                 fail_reads: false,
             };
             (fake, seen)
@@ -559,7 +573,11 @@ mod tests {
         }
         fn write(&mut self, data: &[u8]) -> Result<()> {
             let mut seen = self.seen.lock().unwrap();
-            if self.fail_writes_after.is_some_and(|n| seen.writes.len() >= n) {
+            let attempt = seen.attempts;
+            seen.attempts += 1;
+            if self.fail_attempts.contains(&attempt)
+                || self.fail_writes_after.is_some_and(|n| seen.writes.len() >= n)
+            {
                 return Err(Error::device("Broken pipe"));
             }
             let number = seen.writes.len();
@@ -826,16 +844,48 @@ mod tests {
     }
 
     #[test]
-    fn a_request_that_fails_ends_the_capture_or_its_start() {
-        let (mut fake, seen) = Fake::new(vec![good()]);
-        fake.fail_writes_after = Some(1);
-        let packets = capture(&mut device(fake));
-        assert_eq!(frames(&packets), 1);
-        assert_eq!(writes(&seen), 1);
+    fn a_first_request_that_fails_fails_the_start() {
         let (mut fake, _) = Fake::new(vec![good()]);
         fake.fail_writes_after = Some(0);
         let (tx, _rx) = sync_channel(16);
         assert!(device(fake).start(PacketSink::new(tx, 0)).is_err());
+    }
+
+    #[test]
+    fn a_request_that_fails_is_tried_again() {
+        let (mut fake, seen) = Fake::new(vec![good()]);
+        fake.fail_attempts = (1..).take(MAX_WRITE_FAILURES as usize - 1).collect();
+        let mut d = device(fake);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        assert_eq!(frames(&capture(&mut d)), 2, "one short of the bound");
+        assert_eq!(writes(&seen), 2);
+        assert_eq!(seen.lock().unwrap().attempts, 1 + MAX_WRITE_FAILURES as usize);
+    }
+
+    #[test]
+    fn only_failures_in_a_row_count() {
+        let (mut fake, seen) = Fake::new(vec![good()]);
+        // Every other request fails, more of them than the bound.
+        let rounds = 2 * MAX_WRITE_FAILURES as usize;
+        fake.fail_attempts = (0..rounds).map(|i| 2 * i + 1).collect();
+        let mut d = device(fake);
+        let limit = u64::try_from(rounds).unwrap();
+        d.set(&Key::LimitFrames, &Value::U64(limit), None).unwrap();
+        assert_eq!(frames(&capture(&mut d)), rounds);
+        assert_eq!(writes(&seen), rounds);
+    }
+
+    #[test]
+    fn requests_that_keep_failing_end_the_capture_at_the_bound() {
+        let (mut fake, seen) = Fake::new(vec![good()]);
+        fake.fail_writes_after = Some(1);
+        let mut d = device(fake);
+        // No limit: only the bound can end this.
+        d.no_reply_bound = CAPTURE_BOUND * 2;
+        let packets = capture(&mut d);
+        assert_eq!(frames(&packets), 1);
+        assert_eq!(writes(&seen), 1);
+        assert_eq!(seen.lock().unwrap().attempts, 1 + MAX_WRITE_FAILURES as usize);
     }
 
     #[test]
