@@ -194,9 +194,10 @@ Deliberate, and kept small:
   first element (`-c :enabled=on`) is refused; sigrok-cli dies on an
   assertion. An empty group name (`channel_group=`, `-g ""`) is refused
   too, where sigrok-cli takes it as device-wide: a shell variable that
-  came out empty should not switch every output. `global`, in any case,
-  is device-wide in both. Group names match without case on every
-  driver.
+  came out empty should not switch every output. This is a decision of
+  2026-11-05, for now; `EMPTY_GROUP_IS_DEVICE_WIDE` in `src/cli/parse.rs`
+  says how to undo it. `global`, in any case, is device-wide in both.
+  Group names match without case on every driver.
 - A boolean in `-c` or `-d` must be `true`, `yes`, `on`, `1`, `false`,
   `no`, `off` or `0`, in any case; anything else is refused.
   `sr_parse_boolstring()` takes an empty string as true, matches

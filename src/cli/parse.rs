@@ -201,20 +201,27 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     ConfigPlan { settings: offs, enables }
 }
 
+/// Whether an empty group name (`channel_group=`, `-g ""`) means the whole
+/// device, as in sigrok-cli. Decided 2026-11-05: not for now, as a shell
+/// variable that came out empty should not switch every output, and
+/// `channel_group=global` says it outright. To follow sigrok-cli, set this to
+/// true, delete the test `an_empty_group_is_refused` and the sentence in
+/// docs/CLI.md that names this constant.
+const EMPTY_GROUP_IS_DEVICE_WIDE: bool = false;
+
 /// The scope of a `-c`, a `--get` or a `--show`: its own `channel_group=`,
 /// else `-g`, as the device spells it whatever the case given, and `None` for
 /// the device, `global` in any case, as sigrok-cli's `lookup_channel_group()`
 /// (device.c). Refused in its words, which end sigrok-cli too (a critical
 /// message exits, main.c:46-47), though after what it already sent. An empty
-/// name, device-wide there, is refused too: a shell variable that came out
-/// empty should not switch every output.
+/// name: see [`EMPTY_GROUP_IS_DEVICE_WIDE`].
 pub fn resolve_scope(
     device: &dyn Device,
     own: Option<&str>,
     args: &Args,
 ) -> Result<Option<String>> {
     let Some(name) = own.or(args.channel_group.as_deref()) else { return Ok(None) };
-    if name.eq_ignore_ascii_case("global") {
+    if name.eq_ignore_ascii_case("global") || (EMPTY_GROUP_IS_DEVICE_WIDE && name.is_empty()) {
         return Ok(None);
     }
     let groups = device.channel_groups();

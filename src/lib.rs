@@ -99,6 +99,7 @@ pub mod drivers {
     pub mod microchip_pickit2;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
+    pub mod rdtech_tc;
     pub mod rdtech_um;
     pub mod rigol_ds;
     pub mod saleae_logic16;
@@ -120,6 +121,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
+    registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));
     registry.register(Box::new(drivers::microchip_pickit2::Pickit2Driver));
     registry.register(Box::new(drivers::fx2lafw::Fx2lafwDriver));

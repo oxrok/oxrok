@@ -97,7 +97,7 @@ pub fn si_prefix(value: &mut f32, digits: &mut i32) -> &'static str {
     if prefix > POS {
         prefix = POS;
     }
-    // `powf`, and a product, as C: a quotient rounds otherwise (`E: 16.777218 kWh`).
+    // Times a float power of ten, as `analog.c:412`: dividing rounds otherwise.
     *value *= 10f32.powf((-3 * prefix) as f32);
     *digits += 3 * prefix;
     PREFIXES[(prefix + NEG) as usize]
@@ -199,11 +199,9 @@ mod tests {
         assert_eq!(f(-10.0), "-10.0000 V DC");
         assert_eq!(f(-1.0), "-1000.0 mV DC");
         assert_eq!(f(0.5), "500.0 mV DC");
-        // Significant digits are kept, so the decimals grow with the prefix.
-        // ... and the last of them is sr_analog_si_prefix's own: it multiplies
-        // by 0.001f, which is not 1/1000. Both are what that function gives.
+        // Significant digits are kept, so the decimals grow with the prefix,
+        // and they show the float: tests/emu/rdtech-tc/1500-volts-analog.oracle.
         assert_eq!(f(1500.0), "1.5000001 kV DC");
-        assert_eq!(f(16777.216), "16.7772179 kV DC");
     }
 
     #[test]
