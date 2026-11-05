@@ -332,11 +332,9 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
                     let parts: Vec<String> = values
                         .iter()
                         .map(|v| {
-                            if Some(*v) == current {
-                                format!("{} (current)", fmt_f64(*v))
-                            } else {
-                                fmt_f64(*v)
-                            }
+                            // `%f`, show.c's list of doubles.
+                            let mark = if Some(*v) == current { " (current)" } else { "" };
+                            format!("{v:.6}{mark}")
                         })
                         .collect();
                     println!("{}", parts.join(", "));

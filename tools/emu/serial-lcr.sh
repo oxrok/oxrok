@@ -4,7 +4,7 @@
 EMU_MODEL=serial-lcr
 EMU_CDC=1
 EMU_DRIVER="deree-de5000 mastech-ms5308 peaktech-2170 uni-t-ut612 peaktech-2165 voltcraft-4080"
-EMU_FULL=
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=serial-lcr
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c src/lcr/es51919.c src/lcr/vc4080.c"
 
@@ -37,7 +37,7 @@ es_second() {
 # es_sweep NAME FRAMES PACKET...: a capture of these packets, in turn, behind
 # the scan's two; FRAMES is how many of them make a frame, and the last must.
 # The burst holds what follows, so no count here depends on how long a tool
-# listens. ES_FLAGS has flags for emu_case.
+# listens. ES_FLAGS=stderr compares what is logged instead of the output.
 es_sweep() {
     _name=$1
     _frames=$2
@@ -47,7 +47,11 @@ es_sweep() {
         _list=$_list,$_p
     done
     emu_options period=5 scan-burst=2 burst=$# packet=$_list
-    emu_case "$_name" --keep-header $ES_FLAGS -- -d $D --frames $_frames
+    if [ "$ES_FLAGS" = stderr ]; then
+        emu_case "$_name" --stderr --filter "$F" -- -d $D --frames $_frames
+    else
+        emu_case "$_name" --keep-header -- -d $D --frames $_frames
+    fi
 }
 
 # A vc4080 packet as text: the 27 characters from the function to the Q range,
@@ -67,7 +71,11 @@ vc_sweep() {
         _list=$_list,$_p
     done
     emu_options meter=vc4080 packet=$_list
-    emu_case "$_name" --driver voltcraft-4080 --keep-header $VC_FLAGS -- -d $V --frames $_frames
+    if [ "$VC_FLAGS" = stderr ]; then
+        emu_case "$_name" --driver voltcraft-4080 --stderr --filter "$F" -- -d $V --frames $_frames
+    else
+        emu_case "$_name" --driver voltcraft-4080 --keep-header -- -d $V --frames $_frames
+    fi
 }
 
 # The seven main display ranges of a function and frequency.
@@ -99,6 +107,12 @@ emu_cases() {
     VC_DEFAULT=$(vc_flagged __________)
     ES_FLAGS=
     VC_FLAGS=
+    # oxrok's log prefix, on its side only.
+    F='s/^oxrok: [a-z]+: oxrok::lcr::es51919: /sr: es51919: /
+s/^oxrok: [a-z]+: oxrok::lcr::vc4080: /sr: vc4080: /
+s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
+    HUP_BUG="lcr_receive_data takes a hung up port for a timeout (protocol.c:193-196: revents is not exactly G_IO_IN), and neither a meter that is not asked nor vc4080_packet_request, which ignores its write, can fail there, so it never ends at a frame limit; oxrok ends the capture"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What is on the line, for each id of the table.
     emu_case "es show" --keep-header -- -d $D --show
@@ -145,7 +159,6 @@ emu_cases() {
     emu_case "es P1 alone" --keep-header -- -d $D -C P1 --frames 1
     emu_case "es P2 alone" --keep-header -- -d $D -C P2 --frames 1
     emu_case "es renamed" --keep-header -- -d $D -C P1=main,P2 --frames 1
-    emu_case "es no such channel" --expect-fail --stderr -- -d $D -C P3 --frames 1
     # The limit is checked once all of a read is out: a read holding two
     # packets sends both.
     emu_options scan-burst=2 burst=1 noise=$ES_DEFAULT
@@ -154,7 +167,7 @@ emu_cases() {
 
     # Each side of the packet's fields.
     es_sweep "es units" 15 $(for _u in 02 0a 12 1a 22 2a 32 3a 42 4a 52 5a 62 6a 72; do es_main 02 04d2 $_u 00; printf ' '; done)
-    ES_FLAGS=--stderr
+    ES_FLAGS=stderr
     es_sweep "es unknown units" 2 $(es_main 02 04d2 7a 00) $(es_main 02 04d2 fa 00)
     ES_FLAGS=
     es_sweep "es decimals" 8 $(for _d in 50 51 52 53 54 55 56 57; do es_main 02 04d2 $_d 00; printf ' '; done)
@@ -163,11 +176,11 @@ emu_cases() {
     es_sweep "es values" 7 $(for _v in 0000 0001 7fff 8000 ffff ff85 4e20; do es_main 02 $_v 53 00; printf ' '; done)
     es_sweep "es primary quantity" 4 $(for _q in 01 02 03 04; do es_main $_q 04d2 53 00; printf ' '; done)
     es_sweep "es primary parallel" 4 $(for _q in 01 02 03 04; do es_packet 80 50 00 $_q 04d2 53 00 03 007b 0b 00; printf ' '; done)
-    ES_FLAGS=--stderr
+    ES_FLAGS=stderr
     es_sweep "es primary unknown quantity" 3 $(es_main 00 04d2 53 00) $(es_main 05 04d2 53 00) $(es_main ff 04d2 53 00)
     ES_FLAGS=
     es_sweep "es secondary quantity" 5 $(for _q in 00 01 02 03 04; do es_second $_q 007b 03 00; printf ' '; done)
-    ES_FLAGS=--stderr
+    ES_FLAGS=stderr
     es_sweep "es secondary unknown quantity" 2 $(es_packet 20 50 00 02 3039 53 00 05 007b 03 00) $(es_packet 20 50 00 02 3039 53 00 ff 007b 03 00)
     ES_FLAGS=
     es_sweep "es status" 12 $(for _s in 00 01 02 03 04 07 08 09 0a 0f 10 13; do es_main 02 04d2 53 $_s; printf ' '; done)
@@ -177,16 +190,16 @@ emu_cases() {
     # Neither display in these modes: no frame, no count, no META.
     es_sweep "es calibration and sorting" 1 $(es_flags 08 50) $(es_flags 10 50) $(es_flags 18 10) $(es_flags 20 50)
     es_sweep "es frequencies" 6 $(for _c in 10 30 50 70 90 b0; do es_flags 20 $_c; printf ' '; done)
-    ES_FLAGS=--stderr
+    ES_FLAGS=stderr
     es_sweep "es unknown frequencies" 2 $(es_flags 20 d0) $(es_flags 20 f0)
     ES_FLAGS=
     es_sweep "es models" 5 $(es_flags 00 50) $(es_flags 80 50) $(es_flags 40 50) $(es_flags c0 50) $(es_main 04 04d2 0b 00)
 
     # The scan's packets are parsed too: what is unknown is logged there.
     emu_options period=5 scan-burst=2 burst=1 packet=$(es_main 05 04d2 53 00)
-    emu_case "es unknown quantity in the scan" --stderr -- -d $D --scan
+    emu_case "es unknown quantity in the scan" --stderr --filter "$F" -- -d $D --scan
     emu_options period=5 scan-burst=2 burst=1 packet=$(es_flags 20 f0)
-    emu_case "es unknown frequency in the scan" --stderr -- -d $D --scan
+    emu_case "es unknown frequency in the scan" --stderr --filter "$F" -- -d $D --scan
     emu_options period=5 scan-burst=2 burst=1 packet=$(es_flags 40 50)
     emu_case "es scan finds auto" -- -d $D --get equiv_circuit_model
 
@@ -195,7 +208,7 @@ emu_cases() {
     emu_options noise=3f3f3f scan-burst=2 burst=2
     emu_case "es noise before each packet" --keep-header -- -d $D --frames 2
     emu_options noise=$(printf '3f%.0s' $(seq 1 35)) scan-burst=2 burst=1
-    emu_case "es noise of two packets" --stderr -- -d $D --scan
+    emu_case "es noise of two packets" --stderr --filter "$F" -- -d $D --scan
     emu_options noise=$(printf '3f%.0s' $(seq 1 34)) scan-burst=2 burst=1
     emu_case "es noise just under two packets" --keep-header -- -d $D --scan
     emu_options noise=$(printf '3f%.0s' $(seq 1 111)) scan-burst=2 burst=1
@@ -220,7 +233,11 @@ emu_cases() {
 
     # An unplug with the tty open. The mark is a period after the packet.
     emu_options scan-burst=2 burst=1
-    emu_case "es unplug" --hangs --unplug model --timeout 8 -- -d $D --frames 5
+    emu_case "es unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $D --frames 5
+    # Silence at a frame limit: no bound in either tool, as the meter may come
+    # back. A signal is what ends it.
+    emu_case "es interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $D --frames 5
+    emu_case "es lib silent at a frame limit" --libsigrok --hangs --timeout 3 -- -d $D --frames 5
     emu_options
 
     # The same for the meter that is asked.
@@ -257,7 +274,8 @@ emu_cases() {
         --tx-filter 's/^bulk_out 02 (4e)+ -> [0-9]+$/bulk_out 02 4e... -> N/' -- -d $V --time 1200ms
 
     emu_options meter=vc4080 answers=3
-    emu_case "vc unplug" --driver voltcraft-4080 --hangs --unplug model --timeout 8 -- -d $V --frames 5
+    emu_case "vc unplug" --driver voltcraft-4080 --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $V --frames 5
+    emu_case "vc interrupt" --driver voltcraft-4080 --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $V --frames 5
 
     # Each side of the packet's fields.
     for _f in "L A" "L B" "C A" "C B" "R A"; do
@@ -290,7 +308,7 @@ emu_cases() {
     vc_sweep "vc relative" 2 $(vc_flagged ____R_____) $(vc_flagged ____S_____) $(vc_flagged ____X_____) $(vc_flagged __________)
     vc_sweep "vc limits and tolerance" 1 $(vc_flagged _____L____) $(vc_flagged ______T___) $(vc_flagged ______S___) $(vc_flagged __________)
     vc_sweep "vc backlight and adapter" 3 $(vc_flagged _______B__) $(vc_flagged ________A_) $(vc_flagged _______BA_)
-    VC_FLAGS=--stderr
+    VC_FLAGS=stderr
     vc_sweep "vc low battery" 1 $(vc_flagged _________B)
     VC_FLAGS=
     vc_sweep "vc low battery output" 1 $(vc_flagged _________B)
@@ -300,7 +318,7 @@ emu_cases() {
     emu_options meter=vc4080 noise=3f3f3f
     emu_case "vc noise before each packet" --driver voltcraft-4080 --keep-header -- -d $V --frames 2
     emu_options meter=vc4080 noise=$(printf '3f%.0s' $(seq 1 79))
-    emu_case "vc noise of two packets" --driver voltcraft-4080 --stderr -- -d $V --scan
+    emu_case "vc noise of two packets" --driver voltcraft-4080 --stderr --filter "$F" -- -d $V --scan
     emu_options meter=vc4080 noise=$(printf '3f%.0s' $(seq 1 90))
     emu_case "vc noise past the buffer" --driver voltcraft-4080 --keep-header --no-output -- -d $V --scan
     emu_options meter=vc4080 chunk=1

@@ -69,6 +69,7 @@ pub mod ezusb;
 pub mod formats;
 pub mod ftdi;
 pub mod hid;
+pub mod lcr;
 pub mod modbus;
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub mod pydecode;
@@ -125,6 +126,7 @@ pub mod drivers {
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
+    pub mod serial_lcr;
     pub mod sysclk_lwla;
     pub mod sysclk_sla5032;
     pub mod testo;
@@ -138,6 +140,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::demo::DemoDriver));
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
+    drivers::serial_lcr::register_all(registry);
     registry.register(Box::new(drivers::juntek_jds6600::JdsDriver));
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
