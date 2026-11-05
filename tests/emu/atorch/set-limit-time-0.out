@@ -1,0 +1,2 @@
+sr: hwdriver: Cannot set 'limit_time' to 0.
+Failed to set device option 'limit_time': invalid argument.

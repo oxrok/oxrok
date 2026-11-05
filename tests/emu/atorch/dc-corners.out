@@ -1,0 +1,20 @@
+V: 0.0 V DC
+I: 0 mA DC
+C: 0.00 Ah
+E: 0.0 kWh
+T: 0 °C
+V: 0.1 V DC
+I: 1 mA DC
+C: 0.01 Ah
+E: 0.0 kWh
+T: 1 °C
+V: 409.5 V DC
+I: 4.096 A DC
+C: 655.35 Ah
+E: 167.7722 MWh
+T: 85 °C
+V: 1.6777215 MV DC
+I: 16.777216 kA DC
+C: 167772.16 Ah
+E: 42.9496727 GWh
+T: 65535 °C
