@@ -177,7 +177,8 @@ pub fn device_detail(registry: &Registry, args: &Args) -> Result<()> {
     if let Some(spec) = &args.channels {
         parse::select_channels(device.as_mut(), spec)?;
     }
-    let group = args.channel_group.as_deref();
+    let group = parse::resolve_scope(device.as_ref(), None, args)?;
+    let group = group.as_deref();
     // sr_dev_options() of a group whose config_list() answers
     // SR_ERR_NA: sigrok-cli prints nothing more.
     let options = match device.options(group) {

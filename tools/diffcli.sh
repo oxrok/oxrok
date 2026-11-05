@@ -248,6 +248,7 @@ case_ "demo hex graycode" -- -d $D8 -g Logic -c pattern=graycode --samples 100 -
 case_ "demo ascii" -- -d $D4 -g Logic -c pattern=walking-zero --samples 50 -O ascii
 case_ "demo analog sine" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=sine --samples 20 -O analog
 case_ "demo analog square amplitude" -- -d demo:logic_channels=0:analog_channels=1 -g A0 -c pattern=square:amplitude=5 --samples 10 -O analog
+case_ "analog show" --names --keep-header -- -O analog --show
 case_ "demo null" -- -d $D4 --samples 10 -O null
 case_ "demo null with analog" -- -d demo:logic_channels=2:analog_channels=1 --samples 4 -O null
 case_ "null show" --keep-header -- -O null --show
@@ -259,6 +260,7 @@ case_ "demo time limit" -- -d $D4 -g Logic -c pattern=walking-one --time 1ms -O 
 case_ "demo analog with logic falls back" -- -d $DA -c samplerate=100k -g Logic -c pattern=walking-one --samples 5 -O bits
 case_ "demo show" --keep-header -- -d $DA --show
 case_ "demo get samplerate" --keep-header -- -d demo --get samplerate
+case_ "demo group any case" -- -d demo -g logic -c pattern=sine --get pattern
 case_ "demo set bad option" --stderr -- -d demo -c nosuch=1 --samples 1
 case_ "demo scan option without a value" --stderr -- -d demo:logic_channels --scan
 case_ "demo option without a value" --stderr -- -d demo -c samplerate= --set
@@ -1437,6 +1439,14 @@ flush()
         # host's core pattern and limit. libsigrok may have written its
         # "sr: " first. The exit status has shown it failed.
         sed -i -E '/timeout: the monitored command dumped core$/d; ${/^sr: *$/d;}' "$TMP/a.err"
+        # So the golden still says it died, from the exit status, which no
+        # core pattern changes: timeout gives 128 + the signal, or dies of
+        # it itself, and the shell says the same. 124 and 137 are timeout's
+        # own stop. A line cut by the death ends here.
+        if [ "$a_st" -gt 128 ] && [ "$a_st" != 137 ]; then
+            [ -z "$(tail -c 1 "$TMP/a.err")" ] || echo >>"$TMP/a.err"
+            echo "oracle died: signal $((a_st - 128))" >>"$TMP/a.err"
+        fi
         # The core's line on a refused start, for a driver whose connection
         # id is the address that changes with each attach (greatfet).
         sed -i -E 's/( device )[0-9]+\.[0-9]+( acquisition\.)$/\1BUS.ADDR\2/' "$TMP/a.err"

@@ -186,6 +186,8 @@ emu_cases() {
     emu_case "status changes default output" --keep-header -- -d $K --samples 8
     # A setting ahead of the capture is in the first status's reckoning.
     emu_options
+    # The output goes on just before the start: OUT1, then the queries.
+    emu_case "capture with the output on" --keep-header -- -d $K -c enabled=on --samples 1
     emu_case "capture after a set" --keep-header -- -d $K -c enabled=on --samples 3 -O analog
     emu_options status=11,51
     emu_case "capture after a set the device ignores" --keep-header -- -d $K -c enabled=off --samples 2 -O analog

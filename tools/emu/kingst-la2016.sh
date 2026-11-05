@@ -111,12 +111,20 @@ emu_cases() {
     # sigrok-cli keeps the pairs of one -c in a GHashTable and sets them in
     # its order, g_hash_table_iter_next() at session.c:700-701 (frequency,
     # enabled, duty); oxrok sets enabled=on last and the others as given.
-    # These two give the others in that order; "pwm option order" pins the
-    # difference and "pwm stays off" what it is for.
+    # These two give the others in that order, without enabled; "one by one"
+    # has it too, "pwm option order" pins the difference and "pwm stays off"
+    # what it is for.
     emu_case "pwm2 frequency and duty" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345:output_duty_cycle=12.5
     emu_case "pwm1 20 MHz" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000:output_duty_cycle=50
+    # Each option in a -c of its own: sigrok-cli keeps that order, enabled last.
+    emu_case "pwm1 options one by one" --no-output -- -d $K -g PWM1 --set -c output_frequency=20000000 -c output_duty_cycle=50 -c enabled=on
+    emu_case "pwm2 options one by one" --no-output -- -d $K -g PWM2 --set -c output_frequency=12345 -c output_duty_cycle=12.5 -c enabled=on
     emu_case "pwm option order" --oracle-differs "sigrok-cli sets the pairs of -c in its hash table order (session.c:700-701), oxrok enabled=on last" --no-output -- -d $K -g PWM1 --set -c enabled=on:output_frequency=20000000:output_duty_cycle=50
     emu_case "pwm stays off with a refused duty" --oracle-bug "it turns the output on, then refuses the duty (its hash table order, session.c:700-701)" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c enabled=on:output_duty_cycle=101
+    # The device has no enabled of its own: refused before PWM1 goes on.
+    emu_case "pwm stays off with a key of no scope" --oracle-bug "it turns the output on, then finds the device has no enabled (session.c:700-710)" --expect-fail --stderr --filter "$L" -- -d $K --set -c channel_group=PWM1:enabled=on -c enabled=off
+    emu_case "pwm held by a channel unknown" --oracle-bug "it turns the output on, then fails on the channel (session.c:700, 776)" --expect-fail --stderr --filter "$L" -- -d $K -c channel_group=PWM1:enabled=on --samples 1000 -C nosuch
+    emu_case "pwm1 get after enabled" -- -d $K -g PWM1 -c enabled=on --get enabled
     emu_case "pwm1 too fast" --expect-fail --stderr --filter "$L" -- -d $K -g PWM1 --set -c output_frequency=30000000
     emu_case "pwm2 bad duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=101
     emu_case "pwm2 zero duty" --expect-fail --stderr --filter "$L" -- -d $K -g PWM2 --set -c output_duty_cycle=0
@@ -336,6 +344,9 @@ emu_cases() {
     emu_case "fault download start" --oracle-bug "protocol.c:1654-1657 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-reset@2
     emu_case "fault stream bulk reset" --expect-fail --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
+    # With the output on: as sigrok-cli it stays on, and oxrok says so.
+    kingst_options mcu=1 stall=bulk-reset@2
+    emu_case "fault start with the output on" --oracle-bug "it says nothing of the output it leaves on" --expect-fail --stderr --filter "$N; /kingst-la2016: |left on/!d; s/^.*kingst-la2016: //" -- -d $K -c channel_group=PWM1:enabled=on -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=write:0x00@1
     emu_case "fault stream run" --oracle-bug "protocol.c:1613-1617 leaves the bulk transfers in flight; dev_close() frees them (api.c:700, protocol.c:1049) and libusb aborts" --stderr --filter "$E" -- -d $K -c continuous=on --samples 8 -O hex
     kingst_options mcu=1 stall=bulk-start@1

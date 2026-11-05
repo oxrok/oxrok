@@ -1,0 +1,10 @@
+Driver functions:
+    Multiplexer
+Scan options:
+    conn
+dcttech-usbrelay:conn=/dev/hidrawN - www.dcttech.com USBRelay2 [S/N: ABCDE] 
+Channel groups:
+    R1: No channels
+    R2: No channels
+Supported configuration options on channel group R1:
+    enabled: on, off (current)

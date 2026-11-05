@@ -42,8 +42,8 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     let plan = parse::plan_configs(device.as_ref(), args)?;
     // A name nothing knows is found before `-c` reaches the device.
     for get in &args.gets {
-        let parsed = parse::generic_args(get, false);
-        let group = parsed.scope.or_else(|| args.channel_group.clone());
+        let parsed = parse::option_args(get)?;
+        let group = parse::resolve_scope(device.as_ref(), parsed.scope.as_deref(), args)?;
         for (name, _) in parsed.items {
             parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
         }
@@ -51,14 +51,13 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
     plan.send_settings(device.as_mut())?;
     plan.send_enables(device.as_mut())?;
     for get in &args.gets {
-        let parsed = parse::generic_args(get, false);
-        let group = parsed.scope.or_else(|| args.channel_group.clone());
+        let parsed = parse::option_args(get)?;
+        let group = parse::resolve_scope(device.as_ref(), parsed.scope.as_deref(), args)?;
         for (name, _) in parsed.items {
             let key = parse::resolve_key(device.as_ref(), &name, group.as_deref())?;
             // sigrok-cli's maybe_config_get() (main.c:81-84) asks the
             // driver only for a key it lists as GET in this scope:
-            // SR_ERR_NA for a key without GET and for one not listed. A
-            // group the device lacks stays the driver's error.
+            // SR_ERR_NA for a key without GET and for one not listed.
             let readable = device
                 .options(group.as_deref())
                 .map(|l| l.iter().any(|o| o.key == key && o.access.get));
@@ -219,6 +218,12 @@ fn maybe_config_set(device: &mut dyn Device, key: &Key, value: u64) -> Result<()
     }
 }
 
+/// The samples of a time limit. sigrok-cli's multiplication wraps
+/// (session.c:61) and gives a limit unrelated to the time; here it saturates.
+fn time_samples(rate: u64, msec: u64) -> u64 {
+    rate.saturating_mul(msec) / 1000
+}
+
 fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
     let msec = parse_timestring(text)
         .filter(|t| *t > 0)
@@ -230,7 +235,7 @@ fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
     }
     if device.option(&Key::Samplerate, None).is_some_and(|o| o.access.get) {
         let rate = device.get(&Key::Samplerate, None)?.as_u64().unwrap_or(0);
-        let samples = rate * msec / 1000;
+        let samples = time_samples(rate, msec);
         if samples == 0 {
             return Err(Error::arg("Not enough time at this samplerate."));
         }
@@ -318,6 +323,11 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     for mut d in devices {
         let _ = d.close_after_capture();
     }
+    // As sigrok-cli and as after a finished capture: the state before is not
+    // known, and the device may be gone. So say it, whatever the -l.
+    if result.is_err() && plan.turns_on() {
+        eprintln!("The capture failed with the output on: it was left on.");
+    }
     result?;
     pipeline.check_limit(limit_samples);
     Ok(())
@@ -326,6 +336,70 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_time_limit_does_not_overflow() {
+        assert_eq!(time_samples(1000, 1500), 1500);
+        assert_eq!(time_samples(200_000, 1), 200);
+        assert_eq!(time_samples(999, 1), 0);
+        assert_eq!(time_samples(u64::MAX, 2), u64::MAX / 1000);
+        assert_eq!(time_samples(2, u64::MAX), u64::MAX / 1000);
+    }
+
+    /// A device that reads `limit_samples` and has no way to set it.
+    struct ReadsLimit {
+        info: oxrok::core::DeviceInfo,
+        set_calls: usize,
+    }
+
+    impl Device for ReadsLimit {
+        fn info(&self) -> &oxrok::core::DeviceInfo {
+            &self.info
+        }
+        fn classes(&self) -> &[DeviceClass] {
+            &[]
+        }
+        fn channels(&self) -> &[oxrok::core::Channel] {
+            &[]
+        }
+        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn options(&self, _: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
+            Ok(vec![oxrok::core::OptionDesc::new(Key::LimitSamples, oxrok::core::Access::GET)])
+        }
+        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn set(&mut self, _: &Key, _: &Value, _: Option<&str>) -> Result<()> {
+            self.set_calls += 1;
+            Ok(())
+        }
+        fn list(&self, key: &Key, _: Option<&str>) -> Result<ValueList> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn start(&mut self, _: oxrok::core::PacketSink) -> Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// sigrok-cli's --samples and --frames fail silently here: not through
+    /// `check_key()`, whose message `config_set` would log.
+    #[test]
+    fn samples_ask_for_set_access_first() {
+        let mut dev = ReadsLimit { info: oxrok::core::DeviceInfo::default(), set_calls: 0 };
+        let e = maybe_config_set(&mut dev, &Key::LimitSamples, 5).unwrap_err();
+        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
+        let e = maybe_config_set(&mut dev, &Key::LimitFrames, 5).unwrap_err();
+        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
+        assert_eq!(dev.set_calls, 0);
+    }
 
     #[test]
     fn a_driver_that_ends_captures_itself_starts_with_output_or_trigger() {
