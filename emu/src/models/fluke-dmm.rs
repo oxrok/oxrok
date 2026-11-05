@@ -114,7 +114,7 @@ fn profile(model: &str) -> Result<(&'static str, &'static str, Family)> {
         "199B" => ("0\rFLUKE 199B;V11.40;2008-06-11;ENGLISH\r", "1200/8n1", Family::Scope),
         "287" => ("0\rFLUKE 287,V1.16,95680258\r", "115200/8n1", Family::Fields),
         "289" => ("0\rFLUKE 289,V1.00,95680259\r", "115200/8n1", Family::Fields),
-        _ => return Err(Error(format!("model={model}: 87, 89, 187, 189, 199B, 287 or 289"))),
+        _ => return Err(Error::Invalid(format!("model={model}: 87, 89, 187, 189, 199B, 287 or 289"))),
     })
 }
 
@@ -151,7 +151,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "qm" => qm = Some(answers_list(k, v)?),
             "data" => data = Some(answers_list(k, v)?),
             "answers" => answers = Some(parse_number(k, v, 0..=100_000)?),
-            other => return Err(Error(format!("{NAME} has no option {other}"))),
+            other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let (identity, line, family) = profile(model)?;
@@ -219,7 +219,7 @@ impl Meter {
     /// Whether a query gets its answer.
     fn answers_left(&mut self, port: &mut Port<'_>) -> bool {
         if self.config.answers.is_some_and(|n| self.answered >= n) {
-            port.mark_event_point();
+            port.mark();
             return false;
         }
         self.answered += 1;
@@ -233,7 +233,7 @@ impl Meter {
         self.id_asked = true;
         match &mut self.id {
             Some(list) => port.send(&list.take()),
-            None => port.mark_event_point(),
+            None => port.mark(),
         }
     }
 
@@ -419,17 +419,17 @@ mod tests {
         let mut h = meter(&[("id", "none")]);
         h.write(b"ID\r");
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         let mut h = meter(&[("answers", "1")]);
         h.write(b"ID\r");
         h.read();
-        assert!(!h.cdc.take_event_point(), "ID does not count");
+        assert!(!h.cdc.mark(), "ID does not count");
         h.write(b"QM\r");
         assert_eq!(h.read(), b"0\r1.0327E0,ADC,NORMAL,NONE\r");
-        assert!(!h.cdc.take_event_point());
+        assert!(!h.cdc.mark());
         h.write(b"QM\r");
         assert_eq!(h.read(), b"");
-        assert!(h.cdc.take_event_point());
+        assert!(h.cdc.mark());
         assert_eq!(violations(&mut h), 0);
     }
 
