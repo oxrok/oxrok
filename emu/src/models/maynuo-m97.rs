@@ -10,8 +10,10 @@
 //!   command values, big endian floats with the high word first, the slave
 //!   address (1 to 200) and the line (8 data bits, 1 stop bit, parity and rate
 //!   on the panel): the M98 user's manual, "Maynuo Electronics 2009", section
-//!   4.8, read in full. The same tables are in Craig Peacock's `ATZ9712`
-//!   (`ATZ9712.h`), written against an Atten ATZ9712, a rebadged M9712.
+//!   4.8, of which its frames, examples and tables were read, as text pulled
+//!   from the PDF. The same tables are in Craig Peacock's `ATZ9712`
+//!   (`ATZ9712.h`), for an Atten ATZ9712 and ATZ9711 and a Maynuo M9711 and
+//!   M9712, its README says. No M97 manual was read.
 //! - That the manual's byte for a one coil read holds more than that coil: its
 //!   example reads `ISTATE` and gets `0x48`, of which only the lowest bit is
 //!   said to be `ISTATE`. Here a read of one coil answers the eight from there,
@@ -750,7 +752,7 @@ mod tests {
 
     #[test]
     fn the_frames_of_the_manuals_examples() {
-        // Section 4.8.6: reading ISTATE, with 0x48 as the byte that comes back.
+        // Section 4.8: reading ISTATE, with 0x48 as the byte that comes back.
         let mut h = load(&[("coils", "0x513,0x516")]);
         h.write(&[0x01, 0x01, 0x05, 0x10, 0x00, 0x01, 0xfc, 0xc3]);
         assert_eq!(h.read(), [0x01, 0x01, 0x01, 0x48, 0x51, 0xbe]);
