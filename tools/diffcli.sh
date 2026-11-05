@@ -113,6 +113,11 @@
 # @LEN:fold=COUNT:SHA256, COUNT the lines folded and SHA256 the digest
 # of their text, each line with its newline. It applies after the
 # violation count, before the --hangs cut and the comparisons.
+#
+# A scenario that sets EMU_ORACLE_USB_FLOOR_MS=N runs sigrok-cli and the
+# libsigrok runner with no libusb bulk timeout under N ms
+# (tools/oracle-usb-floor.c), for a C driver whose timeouts are shorter than
+# what the host can hold a transfer up for. oxrok runs as it is.
 
 set -u
 SIGROK_CLI=${SIGROK_CLI:-sigrok-cli}
@@ -495,6 +500,15 @@ if [ $emu = 1 ]; then
         EMU_TERM_EXIT=$TMP/term-exit.so
     else
         echo "note: no SIGTERM preload for --hangs cases (cc failed), so they write no gcov counts"
+    fi
+    # EMU_ORACLE_USB_FLOOR_MS, in a scenario: the oracle's libusb bulk timeouts
+    # under it become it (tools/oracle-usb-floor.c), for a C driver whose few ms
+    # the host can outlast. Without a C compiler such a model can fail at random.
+    EMU_USB_FLOOR=""
+    if cc -shared -fPIC -o "$TMP/usb-floor.so" "$TOOLS/oracle-usb-floor.c" -ldl 2>"$TMP/usb-floor.err"; then
+        EMU_USB_FLOOR=$TMP/usb-floor.so
+    else
+        echo "note: no USB timeout floor for the oracle (cc failed): $(head -1 "$TMP/usb-floor.err")"
     fi
 
     # The state letter of a process (/proc/PID/stat), empty when gone.
@@ -1254,8 +1268,16 @@ flush()
                 interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
                 *) set -- "$tool" "$@" ;;
             esac
+            preload=""
             if { [ $hangs = 1 ] || [ $oracle_hangs = 1 ]; } && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
-                set -- env LD_PRELOAD="$EMU_TERM_EXIT" "$@"
+                preload=$EMU_TERM_EXIT
+            fi
+            if [ -n "$EMU_ORACLE_USB_FLOOR_MS" ] && [ $t = a ] && [ -n "$EMU_USB_FLOOR" ]; then
+                preload="$preload${preload:+ }$EMU_USB_FLOOR"
+                set -- env EMU_ORACLE_USB_FLOOR_MS="$EMU_ORACLE_USB_FLOOR_MS" "$@"
+            fi
+            if [ -n "$preload" ]; then
+                set -- env LD_PRELOAD="$preload" "$@"
             fi
             if [ -n "$oracle_env" ] && [ $t = a ]; then
                 set -- env "$oracle_env" "$@"
@@ -1657,7 +1679,7 @@ flush()
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_ORACLE_USB_FLOOR_MS=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
         . "$f"
