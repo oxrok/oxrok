@@ -1,2 +1,0 @@
-sr: modbus_serial: CRC error (0x8850 vs 0x8851).
-Failed to get 'enabled': data is invalid

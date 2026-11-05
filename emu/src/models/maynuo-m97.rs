@@ -22,10 +22,11 @@
 //!   communication chapter, which lists more than one set of rates.
 //! - The ids in the `MODEL` register: the driver's table alone, 28 and 101, of
 //!   which the driver's own comment says they are guessed.
-//! - Where `SETMODE` holds the mode: the manual says only "u16". `ATZ9712`'s
-//!   `main.cpp` takes the high byte and the driver the low one. `setmode=RAW`
-//!   plays either; the low byte is the default as the driver's reading, not as
-//!   a fact.
+//! - That `SETMODE` holds the mode in its low byte: the manual says only "u16",
+//!   and the driver and `ATZ9712` read the low byte. `ATZ9712`'s `main.cpp` takes
+//!   a high byte of a `u16` that its `ReadRegisterInt` filled byte by byte in wire
+//!   order, on a little endian machine, which makes that the register's low byte.
+//!   `setmode=RAW` sets the whole register, for what the high byte does.
 //! - The bridge: a real load has a DB9 and a USB or RS-232 cable. The ids here
 //!   are the shell's stand-in.
 //!
@@ -68,18 +69,19 @@
 //! - `quiet=N`, the event point at the Nth offer of a read after `PC1` went on,
 //!   for an event in a capture of a tool that sends nothing in it;
 //! - `unasked=N`: right after the echo of `PC1` on, N answers to a read of `U`
-//!   and `I` that nobody asked for. No slave does this, on Modbus or in any
-//!   source. It is here for one reason: libsigrok's capture sends no request
-//!   and reads a reply (its `protocol.c`), so this is the only way a run of
-//!   that code reaches its frames, and the only oracle for what they look like.
-//!   They are built from the lists of `u=` and `i=` without taking from them,
-//!   so a tool that asks after all gets the same values in turn.
+//!   and `I` that nobody asked for. No device does this, on Modbus or in any
+//!   source. It is here for one reason: since its commit 524ec154 libsigrok's
+//!   capture sends no request and reads a reply (its `protocol.c`), so this is the
+//!   only way a run of the pinned code reaches its frames, and the only oracle for
+//!   what they look like. They are built from the lists of `u=` and `i=` without
+//!   taking from them, so a tool that asks after all, and purges these first as
+//!   a request does, gets the same values in turn from its own polls.
 //!
 //! The pedantic checks: a frame with a good CRC, only the functions, coils and
 //! register blocks a C path uses, nothing left of a frame when a tool opens. A
-//! read of four registers from `U` counts as such a path: it is what
-//! `protocol.c`'s read of a reply is the reply to, and the two floats the manual
-//! has there. A frame for another slave is not this model's business.
+//! read of four registers from `U` counts as such a path: the driver sent it from
+//! its commit ffb580cf (2015) until 524ec154 (2025), and `protocol.c` still reads
+//! the reply to it. A frame for another slave is not this model's business.
 
 use crate::model::DeviceModel;
 use crate::options::parse_number;
@@ -92,8 +94,9 @@ pub const NAME: &str = "maynuo-m97";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A Maynuo M97 or M98 electronic load over Modbus RTU on CDC-ACM; id=, \
                          version=, addr=, uart=, ifix=, ufix=, imax=, umax=, setmode=, source=, \
-                         coils=, u=, i=, answers=, faults=, setters=, quiet=, unasked=, and the \
-                         shell's stall=, chunk=, in-limit=, in-stall=, out-hold=";
+                         coils=, u=, i=, answers=, faults=, setters=, quiet=, unasked= (replies \
+                         no device sends, for the C driver's frames), and the shell's stall=, \
+                         chunk=, in-limit=, in-stall=, out-hold=";
 
 const READ_COILS: u8 = 0x01;
 const READ_HOLDING: u8 = 0x03;

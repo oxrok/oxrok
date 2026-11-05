@@ -32,12 +32,21 @@
 //!
 //! Where C does not do what it means:
 //!
-//! - A capture asks. C sends no request in a capture and goes on reading the
+//! - A capture asks. libsigrok's commit 524ec154 (2025, "Synchronize read and
+//!   write operations") deleted `maynuo_m97_capture_start`, which since ffb580cf
+//!   (2015) sent four registers from `U` at the start and after every read. At
+//!   the pinned commit C sends no request in a capture and goes on reading the
 //!   reply to it (`api.c:376-383`, `protocol.c:227`, which `modbus.c:437-438`
 //!   says reads "the reply of a previously sent" one), so it has no samples:
-//!   `--samples` never ends, and `--time` ends with nothing. The read here is
-//!   what that reply would answer: four registers from `U`, the manual's two
-//!   floats. No run of C or of a real load has shown it, see `docs/DEVICES.md`.
+//!   `--samples` never ends, and `--time` ends with nothing. The read here is the
+//!   frame that commit deleted. No recording of it is known, and no run of the
+//!   pinned commit shows it. What differs from the C before that commit: the
+//!   first request goes 10 ms after the start, where C sent it at once; later
+//!   ones go 10 ms after a read ends, where C sent one right after a read; and
+//!   the next request's purge drops a late reply, where C's close waited for the
+//!   last one.
+//! - The channels have the indexes 0 and 1, where C gives both 0 (`api.c:150`,
+//!   `api.c:153`). No output shows it.
 //! - A setting that is no number is refused, where C sends a NaN or an
 //!   infinity. Any other value goes out, as in C: nothing says how a load takes
 //!   one outside the list, and the model's limits in that list are a table's.
@@ -96,8 +105,8 @@ static GROUP_OPTIONS: [OptionDesc; 14] = [
     OptionDesc::new(Key::OverTemperatureProtectionActive, Access::GET),
 ];
 
-/// The session source's timeout, `api.c`'s `dev_acquisition_start`: the time
-/// from one read's end to the next.
+/// The time from one read's end to the next: the number of the session source's
+/// timeout in `api.c`'s `dev_acquisition_start`, which in C does not pace requests.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 /// How long a capture whose only limit is a sample count waits for a good read
 /// before it ends: without one that limit never comes.

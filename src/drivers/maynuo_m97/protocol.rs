@@ -15,11 +15,11 @@
 //!
 //! Registers hold settings and readings as big endian floats in two registers,
 //! high word first (`0x41 0x20 0x00 0x2A` is 10 V in the manual). `CMD` takes a
-//! mode or the input's on and off, and `SETMODE` reads the mode. In which byte
-//! of `SETMODE` is open: this has the low one as C does, where `ATZ9712`'s
-//! `main.cpp`, written against an Atten ATZ9712, has the high one. If that is
-//! what a load does, its regulation reads "UNKNOWN" and a change of the input
-//! writes `CMD` 0, as in C (`docs/DEVICES.md`).
+//! mode or the input's on and off, and the low byte of `SETMODE` reads the mode:
+//! `protocol.c:124`, and `ATZ9712`, written against an Atten ATZ9712, agrees. Its
+//! `main.cpp:55` takes a high byte, but `ReadRegisterInt` (`ATZ9712.cpp:252-254`)
+//! has copied the wire's first byte to the first byte of a little endian `u16`
+//! with no swap, so that is the register's low byte.
 
 use crate::core::{Error, Result};
 use crate::modbus::Modbus;
@@ -221,7 +221,8 @@ impl Link {
     }
 
     /// `U` and `I`, in one read: what `maynuo_m97_receive_data` reads the reply
-    /// of. Unless a stop has come, which then saves the request.
+    /// of, and `maynuo_m97_capture_start` sent until libsigrok's 524ec154. Unless a
+    /// stop has come, which then saves the request.
     ///
     /// # Errors
     ///

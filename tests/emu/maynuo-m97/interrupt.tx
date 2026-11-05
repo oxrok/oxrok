@@ -3,11 +3,12 @@ bulk_out 02 01030b060002262e -> 8
 bulk_in 82 9 -> 010304001c007b7bd6
 bulk_out 02 01050500ff008cf6 -> 8
 bulk_in 82 8 -> 01050500ff008cf6
-bulk_out 02 01030b000004462d -> 8
+bulk_out 02 POLLS 
 bulk_in 82 13 -> 010308414000000000000011ef
-bulk_out 02 01030b000004462d -> 8
+bulk_out 02 POLLS 
 bulk_in 82 13 -> 010308414000000000000011ef
-bulk_out 02 01030b000004462d -> 8
+bulk_out 02 POLLS 
 bulk_in 82 13 -> 010308414000000000000011ef
-bulk_out 02 01030b000004462d -> 8
+bulk_out 02 POLLS 
 interrupt
+bulk_out 02 010505000000cd06 -> 8

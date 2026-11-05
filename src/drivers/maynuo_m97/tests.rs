@@ -12,11 +12,31 @@
 use super::*;
 use crate::modbus::{crc16, frame};
 use std::collections::{HashMap, VecDeque};
-use std::sync::mpsc::{Receiver, sync_channel};
+use std::sync::PoisonError;
+use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
 
 /// How long a test waits for a capture before it fails: a stop or a limit
 /// that does not bite must fail, not hang the run.
 const CAPTURE_BOUND: Duration = Duration::from_secs(20);
+
+/// Runs a test that starts a capture on a thread of its own, and fails it if it
+/// has not come back in time. A stop that does not bite fails the wait for the
+/// End, and then the device's drop would join that capture for ever: the thread
+/// is left behind instead, until the test binary exits.
+fn in_time(test: impl FnOnce() + Send + 'static) {
+    let (done, finished) = sync_channel(1);
+    let thread = std::thread::spawn(move || {
+        test();
+        let _ = done.send(());
+    });
+    match finished.recv_timeout(2 * CAPTURE_BOUND) {
+        Ok(()) => {}
+        Err(RecvTimeoutError::Timeout) => panic!("not over after {:?}", 2 * CAPTURE_BOUND),
+        Err(RecvTimeoutError::Disconnected) => {
+            std::panic::resume_unwind(thread.join().expect_err("it did not finish"));
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -35,6 +55,8 @@ struct State {
     mode: Mode,
     /// Refuse the frames that are numbered here, counting from 1.
     refuse: Vec<usize>,
+    /// Fail the writes of the frames that are numbered here.
+    unwritable: Vec<usize>,
 }
 
 type Shared = Arc<Mutex<State>>;
@@ -52,6 +74,7 @@ impl Fake {
             coils: HashMap::new(),
             mode: Mode::Good,
             refuse: Vec::new(),
+            unwritable: Vec::new(),
         }));
         (Fake { state: Arc::clone(&state), input: VecDeque::new() }, state)
     }
@@ -79,9 +102,13 @@ impl Port for Fake {
         Ok(n)
     }
     fn write(&mut self, data: &[u8]) -> Result<()> {
-        let mut state = self.state.lock().unwrap();
+        // A device's drop gets here, also from a test that has failed.
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.writes.push((Instant::now(), data.to_vec()));
         let number = state.writes.len();
+        if state.unwritable.contains(&number) {
+            return Err(Error::device("Broken pipe"));
+        }
         match state.mode {
             Mode::NoWrite => return Err(Error::device("Broken pipe")),
             Mode::Silent => return Ok(()),
@@ -443,46 +470,49 @@ fn limits_are_kept_and_0_is_refused() {
 
 #[test]
 fn a_capture_asks_each_time_and_ends_at_its_limit() {
-    let (mut d, state) = opened();
-    set_float_at(&state, protocol::U, 12.5);
-    set_float_at(&state, protocol::I, 1.25);
-    d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
-    let packets = capture(&mut d);
-    assert_eq!(frames_in(&packets), 3);
-    assert_eq!(
-        writes(&state)[1..],
-        [poll_frame(), poll_frame(), poll_frame()],
-        "four registers from U, three times and no more"
-    );
-    assert!(matches!(packets[0], Packet::Header { .. }));
-    assert!(matches!(packets[1], Packet::FrameBegin));
-    let (Packet::Analog(v), Packet::Analog(i)) = (&packets[2], &packets[3]) else {
-        panic!("{packets:?}");
-    };
-    assert_eq!(
-        (v.channels.as_slice(), v.samples.as_slice(), v.mq, v.unit, v.flags, v.digits),
-        (&[0][..], &[12.5][..], Mq::Voltage, Unit::Volt, MqFlags::DC, 3)
-    );
-    assert_eq!(
-        (i.channels.as_slice(), i.samples.as_slice(), i.mq, i.unit, i.flags, i.digits),
-        (&[1][..], &[1.25][..], Mq::Current, Unit::Ampere, MqFlags::DC, 4)
-    );
-    assert!(matches!(packets[4], Packet::FrameEnd));
-    assert!(matches!(packets.last(), Some(Packet::End)));
-    d.close().unwrap();
-    assert_eq!(*writes(&state).last().unwrap(), PC1_OFF.to_vec());
+    in_time(|| {
+        let (mut d, state) = opened();
+        set_float_at(&state, protocol::U, 12.5);
+        set_float_at(&state, protocol::I, 1.25);
+        d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(frames_in(&packets), 3);
+        assert_eq!(
+            writes(&state)[1..],
+            [poll_frame(), poll_frame(), poll_frame()],
+            "four registers from U, three times and no more"
+        );
+        assert!(matches!(packets[0], Packet::Header { .. }));
+        assert!(matches!(packets[1], Packet::FrameBegin));
+        let (Packet::Analog(v), Packet::Analog(i)) = (&packets[2], &packets[3]) else {
+            panic!("{packets:?}");
+        };
+        assert_eq!(
+            (v.channels.as_slice(), v.samples.as_slice(), v.mq, v.unit, v.flags, v.digits),
+            (&[0][..], &[12.5][..], Mq::Voltage, Unit::Volt, MqFlags::DC, 3)
+        );
+        assert_eq!(
+            (i.channels.as_slice(), i.samples.as_slice(), i.mq, i.unit, i.flags, i.digits),
+            (&[1][..], &[1.25][..], Mq::Current, Unit::Ampere, MqFlags::DC, 4)
+        );
+        assert!(matches!(packets[4], Packet::FrameEnd));
+        assert!(matches!(packets.last(), Some(Packet::End)));
+        d.close().unwrap();
+        assert_eq!(*writes(&state).last().unwrap(), PC1_OFF.to_vec());
+    });
 }
 
 #[test]
 fn the_polls_keep_their_distance() {
-    let (mut d, state) = opened();
-    d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
-    capture(&mut d);
-    let state = state.lock().unwrap();
-    let at: Vec<Instant> = state.writes.iter().map(|(t, _)| *t).collect();
-    // A loaded box only stretches a gap: the least is what is asserted.
-    let least = at[1..].windows(2).map(|w| w[1].duration_since(w[0])).min().unwrap();
-    assert!(least >= Duration::from_millis(10), "{least:?}");
+    in_time(|| {
+        let (mut d, state) = opened();
+        d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        capture(&mut d);
+        let at: Vec<Instant> = state.lock().unwrap().writes.iter().map(|(t, _)| *t).collect();
+        // A loaded box only stretches a gap: the least is what is asserted.
+        let least = at[1..].windows(2).map(|w| w[1].duration_since(w[0])).min().unwrap();
+        assert!(least >= Duration::from_millis(10), "{least:?}");
+    });
 }
 
 #[test]
@@ -496,29 +526,33 @@ fn a_start_needs_an_open_device() {
 
 #[test]
 fn a_time_limit_ends_a_capture() {
-    let (mut d, _) = opened();
-    d.set(&Key::LimitMsec, &Value::U64(100), None).unwrap();
-    let started = Instant::now();
-    let packets = capture(&mut d);
-    assert!(started.elapsed() >= Duration::from_millis(100));
-    assert!(frames_in(&packets) >= 1);
+    in_time(|| {
+        let (mut d, _) = opened();
+        d.set(&Key::LimitMsec, &Value::U64(100), None).unwrap();
+        let started = Instant::now();
+        let packets = capture(&mut d);
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(frames_in(&packets) >= 1);
+    });
 }
 
 #[test]
 fn a_stop_ends_a_capture_that_has_data() {
-    let (mut d, state) = opened();
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    d.stop().unwrap();
-    packets_until_end(&rx);
-    let after = writes(&state).len();
-    std::thread::sleep(Duration::from_millis(40));
-    assert_eq!(writes(&state).len(), after, "no read after the End");
+    in_time(|| {
+        let (mut d, state) = opened();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+        let after = writes(&state).len();
+        std::thread::sleep(Duration::from_millis(40));
+        assert_eq!(writes(&state).len(), after, "no read after the End");
+    });
 }
 
-#[test]
-fn a_close_does_not_hang_on_a_queue_no_one_reads() {
+/// A capture whose first frame cannot go into a full queue, once it has polled.
+fn stuck_capture() -> (MaynuoDevice, Shared, Receiver<(usize, Packet)>) {
     let (mut d, state) = opened();
     // The Header fills it, and the first frame's packets cannot go.
     let (tx, rx) = sync_channel(1);
@@ -528,114 +562,205 @@ fn a_close_does_not_hang_on_a_queue_no_one_reads() {
         assert!(Instant::now() < deadline, "no poll");
         std::thread::sleep(Duration::from_millis(1));
     }
-    let (done_tx, done_rx) = sync_channel(1);
-    std::thread::spawn(move || {
+    (d, state, rx)
+}
+
+#[test]
+fn a_close_does_not_hang_on_a_queue_no_one_reads() {
+    in_time(|| {
+        let (mut d, state, _rx) = stuck_capture();
         d.close().unwrap();
-        done_tx.send(()).unwrap();
+        assert_eq!(*writes(&state).last().unwrap(), PC1_OFF.to_vec());
     });
-    done_rx.recv_timeout(CAPTURE_BOUND).expect("the close came back");
-    assert_eq!(*writes(&state).last().unwrap(), PC1_OFF.to_vec());
-    drop(rx);
+}
+
+#[test]
+fn a_close_waits_for_the_capture_to_be_over() {
+    in_time(|| {
+        let (mut d, _state, rx) = stuck_capture();
+        d.close().unwrap();
+        // The thread owns the sender, and its End waits half a second for room.
+        // So that a close that does not join comes back with the sender still there.
+        while let Ok(_packet) = rx.try_recv() {}
+        assert!(
+            matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)),
+            "the thread outlives the close"
+        );
+    });
 }
 
 #[test]
 fn a_setting_gets_in_during_a_capture() {
-    let (mut d, state) = opened();
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    d.set(&Key::CurrentLimit, &Value::F64(2.0), Some("1")).unwrap();
-    assert!(writes(&state).contains(&float_write(0x0a01, 2.0)));
-    wait_for_frame(&rx);
-    d.stop().unwrap();
-    packets_until_end(&rx);
+    in_time(|| {
+        let (mut d, state) = opened();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        d.set(&Key::CurrentLimit, &Value::F64(2.0), Some("1")).unwrap();
+        assert!(writes(&state).contains(&float_write(0x0a01, 2.0)));
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+    });
 }
 
 #[test]
 fn a_sample_limit_on_a_silent_load_ends_at_the_bound() {
-    let (mut d, state) = opened();
-    set_mode(&state, Mode::Silent);
-    d.no_reply_bound = Duration::from_millis(1200);
-    d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
-    let started = Instant::now();
-    let packets = capture(&mut d);
-    let took = started.elapsed();
-    assert!(took >= Duration::from_millis(1200), "{took:?}");
-    assert_eq!(frames_in(&packets), 0);
-    // At 500 ms each, a read that passes 1.2 s is the third.
-    assert_eq!(writes(&state).len(), 1 + 3);
+    in_time(|| {
+        let (mut d, state) = opened();
+        set_mode(&state, Mode::Silent);
+        d.no_reply_bound = Duration::from_millis(1200);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let started = Instant::now();
+        let packets = capture(&mut d);
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(1200), "{took:?}");
+        assert_eq!(frames_in(&packets), 0);
+        // Every read but the last ended inside the bound, and a read takes at
+        // least its 500 ms: a slow box means fewer, and never more than three.
+        let polls = writes(&state).len() - 1;
+        assert!((1..=3).contains(&polls), "{polls}");
+    });
 }
 
 #[test]
 fn the_bound_is_five_seconds_and_in_time_not_in_reads() {
     assert_eq!(NO_REPLY_BOUND, Duration::from_secs(5));
-    // Another slave's reply fails at its first byte: failed reads come in
-    // milliseconds.
-    let (mut d, state) = opened();
-    d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
-    d.no_reply_bound = Duration::from_millis(600);
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    set_mode(&state, Mode::OtherSlave);
-    let started = Instant::now();
-    packets_until_end(&rx);
-    assert!(started.elapsed() >= Duration::from_millis(590), "{:?}", started.elapsed());
+    in_time(|| {
+        // Another slave's reply fails at its first byte: failed reads come in
+        // milliseconds.
+        let (mut d, state) = opened();
+        d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
+        d.no_reply_bound = Duration::from_millis(600);
+        let (tx, rx) = sync_channel(4096);
+        // Before the capture's last good read, whenever that is.
+        let started = Instant::now();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        set_mode(&state, Mode::OtherSlave);
+        packets_until_end(&rx);
+        assert!(started.elapsed() >= Duration::from_millis(600), "{:?}", started.elapsed());
+    });
+}
+
+#[test]
+fn the_bound_counts_from_the_last_good_read() {
+    in_time(|| {
+        let (mut d, state) = opened();
+        d.set(&Key::LimitSamples, &Value::U64(1_000_000), None).unwrap();
+        d.no_reply_bound = Duration::from_secs(2);
+        let (tx, rx) = sync_channel(4096);
+        let started = Instant::now();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        while started.elapsed() < Duration::from_millis(2500) {
+            wait_for_frame(&rx);
+        }
+        // A read lost well past the bound, and the capture goes on. It comes
+        // within a poll of the last good read, a long way inside the bound.
+        let lost = {
+            let mut s = state.lock().unwrap();
+            let lost = s.writes.len() + 1;
+            s.refuse = vec![lost];
+            lost
+        };
+        while writes(&state).len() <= lost {
+            wait_for_frame(&rx);
+        }
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+    });
 }
 
 #[test]
 fn a_time_limit_goes_past_the_bound_and_recovers() {
-    let (mut d, state) = opened();
-    d.set(&Key::LimitMsec, &Value::U64(2000), None).unwrap();
-    d.no_reply_bound = Duration::from_millis(100);
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    set_mode(&state, Mode::Silent);
-    std::thread::sleep(Duration::from_millis(700));
-    while rx.try_recv().is_ok() {}
-    set_mode(&state, Mode::Good);
-    wait_for_frame(&rx);
-    packets_until_end(&rx);
+    in_time(|| {
+        let (mut d, state) = opened();
+        // Longer than this test can last: the stop ends it.
+        d.set(&Key::LimitMsec, &Value::U64(3_600_000), None).unwrap();
+        d.no_reply_bound = Duration::from_millis(100);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        set_mode(&state, Mode::Silent);
+        std::thread::sleep(Duration::from_millis(700));
+        while rx.try_recv().is_ok() {}
+        set_mode(&state, Mode::Good);
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+    });
 }
 
 #[test]
 fn continuous_goes_on_through_a_quiet_and_recovers() {
-    let (mut d, state) = opened();
-    d.no_reply_bound = Duration::from_millis(100);
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    set_mode(&state, Mode::Silent);
-    std::thread::sleep(Duration::from_millis(700));
-    while rx.try_recv().is_ok() {}
-    set_mode(&state, Mode::Good);
-    wait_for_frame(&rx);
-    d.stop().unwrap();
-    packets_until_end(&rx);
+    in_time(|| {
+        let (mut d, state) = opened();
+        d.no_reply_bound = Duration::from_millis(100);
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        set_mode(&state, Mode::Silent);
+        std::thread::sleep(Duration::from_millis(700));
+        while rx.try_recv().is_ok() {}
+        set_mode(&state, Mode::Good);
+        wait_for_frame(&rx);
+        d.stop().unwrap();
+        packets_until_end(&rx);
+    });
 }
 
 #[test]
 fn requests_that_cannot_go_out_end_any_capture() {
     assert_eq!(MAX_UNSENT_POLLS, 5);
-    let (mut d, state) = opened();
-    let (tx, rx) = sync_channel(4096);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    wait_for_frame(&rx);
-    set_mode(&state, Mode::NoWrite);
-    let before = writes(&state).len();
-    packets_until_end(&rx);
-    let tries = writes(&state).len() - before;
-    assert!((5..=7).contains(&tries), "{tries}");
+    in_time(|| {
+        let (mut d, state) = opened();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for_frame(&rx);
+        // Under one lock, so that every write from here on fails, whatever the
+        // box's speed: exactly the limit, as nothing else ends this capture.
+        let before = {
+            let mut s = state.lock().unwrap();
+            s.mode = Mode::NoWrite;
+            s.writes.len()
+        };
+        packets_until_end(&rx);
+        assert_eq!(writes(&state).len() - before, 5);
+    });
+}
+
+#[test]
+fn a_request_that_goes_out_starts_the_count_again() {
+    in_time(|| {
+        let (mut d, state) = opened();
+        // Frame 1 is PC1, and each run is one short of the limit.
+        state.lock().unwrap().unwritable = vec![2, 3, 4, 5, 7, 8, 9, 10];
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(frames_in(&packets), 2);
+        assert_eq!(writes(&state).len(), 11);
+    });
+}
+
+#[test]
+fn a_poll_after_a_stop_sends_nothing() {
+    let (d, state) = opened();
+    assert!(d.link().poll(&AtomicBool::new(true)).is_err());
+    assert_eq!(writes(&state).len(), 1, "PC1 alone");
+    assert!(d.link().poll(&AtomicBool::new(false)).is_ok());
+    assert_eq!(writes(&state).len(), 2);
 }
 
 #[test]
 fn a_failed_read_takes_no_sample_and_the_next_does() {
-    let (mut d, state) = opened();
-    // The second poll is refused.
-    state.lock().unwrap().refuse = vec![3];
-    d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
-    let packets = capture(&mut d);
-    assert_eq!(frames_in(&packets), 2);
-    assert_eq!(writes(&state)[1..], [poll_frame(), poll_frame(), poll_frame()]);
+    in_time(|| {
+        let (mut d, state) = opened();
+        // The second poll is refused.
+        state.lock().unwrap().refuse = vec![3];
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(frames_in(&packets), 2);
+        assert_eq!(writes(&state)[1..], [poll_frame(), poll_frame(), poll_frame()]);
+    });
 }

@@ -1,2 +1,2 @@
 sr: modbus: SLAVE DEVICE FAILURE error executing READ_HOLDING_REGISTERS function.
-Failed to get 'ocp_threshold': data is invalid
+Failed to get 'voltage': data is invalid
