@@ -64,7 +64,9 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     WEDGED_BUG="once a line fills the buffer with no LF, protocol.c:188's loop never reads again, and no sample limit can end the run; oxrok drops the line and reads the next"
     NUL_BUG="api.c:145-146: a line that is empty as a string splits to an empty vector, and strcmp gets tokens[0], NULL; oxrok finds no device"
     HUP_BUG="a port gone: protocol.c:226-228 logs a failed write, and the job's next try does the same, for ever; oxrok ends the capture"
-    SILENT_BUG="a silent meter: only a time limit ends a capture in C (protocol.c:112-116 tries for ever); oxrok ends one that only a sample limit could end, after 10 s"
+    # Not a C bug: --oracle-bug --oracle-hangs is what the harness has for "C does
+    # not end by itself". C's jobs retry, and pick up when the meter answers.
+    SILENT_DIFFERS="a choice, not a C bug: C goes on asking a silent meter (protocol.c:112-116), and would pick up when it answers; oxrok ends a capture that only a sample limit could end, after 10 s, with an error"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     CSV_BUG="output/csv.c:713 dumps a row once channels_seen reaches channel_count, and csv.c:191 counts the disabled channels too, so with a display off rows are overwritten before they go out; oxrok writes them all"
 
@@ -74,6 +76,10 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
         U1271A U1272A U1273A U1273AX U1281A U1282A; do
         emu_options model=$_agm
         emu_case "scan $_agm" --keep-header -- -d $F --scan
+    done
+    # A capture per family; the conf and log rows below go by family too.
+    for _agm in U1232A U1242B U1242C U1253B U1272A U1282A; do
+        emu_options model=$_agm
         emu_case "$_agm samples" -- -d $F --samples 3
     done
     emu_options
@@ -180,17 +186,20 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     emu_case "U1232A a resolution of two digits" --no-output -- -d $F -C P1 --time 100ms
     # The STAT bytes the family reads (recv_stat_u123x), and the ones it reads
     # into the next CONF, a second on: temperature on the mV position, and
-    # continuity on the resistance one.
+    # continuity on the resistance one. A case that needs a second CONF runs at
+    # 1 Hz, where each job's second starts after the one before it, so FETC is
+    # due after CONF and STAT however late they are. At 5 Hz the fifth FETC can
+    # come after the next CONF on a loaded box, and the output changes.
     for _ags in 100000000000000000000 010000000000000000000 001000000000000000000 000100000000000000000 000000010000000000000 000000000000000010000 1100xxxxxxxxxxxxxxxx0; do
         emu_options model=U1232A stat=$(ag_h "\"$_ags\"")
         emu_case "U1232A stat $_ags" -- -d $F -C P1 --samples 1
     done
     emu_options model=U1232A conf=$(ag_h '"MV,1,DC"') stat=$(ag_h '"000000010000000000000"')
-    emu_case "U1232A temperature on the mV position" -- -d $F -C P1 --samples 6
+    emu_case "U1232A temperature on the mV position" -- -d $F -C P1 -c samplerate=1 --samples 2
     emu_options model=U1232A conf=$(ag_h '"RES,1"') stat=$(ag_h '"000000000000000010000"')
-    emu_case "U1232A continuity on the resistance position" -- -d $F -C P1 --samples 6
-    emu_options model=U1272A conf=$(ag_list '"RES,1"' '"DIOD"') stat=$(ag_h '"000000000000000010000"')
-    emu_case "U1272A from continuity to diode" -- -d $F -C P1 --samples 6
+    emu_case "U1232A continuity on the resistance position" -- -d $F -C P1 -c samplerate=1 --samples 2
+    emu_options model=U1272A conf=$(ag_list '"RES,1"' '"RES,1"' '"DIOD"') stat=$(ag_h '"000000000000000010000"')
+    emu_case "U1272A from continuity to diode" -- -d $F -C P1 -c samplerate=1 --samples 3
 
     # The other families (recv_conf_u124x_5x), each with what its table takes.
     ag_confs U1242B "VOLT $R6" "VOLT:AC $R6" "VOLT:DC $R6" "VOLT:ACDC $R6" "VOLT:CD $R6" "CURR $R6" "CURR:AC $R6" "CURR:DC $R6" "CURR:ACDC $R6" "CURR:D $R6" "RES $R6" "CAP $R6" "FREQ $R6" "CPER:4-20mA $R6" "CPER:0-20mA $R6" 'T1:K CEL' 'T2:J FAR' 'T1:K XX' 'TEMP:K CEL' 'TEMP:K FAR' DIOD
@@ -206,7 +215,7 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     emu_case "U1253B PULS:NDUT" --no-output -- -d $F -C P1 --time 100ms
     # A second answer in a turn of the dial: PULS:NDUT keeps what came before.
     emu_options model=U1253B conf=$(ag_list "\"VOLT:AC $R6\"" '"PULS:NDUT"')
-    emu_case "U1253B PULS:NDUT keeps the last" -- -d $F -C P1 --samples 6
+    emu_case "U1253B PULS:NDUT keeps the last" -- -d $F -C P1 -c samplerate=1 --samples 2
     for _agm in U1242B U1253B U1242C U1282A; do
         emu_options model=$_agm conf=$(ag_h '"SCOU"')
         emu_case "$_agm SCOU not taken" --no-output -- -d $F -C P1 --time 100ms
@@ -231,7 +240,7 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
         emu_options model=U1242C stat=$(ag_h "\"$_ags\"")
         emu_case "U1242C stat $_ags" -- -d $F -C P1 --samples 1
     done
-    for _ags in 00M000000000000000000 00V000000000000000000 000010000000000000000 000000010000000000000; do
+    for _ags in 00M000000000000000000 00V000000000000000000 010000000000000000000 000010000000000000000 000000010000000000000; do
         emu_options model=U1253B stat=$(ag_h "\"$_ags\"")
         emu_case "U1253B stat $_ags" -- -d $F -C P1 --samples 1
     done
@@ -248,11 +257,14 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     done
     # dBm and dBV reach CONF a second on, and the first turn has V's digits.
     emu_options model=U1253B stat=$(ag_h '"00M000000000000000000"')
-    emu_case "U1253B dBm" -- -d $F -C P1 --samples 6
+    emu_case "U1253B dBm" -- -d $F -C P1 -c samplerate=1 --samples 2
     emu_options model=U1253B stat=$(ag_list '"00V000000000000000000"' '"000000000000000000000"')
-    emu_case "U1253B dBV then not" -- -d $F -C P1 --samples 11
+    emu_case "U1253B dBV then not" -- -d $F -C P1 -c samplerate=1 --samples 3
     emu_options model=U1282A stat=$(ag_h '"00M000000000000000000"') fetc=$(ag_h '+1.23456789E+02')
-    emu_case "U1282A dBm" -- -d $F -C P1 --samples 6
+    emu_case "U1282A dBm" -- -d $F -C P1 -c samplerate=1 --samples 2
+    # The first display's alone (protocol.c:684).
+    emu_options model=U1253B conf2=$(ag_h "\"VOLT:AC $R6\"") stat=$(ag_h '"00M000000000000000000"')
+    emu_case "U1253B dBm leaves P2 in volts" -- -d $F -C P1,P2 -c samplerate=1 --samples 4
     # A value's own exponent cuts the digits of dB and percent, and they
     # stay cut until the next CONF.
     emu_options model=U1282A conf=$(ag_h "\"CPER:4-20mA $R8\"") fetc=$(ag_list '+1.23456789E+00' '+1.23456789E+02' '+1.23456789E+00')
@@ -264,10 +276,10 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
 
     # FETC's values.
     emu_options fetc=$(ag_list '+9.90000000E+37' '-9.90000000E+37' '+9.90000000E+36' '-1.23475000E-03' '+0.00000000E+00')
-    emu_case "values and overloads" -- -d $F -C P1 --samples 5
-    emu_case "values and overloads csv with displays off" --oracle-differs "$CSV_BUG" -- -d $F -C P1 --samples 5 -O csv:header=false
+    emu_case "values and overloads" -- -d $F -C P1 -c samplerate=20 --samples 5
+    emu_case "values and overloads csv with displays off" --oracle-differs "$CSV_BUG" -- -d $F -C P1 -c samplerate=20 --samples 5 -O csv:header=false
     emu_options model=U1232A fetc=$(ag_list '+9.90000000E+37' '-9.90000000E+37' '+9.90000000E+36' '-1.23475000E-03' '+0.00000000E+00')
-    emu_case "values and overloads csv" -- -d $F --samples 5 -O csv:header=false
+    emu_case "values and overloads csv" -- -d $F -c samplerate=20 --samples 5 -O csv:header=false
     emu_options model=U1272A conf=$(ag_h '"MV,1,DC"') fetc=$(ag_list '+1.23475000E+02' '+9.90000000E+37')
     emu_case "U1272A millivolts and overload" -- -d $F -C P1 --samples 2
     emu_options fetc=$(ag_list '+1.00000000E+39' '-1.00000000E+39' '+1.00000000E-50')
@@ -283,8 +295,9 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     emu_case "a line with more CRs" -- -d $F -C P1 --samples 1
     emu_options fetc=$(emu_hex '+1.23475000E+00\n')
     emu_case "a line that ends in LF" -- -d $F -C P1 --samples 1
-    emu_options fetc=$(emu_hex '+1.23475000E+00\r'),$(ag_h '+2.5000000E+00')
-    emu_case "CR is no line end" --no-output --tx-filter '/^bulk_(out|in) /d' -- -d $F -C P1 --time 100ms
+    # Two values with a CR between are one line, unknown: 300 ms, and the next.
+    emu_options fetc=$(emu_hex '+1.23475000E+00\r+2.50000000E+00\r\n'),$(ag_h '+3.50000000E+00')
+    emu_case "CR is no line end" --timeout 15 -- -d $F -C P1 --samples 1
 
     # Channels, in the order the driver goes through them. The first CONF of
     # a U1253B's temperature display never goes out.
@@ -322,17 +335,43 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     # With the second display on, its CONF answer clears the mode
     # (protocol.c:669), and FETC goes out and gets the error, again and again
     # with no pause, the count of them being wall clock.
-    emu_case "U1282A SQU with P2 asks anyway" --no-output --tx-filter '/^bulk_out 02 (464554433f0a0d0a)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (2a450d0a)+$/d' -- -d $F -C P1,P2 --time 100ms
+    # One FETC and one error are kept of the run, and the rest go.
+    emu_case "U1282A SQU with P2 asks anyway" --no-output --tx-filter '/^bulk_out 02 464554433f0a0d0a -> 8$/{
+x
+/F/{
+x
+d
+}
+s/$/F/
+x
+}
+/^bulk_in 82 4 -> 2a450d0a$/{
+x
+/E/{
+x
+d
+}
+s/$/E/
+x
+}' -- -d $F -C P1,P2 --time 500ms
     emu_options model=U1253B conf=$(ag_h '"SQU"')
     emu_case "U1253B SQU not taken" --no-output -- -d $F -C P1 --time 100ms
+    # A value, the dial on SQU for a second with no FETC, and back to a value.
     emu_options model=U1282A conf=$(ag_list "\"VOLT:AC $R8\"" '"SQU"')
-    emu_case "U1282A dial to SQU" -- -d $F -C P1 --samples 5 --time 1500ms
+    emu_case "U1282A dial to SQU" -- -d $F -C P1 -c samplerate=1 --samples 2
 
     # The dial. `*N` starts the jobs over and forgets the quantity.
     emu_options fetc=$(ag_list '*3' '+1.23475000E+00')
     emu_case "switch" -- -d $F -C P1 --samples 1
     emu_options fetc2=$(ag_list '*3' '+1.23475000E+00')
     emu_case "switch at P2" -- -d $F --samples 3
+    # The value behind the switch is for a second display it just forgot
+    # (protocol.c:967-969), and goes.
+    emu_options fetc2=$(emu_hex '*3\r\n+1.23475000E+00\r\n'),$(ag_h '+2.50000000E+00')
+    emu_case "a value behind a switch at P2" --timeout 15 -- -d $F --samples 4
+    # A switch at CONF: CONF again, not STAT (protocol.c:964).
+    emu_options conf=$(ag_list '*3' "\"VOLT:AC $R6\"")
+    emu_case "switch at CONF" -- -d $F -C P1 --samples 1
     emu_options model=U1242C fetc2=$(ag_list '*3' '+1.23475000E+00')
     emu_case "U1242C switch at P2" -- -d $F --samples 3
     emu_options model=U1232A fetc=$(ag_list '*3' '+1.23475000E+00')
@@ -404,18 +443,21 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     emu_case "samplerate 3" -- -d $F -C P1 -c samplerate=3 --samples 2
     emu_case "samplerate 10" -- -d $F -C P1 -c samplerate=10 --samples 3
     emu_case "samplerate 20" -- -d $F -C P1 -c samplerate=20 --samples 3
-    emu_case "samplerate default a second on" -- -d $F -C P1 --samples 7
+    # Before the second CONF only: the 5 FETCs per CONF at this rate are a margin,
+    # and a unit test holds that order on a clock of its own.
+    emu_case "samplerate default" -- -d $F -C P1 --samples 3
     emu_case "limit in -c" --libsigrok --oxrok -- -d $F -C P1 -c limit_samples=2 --continuous
-    emu_case "time limit" -- -d $F -C P1 --time 500ms
-    emu_case "limit_time in -c" --libsigrok --oxrok -- -d $F -C P1 -c limit_time=500 --continuous
+    emu_case "time limit" -- -d $F -C P1 -c samplerate=1 --time 500ms
+    emu_case "limit_time in -c" --libsigrok --oxrok -- -d $F -C P1 -c samplerate=1 -c limit_time=500 --continuous
 
     # Silence: a job is given up after 300 ms. CONF and STAT are in their
     # second then, so the next runs a pass later. FETC's interval is over, so it
     # goes again at once and for good, with no more CONF (protocol.c:112-116).
     emu_options answers=0
-    emu_case "silent" --no-output -- -d $F -C P1 --time 1100ms
+    # The FETCs run into one transfer's line, and their number is wall clock.
+    emu_case "silent" --no-output --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC again and again/' -- -d $F -C P1 --time 1500ms
     emu_options answers=3
-    emu_case "stops answering" -- -d $F -C P1 --time 1100ms
+    emu_case "stops answering" --tx-filter 's/^bulk_out 02 (464554433f0a0d0a)+ -> [0-9]+$/FETC again and again/' -- -d $F -C P1 --time 1500ms
 
     emu_options answers=0
     emu_case "lib silent waits on" --libsigrok --hangs --timeout 3 --no-output -- -d $F -C P1 --samples 1
@@ -438,7 +480,16 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     # running, so one write per 300 ms.
     emu_options out-hold=1
     emu_tty_closing_wait 100
-    emu_case "stops reading" --no-output --timeout 15 --tx-filter '/^bulk_(out|in) /d' -- -d $F -C P1 --time 6000ms
+    emu_case "stops reading" --stderr --timeout 20 --filter "$L
+/^sr: agilent-dmm: Failed to send\\.$/{
+x
+/F/{
+x
+d
+}
+s/$/F/
+x
+}" -- -d $F -C P1 --time 8000ms
     emu_tty_closing_wait 3000
     emu_options answers=3
     # C's two error lines repeat in turn, as often as time allows, so this one
@@ -449,7 +500,7 @@ s/^not supported: (Log data .*)$/sr: agilent-dmm: \\1/
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F -C P1 --samples 9
     # oxrok's bound on silence, and C's wait, of which "lib silent" has the wire.
     emu_options answers=0
-    emu_case "silent with only a sample limit" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
+    emu_case "silent with only a sample limit" --oracle-bug "$SILENT_DIFFERS" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
     emu_options id=none
     emu_case "unplug in the scan" --unplug model --timeout 15 --keep-header --no-output --tx-filter '/^unplug$/q' -- -d $F --scan
 

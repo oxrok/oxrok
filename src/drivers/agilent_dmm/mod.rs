@@ -23,11 +23,20 @@
 //! `--samples N` counts samples, one per channel, so a meter of three channels
 //! ends at 2 after P2.
 //!
-//! A meter that goes quiet, or a log entry that never reads, would hold a
-//! capture only a sample limit can end for ever, as C does: here that ends after
-//! [`SILENCE`]. A meter that answers and has no sample for the moment (the dial
-//! on square wave, or a display with no quantity) is waited for, as the dial
-//! may come back. A port that is gone ends the capture.
+//! A meter that goes quiet, or a log entry that never reads, ends after
+//! [`SILENCE`] a capture that only a sample limit can end, with an error. That
+//! is a choice, not a fix: C's jobs go on asking, and pick up when the meter
+//! answers again, so a dial turned through OFF for longer than that ends such a
+//! capture here and not in C. With a time limit, or none, this waits as C does.
+//! A meter that answers and has no sample for the moment (the dial on square
+//! wave, or a display with no quantity) is waited for. So is one that answers
+//! `*E` to all it is asked: each `*E` asks again at once, paced only by the
+//! meter, with no bound under `--samples`, as in C. A port that is gone ends
+//! the capture.
+//!
+//! As in C, an answer is taken for the channel asked last, so a `FETC?` answered
+//! after its job was given up lands on the next channel, and the values shift
+//! until the turn ends (`P2: 1.00300 kHz`, `P1: 3.00200 kV`).
 //!
 //! See [`protocol`].
 
@@ -65,8 +74,8 @@ const RATE_STEP: u64 = 1;
 /// `cur_samplerate` after a scan.
 const RATE_DEFAULT: u64 = 5;
 /// How long a capture that only a sample limit can end goes on with no answer at
-/// all, or on a log with no sample. Long enough for a U1177A's Bluetooth link
-/// to come back, or an IR cable to be put back on its meter.
+/// all, or on a log with no sample. A choice of this port; see the module's
+/// documentation.
 pub const SILENCE: Duration = Duration::from_secs(10);
 /// How long a worker that was told to stop tries to hand over its `End`.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
@@ -131,6 +140,10 @@ impl Driver for AgilentDmmDriver {
 
 /// The scan's one question.
 fn identify(port: &mut dyn Port) -> Option<Identity> {
+    identify_within(port, IDENTITY_TIME)
+}
+
+fn identify_within(port: &mut dyn Port, time: Duration) -> Option<Identity> {
     match port.write_timeout(IDN, WRITE_TIMEOUT) {
         Ok(n) if n == IDN.len() => {}
         Ok(_) => {
@@ -143,18 +156,18 @@ fn identify(port: &mut dyn Port) -> Option<Identity> {
             return None;
         }
     }
-    let line = read_line(port);
+    let line = read_line(port, time);
     log::debug!("Received '{}'.", line.escape_ascii());
     protocol::parse_identity(&line)
 }
 
-/// `serial_readline`: up to a CR or LF, [`IDENTITY_MAX`] bytes or
-/// [`IDENTITY_TIME`], and what came counts either way. A port that fails ends it.
-fn read_line(port: &mut dyn Port) -> Vec<u8> {
+/// `serial_readline`: up to a CR or LF, [`IDENTITY_MAX`] bytes or `time`, and
+/// what came counts either way. A port that fails ends it.
+fn read_line(port: &mut dyn Port, time: Duration) -> Vec<u8> {
     let start = Instant::now();
     let mut line = Vec::new();
     while line.len() < IDENTITY_MAX {
-        let Some(left) = IDENTITY_TIME.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) else {
+        let Some(left) = time.checked_sub(start.elapsed()).filter(|d| !d.is_zero()) else {
             break;
         };
         let mut byte = [0];
@@ -497,9 +510,7 @@ impl Capture {
             if got > 0 && self.data_source == 0 {
                 progress = Instant::now();
             }
-            let mut wait_for_more = got > 0;
             if let Some(line) = line {
-                wait_for_more = false;
                 let received = meter.receive(&line);
                 if let Some(reading) = received.reading {
                     samples += 1;
@@ -520,13 +531,10 @@ impl Capture {
             }
             if only_samples_can_end && progress.elapsed() >= self.silence {
                 log::error!(
-                    "Acquisition failed: no answer in {} s, and only a sample limit can end this.",
+                    "Acquisition failed: nothing new from the meter in {} s, and only a sample limit can end this.",
                     self.silence.as_secs()
                 );
                 return;
-            }
-            if wait_for_more {
-                continue;
             }
             if let Some(command) = meter.dispatch(Instant::now())
                 && !send(port, &command)
@@ -612,6 +620,7 @@ mod tests {
     struct Seen {
         writes: Vec<(Instant, Vec<u8>)>,
         purges: usize,
+        dropped: bool,
     }
 
     /// A meter: `answer` gets the number of the write and its bytes.
@@ -623,6 +632,18 @@ mod tests {
         fail_reads: bool,
         /// Writes of these numbers find no room.
         blocked_writes: std::ops::Range<usize>,
+        /// How long a read takes when there is nothing to read.
+        idle_read: Duration,
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            // Not an unwrap: a test that failed holding the lock must fail as
+            // itself, not abort the run here.
+            if let Ok(mut seen) = self.seen.lock() {
+                seen.dropped = true;
+            }
+        }
     }
 
     impl Fake {
@@ -635,6 +656,7 @@ mod tests {
                 fail_writes_from: None,
                 fail_reads: false,
                 blocked_writes: 0..0,
+                idle_read: Duration::from_millis(1),
             };
             (fake, seen)
         }
@@ -658,7 +680,8 @@ mod tests {
                 buf[0] = b;
                 return Ok(1);
             }
-            std::thread::sleep(timeout.min(Duration::from_millis(1)));
+            let _ = timeout;
+            std::thread::sleep(self.idle_read);
             Ok(0)
         }
         fn write(&mut self, _: &[u8]) -> Result<()> {
@@ -769,7 +792,7 @@ mod tests {
     fn identify_asks_once_and_reads_a_line() {
         let (mut fake, seen) =
             Fake::new(|_, _| b"Agilent Technologies,U1232A,x,V1\r\nrest".to_vec());
-        let identity = identify(&mut fake).unwrap();
+        let identity = identify_within(&mut fake, BOUND).unwrap();
         assert_eq!(identity.profile.name, "U1232A");
         assert_eq!(writes(&seen), [b"*IDN?\r\n".to_vec()]);
     }
@@ -778,9 +801,10 @@ mod tests {
     fn identify_takes_what_came_when_time_is_up() {
         let (mut fake, _) = Fake::new(|_, _| b"Agilent Technologies,U1232A,x,V1".to_vec());
         let start = Instant::now();
-        assert!(identify(&mut fake).is_some());
+        assert!(identify_within(&mut fake, Duration::from_secs(1)).is_some());
         let took = start.elapsed();
-        assert!(took >= Duration::from_millis(250), "{took:?}");
+        assert!(took >= Duration::from_secs(1), "{took:?}");
+        assert_eq!(IDENTITY_TIME, Duration::from_millis(250));
     }
 
     #[test]
@@ -790,7 +814,7 @@ mod tests {
             a.resize(200, b'v');
             a
         });
-        let identity = identify(&mut fake).unwrap();
+        let identity = identify_within(&mut fake, BOUND).unwrap();
         assert_eq!(identity.version.len(), 127 - 30);
         assert_eq!(fake.input.len(), 200 - 127, "the rest is not read");
     }
@@ -872,11 +896,13 @@ mod tests {
     fn a_silent_meter_has_each_job_given_up_in_its_time() {
         let (fake, seen) = Fake::new(silent);
         let mut d = device("U1232A", fake);
-        d.set(&Key::LimitMsec, &Value::U64(700), None).unwrap();
         let rx = start(&mut d);
+        wait_until("three jobs", || seen.lock().unwrap().writes.len() >= 3);
+        d.stop().unwrap();
         packets_to_end(&rx);
         let seen = seen.lock().unwrap();
-        // CONF? at 0, STAT? a job's time on, FETC? another on.
+        // CONF? at 0, STAT? a job's time on, FETC? another on. A loaded box only
+        // stretches these, so the least gap is what can be held.
         assert_eq!(seen.writes[0].1, b"CONF?\n\r\n");
         assert_eq!(seen.writes[1].1, b"STAT?\n\r\n");
         assert_eq!(seen.writes[2].1, b"FETC?\n\r\n");
@@ -922,8 +948,9 @@ mod tests {
     }
 
     #[test]
-    fn the_time_on_a_silent_meter_is_ten_seconds() {
+    fn the_times_are_c_s_and_the_bound_is_ten_seconds() {
         assert_eq!(SILENCE, Duration::from_secs(10));
+        assert_eq!(POLL, Duration::from_millis(10));
     }
 
     #[test]
@@ -966,13 +993,14 @@ mod tests {
     #[test]
     fn a_meter_that_answers_with_no_value_is_waited_for() {
         let (fake, seen) = Fake::new(no_value);
-        // An answer to each FETC? that is no value, every 300 ms, within this
-        // bound; the fourth comes after it, so only those can have held it off.
-        let mut d = quick("U1232A", fake, Duration::from_millis(500));
+        // An answer to each FETC? that is no value, every 300 ms or so, well within
+        // this bound; the seventh comes after it, so only those can have held it
+        // off.
+        let mut d = quick("U1232A", fake, Duration::from_millis(1500));
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let rx = start(&mut d);
-        wait_until("a fourth FETC?", || {
-            seen.lock().unwrap().writes.iter().filter(|w| w.1.starts_with(b"FETC")).count() >= 4
+        wait_until("a seventh FETC?", || {
+            seen.lock().unwrap().writes.iter().filter(|w| w.1.starts_with(b"FETC")).count() >= 7
         });
         assert!(rx.try_iter().all(|(_, p)| !matches!(p, Packet::End)));
         d.stop().unwrap();
@@ -982,13 +1010,13 @@ mod tests {
     #[test]
     fn a_log_entry_that_never_reads_ends_at_the_bound() {
         let (fake, seen) = Fake::new(bad_log);
-        let mut d = quick("U1282A", fake, Duration::from_millis(700));
+        let mut d = quick("U1282A", fake, Duration::from_millis(1500));
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         d.set(&Key::DataSource, &Value::Str("Log-Hand".to_owned()), None).unwrap();
         let begun = Instant::now();
         let rx = start(&mut d);
         assert_eq!(values(&packets_to_end(&rx)), 0);
-        assert!(begun.elapsed() >= Duration::from_millis(700));
+        assert!(begun.elapsed() >= Duration::from_millis(1500));
         let writes = writes(&seen);
         assert!(writes.len() >= 2);
         assert!(writes.iter().all(|w| w == b"LOG:HAND 1\n\r\n"), "the same index");
@@ -997,7 +1025,7 @@ mod tests {
     #[test]
     fn a_log_entry_read_after_one_that_did_not_counts_as_progress() {
         let (fake, _) = Fake::new(bad_then_good);
-        let mut d = quick("U1282A", fake, Duration::from_millis(600));
+        let mut d = quick("U1282A", fake, Duration::from_secs(5));
         d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
         d.set(&Key::DataSource, &Value::Str("Log-Auto".to_owned()), None).unwrap();
         let rx = start(&mut d);
@@ -1048,6 +1076,68 @@ mod tests {
         let after = writes(&seen).len();
         std::thread::sleep(Duration::from_millis(150));
         assert_eq!(writes(&seen).len(), after, "no more writes");
+        d.close().unwrap();
+    }
+
+    #[test]
+    fn a_close_joins_the_worker() {
+        // The worker holds the port in a read for this long, so a close that
+        // does not wait for it comes back with the port still alive.
+        let (mut fake, seen) = Fake::new(silent);
+        fake.idle_read = Duration::from_millis(300);
+        let mut d = device("U1232A", fake);
+        let _rx = start(&mut d);
+        wait_until("the first job", || !writes(&seen).is_empty());
+        // On a thread, so that a close that never stops the worker fails here.
+        let (done_tx, done_rx) = sync_channel(1);
+        let seen2 = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            d.close().unwrap();
+            done_tx.send(seen2.lock().unwrap().dropped).unwrap();
+        });
+        assert!(done_rx.recv_timeout(BOUND).expect("a close that hangs"), "the port outlived it");
+    }
+
+    #[test]
+    fn a_full_queue_holds_no_header_and_no_close() {
+        let (fake, _) = Fake::new(answers);
+        let mut d = device("U1232A", fake);
+        // Nothing fits: the worker meets a full queue at its first packet.
+        let (tx, rx) = sync_channel(1);
+        tx.send((0, Packet::End)).unwrap();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        let (done_tx, done_rx) = sync_channel(1);
+        std::thread::spawn(move || {
+            d.close().unwrap();
+            done_tx.send(()).unwrap();
+        });
+        done_rx.recv_timeout(BOUND).expect("close held by the queue");
+        drop(rx);
+    }
+
+    #[test]
+    fn the_port_is_back_before_the_end_and_a_second_capture_runs() {
+        let (fake, seen) = Fake::new(answers);
+        let mut d = device("U1232A", fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        // A queue of one left unread: the header and no room for more, so the
+        // sample holds the first capture until the header is read, and the End
+        // then cannot go until the sample is.
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        wait_until("the sample in the queue", || d.port.lock().unwrap().is_some());
+        wait_until("the capture over, with its End still to go", || {
+            !d.capturing.load(Ordering::SeqCst)
+        });
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Analog(_)));
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::End));
+        // As the worker's comment promises a client.
+        let rx = start(&mut d);
+        assert_eq!(values(&packets_to_end(&rx)), 1);
+        let conf = writes(&seen).iter().filter(|w| w.starts_with(b"CONF")).count();
+        assert_eq!(conf, 2, "each capture starts over");
         d.close().unwrap();
     }
 

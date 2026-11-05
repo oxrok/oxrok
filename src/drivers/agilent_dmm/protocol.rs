@@ -25,9 +25,13 @@
 //! | `LOG:HAND N` and kin | `"01000241100100"` | entry N of a log; `*E` past the last |
 //!
 //! Each family of meters takes its own set of lines, as [`parse`] has them from
-//! the C driver's tables of regular expressions, first match first. C's `.` and
-//! `\d` come from `GLib` in `UTF-8` mode: here a line that is no `UTF-8` is unknown,
-//! and `\d` is an ASCII digit.
+//! the C driver's tables of regular expressions, first match first. `GLib` compiles
+//! those in `UTF-8` mode with `\d` as any Unicode digit and any newline counted,
+//! so three classes of line differ here, none of which a device is known to send:
+//! `$` also matches before a trailing VT, FF, NEL, LS or PS, or a CR that a NUL
+//! hides from the strip (taken there, unknown here); `.` refuses those same bytes
+//! inside `STAT?`'s letters (unknown there, taken here); `\d` takes other scripts'
+//! digits (taken there, unknown here). A line that is no `UTF-8` is unknown here.
 //!
 //! [`Meter`] is the C's `dev_context` and its jobs: a job's query goes out when
 //! its interval is over, one at a time, and a job ends with its answer or after
@@ -1215,6 +1219,21 @@ mod tests {
         }
     }
 
+    /// Where `GLib`'s tables and these differ, as a run of both over a corpus
+    /// showed: pinned, so that a change here is one on purpose.
+    #[test]
+    fn the_lines_where_glib_differs() {
+        let fields = "\"A,0,AC\"\u{b}";
+        assert_eq!(parse(Family::U123x, fields), None, "C: $ before a VT");
+        let mut m = one("U1232A");
+        assert_eq!(m.receive(b"\"A,0,AC\"\r\0\r"), Received::default(), "C: a CR left");
+        assert_eq!(m.mq[0], None);
+        let stat = "\"00\u{b} 00000000000000000\"";
+        assert!(parse(Family::U123x, stat).is_some(), "C: . refuses a VT");
+        let digit = "\"00 00000000000000000\u{663}\"";
+        assert_eq!(parse(Family::U123x, digit), None, "C: \\d takes this");
+    }
+
     #[test]
     fn a_range_and_a_resolution_are_checked() {
         for bad in [
@@ -1393,13 +1412,62 @@ mod tests {
     }
 
     #[test]
+    fn a_switch_forgets_the_second_display_where_it_has_no_temperature() {
+        let t = Instant::now();
+        let mut m = live("U1253B");
+        m.dispatch(t);
+        m.receive(b"\"DIOD\"");
+        m.dispatch(t);
+        m.receive(b"\"DIOD\"");
+        assert!(m.mq[1].is_some());
+        m.receive(b"*3");
+        assert_eq!((m.mq[0], m.mq[1]), (None, None));
+        assert_eq!(m.mq[2], Some(Mq::Temperature), "the third stays");
+        let mut m = live("U1242B");
+        m.receive(b"*3");
+        assert_eq!((m.mq[0], m.mq[1]), (None, Some(Mq::Temperature)), "two displays");
+    }
+
+    #[test]
+    fn a_switch_at_conf_asks_conf_again() {
+        let t = Instant::now();
+        let mut m = one("U1232A");
+        assert_eq!(text(m.dispatch(t)).as_deref(), Some("CONF?\n\r\n"));
+        m.receive(b"*3");
+        assert_eq!(text(m.dispatch(t)).as_deref(), Some("CONF?\n\r\n"), "not STAT?");
+    }
+
+    #[test]
+    fn a_late_answer_that_asks_again_goes_ahead_of_the_next_job() {
+        let t = Instant::now();
+        let at = |ms| t + Duration::from_millis(ms);
+        let mut m = live("U1253B");
+        assert_eq!(text(m.dispatch(t)).as_deref(), Some("CONF?\n\r\n"));
+        assert_eq!(m.dispatch(at(301)), None, "given up");
+        assert!(!m.running);
+        // The answer comes after all, and the channel after it is still to ask.
+        m.receive(b"\"DIOD\"");
+        assert_eq!(text(m.dispatch(at(302))).as_deref(), Some("CONF? @2\n\r\n"), "not STAT?");
+    }
+
+    #[test]
+    fn db_is_the_first_displays_alone() {
+        let mut m = live("U1253B");
+        m.receive(b"\"00M000000000000000000\"");
+        m.conf = 1;
+        m.receive(b"\"VOLT:AC +1.000000E+00,+1.000000E-04\"");
+        assert_eq!((m.unit[1], m.digits[1], m.encoding[1]), (Unit::Volt, 4, 5));
+    }
+
+    #[test]
     fn a_line_is_cut_at_its_crs_and_a_nul() {
         let t = Instant::now();
         let mut m = one("U1232A");
         m.dispatch(t);
         m.receive(b"\"V,0,DC\"\r\r");
         m.dispatch(t);
-        m.receive(b"\"000000000000000000000\"\0junk");
+        m.receive(b"\"100000000000000000000\"\0junk");
+        assert_eq!(m.flags[0], MqFlags::MAX | MqFlags::MIN | MqFlags::DC, "taken, up to the NUL");
         m.dispatch(t);
         assert!(m.receive(b"+1.00000000E+00\r\n").reading.is_some());
     }
@@ -1432,6 +1500,8 @@ mod tests {
         assert_eq!(flags("U1242C", "\"100000000000000000000\""), all);
         assert_eq!(flags("U1242C", "\"000000000001000000000\""), MqFlags::HOLD);
         assert_eq!(flags("U1253B", "\"000010000000000000000\""), MqFlags::MAX);
+        assert_eq!(flags("U1253B", "\"010000000000000000000\""), none, "no relative here");
+        assert_eq!(flags("U1282A", "\"000000000001000000000\""), MqFlags::HOLD);
         assert_eq!(flags("U1253B", "\"100000000000000000000\""), none);
         assert_eq!(flags("U1282A", "\"000010000000000000000\""), none, "C looks for a 4");
         assert_eq!(flags("U1282A", "\"000040000000000000000\""), MqFlags::MAX);
@@ -1821,7 +1891,7 @@ mod tests {
     fn the_log_tables_end_where_c_has_them() {
         assert!(log_function(Family::U124xc, 10).is_some());
         assert!(log_function(Family::U124xc, 11).is_none());
-        assert!(log_function(Family::U128x, 13).is_some());
+        assert_eq!(log_function(Family::U128x, 13), Some((Mq::Conductance, Unit::Siemens, -11)));
         assert!(log_function(Family::U128x, 14).is_none());
         assert!(log_function(Family::U125x, 0).is_none());
     }
