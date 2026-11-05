@@ -4,6 +4,7 @@
 EMU_MODEL=atorch
 EMU_CDC=1
 EMU_DRIVER=atorch
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=atorch
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -23,6 +24,13 @@ emu_cases() {
     L='s/^oxrok: (err|warn): oxrok::drivers::atorch(::protocol)?: /sr: atorch: /'
     # What oxrok adds after the error sigrok-cli names.
     N='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    LAG_BUG="receive_msg reads before it looks (protocol.c:151-157), so what a read holds beyond its first message waits for the next byte, and here none comes; oxrok takes all of a read"
+    STALE_BUG="a scan's read can leave a report in buf, which only a probe's start clears (protocol.c:202-203), so a report from the scan is the capture's first frame; oxrok starts each capture empty, and shows what came in the capture"
+    CHANNEL_BUG="parse_report_msg sends every channel whatever -C said (protocol.c:184 has no ch->enabled), and the analog output prints them; the man page has -C as the channels to be used, and csv and other drivers honour it; oxrok sends those asked for"
+    DASH_BUG="sigrok-cli reads the dash of a channel named D- as a range and fails on 'D' (parsers.c); oxrok refuses it as a range too, in its own words"
+    QUIET_BUG="a limit is read only after a report (protocol.c:192), so a unit gone quiet holds the capture for ever; oxrok ends 3 s past the time limit"
+    HUP_BUG="after an unplug a read gives nothing, as for a unit gone quiet, and no limit is read (protocol.c:192, 238-239), so it never ends; oxrok ends on the read's error"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # Every case's rate: the counts in scan= and burst= hold whatever the time,
     # but a report must not land in an open, whose flush takes it. Offers come
     # fast at an open, with the kernel's 16 reads to fill: 5 was too few.
@@ -82,7 +90,7 @@ s/Unrecognized device type \(0x00(55|01)\)/Unrecognized device type (masked)/" -
     # A reply and a report in one read: protocol.c:151-157 reads before it looks,
     # so what is left of a read waits for the next byte, and none comes: 10 s.
     emu_options $P packet=$REPLY$R1 scan=1 burst=0
-    emu_case "scan a reply and a report in one read" --keep-header --no-output --timeout 14 -- -d $A --scan
+    emu_case "scan a reply and a report in one read" --oracle-differs "$LAG_BUG" --keep-header --timeout 14 -- -d $A --scan
     # Nothing to scan.
     emu_options $P
     emu_case "no such node" --keep-header --no-output -- -d atorch:conn=/dev/ttyACM97 --scan
@@ -117,15 +125,15 @@ s/Unrecognized device type \(0x00(55|01)\)/Unrecognized device type (masked)/" -
 
     # A capture: a frame per report, a channel apiece, read as C does.
     emu_options $P scan=1 burst=2
-    emu_case "config limit_frames" --libsigrok -- -d $A -c limit_frames=2 --continuous -O analog
+    emu_case "config limit_frames" --libsigrok --oxrok -- -d $A -c limit_frames=2 --continuous -O analog
     emu_case "frames csv with time" -- -d $A --frames 2 -O csv:header=false
-    emu_case "channel V" -- -d $A -C V --frames 2
-    emu_case "channel E" -- -d $A -C E --frames 2
-    emu_case "channels V and T" -- -d $A -C V,T --frames 2
+    emu_case "channel V" --oracle-differs "$CHANNEL_BUG" -- -d $A -C V --frames 2
+    emu_case "channel E" --oracle-differs "$CHANNEL_BUG" -- -d $A -C E --frames 2
+    emu_case "channels V and T" --oracle-differs "$CHANNEL_BUG" -- -d $A -C V,T --frames 2
     emu_case "channel E csv" -- -d $A -C E --frames 2 -O csv:header=false:time=false
     emu_options $P meter=usb scan=1 burst=1
-    emu_case "channel D plus" -- -d $A -C D+ --frames 1
-    emu_case "channel D minus" --expect-fail --stderr -- -d $A -C D- --frames 1
+    emu_case "channel D plus" --oracle-differs "$CHANNEL_BUG" -- -d $A -C D+ --frames 1
+    emu_case "channel D minus" --oracle-bug "$DASH_BUG" --expect-fail --stderr -- -d $A -C D- --frames 1
 
     # The readings' corners, in single precision and scaled by a double, on each
     # table. E's top bits show the float: 2^24 + 1 has no float of its own.
@@ -164,11 +172,11 @@ s/Unrecognized device type \(0x00(55|01)\)/Unrecognized device type (masked)/" -
     emu_case "two reports in one read" -- -d $A --frames 1
     # The second report of a read has to wait for a next byte in C
     # (protocol.c:151-157), and none comes.
-    emu_case "two reports in one read both" --hangs --filter '2,$d' --timeout 3 -- -d $A --frames 2
+    emu_case "two reports in one read both" --oracle-bug "$LAG_BUG" --oracle-hangs --timeout 3 -- -d $A --frames 2
     # A scan that read more than its report leaves the rest for the capture
     # (protocol.c:202-203 clears only at the probe's start).
     emu_options $P packet=$R1$R2,$R3,$R3 scan=1 burst=2
-    emu_case "a report left from the scan" -- -d $A --frames 1
+    emu_case "a report left from the scan" --oracle-differs "$STALE_BUG" -- -d $A --frames 1
     # More than one read holds, and a limit in the first report: what C does after
     # its stop depends on the reads.
     FL=$R2$R3$R2$R3$R2$R3$R2$R3
@@ -178,22 +186,26 @@ s/Unrecognized device type \(0x00(55|01)\)/Unrecognized device type (masked)/" -
     emu_options $P scan=1 burst=1
     emu_case "time" -- -d $A --time 1
     emu_options $P scan=1 burst=0
-    emu_case "time silent" --hangs --no-output --timeout 3 -- -d $A --time 100
+    emu_case "time silent" --oracle-bug "$QUIET_BUG" --oracle-hangs --stderr --filter "$L" --timeout 6 -- -d $A --time 100
     # A library's stop.
     emu_options $P scan=1 burst=3
     emu_case "stop after 2 frames" --libsigrok -- -d $A --continuous -O analog --stop-after 10
     emu_case "stop at the header" --libsigrok --no-output -- -d $A --continuous -O analog --stop-after 0
     # The debug line, for its form.
     emu_options $P scan=1 burst=0
-    emu_case "the debug line" --stderr --filter 's/^oxrok: debug: oxrok::drivers::atorch::protocol: /sr: atorch: /
+    emu_case "the debug line" --stderr --filter 's/^oxrok: dbg: oxrok::drivers::atorch::protocol: /sr: atorch: /
 s/^sr: \[[0-9:.]+\] /sr: /
 /Atorch msg/!d' -- -l 4 -d $A --scan
     # An unplug: in a scan's wait, and in a capture.
     emu_options $P scan=0 burst=0
     emu_case "unplug in the scan" --unplug model --timeout 14 --keep-header --stderr --filter "$L" -- -d $A --scan
     emu_options $P scan=1 burst=1
-    emu_case "unplug in a capture" --hangs --unplug model --timeout 3 --filter '2,$d' --tx-filter '/^unplug$/q' -- -d $A --frames 5
-    emu_case "stops sending" --hangs --filter '2,$d' --timeout 3 -- -d $A --frames 5
+    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 3 --tx-filter '/^unplug$/q' -- -d $A --frames 5
+    # oxrok's 30 s for a frame limit alone is for unit tests: the case would hold
+    # the lock for it twice, to say what they say.
+    emu_case "stops sending" --libsigrok --hangs --filter '2,$d' --timeout 3 -- -d $A --frames 5
+    # A quiet point: the report has gone, the signal lands in the wait for the next.
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $A --continuous -O analog
     emu_options
 }
 
