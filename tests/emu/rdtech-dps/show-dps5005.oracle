@@ -1,0 +1,21 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+    modbusaddr
+rdtech-dps - RDTech DPS5005 v116 with 3 channels: V I P
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    voltage: -nan (current)
+    voltage_target: 0.000000, 50.000000, inf (current)
+    current: -nan (current)
+    current_limit: 0.000000, 5.000000, inf (current)
+    enabled: on, off (current)
+    regulation: CV (current)
+    ovp_active: on, off (current)
+    ovp_threshold: 0.000000 (current)
+    ocp_active: on, off (current)
+    ocp_threshold: 0.000000 (current)

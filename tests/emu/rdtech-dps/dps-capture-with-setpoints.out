@@ -1,6 +1,6 @@
-V: -nan V DC
-I: -nan A DC
-P: 0.00 W
-V: -nan V DC
-I: -nan A DC
-P: 0.00 W
+V: 10.00 V DC
+I: 1000 mA DC
+P: 10.00 W
+V: 10.00 V DC
+I: 1000 mA DC
+P: 10.00 W

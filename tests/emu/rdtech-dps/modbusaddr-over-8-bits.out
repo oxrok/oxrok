@@ -1,2 +1,1 @@
-The following devices were found:
-rdtech-dps - RDTech DPS5005 v116 with 3 channels: V I P
+modbusaddr must be 0 to 255

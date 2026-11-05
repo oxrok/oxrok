@@ -9,13 +9,13 @@ Supported configuration options:
     continuous: on, off
     limit_samples: 0 (current)
     limit_time: 0 (current)
-    voltage: -nan (current)
-    voltage_target: 0.000000, 50.000000, inf (current)
-    current: -nan (current)
-    current_limit: 0.000000, 20.000000, inf (current)
+    voltage: 0.000000 (current)
+    voltage_target: 0.000000, 50.000000, 0.010000
+    current: 0.000000 (current)
+    current_limit: 0.000000, 20.000000, 0.010000
     enabled: on, off (current)
     regulation: CV (current)
     ovp_active: on, off (current)
-    ovp_threshold: 0.000000 (current)
+    ovp_threshold: 40.000000 (current)
     ocp_active: on, off (current)
-    ocp_threshold: 0.000000 (current)
+    ocp_threshold: 6.000000 (current)

@@ -69,6 +69,7 @@ pub mod ezusb;
 pub mod formats;
 pub mod ftdi;
 pub mod hid;
+pub mod modbus;
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub mod pydecode;
 pub mod scpi;
@@ -99,6 +100,7 @@ pub mod drivers {
     pub mod microchip_pickit2;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
+    pub mod rdtech_dps;
     pub mod rigol_ds;
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
@@ -116,6 +118,8 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
+    registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
+    registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));
