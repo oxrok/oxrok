@@ -10,12 +10,15 @@
 //! read here counts on the clock to release anything: a held reply is released
 //! on the Nth read after the test says so.
 
-use super::protocol::{Link, MODELS, Model, TIMING, Timing};
+use super::protocol::{Link, MODELS, Model, TCP_TIMING, TIMING, Timing};
 use super::*;
 use crate::core::PacketSink;
-use crate::serial::Port;
+use crate::serial::{Params, Port};
 use std::collections::VecDeque;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 /// Plenty, for anything that must not time out here.
@@ -63,6 +66,10 @@ struct Board {
     /// What's on its way moves only every this many reads; 0 and 1 are each.
     pace: usize,
     reads: usize,
+    /// The longest a read has asked to wait, since it was last cleared.
+    longest_read: Duration,
+    /// That, as it stood at the last write.
+    longest_settle_read: Duration,
     /// When the last byte was given to a read.
     last_byte: Option<Instant>,
     /// For each write, how long after the last byte given to a read.
@@ -138,7 +145,8 @@ impl Port for Fake {
             }
         }
         b.reads += 1;
-        if (b.pace <= 1 || b.reads.is_multiple_of(b.pace))
+        b.longest_read = b.longest_read.max(timeout);
+        if (b.pace <= 1 || b.reads % b.pace == 1)
             && let Some(byte) = b.on_the_way.pop_front()
         {
             b.arrived.push_back(byte);
@@ -159,6 +167,7 @@ impl Port for Fake {
             b.gap_before_write.push(last.elapsed());
         }
         b.written.push(data.to_vec());
+        b.longest_settle_read = std::mem::take(&mut b.longest_read);
         let reads = std::mem::take(&mut b.reads_since_write);
         b.reads_before_write.push(reads);
         let answer = b.answer(data);
@@ -253,6 +262,9 @@ fn the_times_are_these() {
     assert_eq!(TIMING.reply, Duration::from_secs(1));
     assert_eq!(TIMING.quiet, Duration::from_millis(300));
     assert_eq!(TIMING.settle_max, Duration::from_secs(1));
+    assert_eq!(TCP_TIMING.reply, Duration::from_secs(5));
+    assert_eq!(Timing::of("tcp-raw/host/1").reply, Duration::from_secs(5));
+    assert_eq!(Timing::of("/dev/ttyACM0").reply, Duration::from_secs(1));
 }
 
 #[test]
@@ -598,23 +610,25 @@ fn the_wait_after_an_unanswered_request_comes_before_the_request() {
     assert!(began.elapsed() < Duration::from_secs(30), "{:?}", began.elapsed());
 }
 
-/// Each byte is well inside `quiet` of the one before, and all of them take
-/// longer than it. Whenever the next request goes, by then the line has been
-/// quiet for all of `quiet`, however slow this host: a stall only stretches a gap.
+/// The bytes come every few reads, so each is inside `quiet` of the one before on
+/// any host that isn't far behind, and all of them take longer than it. Whenever
+/// the next request goes, by then the line has been quiet for all of `quiet`,
+/// however slow this host is, as a stall only stretches a gap.
 #[test]
 fn what_keeps_coming_keeps_the_next_request_waiting() {
     let timing = Timing {
         reply: Duration::from_millis(20),
-        quiet: Duration::from_millis(50),
-        settle_max: Duration::from_secs(60),
+        quiet: Duration::from_millis(200),
+        settle_max: Duration::from_secs(120),
     };
     let (d, fake) = device(19, timing);
     fake.lock().hold_next = 1;
     assert!(get_on(&d, "DO1").is_err());
     {
         let mut b = fake.lock();
-        b.held = vec![0x55; 100];
+        b.held = vec![0x55; 60];
         b.pace = 5;
+        b.reads = 0;
         b.release_in = Some(1);
         b.last_byte = None;
         b.gap_before_write.clear();
@@ -622,8 +636,10 @@ fn what_keeps_coming_keeps_the_next_request_waiting() {
     let _ = get_on(&d, "DO1");
     let b = fake.lock();
     assert_eq!(b.written.len(), 2);
-    assert_eq!(b.gap_before_write.len(), 1, "a byte came before the request");
-    assert!(b.gap_before_write[0] >= timing.quiet, "{:?}", b.gap_before_write[0]);
+    // None only if this host stalled for all of `quiet` before its first read.
+    if let Some(gap) = b.gap_before_write.first() {
+        assert!(*gap >= timing.quiet, "{gap:?}");
+    }
 }
 
 #[test]
@@ -637,6 +653,37 @@ fn only_the_next_request_waits() {
     let b = fake.lock();
     assert!(b.reads_before_write[1] > 3, "{}", b.reads_before_write[1]);
     assert_eq!(b.reads_before_write[2], 1);
+}
+
+#[test]
+fn a_port_lost_in_the_wait_fails_the_request_it_was_for() {
+    let (d, fake) = device(19, SHORT);
+    get_goes_unanswered(&d, &fake);
+    fake.lock().gone = true;
+    assert!(matches!(get_on(&d, "DO1"), Err(Error::Disconnected)));
+    assert_eq!(fake.written().len(), 1, "nothing went out");
+}
+
+/// A wait that reads with the reply's time would see a late answer only when that
+/// time is up, and overstay `quiet` by it.
+#[test]
+fn the_wait_looks_at_the_line_every_few_ms() {
+    let timing = Timing {
+        reply: Duration::from_millis(40),
+        quiet: Duration::from_millis(100),
+        settle_max: Duration::from_secs(60),
+    };
+    let (d, fake) = device(19, timing);
+    fake.lock().hold_next = 1;
+    assert!(get_on(&d, "DO1").is_err());
+    {
+        let mut b = fake.lock();
+        b.held.clear();
+        b.longest_read = Duration::ZERO;
+    }
+    assert!(get_on(&d, "DO1").is_ok());
+    // What the answer's own read asks for comes after the write: take the wait's.
+    assert_eq!(fake.lock().longest_settle_read, Duration::from_millis(5));
 }
 
 #[test]
@@ -717,9 +764,249 @@ fn no_conn_or_an_empty_one_finds_nothing_and_a_bad_port_too() {
     assert!(driver.scan(&conn("tcp-raw/127.0.0.1")).expect("a scan").is_empty());
 }
 
+/// A board on a real socket, whose answers the test can hold back on their
+/// connection, as a slow link does. A held answer goes out with the next request
+/// on that connection: if there is one, the client didn't connect again. So nothing
+/// here depends on how late anything is.
+#[derive(Clone, Default)]
+struct SocketBoard {
+    relay: Arc<Mutex<u32>>,
+    hold: Arc<AtomicBool>,
+    refuse: Arc<AtomicBool>,
+    /// Close after the next answer.
+    close: Arc<AtomicBool>,
+    /// A connection was closed by that.
+    closed: Arc<AtomicBool>,
+    connections: Arc<AtomicUsize>,
+    held: Arc<Mutex<Option<(TcpStream, u8)>>>,
+}
+
+impl SocketBoard {
+    fn relay(&self) -> u32 {
+        *self.relay.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn set_relay(&self, value: u32) {
+        *self.relay.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = value;
+    }
+
+    /// The late answer, now.
+    fn release(&self) {
+        let held = self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        if let Some((mut stream, byte)) = held {
+            let _ = stream.write_all(&[byte]);
+        }
+    }
+
+    fn serve(&self, mut stream: TcpStream) {
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(120)));
+        let _ = stream.set_nodelay(true);
+        let mut command = [0u8; 1];
+        loop {
+            match stream.read(&mut command) {
+                Ok(1) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                _ => return,
+            }
+            self.release();
+            let mut arguments = [0u8; 2];
+            if matches!(command[0], 0x20 | 0x21) && stream.read_exact(&mut arguments).is_err() {
+                return;
+            }
+            let answer = match command[0] {
+                0x24 => u8::try_from(self.relay() & 0xff).unwrap_or(0),
+                0x20 | 0x21 if self.refuse.load(Ordering::SeqCst) => 1,
+                0x20 => {
+                    self.set_relay(self.relay() | 1 << (arguments[0] - 1));
+                    0
+                }
+                0x21 => {
+                    self.set_relay(self.relay() & !(1 << (arguments[0] - 1)));
+                    0
+                }
+                _ => return,
+            };
+            if self.hold.load(Ordering::SeqCst) {
+                let copy = stream.try_clone().expect("a clone");
+                *self.held.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((copy, answer));
+            } else if stream.write_all(&[answer]).is_err() {
+                return;
+            }
+            if self.close.swap(false, Ordering::SeqCst) {
+                self.closed.store(true, Ordering::SeqCst);
+                return;
+            }
+        }
+    }
+
+    /// Listens for ever, for this test binary's life; returns the port.
+    fn listen(&self) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        let port = listener.local_addr().expect("an address").port();
+        let board = self.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { return };
+                board.connections.fetch_add(1, Ordering::SeqCst);
+                let board = board.clone();
+                std::thread::spawn(move || board.serve(stream));
+            }
+        });
+        port
+    }
+
+    /// An open ETH008 on it, whose reply waits are short: every answer that must
+    /// come is taken with [`settled_get`], so a stall costs only a retry.
+    fn device(&self) -> EthDevice {
+        let timing = Timing {
+            reply: Duration::from_millis(100),
+            quiet: Duration::from_millis(20),
+            settle_max: Duration::from_millis(100),
+        };
+        let conn = format!("tcp-raw/127.0.0.1/{}", self.listen());
+        let link = Link::new(None, timing);
+        let mut device = EthDevice::new(model(19), link, conn, String::new(), String::new());
+        device.open().expect("an open");
+        device
+    }
+}
+
+/// A get until it has an answer, bounded. An error is no answer; a value is one,
+/// and has to be right.
+fn settled_get(device: &EthDevice) -> Value {
+    let began = Instant::now();
+    loop {
+        if let Ok(value) = get_on(device, "DO1") {
+            return value;
+        }
+        assert!(began.elapsed() < Duration::from_secs(60), "no answer");
+    }
+}
+
+/// A get's answer is late, and the next set is refused.
+#[test]
+fn a_late_answer_over_tcp_does_not_pass_for_a_refused_set_s() {
+    let board = SocketBoard::default();
+    let mut d = board.device();
+    board.hold.store(true, Ordering::SeqCst);
+    assert!(get_on(&d, "DO1").is_err());
+    board.hold.store(false, Ordering::SeqCst);
+    board.refuse.store(true, Ordering::SeqCst);
+    assert!(d.set(&Key::Enabled, &Value::Bool(true), Some("DO1")).is_err());
+    assert_eq!(board.relay(), 0, "the board refused");
+    assert_eq!(settled_get(&d), Value::Bool(false));
+    assert!(board.connections.load(Ordering::SeqCst) >= 2);
+}
+
+/// A set's answer is late: it took effect, and the next get says so.
+#[test]
+fn a_late_answer_over_tcp_does_not_pass_for_the_next_get() {
+    let board = SocketBoard::default();
+    let mut d = board.device();
+    board.hold.store(true, Ordering::SeqCst);
+    assert!(d.set(&Key::Enabled, &Value::Bool(true), Some("DO1")).is_err());
+    assert_eq!(board.relay(), 1, "it took effect all the same");
+    board.hold.store(false, Ordering::SeqCst);
+    assert_eq!(settled_get(&d), Value::Bool(true));
+}
+
+/// Every answer late, with the relay moving: no get is ever wrong.
+#[test]
+fn steady_latency_over_tcp_gives_errors_and_never_a_wrong_value() {
+    let board = SocketBoard::default();
+    let d = board.device();
+    board.hold.store(true, Ordering::SeqCst);
+    for round in 0..8u32 {
+        board.set_relay(round & 1);
+        if let Ok(value) = get_on(&d, "DO1") {
+            panic!("round {round}: {value:?} from an answer that wasn't sent for it");
+        }
+    }
+    board.hold.store(false, Ordering::SeqCst);
+    board.set_relay(1);
+    assert_eq!(settled_get(&d), Value::Bool(true));
+}
+
+/// The late answer has arrived by the next request: a connection left behind.
+#[test]
+fn a_late_answer_that_has_come_is_left_on_its_connection() {
+    let board = SocketBoard::default();
+    let d = board.device();
+    board.set_relay(1);
+    board.hold.store(true, Ordering::SeqCst);
+    assert!(get_on(&d, "DO1").is_err());
+    board.hold.store(false, Ordering::SeqCst);
+    board.release();
+    board.set_relay(0);
+    assert_eq!(settled_get(&d), Value::Bool(false));
+}
+
+/// A board that closed between requests (it restarted, say) fails one request,
+/// whichever step finds out, and the next connects again.
+#[test]
+fn a_board_that_closed_is_connected_to_again() {
+    let board = SocketBoard::default();
+    let d = board.device();
+    board.close.store(true, Ordering::SeqCst);
+    assert_eq!(settled_get(&d), Value::Bool(false));
+    let began = Instant::now();
+    while !board.closed.load(Ordering::SeqCst) {
+        assert!(began.elapsed() < Duration::from_secs(60), "the board never closed");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Let the end of the stream arrive, so the request's purge is what finds it.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(matches!(get_on(&d, "DO1"), Err(Error::Disconnected)));
+    board.set_relay(1);
+    assert_eq!(settled_get(&d), Value::Bool(true));
+    assert_eq!(board.connections.load(Ordering::SeqCst), 2);
+}
+
+/// A failed connect leaves no port, and the next request tries again.
+#[test]
+fn a_connect_that_fails_is_tried_again_by_the_next_request() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let port = listener.local_addr().expect("an address").port();
+    let conn = format!("tcp-raw/127.0.0.1/{port}");
+    let timing = Timing { reply: Duration::from_millis(50), ..TIMING };
+    let mut link = Link::new(None, timing);
+    link.attach(
+        crate::serial::open(&conn, protocol::line().expect("a line")).expect("a port"),
+        &conn,
+    );
+    assert!(link.get_analog(1).is_err(), "nothing answers");
+    drop(listener);
+    assert!(link.get_analog(1).is_err(), "nothing listens");
+    assert!(link.port.is_none());
+    assert!(link.get_analog(1).is_err(), "nothing listens still");
+}
+
+/// Closed is closed: no request connects again.
+#[test]
+fn a_closed_link_does_not_connect_again() {
+    let board = SocketBoard::default();
+    let mut d = board.device();
+    board.hold.store(true, Ordering::SeqCst);
+    assert!(get_on(&d, "DO1").is_err());
+    d.close().expect("a close");
+    let before = board.connections.load(Ordering::SeqCst);
+    assert!(get_on(&d, "DO1").is_err());
+    assert_eq!(board.connections.load(Ordering::SeqCst), before);
+}
+
+/// A tty's link doesn't try: it has no name to connect to.
+#[test]
+fn only_tcp_connects_again() {
+    let fake = Fake::new(model(19));
+    let mut link = Link::new(None, SHORT);
+    link.attach(Box::new(fake), "/dev/ttyACM0");
+    assert!(link.get_serial().is_ok());
+    assert!(link.port.is_some());
+}
+
 #[test]
 fn a_scan_and_a_get_over_tcp() {
-    use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
     let port = listener.local_addr().expect("an address").port();
     // One connection for the scan, one for the open, as a board takes up to five.

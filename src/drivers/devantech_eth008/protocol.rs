@@ -24,15 +24,26 @@
 //! A board doesn't answer a command it hasn't got, which is why the inputs are
 //! only asked of a board that has them.
 //!
-//! With no framing a late answer would pass for the answer to the next request.
-//! C has that (`recv_response` fails, and nothing clears what comes next). Here
-//! each request starts with an empty input queue, so a byte too many goes, and
-//! after a request went unanswered the next one first waits for the line to go
-//! quiet, with [`Settle`], as a purge drops only what has come. What comes later
-//! than that is still taken for the next answer: nothing in the bytes can tell.
+//! With no framing a late answer would pass for the answer to the next request,
+//! so a relay reads wrong, or a refused set reads as done. So each request starts
+//! with an empty input queue, which takes a byte too many, and after a request
+//! that got no whole answer the next one recovers first:
+//!
+//! - Over TCP it connects again, as a new connection can't receive an old answer
+//!   (C's own remedy, `protocol.c:61`, "assuming that TCP connect is used to
+//!   recover"). C needs none on its path: its blocking `recv` (`tcp.c:362`) never
+//!   gives up, so it never moves on from an answer. It hangs on a silent board.
+//! - On a tty it waits for the line to go quiet, with [`Settle`], as a purge drops
+//!   only what has come. What comes later than that is still taken for the next
+//!   answer: nothing in the bytes can tell. C's read gives up at 20 ms and clears
+//!   nothing, though on a tty C doesn't get that far (see the module above).
+//!
+//! A set whose answer didn't come may have taken effect all the same: its error
+//! says only that nothing is known. Ask again to find out.
 
 use crate::core::{Error, Result};
-use crate::serial::{Port, read_blocking};
+use crate::serial::tcpraw::is_tcpraw_name;
+use crate::serial::{Params, Port, read_blocking};
 use std::time::{Duration, Instant};
 
 const CMD_GET_MODULE_INFO: u8 = 0x10;
@@ -112,10 +123,23 @@ fn invalid_data() -> Error {
     Error::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, "data is invalid"))
 }
 
-/// The times of a request. C's `READ_TIMEOUT_MS` is 20, and over TCP it has no
-/// effect, since its read is a blocking `recv` (`tcp.c:362`): a board at the
-/// other end of a slow link works, and a silent one hangs. So [`Timing::reply`]
-/// is long enough for a slow link and for a loaded host, and does end.
+/// C opens with no `serialcomm` and leaves a tty's line as it is. This sets it, as
+/// [`crate::serial::open`] always does; TCP takes no notice of it.
+const SERIALCOMM: &str = "9600/8n1";
+
+/// The line a port opens with.
+///
+/// # Errors
+///
+/// None in practice: [`SERIALCOMM`] parses.
+pub fn line() -> Result<Params> {
+    Params::parse(SERIALCOMM)
+}
+
+/// The times of a request. C's `READ_TIMEOUT_MS` is 20, too little for a loaded
+/// host. Over TCP it has no effect, since its read is a blocking `recv`
+/// (`tcp.c:362`): a board at the other end of a slow link works, and a silent one
+/// hangs.
 #[derive(Clone, Copy, Debug)]
 pub struct Timing {
     /// How long a whole answer may take.
@@ -126,12 +150,24 @@ pub struct Timing {
     pub settle_max: Duration,
 }
 
-/// What a device uses.
+/// What a tty uses.
 pub const TIMING: Timing = Timing {
     reply: Duration::from_secs(1),
     quiet: Duration::from_millis(300),
     settle_max: Duration::from_secs(1),
 };
+
+/// What TCP uses. A slow link's answer shouldn't fail where C's `recv` waits for
+/// it, and a silent board costs one wait, so the reply has as long as a connect.
+/// `quiet` and `settle_max` aren't used: TCP connects again instead.
+pub const TCP_TIMING: Timing = Timing { reply: Duration::from_secs(5), ..TIMING };
+
+impl Timing {
+    /// What `conn` uses.
+    pub fn of(conn: &str) -> Timing {
+        if is_tcpraw_name(conn) { TCP_TIMING } else { TIMING }
+    }
+}
 
 /// How often [`Settle`]'s wait looks at the line.
 const SETTLE_POLL: Duration = Duration::from_millis(5);
@@ -168,25 +204,51 @@ pub struct Link {
     /// The port, while open.
     pub port: Option<Box<dyn Port>>,
     timing: Timing,
-    /// A request went unanswered, and its answer may still be on the way.
+    /// A request got no whole answer, which may still be on the way.
     out_of_step: bool,
+    /// Where to connect again to recover: a TCP port's name.
+    reconnect: Option<String>,
 }
 
 impl Link {
     /// A link with the given times.
     pub fn new(port: Option<Box<dyn Port>>, timing: Timing) -> Link {
-        Link { port, timing, out_of_step: false }
+        Link { port, timing, out_of_step: false, reconnect: None }
     }
 
-    /// A port, freshly opened: nothing can be on its way on it that C or this
-    /// would mistake. An open flushes, and TCP has a new connection.
-    pub fn attach(&mut self, port: Box<dyn Port>) {
+    /// A port, freshly opened as `conn`: nothing can be on its way on it. An open
+    /// flushes, and TCP has a new connection.
+    pub fn attach(&mut self, port: Box<dyn Port>, conn: &str) {
         self.port = Some(port);
         self.out_of_step = false;
+        self.reconnect = is_tcpraw_name(conn).then(|| conn.to_owned());
     }
 
-    /// Drops what's left of an unanswered request.
-    fn settle(&mut self, port: &mut dyn Port) -> Result<()> {
+    /// The port is closed, and nothing brings it back but [`Link::attach`].
+    pub fn detach(&mut self) {
+        self.port = None;
+        self.out_of_step = false;
+        self.reconnect = None;
+    }
+
+    /// Drops what's left of an unanswered request, by the transport's means. The
+    /// old connection goes first, as a board takes only five. If the new one
+    /// fails there is no port, and the next request tries again.
+    fn recover(&mut self) -> Result<()> {
+        if let Some(conn) = &self.reconnect {
+            log::debug!("Connecting again to {conn}: a request went unanswered.");
+            self.port = None;
+            self.port = Some(crate::serial::open(conn, line()?)?);
+        } else if let Some(mut port) = self.port.take() {
+            let settled = self.settle(port.as_mut());
+            self.port = Some(port);
+            settled?;
+        }
+        Ok(())
+    }
+
+    /// Waits for a quiet line.
+    fn settle(&self, port: &mut dyn Port) -> Result<()> {
         let mut settle = Settle::new(self.timing);
         let mut buf = [0u8; 16];
         while !settle.over() {
@@ -200,6 +262,9 @@ impl Link {
     /// `send_then_recv`, from a clean line. Any failure to get the whole answer
     /// leaves the link out of step.
     fn exchange(&mut self, request: &[u8], reply: &mut [u8]) -> Result<()> {
+        if self.out_of_step {
+            self.recover()?;
+        }
         let mut port = self.port.take().ok_or_else(|| Error::arg("The device is not open."))?;
         let result = self.exchange_on(port.as_mut(), request, reply);
         self.port = Some(port);
@@ -207,13 +272,10 @@ impl Link {
     }
 
     fn exchange_on(&mut self, port: &mut dyn Port, request: &[u8], reply: &mut [u8]) -> Result<()> {
-        if self.out_of_step {
-            self.settle(port)?;
-        }
+        self.out_of_step = true;
         port.purge()?;
         log::trace!("TX --> {}.", hex(request));
         port.write(request)?;
-        self.out_of_step = true;
         let got = read_blocking(port, reply, self.timing.reply)?;
         log::trace!("<-- RX {}.", hex(&reply[..got]));
         if got != reply.len() {

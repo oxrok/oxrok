@@ -6,9 +6,10 @@
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
-//! Devantech relay boards: ETH002, ETH008, ETH484, ETH8020, ETH1610 and the
-//! WIFI002, WIFI008, WIFI484 and WIFI8020. A board is reached over TCP,
-//! `conn=tcp-raw/HOST/17494`, or a serial port carrying the same bytes.
+//! Devantech relay boards: ETH002, ETH008, ETH484 and ETH8020, as the vendor's
+//! documents and Python module have them, and the ETH1610, WIFI002, WIFI008,
+//! WIFI484 and WIFI8020, on the word of libsigrok's table alone. A board is reached
+//! over TCP, `conn=tcp-raw/HOST/17494`, or a serial port carrying the same bytes.
 //!
 //! There's no capture. A board is a set of channel groups with no channels:
 //! `DO1` and up switch one relay or output (`enabled`), `DI1` and up read an
@@ -21,8 +22,9 @@
 //! an open opens it again. C leaves it open (no `serial_close` before
 //! `api.c:191` returns) and opens it a second time: over TCP a second connection,
 //! with the first never closed. On a tty C doesn't get that far. `api.c:105` opens
-//! with no flags, which libserialport takes as read only, so the scan's first
-//! write fails with EBADF and no board is ever found; and were it found, the
+//! with no flags (so since the driver's first commit, 8712c783, 2023-09-24), which
+//! libserialport takes as read only, so the scan's first write fails with EBADF
+//! and no board is ever found; and were it found, the
 //! exclusive open of libserialport 0.1.2 and later would refuse the second open.
 //! Here a tty works like TCP.
 //!
@@ -45,17 +47,13 @@ use crate::core::{
     Access, Channel, ChannelGroup, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
     Packet, PacketSink, Result, Value, ValueList,
 };
-use crate::serial::{Params, Port};
-use protocol::{Link, Model, TIMING};
+use crate::serial::Port;
+use protocol::{Link, Model, TIMING, Timing, line};
 use std::sync::{Mutex, MutexGuard};
 
 const SCAN_OPTIONS: [Key; 1] = [Key::Conn];
 const CLASSES: [DeviceClass; 1] = [DeviceClass::Multiplexer];
 const VENDOR: &str = "Devantech";
-/// C opens with no `serialcomm` and leaves the port as it is. This sets the
-/// line, as [`crate::serial::open`] always does; TCP takes no notice of it.
-const SERIALCOMM: &str = "9600/8n1";
-
 const ACCESS_SET: Access = Access { get: false, set: true, list: false };
 static DEV_OPTIONS: [OptionDesc; 2] =
     [OptionDesc::new(Key::Conn, Access::GET), OptionDesc::new(Key::Enabled, ACCESS_SET)];
@@ -95,7 +93,7 @@ impl Driver for DevantechEth008Driver {
             return Ok(Vec::new());
         };
         // A port that doesn't open is no device.
-        let port = match crate::serial::open(&conn, serialcomm()?) {
+        let port = match crate::serial::open(&conn, line()?) {
             Ok(port) => port,
             Err(e) => {
                 log::error!("{e}");
@@ -113,13 +111,9 @@ impl Driver for DevantechEth008Driver {
     }
 }
 
-fn serialcomm() -> Result<Params> {
-    Params::parse(SERIALCOMM)
-}
-
 /// `probe_device_conn` after the open. The port goes when this returns.
 fn probe(port: Box<dyn Port>, conn: &str) -> Result<Option<EthDevice>> {
-    let mut link = Link::new(Some(port), TIMING);
+    let mut link = Link::new(Some(port), Timing::of(conn));
     let (code, hardware, firmware) = link.get_model()?;
     let Some(model) = Model::find(code) else {
         log::error!("Unknown model ID 0x{code:02x} (HW {hardware}, FW {firmware}).");
@@ -309,15 +303,15 @@ impl Device for EthDevice {
     fn open(&mut self) -> Result<()> {
         let port = match self.pending.take() {
             Some(port) => port,
-            None => crate::serial::open(&self.conn, serialcomm()?)?,
+            None => crate::serial::open(&self.conn, line()?)?,
         };
-        self.link().attach(port);
+        self.link().attach(port, &self.conn);
         Ok(())
     }
 
     /// `std_serial_dev_close`.
     fn close(&mut self) -> Result<()> {
-        self.link().port = None;
+        self.link().detach();
         Ok(())
     }
 

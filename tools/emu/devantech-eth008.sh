@@ -2,6 +2,12 @@
 # CDC-ACM shell. Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a
 # serial model". The real boards are reached over TCP, which no shell carries:
 # libsigrok's serial layer takes either transport, and this is the serial one.
+#
+# So these cases are full under a preload, on a tty, a path no stock C reaches, and
+# TCP was compared by hand only (tests/tcp_raw_cli.rs holds oxrok's side). They
+# compare the requests, the parsing, the tables and the messages. They don't show
+# what C does on its own transport: a silent or short answer here fails with "data
+# is invalid", where over TCP C's blocking recv hangs.
 EMU_MODEL=devantech-eth008
 EMU_CDC=1
 EMU_DRIVER=devantech-eth008
@@ -80,7 +86,7 @@ emu_cases() {
     SHOW_BUG="api.c:279 gives SR_CONF_VOLTAGE a uint32 where hwdriver.c:141 has it SR_T_FLOAT, which show.c:750 reads with g_variant_get_double: a GLib critical, on which sigrok-cli's logger exits (main.c:46-47); oxrok shows the number"
     STOCK_BUG="api.c:105 opens with no flags, which serial_libsp.c:67-71 gives sp_open as a mode of 0, so read only, and the scan's first write fails with EBADF: on a tty stock sigrok-cli finds no board, with any libserialport; oxrok opens for both"
     SHIFT_BUG="recv_response reads what it asks for (protocol.c:191) and nothing clears the rest, so a byte too many is the head of the next answer: here the serial number reads one byte along, and so does every later answer of a session; oxrok drops the input queue before a request"
-    REFUSED_BUG="sigrok-cli sets -c at session.c:804 before the limit it cannot set (:866), so every relay goes on for a capture it then refuses; oxrok holds enabled=on until the start (docs/CLI.md) and sends nothing"
+    SET_BEFORE_LIMIT="sigrok-cli sets -c at session.c:804 before the limit it cannot set (:866), so every relay goes on for a capture it then refuses; oxrok holds enabled=on until the start (docs/CLI.md) and sends nothing"
     LOOSE_BUG="sigrok-cli takes what is no boolean as off (session.c:566, sr_parse_boolstring gives false) and turns every relay off; oxrok refuses it and sends nothing"
     SERIALCOMM_BUG="hwdriver.c's check_options logs the unlisted option and scan goes on with nothing, so sigrok-cli exits 0 finding nothing; oxrok refuses it by its name and exits 1"
 
@@ -220,7 +226,7 @@ emu_cases() {
     emu_case "set conn" --stderr --expect-fail -- -d $K -c conn=x --set
     emu_case "set with nothing" --stderr --expect-fail -- -d $K --set
     emu_case "set with no value" --no-output -- -d $K -c enabled --set
-    emu_case "set in a refused capture" --oracle-bug "$REFUSED_BUG" --expect-fail --stderr -- -d $K -c enabled=on --samples 1
+    emu_case "set in a refused capture" --oracle-bug "$SET_BEFORE_LIMIT" --expect-fail --stderr -- -d $K -c enabled=on --samples 1
 
     # C's hexdumps of each request and answer, at the level that prints them.
     emu_options setters=0
@@ -243,7 +249,8 @@ emu_cases() {
     emu_case "unplug in a get" --expect-fail --no-output --unplug model --timeout 20 --tx-filter '/^unplug$/q' -- -d $K -g DO1 --get enabled
     emu_case "unplug in a set" --expect-fail --no-output --unplug model --timeout 20 --tx-filter '/^unplug$/q' -- -d $K -g DO1 -c enabled=on --set
 
-    # As the oracle really is, with the exclusive open.
+    # With the read only open and the exclusive open as stock has them. The floor
+    # on the read stays, and none of these gets as far as a read.
     SIGROK_CLI=$TMP/eth-stock-cli
     [ "$no_oracle" = 1 ] && SIGROK_CLI=$ETH_STOCK_CLI
     emu_options setters=0
