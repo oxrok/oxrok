@@ -29,7 +29,6 @@
 #![forbid(unsafe_code)]
 
 pub mod models;
-pub mod ut32x;
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key,
@@ -72,7 +71,7 @@ const REQUEST_TIMEOUT: Duration = Duration::ZERO;
 pub struct SerialDmmDriver(pub &'static Model);
 
 /// Registers a driver for every supported meter, on serial and on HID
-/// cables, and the `UT32x` thermometer.
+/// cables.
 pub fn register_all(registry: &mut crate::core::Registry) {
     for model in models::MODELS {
         registry.register(Box::new(SerialDmmDriver(model)));
@@ -80,13 +79,12 @@ pub fn register_all(registry: &mut crate::core::Registry) {
     for model in models::hid_models() {
         registry.register(Box::new(super::uni_t_dmm::UniTDmmDriver(model)));
     }
-    registry.register(Box::new(ut32x::Ut32xDriver));
 }
 
 /// Turns the `VID.PID` form libsigrok's USB drivers take into the HID
 /// cable name: for `uni-t-ut32x`, and for what `uni_t_dmm` hands to its
 /// twins (a cable of another chip, or a CH9325 off Linux).
-fn hid_conn(conn: &str) -> String {
+pub(crate) fn hid_conn(conn: &str) -> String {
     if let Some((v, p)) = conn.split_once('.')
         && let (Ok(vid), Ok(pid)) = (u16::from_str_radix(v, 16), u16::from_str_radix(p, 16))
         && let Some(chip) = crate::serial::hid::Chip::for_usb_id(vid, pid)

@@ -1,0 +1,3 @@
+sr: uni-t-ut32x: Acquisition failed: Broken pipe.
+sr: uni-t-ut32x: Cannot send the stop command: Broken pipe.
+oxrok: warn: oxrok::cli::pipeline: Device only sent 2 samples.
