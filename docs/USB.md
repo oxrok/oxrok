@@ -660,6 +660,16 @@ full case or oracle case. What else is checked depends on oxrok:
   `exit()`, so its gcov counts are written; an `exit()` that deadlocks
   is ended by an alarm 2 s later and writes none. A hang case compares
   `--stderr` or uses `--no-output`.
+- A scenario that sets `EMU_ORACLE_USB_FLOOR_MS=N` runs sigrok-cli and
+  the libsigrok runner with no libusb bulk timeout under N ms
+  (`tools/oracle-usb-floor.c`); oxrok runs as it is. It is for a C
+  driver whose timeouts are shorter than what the host can hold a
+  transfer up for: libusb arms the timer before the URB, the first URB
+  of a driver that did not claim the interface makes the kernel write
+  usbfs's warning to the consoles (about 1 ms on a VM's serial console),
+  and the path through vhci-hcd crosses several tasks. Such a timeout on
+  a scan shows only as "No devices found.". A device that does not
+  answer still times out. `kecheng-kc-330b` sets 250.
 - Either way the output and the transactions are compared with the
   goldens `tests/emu/MODEL/SLUG.out` and `SLUG.tx` (`SLUG` is the case
   name in lower case, runs of other characters made `-`), the

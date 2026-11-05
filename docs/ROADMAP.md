@@ -390,6 +390,13 @@ each with where it belongs:
 - `src/cli/pipeline.rs`'s `check_limit` sums readings across channels, as
   `session.c:441-444` does, so "Device only sent N samples" counts readings
   and a capture cut short with at least half its samples gets no warning.
+- A `libgcov profiling error:` line on the oracle's stderr fails a stderr
+  comparison on any model, as a `.gcda` truncated by a full disk did. The
+  harness could filter that line.
+- Literal short USB timeouts in C drivers, the kind that made Kecheng's scan
+  miss a present device: `hantek-dso` at 40 ms and `lascar-el-usb` at 50 ms
+  (control transfers, which `EMU_ORACLE_USB_FLOOR_MS` does not cover) are
+  the next if they start to flake.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).
