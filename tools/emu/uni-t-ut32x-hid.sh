@@ -24,9 +24,9 @@ emu_cases() {
     F='s/^oxrok: [a-z]+: oxrok::drivers::uni_t_ut32x(::protocol)?: /sr: uni-t-ut32x: /'
     SEARCH_BUG="libsigrok 0bc24877 converts a searched path twice (serial_hid.c ser_hid_chip_search)"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture and sends the stop"
-    UNTIL_PACKET="protocol.c:164-167 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
-    UNPLUG_BUG="the read errors end hidapi_source_cb's loop (serial_hid.c:451-456) and nothing tells ut32x_handle_events, so it goes on for ever; oxrok gets an error and ends"
-    # ch9325_write_bytes (serial_hid_ch9325.c:121,139-141) sends 8 bytes and sets
+    UNTIL_PACKET="protocol.c:154-156 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
+    UNPLUG_BUG="the read errors end hidapi_source_cb's loop (serial_hid.c:451-458) and nothing tells ut32x_handle_events, so it goes on for ever; oxrok gets an error and ends"
+    # ch9325_write_bytes (serial_hid_ch9325.c:130,149-150) sends 8 bytes and sets
     # only the count and the data: the rest is C's stack, oxrok's zeros. A unit test
     # pins those.
     TAIL='s/^(int_out 02 01[0-9a-f]{2})[0-9a-f]{12} -> /\1 and C'"'"'s stack -> /'

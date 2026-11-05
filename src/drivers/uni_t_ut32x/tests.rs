@@ -628,7 +628,7 @@ fn a_limit_set_during_a_capture_bites_at_the_next_record() {
 
 #[test]
 fn on_the_cable_the_bytes_behind_the_count_are_zeros() {
-    // C leaves them uninitialised (`serial_hid_ch9325.c:121,139-141`), and the
+    // C leaves them uninitialised (`serial_hid_ch9325.c:130,149-150`), and the
     // emulator cases mask them.
     let hid = SharedFake::default();
     let mut port = HidPort::open(

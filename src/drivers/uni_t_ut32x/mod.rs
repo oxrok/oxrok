@@ -19,19 +19,19 @@
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
-//! - C checks its limits only behind a record (`protocol.c:164-167`), so a device
+//! - C checks its limits only behind a record (`protocol.c:154-156`), so a device
 //!   that says nothing never ends a capture, whatever the limit. Here a time limit
 //!   allows [`TIME_GRACE`] past its end for that record, which is what C would stop
 //!   on, and a sample limit alone stops after [`SILENCE_BOUND`] with no record.
 //! - A failed read ends the capture. C does not see it: a gone tty polls as `G_IO_HUP`
-//!   and it reads on `G_IO_IN` alone (`protocol.c:296-297`).
+//!   and it reads on `G_IO_IN` alone (`protocol.c:263-264`).
 //! - C loses every record for good after a marker split over its buffer's end
-//!   (`protocol.c:269-272`), which one stray byte ahead of a record does; see
+//!   (`protocol.c:231-234`), which one stray byte ahead of a record does; see
 //!   [`protocol`].
 //! - The port is given back and the `02` sent before `End`, where C has them behind
 //!   it, so a client can start again as soon as it sees `End`. The wire is the same.
 //! - A channel that is off gets no packet, and its records still count. C sends them
-//!   whatever `-C` says (`protocol.c:125-142`).
+//!   whatever `-C` says (`protocol.c:119-143`).
 //! - A limit set during a capture bites at the next record, as in C.
 
 #![forbid(unsafe_code)]

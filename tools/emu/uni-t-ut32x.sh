@@ -42,12 +42,12 @@ emu_cases() {
     # What oxrok adds after the error sigrok-cli names.
     FN="$F
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
-    CHAN_BUG="process_packet (protocol.c:125-142) sends what the meter shows whatever -C says; oxrok sends a channel that is on, and counts the rest as C does"
+    CHAN_BUG="process_packet (protocol.c:119-143) sends what the meter shows whatever -C says; oxrok sends a channel that is on, and counts the rest as C does"
     DASH="both tools read the dash of T1-T2 as a range and refuse it, in their own words, so that channel cannot be named alone"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture and sends the stop"
-    UNTIL_PACKET="protocol.c:164-167 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
-    UNPLUG_BUG="ut32x_handle_events (protocol.c:296-297) reads on G_IO_IN alone, and a gone tty polls as G_IO_HUP, so it goes on for ever; oxrok gets an error and ends"
-    SPLIT_BUG="ut32x_receive_data (protocol.c:269-272) drops a full buffer ending in CR, so the LF starts the next one and every record after it is cut the same way, for ever; oxrok drops that LF too and is in step at the next record"
+    UNTIL_PACKET="protocol.c:154-156 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
+    UNPLUG_BUG="ut32x_handle_events (protocol.c:263-264) reads on G_IO_IN alone, and a gone tty polls as G_IO_HUP, so it goes on for ever; oxrok gets an error and ends"
+    SPLIT_BUG="ut32x_receive_data (protocol.c:231-234) drops a full buffer ending in CR, so the LF starts the next one and every record after it is cut the same way, for ever; oxrok drops that LF too and is in step at the next record"
     T1=$(ut32x_rec 2 :235 1 00 0)
     T2=$(ut32x_rec 2 :241 1 00 1)
 
