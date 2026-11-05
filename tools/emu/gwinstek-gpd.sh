@@ -253,6 +253,13 @@ $A" --expect-fail -- -d $K -g CH1 -c voltage_target=32.1 --set
     emu_case "samples 3 analog" -- -d $K --samples 3 -O analog
     emu_case "channel CH1 only" --oracle-differs "$CHANNEL_BUG" -- -d $K -C CH1 --samples 2
     emu_case "channel CH2 only" --oracle-differs "$CHANNEL_BUG" -- -d $K -C CH2 --samples 2
+    # The open after the scan keeps the rate the scan found.
+    emu_options setters=0 output=1 uart=57600/8n1
+    emu_case "samples at 57600" -- -d $K --samples 1
+    emu_options setters=0 uart=115200/8n1
+    emu_case "get at 115200" -- -d $K -g CH1 --get voltage_target
+    emu_options uart=57600/8n1
+    emu_case "set at 57600" --no-output -- -d $K -g CH1 -c voltage_target=5.5 --set
     emu_options setters=0 output=1 eol=cr
     emu_case "samples with CR" -- -d $K --samples 2
     emu_options setters=0 output=1 eol=lf

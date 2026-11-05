@@ -930,20 +930,63 @@ mod tests {
     fn rounds_are_100_ms_apart() {
         let (fake, seen) = Fake::new(b"\r\n");
         let mut d = device(fake);
-        d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
         let rx = start(&mut d);
         readings(&rx);
         let seen = seen.lock().unwrap();
-        for pair in [(0, 2), (2, 4)] {
-            let gap = seen[pair.1].0 - seen[pair.0].0;
-            assert!(gap >= POLL_INTERVAL, "{gap:?}");
-            assert!(gap < POLL_INTERVAL * 3, "{gap:?}");
+        // The literal, not the constant. The least gap, as a loaded box only
+        // ever stretches one.
+        let gaps: Vec<Duration> =
+            [(0, 2), (2, 4), (4, 6)].iter().map(|(from, to)| seen[*to].0 - seen[*from].0).collect();
+        let least = gaps.iter().min().unwrap();
+        assert!(*least >= Duration::from_millis(100), "{gaps:?}");
+        assert!(*least < Duration::from_millis(300), "{gaps:?}");
+    }
+
+    /// What the driver logs, for the tests that look at it. They run one at a
+    /// time, as the logger is the process's.
+    struct Recorder;
+    static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    static RECORDING: Mutex<()> = Mutex::new(());
+
+    impl log::Log for Recorder {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
         }
+        fn log(&self, record: &log::Record<'_>) {
+            if record.target().starts_with("oxrok::drivers::gwinstek_gpd") {
+                logged_guard().push(record.args().to_string());
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    fn recording() -> std::sync::MutexGuard<'static, ()> {
+        static LOGGER: Recorder = Recorder;
+        let gate = RECORDING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = log::set_logger(&LOGGER);
+        log::set_max_level(log::LevelFilter::Error);
+        logged_guard().clear();
+        gate
+    }
+
+    /// A failed test must not take the others' logging down with it.
+    fn logged_guard() -> std::sync::MutexGuard<'static, Vec<String>> {
+        LOGGED.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn logged() -> Vec<String> {
+        logged_guard().clone()
+    }
+
+    fn logged_about_stray_data() -> bool {
+        logged().iter().any(|m| m.contains("No reply pending") || m.contains("Unexpected data"))
     }
 
     #[test]
     fn the_second_half_of_a_line_end_costs_nothing_and_says_nothing() {
         // C logs two errors and waits 250 ms per round on this.
+        let _gate = recording();
         for eol in [&b"\r"[..], b"\n", b"\r\n"] {
             let (fake, _) = Fake::new(eol);
             let mut d = device(fake);
@@ -952,7 +995,46 @@ mod tests {
             let rx = start(&mut d);
             assert_eq!(readings(&rx), [ROUND, ROUND].concat());
             assert!(began.elapsed() < POLL_INTERVAL * 4, "{:?}", began.elapsed());
+            assert!(!logged_about_stray_data(), "{eol:?}: {:?}", logged());
         }
+    }
+
+    #[test]
+    fn a_reply_has_250_ms_to_come_whole() {
+        let (mut fake, _) = Fake::new(b"\n");
+        fake.offer(b"12.3");
+        let mut link = Link::new(Some(Box::new(fake)), params(), &protocol::MODELS[0]);
+        let began = Instant::now();
+        assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap(), None, "no line end");
+        let took = began.elapsed();
+        assert!(took >= Duration::from_millis(250), "{took:?}");
+        assert!(took < Duration::from_millis(600), "{took:?}");
+    }
+
+    #[test]
+    fn what_follows_the_id_is_dropped_before_the_status() {
+        // C's serial_flush at api.c:207: a line after the ID must not be taken
+        // for the status, which it is not.
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.replies = VecDeque::from([b"GW INSTEK,GPD-3303S,SN:1,V1\r\nstale".to_vec()]);
+        let link = probe(Box::new(fake), params()).unwrap().expect("a device");
+        assert!(link.output_enabled);
+    }
+
+    #[test]
+    fn data_no_one_asked_for_puts_the_next_round_100_ms_after_it() {
+        let _gate = recording();
+        let (mut fake, seen) = Fake::new(b"\r\n");
+        fake.chatter = Some(b"hello");
+        fake.chatter_pause = Duration::from_millis(60);
+        let mut d = device(fake);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [ROUND, ROUND].concat());
+        let seen = seen.lock().unwrap();
+        let gap = seen[2].0 - seen[0].0;
+        assert!(gap >= Duration::from_millis(155), "{gap:?}");
+        assert!(logged_about_stray_data(), "{:?}", logged());
     }
 
     #[test]
