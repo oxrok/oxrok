@@ -94,6 +94,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub const NO_REPLY_BOUND: Duration = Duration::from_secs(5);
 /// Reads in a row whose request cannot go out that end a capture.
 pub const MAX_UNSENT_POLLS: u32 = 5;
+/// How long the End waits for room in the queue once a stop has come. A client
+/// that stops drains (`Session` does); one that does not must not hold up a close.
+const END_AFTER_STOP: Duration = Duration::from_millis(500);
 /// How often a wait between two reads looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(2);
 
@@ -510,7 +513,7 @@ impl Device for RdtechDevice {
             move || {
                 capture.run(&sink, &stop2);
                 capture.link.lock().expect("link lock").acquiring = false;
-                sink.send(Packet::End);
+                send_end(&sink, &stop2);
             },
         );
         match spawned {
@@ -555,7 +558,8 @@ struct Capture {
 
 impl Capture {
     fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
-        if !sink.send(Packet::header()) {
+        let go_on = || !stop.load(Ordering::SeqCst);
+        if !sink.send_while(Packet::header(), go_on) {
             return;
         }
         let started = Instant::now();
@@ -583,7 +587,7 @@ impl Capture {
             match polled {
                 Ok(packets) => {
                     last_good = Instant::now();
-                    if !packets.into_iter().all(|p| sink.send(p)) {
+                    if !packets.into_iter().all(|p| sink.send_while(p, go_on)) {
                         return;
                     }
                     samples += 1;
@@ -608,6 +612,20 @@ impl Capture {
             }
         }
     }
+}
+
+/// The End, for which a client that goes on reading is waited for without a
+/// bound, and after a stop only for [`END_AFTER_STOP`].
+fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+    let stopped_at = std::cell::Cell::new(None);
+    sink.send_while(Packet::End, || {
+        if !stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let at = stopped_at.get().unwrap_or_else(Instant::now);
+        stopped_at.set(Some(at));
+        at.elapsed() < END_AFTER_STOP
+    });
 }
 
 /// Waits for `time`: false when a stop came first.
@@ -1459,6 +1477,30 @@ mod tests {
         packets_until_end(&rx);
         assert!(started.elapsed() < Duration::from_millis(700), "{:?}", started.elapsed());
         assert_eq!(writes.lock().unwrap().len(), before, "no try after the stop");
+    }
+
+    #[test]
+    fn a_close_on_a_full_queue_with_no_one_reading_ends_and_unlocks() {
+        let (mut d, writes, _, _) = switchable();
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        let (done, closed) = std::sync::mpsc::channel();
+        std::thread::spawn(move || done.send(d.close().is_ok()));
+        assert_eq!(closed.recv_timeout(Duration::from_secs(5)), Ok(true), "the close came back");
+        assert_eq!(writes.lock().unwrap().last().unwrap(), &write_frame(0x06, 0));
+        drop(rx);
+    }
+
+    #[test]
+    fn an_end_waits_for_a_client_that_reads_slowly() {
+        let (mut d, _, _, _) = switchable();
+        set(&mut d, &Key::LimitSamples, 3_u64).unwrap();
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        let packets = packets_until_end(&rx);
+        assert!(matches!(packets.last(), Some(Packet::End)), "no stop came: nothing is lost");
     }
 
     #[test]

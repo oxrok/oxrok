@@ -12,7 +12,7 @@ use crate::core::option::{OptionDesc, ValueList};
 use crate::core::packet::Packet;
 use crate::core::trigger::{Trigger, TriggerFeatures};
 use crate::core::value::Value;
-use std::sync::mpsc::SyncSender;
+use std::sync::mpsc::{SyncSender, TrySendError};
 
 /// What kind of instrument a device is. A device can be several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -118,6 +118,27 @@ impl PacketSink {
     /// Sends one packet. False when nobody listens any more.
     pub fn send(&self, packet: Packet) -> bool {
         self.tx.send((self.device, packet)).is_ok()
+    }
+
+    /// Sends one packet, waiting for room only while `go_on` says so: a thread
+    /// that a close will join must not block for ever on a queue no one is
+    /// reading any more. False when nobody listens, or `go_on` said no.
+    pub fn send_while(&self, packet: Packet, go_on: impl Fn() -> bool) -> bool {
+        const LOOK: std::time::Duration = std::time::Duration::from_millis(2);
+        let mut item = (self.device, packet);
+        loop {
+            match self.tx.try_send(item) {
+                Ok(()) => return true,
+                Err(TrySendError::Disconnected(_)) => return false,
+                Err(TrySendError::Full(back)) => {
+                    if !go_on() {
+                        return false;
+                    }
+                    item = back;
+                    std::thread::sleep(LOOK);
+                }
+            }
+        }
     }
 }
 
