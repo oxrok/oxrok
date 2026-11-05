@@ -245,6 +245,13 @@ impl Assembly {
         Some(dump)
     }
 
+    /// A dump passed its check: looks for the id behind it, or a stray byte would
+    /// count as part of a reply and hold back the polls. Not before the check:
+    /// what follows a false id is the real dump.
+    pub fn passed(&mut self) -> Synced {
+        self.feed(&[])
+    }
+
     /// Takes back a dump whose id was false: all but its first byte, then finds
     /// the next id. There is room, as a dump left at most 126 bytes held.
     pub fn resync(&mut self, dump: &[u8; DUMP]) -> Synced {
@@ -438,6 +445,45 @@ mod tests {
         assert_eq!(a.resync(&false_dump), Synced { skipped: 125, warn: true });
         assert_eq!(a.next_dump().unwrap(), d);
         assert!(!a.accumulating());
+    }
+
+    #[test]
+    fn a_stray_byte_behind_a_dump_goes_with_it() {
+        let d = dump(0x0963);
+        let mut a = Assembly::new(0x0963);
+        let mut stream = d.to_vec();
+        stream.push(0x55);
+        a.feed(&stream);
+        assert_eq!(a.next_dump().unwrap(), d);
+        assert_eq!(a.passed(), Synced { skipped: 1, warn: true });
+        assert!(!a.accumulating(), "nothing to hold a poll back");
+    }
+
+    #[test]
+    fn a_stray_byte_between_two_dumps_does_not_shift_the_second() {
+        let d = dump(0x0963);
+        let mut a = Assembly::new(0x0963);
+        let mut stream = d.to_vec();
+        stream.push(0x55);
+        stream.extend_from_slice(&d[..100]);
+        a.feed(&stream);
+        assert_eq!(a.next_dump().unwrap(), d);
+        a.passed();
+        a.feed(&d[100..]);
+        assert_eq!(a.next_dump().unwrap(), d);
+        assert!(!a.accumulating());
+    }
+
+    #[test]
+    fn what_may_begin_an_id_stays_behind_a_dump() {
+        let d = dump(0x0963);
+        let mut a = Assembly::new(0x0963);
+        let mut stream = d.to_vec();
+        stream.push(0x09);
+        a.feed(&stream);
+        a.next_dump().unwrap();
+        assert_eq!(a.passed().skipped, 0);
+        assert_eq!(a.held(), 1);
     }
 
     #[test]

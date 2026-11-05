@@ -431,13 +431,7 @@ impl Capture {
             };
             if got > 0 {
                 last_byte = Instant::now();
-                let synced = assembly.feed(&buffer[..got]);
-                if synced.warn {
-                    log::warn!("Unexpected response data, trying to synchronize.");
-                }
-                if synced.skipped > 0 {
-                    log::debug!("Skipping {} bytes in attempt to sync.", synced.skipped);
-                }
+                log_sync(assembly.feed(&buffer[..got]));
             }
             while let Some(dump) = assembly.next_dump() {
                 if !self.profile.check_ok(&dump) && resyncs_left > 0 {
@@ -453,6 +447,7 @@ impl Capture {
                     return;
                 }
                 resyncs_left = 0;
+                log_sync(assembly.passed());
                 if !self.send_frame(&dump, sink) {
                     return;
                 }
@@ -505,6 +500,16 @@ impl Capture {
             }
         }
         sink.send(Packet::FrameEnd)
+    }
+}
+
+/// What the search for an id did, as `accum_data` says it.
+fn log_sync(synced: protocol::Synced) {
+    if synced.warn {
+        log::warn!("Unexpected response data, trying to synchronize.");
+    }
+    if synced.skipped > 0 {
+        log::debug!("Skipping {} bytes in attempt to sync.", synced.skipped);
     }
 }
 
@@ -918,6 +923,25 @@ mod tests {
     #[test]
     fn silence_outlasts_a_link_that_comes_back() {
         assert_eq!(Pace::default().silence, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn a_stray_byte_behind_a_dump_holds_no_poll_back() {
+        let (mut fake, seen) = Fake::new();
+        let mut stream = dump(0);
+        stream.push(0x55);
+        fake.script.push_back(Reply::Bytes(stream));
+        let pace = Pace { stall: BOUND, ..QUICK };
+        let mut d = UmDevice::from_port(um24c(), Box::new(fake), pace);
+        d.limit_frames = 2;
+        d.open().unwrap();
+        let (tx, rx) = sync_channel(4096);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        let started = Instant::now();
+        assert_eq!(energies(&until_end(&rx)), [0.0, 0.0]);
+        assert!(started.elapsed() < BOUND / 2, "{:?}", started.elapsed());
+        assert_eq!(seen.lock().unwrap().polls.len(), 2);
+        d.close().unwrap();
     }
 
     #[test]
