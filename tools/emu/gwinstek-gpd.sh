@@ -4,6 +4,7 @@
 EMU_MODEL=gwinstek-gpd
 EMU_CDC=1
 EMU_DRIVER=gwinstek-gpd
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=gwinstek-gpd
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -42,6 +43,29 @@ gpd_openable() {
 emu_cases() {
     gpd_openable
     emu_conns
+    # oxrok's log prefix, on its side only.
+    L='s/^oxrok: err: oxrok::drivers::gwinstek_gpd(::protocol)?: /sr: gwinstek-gpd: /'
+    A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    # hwdriver.c's check_key refuses it ahead of the driver, and logs that.
+    Z="$A
+/^sr: hwdriver: Cannot set/d"
+    LOCK_BUG="api.c:255 returns with the scan's port open, so dev_open's second open is refused by libserialport's exclusive open (serialport.c:589, :599): every path but --scan fails on stock sigrok-cli; oxrok closes the port after the scan and opens it again"
+    STALE_BUG="api.c:229, :236, :242, :248 drop gpd_receive_reply's result, and protocol.c:64-65 leaves the buffer as it was, so a reply that did not come is parsed from the last one; oxrok has no reply, so no device"
+    STATUS_MSG="s/^(sr: gwinstek-gpd: Invalid reply to STATUS: ').*(')/\1\2/"
+    OLD_BYTES_BUG="protocol.c:133 and :155 drop gpd_receive_reply's result; reply[0] is cleared but what follows is not, so after a leftover LF a read that failed parses the last reply less its first byte, and counts a sample; oxrok ends the capture"
+    STUCK_BUG="protocol.c:137 and :159 return ahead of the limit's check at :190 with reply_pending still set (:186), and :181 sends no query while it is set: a --samples capture never ends; oxrok ends it with the same message"
+    SILENT_BUG="req_sent_at (protocol.c:185) is never read, so a reply that never comes (:181) leaves a --samples capture waiting for ever; oxrok gives up after 2 s"
+    LONG_BUG="protocol.c:62 reads one byte past buflen and :87 writes one more, and :133's result is dropped, so a line too long reads as two readings and shifts all that follow; oxrok ends the capture"
+    NAN_BUG="api.c:350-351 and :360-361's two comparisons let a NaN through, and :353 sends 'VSET1:  nan' to a live output; oxrok refuses it"
+    ZERO_BUG="api.c:350 lets -0.0 through and :353 sends it as -0.000; oxrok sends 0"
+    MAX_BUG="sigrok-cli's strtof makes 3.2 3.2000000477, which api.c:361 compares to the table's double 3.2: the C refuses the maximum it lists; oxrok compares both in single precision"
+    CHANNEL_BUG="protocol.c:133-176 sends every channel whatever -C says; oxrok still asks, and sends only what is enabled"
+    ORDER_BUG="sigrok-cli sets each -c in turn (session.c:700-707), so OUT1 goes out before the set point that follows; oxrok sends the output on last and off first"
+    PARTIAL_BUG="sigrok-cli sets each -c in turn (session.c:700-707), so OUT1 goes out before a later option is refused; oxrok checks them all first and sends nothing"
+    LOOSE_BUG="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtof) and sends what it makes of it; oxrok refuses it and sends nothing"
+    UNPLUG_SCAN_BUG="api.c:207 onwards drop every send's and read's result, and the buffer's old replies parse, so a device unplugged in the scan is found; oxrok has no reply, so no device"
+    UNPLUG_BUG="gpd_send_cmd's result is dropped at protocol.c:183 and no reply will come, as for a silent device: a --samples capture never ends; oxrok ends it"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     S2303=$(emu_hex 'GW INSTEK,GPD-2303S,SN:ER915277,V2.10')
     S3303=$(emu_hex 'GW INSTEK,GPD-3303S,SN:ER000001,V1.20')
     BAD4303=$(emu_hex 'GW INSTEK,GPD-4303S,SN:1,V1.00')
@@ -70,7 +94,9 @@ emu_cases() {
     emu_case "serialcomm fits" --keep-header -- -d $K:serialcomm=57600/8n1 --scan
     emu_case "serialcomm does not fit" --keep-header --no-output -- -d $K:serialcomm=9600/8n1 --scan
     emu_options setters=0
-    emu_case "serialcomm no such thing" --keep-header --no-output -- -d $K:serialcomm=fast --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses
+    # them first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
     emu_case "no such node" --keep-header --no-output -- -d gwinstek-gpd:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d gwinstek-gpd --scan
     # api.c's comment: what lay in the buffer spoils the first *IDN?.
@@ -94,9 +120,9 @@ emu_cases() {
 
     # IDs. An unsupported one: one no-match path, then the rates after it.
     emu_options setters=0 idn=$BAD4303
-    emu_case "scan GPD-4303S" --stderr -- -d $K --scan
+    emu_case "scan GPD-4303S" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'GW INSTEK,GPD-2303S')
-    emu_case "scan ID without a serial" --stderr -- -d $K --scan
+    emu_case "scan ID without a serial" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'ACME,GPD-2303S,SN:1,V1')
     emu_case "scan another vendor" --keep-header --no-output -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'gw instek,GPD-2303S,SN:1,V1')
@@ -104,9 +130,9 @@ emu_cases() {
     emu_options setters=0 idn=none
     emu_case "scan no answer" --keep-header --no-output -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'GW INSTEK,GPD-3303S,x,SN:1,SN:2,V1')
-    emu_case "scan the regex is greedy" --stderr -- -d $K --scan
+    emu_case "scan the regex is greedy" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'GW INSTEK,GPD-3303S,SN:1,V')
-    emu_case "scan an empty version" --stderr -- -d $K --scan
+    emu_case "scan an empty version" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'GW INSTEK,GPD-2303S,SN:1,V1 extra')
     emu_case "scan text after the version" --keep-header -- -d $K --scan
     emu_options setters=0 idn=$(emu_hex 'GW INSTEK,GPD-2303S,SN:1,V1') idn-eol=0
@@ -114,26 +140,27 @@ emu_cases() {
 
     # Answers gone wrong in the scan.
     emu_options setters=0 iset1=x
-    emu_case "scan ISET garbage" --stderr -- -d $K --scan
+    emu_case "scan ISET garbage" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 vset2=x
-    emu_case "scan VSET garbage" --stderr -- -d $K --scan
+    emu_case "scan VSET garbage" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 iout2=x
-    emu_case "scan IOUT garbage" --stderr -- -d $K --scan
+    emu_case "scan IOUT garbage" --stderr --filter "$L" -- -d $K --scan
     emu_options setters=0 vout2=x
-    emu_case "scan VOUT garbage" --stderr -- -d $K --scan
+    emu_case "scan VOUT garbage" --stderr --filter "$L" -- -d $K --scan
     # The buffer keeps the last answer when a read fails.
     emu_options setters=0 answers=1
-    emu_case "scan status silent" --stderr -- -d $K --scan
+    emu_case "scan status silent" --stderr --filter "$L
+$STATUS_MSG" -- -d $K --scan
     emu_options setters=0 answers=2
-    emu_case "scan ISET silent" -- -d $K -g CH1 --get current_limit
+    emu_case "scan ISET silent" --oracle-differs "$STALE_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g CH1 --get current_limit
     emu_options setters=0 answers=3
-    emu_case "scan VSET silent" -- -d $K -g CH1 --get voltage_target
+    emu_case "scan VSET silent" --oracle-differs "$STALE_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g CH1 --get voltage_target
     emu_options setters=0 iout2=~
-    emu_case "scan IOUT silent keeps VSET" -- -d $K -g CH2 --get current
+    emu_case "scan IOUT silent keeps VSET" --oracle-differs "$STALE_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g CH2 --get current
     emu_options setters=0 vout1=~
-    emu_case "scan VOUT silent keeps IOUT" -- -d $K -g CH1 --get voltage
+    emu_case "scan VOUT silent keeps IOUT" --oracle-differs "$STALE_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g CH1 --get voltage
     emu_options setters=0 iset1=7.5~
-    emu_case "scan a short answer over the old one" -- -d $K -g CH1 --get current_limit
+    emu_case "scan a short answer over the old one" --oracle-differs "$STALE_BUG" --expect-fail --stderr --filter "$L" -- -d $K -g CH1 --get current_limit
     emu_options setters=0 iset1=nan
     emu_case "scan nan" -- -d $K -g CH1 --get current_limit
     emu_options setters=0 iset1=-inf
@@ -181,22 +208,42 @@ emu_cases() {
     emu_case "set voltage ten" --no-output -- -d $K -g CH1 -c voltage_target=10 --set
     emu_case "set then get voltage" -- -d $K -g CH1 -c voltage_target=3.3 --get voltage_target
     emu_case "set then get current" -- -d $K -g CH2 -c current_limit=0.1 --get current_limit
-    emu_case "set voltage too high" --stderr --expect-fail -- -d $K -g CH1 -c voltage_target=30.01 --set
-    emu_case "set voltage negative" --stderr --expect-fail -- -d $K -g CH1 -c voltage_target=-1 --set
-    emu_case "set current too high" --stderr --expect-fail -- -d $K -g CH1 -c current_limit=3.01 --set
-    emu_case "set voltage nan" --no-output -- -d $K -g CH1 -c voltage_target=nan --set
-    emu_case "set current nan" --no-output -- -d $K -g CH2 -c current_limit=nan --set
-    emu_case "set voltage -0" --no-output -- -d $K -g CH1 -c voltage_target=-0 --set
-    emu_case "set voltage with no group" --stderr --expect-fail -- -d $K -c voltage_target=1 --set
-    emu_case "set enabled on a group" --stderr --expect-fail -- -d $K -g CH1 -c enabled=on --set
-    emu_case "set channel_config" --stderr --expect-fail -- -d $K -c channel_config=Independent --set
+    emu_case "set voltage too high" --stderr --filter "$L
+$A" --expect-fail -- -d $K -g CH1 -c voltage_target=30.01 --set
+    emu_case "set voltage negative" --stderr --filter "$L
+$A" --expect-fail -- -d $K -g CH1 -c voltage_target=-1 --set
+    emu_case "set current too high" --stderr --filter "$L
+$A" --expect-fail -- -d $K -g CH1 -c current_limit=3.01 --set
+    emu_case "set voltage nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr --filter "$L
+$A" -- -d $K -g CH1 -c voltage_target=nan --set
+    emu_case "set current nan" --oracle-differs "$NAN_BUG" --expect-fail --stderr --filter "$L
+$A" -- -d $K -g CH2 -c current_limit=nan --set
+    emu_case "set voltage -0" --oracle-differs "$ZERO_BUG" --no-output -- -d $K -g CH1 -c voltage_target=-0 --set
+    emu_case "set voltage with no group" --stderr --filter "$L" --expect-fail -- -d $K -c voltage_target=1 --set
+    emu_case "set enabled on a group" --stderr --filter "$L" --expect-fail -- -d $K -g CH1 -c enabled=on --set
+    # api.c lists it as settable and config_set has no case for it: oxrok's own
+    # wording on its side.
+    emu_case "set channel_config" --stderr --filter "$L
+s/^(Failed to set device option .channel_config.: )not supported.*$/\1not applicable./" --expect-fail -- -d $K -c channel_config=Independent --set
     emu_case "set several in hash order" --no-output -- -d $K -g CH1 -c current_limit=0.5:voltage_target=3.3 --set
     emu_case "set the output and a voltage" --no-output -- -d $K -g CH1 -c voltage_target=3.3 -c channel_group=global:enabled=on --set
+    # The output never goes on ahead of its set points. Nothing goes out unless
+    # all of -c is good.
+    emu_case "output goes on after the set point" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=3.3 --set
+    emu_case "output goes off first" --oracle-differs "$ORDER_BUG" --no-output -- -d $K -c channel_group=CH1:voltage_target=3.3 -c enabled=off --set
+    emu_case "capture: the output on after the set point" --oracle-differs "$ORDER_BUG" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=4 --samples 1
+    emu_case "output with a voltage too high" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr --filter "$L
+$A" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=99 --set
+    emu_case "output with an unknown option" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr -- -d $K -c enabled=on:volage_target=5 --set
+    emu_case "output with a voltage that is no number" --oracle-differs "$LOOSE_BUG" --expect-fail --stderr --filter "$L
+$A" -- -d $K -c enabled=on -c channel_group=CH1:voltage_target=abc --set
+    emu_case "output before a limit that is no number" --oracle-bug "$PARTIAL_BUG" --expect-fail --stderr -- -d $K -c enabled=on --samples abc
     emu_options idn=$S3303 vmax=32 imax=3.2
     emu_case "set 3303 voltage max" --no-output -- -d $K -g CH1 -c voltage_target=32 --set
-    emu_case "set 3303 voltage too high" --stderr --expect-fail -- -d $K -g CH1 -c voltage_target=32.1 --set
+    emu_case "set 3303 voltage too high" --stderr --filter "$L
+$A" --expect-fail -- -d $K -g CH1 -c voltage_target=32.1 --set
     emu_case "set 3303 current 3.1" --no-output -- -d $K -g CH2 -c current_limit=3.1 --set
-    emu_case "set 3303 current max" --stderr --expect-fail -- -d $K -g CH2 -c current_limit=3.2 --set
+    emu_case "set 3303 current max" --oracle-bug "$MAX_BUG" --no-output -- -d $K -g CH2 -c current_limit=3.2 --set
     emu_options
 
     # A capture: every 100 ms the four queries at once, a sample per round.
@@ -204,8 +251,8 @@ emu_cases() {
     emu_case "samples 1" -- -d $K --samples 1
     emu_case "samples 2" -- -d $K --samples 2
     emu_case "samples 3 analog" -- -d $K --samples 3 -O analog
-    emu_case "channel CH1 only" -- -d $K -C CH1 --samples 2
-    emu_case "channel CH2 only" -- -d $K -C CH2 --samples 2
+    emu_case "channel CH1 only" --oracle-differs "$CHANNEL_BUG" -- -d $K -C CH1 --samples 2
+    emu_case "channel CH2 only" --oracle-differs "$CHANNEL_BUG" -- -d $K -C CH2 --samples 2
     emu_options setters=0 output=1 eol=cr
     emu_case "samples with CR" -- -d $K --samples 2
     emu_options setters=0 output=1 eol=lf
@@ -222,8 +269,9 @@ emu_cases() {
     # A time limit: how many rounds depends on the clock, so both are kept up
     # to the first round's queries.
     emu_options setters=0 output=1
-    emu_case "time" --filter '5,$d' --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a494f5554323f0a564f5554323f0a/{x;s/^/x/;/^xx/{x;q};x}' -- -d $K --time 500ms
-    emu_case "config limit_samples 0" --stderr --expect-fail -- -d $K -c limit_samples=0 --samples 1
+    emu_case "time" --filter '5,$d' --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/{x;s/^/x/;/^xx/{x;q};x}' -- -d $K --time 500ms
+    emu_case "config limit_samples 0" --stderr --filter "$L
+$Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     # The output goes on ahead of the capture, set points first.
     emu_options output=0
     emu_case "capture with the output on" -- -d $K -c enabled=on --samples 1
@@ -233,26 +281,26 @@ emu_cases() {
     emu_case "chatter" -- -d $K --samples 2
     # A line longer than protocol.c's 50 byte buffer in a capture, and than
     # api.c's 100 in a scan. Each list's first answer goes to the scan.
-    emu_options setters=0 output=1 iout1=0.000A,0123456789012345678901234567890123456789012345678901234567890123456789
-    emu_case "a reading too long" --timeout 3 -- -d $K --samples 1
+    emu_options setters=0 output=1 iout2=0.000A,0123456789012345678901234567890123456789012345678901234567890123456789
+    emu_case "a reading too long" --oracle-differs "$LONG_BUG" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 idn=$(emu_hex 'GW INSTEK,GPD-2303S,SN:01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890,V1')
     emu_case "an ID too long" --keep-header --no-output -- -d $K --scan
 
     # An invalid reading returns before the limit's check with reply_pending
-    # left set, so no query follows and the C never ends; with CR LF the "\n"
-    # left over makes a read fail with the buffer's old bytes, which it parses.
+    # left set, so no query follows and the C never ends. With CR LF a read that
+    # fails after a leftover LF parses the buffer's old bytes instead.
     emu_options setters=0 output=1 eol=lf iout1=0.000A,x
-    emu_case "reading garbage" --stderr --hangs --timeout 2 -- -d $K --samples 1
-    emu_options setters=0 output=1 iout1=0.000A,x
-    emu_case "reading garbage with CR LF" --stderr --timeout 3 -- -d $K --samples 1
+    emu_case "reading garbage" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
+    emu_options setters=0 output=1 vout1=12.000V,x
+    emu_case "reading garbage with CR LF" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 eol=lf vout1=12.000V,x
-    emu_case "reading garbage after a good one" --stderr --hangs --timeout 2 -- -d $K --samples 1
+    emu_case "reading garbage after a good one" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 eol=lf vout2=05.000V,~
-    emu_case "a reading missing" --stderr --hangs --timeout 2 -- -d $K --samples 1
+    emu_case "a reading missing" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 vout2=05.000V,~
-    emu_case "a reading missing with CR LF" --timeout 3 -- -d $K --samples 1
+    emu_case "a reading missing with CR LF" --oracle-differs "$OLD_BYTES_BUG" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 answers=10
-    emu_case "silent from the capture on" --no-output --hangs --timeout 2 -- -d $K --samples 1
+    emu_case "silent from the capture on" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 4 -- -d $K --samples 1
     # A time limit does end those: the timer's branch checks it.
     emu_case "silent from the capture on, time" --no-output --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/q' -- -d $K --time 300ms
     # goto error frees match_info and regex (api.c:270-273), and no path clears
@@ -260,20 +308,24 @@ emu_cases() {
     # corrupts the heap some runs ("malloc(): smallbin double linked list
     # corrupted", SIGABRT) and not others, so only the first rate is compared.
     emu_options setters=0 vout1=x
-    emu_case "scan VOUT1 garbage" --stderr --expect-fail --filter '2,$d' \
+    emu_case "scan VOUT1 garbage" --stderr --expect-fail --filter "$L
+2,\$d" \
         --tx-filter '/^bulk_in 82 [0-9]+ -> 780d0a$/q' -- -d $K --samples 1
 
     emu_options setters=0 output=1 answers=10
-    emu_case "unplug in a capture" --no-output --unplug model --hangs --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --no-output --unplug model --timeout 6 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    # A quiet point: the query goes unanswered, the signal lands in its wait.
+    emu_options setters=0 output=1 answers=10
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
     emu_options setters=0 answers=4
-    emu_case "unplug in the scan" --stderr --unplug model --timeout 30 -- -d $K --scan
+    emu_case "unplug in the scan" --oracle-differs "$UNPLUG_SCAN_BUG" --no-output --unplug model --timeout 30 -- -d $K --scan
     # As the oracle really is, with the exclusive open.
     SIGROK_CLI=$GPD_STOCK_CLI
     emu_options setters=0
     emu_case "stock scan" --keep-header -- -d $K --scan
-    emu_case "stock show" --stderr --expect-fail -- -d $K --show
-    emu_case "stock get" --stderr --expect-fail -- -d $K --get enabled
-    emu_case "stock samples" --stderr --expect-fail -- -d $K --samples 1
+    emu_case "stock show" --oracle-bug "$LOCK_BUG" --keep-header -- -d $K --show
+    emu_case "stock get" --oracle-bug "$LOCK_BUG" -- -d $K --get enabled
+    emu_case "stock samples" --oracle-bug "$LOCK_BUG" -- -d $K --samples 1
     emu_options
 }
 

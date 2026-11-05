@@ -1,2 +1,4 @@
-sr: serial-libsp: Error opening port (16): Device or resource busy.
-Failed to open device.
+CH1: 0 mA
+CH1: 0 mV DC
+CH2: 0 mA
+CH2: 0 mV DC
