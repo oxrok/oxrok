@@ -171,7 +171,8 @@ struct Shared {
 }
 
 impl Shared {
-    /// What the next set frame does to what the device reports, once.
+    /// What the next set frame does to what the device reports, once per
+    /// capture, or once at a close.
     fn warn_of_what_it_turns_off(&mut self) {
         if let Some(warning) = frame_warning(&self.reported, &self.settings) {
             if !self.warned {
@@ -528,8 +529,13 @@ impl Device for AttenPpsDevice {
             let worker = self.worker.take().expect("just seen");
             let _ = worker.handle.join();
         }
-        if self.shared().port.is_none() {
-            return Err(Error::device("device is not open"));
+        {
+            let mut s = self.shared();
+            if s.port.is_none() {
+                return Err(Error::device("device is not open"));
+            }
+            // A library session's next capture warns afresh.
+            s.warned = false;
         }
         let shared = Arc::clone(&self.shared);
         let stop = Arc::new(AtomicBool::new(false));
@@ -1011,6 +1017,31 @@ mod tests {
         let mut settings = Settings::default();
         settings.channels[0].voltage = 5.0;
         assert_eq!(frame_warning(&Reported::default(), &settings), None);
+    }
+
+    #[test]
+    fn a_new_capture_warns_afresh() {
+        let (mut fake, _seen) = Fake::new();
+        fake.silent_after = Some(0);
+        let mut d = device_of(fake, &reading());
+        d.shared().warned = true;
+        let rx = start(&mut d);
+        // The fake is silent, so no frame of settings can have set it again.
+        assert!(!d.shared().warned);
+        d.stop().unwrap();
+        until(&rx, is_end, CAPTURE_BOUND);
+    }
+
+    #[test]
+    fn a_capture_with_something_to_say_notes_it() {
+        let (fake, _seen) = Fake::new();
+        let mut d = device_of(fake, &reading());
+        let rx = start(&mut d);
+        until(&rx, is_analog, CAPTURE_BOUND);
+        until(&rx, is_analog, CAPTURE_BOUND);
+        until(&rx, is_analog, CAPTURE_BOUND);
+        assert!(d.shared().warned, "it had something to warn of");
+        d.close().unwrap();
     }
 
     #[test]
