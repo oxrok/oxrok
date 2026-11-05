@@ -17,7 +17,7 @@
 //! | Byte | Meaning |
 //! |---|---|
 //! | 0 | `aa` |
-//! | 1 | `aa` asks, `20` sets |
+//! | 1 | `aa` asks (an inference, see [`ask`]), `20` sets |
 //! | 2-13 | each channel's volts x 100 and amperes x 1000, big endian |
 //! | 14, 16 | 1 |
 //! | 15 | outputs on, a mask |
@@ -48,7 +48,14 @@ const HEADER: u8 = 0xaa;
 const COMMAND_ASK: u8 = 0xaa;
 const COMMAND_SET: u8 = 0x20;
 
-/// The frame that asks and changes nothing. It carries no sum.
+/// The frame a scan and a capture's start send. It carries no sum.
+///
+/// That it asks and changes nothing is an inference, though all of a scan's
+/// safety rests on it. `api.c:116` says only that this is how the vendor
+/// software scans; biot's trace on `EEVblog` shows that software sending it
+/// ahead of its `aa 20` frames, with a sum of `54` where C sends 0. `pps-tools`
+/// calls byte 1 an unused address, and the wiki has it fixed at `20`: neither
+/// knows of an `aa` command, and no source says what a device does with one.
 pub fn ask() -> [u8; FRAME] {
     let mut frame = [0; FRAME];
     frame[0] = HEADER;

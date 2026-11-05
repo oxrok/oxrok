@@ -23,7 +23,8 @@ emu_cases() {
     # A frame of readings: CH1 12.34 V 0.500 A, CH2 5.00 V 1.250 A, CH3 3.30 V
     # 0.025 A, all on, protection on, series.
     R=aaaa04d201f401f404e2014a001901070100010100000000
-    # Scans. A scan asks once and changes nothing: setters=0 flags a setting.
+    # Scans. A scan sends one aa frame and no 20: setters=0 flags a setting.
+    # That an aa changes nothing on a real one is an inference: see the model.
     emu_options setters=0
     emu_case "scan" --keep-header -- -d $A --scan
     emu_case "show" --keep-header -- -d $A --show

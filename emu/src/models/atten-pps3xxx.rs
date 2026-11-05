@@ -21,11 +21,15 @@
 //!   as a mask; 17 the vendor software's language; 18 over-current
 //!   protection; 19 the mode (independent, series, parallel); 23 the sum of
 //!   the others, which the wiki says neither side checks.
-//! - The commands: `aa` asks and changes nothing, as a scan must not disturb
-//!   a supply. `20` sets everything in the frame, and is also the only way to
-//!   get a reading once running: the wiki and the README of `pps-tools` say
-//!   the device sends only when it gets a frame, and that what was set cannot
-//!   be read back. No recording of a real one was found.
+//! - The commands: `20` sets everything in the frame, and is the way to get a
+//!   reading: the wiki and the README of `pps-tools` say the device sends
+//!   only when it gets a frame, and the wiki that what was set cannot be read
+//!   back. That `aa` asks and changes nothing is an inference this model makes
+//!   and so cannot prove. `api.c:116` says only that the vendor software scans
+//!   so; biot's trace on `EEVblog` shows that software sending it ahead of its
+//!   `aa 20` frames, with a sum of `54`; `pps-tools` calls byte 1 an unused
+//!   address and the wiki has it fixed at `20`, so neither knows of an `aa`
+//!   command. No recording of a real one's answer was found.
 //! - The answer: the same layout with the measurements in the value fields.
 //!   That byte 1 echoes the command is an inference: the driver's scan wants
 //!   `aa aa` for its `aa`, and the wiki's table has `aa 20` for what it knows.
