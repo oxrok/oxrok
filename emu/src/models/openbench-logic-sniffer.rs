@@ -294,6 +294,9 @@ struct Sniffer {
     stages: [Stage; 4],
     /// A run came and no reset since.
     armed: bool,
+    /// A capture that sends no more marks the event point at the next offer
+    /// with nothing queued: the run's own write is still being drained.
+    point_due: bool,
 }
 
 impl Sniffer {
@@ -306,6 +309,7 @@ impl Sniffer {
             delay: 0,
             stages: [Stage::default(); 4],
             armed: false,
+            point_due: false,
         }
     }
 
@@ -547,12 +551,10 @@ impl Sniffer {
             return;
         }
         let Some(start) = self.find_start() else {
-            port.mark_event_point();
+            self.point_due = true;
             return;
         };
-        if self.board.sends.is_some() {
-            port.mark_event_point();
-        }
+        self.point_due = self.board.sends.is_some();
         let bytes = self.capture(start, read, groups, width);
         port.send(&bytes);
     }
@@ -570,6 +572,12 @@ impl Serial for Sniffer {
                 self.partial.clear();
                 self.long(command, port);
             }
+        }
+    }
+
+    fn tick(&mut self, port: &mut Port<'_>) {
+        if std::mem::take(&mut self.point_due) {
+            port.mark_event_point();
         }
     }
 
@@ -788,6 +796,28 @@ mod tests {
         setup(&mut h, 0x38, 1, 1);
         h.write(&[RUN]);
         assert_eq!(read_all(&mut h), b"");
+    }
+
+    #[test]
+    fn the_event_point_waits_for_an_offer_with_nothing_queued() {
+        let mut h = board(&[("sends", "0")]);
+        setup(&mut h, 0x38, 1, 1);
+        h.write(&[RUN]);
+        assert!(!h.cdc.take_event_point(), "the run's write is still draining");
+        h.offer();
+        assert!(h.cdc.take_event_point());
+        // After the words that are sent, not before them.
+        let mut h = board(&[("sends", "2")]);
+        setup(&mut h, 0x38, 1, 1);
+        h.write(&[RUN]);
+        assert_eq!(read_all(&mut h), [7, 6]);
+        assert!(h.cdc.take_event_point());
+        // A capture sent whole has no point.
+        let mut h = board(&[]);
+        setup(&mut h, 0x38, 1, 1);
+        h.write(&[RUN]);
+        read_all(&mut h);
+        assert!(!h.cdc.take_event_point());
     }
 
     #[test]
