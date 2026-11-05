@@ -72,8 +72,8 @@
 //! a completed transfer, and the next may or may not be accepted); the two
 //! null checks of `fluke_receive_data` (`protocol.c:98`, `101`), which no
 //! session reaches; and `parse_measurement_state`'s `NULL` (`fluke-28x.c:137`),
-//! which runs in the "no state" case, whose crash a line later writes no
-//! counts.
+//! from a line with no state, which the scenario runs under oxrok alone as the
+//! read a line later crashes sigrok-cli in about half of the runs.
 
 use crate::model::DeviceModel;
 use crate::options::{parse_hex_list, parse_number};
@@ -424,7 +424,7 @@ mod tests {
         h.read();
         assert!(!h.cdc.take_event_point(), "ID does not count");
         h.write(b"QM\r");
-        assert!(!h.read().is_empty());
+        assert_eq!(h.read(), b"0\r1.0327E0,ADC,NORMAL,NONE\r");
         assert!(!h.cdc.take_event_point());
         h.write(b"QM\r");
         assert_eq!(h.read(), b"");
