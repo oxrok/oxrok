@@ -372,16 +372,18 @@ impl Capture {
             if let Some(line) = (got > 0).then(|| lines.take(byte[0])).flatten() {
                 let handled = decoder.line(&line);
                 waiting &= !handled.answered;
-                if let Some(Err(e)) = handled.ask.as_ref().map(|ask| port.write(ask.as_bytes())) {
-                    log::debug!("{e}");
-                    log::error!("Cannot send QM (measurement).");
-                    return;
-                }
+                // The reading first, as `handle_line` has it: a write that
+                // fails must not lose a sample the meter has given.
                 if let Some(reading) = handled.reading {
                     samples += 1;
                     if !sink.send(self.analog(reading)) {
                         return;
                     }
+                }
+                if let Some(Err(e)) = handled.ask.as_ref().map(|ask| port.write(ask.as_bytes())) {
+                    log::debug!("{e}");
+                    log::error!("Cannot send QM (measurement).");
+                    return;
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
@@ -732,6 +734,17 @@ mod tests {
             b"QM\r" => b"0\r11,1,3,1,1,0,1\r".to_vec(),
             _ => b"0\r+1.5E+00\r".to_vec(),
         }
+    }
+
+    #[test]
+    fn a_write_that_fails_loses_no_sample() {
+        let (mut fake, _) = Fake::new(scope_answers);
+        fake.fail_writes_from = Some(2);
+        let mut d = device(&QUICK_SCOPE, fake);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let packets = packets_to_end(&start(&mut d));
+        assert_eq!(values(&packets), [1.5]);
+        d.close().unwrap();
     }
 
     #[test]
