@@ -1,0 +1,18 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+    force_detect
+gwinstek-psp:conn=/dev/ttyACMN - GW Instek PSP-405 with 2 channels: V I
+Supported configuration options:
+    conn: /dev/ttyACMN (current)
+    continuous: on, off
+    limit_samples: 
+    limit_time: 
+    voltage: 0.000000 (current)
+    voltage_target: 0.000000, 40.000000, 0.010000
+    current: 0.000000 (current)
+    current_limit: 0.000000, 5.000000, 0.010000
+    otp_active: on, off (current)
+    enabled: on, off (current)
