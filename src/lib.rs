@@ -125,6 +125,7 @@ pub mod drivers {
     pub mod sysclk_sla5032;
     pub mod testo;
     pub mod uni_t_dmm;
+    pub mod uni_t_ut181a;
     pub mod zeroplus_logic_cube;
     pub mod zketech_ebd_usb;
 }
@@ -147,6 +148,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
+    registry.register(Box::new(drivers::uni_t_ut181a::UniTUt181aDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));

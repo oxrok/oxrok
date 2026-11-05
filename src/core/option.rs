@@ -103,6 +103,8 @@ pub enum ValueList {
     /// A list of float pairs, e.g. the voltage thresholds of a device
     /// with fixed logic families (`std_gvar_thresholds()`).
     RangeF64(Vec<(f64, f64)>),
+    /// The measured quantities a device can be set to, with their flags.
+    Mq(Vec<(crate::core::Mq, crate::core::MqFlags)>),
 }
 
 impl ValueList {

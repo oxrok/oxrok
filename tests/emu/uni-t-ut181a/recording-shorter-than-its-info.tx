@@ -15,4 +15,3 @@ bulk_out 02 abcd09000d0100030000001a00 -> 13
 bulk_in 82 17 -> abcd0d0005010000cf4210da1626e22c03
 bulk_out 02 abcd09000d0100040000001b00 -> 13
 bulk_in 82 8 -> abcd040005000900
-~ the last 2 lines repeat to the end (3 or more times)

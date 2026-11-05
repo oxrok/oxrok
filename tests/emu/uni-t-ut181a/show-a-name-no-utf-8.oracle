@@ -1,0 +1,1 @@
+g_variant_new_string(): requires valid UTF-8
