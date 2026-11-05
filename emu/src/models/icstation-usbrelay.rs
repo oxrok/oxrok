@@ -22,11 +22,16 @@
 //!   too (the driver's comment, the wiki, `usb-relay04-fw`'s README, the code of
 //!   `brightlight`, the `delendanet` post): the board switches, stays silent, and
 //!   a host that is identifying it times out. A second `51` is one as well.
-//! - A bit at 0 means on, as the driver has it and as every source on the
-//!   ICSE012A and ICSE014A says. The sources on the ICSE013A (`brightlight`,
-//!   `icserelay`, the `delendanet` post) have a 1 for on, which no recording here
-//!   settles. The polarity only decides what a byte does to the board and nothing
-//!   on the wire, so the model keeps the driver's on all three.
+//! - A bit at 0 means on, as the driver has it, and the sources disagree. 0 for on:
+//!   `usb-relay04-fw`, `signallamp`, `nemanjadjekic`'s script (ICSE012A), `Clapper`,
+//!   the `icstation-5185` README (ICSE014A), and sigrok's wiki. 1 for on: on the
+//!   ICSE013A `brightlight`, `icserelay`, `piswitcher` and the `delendanet` post.
+//!   Also `icsectl` on all three, which is unreliable elsewhere (it swaps ids 172
+//!   and 173). `LalunePierr0t/usbrelay`, written for the ICSE012A, says both: its
+//!   `k1 on` sends a 0, its `--custom 8` is "Switch On k4", and its help has a 1
+//!   lighting the red LED. No recording settles it. The polarity only decides what
+//!   a byte does to the board and nothing on the wire, so the model keeps the
+//!   driver's on all three.
 //! - Bits above the relays do nothing: `delendanet` and `brightlight` say so for
 //!   the ICSE013A, and Tasmota's driver sends them to all boards.
 //! - Relays at power on: `icsectl` and an `EventGhost` plugin say all are on, the
@@ -374,5 +379,10 @@ mod tests {
         h.cdc.model.reset();
         assert_eq!(h.cdc.model.relays, 0);
         assert!(!h.cdc.model.started);
+        h.write(&[START]);
+        assert_eq!(violations(&mut h), 1, "the 50 before the reset no longer counts");
+        let mut h = opened(&[("started", "1")]);
+        h.cdc.model.reset();
+        assert!(h.cdc.model.started, "started=1 is the state at power on");
     }
 }
