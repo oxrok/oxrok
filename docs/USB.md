@@ -696,10 +696,12 @@ kernel until it detaches.
   tool's run, in a section of its own, as on a fresh plug in. A kernel
   without DRV runs the case unbound, with a note.
 - The `.oracle` of `--oracle-bug` masks the address in the core's
-  "device N.M acquisition." line. A status above 128 other than 137 adds
-  `oracle died: signal N` to it, so a crash golden pins its signal
-  (`timeout` gives 128+signal or re-raises it; 137 can be its own KILL).
-  `--interrupt` cases where sigrok-cli dies of SIGINT pin signal 2 too.
+  "device N.M acquisition." line.
+- Which signal killed sigrok-cli is not compared, by decision of
+  2026-11-05: a case needs only that it failed, and its stderr. To pin
+  signals again, revert the commit found by
+  `git log -S'oracle died: signal' -- tools/diffcli.sh`, whose message
+  says how, and bless the `.oracle` files added since.
 
 ### Writing a serial model
 
