@@ -4,6 +4,7 @@
 EMU_MODEL=fluke-dmm
 EMU_CDC=1
 EMU_DRIVER=fluke-dmm
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=fluke-dmm
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -47,6 +48,18 @@ emu_cases() {
     # sed names exactly what may go, so that anything else still shows.
     QM_287='/^bulk_out 02 (514d0d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d312e30333237453[0-9a-f]*0d)+$/d'
     FIRST='2,$d'
+    # oxrok's log prefix on its side only, then what the driver itself says:
+    # the rest of a log is the core's or libserialport's, and goes.
+    L='s/^oxrok: (err|warn): oxrok::drivers::fluke_dmm(::protocol)?: /sr: fluke-dmm: /
+/^sr: fluke-dmm: /!d'
+    # C's 199B sends no flags (FLAGS_BUG), so these cases compare the samples:
+    # the flags go from the end of a line, under both tools. The differs
+    # cases and a unit test hold the flags.
+    NOFLAGS='s/ (AC DC|AC|DC DIODE|DC)$//'
+    FLAGS_BUG="fluke-190.c:171 sends mqflags 0 after handle_qm_19x_meta (fluke-190.c:72-90) worked them out, so a 199B's AC, DC and diode readings look alike; oxrok sends them"
+    WEDGED_BUG="once a line fills the buffer with no CR, protocol.c:106's loop never reads again, and no sample limit can end the run; oxrok drops the line and reads the next"
+    HUP_BUG="protocol.c:132-133 logs a failed write and tries again each second for ever, with no device there; oxrok ends the capture"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # A scan tries 115200, 9600, 1200, three IDs each, until one answers.
     for model in 87 89 187 189 199B 287 289; do
@@ -225,7 +238,7 @@ emu_cases() {
     emu_case "287 samples 1" -- -d $F --samples 1
     emu_case "287 samples 3" -- -d $F --samples 3
     emu_case "287 csv" -- -d $F --samples 2 -O csv:header=false
-    emu_case "287 limit in -c" --libsigrok -- -d $F -c limit_samples=2 --continuous
+    emu_case "287 limit in -c" --libsigrok --oxrok -- -d $F -c limit_samples=2 --continuous
     emu_case "287 a channel named" -- -d $F -C P1=volts --samples 1
     emu_options model=289
     emu_case "289 samples 1" -- -d $F --samples 1
@@ -235,18 +248,22 @@ emu_cases() {
     fl_fields '+9.99999999E+37,VDC,OL,NONE' '-9.99999999E+37,VDC,OL_MINUS,NONE' '0E0,CEL,OPEN_TC,NONE' '+9.99999999E+37,OHM,OL,NONE'
     emu_case "287 the states that give a sample" -- -d $F --samples 4
     fl_fields '1.5E0,VDC,INVALID,NONE' '1.5E0,VDC,BLANK,NONE' '1.5E0,VDC,DISCHARGE,NONE' '1.5E0,VDC,SOMETHING,NONE' '1.5E0,VDC,NORMAL,NONE'
-    emu_case "287 the states that give none" --stderr --filter '/^sr: /!d' -- -d $F --samples 1 -l 2
+    emu_case "287 the states that give none" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     fl_fields '1.5E0,OHM,NORMAL,OPEN_CIRCUIT' '1.5E0,OHM,NORMAL,SHORT_CIRCUIT' '1.5E0,OHM,OL,OPEN_CIRCUIT' '1.5E0,OHM,BLANK,SHORT_CIRCUIT' '1.5E0,VDC,NORMAL,OPEN_CIRCUIT' '1.5E0,VDC,NORMAL,GLITCH_CIRCUIT' '1.5E0,ADC,NORMAL,HIGH_CURRENT' '1.5E0,VDC,NORMAL,SOMETHING'
     emu_case "287 attributes" -- -d $F --samples 7
     fl_fields '1.5E0,OHM,NORMAL,GLITCH_CIRCUIT' '1.5E0,OHM,NORMAL,GOOD_DIODE' '1.5E0,OHM,NORMAL,LO_OHMS' '1.5E0,OHM,NORMAL,NEGATIVE_EDGE' '1.5E0,OHM,NORMAL,POSITIVE_EDGE' '1.5E0,OHM,NORMAL,HIGH_CURRENT' '1.5E0,OHM,NORMAL,SOMETHING' '1.5E0,VDC,NORMAL,NONE'
-    emu_case "287 attributes that leave resistance no sample" --stderr --filter '/^sr: /!d' -- -d $F --samples 1 -l 2
+    emu_case "287 attributes that leave resistance no sample" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     fl_fields 'x,VDC,NORMAL,NONE' '1.5E0,VOLTS,NORMAL,NONE' '1.5E0,VDC,NORMAL,NONE'
-    emu_case "287 bad value and unit" --stderr --filter '/^sr: /!d' -- -d $F --samples 1 -l 2
+    emu_case "287 bad value and unit" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     fl_fields '1.5' '1.5E0,VDC,NORMAL,NONE'
-    emu_case "287 value alone" --stderr --filter '/^sr: /!d' -- -d $F --samples 1 -l 2
+    emu_case "287 value alone" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     fl_fields '1.5E0,VDC' '1.5E0,VDC,NORMAL,NONE'
-    # A segmentation fault: tokens[3] is past the array (fluke-28x.c:196).
-    emu_case "287 no state" --expect-fail --no-output -- -d $F --samples 1
+    # fluke-28x.c:196 reads tokens[3] of a line of two tokens, past the NULL
+    # that ends g_strsplit's array. sigrok-cli dies of a segmentation fault in
+    # about half of the runs and takes the next line in the others, so it can
+    # be neither a full case nor an --oracle-bug one. oxrok takes it for a
+    # line with no state: no sample. The goldens are oxrok's.
+    emu_case "287 no state" --no-oracle-only -- -d $F --samples 1
     fl_fields '1.5E0,VDC,NORMAL' '1.5E0,VDC,NORMAL,NONE'
     emu_case "287 no attribute" -- -d $F --samples 1
     fl_fields '1.5E0,OHM,NORMAL' '1.5E0,VDC,NORMAL,NONE'
@@ -260,33 +277,33 @@ emu_cases() {
     # The driver's buffer: 254 bytes and a CR fit, 255 stop it reading.
     emu_options qm=$(emu_hex "0\r1.5E0,VDC,NORMAL,NONE,$(fl_many x 232)\r")
     emu_case "287 a line of 254 bytes" -- -d $F --samples 1
-    emu_options qm=$(emu_hex "0\r1.5E0,VDC,NORMAL,NONE,$(fl_many x 233)\r")
-    emu_case "287 a line of 255 bytes" --hangs --timeout 3 --no-output -- -d $F --samples 1
+    emu_options qm=$(emu_hex "0\r1.5E0,VDC,NORMAL,NONE,$(fl_many x 233)\r"),$(emu_hex '0\r2.5E0,VDC,NORMAL,NONE\r')
+    emu_case "287 a line of 255 bytes" --oracle-bug "$WEDGED_BUG" --oracle-hangs --timeout 4 -- -d $F --samples 1
 
     # The 199B: what is shown, then its value (fluke-190.c). Each reply to
     # QM N asks for the next, so a capture runs as fast as the meter does,
     # and one more goes out after the last sample. The QM every second is
     # too far off to show in these.
     emu_options model=199B
-    emu_case "199B samples 1" -- -d $F --samples 1
-    emu_case "199B samples 3" -- -d $F --samples 3
-    emu_case "199B csv" -- -d $F --samples 2 -O csv:header=false
+    emu_case "199B samples 1" --filter "$NOFLAGS" -- -d $F --samples 1
+    emu_case "199B samples 3" --filter "$NOFLAGS" -- -d $F --samples 3
+    emu_case "199B csv" --filter "$NOFLAGS" -- -d $F --samples 2 -O csv:header=false
     fl_scope 11,1,3,1,1,0,1 +1.5E+00
-    emu_case "199B volts DC" -- -d $F --samples 1
+    emu_case "199B volts DC" --oracle-differs "$FLAGS_BUG" -- -d $F --samples 1
     fl_scope 11,1,3,1,2,0,1 +1.5E+00
-    emu_case "199B volts AC" -- -d $F --samples 1
+    emu_case "199B volts AC" --oracle-differs "$FLAGS_BUG" -- -d $F --samples 1
     fl_scope 11,1,3,1,3,0,1 +1.5E+00
-    emu_case "199B volts AC+DC" -- -d $F --samples 1
+    emu_case "199B volts AC+DC" --oracle-differs "$FLAGS_BUG" -- -d $F --samples 1
     fl_scope 11,1,3,1,15,0,1 +1.5E+00
-    emu_case "199B diode" -- -d $F --samples 1
+    emu_case "199B diode" --oracle-differs "$FLAGS_BUG" -- -d $F --samples 1
     fl_scope 11,1,3,1,7,0,1 +1.5E+00
     emu_case "199B volts of another type" -- -d $F --samples 1
     fl_scope 11,1,3,2,1,0,1 +1.5E-01
-    emu_case "199B amperes DC" -- -d $F --samples 1
+    emu_case "199B amperes DC" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 11,1,3,2,2,0,1 +1.5E-01
-    emu_case "199B amperes AC" -- -d $F --samples 1
+    emu_case "199B amperes AC" --oracle-differs "$FLAGS_BUG" -- -d $F --samples 1
     fl_scope 11,1,3,2,3,0,1 +1.5E-01
-    emu_case "199B amperes AC+DC" -- -d $F --samples 1
+    emu_case "199B amperes AC+DC" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 11,1,3,2,7,0,1 +1.5E-01
     emu_case "199B amperes of another type" -- -d $F --samples 1
     fl_scope 11,1,3,3,1,0,1 +1.5E+03
@@ -302,15 +319,15 @@ emu_cases() {
     fl_scope 11,1,3,13,1,0,1 +7.0E+01
     emu_case "199B fahrenheit" -- -d $F --samples 1
     fl_scope 11,1,3,1,1,0,1 9.9E+37
-    emu_case "199B volts OL" -- -d $F --samples 1
+    emu_case "199B volts OL" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 19,1,3,1,1,1,1 -1.5E+00
-    emu_case "199B relative" -- -d $F --samples 1
+    emu_case "199B relative" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 11,1,3,3,1,0,1,19,1,3,1,1,1,1 +1.5E+00
-    emu_case "199B absolute then relative" -- -d $F --samples 1
+    emu_case "199B absolute then relative" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 19,1,3,1,1,1,1,11,1,3,3,1,0,1 +1.5E+00
-    emu_case "199B relative then absolute" -- -d $F --samples 1
+    emu_case "199B relative then absolute" --filter "$NOFLAGS" -- -d $F --samples 1
     fl_scope 11,1,3,1,1,0,1,19 +1.5E+00
-    emu_case "199B a set cut short" -- -d $F --samples 1
+    emu_case "199B a set cut short" --filter "$NOFLAGS" -- -d $F --samples 1
     # The relative set's unit is one it lacks: QM 11, and nothing to say.
     fl_scope 11,1,3,1,1,0,1,19,1,3,4,1,1,1 +1.5E+00
     emu_case "199B relative in a unit it lacks" --no-output --tx-filter '/^bulk_out 02 (514d2031310d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d2b312e35452b30300d)+$/d' -- -d $F --time 200ms
@@ -329,9 +346,11 @@ emu_cases() {
     emu_case "199B resistance of another type" --no-output -- -d $F --time 200ms
     # Bad values: no sample, and it asks for the next at once.
     emu_options model=199B data=$(emu_hex '0\rx\r'),$(emu_hex '0\r0.000E+00\r'),$(emu_hex '0\r+1.5E+00\r')
-    emu_case "199B bad value and zero" --stderr --filter '/^sr: /!d' -- -d $F --samples 1 -l 2
+    emu_case "199B bad value and zero" --stderr --filter "$L" -- -d $F --samples 1 -l 2
+    emu_options model=199B data=$(emu_hex '0\rxy\r'),$(emu_hex '0\r+1.5E+00\r')
+    emu_case "199B a value that is no float" --stderr --filter "$L" -- -d $F --samples 1 -l 2
     emu_options model=199B data=$(emu_hex '0\r+1.5E+00,+2.5E+00,3\r')
-    emu_case "199B more values on a line" -- -d $F --samples 1
+    emu_case "199B more values on a line" --filter "$NOFLAGS" -- -d $F --samples 1
     emu_options model=199B data=$(emu_hex '2\r')
     emu_case "199B reading refused" --no-output -- -d $F --time 200ms
     emu_options model=199B qm=$(emu_hex '2\r')
@@ -340,7 +359,8 @@ emu_cases() {
     emu_case "199B silent after the metadata" --no-output -- -d $F --time 200ms
     # The QM a second after the last, and the readings go on.
     emu_options model=199B
-    emu_case "199B a QM each second" --filter "$FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d[0-9a-f]+0d)+$/d' -- -d $F --time 1500ms
+    emu_case "199B a QM each second" --filter "$NOFLAGS
+$FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_in 82 [0-9]+ -> (300d[0-9a-f]+0d)+$/d' -- -d $F --time 1500ms
 
     # Silence and pace: the next QM comes a second after the last on a meter
     # that does not answer, and 100 ms after one that does.
@@ -348,9 +368,16 @@ emu_cases() {
     emu_case "287 silent" --no-output -- -d $F --time 1500ms
     emu_options answers=1
     emu_case "287 stops answering" -- -d $F --time 1500ms
+    # A meter that says nothing is waited for: C's comment at protocol.c:127
+    # has it come back. Only a time limit or the user ends such a capture.
+    emu_options answers=0
+    emu_case "lib 287 silent waits on" --libsigrok --hangs --timeout 3 --no-output -- -d $F --samples 1
+    emu_case "287 silent until an interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' --no-output -- -d $F --samples 1
+    emu_options answers=2
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F --continuous
     emu_options
     emu_case "287 time limit" --filter "$FIRST" --tx-filter "$QM_287" -- -d $F --time 350ms
-    emu_case "287 limit_time in -c" --libsigrok --filter "$FIRST" --tx-filter "$QM_287" -- -d $F -c limit_time=350 --continuous
+    emu_case "287 limit_time in -c" --libsigrok --oxrok --filter "$FIRST" --tx-filter "$QM_287" -- -d $F -c limit_time=350 --continuous
 
     # The USB side, the shell's options.
     emu_options chunk=1
@@ -362,9 +389,12 @@ emu_cases() {
 
     # An unplug during the scan and during a capture, and an interrupt.
     emu_options id=none
-    emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --stderr --filter '/^sr: /!d' --tx-filter '/^unplug$/q' -- -d $F --scan -l 2
+    # Two tries' writes fail, and the other rates find no port. The core's
+    # open errors differ, so only the driver's own lines are compared.
+    emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --stderr --filter "$L
+/No such file/d" --tx-filter '/^unplug$/q' -- -d $F --scan -l 2
     emu_options answers=2
-    emu_case "unplug in a capture" --hangs --unplug model --timeout 4 --stderr --filter '/^sr: /!d' -- -d $F --samples 3
+    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 5 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $F --samples 3
     emu_options
 }
 
