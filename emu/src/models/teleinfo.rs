@@ -59,6 +59,8 @@
 //! - `scan-burst=N`, the same for the opens up to the Nth frame since power on,
 //!   which are a scan's, with no mark. In frames, as a tool's open can raise the
 //!   lines more than once;
+//! - `late=N`, offers with no frame after an open that is no scan's, so a tool's time
+//!   limit can run out before the first frame by a margin no stall takes away;
 //! - `eot=N`, every Nth frame stops half way through with EOT, as an
 //!   interruption does.
 //!
@@ -75,7 +77,7 @@ pub const NAME: &str = "teleinfo";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "EDF Teleinfo on a CDC-ACM cable; optarif=TEXT, frame=GROUP+GROUP,..., \
                          packet=HEX[,HEX...], noise=HEX, uart=LINE|native, period=N, burst=N, \
-                         scan-burst=N, eot=N, and the shell's stall=, chunk=, in-limit=, in-stall=, \
+                         scan-burst=N, late=N, eot=N, and the shell's stall=, chunk=, in-limit=, in-stall=, \
                          out-hold=";
 
 const STX: u8 = 0x02;
@@ -103,6 +105,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
     let mut burst = None;
     let mut scan_burst = None;
     let mut eot = None;
+    let mut late = 0;
     for (k, v) in options {
         if faults.option(k, v)? {
             continue;
@@ -116,6 +119,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "period" => period = cable::parse_number(k, v, 4..=1000)?,
             "burst" => burst = cable::parse_burst(v)?,
             "scan-burst" => scan_burst = cable::parse_burst(v)?,
+            "late" => late = cable::parse_number(k, v, 0..=100_000)?,
             "eot" => eot = Some(cable::parse_number(k, v, 1..=1000)?),
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
@@ -135,6 +139,8 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
         quiet: 0,
         sent: 0,
         eot,
+        late,
+        wait: 0,
     };
     let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "Teleinfo cable");
     let cdc = Cdc::new(NAME, &id, faults, meter);
@@ -256,6 +262,8 @@ struct Meter {
     quiet: u32,
     sent: u32,
     eot: Option<u32>,
+    late: u32,
+    wait: u32,
 }
 
 impl Meter {
@@ -284,13 +292,16 @@ impl Serial for Meter {
             let first = self.scan_burst.is_some_and(|n| self.sent < n);
             self.left = if first { self.scan_burst.map(|n| n - self.sent) } else { self.burst };
             self.marks = !first;
+            self.wait = if first { 0 } else { self.late };
             self.stream = Stream::new(self.period, true).with_burst(self.left);
             self.quiet = 0;
         }
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
-        if self.stream.poll() {
+        if self.wait > 0 {
+            self.wait -= 1;
+        } else if self.stream.poll() {
             self.sent = self.sent.saturating_add(1);
             self.send_frame(port);
             if let Some(left) = &mut self.left {
@@ -317,6 +328,7 @@ impl Serial for Meter {
         self.marks = false;
         self.quiet = 0;
         self.sent = 0;
+        self.wait = 0;
     }
 }
 
@@ -432,6 +444,17 @@ mod tests {
         assert_eq!(offers(&mut h, 4).len(), default_frame("BASE", 0).len());
         h.set_lines(true, true);
         assert_eq!(offers(&mut h, 16).len(), default_frame("BASE", 1).len(), "one left");
+    }
+
+    #[test]
+    fn late_holds_the_first_frame_of_an_open_that_is_no_scans() {
+        let o = [("period", "4"), ("scan-burst", "1"), ("late", "8"), ("frame", "A:1")];
+        let mut h = meter(&o);
+        assert_ne!(offers(&mut h, 4), [0u8; 0], "a scan's is not held");
+        h.set_lines(true, true);
+        assert_eq!(offers(&mut h, 8), [0u8; 0], "held");
+        assert_eq!(offers(&mut h, 3), [0u8; 0], "and a period");
+        assert_ne!(offers(&mut h, 1), [0u8; 0]);
     }
 
     #[test]
