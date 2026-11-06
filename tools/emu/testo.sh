@@ -191,10 +191,10 @@ emu_cases() {
     emu_case "testo kernel driver bound" --bound ftdi_sio -- -d $D --samples 2
 
     # An unplug. The replug binds ftdi_sio again.
-    emu_case "testo unplug in a read" --unplug in=1:4 -- -d $D --samples 100
-    emu_case "testo unplug at a request" --unplug out=2:3 -- -d $D --samples 100
+    emu_case "testo unplug in a read" --oxrok-fails "device disconnected" --unplug in=1:4 -- -d $D --samples 100
+    emu_case "testo unplug at a request" --oxrok-fails "device disconnected" --unplug out=2:3 -- -d $D --samples 100
     # After the start's last vendor request.
-    emu_case "testo unplug at the start" --unplug out=0:8 --no-output -- -d $D --samples 100
+    emu_case "testo unplug at the start" --oxrok-fails "device disconnected" --unplug out=0:8 --no-output -- -d $D --samples 100
 
     # The stop while a read is held: a limit of time, and a client's stop.
     testo_options units=1 mute=2 mute-hold=1
@@ -218,15 +218,15 @@ emu_cases() {
     testo_options bad-prefix=0
     emu_case "testo hang bad prefix at scan" --oracle-bug "$SILENT" $W7 --tx-filter "$T" --expect-fail --stderr --filter "$E" -- -d $D --samples 1
     testo_options mute=1
-    emu_case "testo hang silent in capture" --oracle-bug "api.c:286-297: $NOASK" $W7 --tx-filter "$T" --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang silent in capture" --oxrok-fails "the device stopped answering" --oracle-bug "api.c:286-297: $NOASK" $W7 --tx-filter "$T" --stderr --filter "$E" -- -d $D --samples 1
     testo_options bad-prefix=1
     emu_case "testo hang bad prefix in capture" --oracle-bug "$PREFIX" $H -- -d $D --samples 1
     testo_options out-stall=1
-    emu_case "testo hang out stalls in capture" --oracle-bug "api.c:282-284 ignores the status of the OUT: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang out stalls in capture" --oxrok-fails "endpoint stalled" --oracle-bug "api.c:282-284 ignores the status of the OUT: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
     testo_options in-stall=2
-    emu_case "testo hang in stalls in capture" --oracle-bug "api.c:294-297 resubmits after any error, for ever" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang in stalls in capture" --oxrok-fails "endpoint stalled" --oracle-bug "api.c:294-297 resubmits after any error, for ever" $H --stderr --filter "$E" -- -d $D --samples 1
     testo_options units=1 units2=$U17,1 swap=1
-    emu_case "testo hang overrun in capture" --oracle-bug "api.c:238-243 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
+    emu_case "testo hang overrun in capture" --oxrok-fails "too many damaged answers" --oracle-bug "api.c:238-243 returns with no request: $NOASK" $H --stderr --filter "$E" -- -d $D --samples 1
     # Two temperatures: i goes back to the first channel each time.
     testo_options units=1,1
     emu_case "testo hang same unit twice" --oracle-bug "$I, and two of a unit send the second for ever" $H -- -d $D --samples 1

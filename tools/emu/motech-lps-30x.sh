@@ -291,9 +291,9 @@ $G" --timeout 3 -- -d $K -g CG1 -c voltage_target=1 --set
     # What C never gets over. req_sent_at is real time and the timeout's check
     # takes monotonic time from it, so a request never expires.
     emu_options setters=0 answers=3
-    emu_case "silent from the capture on" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 564f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
+    emu_case "silent from the capture on" --oxrok-fails "no sample from the device" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 564f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
     emu_options setters=0 answers=4
-    emu_case "silent after the first reading" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 494f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
+    emu_case "silent after the first reading" --oxrok-fails "no sample from the device" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --no-output --timeout 5 --tx-filter '/^bulk_out 02 494f5554310d0a/{s/ .*//;q}' -- -d $K --samples 1
     emu_options setters=0 vout1=1.000^,2.000
     emu_case "a reading with no OK" --oracle-bug "$TWO_CLOCKS" --oracle-hangs --timeout 3 -- -d $K --samples 1
     emu_options setters=0 vout1=-,1.000
@@ -312,7 +312,7 @@ $G" --timeout 3 -- -d $K -g CG1 -c voltage_target=1 --set
     emu_case "silent from the capture on, time" --no-output --tx-filter '/^bulk_out 02 564f5554310d0a/{s/ .*//;q}' -- -d $K --time 300ms
 
     emu_options setters=0 answers=3
-    emu_case "unplug in a capture" --oracle-bug "$LOST_DEVICE" --oracle-hangs --no-output --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$LOST_DEVICE" --oracle-hangs --no-output --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 1
     # A quiet point: the request goes unanswered, the signal lands in its wait.
     emu_options setters=0 answers=3
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous

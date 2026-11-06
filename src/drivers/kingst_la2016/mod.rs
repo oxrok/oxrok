@@ -545,6 +545,7 @@ impl La2016Device {
             limit_msec: s.limit_msec,
             samplerate: s.samplerate,
             start,
+            failure: None,
         })
     }
 }
@@ -789,10 +790,10 @@ impl Device for La2016Device {
                 let handle = std::thread::Builder::new()
                     .name("kingst-la2016 acquisition".into())
                     .spawn(move || {
-                        acq.run(&mut link, &sink, &stop2);
+                        let outcome = acq.run(&mut link, &sink, &stop2);
                         // The link first: whoever sees the end may use it.
                         *slot.lock().expect("link lock") = Some(link);
-                        sink.send(Packet::End);
+                        sink.end(outcome);
                     })
                     .map_err(Error::Io)?;
                 self.worker = Some(Worker { stop, handle });
@@ -833,6 +834,8 @@ struct Acquisition {
     limit_msec: u64,
     samplerate: u64,
     start: Instant,
+    /// Why the capture or the stream gave up.
+    failure: Option<Error>,
 }
 
 /// Counts consecutive failed transfers.
@@ -863,8 +866,8 @@ fn send(sink: &PacketSink, unit_size: usize, feed: Vec<Feed>) {
 
 impl Acquisition {
     /// The header, then the capture or the stream; the frame ended when
-    /// it began. [`Packet::End`] is the caller's.
-    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    /// it began. The end is the caller's.
+    fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let framed = match self.stream.take() {
             Some(stream) => self.stream(link, stream, sink, stop),
@@ -873,6 +876,14 @@ impl Acquisition {
         if framed {
             sink.send(Packet::FrameEnd);
         }
+        self.failure.map_or(Ok(()), Err)
+    }
+
+    /// [`Failures::failed`]'s verdict as the failure of the capture.
+    fn too_many_failures(&mut self) {
+        self.failure = Some(Error::device(format!(
+            "{MAX_FAILED_TRANSFERS} USB transfers failed: the data is incomplete"
+        )));
     }
 
     fn time_up(&self) -> bool {
@@ -895,11 +906,15 @@ impl Acquisition {
         let mut halted_for_stop = None;
         loop {
             std::thread::sleep(POLL_INTERVAL);
-            let Ok(state) = link.run_state() else {
-                // The C code reads the failure as an idle state and
-                // downloads a capture that has not finished.
-                let _ = link.set_run_mode(protocol::RUNMODE_HALT);
-                return false;
+            let state = match link.run_state() {
+                Ok(state) => state,
+                Err(e) => {
+                    // The C code reads the failure as an idle state and
+                    // downloads a capture that has not finished.
+                    let _ = link.set_run_mode(protocol::RUNMODE_HALT);
+                    self.failure = Some(e);
+                    return false;
+                }
             };
             if Link::is_idle(state) {
                 break;
@@ -913,6 +928,9 @@ impl Acquisition {
                     *n += 1;
                     if *n > POLLS_AFTER_STOP {
                         log::error!("Device stays busy after the halt, its capture is lost.");
+                        self.failure = Some(Error::device(
+                            "the device stays busy after the halt, its capture is lost",
+                        ));
                         return false;
                     }
                 }
@@ -927,9 +945,13 @@ impl Acquisition {
         log::debug!("Acquisition completion seen (hardware).");
         link.dump_fpga_registers("acquisition complete");
         sink.send(Packet::FrameBegin);
-        let Some((stream, mut download)) = self.start_download(link) else {
-            log::error!("Cannot start acquisition data download.");
-            return true;
+        let (stream, mut download) = match self.start_download(link) {
+            Ok(started) => started,
+            Err(e) => {
+                log::error!("Cannot start acquisition data download.");
+                self.failure = Some(e);
+                return true;
+            }
         };
         log::debug!("Acquisition data download started.");
         let mut stream = stream;
@@ -950,12 +972,14 @@ impl Acquisition {
                     if !data.is_empty() {
                         failures.0 = 0;
                     } else if failures.failed() {
+                        self.too_many_failures();
                         break;
                     }
                     download.chunk(&data)
                 }
                 Err(Error::Disconnected) => {
                     log::warn!("Lost communication to USB device.");
+                    self.failure = Some(Error::Disconnected);
                     break;
                 }
                 Err(e) => {
@@ -966,6 +990,7 @@ impl Acquisition {
                         libusb_error_name(&e)
                     );
                     if failures.failed() {
+                        self.too_many_failures();
                         break;
                     }
                     download.chunk(&[])
@@ -982,18 +1007,18 @@ impl Acquisition {
 
     /// `la2016_start_download()`: the capture info, the bulk reset, the
     /// window, the transfers submitted, the bulk start.
-    fn start_download(&self, link: &mut Link) -> Option<(Box<dyn BulkStream>, Download)> {
+    fn start_download(&self, link: &mut Link) -> Result<(Box<dyn BulkStream>, Download)> {
         let layout = self.model.layout();
         let ppc = u32::try_from(layout.packets_per_chunk()).expect("5 or 6");
-        let info = link.capture_info(ppc).ok()?;
+        let info = link.capture_info(ppc)?;
         let n_transfer_packets = info.n_rep_packets / ppc;
         let size = u32::try_from(layout.transfer_size).expect("16 or 32");
         let n_bytes = n_transfer_packets.wrapping_mul(size);
         let read_pos = info.write_pos.wrapping_sub(n_bytes);
         log::debug!("Want to read {n_transfer_packets} xfer-packets starting from pos {read_pos}.");
-        link.bulk_reset().inspect_err(|_| log::error!("Cannot reset USB bulk state.")).ok()?;
+        link.bulk_reset().inspect_err(|_| log::error!("Cannot reset USB bulk state."))?;
         log::debug!("Will read from 0x{read_pos:08x}, 0x{n_bytes:08x} bytes.");
-        link.bulk_window(read_pos, n_bytes).ok()?;
+        link.bulk_window(read_pos, n_bytes)?;
         let stream = link
             .transport()
             .bulk_in_stream_timed(
@@ -1005,10 +1030,9 @@ impl Acquisition {
             .inspect_err(|e| {
                 log::error!("Cannot submit USB transfer: {}.", libusb_error_name(e));
                 log::error!("Cannot submit USB bulk transfers.");
-            })
-            .ok()?;
+            })?;
         // A failed start drops the stream, which cancels the transfers.
-        link.bulk_start().ok()?;
+        link.bulk_start()?;
         let download = Download::new(
             layout,
             &info,
@@ -1017,7 +1041,7 @@ impl Acquisition {
             self.limit_samples,
             self.samplerate,
         );
-        Some((stream, download))
+        Ok((stream, download))
     }
 
     /// Streaming: the run mode and the bulk start at the first poll,
@@ -1032,13 +1056,15 @@ impl Acquisition {
     ) -> bool {
         log::debug!("First receive callback in stream mode.");
         sink.send(Packet::FrameBegin);
-        if link.set_run_mode(protocol::RUNMODE_RUN).is_err() {
+        if let Err(e) = link.set_run_mode(protocol::RUNMODE_RUN) {
             log::error!("Cannot set 'runmode' to 'run'.");
+            self.failure = Some(e);
             return true;
         }
-        if link.bulk_start().is_err() {
+        if let Err(e) = link.bulk_start() {
             // The FPGA runs: halted, as at the end of a stream.
             let _ = link.set_run_mode(protocol::RUNMODE_HALT);
+            self.failure = Some(e);
             return true;
         }
         log::debug!("Stream data reception initiated.");
@@ -1053,6 +1079,7 @@ impl Acquisition {
                 }
                 Err(Error::Disconnected) => {
                     log::warn!("Lost communication to USB device.");
+                    self.failure = Some(Error::Disconnected);
                     break;
                 }
                 // Nothing in the transfer timeout: legal at a slow rate
@@ -1065,6 +1092,7 @@ impl Acquisition {
                         libusb_error_name(&e)
                     );
                     if failures.failed() {
+                        self.too_many_failures();
                         break;
                     }
                     decoder.chunk(&[])
@@ -1177,8 +1205,9 @@ mod tests {
             limit_msec,
             samplerate: 1_000_000,
             start: Instant::now(),
+            failure: None,
         };
-        acq.run(&mut link, &PacketSink::new(tx, 0), &AtomicBool::new(stop));
+        let _ = acq.run(&mut link, &PacketSink::new(tx, 0), &AtomicBool::new(stop));
         r.finish().unwrap();
         rx.try_iter().map(|(_, p)| p).skip(1).collect()
     }

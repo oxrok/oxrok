@@ -81,3 +81,22 @@ fn mixed_analog_and_digital() {
     assert!((a0[0] - 0.5397).abs() < 1e-3);
     assert!((a1[0] - 0.514).abs() < 1e-3);
 }
+
+/// A recording that ends before the limit is a device that went quiet or
+/// left: the samples that came are kept, and the capture failed.
+#[test]
+fn a_stream_that_ends_before_the_limit_fails_the_run() {
+    let mut dev = device("pico-d4-bits.serial", &["D2", "D3", "D4"]);
+    dev.open().unwrap();
+    dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(1 << 40), None).unwrap();
+    let mut session = Session::new();
+    session.add_device(Box::new(dev));
+    let mut ended = false;
+    let result = session.run(|_, p| {
+        ended |= matches!(p, Packet::End);
+        Flow::Continue
+    });
+    assert!(ended);
+    assert!(matches!(result, Err(oxrok::core::Error::CaptureFailed(_))), "{result:?}");
+}

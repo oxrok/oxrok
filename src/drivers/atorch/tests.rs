@@ -542,7 +542,9 @@ fn a_stop_in_the_middle_of_a_read_sends_no_more_frames() {
     let (tx, rx) = sync_channel(64);
     let sink = PacketSink::new(tx, 0);
     let mut port = fake.clone();
-    assert!(within_bound(move || capture.run(&mut port, &sink, &stop)));
+    assert!(within_bound(move || {
+        let _ = capture.run(&mut port, &sink, &stop);
+    }));
     let packets: Vec<Packet> = rx.try_iter().map(|(_, p)| p).collect();
     assert_eq!(numbers(&packets), Vec::<u32>::new());
 }

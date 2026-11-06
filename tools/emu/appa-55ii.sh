@@ -161,8 +161,8 @@ s/^sr: \[[^]]*\] /sr: /
     # Nothing can come of a size over 32: the buffer fills and the capture ends
     # (protocol.c:306-309). oxrok warns on stderr, which this case does not compare.
     emu_options burst=2 period=2 packet=$G,$(appa_size_over)$G$G
-    emu_case "a size over 32 ends it" --timeout 4 -- -d $A --samples 5
-    emu_case "a size over 32 says so" --oracle-differs "protocol.c:306-309 ends the capture and says nothing; oxrok warns" --stderr --timeout 4 -- -d $A --samples 5
+    emu_case "a size over 32 ends it" --oxrok-fails "a frame's size is out of range" --timeout 4 -- -d $A --samples 5
+    emu_case "a size over 32 says so" --oxrok-fails "a frame's size is out of range" --oracle-differs "protocol.c:306-309 ends the capture and says nothing; oxrok warns" --stderr --timeout 4 -- -d $A --samples 5
 
     # Where C is wrong.
     emu_options burst=2 packet=$G,$(appa_frame 00 0102)$G
@@ -186,7 +186,7 @@ s/^sr: \[[^]]*\] /sr: /
     emu_options mute=1
     emu_case "time on a silent device" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A --time 300ms
     emu_options burst=1
-    emu_case "unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $A --samples 5
+    emu_case "unplug" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $A --samples 5
 
     # A log no one starts waits for the user, under both tools, and a stop ends
     # oxrok's. So does a device that falls silent in C; oxrok gives that 10 s under a

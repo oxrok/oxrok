@@ -263,13 +263,13 @@ emu_cases() {
     emu_case "show with reset stalled" --expect-fail --stderr --filter "$P" -- -d $S --show
     # A capture: CMD_SAMPLE, a status read, a packet, the end.
     sl2_options stall-set=7
-    emu_case "sample stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits
+    emu_case "sample stalls" --oxrok-fails "endpoint stalled" --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-get=2
-    emu_case "status read stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits
+    emu_case "status read stalls" --oxrok-fails "endpoint stalled" --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-get=3
-    emu_case "packet stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits
+    emu_case "packet stalls" --oxrok-fails "endpoint stalled" --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-get=6
-    emu_case "last channel packet stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits
+    emu_case "last channel packet stalls" --oxrok-fails "endpoint stalled" --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-get=8
     emu_case "ready read stalls" --stderr --filter "$P" -- -d $S --samples 8 -O bits
     sl2_options stall-set=8
@@ -282,11 +282,11 @@ emu_cases() {
     # capture as on a failed transfer.
     A="sl2_receive_transfer_in() ignores actual_length, protocol.c:301-307, so the samples are what the buffer held"
     sl2_options short-get=3
-    emu_case "short packet" --oracle-differs "$A" --stderr --filter "$P" -- -d $S -C 0 -c samplerate=1M --samples 32 -O bits
+    emu_case "short packet" --oxrok-fails "Sample packet 0 of channel 0 is 4 bytes: it needs 8." --oracle-differs "$A" --stderr --filter "$P" -- -d $S -C 0 -c samplerate=1M --samples 32 -O bits
     # The second packet short: its samples repeat the first one's, and
     # nothing says so. oxrok delivers the first one's samples only.
     sl2_options short-get=4
-    emu_case "short second packet" --oracle-differs "$A" --stderr --filter "$P" -- -d $S -C 0 -c samplerate=1M --samples 1984 -O hex
+    emu_case "short second packet" --oxrok-fails "Sample packet 1 of channel 0 is 4 bytes: it needs 128." --oracle-differs "$A" --stderr --filter "$P" -- -d $S -C 0 -c samplerate=1M --samples 1984 -O hex
     # Short, with every byte used: both tools have the right samples.
     sl2_options short-get=3 short-len=6
     emu_case "short packet holding all" -- -d $S -C 0 -c samplerate=1M --samples 16 -O bits
@@ -319,10 +319,10 @@ emu_cases() {
     # transfer (the release, or a new look at the bus), so what it finds
     # is a race with the detach.
     emu_case "unplug open reset" --expect-fail --stderr --filter "$P" --unplug out=0:5 -- -d $S --samples 8 -O bits
-    emu_case "unplug open idle" --stderr --filter "$P" --unplug out=0:6 -- -d $S --samples 8 -O bits
-    emu_case "unplug after sample" --stderr --filter "$P" --unplug out=0:7 -- -d $S --samples 8 -O bits
-    emu_case "unplug at status" --stderr --filter "$P" --unplug in=0:2 -- -d $S --samples 8 -O bits
-    emu_case "unplug at first packet" --stderr --filter "$P" --unplug in=0:3 -- -d $S --samples 8 -O bits
+    emu_case "unplug open idle" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug out=0:6 -- -d $S --samples 8 -O bits
+    emu_case "unplug after sample" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug out=0:7 -- -d $S --samples 8 -O bits
+    emu_case "unplug at status" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug in=0:2 -- -d $S --samples 8 -O bits
+    emu_case "unplug at first packet" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug in=0:3 -- -d $S --samples 8 -O bits
     emu_case "unplug at last packet" --stderr --filter "$P" --unplug in=0:7 -- -d $S --samples 8 -O bits
     emu_case "unplug at the channel after" --stderr --filter "$P" --unplug in=0:4 -- -d $S -C 0 --samples 8 -O bits
     emu_case "unplug before the reset" --stderr --filter "$P" --unplug in=0:5 -- -d $S -C 0 --samples 8 -O bits
@@ -330,7 +330,7 @@ emu_cases() {
     emu_case "unplug before idle" --stderr --filter "$P" --unplug out=0:8 -- -d $S -C 0 --samples 8 -O bits
     # Between two status reads, the driver's own poll fails to submit.
     sl2_options sampling=1
-    emu_case "unplug between status reads" --stderr --filter "$P" --unplug in=0:2 -- -d $S --samples 8 -O bits
+    emu_case "unplug between status reads" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug in=0:2 -- -d $S --samples 8 -O bits
     sl2_options
 
     # libsigrok-run: what sigrok-cli cannot do. No limit: 0 bytes asked,

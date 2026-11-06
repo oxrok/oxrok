@@ -529,8 +529,8 @@ impl Device for Logic16Device {
                 let handle = std::thread::Builder::new()
                     .name("saleae-logic16 acquisition".into())
                     .spawn(move || {
-                        acq.run(stream, &mut link, &sink, &stop2);
-                        sink.send(Packet::End);
+                        let outcome = acq.run(stream, &mut link, &sink, &stop2);
+                        sink.end(outcome);
                         *slot.lock().expect("link lock") = Some(link);
                     })
                     .map_err(Error::Io)?;
@@ -572,7 +572,12 @@ struct Acquisition {
 #[derive(Debug, PartialEq, Eq)]
 enum Next {
     Continue,
+    /// The limit was met.
     End,
+    /// The FX2 gave up: too many transfers failed or brought nothing.
+    GaveUp,
+    /// A transfer that holds half a word.
+    OddLength,
 }
 
 /// The counters of `struct dev_context` a capture keeps.
@@ -593,8 +598,9 @@ impl Acquisition {
         link: &mut Link,
         sink: &PacketSink,
         stop: &AtomicBool,
-    ) {
+    ) -> Result<()> {
         sink.send(Packet::header());
+        let mut outcome = Ok(());
         let mut state = State { sent: 0, empty: 0, fired: self.stl.is_none() };
         while !stop.load(Ordering::SeqCst) {
             let transfer = match stream.next(self.timeout) {
@@ -602,18 +608,31 @@ impl Acquisition {
                     // LIBUSB_TRANSFER_NO_DEVICE: the C driver ends the
                     // capture without a message (protocol.c:875-878).
                     log::debug!("Device has been disconnected.");
+                    outcome = Err(Error::Disconnected);
                     break;
                 }
                 other => other,
             };
-            if self.transfer(transfer, &mut state, sink) == Next::End {
-                break;
+            match self.transfer(transfer, &mut state, sink) {
+                Next::Continue => {}
+                Next::End => break,
+                Next::GaveUp => {
+                    outcome = Err(Error::device(format!(
+                        "over {MAX_EMPTY_TRANSFERS} sample transfers in a row failed or brought nothing"
+                    )));
+                    break;
+                }
+                Next::OddLength => {
+                    outcome = Err(Error::device("a transfer of an odd number of bytes"));
+                    break;
+                }
             }
         }
         if let Err(e) = link.abort_acquisition() {
             log::debug!("Stopping the acquisition: {e}.");
         }
         drop(stream);
+        outcome
     }
 
     /// One transfer, completed (`Ok`) or failed, as
@@ -621,7 +640,7 @@ impl Acquisition {
     fn transfer(&mut self, transfer: Result<Vec<u8>>, s: &mut State, sink: &PacketSink) -> Next {
         // A timeout counts as an empty transfer, any other failure as a
         // failed one.
-        let (data, mut failed) = match transfer {
+        let (data, failed) = match transfer {
             Ok(d) => (d, false),
             Err(Error::Timeout) => (Vec::new(), false),
             Err(e) => {
@@ -631,13 +650,12 @@ impl Acquisition {
         };
         if data.len() % 2 != 0 {
             log::error!("Got an odd number of bytes from the device. This should not happen.");
-            failed = true;
-            s.empty = MAX_EMPTY_TRANSFERS;
+            return Next::OddLength;
         }
         if data.is_empty() || failed {
             s.empty += 1;
             // Past the limit the FX2 gave up.
-            return if s.empty > MAX_EMPTY_TRANSFERS { Next::End } else { Next::Continue };
+            return if s.empty > MAX_EMPTY_TRANSFERS { Next::GaveUp } else { Next::Continue };
         }
         s.empty = 0;
         let mut samples = Vec::new();
@@ -714,12 +732,12 @@ mod tests {
         for _ in 0..MAX_EMPTY_TRANSFERS {
             assert_eq!(a.transfer(Ok(Vec::new()), &mut s, &sink), Next::Continue);
         }
-        assert_eq!(a.transfer(Err(Error::device("stall")), &mut s, &sink), Next::End);
+        assert_eq!(a.transfer(Err(Error::device("stall")), &mut s, &sink), Next::GaveUp);
         // Data resets the count; an odd length ends at once.
         let mut s = State { sent: 0, empty: 10, fired: true };
         assert_eq!(a.transfer(Ok(words(&[1])), &mut s, &sink), Next::Continue);
         assert_eq!(s.empty, 0);
-        assert_eq!(a.transfer(Ok(vec![1, 2, 3]), &mut s, &sink), Next::End);
+        assert_eq!(a.transfer(Ok(vec![1, 2, 3]), &mut s, &sink), Next::OddLength);
     }
 
     #[test]

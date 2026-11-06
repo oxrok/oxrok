@@ -336,7 +336,7 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_options setters=0 $PAD saved=na@3111.1:m=1.5/30/VDC,n~1600@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC
     emu_case "save a frame cut holds it" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 100 -O analog
     emu_options setters=0
-    emu_case "save none" --oracle-bug "$ER_BUG" --oracle-hangs --timeout 3 --no-output -- -d $U -c data_source=Save --samples 1 -O analog
+    emu_case "save none" --oxrok-fails "the meter refused the request" --oracle-bug "$ER_BUG" --oracle-hangs --timeout 3 --no-output -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=08:1:silent saved=n@3111.1:m=1/30/VDC
     emu_case "save no count" --stderr --filter "$F
 $NO_ANSWER" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
@@ -372,7 +372,7 @@ $REFUSED" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
     emu_case "recording chunk refused" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=One --samples 9 -O analog
     # A device that says it has more than it gives: C asks again for ever.
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/5 have=3
-    emu_case "recording shorter than its info" --oracle-bug "$EMPTY_BUG" --oracle-hangs --timeout 3 -- -d $U -c data_source=One --samples 100 -O analog
+    emu_case "recording shorter than its info" --oxrok-fails "samples of the" --oracle-bug "$EMPTY_BUG" --oracle-hangs --timeout 3 -- -d $U -c data_source=One --samples 100 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:1:bad
     emu_case "recording chunk checksum" --libsigrok --hangs --timeout 2 --no-output -- -d $U -c data_source=One --samples 9 -O analog
 
@@ -388,7 +388,7 @@ $REFUSED" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
     emu_options setters=0 period=2 frames=1
     emu_case "interrupt a capture" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 -- -d $U --continuous -O analog
     emu_options setters=0 period=2 frames=1
-    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $U --time 3000 -O analog
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $U --time 3000 -O analog
     emu_options
 }
 

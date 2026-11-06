@@ -130,10 +130,10 @@ s/^(Failed to set device option .samplerate.): device error: .*/\1: generic\/uns
     # Port A's bulk IN endpoint halts after so many transfers: the read
     # fails and the acquisition stops with what it had.
     ftdi_la_options in-stall=6
-    emu_case "read error" --filter "$LONG" -- -d $D -c samplerate=1m --samples 100000 -O hex
-    emu_case "read error message" --stderr --filter "$E" -- -d $D -c samplerate=1m --samples 100000 -O hex
+    emu_case "read error" --oxrok-fails "libftdi error (-9): usb bulk read failed" --filter "$LONG" -- -d $D -c samplerate=1m --samples 100000 -O hex
+    emu_case "read error message" --oxrok-fails "libftdi error (-9): usb bulk read failed" --stderr --filter "$E" -- -d $D -c samplerate=1m --samples 100000 -O hex
     ftdi_la_options in-stall=0
-    emu_case "first read error" --stderr --filter "$E" -- -d $D -c samplerate=1m --samples 100 -O hex
+    emu_case "first read error" --oxrok-fails "libftdi error (-9): usb bulk read failed" --stderr --filter "$E" -- -d $D -c samplerate=1m --samples 100 -O hex
     # The requests of the driver's open, each STALLed in turn: libftdi's
     # own reset in ftdi_usb_open (-6), the purge, the reset of the bit
     # mode, bit-bang.

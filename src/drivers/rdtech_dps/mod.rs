@@ -515,9 +515,9 @@ impl Device for RdtechDevice {
         let stop2 = Arc::clone(&stop);
         let spawned = std::thread::Builder::new().name("rdtech-dps acquisition".to_owned()).spawn(
             move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capture.link.lock().expect("link lock").acquiring = false;
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             },
         );
         match spawned {
@@ -561,10 +561,10 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
@@ -574,7 +574,7 @@ impl Capture {
         let mut unsent = 0;
         loop {
             if !wait(self.interval, stop) {
-                return;
+                return Ok(());
             }
             // The lock is held for the read alone, so that a setting gets in
             // between two, and the packets go out with no lock.
@@ -592,7 +592,7 @@ impl Capture {
                 Ok(packets) => {
                     last_good = Instant::now();
                     if !packets.into_iter().all(|p| sink.send_while(p, go_on)) {
-                        return;
+                        return Ok(());
                     }
                     samples += 1;
                 }
@@ -600,19 +600,22 @@ impl Capture {
                     log::debug!("A read failed: {e}.");
                     if unsent >= MAX_UNSENT_POLLS {
                         log::error!("Acquisition failed: {unsent} requests could not go out.");
-                        return;
+                        return Err(e);
                     }
                     if only_samples_can_end && last_good.elapsed() >= self.no_reply_bound {
                         log::error!("No reply from the device for {:?}.", self.no_reply_bound);
-                        return;
+                        return Err(Error::device(format!(
+                            "no reply from the device for {:?}",
+                            self.no_reply_bound
+                        )));
                     }
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
         }
     }
@@ -620,9 +623,9 @@ impl Capture {
 
 /// The End, for which a client that goes on reading is waited for without a
 /// bound, and after a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }

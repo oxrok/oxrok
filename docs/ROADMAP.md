@@ -312,9 +312,6 @@ each with where it belongs:
 - `tools/attribution.py` credits files only: facts taken from a
   firmware source tree (the fx2lafw and hantek-6xxx models use
   sigrok-firmware-fx2lafw) are credited by hand in the model's header.
-- A failed capture exits 0 on every port. Decided 2026-11-04: it will exit
-  non-zero and say what happened on stderr, on all ports, through an error
-  path alongside `Packet::End`.
 - `Session`'s `End` is sent before the link goes back in its slot, so
   `start()` right after `End` can get Busy (lecroy-logicstudio,
   saleae-logic16, kingst-la2016, hantek-6xxx, sysclk-lwla);

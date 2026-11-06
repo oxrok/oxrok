@@ -430,9 +430,9 @@ impl Device for AtorchDevice {
             .name("atorch acquisition".to_owned())
             .spawn(move || {
                 let mut port = port;
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("port lock") = Some(port);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -451,9 +451,9 @@ impl Device for AtorchDevice {
 
 /// The End, which a client that goes on reading gets however long it takes, and
 /// after a stop only if there is room within [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -498,35 +498,35 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
         if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
-            return;
+            return Ok(());
         }
         let mut framer = Framer::default();
         let mut sent = 0u64;
         let mut last_report = started;
         loop {
             if stop.load(Ordering::SeqCst) {
-                return;
+                return Ok(());
             }
             let got = match port.read(framer.room(), self.pace.wait) {
                 Ok(got) => got,
                 Err(e) => {
                     log::error!("Reading the port failed: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             framer.filled(got);
             while let Some(message) = framer.next_message() {
                 let Message::Report(report) = message else { continue };
                 if stop.load(Ordering::SeqCst) || !self.send_frame(&report, sink, stop) {
-                    return;
+                    return Ok(());
                 }
                 sent += 1;
                 last_report = Instant::now();
                 if self.limit_reached(sent, started) {
-                    return;
+                    return Ok(());
                 }
             }
             let frame_limit = self.limits.frames.load(Ordering::SeqCst);
@@ -534,11 +534,14 @@ impl Capture {
             match overdue(&self.pace, frame_limit, msec, started.elapsed(), last_report.elapsed()) {
                 Some(Overdue::Time) => {
                     log::warn!("No report came after the time limit.");
-                    return;
+                    return Ok(());
                 }
                 Some(Overdue::Silence) => {
                     log::error!("No report from the device for {} s.", self.pace.silence.as_secs());
-                    return;
+                    return Err(Error::device(format!(
+                        "no report from the device for {} s",
+                        self.pace.silence.as_secs()
+                    )));
                 }
                 None => {}
             }

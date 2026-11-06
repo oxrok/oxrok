@@ -610,10 +610,10 @@ impl Device for ItechIt8500Device {
         let spawned = std::thread::Builder::new()
             .name("itech-it8500 acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 // Ahead of the End, so that a client that sees it can start again.
                 link.lock().expect("link lock").capturing = false;
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -656,17 +656,17 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(mut self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(mut self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         let mut samples = 0u64;
         let mut last_good = started;
         loop {
             if !wait(self.period, stop) {
-                return;
+                return Ok(());
             }
             // The lock is held for the poll alone: a client's setting gets in
             // between two, and a full queue holds up nobody.
@@ -680,27 +680,30 @@ impl Capture {
                     let packets = sample_packets(&self.reported, &status);
                     self.reported = status;
                     if !packets.into_iter().all(|p| sink.send_while(p, go_on)) {
-                        return;
+                        return Ok(());
                     }
                     samples += 1;
                 }
                 Err(Failed::Port(e)) => {
                     log::error!("Acquisition failed: {e}.");
-                    return;
+                    return Err(e);
                 }
                 Err(Failed::Answer | Failed::Late) => {
                     let only_samples_can_end = limit_samples > 0 && limit_msec == 0;
                     if only_samples_can_end && last_good.elapsed() >= self.no_reading_bound {
                         log::error!("No reading from the load for {:?}.", self.no_reading_bound);
-                        return;
+                        return Err(Error::device(format!(
+                            "no reading from the load for {:?}",
+                            self.no_reading_bound
+                        )));
                     }
                 }
             }
             if limit_samples > 0 && samples >= limit_samples {
-                return;
+                return Ok(());
             }
             if limit_msec > 0 && started.elapsed() >= Duration::from_millis(limit_msec) {
-                return;
+                return Ok(());
             }
         }
     }
@@ -751,9 +754,9 @@ fn analog(channel: usize, value: f64, mq: Mq, flags: MqFlags, unit: Unit) -> Pac
 
 /// The End, for which a client that goes on reading is waited for without a
 /// bound, and after a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }

@@ -403,7 +403,7 @@ $FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_i
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --stderr --filter "$L
 /No such file/d" --tx-filter '/^unplug$/q' -- -d $F --scan -l 2
     emu_options answers=2
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 5 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $F --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 5 --stderr --filter "$L" --tx-filter '/^unplug$/q' -- -d $F --samples 3
     emu_options
 }
 

@@ -752,8 +752,8 @@ impl Device for DslogicDevice {
                 let handle = std::thread::Builder::new()
                     .name("dreamsourcelab-dslogic acquisition".into())
                     .spawn(move || {
-                        acq.run(&mut link, &sink, &stop2);
-                        sink.send(Packet::End);
+                        let outcome = acq.run(&mut link, &sink, &stop2);
+                        sink.end(outcome);
                         *slot.lock().expect("link lock") = Some(link);
                     })
                     .map_err(Error::Io)?;
@@ -824,7 +824,10 @@ struct Acquisition {
 #[derive(Debug, PartialEq, Eq)]
 enum Next {
     Continue,
+    /// The limit was met.
     End,
+    /// The FX2 gave up: too many transfers in a row brought nothing.
+    GaveUp,
 }
 
 /// The counters of `struct dev_context` a capture keeps.
@@ -839,8 +842,10 @@ struct State {
 enum TriggerPacket {
     /// The trigger's sample.
     Position(u32),
-    /// The capture is over: stopped, the device gone, or an error.
-    Over,
+    /// The capture was stopped.
+    Stopped,
+    /// The device is gone, or an error.
+    Failed(Error),
 }
 
 impl Acquisition {
@@ -848,10 +853,11 @@ impl Acquisition {
     /// limit, the FX2 giving up, the device gone or the stop flag (which
     /// sends the stop command, `dslogic_acquisition_stop()`); the stream
     /// drops last, which cancels the transfers still queued.
-    fn run(self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let real_pos = match Self::trigger_packet(link, stop) {
             TriggerPacket::Position(p) => p,
-            TriggerPacket::Over => return,
+            TriggerPacket::Stopped => return Ok(()),
+            TriggerPacket::Failed(e) => return Err(e),
         };
         // start_transfers().
         for i in 0..self.depth {
@@ -863,30 +869,37 @@ impl Acquisition {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Failed to submit transfer: {}.", crate::usb::libusb_error_name(&e));
-                return;
+                return Err(e);
             }
         };
         sink.send(Packet::header());
         let mut state = State { sent: 0, empty: 0, trigger_pos: u64::from(real_pos) };
-        loop {
+        let outcome = loop {
             if stop.load(Ordering::SeqCst) {
                 let _ = link.stop();
-                break;
+                break Ok(());
             }
             let transfer = match stream.next(self.timeout) {
                 Err(Error::Disconnected) => {
                     // LIBUSB_TRANSFER_NO_DEVICE: the C driver ends the
                     // capture without a message.
                     log::debug!("Device has been disconnected.");
-                    break;
+                    break Err(Error::Disconnected);
                 }
                 other => other,
             };
-            if self.transfer(transfer, &mut state, sink) == Next::End {
-                break;
+            match self.transfer(transfer, &mut state, sink) {
+                Next::Continue => {}
+                Next::End => break Ok(()),
+                Next::GaveUp => {
+                    break Err(Error::device(format!(
+                        "over {MAX_EMPTY_TRANSFERS} sample transfers in a row brought nothing"
+                    )));
+                }
             }
-        }
+        };
         drop(stream);
+        outcome
     }
 
     /// The trigger transfer of `dslogic_acquisition_start()`: a read of
@@ -903,7 +916,7 @@ impl Acquisition {
                 // transfer cancelled.
                 let _ = link.stop();
                 log::debug!("Trigger transfer canceled.");
-                return TriggerPacket::Over;
+                return TriggerPacket::Stopped;
             }
             let read =
                 link.transport().bulk_in(ENDPOINT_IN, protocol::TRIGGER_POS_LEN, TRIGGER_POLL);
@@ -927,7 +940,7 @@ impl Acquisition {
             }
             Err(Error::Disconnected) => {
                 log::debug!("Device has been disconnected.");
-                TriggerPacket::Over
+                TriggerPacket::Failed(Error::Disconnected)
             }
             other => {
                 // trigger_receive() has no branch for this: libsigrok's
@@ -939,7 +952,9 @@ impl Acquisition {
                 };
                 log::error!("Failed to read the trigger position: {why}.");
                 let _ = link.stop();
-                TriggerPacket::Over
+                TriggerPacket::Failed(Error::device(format!(
+                    "failed to read the trigger position: {why}"
+                )))
             }
         }
     }
@@ -962,7 +977,7 @@ impl Acquisition {
         if data.is_empty() {
             s.empty += count;
             // Past the limit the FX2 gave up.
-            return if s.empty > MAX_EMPTY_TRANSFERS { Next::End } else { Next::Continue };
+            return if s.empty > MAX_EMPTY_TRANSFERS { Next::GaveUp } else { Next::Continue };
         }
         s.empty = 0;
         let limit = self.limit;
@@ -1058,7 +1073,7 @@ mod tests {
         for _ in 0..MAX_EMPTY_TRANSFERS {
             assert_eq!(a.transfer(Ok(Vec::new()), &mut s, &sink), Next::Continue);
         }
-        assert_eq!(a.transfer(Err(Error::device("stall")), &mut s, &sink), Next::End);
+        assert_eq!(a.transfer(Err(Error::device("stall")), &mut s, &sink), Next::GaveUp);
         // A queue of 10 timing out: 7 timeouts make 70 empty transfers.
         let mut a = acquisition(0);
         a.depth = 10;
@@ -1066,7 +1081,7 @@ mod tests {
         for _ in 0..6 {
             assert_eq!(a.transfer(Err(Error::Timeout), &mut s, &sink), Next::Continue);
         }
-        assert_eq!(a.transfer(Err(Error::Timeout), &mut s, &sink), Next::End);
+        assert_eq!(a.transfer(Err(Error::Timeout), &mut s, &sink), Next::GaveUp);
         let a = acquisition(0);
         let mut s = State { sent: 0, empty: 10, trigger_pos: 0 };
         assert_eq!(a.transfer(Ok(vec![0; 8]), &mut s, &sink), Next::Continue);
@@ -1084,7 +1099,7 @@ mod tests {
         let sink = PacketSink::new(tx, 0);
         let mut a = acquisition(64);
         a.depth = 2;
-        a.run(&mut link, &sink, &AtomicBool::new(stopped));
+        let _ = a.run(&mut link, &sink, &AtomicBool::new(stopped));
         check.finish().unwrap();
         collect(&rx)
     }

@@ -455,9 +455,9 @@ impl Device for MotechLpsDevice {
         let spawned = std::thread::Builder::new()
             .name("motech-lps-301 acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -483,9 +483,9 @@ impl Device for MotechLpsDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
 /// after a stop only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -664,13 +664,11 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
-            return;
+            return Ok(());
         }
-        if let Err(e) = self.passes(sink, stop) {
-            log::error!("Acquisition failed: {e}.");
-        }
+        self.passes(sink, stop).inspect_err(|e| log::error!("Acquisition failed: {e}."))
     }
 
     /// Whether a device that stops answering would keep this capture for ever:
@@ -1232,6 +1230,21 @@ mod tests {
         assert!(took >= Duration::from_secs(2), "{took:?}");
         assert!(took < Duration::from_secs(6), "{took:?}");
         assert!(writes(&seen).len() >= 2, "it kept asking");
+    }
+
+    #[test]
+    fn a_silent_device_fails_a_sample_limited_capture() {
+        let (mut fake, _) = Fake::new();
+        fake.answers = Some(0);
+        let mut d = device(fake);
+        d.silence_bound = Duration::from_millis(100);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        let mut packets = Vec::new();
+        while !matches!(packets.last(), Some(Packet::End)) {
+            packets.push(rx.recv_timeout(CAPTURE_BOUND).unwrap().1);
+        }
+        assert!(matches!(&packets[..], [.., Packet::Failed(_), Packet::End]), "{packets:?}");
     }
 
     #[test]

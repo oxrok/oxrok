@@ -12,6 +12,9 @@ and single spaces), oxrok follows 0.6.
 
 Deliberate, and kept small:
 
+- A capture that fails exits 1 and says why on stderr, as
+  [Exit status](#exit-status) has it. sigrok-cli exits 0 on most of
+  them.
 - The header line of the logic outputs says `oxrok <version>` instead of
   `libsigrok <version>`. Same for `$version` and `$scope` in VCD files,
   `sigrok version` in session metadata and the CSV comment header.
@@ -296,11 +299,12 @@ Deliberate, and kept small:
   KiB of the buffer, stale bytes included (`protocol.c:906`). The
   messages "Failed to do I2C wake read" and "Failed FPGA register
   read-back" print the byte they check (`protocol.c:341`, `540`).
-- `saleae-logic-pro`: the first failed transfer ends the capture, with a
+- `saleae-logic-pro`: the first failed transfer fails the capture, with a
   warning; libsigrok drops that transfer and goes on until its idle
-  timeout. Running out of transfers (1 s) and a failed authentication
-  also warn where libsigrok is silent at the default log level, so
-  `--strict` fails those runs. A firmware file whose last part isn't
+  timeout. It has no limit, so a stream that runs out (1 s with no transfer)
+  fails the capture too (exit 1). That and a failed authentication also
+  warn where libsigrok is silent at the default log level, so `--strict`
+  fails those runs. A firmware file whose last part isn't
   flagged final is a failed upload here, where libsigrok logs "Missing
   final part." and calls it a success (`api.c:111-116`); the board is
   listed either way.
@@ -354,7 +358,8 @@ Deliberate, and kept small:
   over 2^31 samples give the limit's samples; sigrok-cli prints none.
 - `sysclk-sla5032`: warnings "The FPGA's key step failed" and "The
   capture ended early" (a failure, no samples, or a chunk with no end
-  marker); exit status stays 0 as with sigrok-cli.
+  marker); these fail the capture (exit 1), where sigrok-cli exits 0. A
+  failed key step only warns.
 - ikalogic-scanalogic2: `-t` with two stages is refused where sigrok-cli
   captures without a trigger. A serial over 2^31 prints as it is, not
   negative. A sample packet lacking bytes the capture uses ends it with
@@ -382,8 +387,8 @@ Deliberate, and kept small:
 - lascar-el-usb: half degrees and half percents are kept (23.5 where
   sigrok-cli says 23).
 - lascar-el-usb: a device that stops sending or halts its endpoint ends
-  the capture after 30 reads with an error line, exit 0. sigrok-cli
-  never ends.
+  the capture after 30 reads with an error line, and it failed (exit 1).
+  sigrok-cli never ends.
 - greatfet: a limit inside a byte of packed sample memory gives exactly
   the limit, where sigrok-cli gives up to 7 more.
 - greatfet: a `samplerate` of 2^32 or more is refused, where sigrok-cli
@@ -395,7 +400,7 @@ Deliberate, and kept small:
 - korad-kaxxxxp: `--get voltage`, `voltage_target`, `current` or
   `current_limit` with no reply fails, where sigrok-cli prints 0.0 with
   rc=0. In a capture such a reading is no sample and doesn't count;
-  sigrok-cli sends 0 and counts it. A capture ends after 5 such readings
+  sigrok-cli sends 0 and counts it. A capture fails after 5 such readings
   in a row.
 - korad-kaxxxxp: oxrok refuses `voltage_target=nan` and
   `current_limit=nan`; sigrok-cli sends `VSET1:  nan` to the supply.
@@ -403,14 +408,14 @@ Deliberate, and kept small:
   sigrok-cli sends `VSET1:-0.00` and `ISET1:-0.000`.
 - korad-kaxxxxp: sigrok-cli sends `VSET1:00.00` for `voltage_target=abc`
   and `VSET1:12.00` for `12V`; oxrok refuses both.
-- korad-kaxxxxp: a device that leaves ends a korad capture, with exit 0;
+- korad-kaxxxxp: a device that leaves fails a korad capture (exit 1);
   libsigrok repeats the last values until the limit.
 - korad-kaxxxxp: each query first drops what is in the input queue,
   which C does not do; it puts nothing on the wire.
 - rdtech-tc honours `-C` on every output, where libsigrok sends all six
   channels (protocol.c:266-274).
-- rdtech-tc: with only a frame limit, a capture ends after 5 s with a
-  reply owed, so a later reply loses frames sigrok-cli would get.
+- rdtech-tc: with only a frame limit, a capture fails after 5 s with a
+  reply owed (exit 1), so a later reply loses frames sigrok-cli would get.
   libsigrok waits for ever. Under `--time` or `--continuous` it waits as
   libsigrok does.
 - rdtech-tc: 5 failed poll writes in a row end a capture, where
@@ -428,8 +433,8 @@ Deliberate, and kept small:
   end the capture on a failed check.
 - rdtech-um: an unplug ends the capture, where sigrok-cli logs a failed
   poll without end.
-- rdtech-um: a silent meter ends a capture that only `--frames` could
-  end, after 30 s; with `--time` or `--continuous` it is polled on, as
+- rdtech-um: a silent meter fails a capture that only `--frames` could
+  end, after 30 s (exit 1); with `--time` or `--continuous` it is polled on, as
   in sigrok-cli.
 - rdtech-um: a meter that stopped reading is no error, as in sigrok-cli:
   a poll waits 1 ms for room.
@@ -443,7 +448,7 @@ Deliberate, and kept small:
   refused; sigrok-cli truncates and wraps. `modbusaddr` over 255 is
   refused. A DPS's panel is unlocked on every way out that reaches the
   driver, where sigrok-cli unlocks only when it exits 0. A capture whose
-  only limit is `--samples` ends after 5 s with no good read, exit 0;
+  only limit is `--samples` fails after 5 s with no good read (exit 1);
   under `--time` and `--continuous` it waits and recovers, and
   sigrok-cli hangs in the first case and recovers in the others. An
   RD6012P scaled write first reads register 20, one more read than
@@ -459,8 +464,8 @@ Deliberate, and kept small:
 - `atten-pps3203`: setpoints go to the nearest 0.01 V or 1 mA;
   sigrok-cli truncates, so 3.3 V is 3.29. NaN is refused; sigrok-cli
   sends it as 0.
-- `atten-pps3203`: a capture ends after 2 s of silence, and a stop after
-  300 ms; sigrok-cli never ends, even when stopped. An extra byte does
+- `atten-pps3203`: a capture fails after 2 s of silence (exit 1), and a
+  stop ends one after 300 ms; sigrok-cli never ends, even when stopped. An extra byte does
   not shift later frames, and an answer no supply could give is no
   reading.
 - `atten-pps3203`: oxrok warns on stderr of what a set frame changes,
@@ -468,8 +473,8 @@ Deliberate, and kept small:
   sigrok-cli says nothing. The wire is the same.
 - manson-hcs-3xxx: a silent device is no device, and a failed setting,
   after 2 s; sigrok-cli waits for ever. A timed-out `enabled=on` says
-  the output may be on. A capture with only a sample limit ends after 5
-  s with no reading, where sigrok-cli asks for ever; under `--time` or
+  the output may be on. A capture with only a sample limit fails after 5
+  s with no reading (exit 1), where sigrok-cli asks for ever; under `--time` or
   `--continuous` both keep asking and go on when it answers. A reply
   that is not eight digits and a mode is no sample; sigrok-cli takes
   what strtod makes of it, 0 V for garbage. A fragment of a reply is
@@ -486,8 +491,8 @@ Deliberate, and kept small:
   maximum it lists; libsigrok refuses it, as `strtof` gives a value
   above the table's double.
 - `gwinstek-gpd` honours `-C`; libsigrok sends every channel.
-- `gwinstek-gpd` ends a capture on an invalid reading. With only a
-  sample limit it also ends one after 2 s with no reply. libsigrok hangs
+- `gwinstek-gpd` fails a capture on an invalid reading (exit 1). With
+  only a sample limit it also fails one after 2 s with no reply. libsigrok hangs
   under `--samples`, or parses old bytes. Under `--time` or
   `--continuous` both wait for a silent device.
 - `gwinstek-gpd`'s `-O csv` warns: four rows a round, with made-up zeros
@@ -501,9 +506,9 @@ Deliberate, and kept small:
 - maynuo-m97: a capture asks for its readings, where sigrok-cli at the
   pinned commit sends no request and has no samples: its `--samples`
   never ends, and its `--time` ends with nothing. A capture with only a
-  sample limit ends after 5 s with no good read; one under `--time` or
-  `--continuous` waits and goes on when the load comes back. Five
-  requests in a row that cannot go out end any capture. A
+  sample limit fails after 5 s with no good read (exit 1); one under `--time`
+  or `--continuous` waits and goes on when the load comes back. Five
+  requests in a row that cannot go out fail any capture. A
   `voltage_target`, `current_limit` or threshold that is NaN or infinite
   is refused; any other value goes out, as in C, also one outside the
   list. `modbusaddr` over 255 is refused. `PC1` is cleared on every way
@@ -511,8 +516,8 @@ Deliberate, and kept small:
   set.
 - `motech-lps-301`: a device that does not answer is no device (a scan)
   or a failed setting after 250 ms, where sigrok-cli waits for as long
-  as it stays silent. A capture with only a sample limit ends after 2 s
-  with no sample.
+  as it stays silent. A capture with only a sample limit fails after 2 s
+  with no sample (exit 1).
 - `motech-lps-301`: a reading that is no number sends no sample for that
   round; sigrok-cli sends 0. A reading later than 250 ms is dropped with
   its round, where sigrok-cli waits and takes it.
@@ -543,7 +548,8 @@ Deliberate, and kept small:
   toggle of a one-frame capture. A NaN is refused, where sigrok-cli
   stores it. `-C` is honoured, where C sends all four channels. An
   unplug ends a capture or scan at once, where sigrok-cli takes some 200
-  s. A read error sends what a stop sends and ends. `-C V.D-` is refused
+  s. A read error sends what a stop sends and fails the capture (exit 1), and
+  silence, which ends a capture in sigrok-cli too, fails it here. `-C V.D-` is refused
   by both tools, in different words, as the dash reads as a range.
 - agilent-dmm: `-O csv` with a display disabled writes every row, where
   libsigrok's csv loses rows because its channel count includes disabled
@@ -720,8 +726,8 @@ Deliberate, and kept small:
   says what the meter took, auto after a mode.
 - uni-t-ut181a: a chunk after a recording's first comes from that
   recording, not recording 1. A download ends on `ER`, an empty chunk or
-  5 s of silence, where sigrok-cli waits or asks for ever; it exits 0
-  with the message on stderr.
+  5 s of silence, where sigrok-cli waits or asks for ever; it fails
+  (exit 1).
 - uni-t-ut181a: a time limit ends a silent meter, and a live `--time`
   does not wait for one more reading. A first reading may take 2 s,
   where sigrok-cli finds no device after 100 ms. A live capture with
@@ -786,10 +792,10 @@ Deliberate, and kept small:
   ended by CR alone warn once.
 - Under `flow=1`, `rts=` is not applied by any driver, as in libsigrok's
   use of libserialport.
-- serial-lcr: a port that hangs up ends a capture, where sigrok-cli
+- serial-lcr: a port that hangs up fails a capture (exit 1), where sigrok-cli
   keeps running at a frame limit (`protocol.c:193-196`).
-- serial-lcr: an ES51919 sending no bytes for 10 s ends a capture that
-  only a frame limit could end, with an error and C's exit status.
+- serial-lcr: an ES51919 sending no bytes for 10 s fails a capture that
+  only a frame limit could end (exit 1).
   sigrok-cli waits for ever (`protocol.c:193-200`). A time limit or
   `--continuous` is left alone.
 - serial-lcr: a VC4080 silent for 10 s gets one warning naming setup
@@ -805,13 +811,64 @@ Deliberate, and kept small:
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
   capture goes on, where sigrok-cli stops reading for good.
-- fluke-dmm: a port that is gone ends a capture, with exit 0, where
+- fluke-dmm: a port that is gone fails a capture (exit 1), where
   sigrok-cli retries each second for ever.
 - fluke-dmm: a 28x line of two fields gives no sample, where sigrok-cli
   reads past its array and crashes depending on the heap
   (`fluke-28x.c:196`).
 - fluke-dmm: a write that finds no room logs a warning, where sigrok-cli
   says nothing.
+
+## Exit status
+
+(Where a driver's failure has more to it, its line above says.)
+
+0 when the run did what was asked; 1 otherwise, with the reason on stderr
+at any `-l`. A capture that started has failed when it ended for any reason
+other than
+
+- a limit being met (`--samples`, `--time`, `--frames`), also when all that
+  fails afterwards is the way back to idle (ikalogic-scanalogic2,
+  sysclk-lwla);
+- a stop asked for: Ctrl-C, a device's own cancel button (pickit2), and for
+  a library client a stop through the session;
+- the natural end of the device's data: a stored download that came whole
+  (ols: silence once the board has sent what it holds, or anything under RLE,
+  where what it sends says nothing of the samples; a board that goes quiet
+  with less fails).
+
+So these fail: a device that leaves, a read or write error that ends the
+capture, a poll or retry limit giving up, a bound on silence that ends a
+capture whose limit was not met, a stream with no limit that runs out
+(saleae-logic-pro), and an output that can no longer be written (a full disk).
+Errors a driver retries past or only warns about do not. A reader that goes,
+`oxrok ... | head`, stops the capture as Ctrl-C does: exit 0, where sigrok-cli
+dies of the signal. oxrok does not read stdin, where sigrok-cli takes any key or its end as a stop:
+`--continuous` ends on a signal, a failure or a reader that goes. With `-i` there is
+no capture, but an output that can no longer be written exits 1 with
+`output: WHY` all the same.
+
+A failed capture says so on one line, the last one it writes:
+
+    capture failed: device disconnected
+
+with the driver's own error after the colon. All the rest is as after any
+capture: what came before the failure is written and flushed, the output is
+closed, whatever the output module writes at the end goes out (an srzip has
+its file, a partial one), `Device only sent N samples.` is said, `--strict`
+says its count of warnings, and with an output switched on by `-c` the line that says it was left on comes too. A
+capture that failed before any data leaves the output as a capture of no
+samples leaves it, and exits 1 all the same. A capture a device refuses to
+start, or options it refuses, are not this: they print their error as they
+always did, with no `capture failed:`, and exit 1. A stop wins over a failure
+that comes after it: such a run exits 0.
+
+A library client gets the same from `Session::run`, after the consumer
+has had every packet, `Packet::End` included: `Err(Error::CaptureFailed(why))`,
+with `why` the first device's failure. The consumer has also seen
+`Packet::Failed(why)` at the place in the feed where it happened, as has
+anyone reading a `PacketSink` without a session. A device whose thread dies
+with no end (a panic) counts as failed, and the consumer gets an end for it.
 
 ## Not available yet
 

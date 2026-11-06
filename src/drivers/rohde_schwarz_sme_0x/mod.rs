@@ -288,7 +288,7 @@ impl Device for SmeDevice {
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         std::thread::spawn(move || {
             sink.send(Packet::header());
-            sink.send(Packet::End);
+            sink.end(Ok(()));
         });
         Ok(())
     }

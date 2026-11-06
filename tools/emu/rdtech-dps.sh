@@ -261,7 +261,7 @@ s/^data is invalid$/Failed to start session./"
     emu_case "way out: a refused start" --oracle-bug "$NO_CLOSE_BUG" --stderr --filter "$S" --expect-fail -- -d $D --samples 1
     emu_options setters=0 answers=6
     emu_case "way out: interrupt" --oracle-bug "$SIGINT_BUG" --timeout 20 --interrupt model -- -d $D --continuous
-    emu_case "way out: unplug leaves it locked" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --unplug model -- -d $D --samples 3
+    emu_case "way out: unplug leaves it locked" --oxrok-fails "serial port: I/O error" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --unplug model -- -d $D --samples 3
     # Every setting's own way out, in both maps.
     for set in voltage_target=5 current_limit=1 enabled=on ovp_threshold=45 ocp_threshold=5; do
         emu_options faults=3:exc04
@@ -354,9 +354,9 @@ s/^data is invalid$/Failed to start session./"
     emu_options setters=0 id=60125 faults=5:silent,6:silent,7:silent
     emu_case "a poll lost" --driver rdtech-rd -- -d $R --samples 1
     emu_options setters=0 id=60125 answers=4
-    emu_case "silent in a capture" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" --no-output -- -d $R --samples 2
+    emu_case "silent in a capture" --oxrok-fails "no reply from the device for 5s" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" --no-output -- -d $R --samples 2
     emu_options setters=0 id=60125 answers=6
-    emu_case "silent after a sample" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" -- -d $R --samples 3
+    emu_case "silent after a sample" --oxrok-fails "no reply from the device for 5s" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --tx-filter "$N" -- -d $R --samples 3
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 id=60125 chunk=1
@@ -369,7 +369,7 @@ s/^data is invalid$/Failed to start session./"
     emu_options setters=0 stall=lines
     emu_case "control lines stalled" --keep-header -- -d $D --scan
     emu_options setters=0 id=60125 answers=6
-    emu_case "unplug in a capture" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --unplug model -- -d $R --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "serial port: I/O error" --driver rdtech-rd --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 15 --unplug model -- -d $R --samples 3
     emu_case "interrupt" --driver rdtech-rd --oracle-bug "$SIGINT_BUG" --timeout 15 --interrupt model --tx-filter '/^interrupt$/q' -- -d $R --continuous
     emu_options setters=0 answers=0
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $D --scan

@@ -355,12 +355,13 @@ impl Device for LascarDevice {
             .spawn(move || {
                 sink.send(Packet::header());
                 sink.send(Packet::Meta(vec![(Key::SampleInterval, Value::U64(plan.interval_ms))]));
+                let mut outcome = Ok(());
                 if plan.decoder.logged > 0 {
                     let mut decoder = plan.decoder;
                     let read = plan.first_read;
-                    run(&mut link, &mut decoder, plan.log_size, read, &sink, &stop2);
+                    outcome = run(&mut link, &mut decoder, plan.log_size, read, &sink, &stop2);
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("link lock") = Some(link);
             })
             .map_err(Error::Io)?;
@@ -419,7 +420,7 @@ fn run(
     mut first_read: Option<Result<Vec<u8>>>,
     sink: &PacketSink,
     stop: &AtomicBool,
-) {
+) -> Result<()> {
     let mut received = 0u32;
     let mut failed = 0u32;
     while !stop.load(Ordering::SeqCst) {
@@ -431,19 +432,19 @@ fn run(
                 failed = if data.is_empty() { failed + 1 } else { 0 };
                 for packet in decoder.packets(&data) {
                     if !sink.send(Packet::Analog(packet)) {
-                        return;
+                        return Ok(());
                     }
                 }
                 received = received.saturating_add(u32::try_from(data.len()).unwrap_or(u32::MAX));
                 log::trace!("received {received}/{log_size} bytes");
                 if received >= log_size {
-                    return;
+                    return Ok(());
                 }
             }
-            Err(Error::Disconnected) => return,
+            Err(Error::Disconnected) => return Err(Error::Disconnected),
             Err(Error::Timeout) => {
                 if received >= log_size {
-                    return;
+                    return Ok(());
                 }
                 failed += 1;
             }
@@ -454,9 +455,12 @@ fn run(
         }
         if failed >= MAX_FAILED_READS {
             log::error!("The device stopped sending its log after {received} of {log_size} bytes.");
-            return;
+            return Err(Error::device(format!(
+                "the device stopped sending its log after {received} of {log_size} bytes"
+            )));
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -493,7 +497,7 @@ mod tests {
         let r = Replay::from_text(&format!("{NO_STEPS}{steps}")).unwrap();
         let mut link = Link { transport: Box::new(r.clone()) };
         let (tx, rx) = std::sync::mpsc::sync_channel(4096);
-        run(&mut link, &mut dec, log_size, None, &PacketSink::new(tx, 0), stop);
+        let _ = run(&mut link, &mut dec, log_size, None, &PacketSink::new(tx, 0), stop);
         (rx.try_iter().map(|(_, p)| p).collect(), r)
     }
 

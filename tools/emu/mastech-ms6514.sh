@@ -215,7 +215,7 @@ emu_cases() {
     # A period long enough that the tool has read the burst when the event lands.
     emu_options burst=2 first=0 period=15
     emu_case "interrupt a silent unit" --oracle-bug "$SIGINT_BUG" --timeout 10 --interrupt model -- -d $K --samples 100
-    emu_case "unplug in a capture" --oracle-bug "$HUP" --oracle-hangs --timeout 5 --unplug model -- -d $K --samples 100
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP" --oracle-hangs --timeout 5 --unplug model -- -d $K --samples 100
 
     # The stored values: a1 goes out after the header, the live frame that follows
     # the dump ends the capture.

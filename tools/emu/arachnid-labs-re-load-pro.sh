@@ -195,7 +195,7 @@ s/^oxrok: warn: oxrok::drivers::arachnid_labs_re_load_pro::protocol: (A read fai
     emu_options setters=0 count=0
     emu_case "time on a silent device" --oracle-bug "$TIME_BUG" --oracle-hangs --no-output --timeout 3 -- -d $K --time 100ms
     emu_options setters=0 count=1
-    emu_case "samples 2 of a silent device" --oracle-bug "$SAMPLES_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 2
+    emu_case "samples 2 of a silent device" --oxrok-fails "no reading for" --oracle-bug "$SAMPLES_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 2
 
     # What monitoring may send besides readings: all of them as META lines.
     emu_options setters=0 count=6 lines=$(emu_hex 'overtemp\r\n'),$(emu_hex 'undervolt\r\n'),$(emu_hex 'set 1234\r\n'),$(emu_hex 'uvlo 3300\r\n'),$(emu_hex 'uvlo 0\r\n'),$(emu_hex 'read 1 2 3 4\r\n')
@@ -254,7 +254,7 @@ s/^oxrok: warn: oxrok::drivers::arachnid_labs_re_load_pro::protocol: (A read fai
     emu_case "get current no answer" --oracle-bug "$READ_BUG" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 --expect-fail --stderr -- -d $K -g 1 --get current
     # The end of a capture from outside.
     emu_options setters=0 count=1
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $K --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $K --samples 3
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $K --continuous
     # A library client's stop: monitoring goes on until the close.
     emu_case "lib stop" --libsigrok -- -d $K --continuous --stop-after 1

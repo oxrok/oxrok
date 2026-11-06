@@ -98,9 +98,9 @@ emu_cases() {
     emu_case "idle reads" -- -d $D --samples 100 -O hex
     # The bulk IN endpoint halts: the read fails, the acquisition stops.
     scanaplus_options in-stall=0
-    emu_case "first read error" --stderr --filter "$N" -- -d $D --samples 100 -O hex
+    emu_case "first read error" --oxrok-fails "libftdi error (-9): usb bulk read failed" --stderr --filter "$N" -- -d $D --samples 100 -O hex
     scanaplus_options in-stall=7
-    emu_case "read error after the dropped read" --stderr --filter "$N" -- -d $D --samples 1000000 -O hex
+    emu_case "read error after the dropped read" --oxrok-fails "libftdi error (-9): usb bulk read failed" --stderr --filter "$N" -- -d $D --samples 1000000 -O hex
     # Latency flushes (the model's short=N:M): transfer N of the stream
     # carries M bytes, 0 the status bytes alone, which ends libftdi's
     # read. A first read of 100 bytes is dropped as if it were 64 KiB:
@@ -177,5 +177,5 @@ emu_cases() {
         emu_case "unplug before write $n" --unplug out=2:$((n - 1)) --stderr --expect-fail --filter "$S; $X" -- -d $D --samples 10
     done
     # Mid capture: the third bulk IN of the dropped read.
-    emu_case "unplug mid capture" --unplug in=1:3 --stderr --filter "$N" -- -d $D --samples 100 -O hex
+    emu_case "unplug mid capture" --oxrok-fails "libftdi error (-4): usb bulk read failed" --unplug in=1:3 --stderr --filter "$N" -- -d $D --samples 100 -O hex
 }

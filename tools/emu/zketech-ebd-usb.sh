@@ -88,7 +88,7 @@ s/^(Failed to open device).*$/\\1./"
     # (anykey.c:50,83) after one frame, where oxrok does not read stdin.
     emu_case "config limit_samples" --libsigrok --oxrok -- -d $A -c limit_samples=2 --continuous
     emu_options setters=0 frames=3
-    emu_case "continuous" --libsigrok --oxrok -- -d $A --continuous
+    emu_case "continuous" --oxrok-fails "no messages received" --libsigrok --oxrok -- -d $A --continuous
     emu_options setters=0 chunk=1 period=100000
     emu_case "capture one byte per transfer" -- -d $A --samples 1
     # The load. A setting reaches it only from the first frame of a capture.
@@ -170,14 +170,14 @@ s/^(Failed to open device).*$/\\1./"
     # A device that goes quiet ends the capture, with no stop: frames= counts the
     # scan's.
     emu_options frames=1
-    emu_case "silent in a capture" --no-output -- -d $A --samples 3
-    emu_case "silent in a capture says so" --stderr --filter "$F" -- -d $A --samples 3
+    emu_case "silent in a capture" --oxrok-fails "no messages received" --no-output -- -d $A --samples 3
+    emu_case "silent in a capture says so" --oxrok-fails "no messages received" --stderr --filter "$F" -- -d $A --samples 3
     emu_options frames=3
-    emu_case "silent after two" -- -d $A --samples 3
-    emu_case "silent after two says so" --stderr --filter "$F" -- -d $A --samples 3
-    emu_case "silent with the load on" -- -d $A -c current_limit=1 --samples 3
+    emu_case "silent after two" --oxrok-fails "no messages received" -- -d $A --samples 3
+    emu_case "silent after two says so" --oxrok-fails "no messages received" --stderr --filter "$F" -- -d $A --samples 3
+    emu_case "silent with the load on" --oxrok-fails "no messages received" -- -d $A -c current_limit=1 --samples 3
     emu_options frames=1
-    emu_case "silent with continuous" --libsigrok --oxrok --no-output -- -d $A --continuous
+    emu_case "silent with continuous" --oxrok-fails "no messages received" --libsigrok --oxrok --no-output -- -d $A --continuous
 
     # The library runs it for longer. Four analog packets a frame.
     emu_options
@@ -192,12 +192,12 @@ s/^(Failed to open device).*$/\\1./"
     # A device that leaves: oxrok ends at once. C ends by itself some 200 s later,
     # which these cases do not wait for: see UNPLUG_BUG.
     emu_options frames=2
-    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $A --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $A --samples 3
     emu_options frames=0
     emu_case "unplug in the scan" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 8 --keep-header --no-output -- -d $A --scan
     emu_options
     emu_case "unplug in the scan's stop" --unplug out=2:13 --stderr --filter "$FU" --expect-fail -- -d $A --samples 3
-    emu_case "unplug in a capture's start" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug out=2:25 --timeout 5 --no-output -- -d $A --samples 3
+    emu_case "unplug in a capture's start" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug out=2:25 --timeout 5 --no-output -- -d $A --samples 3
     emu_case "unplug in a capture's stop" --unplug out=2:35 --timeout 5 -- -d $A --samples 1
 
     # What oxrok alone can run: the signal ends a stream the model has stopped
@@ -216,7 +216,7 @@ s/^(Failed to open device).*$/\\1./"
     emu_options load=1 limit=1500 cutoff=300
     emu_case "load on, one sample, nothing set says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A --samples 1
     emu_options frames=3
-    emu_case "silent with the load on says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c current_limit=1 --samples 3
+    emu_case "silent with the load on says so" --oxrok-fails "no messages received" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c current_limit=1 --samples 3
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 stall=line

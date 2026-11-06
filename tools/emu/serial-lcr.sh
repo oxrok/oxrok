@@ -256,14 +256,14 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     # An unplug with the tty open. The mark is a period after the packet, and 1 s
     # outlasts a stall that would leave the packet unread at the hangup.
     emu_options period=50 scan-burst=2 burst=1
-    emu_case "es unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $D --frames 5
+    emu_case "es unplug" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $D --frames 5
     emu_case "es interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $D --frames 5
     # Silence at a frame limit: for ever in C, and a meter that takes no commands
     # and streams all the time is off or unplugged, so oxrok ends after its 10 s.
     # This case costs that: a seam tests the times, this the message and the end.
     emu_options period=5 scan-burst=2 burst=1
     emu_case "es lib silent at a frame limit" --libsigrok --hangs --timeout 3 -- -d $D --frames 5
-    emu_case "es silent ends at the bound" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $D --frames 5
+    emu_case "es silent ends at the bound" --oxrok-fails "no bytes from the meter" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $D --frames 5
     emu_options
 
     # The same for the meter that is asked.
@@ -302,7 +302,7 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
         --tx-filter 's/^bulk_out 02 (4e)+ -> [0-9]+$/bulk_out 02 4e... -> N/' -- -d $V --time 1200ms
 
     emu_options meter=vc4080 answers=3
-    emu_case "vc unplug" --driver voltcraft-4080 --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $V --frames 5
+    emu_case "vc unplug" --oxrok-fails "the port gone" --driver voltcraft-4080 --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $V --frames 5
     emu_case "vc interrupt" --driver voltcraft-4080 --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $V --frames 5
 
     # Each side of the packet's fields.

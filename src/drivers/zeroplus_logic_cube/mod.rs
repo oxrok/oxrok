@@ -832,7 +832,10 @@ mod tests {
         let mut d = device(&s);
         d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
         let packets = capture(&mut d);
-        assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
+        assert!(
+            matches!(packets[..], [Packet::Header { .. }, Packet::Failed(_), Packet::End]),
+            "{packets:?}"
+        );
     }
 
     #[test]
@@ -848,7 +851,10 @@ mod tests {
         let mut d = device(&s);
         d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
         let packets = capture(&mut d);
-        assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
+        assert!(
+            matches!(packets[..], [Packet::Header { .. }, Packet::Failed(_), Packet::End]),
+            "{packets:?}"
+        );
 
         let mut s = device_steps();
         start_steps(&mut s, &regs_1000());
@@ -893,7 +899,8 @@ mod tests {
         let mut d = device(&s);
         d.set(&Key::LimitSamples, &Value::U64(1000), None).unwrap();
         let packets = capture(&mut d);
-        assert!(matches!(packets[..], [Packet::Header { .. }, Packet::End]), "{packets:?}");
+        assert_eq!(packets[1], Packet::Failed("device disconnected".to_owned()), "{packets:?}");
+        assert_eq!(packets[2], Packet::End);
     }
 
     #[test]

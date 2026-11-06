@@ -323,9 +323,9 @@ impl Device for Ut32xDevice {
         let spawned = std::thread::Builder::new().name("uni-t-ut32x acquisition".to_owned()).spawn(
             move || {
                 let mut port = port;
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(port);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             },
         );
         match spawned {
@@ -349,9 +349,9 @@ impl Device for Ut32xDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and after
 /// a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -370,21 +370,23 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let going_on = || !stop.load(Ordering::SeqCst);
+        let mut outcome = Ok(());
         if sink.send_while(Packet::header(), going_on) {
             // C takes no notice of a failed write, and neither does the meter's silence.
             if let Err(e) = port.write(&[self.command]) {
                 log::warn!("Cannot send the start command: {e}.");
             }
-            self.receive(port, sink, stop);
+            outcome = self.receive(port, sink, stop);
         }
         if let Err(e) = port.write(&[CMD_STOP]) {
             log::warn!("Cannot send the stop command: {e}.");
         }
+        outcome
     }
 
-    fn receive(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn receive(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
         let mut last_record = started;
         let mut count = 0u64;
@@ -394,7 +396,7 @@ impl Capture {
                 Ok(n) => n,
                 Err(e) => {
                     log::error!("Acquisition failed: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             let mut done = false;
@@ -423,10 +425,19 @@ impl Capture {
                 count += 1;
                 done |= self.limit_reached(count, started);
             });
-            if done || self.gave_up_waiting(started, last_record) {
-                return;
+            if done {
+                return Ok(());
+            }
+            if self.gave_up_waiting(started, last_record) {
+                // Past a time limit that is the limit, met with no record to say so.
+                return if self.limits.msec.load(Ordering::SeqCst) > 0 {
+                    Ok(())
+                } else {
+                    Err(Error::device("no record from the device"))
+                };
             }
         }
+        Ok(())
     }
 
     /// C's check, behind each record.

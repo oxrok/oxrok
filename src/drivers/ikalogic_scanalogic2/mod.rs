@@ -62,7 +62,7 @@ pub mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, UsbId};
 use protocol::{NUM_CHANNELS, Plan};
@@ -379,9 +379,9 @@ impl Device for Scanalogic2Device {
         let handle = std::thread::Builder::new()
             .name("ikalogic-scanalogic2 acquisition".into())
             .spawn(move || {
-                protocol::run(t.as_mut(), plan, wait, &sink, &stop2);
+                let outcome = protocol::run(t.as_mut(), plan, wait, &sink, &stop2);
                 *slot.lock().expect("link lock") = Some(t);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -401,6 +401,7 @@ impl Device for Scanalogic2Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Packet;
     use crate::usb::record::Replay;
     use std::fmt::Write as _;
     use std::sync::mpsc::sync_channel;
@@ -513,8 +514,12 @@ mod tests {
         let mut d = device(&steps);
         d.set(&Key::LimitSamples, &Value::U64(8), None).unwrap();
         let packets = capture(&mut d);
-        assert_eq!(packets.len(), 2);
-        assert_eq!(packets[1], Packet::End);
+        assert_eq!(packets.len(), 3);
+        assert!(
+            matches!(&packets[1], Packet::Failed(why) if why.contains("stalled")),
+            "{packets:?}"
+        );
+        assert_eq!(packets[2], Packet::End);
     }
 
     #[test]

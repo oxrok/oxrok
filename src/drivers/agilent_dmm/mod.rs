@@ -426,12 +426,15 @@ impl Device for AgilentDevice {
         let spawned = std::thread::Builder::new().name("agilent-dmm acquisition".to_owned()).spawn(
             move || {
                 let port = slot.lock().expect("port lock").take();
-                if let Some(mut port) = port {
-                    capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = if let Some(mut port) = port {
+                    let outcome = capture.run(port.as_mut(), &sink, &stop2);
                     *slot.lock().expect("port lock") = Some(port);
-                }
+                    outcome
+                } else {
+                    Err(Error::device("device is not open"))
+                };
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             },
         );
         let handle = match spawned {
@@ -458,9 +461,9 @@ impl Device for AgilentDevice {
 }
 
 /// `End`, waiting for room while nobody has said stop, and for a moment after.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -482,12 +485,12 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let mut meter =
             Meter::new(self.profile, self.enabled.clone(), self.data_source, self.samplerate);
@@ -501,7 +504,7 @@ impl Capture {
                 Ok(got) => got,
                 Err(e) => {
                     log::error!("Read failed: {e}");
-                    return;
+                    return Err(e);
                 }
             };
             let line = (got > 0).then(|| lines.take(byte[0])).flatten();
@@ -516,32 +519,36 @@ impl Capture {
                     samples += 1;
                     progress = Instant::now();
                     if !sink.send_while(analog(reading), go_on) {
-                        return;
+                        return Ok(());
                     }
                 }
                 if received.stop {
-                    return;
+                    return Ok(());
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
             if only_samples_can_end && progress.elapsed() >= self.silence {
                 log::error!(
                     "Acquisition failed: nothing new from the meter in {} s, and only a sample limit can end this.",
                     self.silence.as_secs()
                 );
-                return;
+                return Err(Error::device(format!(
+                    "nothing new from the meter in {} s",
+                    self.silence.as_secs()
+                )));
             }
             if let Some(command) = meter.dispatch(Instant::now())
                 && !send(port, &command)
             {
-                return;
+                return Err(Error::device("failed to send to the meter"));
             }
         }
+        Ok(())
     }
 }
 

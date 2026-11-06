@@ -82,7 +82,16 @@ pub fn main() -> ExitCode {
         show::help();
         Ok(())
     };
-    let result = result.and_then(|()| strict_check(&args));
+    // A failed capture is still reported last, and `--strict` has its say first.
+    let result = match result {
+        Err(failed @ oxrok::core::Error::CaptureFailed(_)) => {
+            if let Err(oxrok::core::Error::Arg(msg)) = strict_check(&args) {
+                eprintln!("{msg}");
+            }
+            Err(failed)
+        }
+        other => other.and_then(|()| strict_check(&args)),
+    };
     // A replay from OXROK_USB_REPLAY or OXROK_HID_REPLAY that was not
     // played to its end is a run that went otherwise than recorded.
     let result = result.and_then(|()| oxrok::core::sessions::finish_replays());

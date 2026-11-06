@@ -592,10 +592,11 @@ impl Device for Pickit2Device {
             .name("microchip-pickit2 acquisition".to_owned())
             .spawn(move || {
                 let mut dev = dev;
-                if let Err(e) = run(dev.as_mut(), &sink, &stop2, &setup, limit) {
+                let outcome = run(dev.as_mut(), &sink, &stop2, &setup, limit);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("dev lock") = Some(dev);
             })
             .map_err(Error::Io)?;

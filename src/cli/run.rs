@@ -333,9 +333,18 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     if result.is_err() && plan.turns_on() {
         eprintln!("The capture failed with the output on: it was left on.");
     }
-    result?;
+    // A capture that failed was still a capture: its short count is said
+    // as after any other, and the failure comes last, for main to print.
+    if !matches!(result, Err(Error::CaptureFailed(_))) {
+        result?;
+        pipeline.check_limit(limit_samples);
+        return match pipeline.failure() {
+            Some(why) => Err(Error::CaptureFailed(why.to_owned())),
+            None => Ok(()),
+        };
+    }
     pipeline.check_limit(limit_samples);
-    Ok(())
+    result
 }
 
 #[cfg(test)]

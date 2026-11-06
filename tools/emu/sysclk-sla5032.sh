@@ -322,18 +322,18 @@ emu_cases() {
     # 28 (bit 4), the chunk; write-reg 29 (R14).
     for f in stall=read-reg:14 stall=read-reg:15 stall=read-reg:16 stall_reply=read-reg:14 short_reply=read-reg:16 stall=write-reg:24 stall=write-reg:25 stall=read-data stall=write-reg:26 stall=read-reg:23 stall=write-reg:27 stall=read-reg:24 stall=write-reg:28; do
         sla_options configured=1 $f
-        emu_case "fault capture $f" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+        emu_case "fault capture $f" --oxrok-fails "LIBUSB_ERROR_PIPE|endpoint stalled|short register read" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     done
     # What only the debug log says in the C.
     sla_options configured=1 stall=read-reg:14
-    emu_case "fault capture warned" --oracle-differs "$F2" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault capture warned" --oxrok-fails "command 3 failed: LIBUSB_ERROR_PIPE" --oracle-differs "$F2" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_stall=1
-    emu_case "fault chunk stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk stalled" --oxrok-fails "endpoint stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     # The driver gives up after USB_DATA_TIMEOUT_MS, 2 s.
     sla_options configured=1 data_stall=2
-    emu_case "fault second chunk stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 1500000 -O bits
+    emu_case "fault second chunk stalled" --oxrok-fails "endpoint stalled" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 1500000 -O bits
     sla_options configured=1 data_hold=1
-    emu_case "fault chunk never sent" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk never sent" --oxrok-fails "timeout" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     # The records end on a packet boundary and no zero-length packet comes:
     # 65536 samples at 258 a run are 255 records and the marker, 1536 bytes.
     # The transfer runs to the 2 s timeout with the whole capture in it.
@@ -343,15 +343,15 @@ emu_cases() {
     # What the C ends in silence: nothing at all (protocol.c:760-765), and a
     # chunk neither full nor with a marker (protocol.c:851).
     sla_options configured=1 data_short=0
-    emu_case "fault chunk empty warned" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk empty warned" --oxrok-fails "the device sent no samples" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=600
-    emu_case "fault chunk short warned" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk short warned" --oxrok-fails "a chunk of 600 bytes has no end marker" --oracle-differs "$S" --stderr --filter "$N; /The capture ended early/!d" -- -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=0
-    emu_case "fault chunk empty" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk empty" --oxrok-fails "the device sent no samples" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=601
-    emu_case "fault chunk short and uneven" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk short and uneven" --oxrok-fails "a chunk of 601 bytes has no end marker" --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1 data_short=600
-    emu_case "fault chunk short samples" --digest --filter "$B" -- -d $F -C CH0 --samples 512 -O bits
+    emu_case "fault chunk short samples" --oxrok-fails "a chunk of 600 bytes has no end marker" --digest --filter "$B" -- -d $F -C CH0 --samples 512 -O bits
     # Records claiming over 2^31 samples: the int at protocol.c:782 goes
     # negative and g_try_malloc() fails (protocol.c:797-801). About 197 KB.
     # oxrok counts in 64 bits and lets the limit's samples out, expanding no
@@ -367,8 +367,8 @@ emu_cases() {
     emu_case "fault no answer to a poll" --interrupt in=8:15 --oracle-bug "$I" --no-output -- -d $F -C CH0 --samples 512 -O bits
     # Unplugged at the first poll's status reply.
     sla_options configured=1
-    emu_case "unplug while polling" --unplug in=8:16 --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "unplug while polling" --oxrok-fails "command 3 failed: LIBUSB_ERROR_NO_DEVICE" --unplug in=8:16 --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
     # Unplugged at bit 4's rise, with the chunk still to read (the 53rd
     # command: 36 of the start, 9 of the polls, 8 of the read-back).
-    emu_case "unplug at the chunk" --unplug out=4:53 --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
+    emu_case "unplug at the chunk" --oxrok-fails "device disconnected" --unplug out=4:53 --stderr --filter "$E" -- -l 5 -d $F -C CH0 --samples 512 -O bits
 }

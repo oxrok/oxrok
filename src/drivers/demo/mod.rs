@@ -583,7 +583,7 @@ impl Acquisition {
         if in_frame {
             sink.send(Packet::FrameEnd);
         }
-        sink.send(Packet::End);
+        sink.end(Ok(()));
     }
 
     /// Generates `count` logic samples and sends those past the

@@ -296,20 +296,20 @@ $U" -- -d $F --samples 8 -O bits
     gf_options in-stall=0 in-limit=2
     # The transactions alone differ: the first of these flips if the C's stop
     # ever goes out. The second pins oxrok's message.
-    emu_case "halted at once" --oracle-differs "$W_STOP" --no-output -- -d $F --samples 8 -O bits
-    emu_case "halted at once message" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
+    emu_case "halted at once" --oxrok-fails "endpoint stalled" --oracle-differs "$W_STOP" --no-output -- -d $F --samples 8 -O bits
+    emu_case "halted at once message" --oxrok-fails "endpoint stalled" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
     # The C's stop as it is, failed from inside the callback, 16 times.
     emu_case "lib halted at once" --libsigrok --stderr -- -d $F --samples 8 -O bits
     gf_options in-stall=1 in-limit=2
-    emu_case "halted after one" --oracle-differs "$W_LOST" --digest --filter "$LONG" -- -d $F --samples 300000 -O bits
+    emu_case "halted after one" --oxrok-fails "endpoint stalled" --oracle-differs "$W_LOST" --digest --filter "$LONG" -- -d $F --samples 300000 -O bits
     gf_options
 
     # A cable pulled during a capture.
     gf_options in-limit=2
-    emu_case "unplug" --unplug in=1:1 --stderr --filter "$R
+    emu_case "unplug" --oxrok-fails "device disconnected" --unplug in=1:1 --stderr --filter "$R
 $D" -- -d $F --samples 300000 -O bits
     gf_options in-limit=0
-    emu_case "unplug at start" --unplug out=0:6 --stderr --filter "$R
+    emu_case "unplug at start" --oxrok-fails "device disconnected" --unplug out=0:6 --stderr --filter "$R
 $D" -- -d $F --samples 8 -O bits
     emu_case "unplug at configure" --expect-fail --unplug out=0:5 --stderr --filter "$R" -- -d $F --samples 8 -O bits
     gf_options

@@ -403,8 +403,8 @@ impl Device for MansonDevice {
         let handle = std::thread::Builder::new()
             .name("manson-hcs-3xxx acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = capture.run(&sink, &stop2);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -439,40 +439,39 @@ struct Progress {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
         let mut progress = Progress { samples: 0, sent_at: None, quiet_since: started };
         let only_samples_can_end = self.limit_samples > 0 && self.limit_msec == 0;
         while !stop.load(Ordering::SeqCst) {
-            if !self.pass(sink, &mut progress) {
-                return;
+            if !self.pass(sink, &mut progress)? {
+                return Ok(());
             }
             if self.limit_samples > 0 && progress.samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
             if only_samples_can_end && progress.quiet_since.elapsed() > self.no_reading_bound {
                 log::error!("Acquisition failed: no reading for {:?}.", self.no_reading_bound);
-                return;
+                return Err(Error::device(format!("no reading for {:?}", self.no_reading_bound)));
             }
-            if !self.request(&mut progress) {
-                return;
-            }
+            self.request(&mut progress)?;
         }
+        Ok(())
     }
 
-    /// A byte, if one comes. False when the capture is over.
-    fn pass(&self, sink: &PacketSink, progress: &mut Progress) -> bool {
+    /// A byte, if one comes. False when nobody listens any more.
+    fn pass(&self, sink: &PacketSink, progress: &mut Progress) -> Result<bool> {
         let mut link = self.link.lock().expect("link lock");
         let byte = match link.read_byte(POLL) {
             Ok(byte) => byte,
             Err(e) => {
                 log::error!("Acquisition failed: {e}.");
-                return false;
+                return Err(e);
             }
         };
         let Some(byte) = byte else {
@@ -480,26 +479,25 @@ impl Capture {
             // or set waiting until the reads happen to let it in.
             drop(link);
             std::thread::sleep(LET_CLIENTS_IN);
-            return true;
+            return Ok(true);
         };
         let Some(reply) = link.buffer.push(byte) else {
-            return true;
+            return Ok(true);
         };
         link.reply_pending = false;
         if reply.is_empty() || !link.take_getd(&reply) {
-            return true;
+            return Ok(true);
         }
         progress.quiet_since = Instant::now();
         progress.samples += 1;
         let (voltage, current) = (link.voltage, link.current);
         // Not with the link: a full queue must not hold up a client's get or set.
         drop(link);
-        send_sample(sink, voltage, current)
+        Ok(send_sample(sink, voltage, current))
     }
 
-    /// The next `GETD` if it is time, as the end of `hcs_receive_data`. False
-    /// when the capture is over.
-    fn request(&self, progress: &mut Progress) -> bool {
+    /// The next `GETD` if it is time, as the end of `hcs_receive_data`.
+    fn request(&self, progress: &mut Progress) -> Result<()> {
         let mut link = self.link.lock().expect("link lock");
         if std::mem::take(&mut link.reading_dropped) {
             progress.quiet_since = Instant::now();
@@ -510,17 +508,17 @@ impl Capture {
                 // C keeps it, and it joins the next reply as one reading.
                 link.buffer = protocol::ReplyBuffer::default();
             }
-            return true;
+            return Ok(());
         }
         // C goes on after a port that failed, for ever without a time limit
         // (`protocol.c:245`, its result only ends that pass).
         if let Err(e) = link.send("GETD\r") {
             log::error!("Acquisition failed: {e}.");
-            return false;
+            return Err(e);
         }
         progress.sent_at = Some(Instant::now());
         link.reply_pending = true;
-        true
+        Ok(())
     }
 }
 

@@ -303,7 +303,7 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     # A line longer than protocol.c's 50 byte buffer in a capture, and than
     # api.c's 100 in a scan. Each list's first answer goes to the scan.
     emu_options setters=0 output=1 iout2=0.000A,0123456789012345678901234567890123456789012345678901234567890123456789
-    emu_case "a reading too long" --oracle-differs "$LONG_BUG" --timeout 3 -- -d $K --samples 1
+    emu_case "a reading too long" --oxrok-fails "invalid reply to IOUT1?" --oracle-differs "$LONG_BUG" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 idn=$(emu_hex 'GW INSTEK,GPD-2303S,SN:01234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890,V1')
     emu_case "an ID too long" --keep-header --no-output -- -d $K --scan
 
@@ -311,17 +311,17 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
     # left set, so no query follows and the C never ends. With CR LF a read that
     # fails after a leftover LF parses the buffer's old bytes instead.
     emu_options setters=0 output=1 eol=lf iout1=0.000A,x
-    emu_case "reading garbage" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
+    emu_case "reading garbage" --oxrok-fails "invalid reply to IOUT1?" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 vout1=12.000V,x
-    emu_case "reading garbage with CR LF" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 3 -- -d $K --samples 1
+    emu_case "reading garbage with CR LF" --oxrok-fails "invalid reply to VOUT1?" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 eol=lf vout1=12.000V,x
-    emu_case "reading garbage after a good one" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
+    emu_case "reading garbage after a good one" --oxrok-fails "invalid reply to VOUT1?" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 eol=lf vout2=05.000V,~
-    emu_case "a reading missing" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
+    emu_case "a reading missing" --oxrok-fails "invalid reply to VOUT1?" --oracle-bug "$STUCK_BUG" --oracle-hangs --stderr --filter "$L" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 vout2=05.000V,~
-    emu_case "a reading missing with CR LF" --oracle-differs "$OLD_BYTES_BUG" --timeout 3 -- -d $K --samples 1
+    emu_case "a reading missing with CR LF" --oxrok-fails "invalid reply to VOUT1?" --oracle-differs "$OLD_BYTES_BUG" --timeout 3 -- -d $K --samples 1
     emu_options setters=0 output=1 answers=10
-    emu_case "silent from the capture on" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 4 -- -d $K --samples 1
+    emu_case "silent from the capture on" --oxrok-fails "no reply to the readings" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 4 -- -d $K --samples 1
     # A time limit does end those: the timer's branch checks it.
     emu_case "silent from the capture on, time" --no-output --tx-filter '/^bulk_out 02 494f5554313f0a564f5554313f0a/q' -- -d $K --time 300ms
     # Past oxrok's 2 s bound, which a time limit does not have: how long each
@@ -338,7 +338,7 @@ $Z" --expect-fail -- -d $K -c limit_samples=0 --samples 1
         --tx-filter '/^bulk_in 82 [0-9]+ -> 780d0a$/q' -- -d $K --samples 1
 
     emu_options setters=0 output=1 answers=10
-    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --no-output --unplug model --timeout 6 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --no-output --unplug model --timeout 6 --tx-filter '/^unplug$/q' -- -d $K --samples 1
     # A quiet point: the query goes unanswered, the signal lands in its wait.
     emu_options setters=0 output=1 answers=10
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous

@@ -304,7 +304,7 @@ impl Device for UsbRelayDevice {
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         // Nothing to acquire; the session ends at once.
         sink.send(Packet::header());
-        sink.send(Packet::End);
+        sink.end(Ok(()));
         Ok(())
     }
 

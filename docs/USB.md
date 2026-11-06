@@ -505,6 +505,24 @@ full case or oracle case. What else is checked depends on oxrok:
   full run removes `.oracle` goldens no case wrote, and a case that
   becomes ordinary drops its `.oracle` when blessed. Bytes libsigrok
   reads past a buffer are masked by the case's `--filter`.
+- `--oxrok-fails WHY` marks a full case whose capture really failed, for
+  which sigrok-cli exits as it always has, 0 unless the case says
+  `--expect-fail` (docs/CLI.md, "Exit status"). oxrok must exit 1 and write
+  a `capture failed: ` line on stderr with WHY in its text, or the case
+  fails; `A|B` when either can come, as the pace has it. That line is taken
+  out before anything is compared, and everything else is compared in
+  full, under `--no-oracle` too. In an `--unplug` case the fault can get
+  there before the capture does (ols's unplug can land in the drain after
+  its last command, in `start`): an exit 1 with the refused start's error
+  as the last line of stderr passes too, and that line goes instead. There
+  WHY is only a note, as what an unplug says depends on the pace.
+  It goes with `--stderr`, `--oracle-bug`, `--oracle-differs`, events and
+  `--libsigrok --oxrok`. A `--record` case writes `# fails: WHY` in its
+  fixture, for `tests/emu_replay.rs` to expect the same of the replay.
+  Without the flag an oxrok that exits 1 fails the case, so a capture
+  wrongly reported as failed shows. A capture that fails silently does
+  not: a driver that logs an error and ends with `Ok` passes against
+  sigrok-cli's goldens, so a port checks what its give-up paths return.
 - `tools/diffcli.sh --no-oracle` (implies `--emu`) runs the emulator
   tier without sigrok-cli, as CI does. A full case runs oxrok alone
   against the committed `.out` and `.tx` goldens, the ones sigrok-cli

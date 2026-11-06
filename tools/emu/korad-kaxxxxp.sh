@@ -204,12 +204,12 @@ emu_cases() {
     emu_options setters=0 output=1 vout=12.34,xx.xx,1.,1.5e1
     emu_case "garbage and short readings" -- -d $K --samples 4
     emu_options setters=0 answers=1
-    emu_case "only the ID answered" --oracle-differs "$SILENT_BUG" --no-output -- -d $K --samples 2
+    emu_case "only the ID answered" --oxrok-fails "5 readings with no answer" --oracle-differs "$SILENT_BUG" --no-output -- -d $K --samples 2
     emu_case "only the ID answered get" --oracle-differs "$SILENT_BUG" --expect-fail --stderr -- -d $K --get voltage_target
     emu_case "only the ID answered get enabled" -- -d $K --get enabled
     emu_case "only the ID answered show" --oracle-differs "$SILENT_BUG" --keep-header -- -d $K --show
     emu_options setters=0 answers=7
-    emu_case "silent from the capture on" --oracle-differs "$SILENT_BUG" -- -d $K --samples 2
+    emu_case "silent from the capture on" --oxrok-fails "5 readings with no answer" --oracle-differs "$SILENT_BUG" -- -d $K --samples 2
     emu_options setters=0 sixth=0
     emu_case "no sixth byte in the scan" -- -d $K --samples 1
 
@@ -227,7 +227,7 @@ emu_cases() {
     emu_options setters=0 answers=2
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $K --scan
     emu_options setters=0 answers=8
-    emu_case "unplug in a capture" --oracle-differs "$HUP_BUG" --unplug model --timeout 30 --tx-filter '/^unplug$/q' -- -d $K --samples 3
+    emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-differs "$HUP_BUG" --unplug model --timeout 30 --tx-filter '/^unplug$/q' -- -d $K --samples 3
     # A quiet point: the status goes unanswered, the signal lands in its wait.
     emu_options setters=0 answers=8
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous

@@ -253,7 +253,7 @@ emu_cases() {
     pols_options in-stall=1
     emu_case "metadata read error" --stderr --filter "$P" -- -d $D --scan
     pols_options in-stall=3
-    emu_case "capture read error" --stderr --filter "$P" -- -d $D --samples 100 -O hex
+    emu_case "capture read error" --oxrok-fails "libftdi error (-9): usb bulk read failed" --stderr --filter "$P" -- -d $D --samples 100 -O hex
     # Status bytes alone after the bit mode reset: the ID read gets 0 bytes.
     pols_options idle=1
     emu_case "id read empty" --stderr --expect-fail -- -d $D --samples 10
@@ -286,5 +286,5 @@ emu_cases() {
     emu_case "unplug after the open" --unplug out=0:12 --stderr --expect-fail --filter "$U" -- -d $D --samples 16 --triggers 0=1
     # Unplugged after the capture's second transfer: the next read and
     # the resets of the stop fail.
-    emu_case "unplug mid capture" --unplug in=3:5 --stderr --filter "$U0" -- -d $D --samples 20000 -O hex
+    emu_case "unplug mid capture" --oxrok-fails "libftdi error (-4): usb bulk read failed" --unplug in=3:5 --stderr --filter "$U0" -- -d $D --samples 20000 -O hex
 }

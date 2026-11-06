@@ -318,12 +318,16 @@ impl Device for FlukeDevice {
         let spawned =
             std::thread::Builder::new().name("fluke-dmm acquisition".to_owned()).spawn(move || {
                 let port = slot.lock().expect("port lock").take();
-                if let Some(mut port) = port {
-                    capture.run(port.as_mut(), &sink, &stop2);
-                    *slot.lock().expect("port lock") = Some(port);
-                }
+                let outcome = match port {
+                    Some(mut port) => {
+                        let outcome = capture.run(port.as_mut(), &sink, &stop2);
+                        *slot.lock().expect("port lock") = Some(port);
+                        outcome
+                    }
+                    None => Err(Error::device("device is not open")),
+                };
                 capturing.store(false, Ordering::SeqCst);
-                sink.send(Packet::End);
+                sink.end(outcome);
             });
         let handle = match spawned {
             Ok(handle) => handle,
@@ -357,15 +361,13 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
         if !sink.send(Packet::header()) {
-            return;
+            return Ok(());
         }
-        if !send(port, b"QM\r", "Unable to send QM.") {
-            return;
-        }
+        send(port, b"QM\r", "Unable to send QM.")?;
         let mut sent_at = Instant::now();
         let mut waiting = true;
         let mut samples = 0u64;
@@ -377,7 +379,7 @@ impl Capture {
                 Ok(got) => got,
                 Err(e) => {
                     log::error!("Read failed: {e}");
-                    return;
+                    return Err(e);
                 }
             };
             if let Some(line) = (got > 0).then(|| lines.take(byte[0])).flatten() {
@@ -388,31 +390,29 @@ impl Capture {
                 if let Some(reading) = handled.reading {
                     samples += 1;
                     if !sink.send(self.analog(reading)) {
-                        return;
+                        return Ok(());
                     }
                 }
-                let complaint = "Cannot send QM (measurement).";
-                if handled.ask.is_some_and(|ask| !send(port, ask.as_bytes(), complaint)) {
-                    return;
+                if let Some(ask) = handled.ask {
+                    send(port, ask.as_bytes(), "Cannot send QM (measurement).")?;
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() > limit {
-                return;
+                return Ok(());
             }
             let elapsed = sent_at.elapsed();
             if (!waiting && elapsed > self.profile.poll_period) || elapsed > self.profile.timeout {
                 // C logs a failure and asks again every second for ever
                 // (protocol.c:132-133): here a port gone ends the capture.
-                if !send(port, b"QM\r", "Unable to send QM.") {
-                    return;
-                }
+                send(port, b"QM\r", "Unable to send QM.")?;
                 sent_at = Instant::now();
                 waiting = true;
             }
         }
+        Ok(())
     }
 
     fn analog(&self, r: protocol::Reading) -> Packet {
@@ -431,18 +431,18 @@ impl Capture {
 /// it. With 1 ms for a write, as C has, a meter not taking bytes holds no stop;
 /// the next `QM` tries again. C says nothing of a short write, as it is no
 /// error there (`protocol.c:72`, `132`); this logs it.
-fn send(port: &mut dyn Port, data: &[u8], complaint: &str) -> bool {
+fn send(port: &mut dyn Port, data: &[u8], complaint: &str) -> Result<()> {
     match port.write_timeout(data, WRITE_TIMEOUT) {
         Ok(n) => {
             if n < data.len() {
                 log::warn!("{n} of {} bytes of a command went out.", data.len());
             }
-            true
+            Ok(())
         }
         Err(e) => {
             log::debug!("{e}");
             log::error!("{complaint}");
-            false
+            Err(e)
         }
     }
 }
@@ -690,7 +690,10 @@ mod tests {
         let mut d = device(&QUICK, fake);
         let rx = start(&mut d);
         let packets = packets_to_end(&rx);
-        assert_eq!(packets.len(), 1, "the header alone: {packets:?}");
+        assert!(
+            matches!(packets[..], [Packet::Header { .. }, Packet::Failed(_)]),
+            "the header and the failure alone: {packets:?}"
+        );
         assert_eq!(writes(&seen).len(), 0);
         d.close().unwrap();
     }

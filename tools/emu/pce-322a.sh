@@ -187,16 +187,16 @@ s/^(Failed to set device option .data_source.: invalid argument): data_source: i
     # No answer: C goes on waiting, and oxrok ends at its bound. 7 s each, for C's
     # wait and oxrok's 5 s, one per step of a read.
     emu_options frames=0 no-status=1
-    emu_case "memory no status" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A $M --samples 1000
+    emu_case "memory no status" --oxrok-fails "nothing has come of the meter" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A $M --samples 1000
     emu_options frames=0 status=d1050001d200003610
     emu_case "memory status ending in 10" --oracle-bug "$TEN_BUG" --oracle-hangs --timeout 3 -- -d $A $M --samples 1000
     emu_case "memory status ending in 10 says so" --oracle-bug "$TEN_BUG" --oracle-hangs --timeout 3 --stderr --filter "$F" -- -d $A $M --samples 1000
     emu_options frames=0 records=1 samples=300 no-block=1
-    emu_case "memory a block lost" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 -- -d $A $M --samples 1000
+    emu_case "memory a block lost" --oxrok-fails "nothing has come of the meter" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 -- -d $A $M --samples 1000
 
     # What ends no capture in C.
     emu_options frames=0
-    emu_case "silent" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A --samples 1
+    emu_case "silent" --oxrok-fails "nothing has come of the meter" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A --samples 1
     # The same way out for oxrok, so C's alone.
     emu_options frames=1 period=5
     emu_case "lib power off" --libsigrok --hangs --timeout 2 --no-output -- -d $A -c power_off=true --samples 1
@@ -209,9 +209,9 @@ s/^(Failed to set device option .data_source.: invalid argument): data_source: i
     emu_options frames=0 stall=lines
     emu_case "control lines stalled" --keep-header -- -d $A --scan
     emu_options frames=2 period=5
-    emu_case "unplug" --oracle-bug "$GONE_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $A --samples 3
+    emu_case "unplug" --oxrok-fails "the port gone" --oracle-bug "$GONE_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $A --samples 3
     emu_options frames=0 no-status=1
-    emu_case "unplug in memory" --oracle-bug "$GONE_BUG" --oracle-hangs --unplug model --timeout 5 --no-output -- -d $A $M --samples 1000
+    emu_case "unplug in memory" --oxrok-fails "the port gone" --oracle-bug "$GONE_BUG" --oracle-hangs --unplug model --timeout 5 --no-output -- -d $A $M --samples 1000
 
     # What oxrok alone can run. The model has gone quiet: the limit is not met,
     # and each of these ends well before the bound would.

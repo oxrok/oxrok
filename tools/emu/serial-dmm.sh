@@ -62,7 +62,7 @@ emu_cases() {
     # The hang is this pilot's alone: see docs/USB.md, "Writing a serial
     # model". closing_wait is 30 s otherwise, for each tool.
     emu_tty_closing_wait 100
-    emu_case "metex stops reading" --oracle-bug "$BLOCK_BUG" --oracle-hangs --no-output --timeout 9 \
+    emu_case "metex stops reading" --oxrok-fails "Operation timed out" --oracle-bug "$BLOCK_BUG" --oracle-hangs --no-output --timeout 9 \
         --tx-filter '/^bulk_out 02 /d' -- -d $M --time 200ms
     emu_tty_closing_wait 3000
     serial_dmm_options
@@ -86,10 +86,10 @@ emu_cases() {
     # unplug right behind a read loses the bytes to the hangup or not, as
     # the pace has it, so a case never counts on that.
     serial_dmm_options answers=2
-    emu_case "metex unplug" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $M --samples 5
+    emu_case "metex unplug" --oxrok-fails "Broken pipe" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $M --samples 5
     # The scan takes two packets (at any meter of this kind) to find one.
     serial_dmm_options meter=fs9721 burst=3
-    emu_case "ut60a unplug" --driver uni-t-ut60a-ser --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $F --samples 5
+    emu_case "ut60a unplug" --oxrok-fails "Broken pipe" --driver uni-t-ut60a-ser --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $F --samples 5
     serial_dmm_options answers=3
     # The driver asks again every 50 ms until the signal lands, so what
     # follows the mark depends on the pace.

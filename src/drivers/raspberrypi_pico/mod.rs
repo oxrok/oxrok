@@ -490,10 +490,11 @@ impl Device for PicoDevice {
             .name("raspberrypi-pico acquisition".to_owned())
             .spawn(move || {
                 let mut port = port;
-                if let Err(e) = acq.run(port.as_mut(), &sink, &stop2) {
+                let outcome = acq.run(port.as_mut(), &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("port lock") = Some(port);
             })
             .map_err(Error::Io)?;
@@ -836,15 +837,30 @@ impl Acquisition {
         let mut buf: Vec<u8> = Vec::with_capacity(READ_SIZE);
         let mut chunk = vec![0u8; READ_SIZE];
         let mut idle = 0u32;
+        let mut gave_up = Ok(());
         loop {
             if stop.load(Ordering::SeqCst) {
                 break;
             }
-            let n = port.read(&mut chunk, Duration::from_millis(10))?;
+            let n = match port.read(&mut chunk, Duration::from_millis(10)) {
+                Ok(n) => n,
+                // The limit's samples are out: only the closing count is lost.
+                Err(e) if limit > 0 && sent >= limit => {
+                    log::debug!("Reading past the limit: {e}.");
+                    return Ok(());
+                }
+                Err(e) => return Err(e),
+            };
             if n == 0 {
                 idle += 1;
                 if idle > 500 {
                     log::warn!("Device stopped sending data.");
+                    // With the limit met it is only the closing count missing.
+                    if !(limit > 0 && sent >= limit) {
+                        gave_up = Err(Error::device(format!(
+                            "the device stopped sending data after {sent} samples"
+                        )));
+                    }
                     break;
                 }
                 continue;
@@ -876,7 +892,10 @@ impl Acquisition {
                 }
                 if limit > 0 && sent >= limit && dec.end == StreamEnd::Active && !stop_sent {
                     log::debug!("Ending: sent {sent} of {limit} samples, {} bytes", dec.byte_count);
-                    port.write(b"+")?;
+                    if let Err(e) = port.write(b"+") {
+                        log::debug!("Asking for the end past the limit: {e}.");
+                        return Ok(());
+                    }
                     stop_sent = true;
                 }
             }
@@ -901,12 +920,17 @@ impl Acquisition {
                 }
             }
         }
-        if dec.end != StreamEnd::Stopped {
-            port.write(b"+")?;
-        }
-        drain(port)?;
+        let closed = if dec.end == StreamEnd::Stopped { Ok(()) } else { port.write(b"+") };
+        let closed = closed.and_then(|()| drain(port));
         log::debug!("Sent {sent} samples.");
-        Ok(())
+        if limit > 0 && sent >= limit {
+            if let Err(e) = closed {
+                log::debug!("Closing past the limit: {e}.");
+            }
+            return Ok(());
+        }
+        closed?;
+        gave_up
     }
 
     /// Sends decoded samples to the session, through the software

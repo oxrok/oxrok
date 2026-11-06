@@ -1432,37 +1432,38 @@ impl Acquisition {
         stop: &std::sync::atomic::AtomicBool,
     ) {
         let mut stop_seen = false;
-        loop {
+        let outcome = loop {
             std::thread::sleep(POLL);
             if !stop_seen && stop.load(std::sync::atomic::Ordering::SeqCst) {
                 stop_seen = true;
                 if self.state == State::Capture {
                     self.state = State::Stopping;
                 } else {
-                    break;
+                    break Ok(());
                 }
             }
             let mut feed = SinkFeed(sink);
-            let go_on = match self.state {
-                State::Idle => break,
+            let polled = match self.state {
+                State::Idle => break Ok(()),
                 State::Stopping | State::Download => self.download(link, &mut feed, stop),
                 State::Capture => self.capture(link, &mut feed, stop),
             };
-            if !go_on || self.state == State::Idle {
-                break;
+            match polled {
+                Ok(()) if self.state != State::Idle => {}
+                done => break done,
             }
-        }
-        sink.send(Packet::End);
+        };
+        sink.end(outcome);
     }
 
-    /// `sigma_capture_mode`: false when the acquisition is to end.
+    /// `sigma_capture_mode`: an error ends the acquisition.
     fn capture(
         &mut self,
         link: &mut Link,
         feed: &mut dyn Feed,
         stop: &std::sync::atomic::AtomicBool,
-    ) -> bool {
-        let Ok((_, _, mode)) = link.read_pos() else { return false };
+    ) -> Result<()> {
+        let (_, _, mode) = link.read_pos()?;
         if mode & rmr::POSTTRIGGERED != 0 {
             return self.download(link, feed, stop);
         }
@@ -1476,34 +1477,30 @@ impl Acquisition {
         if self.trigger.is_none() && mode & rmr::ROUND != 0 {
             return self.download(link, feed, stop);
         }
-        true
+        Ok(())
     }
 
     /// `download_capture`: forces the stop if needed, then reads and
-    /// decodes up to 50 reads of rows; false when the acquisition is to
-    /// end. Sets the state idle once all is read.
+    /// decodes up to 50 reads of rows; an error ends the acquisition. Sets
+    /// the state idle once all is read.
     fn download(
         &mut self,
         link: &mut Link,
         feed: &mut dyn Feed,
         stop: &std::sync::atomic::AtomicBool,
-    ) -> bool {
-        let Ok(mode) = link.get_register(rreg::MODE) else {
-            log::error!("Could not determine current device state.");
-            return false;
-        };
+    ) -> Result<()> {
+        let mode = link
+            .get_register(rreg::MODE)
+            .inspect_err(|_| log::error!("Could not determine current device state."))?;
         if mode & rmr::POSTTRIGGERED == 0 {
             log::info!("Downloading sample data.");
             self.state = State::Download;
-            if link.set_register(wreg::MODE, wmr::FORCESTOP | wmr::SDRAMWRITEEN).is_err() {
-                return false;
-            }
+            link.set_register(wreg::MODE, wmr::FORCESTOP | wmr::SDRAMWRITEEN)?;
             let mut polls = 0;
             loop {
-                let Ok(m) = link.get_register(rreg::MODE) else {
-                    log::error!("Could not poll for post-trigger state.");
-                    return false;
-                };
+                let m = link
+                    .get_register(rreg::MODE)
+                    .inspect_err(|_| log::error!("Could not poll for post-trigger state."))?;
                 if m & rmr::POSTTRIGGERED != 0 {
                     break;
                 }
@@ -1511,18 +1508,17 @@ impl Acquisition {
                 let stopping = stop.load(std::sync::atomic::Ordering::SeqCst);
                 if polls >= if stopping { MAX_STOP_POLLS_STOPPING } else { MAX_STOP_POLLS } {
                     log::error!("Could not poll for post-trigger state.");
-                    return false;
+                    return Err(Error::device(format!(
+                        "the forced stop did not complete in {polls} mode reads"
+                    )));
                 }
             }
         }
         if self.decoder.is_none() {
-            if link.set_register(wreg::MODE, wmr::SDRAMREADEN).is_err() {
-                return false;
-            }
-            let Ok((stop_pos, trig_pos, mode)) = link.read_pos() else {
-                log::error!("Could not query capture positions/state.");
-                return false;
-            };
+            link.set_register(wreg::MODE, wmr::SDRAMREADEN)?;
+            let (stop_pos, trig_pos, mode) = link
+                .read_pos()
+                .inspect_err(|_| log::error!("Could not query capture positions/state."))?;
             let trig_pos = if self.trigger.is_none() || mode & rmr::TRIGGERED == 0 {
                 u32::MAX
             } else {
@@ -1537,13 +1533,11 @@ impl Acquisition {
                 self.limit_samples,
             ));
         }
-        let Some(dec) = self.decoder.as_mut() else { return false };
+        let Some(dec) = self.decoder.as_mut() else { return Ok(()) };
         let mut chunks = CHUNKS_PER_POLL;
         while !dec.done() {
             let (first, count) = dec.next_fetch();
-            if link.read_dram(first, count, &mut self.rows).is_err() {
-                return false;
-            }
+            link.read_dram(first, count, &mut self.rows)?;
             dec.decode(&self.rows, count, feed);
             chunks -= 1;
             if chunks == 0 {
@@ -1555,7 +1549,7 @@ impl Acquisition {
             dec.flush(feed);
             self.state = State::Idle;
         }
-        true
+        Ok(())
     }
 }
 
@@ -1807,7 +1801,7 @@ mod tests {
             let (mut link, replay) = linked(&steps);
             let mut acq = Acquisition::new(None, 16, 0, TimeLimit::default(), false);
             let mut rec = Rec::default();
-            assert!(!acq.download(&mut link, &mut rec, &AtomicBool::new(stop)));
+            assert!(acq.download(&mut link, &mut rec, &AtomicBool::new(stop)).is_err());
             assert_eq!(replay.remaining(), 0, "stop {stop}");
         }
     }
@@ -1827,7 +1821,7 @@ mod tests {
         use std::sync::atomic::AtomicBool;
         let steps = format!("{}{NO_DOWNLOAD}", position_read(mode));
         let mut rec = Rec::default();
-        acq.capture(&mut link(&steps), &mut rec, &AtomicBool::new(false))
+        acq.capture(&mut link(&steps), &mut rec, &AtomicBool::new(false)).is_ok()
     }
 
     #[test]

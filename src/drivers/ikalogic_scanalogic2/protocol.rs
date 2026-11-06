@@ -562,6 +562,16 @@ impl Machine {
         }
     }
 
+    /// What an error that ended the capture makes of it: nothing once the
+    /// limit's samples are out, when all that failed is the way back to idle.
+    fn outcome(&self, e: Error) -> Result<()> {
+        if self.samples.plan.limit > 0 && self.samples.processed >= self.samples.plan.limit {
+            Ok(())
+        } else {
+            Err(e)
+        }
+    }
+
     /// The report to send.
     pub fn out(&self) -> &[u8; PACKET_LENGTH] {
         &self.out
@@ -720,7 +730,7 @@ pub fn run(
     wait: Duration,
     sink: &PacketSink,
     stop: &AtomicBool,
-) {
+) -> Result<()> {
     let mut machine = Machine::new(plan);
     sink.send(Packet::header());
     let mut emit = |p: Packet| {
@@ -733,7 +743,7 @@ pub fn run(
             Next::Out => {
                 if let Err(e) = set_report(t, machine.out()) {
                     log::error!("Transfer to device failed: {}.", transfer_status_name(&e));
-                    return;
+                    return machine.outcome(e);
                 }
                 machine.after_out(stop.load(Ordering::SeqCst))
             }
@@ -744,11 +754,11 @@ pub fn run(
                     // the C's submit, where this finds out at completion.
                     Err(Error::Disconnected) if waited => {
                         log::error!("Submit transfer failed: LIBUSB_ERROR_NO_DEVICE.");
-                        return;
+                        return machine.outcome(Error::Disconnected);
                     }
                     Err(e) => {
                         log::error!("Transfer to device failed: {}.", transfer_status_name(&e));
-                        return;
+                        return machine.outcome(e);
                     }
                 };
                 waited = false;
@@ -756,7 +766,7 @@ pub fn run(
                     Ok(next) => next,
                     Err(message) => {
                         log::error!("{message}");
-                        return;
+                        return machine.outcome(Error::Device(message));
                     }
                 }
             }
@@ -767,7 +777,7 @@ pub fn run(
                 waited = true;
                 Next::In
             }
-            Next::Done => return,
+            Next::Done => return Ok(()),
         };
     }
 }
@@ -1298,7 +1308,7 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let mut t = StopAt { replay, reads, writes, stop: Arc::clone(&stop), log: Vec::new() };
         let (tx, rx) = std::sync::mpsc::sync_channel(16);
-        run(&mut t, plan, Duration::from_millis(1), &PacketSink::new(tx, 0), &stop);
+        run(&mut t, plan, Duration::from_millis(1), &PacketSink::new(tx, 0), &stop).unwrap();
         check.finish().unwrap();
         (rx.try_iter().map(|(_, p)| p).collect(), t.log)
     }

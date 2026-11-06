@@ -231,7 +231,7 @@ $Q1" -- -d $K --samples 2 -O analog
     emu_options answers=1
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous
     emu_options answers=1
-    emu_case "unplug in a capture" --stderr --filter "$L" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 1
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --stderr --filter "$L" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 1
     emu_options
 }
 

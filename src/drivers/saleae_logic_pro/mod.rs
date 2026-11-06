@@ -424,46 +424,53 @@ fn run(
     sink.send(Packet::header());
     link.start();
     let mut idle = 0;
+    let mut outcome = Ok(());
     while !stop.load(Ordering::SeqCst) {
-        if on_transfer(stream.next(POLL), &mut converter, &mut idle, sink) == Next::End {
-            break;
+        match on_transfer(stream.next(POLL), &mut converter, &mut idle, sink) {
+            Ok(Next::Continue) => {}
+            Ok(Next::End) => break,
+            Err(e) => {
+                outcome = Err(e);
+                break;
+            }
         }
     }
     link.stop();
     drop(stream);
-    sink.send(Packet::End);
+    sink.end(outcome);
 }
 
 /// `saleae_logic_pro_receive_data()` and `dev_acquisition_handle()`: one
 /// answer of the stream. The C driver drops a failed transfer without
 /// submitting it again, and the idle timeout then ends the capture; here
-/// the first failure does.
+/// the first failure does. This capture has no limit, so a stream that runs
+/// out is an error too, and the end of `Next` is for nobody listening.
 fn on_transfer(
     transfer: Result<Vec<u8>>,
     converter: &mut Converter,
     idle: &mut u32,
     sink: &PacketSink,
-) -> Next {
+) -> Result<Next> {
     match transfer {
         Ok(data) => {
             *idle = 0;
             let samples = converter.convert(&data);
             if !samples.is_empty() && !sink.send(Packet::logic(2, samples)) {
-                return Next::End;
+                return Ok(Next::End);
             }
-            Next::Continue
+            Ok(Next::Continue)
         }
         Err(Error::Timeout) => {
             *idle += 1;
             if *idle < IDLE_POLLS {
-                return Next::Continue;
+                return Ok(Next::Continue);
             }
             log::warn!("No transfer for 1 s, ending the capture.");
-            Next::End
+            Err(Error::device("no transfer for 1 s"))
         }
         Err(e) => {
             log::warn!("A transfer failed, ending the capture: {e}.");
-            Next::End
+            Err(e)
         }
     }
 }
@@ -498,22 +505,28 @@ mod tests {
         let mut c = Converter::new(1);
         let mut idle = 0;
         for _ in 0..IDLE_POLLS - 1 {
-            assert_eq!(on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink), Next::Continue);
+            assert_eq!(
+                on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink).unwrap(),
+                Next::Continue
+            );
         }
         // Data resets the time, and a short transfer gives only its own
         // samples (protocol.c:906 converts all 16 KiB).
-        assert_eq!(on_transfer(Ok(vec![0; 4]), &mut c, &mut idle, &sink), Next::Continue);
+        assert_eq!(on_transfer(Ok(vec![0; 4]), &mut c, &mut idle, &sink).unwrap(), Next::Continue);
         assert_eq!(idle, 0);
         let (_, p) = rx.try_recv().unwrap();
         assert_eq!(p, Packet::logic(2, vec![0; 64]));
         for _ in 0..IDLE_POLLS - 1 {
-            assert_eq!(on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink), Next::Continue);
+            assert_eq!(
+                on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink).unwrap(),
+                Next::Continue
+            );
         }
-        assert_eq!(on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink), Next::End);
+        assert!(on_transfer(Err(Error::Timeout), &mut c, &mut idle, &sink).is_err());
         let mut idle = 0;
         let stalled = Err(Error::device("stalled"));
-        assert_eq!(on_transfer(stalled, &mut c, &mut idle, &sink), Next::End);
-        assert_eq!(on_transfer(Err(Error::Disconnected), &mut c, &mut idle, &sink), Next::End);
+        assert!(on_transfer(stalled, &mut c, &mut idle, &sink).is_err());
+        assert!(on_transfer(Err(Error::Disconnected), &mut c, &mut idle, &sink).is_err());
     }
 
     /// A stream that never ends, setting the stop flag at its third answer.

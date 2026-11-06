@@ -385,9 +385,9 @@ impl Device for NormaDevice {
         let spawned = std::thread::Builder::new()
             .name(format!("{} acquisition", self.info.driver))
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -413,9 +413,9 @@ impl Device for NormaDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
 /// after a stop only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -592,14 +592,15 @@ fn time_is_up(limit_msec: u64, started: Instant, now: Instant) -> bool {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
-            return;
+            return Ok(());
         }
         let left = std::mem::take(&mut self.link.lock().expect("link lock").in_flight);
         let mut requests = Requests::new(left, self.request_timeout, Instant::now());
-        self.passes(sink, stop, &mut requests);
+        let outcome = self.passes(sink, stop, &mut requests);
         self.link.lock().expect("link lock").in_flight = requests.in_flight;
+        outcome
     }
 
     /// Reads up to the end of a line, as a pass of C's callback, whose read loop
@@ -666,7 +667,7 @@ impl Capture {
         true
     }
 
-    fn passes(&self, sink: &PacketSink, stop: &AtomicBool, requests: &mut Requests) {
+    fn passes(&self, sink: &PacketSink, stop: &AtomicBool, requests: &mut Requests) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         let started = Instant::now();
         let mut buffer = LineBuffer::default();
@@ -674,7 +675,7 @@ impl Capture {
         let mut due = started + POLL_INTERVAL;
         loop {
             if stop.load(Ordering::SeqCst) {
-                return;
+                return Ok(());
             }
             let line = match self.pass(&mut buffer, due) {
                 Pass::NotYet => continue,
@@ -686,7 +687,7 @@ impl Capture {
                 && let Some(reading) = self.take_line(&line, requests)
             {
                 if self.enabled && !sink.send_while(packet(&reading), go_on) {
-                    return;
+                    return Ok(());
                 }
                 samples += 1;
             }
@@ -694,7 +695,7 @@ impl Capture {
             if time_is_up(self.limit_msec, started, now)
                 || (self.limit_samples > 0 && samples >= self.limit_samples)
             {
-                return;
+                return Ok(());
             }
             if self.limit_samples > 0
                 && self.limit_msec == 0
@@ -717,7 +718,7 @@ impl Capture {
                 buffer.clear();
             }
             if turn != Turn::Wait && !self.send_request(requests) {
-                return;
+                return Err(Error::device("unable to send a request"));
             }
         }
     }

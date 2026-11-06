@@ -210,6 +210,7 @@ fn shape(packets: &[Packet]) -> Vec<String> {
         .iter()
         .map(|p| match p {
             Packet::Header { .. } => "header".to_owned(),
+            Packet::Failed(_) => "failed".to_owned(),
             Packet::Trigger => "trigger".to_owned(),
             Packet::Logic(l) => format!("logic {}", l.data.len()),
             Packet::Analog(a) => format!("analog {}", a.samples.len()),
@@ -351,7 +352,7 @@ fn an_invalid_status_in_the_polls_ends_with_no_samples() {
         let (mut device, fake) = open_device(&[0x21, 0x33, 0xff, 0x36]);
         let (tx, rx) = sink(16);
         device.start(tx).unwrap();
-        assert_eq!(shape(&packets(&rx)), ["header"]);
+        assert_eq!(shape(&packets(&rx)), ["header", "failed"]);
         assert_eq!(fake.count(&read_buffer_request()), 0);
     });
 }
@@ -365,7 +366,7 @@ fn a_silent_device_ends_at_the_bound_and_not_before() {
         let at = Instant::now();
         let (tx, rx) = sink(16);
         device.start(tx).unwrap();
-        assert_eq!(shape(&packets(&rx)), ["header"]);
+        assert_eq!(shape(&packets(&rx)), ["header", "failed"]);
         assert!(at.elapsed() >= Duration::from_millis(300), "{:?}", at.elapsed());
     });
 }
@@ -378,7 +379,7 @@ fn a_dump_that_stops_short_ends_at_the_bound() {
         device.silence_bound = Duration::from_millis(100);
         let (tx, rx) = sink(16);
         device.start(tx).unwrap();
-        assert_eq!(shape(&packets(&rx)), ["header"]);
+        assert_eq!(shape(&packets(&rx)), ["header", "failed"]);
     });
 }
 
@@ -449,7 +450,7 @@ fn a_read_that_fails_ends_the_capture() {
         let (tx, rx) = sink(16);
         device.start(tx).unwrap();
         fake.line().fail = true;
-        assert_eq!(shape(&packets(&rx)), ["header"]);
+        assert_eq!(shape(&packets(&rx)), ["header", "failed"]);
     });
 }
 
@@ -1134,7 +1135,7 @@ mod clocked {
                 let mut device = open(&clock);
                 device.silence_bound = Duration::from_millis(300);
                 let got = capture(&mut device).unwrap();
-                assert_eq!(shape(&got), ["header"], "{short}");
+                assert_eq!(shape(&got), ["header", "failed"], "{short}");
                 {
                     let mut state = clock.state();
                     state.dump = dump_bytes();

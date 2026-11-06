@@ -579,10 +579,10 @@ impl ReloadProDevice {
         let spawned = std::thread::Builder::new()
             .name("arachnid-labs-re-load-pro acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capture.shared.link.lock().expect("link lock").running = false;
                 capture.shared.line.notify_all();
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -755,14 +755,14 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         for line in &self.opening {
             if self.handle_line(*line, "", sink, stop).is_none() {
-                return;
+                return Ok(());
             }
         }
         let started = Instant::now();
@@ -774,12 +774,12 @@ impl Capture {
         let mut chunk = [0u8; 64];
         loop {
             if !go_on() {
-                return;
+                return Ok(());
             }
             // C looks at a time limit only when a line has come
             // (`protocol.c:425`).
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
             let read = {
                 let mut link = self.shared.link.lock().expect("link lock");
@@ -792,7 +792,7 @@ impl Capture {
                 Ok(n) => n,
                 Err(e) => {
                     log::error!("Serial port read error: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             for &byte in &chunk[..n] {
@@ -803,20 +803,20 @@ impl Capture {
                 if (!ended && pending.len() < protocol::LINE_MAX) || pending.is_empty() {
                     continue;
                 }
-                let Some(sample) = self.handle(&pending, sink, stop) else { return };
+                let Some(sample) = self.handle(&pending, sink, stop) else { return Ok(()) };
                 pending.clear();
                 if sample {
                     samples += 1;
                     last_reading = Instant::now();
                     if self.limit_samples > 0 && samples >= self.limit_samples {
-                        return;
+                        return Ok(());
                     }
                 }
             }
             // After the read: a machine that stalled has lines to look at first.
             if only_samples_can_end && last_reading.elapsed() >= self.no_reading {
                 log::error!("Acquisition failed: no reading for {:?}.", self.no_reading);
-                return;
+                return Err(Error::device(format!("no reading for {:?}", self.no_reading)));
             }
             if n == 0 {
                 std::thread::sleep(EMPTY_READ_PAUSE);
@@ -917,9 +917,9 @@ fn analog(channel: usize, value: f32, mq: Mq, unit: Unit) -> Packet {
 
 /// The End, for which a client that goes on reading is waited for without a
 /// bound, and after a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -1670,7 +1670,8 @@ mod tests {
         let started = Instant::now();
         let packets = capture(&mut d);
         let took = started.elapsed();
-        assert_eq!(packets.len(), 2, "{packets:?}");
+        assert!(matches!(packets[1], Packet::Failed(_)), "{packets:?}");
+        assert_eq!(packets.len(), 3, "{packets:?}");
         assert!(took >= Duration::from_millis(400), "{took:?}");
         assert!(took < Duration::from_secs(4), "{took:?}");
     }
@@ -1756,6 +1757,7 @@ mod tests {
         let rx = start(&mut d);
         assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::Header { .. }))));
         state.lock().unwrap().fail_reads = true;
+        assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::Failed(_)))));
         assert!(matches!(rx.recv_timeout(CAPTURE_BOUND), Ok((_, Packet::End))));
     }
 

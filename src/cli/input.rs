@@ -199,7 +199,10 @@ pub fn run(args: &Args) -> Result<()> {
     if let Some(e) = failed {
         return Err(e);
     }
-    Ok(())
+    match pipeline.as_ref().and_then(Pipeline::failure) {
+        Some(why) => Err(Error::Arg(why.to_owned())),
+        None => Ok(()),
+    }
 }
 
 /// `-i FILE --show`: the file's properties.

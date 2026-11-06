@@ -10,7 +10,7 @@ use crate::cli::decode::Decoding;
 use crate::cli::parse;
 use oxrok::core::{Channel, Error, Packet, Result};
 use oxrok::formats::output::{self, Options, Output, OutputContext};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 
 const DEFAULT_OUTPUT_NOFILE: &str = "bits:width=64";
 const DEFAULT_OUTPUT_FILE: &str = "srzip";
@@ -25,9 +25,16 @@ pub struct Pipeline {
     buf: Vec<u8>,
     wait_trigger: bool,
     triggered: bool,
+    /// Why the output can no longer be written, once it cannot.
+    failure: Option<String>,
     /// Logic and analog samples received.
     pub received_logic: u64,
     pub received_analog: u64,
+}
+
+/// A write to a reader that has gone: no fault of the output's.
+fn reader_gone(e: &Error) -> bool {
+    matches!(e, Error::Io(io) if io.kind() == ErrorKind::BrokenPipe)
 }
 
 impl Pipeline {
@@ -49,6 +56,7 @@ impl Pipeline {
                 buf: Vec::new(),
                 wait_trigger: args.wait_trigger,
                 triggered: false,
+                failure: None,
                 received_logic: 0,
                 received_analog: 0,
             });
@@ -91,14 +99,18 @@ impl Pipeline {
             buf: Vec::new(),
             wait_trigger: args.wait_trigger,
             triggered: false,
+            failure: None,
             received_logic: 0,
             received_analog: 0,
         })
     }
 
-    /// Handles one packet. False when the output can no longer be written.
+    /// Handles one packet. False when the output can no longer be written,
+    /// or its reader has gone, which only stops the run: `oxrok ... | head`.
     pub fn handle(&mut self, packet: &Packet) -> bool {
         match packet {
+            // For the run's result, not for the outputs.
+            Packet::Failed(_) => return true,
             Packet::Trigger => self.triggered = true,
             Packet::Logic(l) => self.received_logic += l.len() as u64,
             Packet::Analog(a) => self.received_analog += a.len() as u64,
@@ -110,7 +122,10 @@ impl Pipeline {
         if let Some(d) = &mut self.decoding {
             let mut stdout = std::io::stdout();
             if let Err(e) = d.handle(packet, &mut stdout) {
-                log::error!("decoding: {e}");
+                if !reader_gone(&e) {
+                    log::error!("decoding: {e}");
+                    self.failure.get_or_insert_with(|| format!("decoding: {e}"));
+                }
                 return false;
             }
         }
@@ -119,7 +134,10 @@ impl Pipeline {
         match main.receive(packet, &mut self.buf) {
             Ok(()) => {}
             Err(e) => {
-                log::error!("output: {e}");
+                if !reader_gone(&e) {
+                    log::error!("output: {e}");
+                    self.failure.get_or_insert_with(|| format!("output: {e}"));
+                }
                 return false;
             }
         }
@@ -130,11 +148,19 @@ impl Pipeline {
         }
         if !self.buf.is_empty()
             && let Some(sink) = &mut self.sink
-            && (sink.write_all(&self.buf).is_err() || sink.flush().is_err())
+            && let Err(e) = sink.write_all(&self.buf).and_then(|()| sink.flush())
         {
+            if e.kind() != ErrorKind::BrokenPipe {
+                self.failure.get_or_insert_with(|| format!("output: {e}"));
+            }
             return false;
         }
         true
+    }
+
+    /// The reason the output could no longer be written, if so.
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 
     /// Warns when fewer samples than asked arrived.

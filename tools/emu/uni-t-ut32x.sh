@@ -149,7 +149,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "time, silent" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 5 --no-output -- -d $A --time 50
     # Over 10 s: the bound oxrok waits, and C's timeout beyond it. One case per form.
     emu_options burst=0
-    emu_case "samples, silent says so" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 8 --stderr --filter "$F" -- -d $A --samples 1
+    emu_case "samples, silent says so" --oxrok-fails "no record from the device" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 8 --stderr --filter "$F" -- -d $A --samples 1
 
     # A stop, from a client, and from a signal. A long period: the client's stop lands
     # ahead of the second record.
@@ -160,7 +160,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_options period=10 burst=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --samples 5
     emu_options period=25 burst=2
-    emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 -- -d $A --samples 5
-    emu_case "unplug says so" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 --stderr --filter "$F" -- -d $A --samples 5
+    emu_case "unplug" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 -- -d $A --samples 5
+    emu_case "unplug says so" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 --stderr --filter "$F" -- -d $A --samples 5
     emu_options
 }

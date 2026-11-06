@@ -566,9 +566,9 @@ impl Device for Hantek6xxxDevice {
         let handle = std::thread::Builder::new()
             .name("hantek-6xxx acquisition".into())
             .spawn(move || {
-                acq.run(&mut link, &sink, &stop2);
+                let outcome = acq.run(&mut link, &sink, &stop2);
                 *slot.lock().expect("link lock") = Some(link);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -597,7 +597,7 @@ struct Acquisition {
 impl Acquisition {
     /// The start, the flush, the transfers until a limit, the stop flag,
     /// a silent or vanished device; then the stop command.
-    fn run(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         // Failed, the transfers below find out: the C driver logs it and
         // reads all the same.
@@ -605,14 +605,17 @@ impl Acquisition {
         // What the first transfer holds or how it ends is of no interest,
         // as long as there is a device.
         let flushed = link.read(FLUSH_SIZE);
-        if !matches!(flushed, Err(Error::Disconnected)) {
-            self.transfers(link, sink, stop);
-        }
+        let outcome = if matches!(flushed, Err(Error::Disconnected)) {
+            Err(Error::Disconnected)
+        } else {
+            self.transfers(link, sink, stop)
+        };
         log::debug!("Stopping acquisition.");
         let _ = link.stop();
+        outcome
     }
 
-    fn transfers(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) {
+    fn transfers(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
         let elapsed = || started.elapsed().as_millis() as u64;
         let mut received = 0u64;
@@ -629,14 +632,17 @@ impl Acquisition {
                 Ok(d) => d,
                 Err(Error::Disconnected) => {
                     log::error!("The device is gone, the data is incomplete.");
-                    return;
+                    return Err(Error::Disconnected);
                 }
                 Err(Error::Timeout) => {
                     log::error!(
                         "No data for {:?}, the data is incomplete.",
                         protocol::TRANSFER_TIMEOUT
                     );
-                    return;
+                    return Err(Error::device(format!(
+                        "no data for {:?}",
+                        protocol::TRANSFER_TIMEOUT
+                    )));
                 }
                 Err(e) => {
                     log::debug!("Transfer failed: {e}.");
@@ -648,7 +654,7 @@ impl Acquisition {
                 failures += 1;
                 if failures >= MAX_EMPTY_TRANSFERS {
                     log::error!("{failures} transfers without data, the data is incomplete.");
-                    return;
+                    return Err(Error::device(format!("{failures} transfers without data")));
                 }
                 continue;
             }
@@ -659,13 +665,14 @@ impl Acquisition {
             let keep = self.limits.room(received).min(samples) as usize;
             received += samples;
             if !self.send_chunk(&data[..keep * 2], sink) {
-                return;
+                return Ok(());
             }
             if self.limits.reached(received, elapsed()) {
                 log::info!("Requested limit reached, stopping after {received} samples.");
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
     /// `send_chunk()`: a packet per enabled channel. False when nobody
@@ -716,7 +723,7 @@ mod tests {
     fn run(acq: &Acquisition, steps: &str) -> Receiver<(usize, Packet)> {
         let (tx, rx) = sync_channel(4096);
         let sink = PacketSink::new(tx, 0);
-        acq.run(&mut link(steps), &sink, &AtomicBool::new(false));
+        let _ = acq.run(&mut link(steps), &sink, &AtomicBool::new(false));
         rx
     }
 

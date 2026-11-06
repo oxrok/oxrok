@@ -199,9 +199,9 @@ emu_cases() {
     # count; an unplug after the fifth status read does. The C goes on
     # with its error code for a status; oxrok warned first, sent the same
     # registers, and ends.
-    emu_case "two levels warned" --oracle-differs "$GONE" --stderr --filter "$P; /high and low|Lost the board/!d; s/.*zeroplus-logic-cube: //" --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
+    emu_case "two levels warned" --oxrok-fails "device disconnected" --oracle-differs "$GONE" --stderr --filter "$P; /high and low|Lost the board/!d; s/.*zeroplus-logic-cube: //" --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
     # What sigrok-cli does there: no samples, exit 0, the same transactions.
-    emu_case "two levels unplugged output" --no-output --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
+    emu_case "two levels unplugged output" --oxrok-fails "device disconnected" --no-output --unplug in=0:5 -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
 
     # Other boards.
     zp_options pid=0x7009
@@ -272,9 +272,9 @@ emu_cases() {
     # discard 1089 at a limit of 1500) and it delivers samples by that,
     # the output case's .oracle; oxrok says so, its .out, and delivers none.
     zp_options stall=rdata:0x9b@1
-    emu_case "fault stop address read" --oracle-differs "$ADDR" --stderr --filter "$E" -- -d $Z -C A0 --samples 1500 -O bits
+    emu_case "fault stop address read" --oxrok-fails "endpoint stalled" --oracle-differs "$ADDR" --stderr --filter "$E" -- -d $Z -C A0 --samples 1500 -O bits
     zp_options stall=rdata:0x9b@1
-    emu_case "fault stop address read output" --oracle-differs "$ADDR" --digest --filter "$B" -- -d $Z -C $CH --samples 1500 -O bits
+    emu_case "fault stop address read output" --oxrok-fails "endpoint stalled" --oracle-differs "$ADDR" --digest --filter "$B" -- -d $Z -C $CH --samples 1500 -O bits
     # The bulk read request refused: the bulk read that follows times
     # out (5 s) and the C uses its buffer all the same. oxrok ends the
     # capture with the samples of the reads that completed, no read after
@@ -282,19 +282,19 @@ emu_cases() {
     # are those of a clean capture up to the fault. Each stderr case's .oracle is empty (a
     # stdout is all --oracle-differs keeps), its .out what oxrok says.
     zp_options stall=bulkreq@3
-    emu_case "fault bulk request" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "fault bulk request" --oxrok-fails "the readout was cut short after 0 samples" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
     zp_options stall=bulkreq@3
-    emu_case "fault bulk request output" --oracle-differs "$STALE" --no-output --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
+    emu_case "fault bulk request output" --oxrok-fails "the readout was cut short after 0 samples" --oracle-differs "$STALE" --no-output --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
     # A bulk read refused, and one cut short.
     zp_options stall=bulk@3
-    emu_case "fault bulk stall" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "fault bulk stall" --oxrok-fails "the readout was cut short after 0 samples" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
     zp_options stall=bulk@3
-    emu_case "fault bulk stall output" --oracle-differs "$STALE" --no-output --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
+    emu_case "fault bulk stall output" --oxrok-fails "the readout was cut short after 0 samples" --oracle-differs "$STALE" --no-output --filter "$B" -- -d $Z -C $CH --samples 1000 -O bits
     zp_options short=4
-    emu_case "fault short read" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "fault short read" --oxrok-fails "the readout was cut short after 740 samples" --oracle-differs "$STALE" --stderr --filter "$E" -- -d $Z -C A0 --samples 1000 -O bits
     # The whole output: 740 samples, the first 740 of "default capture".
     zp_options short=4
-    emu_case "fault short read output" --oracle-differs "$STALE" -- -d $Z -C $CH --samples 1000 -O bits
+    emu_case "fault short read output" --oxrok-fails "the readout was cut short after 740 samples" --oracle-differs "$STALE" -- -d $Z -C $CH --samples 1000 -O bits
     # A read after the first delivered ones refused, the stop on its way:
     # the signal comes with the request, so the read that follows has
     # begun and its 5 s (the model NAKs it) tell the stop on no timing.
@@ -306,15 +306,15 @@ emu_cases() {
     # the busy bit set). oxrok gives up after protocol::MAX_FAILED_POLLS,
     # paced to about 1.6 s.
     zp_options stall=rdata:0x21
-    emu_case "fault every status read hangs" --oracle-bug "$WAIT" --oracle-hangs --timeout 5 --stderr --filter "$E" -- -d $Z -C A0 --samples 100 -O bits
+    emu_case "fault every status read hangs" --oxrok-fails "endpoint stalled" --oracle-bug "$WAIT" --oracle-hangs --timeout 5 --stderr --filter "$E" -- -d $Z -C A0 --samples 100 -O bits
 
     # Unplugged while the driver polls (after control read #2, the
     # first poll), and in the middle of the data (after bulk IN #3).
     zp_options
-    emu_case "unplug while polling" --oracle-differs "$GONE" --stderr --filter "$E" --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "unplug while polling" --oxrok-fails "device disconnected" --oracle-differs "$GONE" --stderr --filter "$E" --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
     # No samples and exit 0 under both tools; the C's garbage is its log.
-    emu_case "unplug while polling output" --no-output --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
-    emu_case "unplug mid data" --oracle-differs "$STALE" --stderr --filter "$E" --unplug in=1:3 -- -d $Z -C A0 --samples 1000 -O bits
-    emu_case "unplug mid data output" --oracle-differs "$STALE" --digest --filter "$B" --unplug in=1:3 -- -d $Z -C $CH --samples 1000 -O bits
+    emu_case "unplug while polling output" --oxrok-fails "device disconnected" --no-output --unplug in=0:2 -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "unplug mid data" --oxrok-fails "the readout was cut short after 485 samples" --oracle-differs "$STALE" --stderr --filter "$E" --unplug in=1:3 -- -d $Z -C A0 --samples 1000 -O bits
+    emu_case "unplug mid data output" --oxrok-fails "the readout was cut short after 485 samples" --oracle-differs "$STALE" --digest --filter "$B" --unplug in=1:3 -- -d $Z -C $CH --samples 1000 -O bits
     zp_options
 }

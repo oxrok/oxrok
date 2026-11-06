@@ -120,6 +120,31 @@ impl PacketSink {
         self.tx.send((self.device, packet)).is_ok()
     }
 
+    /// Ends an acquisition: [`Packet::Failed`] when `outcome` is an error,
+    /// then [`Packet::End`]. The way every acquisition finishes, so that each
+    /// says whether it failed. `Err` is for a capture that ended for any
+    /// reason other than a limit, a stop or the natural end of the data; an
+    /// error the driver retried past or only warns about is `Ok`. False when
+    /// nobody listens any more.
+    pub fn end(&self, outcome: Result<()>) -> bool {
+        if let Err(e) = outcome
+            && !self.send(Packet::Failed(e.to_string()))
+        {
+            return false;
+        }
+        self.send(Packet::End)
+    }
+
+    /// [`PacketSink::end`] through [`PacketSink::send_while`].
+    pub fn end_while(&self, outcome: Result<()>, go_on: impl Fn() -> bool) -> bool {
+        if let Err(e) = outcome
+            && !self.send_while(Packet::Failed(e.to_string()), &go_on)
+        {
+            return false;
+        }
+        self.send_while(Packet::End, go_on)
+    }
+
     /// Sends one packet, waiting for room only while `go_on` says so: a thread
     /// that a close will join must not block for ever on a queue no one is
     /// reading any more. False when nobody listens, or `go_on` said no.
@@ -148,7 +173,8 @@ impl PacketSink {
 /// [`Key`] with get, set and list access, optionally scoped to a channel
 /// group. Acquisition is a thread the device owns: [`Device::start`]
 /// spawns it, it sends packets to the sink, and [`Device::stop`] asks it
-/// to end. The thread always finishes with [`Packet::End`].
+/// to end. The thread always finishes with [`PacketSink::end`], which
+/// sends [`Packet::End`] and, before it, [`Packet::Failed`] if it failed.
 pub trait Device: Send {
     /// Identity.
     fn info(&self) -> &DeviceInfo;
@@ -237,7 +263,8 @@ pub trait Device: Send {
 
     /// Starts acquiring. Packets go to `sink` from the device's own
     /// thread, starting with [`Packet::Header`] and ending with
-    /// [`Packet::End`].
+    /// [`PacketSink::end`]. An `Err` here is a capture that never started;
+    /// one that fails later reports it through the sink.
     fn start(&mut self, sink: PacketSink) -> Result<()>;
 
     /// Asks a running acquisition to end. The thread sends

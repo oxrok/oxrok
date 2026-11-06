@@ -81,6 +81,18 @@ impl Session {
     /// each packet and the index of the device it came from. Returns when
     /// every device sent [`Packet::End`], or after the consumer asked to
     /// stop and the devices ended.
+    ///
+    /// A device that fails reaches the consumer as [`Packet::Failed`] where
+    /// it happened, and its [`Packet::End`] follows; the other devices go on
+    /// until they end. `run` then returns [`Error::CaptureFailed`] with the
+    /// first failure's text, after every packet was delivered: what the
+    /// consumer got before the failure is good, however little that was. A
+    /// failure that arrives once a stop was asked for still reaches the
+    /// consumer, but the run is a stopped one and returns `Ok`. A device
+    /// whose thread ends without its `End` (a panic) counts as failed unless
+    /// stopping, and the consumer gets an `End` in its name. A device that
+    /// refuses to start is the `Err` of its `start`, and no failure of this
+    /// kind.
     pub fn run(&mut self, mut consumer: impl FnMut(usize, &Packet) -> Flow) -> Result<()> {
         if self.devices.is_empty() {
             return Err(Error::arg("a session needs at least one device"));
@@ -114,17 +126,22 @@ impl Session {
             while rx.recv().is_ok() {}
             return Err(e);
         }
-        let mut ended = 0;
+        let mut ended = vec![false; started];
         let mut stopping = false;
-        while ended < started {
+        let mut failure = None;
+        while ended.contains(&false) {
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok((dev, packet)) => {
-                    let is_end = matches!(packet, Packet::End);
+                    if let Packet::Failed(why) = &packet
+                        && !self.stop_flag.load(Ordering::SeqCst)
+                    {
+                        failure.get_or_insert_with(|| why.clone());
+                    }
                     if consumer(dev, &packet) == Flow::Stop {
                         self.stop_flag.store(true, Ordering::SeqCst);
                     }
-                    if is_end {
-                        ended += 1;
+                    if matches!(packet, Packet::End) {
+                        ended[dev] = true;
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -137,12 +154,24 @@ impl Session {
                     // longer matters.
                     let _ = consumer(dev, &packet);
                     if matches!(packet, Packet::End) {
-                        ended += 1;
+                        ended[dev] = true;
                     }
                 })?;
             }
         }
-        Ok(())
+        // Every sender is gone and some End never came: the thread died.
+        for (dev, _) in ended.iter().enumerate().filter(|(_, ended)| !**ended) {
+            if !self.stop_flag.load(Ordering::SeqCst) {
+                failure.get_or_insert_with(|| {
+                    format!(
+                        "the {} driver's acquisition ended without saying how",
+                        self.devices[dev].info().driver
+                    )
+                });
+            }
+            let _ = consumer(dev, &Packet::End);
+        }
+        failure.map_or(Ok(()), |why| Err(Error::CaptureFailed(why)))
     }
 }
 
@@ -305,6 +334,156 @@ mod tests {
                 })
                 .unwrap();
         });
+    }
+
+    /// A device whose thread sends one logic packet, then ends as told.
+    struct Scripted {
+        info: DeviceInfo,
+        channels: Vec<Channel>,
+        outcome: Option<Result<()>>,
+        worker: Option<JoinHandle<()>>,
+    }
+
+    impl Scripted {
+        /// `outcome`: how it ends; `None` is a thread that dies with no end.
+        fn new(outcome: Option<Result<()>>) -> Box<Self> {
+            Box::new(Scripted {
+                info: DeviceInfo { driver: "scripted", ..DeviceInfo::default() },
+                channels: vec![Channel::new(0, ChannelKind::Logic, "D0")],
+                outcome,
+                worker: None,
+            })
+        }
+    }
+
+    impl Device for Scripted {
+        fn info(&self) -> &DeviceInfo {
+            &self.info
+        }
+        fn classes(&self) -> &[DeviceClass] {
+            &[]
+        }
+        fn channels(&self) -> &[Channel] {
+            &self.channels
+        }
+        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
+            Ok(())
+        }
+        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
+            Ok(())
+        }
+        fn options(&self, _: Option<&str>) -> Result<Vec<OptionDesc>> {
+            Ok(Vec::new())
+        }
+        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn set(&mut self, key: &Key, _: &Value, _: Option<&str>) -> Result<()> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn list(&self, key: &Key, _: Option<&str>) -> Result<ValueList> {
+            Err(Error::UnknownKey(key.id().to_owned()))
+        }
+        fn start(&mut self, sink: PacketSink) -> Result<()> {
+            let outcome = self.outcome.take();
+            self.worker = Some(std::thread::spawn(move || {
+                sink.send(Packet::logic(1, vec![7]));
+                if let Some(outcome) = outcome {
+                    sink.end(outcome);
+                }
+            }));
+            Ok(())
+        }
+        fn stop(&mut self) -> Result<()> {
+            if let Some(w) = self.worker.take() {
+                w.join().expect("worker");
+            }
+            Ok(())
+        }
+    }
+
+    /// The packets of one run, as (device, packet), and its result as text.
+    fn run_all(
+        devices: Vec<Box<dyn Device>>,
+    ) -> (Vec<(usize, Packet)>, std::result::Result<(), String>) {
+        let mut session = Session::new();
+        for d in devices {
+            session.add_device(d);
+        }
+        let mut packets = Vec::new();
+        let result = session.run(|dev, p| {
+            packets.push((dev, p.clone()));
+            Flow::Continue
+        });
+        (packets, result.map_err(|e| e.to_string()))
+    }
+
+    #[test]
+    fn a_failure_comes_back_after_the_data_and_the_end() {
+        let (packets, result) =
+            within_limit(|| run_all(vec![Scripted::new(Some(Err(Error::Disconnected)))]));
+        let packets: Vec<Packet> = packets.into_iter().map(|(_, p)| p).collect();
+        assert_eq!(
+            packets,
+            [
+                Packet::logic(1, vec![7]),
+                Packet::Failed("device disconnected".to_owned()),
+                Packet::End
+            ]
+        );
+        assert_eq!(result.unwrap_err(), "capture failed: device disconnected");
+    }
+
+    #[test]
+    fn a_capture_that_ends_well_returns_ok() {
+        let (packets, result) = within_limit(|| run_all(vec![Scripted::new(Some(Ok(())))]));
+        assert_eq!(result, Ok(()));
+        assert!(!packets.iter().any(|(_, p)| matches!(p, Packet::Failed(_))));
+    }
+
+    #[test]
+    fn one_failed_device_waits_for_the_others_and_gives_the_first_reason() {
+        let (packets, result) = within_limit(|| {
+            run_all(vec![Scripted::new(Some(Err(Error::Timeout))), Scripted::new(Some(Ok(())))])
+        });
+        assert_eq!(result.unwrap_err(), "capture failed: timeout");
+        for dev in 0..2 {
+            assert!(packets.contains(&(dev, Packet::End)), "device {dev}: {packets:?}");
+        }
+    }
+
+    #[test]
+    fn a_thread_that_dies_is_a_failure_and_still_gets_an_end() {
+        let (packets, result) = within_limit(|| run_all(vec![Scripted::new(None)]));
+        assert!(result.unwrap_err().contains("the scripted driver's"));
+        assert_eq!(packets.last(), Some(&(0, Packet::End)));
+    }
+
+    #[test]
+    fn a_failure_after_a_stop_is_a_stopped_run() {
+        let (seen, result) = within_limit(|| {
+            let mut session = Session::new();
+            session.add_device(Scripted::new(Some(Err(Error::Timeout))));
+            let mut seen = false;
+            // The first packet asks for the stop; the failure comes after.
+            let result = session.run(|_, p| {
+                seen |= matches!(p, Packet::Failed(_));
+                Flow::Stop
+            });
+            (seen, result.map_err(|e| e.to_string()))
+        });
+        assert_eq!(result, Ok(()));
+        assert!(seen, "the consumer still sees the failure");
+    }
+
+    #[test]
+    fn end_while_gives_up_with_a_full_queue_and_no_reader() {
+        let (tx, rx) = sync_channel(1);
+        let sink = PacketSink::new(tx, 0);
+        assert!(sink.send(Packet::FrameBegin));
+        assert!(!sink.end_while(Err(Error::Timeout), || false));
+        drop(rx);
+        assert!(!sink.end(Err(Error::Timeout)));
     }
 
     #[test]

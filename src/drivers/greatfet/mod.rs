@@ -542,10 +542,10 @@ impl Device for GreatfetDevice {
         let handle = std::thread::Builder::new()
             .name("greatfet acquisition".into())
             .spawn(move || {
-                run(stream, &mut link, &capture, &sink, &stop2);
+                let outcome = run(stream, &mut link, &capture, &sink, &stop2);
                 // Before the End, so that a client can start again at once.
                 *slot.lock().expect("link lock") = Some(link);
-                sink.send(Packet::End);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -581,15 +581,15 @@ fn run(
     capture: &Capture,
     sink: &PacketSink,
     stop: &AtomicBool,
-) {
+) -> Result<()> {
     sink.send(Packet::header());
     sink.send(Packet::meta(Key::Samplerate, Value::U64(capture.samplerate)));
     let mut sent = 0;
-    let board_left = loop {
+    let outcome = loop {
         if stop.load(Ordering::SeqCst)
             || capture.limit_time.is_some_and(|t| capture.started.elapsed() > t)
         {
-            break false;
+            break Ok(());
         }
         match stream.next(POLL) {
             Ok(data) => {
@@ -597,16 +597,16 @@ fn run(
                 let samples = capture.plan.samples(&data, capture.unit, remain);
                 sent += (samples.len() / capture.unit) as u64;
                 if !samples.is_empty() && !sink.send(Packet::logic(capture.unit, samples)) {
-                    break false;
+                    break Ok(());
                 }
                 if capture.limit_samples > 0 && sent >= capture.limit_samples {
-                    break false;
+                    break Ok(());
                 }
             }
             Err(Error::Timeout) => {}
             Err(Error::Disconnected) => {
                 log::error!("Device gone during USB transfer. Aborting.");
-                break true;
+                break Err(Error::Disconnected);
             }
             Err(e) => {
                 let name = libusb_error_name(&e);
@@ -615,15 +615,16 @@ fn run(
                 } else {
                     log::error!("USB transfer failed ({name}). Aborting.");
                 }
-                break false;
+                break Err(e);
             }
         }
     };
-    if !board_left {
+    if !matches!(outcome, Err(Error::Disconnected)) {
         link.stop();
     }
     drop(stream);
     let _ = link.transport().release_interface(SAMPLES_INTERFACE);
+    outcome
 }
 
 #[cfg(test)]
@@ -690,7 +691,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let stop = Arc::new(AtomicBool::new(false));
         let stream = Box::new(Endless { stop: Arc::clone(&stop), answers: 0 });
-        run(stream, &mut link, &capture(0xff, 2, 0), &PacketSink::new(tx, 0), &stop);
+        let _ = run(stream, &mut link, &capture(0xff, 2, 0), &PacketSink::new(tx, 0), &stop);
         r.finish().unwrap();
         assert_eq!(packets(&rx), 12);
     }
@@ -704,7 +705,7 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let stream = Box::new(Endless { stop: flag, answers: 0 });
         // 1 channel, 8 samples a byte.
-        run(stream, &mut link, &capture(0x1, 2, 37), &PacketSink::new(tx, 0), &stop);
+        let _ = run(stream, &mut link, &capture(0x1, 2, 37), &PacketSink::new(tx, 0), &stop);
         r.finish().unwrap();
         assert_eq!(packets(&rx), 37);
     }
@@ -719,7 +720,7 @@ mod tests {
         let mut c = capture(0xff, 2, 0);
         c.limit_time = Some(Duration::ZERO);
         std::thread::sleep(Duration::from_millis(2));
-        run(stream, &mut link, &c, &PacketSink::new(tx, 0), &stop);
+        run(stream, &mut link, &c, &PacketSink::new(tx, 0), &stop).unwrap();
         r.finish().unwrap();
         assert_eq!(packets(&rx), 0);
     }
@@ -741,7 +742,7 @@ mod tests {
         let (r, mut link) = stopping_link();
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let stream = Box::new(Failing(Some(Error::device("endpoint stalled")), true));
-        run(
+        let outcome = run(
             stream,
             &mut link,
             &capture(0xff, 2, 0),
@@ -750,6 +751,7 @@ mod tests {
         );
         r.finish().unwrap();
         assert_eq!(packets(&rx), 4);
+        assert!(outcome.unwrap_err().to_string().contains("stalled"));
     }
 
     /// A transport that answers everything and counts the control writes.
@@ -839,13 +841,14 @@ mod tests {
         let mut link = Link::new(Box::new(spy));
         let (tx, rx) = std::sync::mpsc::sync_channel(64);
         let stream = Box::new(Failing(Some(Error::Disconnected), false));
-        run(
+        let outcome = run(
             stream,
             &mut link,
             &capture(0xff, 2, 0),
             &PacketSink::new(tx, 0),
             &AtomicBool::new(false),
         );
+        assert!(matches!(outcome, Err(Error::Disconnected)));
         assert_eq!(packets(&rx), 0);
         assert_eq!(writes.load(Ordering::SeqCst), 0);
     }

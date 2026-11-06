@@ -262,22 +262,25 @@ emu_cases() {
         lwla_options stall=$f
         emu_case "fault setup $f" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -c samplerate=1M --samples 10 -O bits
     done
-    for f in stall=write-reg:10 stall=read-lregs:2 stall_reply=read-lregs:2 short_reply=read-lregs:2 stall=write-reg:14 stall=read-reg:7 stall_reply=read-reg:7 short_reply=read-reg:7 stall=write-reg:19 stall=read-mem:1 stall_reply=read-mem:1 short_reply=read-mem:1 stall=write-reg:22; do
+    for f in stall=write-reg:10 stall=read-lregs:2 stall_reply=read-lregs:2 short_reply=read-lregs:2 stall=write-reg:14 stall=read-reg:7 stall_reply=read-reg:7 short_reply=read-reg:7 stall=write-reg:19 stall=read-mem:1 stall_reply=read-mem:1 short_reply=read-mem:1; do
         lwla_options $f
-        emu_case "fault capture $f" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
+        emu_case "fault capture $f" --oxrok-fails "endpoint stalled|match expected size" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
+    # The samples are out by then: logged, and no failure.
+    lwla_options stall=write-reg:22
+    emu_case "fault capture stall=write-reg:22" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     # The 100th of the 134 reads fails: the C has sent its first packet of
     # 20000 samples and drops the 2000 or so decoded since, oxrok passes them
     # on. The first line of the golden is the number of lines of the output,
     # which shows it. A STALLed command OUT ends through the callback's
     # error, a reply of the wrong size in the decoding loop.
     lwla_options stall=read-mem:100
-    emu_case "fault later read keeps the samples" --oracle-differs "protocol.c:325-330 sets transfer_error and 299-309 ends the capture with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
+    emu_case "fault later read keeps the samples" --oxrok-fails "endpoint stalled" --oracle-differs "protocol.c:325-330 sets transfer_error and 299-309 ends the capture with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     lwla_options short_reply=read-mem:100
-    emu_case "fault later short read keeps the samples" --oracle-differs "protocol.c:216-219 returns with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
+    emu_case "fault later short read keeps the samples" --oxrok-fails "received size 1006 does not match expected size 1008" --oracle-differs "protocol.c:216-219 returns with the partly filled packet unsent" --digest --filter '$=; d' -- -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     # Unplugged after the first status reply (the 8th reply).
     lwla_options
-    emu_case "unplug while polling" --unplug in=6:8 --stderr --filter "$E" -- -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
+    emu_case "unplug while polling" --oxrok-fails "device disconnected" --unplug in=6:8 --stderr --filter "$E" -- -d $F -C CH1,CH4 -c samplerate=1k --time 300 -O bits
 
     # Broken bitstream files.
     for how in missing empty huge; do
@@ -346,6 +349,6 @@ emu_cases() {
     done
     for f in stall=write-reg:15 stall=read-reg:3 stall_reply=read-reg:4 short_reply=read-reg:3 stall=write-reg:16 short_reply=read-mem:3 stall=read-mem:3; do
         lwla_options model=1016 $f
-        emu_case "1016 fault capture $f" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
+        emu_case "1016 fault capture $f" --oxrok-fails "endpoint stalled|match expected size" --stderr --filter "$E" -- -d $F -C CH1 -c samplerate=1M --samples 300 -O bits
     done
 }

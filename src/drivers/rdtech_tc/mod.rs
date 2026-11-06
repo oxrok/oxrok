@@ -332,8 +332,8 @@ impl Device for RdtechTcDevice {
             .name("rdtech-tc acquisition".to_owned())
             .spawn(move || {
                 sink.send(Packet::header());
-                capture.run(&sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = capture.run(&sink, &stop2);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -375,12 +375,14 @@ struct Rx {
 enum Pass {
     /// Nothing that ends the capture.
     Go,
-    /// The capture is over.
+    /// The capture is over: a limit, or nobody listening.
     End,
+    /// The capture failed.
+    Failed(Error),
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let started = Instant::now();
         let mut rx = Rx {
             buf: [0; RSP_BUF_SIZE],
@@ -393,19 +395,24 @@ impl Capture {
         let mut frames = 0;
         let mut guard = self.port.lock().expect("port lock");
         let Some(port) = guard.as_mut() else {
-            return;
+            return Err(Error::device("device is not open"));
         };
         while !stop.load(Ordering::SeqCst) {
-            if matches!(self.receive(port.as_mut(), &mut rx, &mut frames, sink), Pass::End) {
-                return;
+            match self.receive(port.as_mut(), &mut rx, &mut frames, sink) {
+                Pass::Go => {}
+                Pass::End => return Ok(()),
+                Pass::Failed(e) => return Err(e),
             }
             if self.limit.is_some_and(|limit| started.elapsed() > limit) {
-                return;
+                return Ok(());
             }
-            if matches!(self.poll(port.as_mut(), &mut rx), Pass::End) {
-                return;
+            match self.poll(port.as_mut(), &mut rx) {
+                Pass::Go => {}
+                Pass::End => return Ok(()),
+                Pass::Failed(e) => return Err(e),
             }
         }
+        Ok(())
     }
 
     /// One look at the port, `recv_poll_data` when something came: a reply
@@ -422,7 +429,7 @@ impl Capture {
             Ok(n) => n,
             Err(e) => {
                 log::error!("Acquisition failed: {e}.");
-                return Pass::End;
+                return Pass::Failed(e);
             }
         };
         if n == 0 && looked.elapsed() < SOURCE_PERIOD {
@@ -439,7 +446,7 @@ impl Capture {
         let reply: &[u8; POLL_LEN] = rx.buf[..POLL_LEN].try_into().expect("the length");
         let Some(plain) = protocol::process_poll(reply) else {
             log::error!("Failed to process poll packet.");
-            return Pass::End;
+            return Pass::Failed(Error::device("failed to process poll packet"));
         };
         if !self.send_frame(&plain, sink) {
             return Pass::End;
@@ -478,7 +485,10 @@ impl Capture {
             let only_frames_can_end = self.limit_frames > 0 && self.limit.is_none();
             if only_frames_can_end && rx.quiet_since.elapsed() > self.no_reply_bound {
                 log::error!("No reply from the device for {:?}.", self.no_reply_bound);
-                return Pass::End;
+                return Pass::Failed(Error::device(format!(
+                    "no reply from the device for {:?}",
+                    self.no_reply_bound
+                )));
             }
             return Pass::Go;
         }
@@ -489,7 +499,11 @@ impl Capture {
             log::error!("Unable to send poll request.");
             log::debug!("{e}");
             rx.write_failures += 1;
-            return if rx.write_failures >= MAX_WRITE_FAILURES { Pass::End } else { Pass::Go };
+            return if rx.write_failures >= MAX_WRITE_FAILURES {
+                Pass::Failed(e)
+            } else {
+                Pass::Go
+            };
         }
         rx.write_failures = 0;
         rx.requested = Instant::now();

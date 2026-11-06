@@ -94,6 +94,11 @@ pub enum Packet {
     FrameBegin,
     /// The end of a frame.
     FrameEnd,
+    /// The acquisition failed, and why, in the driver's words: it ended for
+    /// a reason other than a limit, a stop or the natural end of the data.
+    /// What came before it is good, and [`Packet::End`] still follows. A
+    /// driver sends it through [`PacketSink::end`](crate::core::PacketSink::end).
+    Failed(String),
     /// The last packet of an acquisition.
     End,
 }

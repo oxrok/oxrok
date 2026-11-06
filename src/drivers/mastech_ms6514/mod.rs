@@ -416,10 +416,10 @@ impl Device for MastechMs6514Device {
         let spawned = std::thread::Builder::new()
             .name("mastech-ms6514 acquisition".to_owned())
             .spawn(move || {
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("port lock") = Some(port);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -449,9 +449,9 @@ impl Drop for MastechMs6514Device {
 
 /// `End`, waiting for room for as long as nobody asked to stop, and after a stop
 /// only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -470,10 +470,10 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         // C drops the result, and whatever comes decides what happens.
@@ -488,13 +488,13 @@ impl Capture {
         let mut len = 0;
         while go_on() {
             if self.limit_msec > 0 && started.elapsed() >= limit_time {
-                return;
+                return Ok(());
             }
             let n = match port.read(&mut buf[len..], READ_TIME) {
                 Ok(n) => n,
                 Err(e) => {
                     log::error!("Serial port read error: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             if n == 0 {
@@ -517,11 +517,11 @@ impl Capture {
                                      empty, or a live frame crossed the request."
                                 );
                             }
-                            return;
+                            return Ok(());
                         }
                         pos += FRAME_SIZE;
                         if !self.send(frame, sink, stop) {
-                            return;
+                            return Ok(());
                         }
                         samples += 1;
                     }
@@ -531,9 +531,10 @@ impl Capture {
             len -= pos;
             // After a whole read, as a read holding several frames sends them.
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
     /// Sends a frame's two readings where their channels are enabled: false when

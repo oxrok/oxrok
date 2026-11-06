@@ -52,7 +52,7 @@
 //! - the time limit in samples saturates rather than wrapping
 //!   (`(SR_MHZ(100) / 1000) * limit_msec`, `protocol.c` 356).
 
-use crate::core::{Packet, PacketSink};
+use crate::core::{Error, Packet, PacketSink};
 use crate::ftdi::libftdi::{Context, FtdiError};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -238,7 +238,10 @@ pub fn run(
 ) -> std::result::Result<(), FtdiError> {
     sink.send(Packet::header());
     let r = receive(ctx, limits, sink, stop);
-    sink.send(Packet::End);
+    sink.end(match &r {
+        Ok(()) => Ok(()),
+        Err(e) => Err(Error::Device(format!("libftdi error {e}"))),
+    });
     r
 }
 

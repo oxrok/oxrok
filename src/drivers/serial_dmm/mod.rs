@@ -406,10 +406,11 @@ impl Device for DmmDevice {
             .name(format!("{} acquisition", self.model.id))
             .spawn(move || {
                 let mut port = port;
-                if let Err(e) = acq.run(port.as_mut(), &sink, &stop2) {
+                let outcome = acq.run(port.as_mut(), &sink, &stop2);
+                if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.send(Packet::End);
+                sink.end(outcome);
                 *slot.lock().expect("port lock") = Some(port);
             })
             .map_err(Error::Io)?;
@@ -440,16 +441,16 @@ impl Acquisition {
     /// acquisition ends, as there `req_packet`'s error removes the
     /// source and so ends the session. A meter whose request ignores
     /// the write's result goes on and asks again after its timeout.
-    fn request(&self, port: &mut dyn Port, req: &[u8]) -> bool {
+    fn request(&self, port: &mut dyn Port, req: &[u8]) -> Result<()> {
         match port.write(req) {
-            Ok(()) => true,
+            Ok(()) => Ok(()),
             Err(e) if self.model.request_unchecked => {
                 log::debug!("Packet request not sent: {e}.");
-                true
+                Ok(())
             }
             Err(e) => {
                 log::error!("Failed to request packet: {e}.");
-                false
+                Err(e)
             }
         }
     }
@@ -494,9 +495,7 @@ impl Acquisition {
         let mut chunk = [0u8; DMM_BUFSIZE];
         let mut last_request = None;
         if let Some(req) = p.request {
-            if !self.request(port, req) {
-                return Ok(());
-            }
+            self.request(port, req)?;
             last_request = Some(Instant::now());
         }
         loop {
@@ -512,9 +511,7 @@ impl Acquisition {
                 if let (Some(req), Some(at)) = (p.request, last_request)
                     && at.elapsed() >= request_timeout
                 {
-                    if !self.request(port, req) {
-                        return Ok(());
-                    }
+                    self.request(port, req)?;
                     last_request = Some(Instant::now());
                 }
                 continue;
@@ -568,9 +565,7 @@ impl Acquisition {
             }
             if let (Some(req), true) = (p.request, deferred) {
                 std::thread::sleep(request_delay);
-                if !self.request(port, req) {
-                    return Ok(());
-                }
+                self.request(port, req)?;
                 last_request = Some(Instant::now());
             }
             if buf.len() == DMM_BUFSIZE {
@@ -721,7 +716,8 @@ mod tests {
             limit_samples: 1,
             limit_msec: 2000,
         };
-        acq.run(port, &PacketSink::new(tx, 0), &AtomicBool::new(false)).unwrap();
+        // What the first failed request does is the packets' to show here.
+        let _ = acq.run(port, &PacketSink::new(tx, 0), &AtomicBool::new(false));
         rx.try_iter().map(|(_, p)| p).collect()
     }
 

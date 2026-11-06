@@ -430,8 +430,8 @@ impl Device for KoradDevice {
         let handle = std::thread::Builder::new()
             .name("korad-kaxxxxp acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
-                sink.send(Packet::End);
+                let outcome = capture.run(&sink, &stop2);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -456,7 +456,7 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
@@ -465,20 +465,21 @@ impl Capture {
         let mut due = started + POLL_INTERVAL;
         loop {
             if !wait_until(due, stop) {
-                return;
+                return Ok(());
             }
             due = Instant::now() + POLL_INTERVAL;
             match self.step(sink, &mut silent) {
                 Step::Sample => samples += 1,
                 Step::Other => {}
-                Step::End => return,
+                Step::End => return Ok(()),
+                Step::Failed(e) => return Err(e),
             }
             // Checked after each step, as `receive_data` does.
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() > limit {
-                return;
+                return Ok(());
             }
         }
     }
@@ -495,7 +496,7 @@ impl Capture {
             Ok(answered) => answered,
             Err(e) => {
                 log::error!("Acquisition failed: {e}.");
-                return Step::End;
+                return Step::Failed(e);
             }
         };
         let reading = matches!(target, Target::Current | Target::Voltage);
@@ -503,7 +504,7 @@ impl Capture {
             *silent = if answered { 0 } else { *silent + 1 };
             if *silent >= MAX_SILENT_READINGS {
                 log::error!("Acquisition failed: {silent} readings with no answer.");
-                return Step::End;
+                return Step::Failed(Error::device(format!("{silent} readings with no answer")));
             }
         }
         let mut step = Step::Other;
@@ -526,7 +527,9 @@ impl Capture {
 enum Step {
     Sample,
     Other,
+    /// Nobody listens any more.
     End,
+    Failed(Error),
 }
 
 /// Waits for `due`: false when a stop came first.

@@ -464,7 +464,7 @@ fn silence_ends_it_with_no_stop_and_says_not_running() {
     limit_samples(&mut device, 3);
     let packets = run(&mut device);
     assert_eq!(frames(&packets), 0);
-    assert!(matches!(packets.last(), Some(Packet::End)));
+    assert!(matches!(&packets[..], [.., Packet::Failed(_), Packet::End]), "{packets:?}");
     assert_eq!(fake.command_types(), [0x05], "C sends no stop here");
 }
 
@@ -525,7 +525,8 @@ fn a_read_that_fails_on_a_port_gone_ends_all_the_same() {
     let mut device = fake.device();
     let (tx, rx) = sync_channel(64);
     device.start(PacketSink::new(tx, 0)).unwrap();
-    assert!(matches!(collect(&rx).last(), Some(Packet::End)));
+    let packets = collect(&rx);
+    assert!(matches!(&packets[..], [.., Packet::Failed(_), Packet::End]), "{packets:?}");
     assert_eq!(fake.command_types(), [0x05]);
 }
 

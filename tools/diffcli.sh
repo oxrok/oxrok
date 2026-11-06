@@ -1055,7 +1055,8 @@ flush()
 
     # emu_case NAME [--keep-header] [--stderr] [--names] [--filter SED]
     #          [--digest] [--expect-fail] [--no-output] [--driver ID]
-    #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--unplug WHEN]
+    #          [--oracle-bug WHY [--oracle-hangs]] [--oracle-differs WHY] [--oxrok-fails WHY]
+    #          [--unplug WHEN]
     #          [--interrupt WHEN] [--timeout S] [--hangs] [--record]
     #          [--libsigrok [--oxrok]] [--tx-filter SED] [--no-oracle-only] [--bound DRV] -- ARGS...
     #   The flags of case_, plus: --digest, the compared output ends
@@ -1080,6 +1081,14 @@ flush()
     #   goldens, and a sigrok-cli that matches oxrok fails the case
     #   ("oracle fixed?"). --expect-fail and --stderr then apply to
     #   oxrok alone (an oxrok that refuses what sigrok-cli runs).
+    #   --oxrok-fails, a full case whose capture fails, for which sigrok-cli
+    #   exits as ever: oxrok must exit 1 and say `capture failed: ` on stderr
+    #   with WHY in its text (A|B when either can come, as the pace has it).
+    #   In an --unplug case the last line of a refused start does as well,
+    #   when the unplug gets there before the capture, and WHY is only a note,
+    #   as what an unplug says depends on the pace. That line is taken
+    #   out, and the rest is compared as always, --no-oracle too. In a
+    #   --record case the fixture says `# fails: WHY`.
     #   --unplug and --interrupt arm the emulator's event at WHEN
     #   (in=EP:N, out=EP:N or model; docs/USB.md) for each tool's run,
     #   which must fire it: the device leaves the bus and comes back
@@ -1124,10 +1133,17 @@ flush()
     #   them, so a recording that is not deterministic fails. The name
     #   neither starts nor ends with white space and holds no tab or
     #   newline: it is the section name in the log.
+    # Whether the text $1 holds one of the |-separated reasons of $2.
+    emu_fails_says() {
+        printf '%s\n' "$2" | tr '|' '\n' | grep -qF -f - -- /dev/fd/3 3<<EOF
+$1
+EOF
+    }
+
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""; ofails=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -1142,6 +1158,7 @@ flush()
                 --oracle-bug) bug=$2; shift ;;
                 --oracle-hangs) oracle_hangs=1 ;;
                 --oracle-differs) differs=$2; shift ;;
+                --oxrok-fails) ofails=$2; shift ;;
                 --unplug) event="unplug $2"; shift ;;
                 --interrupt) event="interrupt $2"; shift ;;
                 --timeout) case_timeout=$2; shift ;;
@@ -1222,6 +1239,7 @@ flush()
                 why="$why; --oracle-differs takes neither --oracle-bug, --hangs nor --record"
             fi
         fi
+        if [ -n "$ofails" ] && [ $mode != full ]; then why="$why; --oxrok-fails needs oxrok's $driver"; fi
         tty0=$EMU_TTY
         for t in $tools; do
             if [ $t = b ]; then tool=$OXROK; elif [ $libsig = 1 ]; then tool=$EMU_LIBSIGROK_RUN; else tool=$SIGROK_CLI; fi
@@ -1322,6 +1340,28 @@ flush()
                 fi
             elif [ -n "$differs" ] && [ $t = a ]; then
                 [ $st = 0 ] || why="$why; sigrok-cli exited $st, where --oracle-differs says it exits 0"
+            elif [ -n "$ofails" ] && [ $t = b ]; then
+                [ $st = 1 ] || why="$why; oxrok exited $st, where --oxrok-fails says it exits 1 ($ofails)"
+                # The reason goes before anything is compared. An unplug can
+                # get there before the capture does: the error of the start
+                # it refused, the last line, instead. Which error an unplug
+                # gives depends on the pace, so its text is not held to WHY.
+                ofails_unplug=0
+                case $event in unplug*) ofails_unplug=1 ;; esac
+                if grep -q '^capture failed: .' "$TMP/b.err"; then
+                    ofails_said=$(grep '^capture failed: .' "$TMP/b.err" | tail -n 1)
+                    sed -i '/^capture failed: /d' "$TMP/b.err"
+                elif [ $ofails_unplug = 1 ]; then
+                    ofails_said=$(tail -n 1 "$TMP/b.err")
+                    sed -i '$d' "$TMP/b.err"
+                else
+                    ofails_said=""
+                fi
+                if [ -z "$ofails_said" ]; then
+                    why="$why; oxrok gave no 'capture failed: ' line ($ofails)"
+                elif [ $ofails_unplug = 0 ] && ! emu_fails_says "$ofails_said" "$ofails"; then
+                    why="$why; oxrok said '$ofails_said', where --oxrok-fails says '$ofails'"
+                fi
             elif [ $hangs = 1 ]; then
                 # 137: timeout's KILL, 5 s after a TERM that did not end it.
                 case $st in
@@ -1470,6 +1510,7 @@ flush()
         {
             sed -n 1p "$rec"
             echo "# emu $EMU_MODEL: $name"
+            [ -z "$ofails" ] || echo "# fails: $ofails"
             for a in "$@"; do printf '# arg: %s\n' "$a"; done | sed -E -f "$TMP/emu.sed"
             sed -E -f "$TMP/emu.sed" "$rec" | sed -E '1d; /^device /s/ bus=[0-9]+ addr=[0-9]+//' |
                 if [ "$rec" = "$TMP/rec.hid" ]; then sed -E '/^read [0-9]+ -> -$/d'; else cat; fi

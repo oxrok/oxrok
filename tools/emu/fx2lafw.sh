@@ -212,11 +212,11 @@ emu_cases() {
     fx2lafw_options profile=saleae-logic flashed=1 empty=64
     emu_case "fault 64 empty transfers" -- -d $F -c samplerate=1M --samples 16 -O hex
     fx2lafw_options profile=saleae-logic flashed=1 empty=65
-    emu_case "fault 65 empty transfers" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
+    emu_case "fault 65 empty transfers" --oxrok-fails "the device stopped sending data" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
     fx2lafw_options profile=saleae-logic flashed=1 stall_in=3
     emu_case "fault bulk in stall" -- -d $F -c samplerate=1M --samples 16 -O hex
     fx2lafw_options profile=saleae-logic flashed=1 empty=30 stall_in=35
-    emu_case "fault 65 empty or stalled" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
+    emu_case "fault 65 empty or stalled" --oxrok-fails "the device stopped sending data" --no-output -- -d $F -c samplerate=1M --samples 16 -O hex
     # The string reads of the scan failing (api.c 255-288): a STALL, or
     # an answer shorter than its bLength (libusb: LIBUSB_ERROR_IO), of
     # the language table, the manufacturer, the product or the serial
@@ -232,7 +232,7 @@ emu_cases() {
     # still queued fail with LIBUSB_TRANSFER_NO_DEVICE and the
     # acquisition ends with what came before (protocol.c 444-447).
     fx2lafw_options profile=saleae-logic flashed=1
-    emu_case "unplug mid capture" --unplug in=2:3 -- -d $F -c samplerate=20k --samples 3000 -O hex
+    emu_case "unplug mid capture" --oxrok-fails "device disconnected" --unplug in=2:3 -- -d $F -c samplerate=20k --samples 3000 -O hex
     # Another program holds the interface: both tools read the version
     # and REVID, then fail to claim it (LIBUSB_ERROR_BUSY). The same
     # descriptors as above, so the device is not re-attached.
