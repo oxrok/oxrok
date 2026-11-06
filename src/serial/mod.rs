@@ -630,14 +630,33 @@ pub struct UsbPort {
     pub product: Option<String>,
 }
 
+/// What `/dev/tty.X` is the dial-in side of, on macOS: `/dev/cu.X`.
+pub fn callout_name(name: &str) -> Option<String> {
+    name.strip_prefix("/dev/tty.").map(|rest| format!("/dev/cu.{rest}"))
+}
+
 /// The serial ports on this machine that are on USB, for a driver that goes by
 /// the ids, `sp_get_port_usb_vid_pid`, without opening anything.
+///
+/// What this rests on, from reading serialport 4.10.1 and with no such machine to
+/// run it on:
+///
+/// - On macOS the crate lists both `IOCalloutDevice` and `IODialinDevice`
+///   (`posix/enumerate.rs:573`), where libserialport lists callout alone
+///   (`macosx.c`), so `/dev/tty.*` go here: each port would come twice, and a
+///   dial-in node can block on carrier. Its strings come from the
+///   `IOUSBHostInterface` parent first (`:452`), which may not hold the serial
+///   number's property: unverified.
+/// - On Windows, with no serial number the crate gives the instance id, and its
+///   product and manufacturer are the friendly name and `SPDRP_MFG`, not the
+///   descriptors' strings.
 pub fn list_usb_ports() -> Vec<UsbPort> {
     let Ok(ports) = serialport::available_ports() else {
         return Vec::new();
     };
     ports
         .into_iter()
+        .filter(|port| !cfg!(target_os = "macos") || callout_name(&port.port_name).is_none())
         .filter_map(|port| match port.port_type {
             serialport::SerialPortType::UsbPort(usb) => Some(UsbPort {
                 name: port.port_name,
@@ -655,6 +674,13 @@ pub fn list_usb_ports() -> Vec<UsbPort> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_dial_in_node_has_its_callout_name() {
+        assert_eq!(callout_name("/dev/tty.usbmodem1").as_deref(), Some("/dev/cu.usbmodem1"));
+        assert_eq!(callout_name("/dev/cu.usbmodem1"), None);
+        assert_eq!(callout_name("/dev/ttyACM0"), None);
+    }
 
     /// Plays `script`, each read taking one entry: how many bytes it gives.
     /// It remembers the time each read was given.

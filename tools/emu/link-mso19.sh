@@ -21,17 +21,24 @@ emu_cases() {
     L='s/^oxrok: [a-z]+: oxrok::drivers::link_mso19(::protocol)?: /sr: link-mso19: /'
     # A refused setting or start in each tool's words: the core's lines are C's
     # alone, and what follows is the error each has for it.
-    A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./
-s/^(Failed to set device option .[a-z_]+.: )device error: generic\/unspecified error\.$/\1generic\/unspecified error./
-s/^Failed to set channels: invalid argument: //'
-    # Each tool's way of saying that an open failed: the driver's line comes first.
-    O="$L
-s/^(Failed to open device): .*$/\1./"
-    S="$L
+    # A refused setting in each tool's words, oxrok's named in full.
+    A='s/^(Failed to set device option .[a-z_]+.: invalid argument): invalid value for [a-z_]+\.$/\1./
+s/^(Failed to set device option .samplerate.): device error: generic\/unspecified error\.$/\1: generic\/unspecified error./
+s/^Failed to set channels: invalid argument: unknown channel /unknown channel /'
+    # A failed open or start: the driver's own line comes first in both, and oxrok's
+    # last line says it again where C's core says only that it failed.
+    O1="$L
+s/^(Failed to open device): device error: Invalid status byte [0-9a-f]{2}\.$/\1./"
+    O2="$L
+s/^(Failed to open device): device error: Reading status failed\.$/\1./"
+    S1="$L
 $P
 /^sr: session: /d
-s/^(Failed to start session).*$/\1./
-s/^device error: .*$/Failed to start session./"
+s/^device error: Invalid status byte 7f$/Failed to start session./"
+    S2="$L
+$P
+/^sr: session: /d
+s/^device error: Reading status failed$/Failed to start session./"
     THRESHOLD_BUG="protocol.c:90-93, since 932a3452, hold the sum in an int and divide it by the probe factor as an int, so 15 V on a 10x probe is 1 V and 9 V is 0 V, while the level reads back as set; the commit before it, and mso19fcgi, divide the voltage, and oxrok does"
     READY_BUG="api.c:647 keeps the start's status as devc->status, so protocol.c:390 takes a READY there for a dump asked for and copies the next status reply into the buffer; no request goes out and the session waits for ever; oxrok asks again, and dumps"
     SILENT_BUG="serial_source_add's timeout of -1 (api.c:659) and no other bound: a device that stops answering holds C for ever; oxrok ends after 5 s"
@@ -40,10 +47,12 @@ s/^device error: .*$/Failed to start session./"
     NULL_BUG="sp_get_port_usb_serial gives null for a device with no serial number, and protocol.c:210 reads serial_num[0]; oxrok says the serial is invalid"
     RATE_BUG="mso_configure_rate takes a uint32_t (protocol.c:290), so 2^32 + 100 is 100 Hz with exit 0; oxrok refuses it"
     NAN_BUG="api.c:510's two comparisons let a position that is no number through, to a register of 0; oxrok refuses it"
-    FLOAT_DIFF="sigrok-cli parses a float in single precision, so 3.3 is 3.2999999523, under 55 steps of the DAC where the double is over: one step lower; a library client of libsigrok has what oxrok has"
+    FLOAT_DIFF="sigrok-cli parses a float in single precision, so 0.6 is 0.6000000238, just over 10 steps of the DAC, and C sends word 332, 60 mV off at a 10x probe, where oxrok sends 333; protocol.c:90-93 truncates the threshold as well, to 0x200 where oxrok has 0x1f3; a library client of libsigrok gets the double, so oxrok is not narrowed"
     CSV_BUG="csv.c:500 indexes the logic samples by the column, which counts DSO, so each logic column shows the next channel's value, and the last the next sample's channel 0, reading past the buffer on the last line (which is why that line is cut here); oxrok has the right channel"
     LOOSE_BUG="sigrok-cli takes what is no number as 0 (strtod, unchecked) and sets it; oxrok refuses it and sends nothing"
     REFUSED_TRIGGER="sigrok-cli exits 0 after sr_trigger_match_add refuses the match, capturing nothing; oxrok fails"
+    FLOAT_GET="sigrok-cli parses a float in single precision, so 3.3 reads back 3.2999999523162842; oxrok keeps the double"
+    DSO_BIT="sigrok-cli maps the name to the channel's index, api.c:302's 4, so the decoder reads logic 4 under DSO's name; oxrok refuses it"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # A scan opens nothing. The serial number holds the calibration.
@@ -102,6 +111,7 @@ s/^device error: .*$/Failed to start session./"
     done
     emu_case "set rate not in the table" --stderr --filter "$L
 $A" --expect-fail -- -d $K -c samplerate=3m --set
+    emu_case "set rate 2^32 over one" --oracle-differs "$RATE_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c samplerate=4294967396 --get samplerate
     emu_case "set then get rate" -- -d $K -c samplerate=1m --get samplerate
     emu_case "set limit 1024" --no-output -- -d $K -c limit_samples=1024 --set
     emu_case "set limit 1023" --stderr --filter "$L
@@ -129,6 +139,7 @@ $A" --expect-fail -- -d $K --samples 1023
     emu_case "set then get position" -- -d $K -c horiz_triggerpos=0.25 --get horiz_triggerpos
     emu_case "position at the top" -- -d $K -c horiz_triggerpos=1 --get horiz_triggerpos
     emu_case "position at the bottom" -- -d $K -c horiz_triggerpos=-10 --get horiz_triggerpos
+    emu_case "position is no number" --oracle-differs "$NAN_BUG" --expect-fail --stderr --filter "$A" -- -d $K -c horiz_triggerpos=nan --get horiz_triggerpos
     emu_case "position too high" --stderr --filter "$L
 $A" --expect-fail -- -d $K -c horiz_triggerpos=1.5 --set
     emu_case "position too low" --stderr --filter "$L
@@ -141,7 +152,6 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
     emu_case "capture" --digest --filter "$D" -- -d $K --samples 1024
     emu_case "capture analog" --digest --filter "$D" -- -d $K --samples 1024 -O analog
     emu_case "capture csv" --oracle-differs "$CSV_BUG" --filter '1024,$d' -- -d $K --samples 1024 -O csv:header=false:time=false
-    emu_case "capture csv trigger" --oracle-differs "$CSV_BUG" --filter "$D" -- -d $K --samples 1024 -O csv:header=false:time=false:trigger=true
     emu_case "capture hex" --digest --filter "$D" -- -d $K --samples 1024 -O hex
     emu_case "capture bits is all of it" -- -d $K --samples 1024
     emu_case "time at the rate" --digest --filter "$D" -- -d $K -c samplerate=100 --time 10240
@@ -177,7 +187,14 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
     emu_case "capture holdoff" --digest --filter "$D" -- -d $K -C 0,1,2,3,4,5,6,7 -c horiz_triggerpos=-2.5 --samples 1024 -O csv:header=false:time=false:trigger=true
     emu_case "capture holdoff rounds to 0" --digest --filter "$D" -- -d $K -C 0,1,2,3,4,5,6,7 -c horiz_triggerpos=-0.0001 --samples 1024 -O csv:header=false:time=false:trigger=true
     # A level off the whole volts, on the double's side of the DAC's step.
-    emu_case "capture offset 3.3" --oracle-differs "$FLOAT_DIFF" --digest --filter "$D" -- -d $K -g DSO -c offset=3.3 --samples 1024
+    emu_case "capture offset 0.6" --oracle-differs "$FLOAT_DIFF" --digest --filter "$D" -- -d $K -g DSO -c offset=0.6 --samples 1024 -O analog
+    emu_case "get offset 3.3" --oracle-differs "$FLOAT_GET" -- -d $K -g DSO -c offset=3.3 --get offset
+    # Decoders: a name goes to the logic channel's bit, and DSO is first in the list.
+    emu_case "decoder rx 3" --digest --filter "$D" -- -d $K --samples 1024 -P uart:baudrate=1000:rx=3
+    emu_case "decoder rx 7" --digest --filter "$D" -- -d $K --samples 1024 -P uart:baudrate=1000:rx=7
+    emu_case "decoder default channels" --digest --filter "$D" -- -d $K --samples 1024 -P i2c
+    emu_case "decoder on a renamed channel" --digest --filter "$D" -- -d $K -C 3=RX --samples 1024 -P uart:baudrate=1000:rx=RX
+    emu_case "decoder on DSO" --oracle-differs "$DSO_BIT" --expect-fail --stderr --filter "$D" -- -d $K --samples 1024 -P uart:baudrate=1000:rx=DSO
     # Triggers.
     emu_case "trigger" --digest --filter "$D" -- -d $K -t 0=1,3=0,7=1 --samples 1024
     emu_case "trigger on a disabled channel" --stderr --expect-fail -- -d $K -C 0,1 -t 0=1,5=1 --samples 1024
@@ -207,28 +224,28 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
 
     # Status faults.
     emu_options status-at=1:ff
-    emu_case "open status invalid" --stderr --filter "$O" --expect-fail -- -d $K --show
+    emu_case "open status invalid" --stderr --filter "$O1" --expect-fail -- -d $K --show
     emu_options status-at=1:00
-    emu_case "open status 0" --stderr --filter "$O" --expect-fail -- -d $K --show
+    emu_case "open status 0" --stderr --filter "$O1" --expect-fail -- -d $K --show
     emu_options status-at=1:07
-    emu_case "open status 7" --stderr --filter "$O" --expect-fail -- -d $K --show
+    emu_case "open status 7" --stderr --filter "$O1" --expect-fail -- -d $K --show
     emu_options mute-at=1
-    emu_case "open status silent" --stderr --filter "$O" --expect-fail -- -d $K --show
+    emu_case "open status silent" --stderr --filter "$O2" --expect-fail -- -d $K --show
     emu_options status-at=2:7f
-    emu_case "start status invalid" --stderr --filter "$S" --expect-fail -- -d $K --samples 1024
+    emu_case "start status invalid" --stderr --filter "$S1" --expect-fail -- -d $K --samples 1024
     emu_options mute-at=2
-    emu_case "start status silent" --stderr --filter "$S" --expect-fail -- -d $K --samples 1024
+    emu_case "start status silent" --stderr --filter "$S2" --expect-fail -- -d $K --samples 1024
     emu_options status-at=3:ff
     emu_case "poll status invalid" --stderr --filter "$L" -- -d $K --samples 1024
     emu_options late-at=4:5
     emu_case "poll status late" --digest --filter "$D" -- -d $K --samples 1024
     # Never ends, as what it waits for does not come.
     emu_options mute-at=3
-    emu_case "poll status silent" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1024
+    emu_case "poll status silent" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options dump=100
-    emu_case "dump short" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1024
+    emu_case "dump short" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options raw=1
-    emu_case "dump with flow control bytes" --oracle-bug "$SILENT_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1024
+    emu_case "dump with flow control bytes" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options pre=0 wait=0 post=0
     emu_case "ready at the start" --oracle-bug "$READY_BUG" --oracle-hangs --digest --filter "$D" --timeout 3 -- -d $K --samples 1024
     # A trigger that never fires is no error: both wait, polling. The stop is on

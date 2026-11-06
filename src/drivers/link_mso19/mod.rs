@@ -34,7 +34,14 @@
 //! - A device silent in a capture for [`SILENCE_BOUND`] ends it, where C waits
 //!   for ever, as a trigger that never fires goes on being polled and is not
 //!   silence. A stop leaves a reply on its way, so the next start or open waits
-//!   for the line to go quiet ([`settle`]).
+//!   for the line to go quiet ([`settle`]), for as long as a reply may take. A
+//!   reply later than that can still land ahead of a dump on a device that also
+//!   answers slower than a poll's read.
+//! - C and this port read 19 digits of the serial number. A real unit has 11 more,
+//!   which mso19fcgi uses at 200 MSa/s (`GetVbit` under 10 ns a sample), so 200 MHz
+//!   readings here use the calibration of the other rates.
+//! - A setting during a capture is refused as busy, where C takes it: a rate would
+//!   go out among the polls, and what the dump is decoded with would change.
 //! - The analog packets say they are from the channel DSO, as they do in C, whose
 //!   channel has index 4, as logic channel 4 has: the index is C's.
 //!
@@ -103,9 +110,11 @@ const POLL_READ: Duration = Duration::from_millis(10);
 pub const SILENCE_BOUND: Duration = Duration::from_secs(5);
 /// How often a wait looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(5);
-/// How long the line must have nothing on it after a stop to count as quiet. At
-/// 460800 baud a 64 byte packet comes in 1.4 ms.
-const QUIET: Duration = Duration::from_millis(20);
+/// How long the line must have nothing on it after a stop to count as quiet: as
+/// long as a status reply may take, or a reply a stop left out reads as the next
+/// capture's status, one is outstanding from then on, and on a device slower than
+/// [`POLL_READ`] it lands ahead of the dump and shifts it all.
+const QUIET: Duration = STATUS_TIMEOUT;
 /// How many reads of [`STOP_CHECK`] with nothing that has to be as well.
 const QUIET_READS: u32 = 4;
 /// How long [`settle`] goes on, for a device that never goes quiet. A dump takes
@@ -159,10 +168,13 @@ fn find_ports(ports: Vec<serial::UsbPort>, conn: Option<&str>) -> Vec<serial::Us
         return ports;
     };
     let real = std::fs::canonicalize(conn).ok();
+    let callout = serial::callout_name(conn);
     ports
         .into_iter()
         .filter(|p| {
-            p.name == conn || real.as_deref().is_some_and(|r| r == std::path::Path::new(&p.name))
+            p.name == conn
+                || callout.as_deref() == Some(p.name.as_str())
+                || real.as_deref().is_some_and(|r| r == std::path::Path::new(&p.name))
         })
         .collect()
 }
@@ -317,8 +329,9 @@ impl MsoDevice {
         protocol::send(port, &self.settings.reset_fsm_words())?;
         self.settings.apply_coupling();
         let rate = self.settings.cur_rate;
-        let words = self.settings.rate_words(rate).ok_or_else(unsupported_rate)?;
+        let (words, slow) = protocol::rate_words(rate).ok_or_else(unsupported_rate)?;
         protocol::send(port, &words)?;
+        self.settings.set_slow_mode(slow);
         log::debug!("Setting dac word for the offset.");
         protocol::send(port, &self.settings.dac_offset_words())?;
         log::debug!("Setting dac word for the logic threshold.");
@@ -434,6 +447,16 @@ fn settle(port: &mut dyn Port, in_flight: &AtomicBool, bound: Duration) -> Resul
     Ok(())
 }
 
+/// A client that drops a device mid-capture leaves no thread polling, with the
+/// port held, for as long as the trigger does not fire.
+impl Drop for MsoDevice {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            log::debug!("Could not close the device: {e}.");
+        }
+    }
+}
+
 impl Device for MsoDevice {
     fn info(&self) -> &DeviceInfo {
         &self.info
@@ -519,12 +542,13 @@ impl Device for MsoDevice {
             }
             Key::Samplerate => {
                 let rate = value.as_u64().ok_or_else(bad)?;
-                let words = self.settings.rate_words(rate).ok_or_else(unsupported_rate)?;
+                let (words, slow) = protocol::rate_words(rate).ok_or_else(unsupported_rate)?;
                 {
                     let mut port = self.shared.port.lock().expect("port lock");
                     let port = port.as_mut().ok_or_else(|| Error::device("device is not open"))?;
                     protocol::send(port.as_mut(), &words)?;
                 }
+                self.settings.set_slow_mode(slow);
                 self.settings.cur_rate = rate;
             }
             Key::TriggerSource => {
@@ -734,7 +758,10 @@ impl Capture {
         loop {
             match self.wait(port, &mut buf[..1], stop)? {
                 Waited::Stopped => return Ok(None),
-                Waited::Silent => return Ok(silent()),
+                Waited::Silent => {
+                    log::error!("The device stopped answering.");
+                    return Ok(None);
+                }
                 Waited::Bytes(_) => {}
             }
             // C's read is for all of a pass and takes what follows the status with
@@ -760,7 +787,13 @@ impl Capture {
             let end = (got + PASS_BYTES).min(DUMP_BYTES);
             match self.wait(port, &mut dump[got..end], stop)? {
                 Waited::Stopped => return Ok(None),
-                Waited::Silent => return Ok(silent()),
+                // Not "stopped answering": on this line the tty takes XON and XOFF
+                // out of what comes. mso19fcgi takes 3070 bytes as enough, so a unit
+                // that sends a little short is possible, and loses this capture.
+                Waited::Silent => {
+                    log::error!("{got} of {DUMP_BYTES} bytes came.");
+                    return Ok(None);
+                }
                 Waited::Bytes(n) => got += n,
             }
         }
@@ -791,12 +824,6 @@ impl Capture {
             && (!has_trigger || sink.send_while(Packet::Trigger, go_on))
             && part(pre..NUM_SAMPLES);
     }
-}
-
-/// The capture is over: says so.
-fn silent() -> Option<Vec<u8>> {
-    log::error!("The device stopped answering.");
-    None
 }
 
 #[cfg(test)]

@@ -95,7 +95,9 @@ const STATUS_DATA_READY: u8 = 6;
 const VBIT_CALIBRATION_DENOMINATOR: f64 = 10_000.0 * 1000.0;
 const OFFSET_VBIT_CALIBRATION_NUMERATOR: f64 = 3.0;
 
-/// `samplerate`: the rate, the divider, the slow mode bit of register 15.
+/// `samplerate`: the rate, the divider, the slow mode bit of register 15. mso19fcgi
+/// has other dividers for the same rates, a step off these (0x0362 for 2 MHz), where
+/// its own comments' counts are these: C's are kept.
 pub const RATES: [(u64, u16, u8); 20] = [
     (200_000_000, 0x0205, 0),
     (100_000_000, 0x0105, 0),
@@ -163,6 +165,15 @@ pub fn frame(words: &[[u8; 2]]) -> Vec<u8> {
 /// device takes nothing; [`Port::write`] gives up after its 5 s.
 pub fn send(port: &mut dyn Port, words: &[[u8; 2]]) -> Result<()> {
     port.write(&frame(words))
+}
+
+/// `mso_configure_rate`'s table: the rate's words and its slow mode bit. C takes a
+/// `uint32_t`, so a rate 2^32 over one of these is that one; here it is not in the
+/// table.
+pub fn rate_words(rate: u64) -> Option<([[u8; 2]; 2], u8)> {
+    let (_, value, slow) = RATES.iter().find(|(r, ..)| *r == rate)?;
+    let [lsb, msb] = value.to_le_bytes();
+    Some(([word(REG_CLKRATE1, msb), word(REG_CLKRATE2, lsb)], *slow))
 }
 
 /// What a dump request is.
@@ -253,8 +264,8 @@ fn scan_digits(text: &[u8], at: &mut usize, width: usize) -> Option<u32> {
 }
 
 /// `mso_parse_serial`: 5, 3, 3, 1, 1 and 6 digits, the first a 4. What follows
-/// is not read: real units have 11 digits more, for the 200 mV range, which C
-/// says nothing about. A field of 0 takes C's default.
+/// is not read: real units have 11 digits more, which mso19fcgi uses for 200 MSa/s
+/// and C says nothing about. A field of 0 takes C's default.
 pub fn parse_serial(serial: &str) -> Option<Calibration> {
     let text = serial.as_bytes();
     if text.first() != Some(&b'4') {
@@ -534,14 +545,10 @@ impl Settings {
         ]
     }
 
-    /// `mso_configure_rate`'s table: the rate's words, with the slow mode kept
-    /// for the next bank select. C takes a `uint32_t`, so a rate 2^32 over one of
-    /// these is that one; this one is not in the table.
-    pub fn rate_words(&mut self, rate: u64) -> Option<[[u8; 2]; 2]> {
-        let (_, value, slow) = RATES.iter().find(|(r, ..)| *r == rate)?;
-        self.ctlbase2 = *slow;
-        let [lsb, msb] = value.to_le_bytes();
-        Some([word(REG_CLKRATE1, msb), word(REG_CLKRATE2, lsb)])
+    /// Register 15's lasting bit for the rate that went out, for the next bank
+    /// select.
+    pub fn set_slow_mode(&mut self, slow: u8) {
+        self.ctlbase2 = slow;
     }
 
     /// `dev_acquisition_start`'s coupling bit.
@@ -768,13 +775,13 @@ mod tests {
     #[test]
     fn the_rate_table_has_the_slow_mode_for_a_bank_select() {
         let mut s = settings();
-        assert_eq!(s.rate_words(10_000), Some([word(9, 0x9f), word(10, 0x0e)]));
+        assert_eq!(rate_words(10_000), Some(([word(9, 0x9f), word(10, 0x0e)], 0)));
         assert_eq!(s.bank_select(2), word(15, 2));
-        assert_eq!(s.rate_words(100), Some([word(9, 0x9f), word(10, 0x0f)]));
+        assert_eq!(rate_words(100), Some(([word(9, 0x9f), word(10, 0x0f)], 0x20)));
+        s.set_slow_mode(0x20);
         assert_eq!(s.bank_select(0), word(15, 0x20));
-        assert_eq!(s.rate_words(3_000_000), None);
-        assert_eq!(s.rate_words((1 << 32) + 100), None);
-        assert_eq!(s.bank_select(0), word(15, 0x20));
+        assert_eq!(rate_words(3_000_000), None);
+        assert_eq!(rate_words((1 << 32) + 100), None);
     }
 
     #[test]

@@ -35,7 +35,8 @@
 //! takes "at least 3070 bytes". libsigrok has had `flow=2` since 2013, and its
 //! 2020 commit 6e183da9 says it gets "basic analog and digital data working", which
 //! suggests it holds on a unit, though no message mentions XON/XOFF. So a byte here
-//! has bit 6 the inverse of its bit 5, as in a word, which holds neither. `raw=1` leaves them 0, and the dump then holds both.
+//! has bit 6 the inverse of its bit 5, as in a word, which holds neither. `raw=1`
+//! leaves them 0, and the dump then holds both.
 //!
 //! Emulation artifacts:
 //!

@@ -25,6 +25,7 @@ const BOUND: Duration = Duration::from_secs(60);
 /// A device behind a line: answers its status and dump requests in turn, on the
 /// reads to come.
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct Line {
     /// What was written, a write each.
     written: Vec<Vec<u8>>,
@@ -49,6 +50,10 @@ struct Line {
     hold_dump: bool,
     /// What each read takes, whether or not it brings anything.
     pause: Duration,
+    /// What arrives is held back by one empty read, until a dump request.
+    empty_first: bool,
+    /// The last read was that empty one.
+    was_empty: bool,
 }
 
 #[derive(Clone)]
@@ -101,6 +106,13 @@ impl Port for Fake {
         if line.fail {
             return Err(Error::Io(std::io::Error::other("gone")));
         }
+        if line.empty_first && !line.was_empty {
+            line.was_empty = true;
+            drop(line);
+            std::thread::sleep(timeout.min(Duration::from_millis(5)));
+            return Ok(0);
+        }
+        line.was_empty = false;
         let take = match (line.hold, line.chunk) {
             (true, _) => 0,
             (false, 0) => line.coming.len(),
@@ -131,6 +143,7 @@ impl Port for Fake {
             let dump = line.dump.clone();
             line.coming.extend(dump);
             line.hold = line.hold_dump;
+            line.empty_first = false;
         }
         Ok(())
     }
@@ -182,8 +195,8 @@ fn packets(rx: &Receiver<(usize, Packet)>) -> Vec<Packet> {
     }
 }
 
-/// `f` on its own thread: a stop that does not bite fails, where the device's
-/// drop would hang the test.
+/// `f` on its own thread, with a bound: a capture that does not end fails here,
+/// where a wait for it or the device's drop would hang the test.
 fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     let (tx, rx) = sync_channel(1);
     std::thread::spawn(move || {
@@ -220,10 +233,14 @@ fn an_open_resets_and_reads_a_status() {
 
 #[test]
 fn an_open_fails_on_a_status_no_device_gives_or_none() {
-    for statuses in [&[0xffu8][..], &[0x00], &[]] {
+    for (statuses, message) in [
+        (&[0xffu8][..], "device error: Invalid status byte ff"),
+        (&[0x00], "device error: Invalid status byte 00"),
+        (&[], "device error: Reading status failed"),
+    ] {
         let fake = Fake::new(statuses);
         let mut device = MsoDevice::from_port(Box::new(fake.clone()), SERIAL).unwrap();
-        assert!(device.open().is_err(), "{statuses:?}");
+        assert_eq!(device.open().unwrap_err().to_string(), message);
         // No reset of the sequencer follows.
         assert_eq!(fake.frames().len(), 2, "{statuses:?}");
     }
@@ -312,12 +329,16 @@ fn ready_at_the_first_status_still_asks_for_the_dump() {
 
 #[test]
 fn a_status_read_at_the_start_that_fails_refuses_it() {
-    for statuses in [&[0x21u8, 0xff][..], &[0x21]] {
+    for (statuses, message) in [
+        (&[0x21u8, 0xff][..], "device error: Invalid status byte ff"),
+        (&[0x21], "device error: Reading status failed"),
+    ] {
         let statuses = statuses.to_vec();
         bounded(move || {
             let (mut device, _fake) = open_device(&statuses);
             let (tx, _rx) = sink(16);
-            assert!(device.start(tx).is_err());
+            let error = device.start(tx).unwrap_err();
+            assert_eq!(error.to_string(), message);
             // The port came back: a client can try again.
             assert!(device.port().is_some());
         });
@@ -749,7 +770,8 @@ fn settling_has_a_bound() {
 fn the_times_are_as_stated() {
     assert_eq!(STATUS_TIMEOUT, Duration::from_millis(100));
     assert_eq!(POLL_READ, Duration::from_millis(10));
-    assert_eq!(QUIET, Duration::from_millis(20));
+    assert_eq!(QUIET, Duration::from_millis(100));
+    assert!(QUIET >= STATUS_TIMEOUT);
     assert_eq!(SETTLE_BOUND, Duration::from_secs(2));
 }
 
@@ -766,4 +788,392 @@ fn a_poll_is_paced_by_c_s_read() {
         assert!(at.elapsed() >= Duration::from_millis(30), "{:?}", at.elapsed());
         assert_eq!(fake.count(&read_status_request()), 5);
     });
+}
+
+#[test]
+fn silence_counts_from_the_last_byte_not_from_the_capture_s_start() {
+    bounded(|| {
+        // Far more polls than the bound holds, each with an empty read ahead of it.
+        let mut statuses = vec![0x21];
+        statuses.extend([0x34; 40]);
+        statuses.push(0x36);
+        let (mut device, fake) = open_device(&statuses);
+        fake.line().empty_first = true;
+        device.silence_bound = Duration::from_millis(250);
+        let at = Instant::now();
+        let (tx, rx) = sink(16);
+        device.start(tx).unwrap();
+        assert_eq!(shape(&packets(&rx)).len(), 6);
+        assert!(at.elapsed() > device.silence_bound, "{:?}", at.elapsed());
+    });
+}
+
+#[test]
+fn dropping_a_device_ends_its_capture_and_lets_the_port_go() {
+    bounded(|| {
+        let mut statuses = vec![0x21];
+        statuses.extend([0x34; 5000]);
+        let (mut device, fake) = open_device(&statuses);
+        let (tx, rx) = sink(16);
+        device.start(tx).unwrap();
+        let shared = Arc::clone(&device.shared);
+        drop(device);
+        // Only this test holds it now: the thread has ended, and no port is held.
+        assert_eq!(Arc::strong_count(&shared), 1);
+        assert!(shared.port.lock().unwrap().is_none());
+        let polls = fake.count(&read_status_request());
+        std::thread::sleep(Duration::from_millis(30));
+        assert_eq!(fake.count(&read_status_request()), polls);
+        drop(rx);
+    });
+}
+
+#[test]
+fn a_rate_refused_on_a_closed_port_leaves_the_slow_mode_alone() {
+    let fake = Fake::new(&[]);
+    let mut device = MsoDevice::from_port(Box::new(fake), SERIAL).unwrap();
+    assert!(device.set(&Key::Samplerate, &Value::U64(100), None).is_err());
+    assert_eq!(device.settings.reset_adc_words()[0], word(15, 0));
+}
+
+#[test]
+fn a_rate_taken_sets_the_slow_mode() {
+    let (mut device, _fake) = open_device(&[0x21]);
+    device.set(&Key::Samplerate, &Value::U64(100), None).unwrap();
+    assert_eq!(device.settings.reset_adc_words()[0], word(15, 0x20));
+    device.set(&Key::Samplerate, &Value::U64(10_000), None).unwrap();
+    assert_eq!(device.settings.reset_adc_words()[0], word(15, 0));
+}
+
+#[test]
+fn conn_finds_a_callout_port_by_its_dial_in_name() {
+    let mut port = usb_port(1, 2, None);
+    "/dev/cu.usbmodem1".clone_into(&mut port.name);
+    assert_eq!(find_ports(vec![port.clone()], Some("/dev/tty.usbmodem1")).len(), 1);
+    assert_eq!(find_ports(vec![port.clone()], Some("/dev/cu.usbmodem1")).len(), 1);
+    assert_eq!(find_ports(vec![port], Some("/dev/tty.other")).len(), 0);
+}
+
+/// A device on a clock: bytes come at the line's rate, a status after its latency.
+/// The rest of this file releases bytes by reads, which cannot show a reply that
+/// outlasts a wait. Time on a slow host stretches only what the driver does, so a
+/// test holds what the data must be, not how long anything took. What it does not
+/// hold: that a start with a reply near its timeout succeeds.
+mod clocked {
+    use super::*;
+
+    /// 460800 baud, 10 bits a byte.
+    const BYTE: Duration = Duration::from_nanos(21_701);
+
+    struct State {
+        /// When each byte arrives, in order.
+        queue: VecDeque<(Instant, u8)>,
+        free: Instant,
+        /// Status reads until ready; `None` never.
+        polls_left: Option<u32>,
+        latency: Duration,
+        /// The latency of one status read, by its number.
+        late: std::collections::HashMap<u32, Duration>,
+        statuses: u32,
+        dump: Vec<u8>,
+        armed: bool,
+    }
+
+    #[derive(Clone)]
+    struct Clock(Arc<Mutex<State>>);
+
+    impl Clock {
+        fn new(latency: Duration, polls: Option<u32>) -> Clock {
+            Clock(Arc::new(Mutex::new(State {
+                queue: VecDeque::new(),
+                free: Instant::now(),
+                polls_left: polls,
+                latency,
+                late: std::collections::HashMap::new(),
+                statuses: 0,
+                dump: dump_bytes(),
+                armed: false,
+            })))
+        }
+
+        fn state(&self) -> std::sync::MutexGuard<'_, State> {
+            self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        }
+    }
+
+    fn queue(state: &mut State, after: Duration, bytes: &[u8]) {
+        let mut at = (Instant::now() + after).max(state.free);
+        for byte in bytes {
+            at += BYTE;
+            state.queue.push_back((at, *byte));
+        }
+        state.free = at;
+    }
+
+    impl Port for Clock {
+        fn name(&self) -> &'static str {
+            "clock"
+        }
+
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            let end = Instant::now() + timeout;
+            loop {
+                {
+                    let mut state = self.state();
+                    let now = Instant::now();
+                    let mut n = 0;
+                    while n < buf.len() && state.queue.front().is_some_and(|x| x.0 <= now) {
+                        buf[n] = state.queue.pop_front().expect("looked at").1;
+                        n += 1;
+                    }
+                    if n > 0 {
+                        return Ok(n);
+                    }
+                }
+                if Instant::now() >= end {
+                    return Ok(0);
+                }
+                std::thread::sleep(Duration::from_micros(200));
+            }
+        }
+
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            let mut state = self.state();
+            if data == frame(&read_status_request()) {
+                state.statuses += 1;
+                let n = state.statuses;
+                let latency = state.late.get(&n).copied().unwrap_or(state.latency);
+                let byte = if state.armed {
+                    match &mut state.polls_left {
+                        None => 0x34,
+                        Some(0) => 0x36,
+                        Some(left) => {
+                            *left -= 1;
+                            0x34
+                        }
+                    }
+                } else {
+                    0x21
+                };
+                queue(&mut state, latency, &[byte]);
+            } else if data == frame(&read_buffer_request()) {
+                let dump = state.dump.clone();
+                queue(&mut state, Duration::from_millis(1), &dump);
+            } else if data == frame(&[word(14, 0x91), word(14, 0x92), word(14, 0x90)]) {
+                state.armed = true;
+            }
+            Ok(())
+        }
+
+        fn purge(&mut self) -> Result<()> {
+            let mut state = self.state();
+            let now = Instant::now();
+            while state.queue.front().is_some_and(|x| x.0 <= now) {
+                state.queue.pop_front();
+            }
+            Ok(())
+        }
+    }
+
+    fn open(clock: &Clock) -> MsoDevice {
+        let mut device = MsoDevice::from_port(Box::new(clock.clone()), SERIAL).unwrap();
+        device.open().unwrap();
+        device
+    }
+
+    /// Each sample is the one `dump_bytes` holds, in its place.
+    fn check(got: &[Packet]) -> std::result::Result<(), String> {
+        let (mut logic, mut analog) = (Vec::new(), Vec::new());
+        for packet in got {
+            match packet {
+                Packet::Logic(x) => logic.extend_from_slice(&x.data),
+                Packet::Analog(x) => analog.extend_from_slice(&x.samples),
+                _ => {}
+            }
+        }
+        if logic.len() != NUM_SAMPLES || analog.len() != NUM_SAMPLES {
+            return Err(format!(
+                "{} logic, {} analog: {:?}",
+                logic.len(),
+                analog.len(),
+                shape(got)
+            ));
+        }
+        for i in 0..NUM_SAMPLES {
+            if usize::from(logic[i]) != i & 0xff {
+                return Err(format!("logic {i} = {:#x}", logic[i]));
+            }
+            let raw = u16::try_from((i * 2) & 0x3ff).expect("10 bits");
+            let want = (512.0 - f64::from(raw)) * 0.004_287_4 * 10.0;
+            if (f64::from(analog[i]) - want).abs() > 1e-3 {
+                return Err(format!("analog {i} = {} want {want}", analog[i]));
+            }
+        }
+        Ok(())
+    }
+
+    /// A capture to its end, or the start's refusal, which is no wrong sample.
+    fn capture(device: &mut MsoDevice) -> std::result::Result<Vec<Packet>, String> {
+        let (tx, rx) = sink(64);
+        device.start(tx).map_err(|e| format!("start: {e}"))?;
+        let got = packets(&rx);
+        wait_for("the port back", || device.port().is_some());
+        Ok(got)
+    }
+
+    fn samples_are_right(device: &mut MsoDevice) -> std::result::Result<(), String> {
+        match capture(device) {
+            Ok(got) => check(&got),
+            Err(refused) => {
+                assert!(refused.contains("Reading status failed"), "{refused}");
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn a_stop_at_any_point_leaves_the_next_capture_right() {
+        bounded(|| {
+            for latency in [1u64, 9] {
+                for step in 0..8u64 {
+                    let clock = Clock::new(Duration::from_millis(latency), Some(2));
+                    let mut device = open(&clock);
+                    let (tx, rx) = sink(64);
+                    device.start(tx).unwrap();
+                    std::thread::sleep(Duration::from_micros(12_500 * step));
+                    device.stop().unwrap();
+                    packets(&rx);
+                    wait_for("the port back", || device.port().is_some());
+                    clock.state().polls_left = Some(2);
+                    let result = samples_are_right(&mut device);
+                    assert!(result.is_ok(), "latency {latency} step {step}: {result:?}");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn a_status_slower_than_a_poll_s_read_stays_in_step() {
+        bounded(|| {
+            for latency in [15u64, 60] {
+                let clock = Clock::new(Duration::from_millis(latency), Some(3));
+                let mut device = open(&clock);
+                let result = samples_are_right(&mut device);
+                assert!(result.is_ok(), "{latency}: {result:?}");
+            }
+        });
+    }
+
+    /// The attack: a device slower than a poll's read, and a reply a stop left out,
+    /// at each point of a poll. With the line called quiet before a reply can have
+    /// come, the stale one reads as the next status, one stays outstanding, and it
+    /// lands ahead of the dump: `analog 0 = 19.636 want 21.951`.
+    #[test]
+    fn a_reply_a_stop_left_out_does_not_shift_the_next_dump() {
+        bounded(|| {
+            let mut bad = Vec::new();
+            for latency in [40u64, 60, 95] {
+                for stop_at in [latency / 2, latency + 1, latency + latency / 2, 2 * latency + 3] {
+                    let clock = Clock::new(Duration::from_millis(latency), Some(1000));
+                    let mut device = open(&clock);
+                    let (tx, rx) = sink(64);
+                    device.start(tx).unwrap();
+                    std::thread::sleep(Duration::from_millis(stop_at));
+                    device.stop().unwrap();
+                    packets(&rx);
+                    wait_for("the port back", || device.port().is_some());
+                    clock.state().polls_left = Some(3);
+                    if let Err(e) = samples_are_right(&mut device) {
+                        bad.push(format!("latency {latency} stop at {stop_at}: {e}"));
+                    }
+                }
+            }
+            assert_eq!(bad, Vec::<String>::new());
+        });
+    }
+
+    /// One reply much later than the rest, on a device that also answers slowly.
+    #[test]
+    fn one_reply_within_the_timeout_after_a_stop_does_not_shift_the_next_dump() {
+        bounded(|| {
+            let clock = Clock::new(Duration::from_millis(15), Some(1000));
+            let mut device = open(&clock);
+            let (tx, rx) = sink(64);
+            device.start(tx).unwrap();
+            std::thread::sleep(Duration::from_millis(40));
+            let want = {
+                let mut state = clock.state();
+                let next = state.statuses + 1;
+                state.late.insert(next, Duration::from_millis(60));
+                next
+            };
+            wait_for("the request", || clock.state().statuses >= want);
+            device.stop().unwrap();
+            packets(&rx);
+            wait_for("the port back", || device.port().is_some());
+            clock.state().polls_left = Some(3);
+            let result = samples_are_right(&mut device);
+            assert!(result.is_ok(), "{result:?}");
+        });
+    }
+
+    #[test]
+    fn a_dump_short_by_any_count_gives_no_samples_and_the_next_is_right() {
+        bounded(|| {
+            for short in [3071usize, 3070, 1536, 1] {
+                let clock = Clock::new(Duration::from_millis(1), Some(2));
+                clock.state().dump.truncate(short);
+                let mut device = open(&clock);
+                device.silence_bound = Duration::from_millis(300);
+                let got = capture(&mut device).unwrap();
+                assert_eq!(shape(&got), ["header"], "{short}");
+                {
+                    let mut state = clock.state();
+                    state.dump = dump_bytes();
+                    state.polls_left = Some(2);
+                }
+                let result = samples_are_right(&mut device);
+                assert!(result.is_ok(), "{short}: {result:?}");
+            }
+        });
+    }
+
+    #[test]
+    fn a_setting_between_captures_changes_nothing_in_them() {
+        bounded(|| {
+            let clock = Clock::new(Duration::from_millis(1), Some(2));
+            let mut device = open(&clock);
+            for _ in 0..3 {
+                clock.state().polls_left = Some(2);
+                let result = samples_are_right(&mut device);
+                assert!(result.is_ok(), "{result:?}");
+                device.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn a_start_s_status_over_its_timeout_fails_and_a_retry_has_no_wrong_samples() {
+        bounded(|| {
+            for late in [110u64, 300] {
+                let clock = Clock::new(Duration::from_millis(1), Some(2));
+                let mut device = open(&clock);
+                let next = clock.state().statuses + 1;
+                clock.state().late.insert(next, Duration::from_millis(late));
+                let (tx, _rx) = sink(64);
+                assert!(device.start(tx).is_err(), "{late}");
+                clock.state().polls_left = Some(2);
+                let result = samples_are_right(&mut device);
+                assert!(result.is_ok(), "{late}: {result:?}");
+            }
+        });
+    }
 }
