@@ -1,0 +1,12 @@
+Driver functions:
+    Energy meter
+    Power meter
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+atorch - Atorch USB Meter with 7 channels: V I C E D- D+ T
+Supported configuration options:
+    continuous: on, off
+    limit_time: 0 (current)
+    limit_frames: 0 (current)

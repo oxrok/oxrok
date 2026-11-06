@@ -82,6 +82,7 @@ pub mod drivers {
     pub mod appa_55ii;
     pub mod arachnid_labs_re_load_pro;
     pub mod asix_sigma;
+    pub mod atorch;
     pub mod atten_pps3xxx;
     pub mod chronovu_la;
     pub mod dcttech_usbrelay;
@@ -150,6 +151,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
+    registry.register(Box::new(drivers::atorch::AtorchDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::mastech_ms6514::MastechMs6514Driver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
