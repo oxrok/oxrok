@@ -914,6 +914,14 @@ Deliberate, and kept small:
   unplug it fails with exit 1; libsigrok does not notice.
 - `power_off=off` on `gmc-mh-2x-bd232` is refused in both, in oxrok with
   its own message.
+- `center-309`, `voltcraft-k204`: `-C` is honoured. A warning at 10 s
+  with no sample, and a line when the meter is back, where sigrok-cli
+  says nothing. A `--samples` capture with no sample at all for 10 s, a
+  port gone, or 10 minutes with no sample after one, exits 1, where
+  sigrok-cli never ends. `--continuous` runs until a signal, where
+  sigrok-cli stops at stdin's end.
+- sigrok-cli also stops a capture on a key press, on every driver, and
+  oxrok ignores a key on a pipe stdin.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

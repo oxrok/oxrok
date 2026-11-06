@@ -355,6 +355,20 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A framing check of two bytes passes a window one byte out. Replay
+  damaged replies across value classes, not at room temperature alone:
+  the failure on `center-3xx` needed byte 43 to be 3.
+- A re-ask just before a reply makes the reply look on time, so the age
+  from the newest request says nothing. Count from the oldest out, and
+  let one quick reply prove nothing. Sweep latencies on both a queueing
+  and a duplicate-dropping meter: one point at 2.5 s passed on a rule
+  that piled up at 3.5 s.
+- A held sample must not hold back the limit for ever: bound how long a
+  stream with no quiet can defer it.
+- A `LD_PRELOAD` of a file that is gone only warns, and the run passes
+  unshimmed. Check the file exists first.
+- Search `git log --all`, including fetched pull request refs, for a
+  real user's report before writing a model.
 - When a driver's sign handling looks wrong, read its history before
   reasoning from a document: `git log -p` on the line found a 2016
   commit that turned a factor into an exponent, and the C before it is a

@@ -3106,6 +3106,48 @@ Not emulated: a write failing in the scan or at `power_off`. The model's
 next block waits for an open after a scan's, an artifact, and its
 wake-up behaviour is a guess.
 
+## Center 309 and Voltcraft K204 thermometers (center-309, voltcraft-k204)
+
+Four channel thermometers in `src/drivers/center_3xx`, 9600/8n1,
+emulated, not on hardware: model `center-3xx`, 77 cases on 2026-11-06,
+gcov 96.2% of the driver. A scan opens and closes the port, sending
+nothing. A capture sends `A` 500 ms after the last bytes and takes a
+45-byte answer, one sample of T1 to T4.
+
+Evidence from a real unit: libsigrok pull requests 300 and 302 (commits
+`b0f350c7`, `47cbc0e1`, `71d69573`, 2026-09-02), from a K204 owner, in
+no stock C. A lost reply, a loose RS-232 line or auto power off stalls C
+for good. Recovery after a reconnect is expected. A port gone gives
+revents `0x19`. `-C` is ignored, with `T1: -17.0 °C, T2: inf °C` as
+output. A unit ignores duplicate `A`s. These outrank the model, and the
+oracle stays stock.
+
+Here a request is repeated every 2 s while nothing is heard. A reply
+that looks late holds the next request for 1.5 times the meter's
+apparent time, so a meter that queued requests would drain; no such
+meter is known. A lost reply costs about 5 s. At 10 s with no sample
+every capture warns, and a line says when the meter is back. A
+`--samples` capture exits 1 at 10 s only if it has had no sample ("no
+answer from the thermometer for 10 s", or "no usable answer..." if bytes
+came). After a sample it fails at 10 minutes.
+
+Only bytes 0 and 44 check a packet and there is no checksum, so bit
+flips cannot be detected. Where two valid windows overlap the last is
+taken, which removes the false packet a stray `0x02` makes when byte 43
+is 3 (T1 and T2 whole degrees). A byte put inside such a reply can still
+give a wrong value, as in C. A burst that is no multiple of 45 warns
+that the sample may be wrong; it does not refuse, as nothing proves a
+309 has no trailer. C's request flag is a `static` shared by all
+captures of a process (`protocol.c:218`).
+
+The document (Conrad's "Schnittstelle Voltcraft K204 Datalogger")
+defines only mode bits `00`; `01` as MAX and `10` as MIN are C's alone.
+In MAX, MIN and REL it gives the values at other bytes (16-23, 24-31,
+32-39, from 1), and C has read bytes 7-14 from its first commit, with
+`TODO`s. This does the same and warns once per capture. At a latency
+over 2 s, a second capture's first sample can be an old reply, valid but
+stale by the latency.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in
