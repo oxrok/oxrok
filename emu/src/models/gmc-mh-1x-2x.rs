@@ -237,7 +237,7 @@ impl Default for Config {
         let list = |s: &str| Packets::new(parse_packets(s, 1, MSGS_MAX).expect("the defaults parse"));
         Config {
             msgs: list(SEND_BLOCK),
-            period: 25,
+            period: 50,
             lead: 5,
             burst: None,
             blocks: None,
