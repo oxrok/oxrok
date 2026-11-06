@@ -1,0 +1,3 @@
+sr: siglent-sds: Read error while reading data header.
+sr: session: Could not start siglent-sds device usbtmc/1.67 acquisition.
+Failed to start session.

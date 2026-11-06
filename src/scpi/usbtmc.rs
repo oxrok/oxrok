@@ -158,6 +158,9 @@ impl Usbtmc {
         let (vid, pid) = (usb.info().vendor_id, usb.info().product_id);
         if listed(&RESET_ON_OPEN, vid, pid) {
             usb.reset()?;
+            // Both backends drop their claims at a reset, where libusb's handle in C
+            // keeps its own: no later transfer would find the interface.
+            usb.claim_interface(interface)?;
         }
         let mut usb488_caps = 0;
         if let Ok(caps) =

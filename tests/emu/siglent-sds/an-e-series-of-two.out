@@ -1,0 +1,63 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+siglent-sds - Siglent SDS1202X-E 7.6.1.15 [S/N: SDSEMU0001] with 2 channels: CH1 CH2
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+Supported configuration options across all channel groups:
+    timebase - supported values:
+      1 ns
+      2 ns
+      5 ns
+      10 ns
+      20 ns
+      50 ns
+      100 ns
+      200 ns
+      500 ns
+      1 us
+      2 us
+      5 us
+      10 us
+      20 us
+      50 us
+      100 us
+      200 us
+      500 us (current)
+      1 ms
+      2 ms
+      5 ms
+      10 ms
+      20 ms
+      50 ms
+      100 ms
+      200 ms
+      500 ms
+      1 s
+      2 s
+      5 s
+      10 s
+      20 s
+      50 s
+    triggersource: CH1, CH2, Ext, Ext /5, AC Line
+    triggerslope: r (current), f
+    triggerlevel: 0.000000 (current)
+    horiz_triggerpos: 0.000000 (current)
+    num_hdiv
+    samplerate
+    limit_frames: 1 (current)
+    data_source: Display, History
+    averaging: on, off (current)
+    avg_samples:  - supported values:
+      4
+      16
+      32
+      64
+      128
+      256
+      512
+      1024

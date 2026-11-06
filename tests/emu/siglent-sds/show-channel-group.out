@@ -14,7 +14,7 @@ Channel groups:
 Supported configuration options on channel group CH1:
     num_vdiv
     vdiv - supported values:
-      0.005 V
+      0.0005 V
       1 mV
       2 mV
       5 mV
