@@ -144,6 +144,22 @@ impl ConfigItem {
     fn is_enabled(&self, on: bool) -> bool {
         self.key == Key::Enabled && self.value == Value::Bool(on)
     }
+
+    /// An `enabled` as a `-c` would say it.
+    fn spelled(&self) -> String {
+        let group = self.group.as_ref().map_or(String::new(), |g| format!("channel_group={g}:"));
+        let state = if self.is_enabled(true) { "on" } else { "off" };
+        format!("{group}{}={state}", self.name)
+    }
+
+    /// What a warning says of `self`, dropped for `by`, a later `enabled`.
+    fn dropped_for(&self, by: &ConfigItem) -> String {
+        format!(
+            "-c {} is not sent, as the later -c {} counts. A pulse takes two runs.",
+            self.spelled(),
+            by.spelled()
+        )
+    }
 }
 
 /// The `-c` options of a command line, every key resolved and every value
@@ -153,6 +169,9 @@ pub struct ConfigPlan {
     settings: Vec<ConfigItem>,
     /// What switches an output on, after every setting was accepted.
     enables: Vec<ConfigItem>,
+    /// A warning for each `enabled` of another `-c` that won't be sent, where
+    /// sigrok-cli would have switched the output.
+    dropped: Vec<String>,
 }
 
 /// Puts the options in the order they go to the device: `enabled=off`,
@@ -167,6 +186,8 @@ pub struct ConfigPlan {
 /// - A device-wide `enabled=off` overrides any `enabled=on` given before it
 ///   on a channel group: that on goes, rather than pulse an output that ends
 ///   off.
+/// - An `enabled` of another `-c` that goes for these reasons gets a warning, where
+///   sigrok-cli would have switched the output: a pulse takes two runs.
 /// - `enabled=off` on a group given after a device-wide `enabled=on` (`-c
 ///   enabled=on -c channel_group=R1:enabled=off`: all but R1) stays after it.
 ///   R1 does have power between the two.
@@ -175,12 +196,24 @@ pub struct ConfigPlan {
 ///   write the limit in the range before.
 fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     let mut kept: Vec<ConfigItem> = Vec::with_capacity(items.len());
+    let mut dropped = Vec::new();
     for item in items {
         kept.retain(|k| {
-            !(k.same_setting(&item) && (k.config == item.config || item.key == Key::Enabled))
+            let goes =
+                k.same_setting(&item) && (k.config == item.config || item.key == Key::Enabled);
+            if goes && k.config != item.config && k.value != item.value {
+                dropped.push(k.dropped_for(&item));
+            }
+            !goes
         });
         if item.is_enabled(false) && item.group.is_none() {
-            kept.retain(|k| !(k.is_enabled(true) && k.group.is_some()));
+            kept.retain(|k| {
+                let goes = k.is_enabled(true) && k.group.is_some();
+                if goes {
+                    dropped.push(k.dropped_for(&item));
+                }
+                !goes
+            });
         }
         kept.push(item);
     }
@@ -205,7 +238,7 @@ fn order_configs(items: Vec<ConfigItem>) -> ConfigPlan {
     }
     offs.append(&mut ranges);
     offs.append(&mut others);
-    ConfigPlan { settings: offs, enables }
+    ConfigPlan { settings: offs, enables, dropped }
 }
 
 /// Whether an empty group name (`channel_group=`, `-g ""`) means the whole
@@ -265,7 +298,11 @@ pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
             items.push(ConfigItem { name, key, value, group: group.clone(), config });
         }
     }
-    Ok(order_configs(items))
+    let plan = order_configs(items);
+    for warning in &plan.dropped {
+        log::warn!("{warning}");
+    }
+    Ok(plan)
 }
 
 fn send_configs(device: &mut dyn Device, items: &[ConfigItem]) -> Result<()> {
@@ -761,6 +798,52 @@ mod tests {
         let (sent, result) = run_configs(&["-c", "enabled:voltage_target=5"]);
         result.unwrap();
         assert_eq!(sent, ["voltage_target=5", "enabled=true"]);
+    }
+
+    #[test]
+    fn a_dropped_enabled_is_named_and_nothing_else_is() {
+        use clap::Parser as _;
+        let dev = Recorder::new(&std::sync::Arc::default());
+        let dropped = |configs: &[&str]| {
+            let mut line = vec!["oxrok", "--set"];
+            for c in configs {
+                line.extend(["-c", c]);
+            }
+            let args = Args::try_parse_from(line).unwrap();
+            plan_configs(&dev, &args).unwrap().dropped
+        };
+        assert_eq!(
+            dropped(&["enabled=on", "enabled=off"]),
+            [
+                "-c enabled=on is not sent, as the later -c enabled=off counts. A pulse takes two runs."
+            ]
+        );
+        assert_eq!(
+            dropped(&["channel_group=R1:enabled=off", "channel_group=R1:enabled=on"]),
+            [
+                "-c channel_group=R1:enabled=off is not sent, as the later -c channel_group=R1:enabled=on counts. A pulse takes two runs."
+            ]
+        );
+        // A device-wide off takes a group's on.
+        assert_eq!(
+            dropped(&["channel_group=R1:enabled=on", "enabled=off"]),
+            [
+                "-c channel_group=R1:enabled=on is not sent, as the later -c enabled=off counts. A pulse takes two runs."
+            ]
+        );
+        // Each that goes, in turn.
+        assert_eq!(dropped(&["enabled=on", "enabled=off", "enabled=on"]).len(), 2);
+        // Nothing lost: one -c keeps one value in sigrok-cli too, a repeat switches
+        // nothing, other scopes and other keys stay.
+        for configs in [
+            &["enabled=on:enabled=off"][..],
+            &["enabled=on", "enabled=on"],
+            &["enabled=on", "channel_group=R1:enabled=off"],
+            &["channel_group=R1:enabled=on", "channel_group=R2:enabled=off"],
+            &["voltage_target=1", "voltage_target=2"],
+        ] {
+            assert_eq!(dropped(configs), Vec::<String>::new(), "{configs:?}");
+        }
     }
 
     #[test]
