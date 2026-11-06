@@ -318,6 +318,35 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- `g_source_get_time` is cached per main-loop iteration, and
+  `fd_source_check` asks for it only when `revents` is 0. So a
+  callback's sleep eats a source's timeout after an expiry, and not
+  after a read. Check with a run. A case on it needs the answer held
+  back, as C's zero-timeout poll sometimes finds one that came at once
+  (1 run in 15 here).
+- Ask whether time is up ahead of a read and act on it after an empty
+  one. C's check tests `revents` first, so an answer that lies ready
+  wins, and a stall outside the wait must not cost a request.
+- A flush before a sleep leaves a tail to arrive in the sleep, and a
+  model that delivers whole frames cannot show it. Flush after the sleep
+  too, except after an expiry, where it could drop the only answer a
+  slow device gives.
+- Set a "last alive" time after the send to the queue, not before: a
+  slow client otherwise reads as a silent device.
+- `SIGSTOP` starting 80 ms or more after a tool starts misses a short
+  capture altogether. Aim stops at the request (35-70 ms here). That
+  found a real flake: a stalled tool takes SIGINT late, so a retry lands
+  after the `interrupt` line. Delete only those writes after the event,
+  not everything.
+- A test's own sleep can pass a window under the sleep shim: 50 ms at
+  SLOW=12 outlasted a 500 ms End window. Wait on the clock without
+  sleeping there.
+- A test that the End survives a stop must let the worker see the stop
+  first. A reader that frees the queue at once lets `try_send` win, and
+  the mutant survives.
+- A late answer that can land between two writes of a round splits a
+  `.tx` line by timing. Fold the writes and end the filter at the first
+  answer, and leave what follows to a fake port.
 - A driver with two packet sizes and one window may step the larger over
   the smaller. Play distinct values, as equal ones hide it: `kern-scale`
   lost every second reading, in the format the real unit sends most.

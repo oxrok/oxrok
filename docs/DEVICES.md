@@ -2977,6 +2977,47 @@ two packets sends both past the limit, as in C. A limit of the format:
 there is no checksum, so a point lost from a 15-byte packet can make a
 good 14-byte one, `+0012720`, which reads 12720.
 
+## B&K Precision 1856D frequency counter (bkprecision-1856d)
+
+Model `bkprecision-1856d` on the CDC-ACM shell (`a=`, `c=`, `replies=`,
+`settle=`, `answers=`, `late=`), written from the manual's section 3-7
+and the C driver. Port in `src/drivers/bkprecision_1856d`. 125 cases on
+2026-11-06: 107 full, 4 `--oracle-bug`, 4 `--oracle-differs`, 6 library,
+4 `--no-oracle-only`. Not tried on hardware.
+
+`-d bkprecision-1856d:conn=PORT`. A scan does not open the port, so any
+name is a device. `gate_time`, `data_source` (A, C; default C) and
+`limit_samples` stay on the host until a capture sends them. `gate_time`
+takes 10 ms, 100 ms, 1 s and 10 s, and any spelling of those values:
+`0.01s`, `0.1s`, `1000ms`, `10000ms`. sigrok-cli takes `10ms`, `100ms`,
+`1s` and `10s` only. Each reading is a round: gate, sleep (40, 80, 80 or
+800 ms), request. Only `limit_samples` or a stop ends a capture;
+`--time` is refused, as in sigrok-cli.
+
+What the model taught: C's 100 ms answer timer includes the gate's sleep
+after an expiry, so at a 10 s gate G3 and D0 go a third time before the
+answer is read, unless it came at once (`session.c:108-109`, `:134`). C
+still gets the reading, and the port's 100 ms from the request is a
+choice. A queued surplus frame is taken as the next reading
+(`protocol.c:330`). C flushes before the sleep after a wrong frame end
+(`protocol.c:245`), which by reading leaves the tail to start the next
+answer; the port flushes again after the sleep. GHz has no factor, as in
+C, and the panel has only M and K. The manual writes `KHz` and C tests
+`k`, so such a frame would read 1000 times low: kept until there is a
+recording.
+
+After an input change or a restart the port waits until the last request
+has had its 100 ms, then flushes. A device that answers later and queues
+requests still gives old readings: on a fake at the 10 ms gate, 0 up to
+120 ms of delay, 1 at 150-200 ms, 2 at 300 ms, 3 at 500 ms, 7 at 1 s, 21
+at 3 s. Whether a real counter's first `D0` after `F` shows the old
+display is unknown.
+
+The reading is a float, where C's packet holds a double. At 3.7 GHz a
+float's step is 256 Hz, where the panel's is 100 Hz at a 10 s gate on
+the internal time base (table 2), 10 Hz on an external one. The printed
+value is off too, in both tools: `3700.0001MHz` prints `3.6999998 GHz`.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

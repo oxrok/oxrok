@@ -858,6 +858,18 @@ Deliberate, and kept small:
   scan, and at a capture a refused start, "could not send O1: ..."; C
   waits. A second capture on an open port (library clients) drops what
   came since the first.
+- `bkprecision-1856d`: a surplus frame on the line is dropped ahead of
+  the next request, where sigrok-cli takes it as the next reading.
+- `bkprecision-1856d`: a capture with only a sample limit fails after 5
+  s, or three gates if longer, with no usable answer (a counter that
+  says it has nothing to show is not silent), and any capture fails
+  after 4 failed writes, with exit 1; sigrok-cli goes on for ever.
+- `bkprecision-1856d`: `gate_time=1000ms` and `0.1s` are the table's 1 s
+  and 100 ms, as the core reduces a period; sigrok-cli refuses both.
+- `bkprecision-1856d`: after an expiry the answer has its full 100 ms
+  from the request, so G and D do not go a third time ahead of it.
+- An unlisted scan option (`serialcomm` on `bkprecision-1856d`) is
+  refused with a message, where sigrok-cli finds nothing and exits 0.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
