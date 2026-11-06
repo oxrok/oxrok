@@ -169,7 +169,9 @@ fn device_line(device: &dyn Device) -> String {
     } else if !channels.is_empty() {
         let _ = write!(s, "with {} channels:", channels.len());
         let mut sorted: Vec<_> = channels.iter().collect();
-        sorted.sort_by_key(|c| c.index);
+        if !device.channels_listed_as_they_are() {
+            sorted.sort_by_key(|c| c.index);
+        }
         for c in sorted {
             s.push(' ');
             s.push_str(&c.name);
