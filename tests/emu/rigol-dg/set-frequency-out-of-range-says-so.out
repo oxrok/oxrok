@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::rigol_dg: output_frequency 100000000 Hz is outside 0.000001 to 60000000: the instrument may refuse it, and nothing would say so.

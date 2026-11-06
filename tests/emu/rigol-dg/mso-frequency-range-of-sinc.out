@@ -8,8 +8,8 @@ Channel groups:
     2: channel CH2
 Supported configuration options on channel group 1:
     enabled: on, off (current)
-    pattern: Sine (current), Square, Ramp, Pulse, Arb, Noise, DC, Sinc, ExpRise, ExpFall, ECG, Gauss, Lorentz, Haversin
-    output_frequency: 0.100000, 25000000.000000, 0.100000
+    pattern: Sine, Square, Ramp, Pulse, Arb, Noise, DC, Sinc (current), ExpRise, ExpFall, ECG, Gauss, Lorentz, Haversin
+    output_frequency: 0.100000, 1000000.000000, 0.100000
     amplitude: 5.000000 (current)
     offset: 0.000000 (current)
     phase: 0.000000 (current), 360.000000, 0.100000
