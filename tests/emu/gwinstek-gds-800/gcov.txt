@@ -1,7 +1,7 @@
 gcov gwinstek-gds-800 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        89.5%  77 of 86
-  protocol.c   75.9%  126 of 166
-  total        80.6%  203 of 252
+  protocol.c   88.0%  146 of 166
+  total        88.5%  223 of 252
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_open: 97-98
@@ -9,14 +9,13 @@ never reached, by function (line ranges hold no reached line):
     config_get: 124, 135-136
     config_set: 150, 158-159
   protocol.c
-    read_data: 37-40, 47-48, 57-60
-    gwinstek_gds_800_receive_data: 85, 88, 93, 98-100, 103-105, 108-110, 119-121, 124-126, 165, 169-172, 180, 183-185, 191, 222-224
+    gwinstek_gds_800_receive_data: 85, 88, 98-100, 103-105, 108-110, 119-121, 124-126, 165, 180, 191
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/scpi/scpi.c          34.1%  173 of 507
-  src/scpi/scpi_serial.c   64.3%  54 of 84
+  src/scpi/scpi_serial.c   65.5%  55 of 84
   src/serial.c             32.6%  131 of 402
-  src/serial_libsp.c       37.1%  95 of 256
-  total                    36.3%  453 of 1249
+  src/serial_libsp.c       39.1%  100 of 256
+  total                    36.7%  459 of 1249
 never reached, by function (line ranges hold no reached line):
   src/scpi/scpi.c
     parse_strict_bool: never called (55-78)
@@ -53,7 +52,7 @@ never reached, by function (line ranges hold no reached line):
     scpi_serial_open: 118
     scpi_serial_connection_id: never called (125-133)
     scpi_serial_send: 161-163
-    scpi_serial_read_data: 187, 199-201
+    scpi_serial_read_data: 199-201
   src/serial.c
     dev_is_supported: 62
     serial_open: 87-88, 99, 101, 103, 107, 122, 125, 130, 140, 142
@@ -90,7 +89,7 @@ never reached, by function (line ranges hold no reached line):
     sr_ser_libsp_flush: 126-127, 133-141
     sr_ser_libsp_drain: never called (147-167)
     sr_ser_libsp_write: 178-179, 183, 188-195
-    sr_ser_libsp_read: 209-210, 216, 219-226
+    sr_ser_libsp_read: 209-210, 216, 219-221
     sr_ser_libsp_set_params: 242-243, 253-260, 276-284
     sr_ser_libsp_set_handshake: never called (290-311)
     sr_ser_libsp_source_add_int: 330-331, 334-335, 339, 345, 347, 350-351, 354-357, 369, 371
