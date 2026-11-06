@@ -644,6 +644,8 @@ mod tests {
         // Mode 1 and all else is not. A tab with a wrong control is noise.
         assert!(!is_standard(&line("ADCO", "031428097115")));
         assert!(!is_standard(b"\nVTIC\t02\t!\r"));
+        // Right by mode 2's sum, but with a space: a historic group's sum may be so.
+        assert!(!is_standard(&mode2("VTIC 02 ")));
         assert!(!is_standard(b"000000"));
         assert!(!is_standard(b"\nADSC"));
     }
