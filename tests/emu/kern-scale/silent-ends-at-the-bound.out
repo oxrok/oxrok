@@ -1,0 +1,2 @@
+sr: kern-scale: No usable packet from the scale for 10 s. It was told to send without being asked, so it is off, its cable is out, its line differs, or a power cycle took it back to another output mode.
+oxrok: warn: oxrok::cli::pipeline: Device only sent 1 samples.

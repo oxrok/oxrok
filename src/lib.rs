@@ -107,6 +107,7 @@ pub mod drivers {
     pub mod itech_it8500;
     pub mod juntek_jds6600;
     pub mod kecheng_kc_330b;
+    pub mod kern_scale;
     pub mod kingst_la2016;
     pub mod korad_kaxxxxp;
     pub mod lascar_el_usb;
@@ -192,6 +193,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
     registry.register(Box::new(drivers::kecheng_kc_330b::Kc330bDriver));
     registry.register(Box::new(drivers::conrad_digi_35_cpu::ConradDigi35CpuDriver));
+    registry.register(Box::new(drivers::kern_scale::KernScaleDriver));
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));
