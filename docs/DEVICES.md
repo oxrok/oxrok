@@ -2389,6 +2389,47 @@ after a timeout, which narrows this and does not remove it, and C has it
 too. Not emulated: allocation failures, and paths `check_key()` refuses
 first.
 
+## Arachnid Labs Re:load Pro (arachnid-labs-re-load-pro)
+
+Arachnid Labs Re:load Pro electronic load: ported and emulated on the
+CDC-ACM shell, not on hardware. Model `arachnid-labs-re-load-pro`
+(`version=TEXT|none`, `banner=`, `stale=`, `set=`, `uvlo=`, `on=`,
+`volts=`, `amps=`, `replies=`, `answers=`, `lines=`, `count=`,
+`period=`, `fields=2|4`, `gap=`, `setters=`), 131 cases (90 full, 15
+`--oracle-bug`, 23 `--oracle-differs`, 1 library, 2 `--no-oracle-only`),
+2026-11-06, gcov 91.8%. Not emulated: a port gone between the open and
+the scan's first write, a get during a capture (no CLI or runner path
+asks; fake-port tests only), branches check_key stops first, and oxrok's
+own failed writes after an answer (no event falls there; unit tests
+only).
+
+Built from the firmware's source and history (arachnidlabs/reload-pro).
+`conn=` is required, 115200/8n1 by default. C's float check on firmware
+>= 1.10 refuses no real firmware: `version` came with v1.6, and 1.6 to
+1.9 compare above 1.10. `uvlo` came with v1.9, `on` and `off` with
+v1.10, and two more numbers on `read` after v1.11's release. The real
+device is an FT230X, 0403:6015, which ftdi_sio binds by id, so the model
+has stand-in ids. Keys other than the limits are on channel group `1`
+(`-g 1`). A capture sends `monitor 200`, a sample is a `read` line, and
+`monitor 0` goes at every close. `overtemp`, `undervolt`, `set` and
+`uvlo` lines in a capture are META. What arrives ahead of a request or a
+capture is read first, keeping only `overtemp` and `undervolt`. A reply
+later than the 1 s wait stays in the input: the next request reads it
+first if it has come, and otherwise, on a device lagging by more than
+the wait, may take it for its own.
+
+libsigrok: an `err` line is a success because its check reads the
+pointer's bytes (protocol.c:59); silence or an error reads as 0
+(protocol.c:180, 216); a cut line or the first line of any kind is taken
+as the answer (protocol.c:51); a read with no answer or too few numbers
+kills sigrok-cli (protocol.c:254, 336); a failed current_limit, uvc or
+uvc_threshold query returns OK with no value, which kills it too, now
+and then with a GLib error on stderr, so two of those cases run on oxrok
+alone (api.c:230, 246, 253); a time limit, a stopped stream and an
+unplug all hang (protocol.c:425); a line in two pieces is a wrong
+reading (protocol.c:393). oxrok does the sane thing for each. A capture
+with only a sample limit ends after 5 s with no reading.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

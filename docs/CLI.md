@@ -614,6 +614,30 @@ Deliberate, and kept small:
   reads on into the heap.
 - `itech-it8500`: a library's `value as f32` sends 3299 for 3.3 where
   libsigrok sends 3300, as with Manson. sigrok-cli sends 3299 too.
+- arachnid-labs-re-load-pro: a setting with no answer fails outside a
+  capture, where sigrok-cli reports success. The firmware answers each
+  one every time, so silence means a lost line or a link down, and
+  `enabled=off` may have left the current flowing. In a capture a
+  setting only writes, as in sigrok-cli.
+- arachnid-labs-re-load-pro: an `err` line fails a `-c` or `--get`,
+  where sigrok-cli reports success or reads 0, and a value with no
+  answer, or an answer cut short with no line end, fails `--get`.
+- arachnid-labs-re-load-pro: `--get otp_active` and `--get uvc_active`
+  read what has arrived, so they report an `overtemp` or `undervolt`
+  already sent; sigrok-cli looks for those lines only in a capture.
+- arachnid-labs-re-load-pro: a request reads through other lines for its
+  1 s wait, so a reading left by monitoring is not taken for the answer.
+- arachnid-labs-re-load-pro: `current_limit=nan` and `uvc_threshold=nan`
+  are refused and nothing is sent; sigrok-cli sends `set -2147483648`.
+- arachnid-labs-re-load-pro: `--time` ends at the limit with nothing
+  arriving, where sigrok-cli waits for the next line, so a capture may
+  hold one sample fewer. A `--samples` capture ends after 5 s with no
+  reading, and a capture ends on a port gone; sigrok-cli waits for ever
+  on both.
+- arachnid-labs-re-load-pro: a scan drops the input first, so a late
+  monitoring line does not lose the device.
+- arachnid-labs-re-load-pro: `-O analog:digits=spec` prints 3 digits,
+  not the C's 4: `AnalogData` holds one digit count. No case pins this.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

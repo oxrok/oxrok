@@ -298,6 +298,35 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- Read the firmware's history as well as its source. A model built from
+  the newest commit gave old versions commands they never had, and gave
+  the released v1.11 a `read` from a later commit. Check a model's
+  comment that says "as in the firmware" against the firmware.
+- Don't purge a device that speaks by itself. Read what has arrived and
+  note it: a purge lost the only lines saying the load had turned itself
+  off. Keep a line still arriving, or it is lost at the seam.
+- If a C driver takes silence for success and the firmware answers every
+  time, say so with firmware evidence and fail. That moves every case
+  relying on the silent step, not only the ones named for it.
+- Bound a wait by time, not by lines: a backlog of short lines used up a
+  count in 15 ms. A line nothing ended is no answer: `set 15` of `set
+  1500` reads as a valid number.
+- Check a capture's no-data bound after its read, so a stall cannot end
+  a capture with lines waiting.
+- A crash through an uninitialised GVariant in sigrok-cli has a stderr
+  that changes about 1 run in 100 under load. 120 clean runs do not
+  clear it, so use `--no-oracle-only` for those seen and say so beside
+  them.
+- Keep OS error text out of goldens by masking it in a filter, keeping
+  the line. Don't replace the real error at the driver, and never log a
+  literal for a C variable (`: -1.`).
+- A match on `self.link().method()` keeps the guard for the whole match,
+  so an arm that locks again deadlocks. Take the result into a `let`
+  first.
+- When a fake answers by itself, a test that also feeds lines leaves
+  stale ones behind. A test of two flags read in turn can hide a mutant
+  in the second. To test a close's join deterministically, fill the
+  queue so the thread waits out its End, then check the `Arc` count.
 - `.` in a sed filter does not match an invalid UTF-8 byte, so a filter
   masking bytes read past a buffer fails at random. Replace the whole
   line with `c`.
