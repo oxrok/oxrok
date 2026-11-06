@@ -1,0 +1,2 @@
+sr: arachnid-labs-re-load-pro: Device replied with an error: 'err Unknown command 'read''.
+Failed to get 'voltage': device error: err Unknown command 'read'

@@ -1,0 +1,21 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+arachnid-labs-re-load-pro - Arachnid Labs Re:load Pro 1.11 with 2 channels: V I
+Channel groups:
+    1: channels V I
+Supported configuration options on channel group 1:
+    enabled: on, off
+    regulation: CC (current)
+    voltage: 12.345000 (current)
+    current: 1.499000 (current)
+    current_limit: 0.000000, 6.000000, 0.001000
+    ovp_enabled: on (current), off
+    ocp_enabled: on (current), off
+    otp: on (current), off
+    otp_active: on, off (current)
+    uvc: on (current), off
+    uvc_active: on, off (current)
+    uvc_threshold: 0.000000, 60.000000, 0.001000

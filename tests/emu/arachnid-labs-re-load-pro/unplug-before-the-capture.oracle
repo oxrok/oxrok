@@ -1,0 +1,6 @@
+sr: serial-libsp: Write error (5): Input/output error.
+sr: arachnid-labs-re-load-pro: Unable to send 'monitor' command: -1.
+sr: session: Could not start arachnid-labs-re-load-pro device (null) acquisition.
+sr: session: Cannot remove non-existing event source ADDR.
+sr: std: arachnid-labs-re-load-pro: Failed to remove source: -4.
+Failed to start session.

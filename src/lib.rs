@@ -79,6 +79,7 @@ pub mod usb;
 /// The device drivers, one module per family.
 pub mod drivers {
     pub mod agilent_dmm;
+    pub mod arachnid_labs_re_load_pro;
     pub mod asix_sigma;
     pub mod atten_pps3xxx;
     pub mod chronovu_la;
@@ -138,6 +139,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::agilent_dmm::AgilentDmmDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
     registry.register(Box::new(drivers::itech_it8500::ItechIt8500Driver));
+    registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));

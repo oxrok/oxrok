@@ -1,0 +1,12 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+    serialcomm
+arachnid-labs-re-load-pro - Arachnid Labs Re:load Pro 1.11 with 2 channels: V I
+Channel groups:
+    1: channels V I
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

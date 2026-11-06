@@ -25,6 +25,7 @@
 //! All of it is as in `protocol.c`, but for a reply that does not come, which
 //! C waits for for ever, and fields that make no number, which C takes for 0.
 
+use crate::core::util::g_ascii_strtod;
 use crate::core::{Error, Result};
 use crate::serial::{Port, read_blocking};
 use std::time::{Duration, Instant};
@@ -105,85 +106,6 @@ pub fn first_line(reply: &[u8]) -> &[u8] {
     &text[..n]
 }
 
-/// How many bytes `f(c)` holds for at the start of `text`.
-fn span(text: &[u8], f: impl Fn(u8) -> bool) -> usize {
-    text.iter().take_while(|c| f(**c)).count()
-}
-
-/// A hexadecimal float after its `0x`, as far as it goes: `None` with no digit.
-fn hex_float(text: &[u8]) -> Option<f64> {
-    let whole = span(text, |c| c.is_ascii_hexdigit());
-    let fraction = if text.get(whole) == Some(&b'.') {
-        span(&text[whole + 1..], |c| c.is_ascii_hexdigit())
-    } else {
-        0
-    };
-    if whole + fraction == 0 {
-        return None;
-    }
-    let digit = |c: &u8| f64::from(char::from(*c).to_digit(16).expect("a hex digit"));
-    let mut value = text[..whole].iter().fold(0.0, |v, c| v * 16.0 + digit(c));
-    let mut scale = 1.0 / 16.0;
-    for c in text[whole..].iter().skip(1).take(fraction) {
-        value += digit(c) * scale;
-        scale /= 16.0;
-    }
-    let used = if fraction > 0 { whole + 1 + fraction } else { whole };
-    let rest = &text[used..];
-    if matches!(rest.first(), Some(b'p' | b'P')) {
-        let sign = usize::from(matches!(rest.get(1), Some(b'+' | b'-')));
-        let digits = span(&rest[1 + sign..], |c| c.is_ascii_digit());
-        if digits > 0 {
-            let end = 1 + sign + digits;
-            let exp = std::str::from_utf8(&rest[1..end]).ok()?.parse::<i32>().unwrap_or(i32::MAX);
-            value *= 2f64.powi(exp);
-        }
-    }
-    Some(value)
-}
-
-/// `g_ascii_strtod`: the number `text` starts with, or `None` where C's would
-/// convert nothing and give 0.
-pub fn strtod(text: &[u8]) -> Option<f64> {
-    let spaces = span(text, |c| matches!(c, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r'));
-    let text = &text[spaces..];
-    let negative = text.first() == Some(&b'-');
-    let text = text.strip_prefix(b"-").or_else(|| text.strip_prefix(b"+")).unwrap_or(text);
-    let sign = if negative { -1.0 } else { 1.0 };
-    let starts =
-        |word: &[u8]| text.len() >= word.len() && text[..word.len()].eq_ignore_ascii_case(word);
-    if starts(b"inf") {
-        return Some(sign * f64::INFINITY);
-    }
-    if starts(b"nan") {
-        return Some(f64::NAN);
-    }
-    if starts(b"0x")
-        && let Some(value) = hex_float(&text[2..])
-    {
-        return Some(sign * value);
-    }
-    let whole = span(text, |c| c.is_ascii_digit());
-    let fraction = if text.get(whole) == Some(&b'.') {
-        span(&text[whole + 1..], |c| c.is_ascii_digit())
-    } else {
-        0
-    };
-    if whole + fraction == 0 {
-        return None;
-    }
-    let mut used = if text.get(whole) == Some(&b'.') { whole + 1 + fraction } else { whole };
-    if matches!(text.get(used), Some(b'e' | b'E')) {
-        let exp_sign = usize::from(matches!(text.get(used + 1), Some(b'+' | b'-')));
-        let digits = span(&text[(used + 1 + exp_sign).min(text.len())..], |c| c.is_ascii_digit());
-        if digits > 0 {
-            used += 1 + exp_sign + digits;
-        }
-    }
-    let value: f64 = std::str::from_utf8(&text[..used]).ok()?.parse().ok()?;
-    Some(sign * value)
-}
-
 /// `GETD`'s first line as volts and amperes, or `None` where it is not eight
 /// digits and a mode. C takes what `strtod` makes of each field, 0 for no number
 /// and whatever lies past a short line, so a fragment of a reply that joins
@@ -211,8 +133,8 @@ pub fn parse_getd(line: &[u8]) -> Option<(f32, f32)> {
 /// garbled `GMAX` above the rating is not caught: nothing here knows the rating.
 pub fn parse_gmax(line: &[u8], model: &Model) -> (f32, f32) {
     let limit = |value: f64| Some(value as f32).filter(|v| v.is_finite()).unwrap_or(0.0);
-    let volts = strtod(&line[..line.len().min(3)]).unwrap_or(0.0) * VOLTAGE_STEP;
-    let amps = line.get(3..).and_then(strtod).unwrap_or(0.0) * model.current_step;
+    let volts = g_ascii_strtod(&line[..line.len().min(3)]).unwrap_or(0.0) * VOLTAGE_STEP;
+    let amps = line.get(3..).and_then(g_ascii_strtod).unwrap_or(0.0) * model.current_step;
     (limit(volts), limit(amps))
 }
 
@@ -537,38 +459,6 @@ mod tests {
         for bad in [&b""[..], b"HCS-", b"hcs-3202", b"3202 ", b"HCS-HCS-3202", b"3999"] {
             assert_eq!(lookup(bad), None, "{}", bad.escape_ascii());
         }
-    }
-
-    #[test]
-    fn strtod_goes_as_far_as_it_can() {
-        let cases: &[(&[u8], Option<f64>)] = &[
-            (b"1234", Some(1234.0)),
-            (b" 12 ", Some(12.0)),
-            (b"1.2 ", Some(1.2)),
-            (b"-100", Some(-100.0)),
-            (b"+1", Some(1.0)),
-            (b"1e01", Some(10.0)),
-            (b"1e", Some(1.0)),
-            (b"1e+", Some(1.0)),
-            (b".5", Some(0.5)),
-            (b"5.", Some(5.0)),
-            (b"12x4", Some(12.0)),
-            (b"0x10", Some(16.0)),
-            (b"0x", Some(0.0)),
-            (b"0x.8", Some(0.5)),
-            (b"0x1p2", Some(4.0)),
-            (b"inf", Some(f64::INFINITY)),
-            (b"-INF", Some(f64::NEG_INFINITY)),
-            (b"", None),
-            (b"xxxx", None),
-            (b".", None),
-            (b"-", None),
-            (b"e5", None),
-        ];
-        for (text, want) in cases {
-            assert_eq!(strtod(text), *want, "{}", text.escape_ascii());
-        }
-        assert!(strtod(b"nanx").unwrap().is_nan());
     }
 
     #[test]
