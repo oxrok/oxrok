@@ -1,0 +1,22 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+scpi-dmm:conn=tcp-raw/127.0.0.1/PORT - HEWLETT-PACKARD 34401A 1.0-1.0-1.0 [S/N: EMU0001] with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    conn: tcp-raw/127.0.0.1/PORT (current)
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    measured_quantity:  - supported measurements:
+      voltage/dc (current)
+      voltage/ac
+      current/dc
+      current/ac
+      resistance
+      resistance/four_wire
+      continuity
+      voltage/dc/diode
+      frequency
+      time
