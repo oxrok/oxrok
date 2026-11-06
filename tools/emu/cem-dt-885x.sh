@@ -310,7 +310,7 @@ s/^(..)$/bulk_out 02 \1 -> told/
     done
     # One or more commands, each with a token at once, an artifact that C takes.
     emu_options
-    for set in spl_weight_freq=C spl_weight_time=S datalog=on hold_max=on hold_min=on spl_meas_range=30-80 spl_meas_range=80-130; do
+    for set in spl_weight_freq=C spl_weight_time=S datalog=on hold_max=on hold_min=on spl_meas_range=50-100 spl_meas_range=80-130; do
         emu_case "set $set" --no-output --tx-filter "$ONCE" -- -d $X -c $set --set
     done
     emu_case "set two" --no-output --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C:spl_weight_time=S --set

@@ -1121,7 +1121,9 @@ bounded_test! {
         let capturing = Arc::clone(&device.capturing);
         wait_for("the capture over", || !capturing.load(Ordering::SeqCst));
         device.stop().unwrap();
-        // Well inside END_AFTER_STOP: a reader who comes now still gets it.
+        // Well inside END_AFTER_STOP, even at a sleep twelve times as long, and far
+        // past a first look at the queue: a reader who comes now still gets it.
+        std::thread::sleep(Duration::from_millis(20));
         assert!(rx.recv_timeout(BOUND).is_ok(), "the header");
         assert!(rx.recv_timeout(BOUND).is_ok(), "the level");
         let end = rx.recv_timeout(BOUND);
@@ -1307,6 +1309,23 @@ bounded_test! {
         device.close().unwrap();
         assert!(fake.lock().asks <= 2, "{}", fake.lock().asks);
         drop(rx);
+        // And with no stop to end it, one for the whole read.
+        let fake = Fake::with(|m| {
+            m.line_full = true;
+            m.input.extend([0x12; 4]);
+        });
+        let device = fake.device();
+        let capture = Capture {
+            link: Arc::clone(&device.link),
+            limit_samples: 0,
+            from_memory: true,
+            enabled: true,
+            silence_bound: SILENCE_BOUND,
+            level_bound: LEVEL_BOUND,
+        };
+        let pass = capture.pass(0, &mut true, &AtomicBool::new(false)).unwrap();
+        assert_eq!(pass.bytes, 4);
+        assert_eq!(fake.lock().asks, 1);
     }
 }
 

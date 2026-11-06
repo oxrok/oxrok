@@ -137,14 +137,15 @@ const LONGEST_EXTRA: usize = 256;
 const LONGEST_RECORD: u32 = 2000;
 /// Blocks with no level after an open.
 const STARTUP: u32 = 2;
-/// Offers of a read per block, ahead of an open's first too. Offers came at some 7 to
-/// 12 ms each on the testers: about 110 to 190 ms per block, against the wiki's 50. A
-/// shorter one loses the session: with reads completing all the time, a tool's close
-/// hits the kernel's `CMD_UNLINK` ahead of `CMD_SUBMIT` (`docs/ROADMAP.md`). Seen with
-/// `vhci_hcd`'s "cannot find a urb of seqnum": at 1 within some 20 closes, at 2 within
-/// some 30, at 4 about once per 500, at 8 once in 74 event cases, and with `chunk=`
-/// within 60. A first block two offers after the open, as a stock C scan's 25 ms would
-/// want, lost the session at the first `stty` in 2 of 6 sessions.
+/// Offers of a read per block. An open offers the kernel's 16 reads at once, and later
+/// ones come some 7 to 20 ms apart: about 110 to 300 ms per block, against the wiki's
+/// 50. A shorter one loses the session: with reads completing all the time, a tool's
+/// close hits the kernel's `CMD_UNLINK` ahead of `CMD_SUBMIT` (`docs/ROADMAP.md`). Seen
+/// with `vhci_hcd`'s "cannot find a urb of seqnum": at 1 within some 20 closes, at 2
+/// within some 30, at 4 about once per 500, at 8 once in 74 event cases, and with
+/// `chunk=` within 60. So the first block also has to wait past those 16: at a period
+/// of 16 it came with them, inside the first `stty`'s open and close, and that lost 3
+/// sessions of 5 at their first case. See [`Meter::hold_off`].
 const PERIOD: u32 = 16;
 const DEFAULT_LOG: &str = "a01:3,c10:2";
 
@@ -363,6 +364,9 @@ struct Meter {
     off: bool,
     /// Offers since the last block.
     offers: u32,
+    /// Offers yet to pass after an open before the period counts: half a period, so
+    /// the first block is past the open's own round of offers.
+    hold_off: u32,
     /// Blocks and levels of this open.
     blocks: u32,
     levels: u32,
@@ -392,6 +396,7 @@ impl Meter {
             deaf: config.deaf,
             off: false,
             offers: 0,
+            hold_off: 0,
             blocks: 0,
             levels: 0,
             held: 0,
@@ -570,6 +575,7 @@ impl Serial for Meter {
     fn changed(&mut self, event: LineEvent, _port: &mut Port<'_>) {
         if event.opened() {
             self.offers = 0;
+            self.hold_off = self.config.period / 2;
             self.blocks = 0;
             self.levels = 0;
             self.held = 0;
@@ -581,6 +587,10 @@ impl Serial for Meter {
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
+        if self.hold_off > 0 {
+            self.hold_off -= 1;
+            return;
+        }
         self.offers = self.offers.saturating_add(1);
         if self.offers < self.config.period {
             return;
@@ -875,7 +885,8 @@ mod tests {
         let mut h = meter(&[("period", "3")]);
         assert_eq!(one(&mut h), Vec::<u8>::new());
         assert_eq!(one(&mut h), Vec::<u8>::new());
-        assert_eq!(one(&mut h)[0], SYNC, "the first a period on: stty has gone by then");
+        assert_eq!(one(&mut h), Vec::<u8>::new());
+        assert_eq!(one(&mut h)[0], SYNC, "half a period more first: stty has gone by then");
         assert_eq!(one(&mut h), Vec::<u8>::new());
         assert_eq!(one(&mut h), Vec::<u8>::new());
         assert_eq!(one(&mut h)[0], SYNC);
