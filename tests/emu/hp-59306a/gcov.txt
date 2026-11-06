@@ -1,0 +1,73 @@
+gcov hp-59306a (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        80.9%  55 of 68
+  protocol.c  100.0%  13 of 13
+  total        84.0%  68 of 81
+never reached, by function (line ranges hold no reached line):
+  api.c
+    probe_device: 67-68
+    config_get: 116, 122-123
+    config_set: 140-141, 148-149
+    config_list: 165-166, 173-174
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/scpi/scpi.c       15.6%  79 of 507
+  src/scpi/scpi_tcp.c   35.8%  39 of 109
+  src/tcp.c             58.2%  71 of 122
+  total                 25.6%  189 of 738
+never reached, by function (line ranges hold no reached line):
+  src/scpi/scpi.c
+    parse_strict_bool: never called (55-78)
+    sr_scpi_scan_resource: 132
+    scpi_send: never called (181-190)
+    scpi_write_data: never called (205-207)
+    scpi_read_data: never called (219-221)
+    scpi_read_response: never called (234-257)
+    scpi_get_data: never called (270-311)
+    sr_scpi_scan: 332-350
+    sr_scpi_source_add: never called (440-444)
+    sr_scpi_source_remove: never called (457-460)
+    sr_scpi_send_variadic: never called (495-504)
+    sr_scpi_read_begin: never called (514-516)
+    sr_scpi_read_data: never called (528-537)
+    sr_scpi_write_data: never called (552-561)
+    sr_scpi_read_complete: never called (571-573)
+    sr_scpi_free: 604
+    sr_scpi_get_string: never called (624-651)
+    sr_scpi_read_response: never called (664-673)
+    sr_scpi_get_data: never called (676-685)
+    sr_scpi_get_bool: never called (698-717)
+    sr_scpi_get_int: never called (730-754)
+    sr_scpi_get_float: never called (767-786)
+    sr_scpi_get_double: never called (799-818)
+    sr_scpi_get_opc: never called (829-842)
+    sr_scpi_get_floatv: never called (859-902)
+    sr_scpi_get_uint8v: never called (919-961)
+    sr_scpi_get_block: never called (978-1124)
+    sr_scpi_get_hw_id: never called (1139-1201)
+    sr_scpi_hw_info_free: never called (1210-1219)
+    sr_scpi_unquote_string: never called (1231-1261)
+    sr_vendor_alias: never called (1264-1273)
+    sr_scpi_cmd_get: never called (1276-1293)
+    sr_scpi_cmd: never called (1296-1334)
+    sr_scpi_cmd_resp: never called (1337-1418)
+  src/scpi/scpi_tcp.c
+    scpi_tcp_dev_inst_new: 58
+    scpi_tcp_connection_id: 85
+    scpi_tcp_source_add: never called (91-96)
+    scpi_tcp_source_remove: never called (100-104)
+    scpi_tcp_send: 119-120, 124
+    scpi_tcp_read_begin: never called (134-141)
+    scpi_tcp_raw_read_data: never called (145-174)
+    scpi_tcp_raw_write_data: never called (178-194)
+    scpi_tcp_rigol_read_data: never called (198-241)
+    scpi_tcp_read_complete: never called (245-253)
+    scpi_tcp_close: 263
+  src/tcp.c
+    sr_fd_is_readable: never called (78-95)
+    sr_tcp_dev_inst_new: 143
+    sr_tcp_get_port_path: 190, 194, 196
+    sr_tcp_connect: 226, 228, 237-239, 247
+    sr_tcp_disconnect: 280
+    sr_tcp_write_bytes: 312, 314, 316, 319, 323
+    sr_tcp_read_bytes: never called (343-366)
+    sr_tcp_source_add: never called (388-394)
+    sr_tcp_source_remove: never called (410-415)
