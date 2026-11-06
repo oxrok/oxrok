@@ -154,11 +154,15 @@ s/^(bulk_in 81 [0-9]+ -> 3160c[123])[0-9a-f]{4}/\1SEQ/'
         emu_case "trigger $t" --tx-filter "$T" -- -d $D -c samplerate=10M -C D0,D19,CLK1 --samples 64 -t "$t" -O bits
     done
     emu_case "trigger 500M" --tx-filter "$T" --digest --filter '6,$d' -- -d $D -c samplerate=500M -C CLK1 --samples 2047 -t CLK1=r -O bits
+    emu_case "trigger 500M ratio 25" --tx-filter "$T" --digest --filter '6,$d' -- -d $D -c samplerate=500M:captureratio=25 -C CLK1 --samples 2047 -t CLK1=r -O bits
     emu_case "trigger on a channel left out" --tx-filter "$T" --stderr --expect-fail --filter "$L" -- -d $D -c samplerate=1M -C CLK1 --samples 16 -t D0=r -O bits
     # Bench stimuli, in time: the D0 pulse train of the "trigger" section.
     lp_options d=0 seq=1:5000,0:5000 seq-repeat=30 clk=0
     emu_case "pulses rising 1M" --tx-filter "$T" -- -d $D -c samplerate=1M:captureratio=25 -C D0 --samples 200 -t D0=r -O bits
     emu_case "pulses falling 1M" --tx-filter "$T" -- -d $D -c samplerate=1M -C D0 --samples 100 -t D0=f -O bits
+    # What the user ran on a real unit, from the macOS release binary.
+    emu_case "wait for the trigger" --tx-filter "$T" --oracle-differs "sigrok-cli session.c:403: -w keeps samples from the decoder and the count only, and its output module gets them all; oxrok's output starts at the trigger" -- -d $D -c samplerate=1M -C D0 --samples 100 -t D0=r -w -O bits
+    emu_case "wait for the trigger, whole memory" --tx-filter "$T" --oracle-differs "sigrok-cli session.c:403: -w keeps samples from the decoder and the count only, and its output module gets them all; oxrok's output starts at the trigger" --digest --filter '12,$d' -- -d $D -c samplerate=1M --samples 2048 -t D0=r -w -O bits
     lp_options d=0 seq=0:10000,1:10000,2:10000,3:10000,4:10000,5:10000,6:10000,7:10000 seq-repeat=3 clk=0
     emu_case "pattern 110 1M" --tx-filter "$T" -- -d $D -c samplerate=1M -C D0,D1,D2 --samples 100 -t D0=0,D1=1,D2=1 -O bits
     # The upper lanes: D24 rising while D30 is high.
@@ -274,7 +278,7 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     lp_options
 
     # Firmware.
-    M=$EMU_FIRMWARE_DIR/../lp-fw
+    M=$TMP/lp-fw
     lp_options image=none
     SIGROK_FIRMWARE_DIR=$M/missing; export SIGROK_FIRMWARE_DIR
     mkdir -p "$M/missing"
@@ -299,6 +303,8 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     for n in 1 5 17; do
         emu_case "oxrok count r*$n" $O "$T" -- -d $D -c samplerate=1M -C D0 --samples 200 -t "D0=r*$n" -O bits
     done
+    # A level with a count: the pattern becoming true, not its samples.
+    emu_case "oxrok count of a level" $O "$T" -- -d $D -c samplerate=1M -C D0 --samples 200 -t "D0=1*2" -O bits
     # consecutive: six rises, D1 high except on the third.
     lp_options d=0 seq=0:20000,2:5000,3:5000,2:5000,3:5000,0:5000,1:5000,2:5000,3:5000,2:5000,3:5000,2:5000,3:5000,0:20000 clk=0
     emu_case "oxrok cumulative r*3" $O "$T" -- -d $D -c samplerate=1M -C D0,D1 --samples 200 -t "D0=r*3,D1=1" -O bits
