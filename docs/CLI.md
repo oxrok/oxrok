@@ -638,6 +638,20 @@ Deliberate, and kept small:
   monitoring line does not lose the device.
 - arachnid-labs-re-load-pro: `-O analog:digits=spec` prints 3 digits,
   not the C's 4: `AnalogData` holds one digit count. No case pins this.
+- rohde-schwarz-sme-0x: a read that fails, or a value out of range,
+  fails with a message; sigrok-cli prints a value nobody set, or
+  nothing, and exits 0. A NaN is refused. An empty reply and a reply
+  that is not finite or in hexadecimal are errors, and so is a `POW?`
+  reply beyond 1000. After a query with no good answer on a serial port,
+  the next waits up to 2 s for the line to fall silent.
+  `output_frequency=3000000000` is accepted on an SME06.
+- rohde-schwarz-sme-0x: settings stay double precision: 123456789 goes
+  out as 123456789.0 and 2999999999 as 2999999999.0, where sigrok-cli's
+  `strtof` sends 123456792.0 and 3000000000.0. 3000000001 is refused on
+  an SME03, where `strtof` rounds it into range.
+- rohde-schwarz-sme-0x: with no `conn=` only USBTMC devices are probed;
+  sigrok-cli also opens USB serial ports from `scpi_serial.c`'s table of
+  ids, and sets their line, which oxrok does not with `conn=` either.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

@@ -94,6 +94,7 @@ Emulator and replay only, never run on hardware:
 | `rdtech-dps`, `rdtech-rd` | 226 | 89.2% |
 | `rdtech-tc` | 73 | 93.8% |
 | `rdtech-um` | 90 | 93.7% |
+| `rohde-schwarz-sme-0x` | 76 | 94.9% |
 | `saleae-logic16` | 87 | 91.6% |
 | `saleae-logic-pro` | 109 | 97.1% |
 | `sysclk-lwla` | 141 | 91.1% |

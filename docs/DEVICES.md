@@ -2430,6 +2430,44 @@ unplug all hang (protocol.c:425); a line in two pieces is a wrong
 reading (protocol.c:393). oxrok does the sane thing for each. A capture
 with only a sample limit ends after 5 s with no reading.
 
+## Rohde&Schwarz SME signal generators (rohde-schwarz-sme-0x)
+
+SME02, SME03, SME03A, SME03E and SME06, SCPI over RS-232 (`conn=PORT`,
+optional `serialcomm=`). `tcp-raw` and `usbtmc` resources go through
+`src/scpi` untested, and C's GPIB is not ported. Emulator-verified on
+the CDC-ACM shell (`emu/src/models/rohde-schwarz-sme-0x.rs`), 76 cases
+(55 full, 20 `--oracle-differs`, 1 library), gcov 94.9%, no hardware.
+Options: output_frequency and amplitude, get and set. A scan sends a
+bare LF, which switches RS-232 to remote, and `*IDN?`, and closes; an
+open and a close send nothing. With no `serialcomm=` the port keeps its
+speed, frame and flow control, as in C, but on Windows and on a HID
+cable, where it is 9600/8n1. The instrument has 8n1 fixed, 1200 to
+115200 baud at its panel, 9600 at reset, and prefers RTS/CTS to
+XON/XOFF. It acquires nothing: a capture is refused for want of a limit
+key, and a session refuses to start with no channels.
+
+Facts are from the maker's operating manual, edition 14 (1038.6002.02):
+the IDN form, replies with no unit (`1E6`), the line, the reset state of
+100 MHz and -30 dBm, the ranges. The model's stand-ins are LF as a
+reply's end and the exponent form for a level. `FREQ?` and `POW?`
+include the offsets, which neither tool sets, so a set range holds only
+with offset 0, in C as well.
+
+libsigrok bugs the model found: a failed read prints a double nobody
+set, with exit 0 (api.c:170, 176-177, 180-181); a value out of range
+does nothing and says nothing (protocol.c:71-72, 85-86, api.c:203, 207);
+a NaN goes out as `FREQ nanHz`; an empty reply reads 0; the table has
+the SME06 at 1.5 GHz (api.c:60-61), a copy of the SME02's, where the
+manual has 6 GHz. By reading only: the stop takes the SCPI instance for
+a serial port (api.c:237, std.c:366), and no session gets there.
+
+Limits: after a query with no good answer the next waits, on a serial
+port only, for 1 s of silence, up to 2 s, and purges. A reply that
+begins later still can be taken for an answer, unless it is a frequency
+for a `POW?`: `FREQ?` has no check, as with an offset any number is
+real. `Scpi::get_data` reads for as long as bytes come with no newline,
+so a device streaming that way hangs a query, as in C (shared code).
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

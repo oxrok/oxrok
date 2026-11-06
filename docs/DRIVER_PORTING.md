@@ -298,6 +298,39 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- SCPI over serial with no `serialcomm` sets no line in C, while
+  `scpi::open` defaults to 115200/8n1: use `scpi::open_keeping_line`. It
+  keeps speed, frame and flow control, skips `scpi_serial.c`'s table of
+  USB ids, and has nothing to keep on Windows. Read the settings on a
+  descriptor that stays open through the real open, as a last close
+  drops the lines under `HUPCL`. A pty shows no frame: it forces 8 bits
+  and no parity. On macOS a speed on a pty fails with `ENOTTY`, so such
+  a test is Linux only.
+- A purge that follows an expiry by more than the wait can cut a reply
+  in flight, and the tail of a round number parses as 0. Always look at
+  the line for a moment before a purge, read once more when the time is
+  up, and restart the wait on a byte.
+- Read a device's manual for what its query returns before checking a
+  reading's range: the SME's `FREQ?` includes an offset, so a floor
+  refused real values.
+- `read_begin` and `read_data` are not free on every SCPI transport:
+  USBTMC's is a request to the device, and a recorder writes them as
+  steps. A look at the line needs its own method
+  (`ScpiTransport::discard`).
+- A test that forks in a binary with serial tests can fail them: the
+  child holds the port's `flock` until its exec, and the next open says
+  "Unable to acquire exclusive lock". Give such a test its own binary.
+- `sr_scpi_get_double`'s result dropped by `config_get` prints
+  uninitialised stack. Mask it with a filter that only matches a value,
+  so oxrok's empty `--show` value stays visible.
+- A fake must keep a device's order: an answer it queues ahead of a late
+  reply let a late-reply test pass with the settle removed.
+- A mutant runner killed by `timeout` skips its `finally` and leaves the
+  mutant in the tree. Interrupt it with SIGINT, and check every mutant's
+  source text afterwards.
+- `emu-remote.sh` copies `tests/emu` back with `--delete`. A run started
+  before a rebase and ending after it deletes the goldens the rebase
+  brought in.
 - Read the firmware's history as well as its source. A model built from
   the newest commit gave old versions commands they never had, and gave
   the released v1.11 a `read` from a later commit. Check a model's
