@@ -318,6 +318,39 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A device that starts each exchange has no request timer to get wrong:
+  framing lives in the size of each read, so port those sizes. A
+  record's own form brings it back in step, so a late reply loses
+  readings but cannot shift them.
+- A time limit that ends at the first empty read loses C's level on any
+  meter slower than the read's wait, and the fast model in the goldens
+  can't show it. Keep one case at the device's real rate, and let the
+  limit run a period past.
+- `SLOW=` can't show this: a stall merges a device's unasked bytes into
+  one read, and a burst has no spare for what is rightly dropped. Stop
+  oxrok alone, at 0.15:0.1 and 0.4:0.3, against the goldens. A model
+  that waits for the host makes the case hold at any stall.
+- Read a bless's diff even when all pass: a list entry spent during the
+  harness's tty restore made a case on two announcements test one. A
+  model takes nothing from its lists while the line is misset.
+- `char buf[]` in a C driver: a compare with a masked sum never matches
+  at `0x80` and up, and a digit test `> 9` lets negatives through. A
+  golden with those bytes shows which way the platform goes.
+- A bound in elapsed time needs a credit for time the thread did not
+  run, and the credit needs a limit, or a process stopped again and
+  again never gets there.
+- A limit set on a running capture gets its bound from then, not from
+  the start.
+- A positive signal can relax a bound: a device saying "not valid" isn't
+  silent. Check that it needs a good sum, or garbage passes for it.
+- A warning a unit test can't see can't be checked by a mutant: put
+  "said once" in the pure struct.
+- A model that starts its stream only on `opened()` never starts when a
+  tool's `SET_CONTROL_LINE_STATE` stalled. Run it from the start: offers
+  come only with the tty open.
+- `RLIMIT_AS` caps address space, and a test binary's malloc arenas and
+  thread stacks reach 2 GiB: "memory allocation of 1 bytes failed" with
+  no failed test is the cap, not a leak.
 - A fake's clock runs on the same slowed sleeps as the driver, so the
   shim can't show a race between a test's sleep and a fake's timed
   bytes; release by the read or by the test. A bound under a host's

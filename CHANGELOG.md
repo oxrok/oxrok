@@ -6,6 +6,10 @@ release may change the library API.
 
 ## [Unreleased]
 
+### Added
+
+- Drivers: `colead-slm`.
+
 ## [0.1.0-alpha.2] - 2026-11-06
 
 Still experimental, and still a pre-release: 25 of libsigrok's 87 drivers are

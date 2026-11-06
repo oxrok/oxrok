@@ -93,6 +93,7 @@ Emulator and replay only, never run on hardware:
 | `mastech-ms6514` | 70 | 94.9% |
 | `bkprecision-1856d` | 125 | 89.4% |
 | `cem-dt-885x` | 107 | 94.0% |
+| `colead-slm` | 63 | 95.6% |
 | `conrad-digi-35-cpu` | 58 | 93.3% |
 | `kern-ew-6200-2nm` | 62 | 93.5% |
 | `link-mso19` | 162 | 92.0% |

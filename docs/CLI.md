@@ -870,6 +870,26 @@ Deliberate, and kept small:
   from the request, so G and D do not go a third time ahead of it.
 - An unlisted scan option (`serialcomm` on `bkprecision-1856d`) is
   refused with a message, where sigrok-cli finds nothing and exits 0.
+- colead-slm: `--time` ends a second past its limit on a silent meter or
+  a flood with no level, with exit 0 and a warning that says whether
+  bytes came, where sigrok-cli looks at its limits behind a level alone
+  and waits for ever (`protocol.c:177-180`). While levels come it ends
+  behind one, as there.
+- colead-slm: 15 s with no bytes or no usable record fails a capture
+  that only a sample limit could end (exit 1), and says which.
+  sigrok-cli waits for ever. Well-formed records whose status says not
+  valid get one warning at 15 s and the capture goes on, as there. A
+  time limit or `--continuous` is left alone.
+- colead-slm: a port that hangs up fails a capture (exit 1), where
+  sigrok-cli takes it for a timeout (`protocol.c:199-201`).
+- colead-slm: a digit or a sum with its top bit is read as a byte. Where
+  `char` is signed, sigrok-cli takes `0xff` for -1 and never matches a
+  sum of `0x80` or more (`protocol.c:63`, `:70-73`). No meter's record
+  has either.
+- colead-slm: a record with no digits reads 0.0 dB in both, and oxrok
+  warns once per capture, as the meter's range starts at 30 dB. A
+  capture starts with no record owed, where C goes on filling the one a
+  stop cut.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

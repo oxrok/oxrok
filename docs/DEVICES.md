@@ -3018,6 +3018,42 @@ float's step is 256 Hz, where the panel's is 100 Hz at a 10 s gate on
 the internal time base (table 2), 10 Hz on an external one. The printed
 value is off too, in both tools: `3700.0001MHz` prints `3.6999998 GHz`.
 
+## Colead SL-5868P sound level meter (colead-slm)
+
+An RS-232 meter, 30 to 130 dB, A, C and flat, fast and slow: `-d
+colead-slm:conn=/dev/ttyUSB0`. `conn=` is required and `serialcomm=`
+defaults to 2400/8n1. A scan touches nothing, so any port is a meter
+until a capture. Nothing can be read; `limit_samples` and `limit_time`
+can be set. Emulated by the `colead-slm` model on the CDC-ACM shell,
+options `packet=`, `announce=`, `period=`, `burst=`, `after-ask=`,
+`last-gap=`, `late=`, `uart=`. 63 cases on 2026-11-06: 49 full, 10
+`--oracle-bug`, 4 `--oracle-differs`. gcov 95.6%; not reached: two NULL
+guards, the failed write, an empty read while a record is owed, and an
+overrun that can't happen. Never run on hardware. Facts are from the
+sigrok wiki's page and the C driver. No firmware source, recording or
+manual was found. Not known: a marker record's status, and whether
+stored records are announced.
+
+What the model taught: only a read of the one byte `0x10` is an
+announcement, so two in one read are none, and a reply's stray last byte
+alone in a read can be one. A missing reply is filled by ten further
+announcements and then refused, so a meter whose replies come later than
+its period gives no levels, though never a wrong one. C's limits are
+looked at behind a level alone (`protocol.c:177-180`), so `--time` on a
+silent meter never ends. Its `char` makes a digit of `0xff` a -1
+(-1024.7 dB) and a sum of `0x80` or more never match, where `char` is
+signed; no meter's record reaches either.
+
+The port keeps C's level behind a short time limit, and ends a time
+limit a second past it when none came, saying so with exit 0. It fails a
+capture when the port hangs up, and one that only a sample limit could
+end after 15 s with no bytes or no usable record. A meter sending
+well-formed records marked not valid gets one warning and is waited for,
+as in C. A long Read-key dump of records refused for their mode would
+fail such a capture: what stored records look like is not known. A
+record with no digits keeps C's 0.0 dB and is warned about once per
+capture. A capture starts with no record owed.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in
