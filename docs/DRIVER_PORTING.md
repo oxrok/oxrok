@@ -275,6 +275,36 @@ from the C code before the instrument is on the desk, then replace it
 with a recording. Long downloads use `read_begin`/`read_data` on the
 `Scpi` directly; `get_block` handles the common IEEE 488.2 case.
 
+### SCPI instrument
+
+The recipe for a SCPI driver, model and port together. Copy
+`emu/src/models/rigol-ds.rs` and `tools/emu/rigol-ds.sh`; `docs/USB.md`, "Writing a
+SCPI model", has the API and what it can't show.
+
+1. **The model** is an `Instrument` (`emu/src/shells/scpi.rs`), and little else:
+   `idn`, `settings` for what is a value to read and set, `command` for the rest.
+   `scpi::Config` takes the fault options and makes the device: `.usbtmc(NAME, &id,
+   instrument)` in `build`, `.tcp(instrument)` in `build_tcp`. Add neither a shell
+   nor a framing to a model: `usbtmc.rs`, `tcp.rs` and `scpi.rs` carry those.
+2. **The scenario** sets `EMU_TMC=1` and `EMU_TCP=1` (`only` for no USB), and
+   names the socket `conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT`, inside `emu_cases`. Take
+   the cases of each path once on the transport they're cheapest on, and scan, show
+   and one capture on both.
+3. **The port** closes at the end of a probe, and its open calls `Scpi::reopen`, as
+   `sr_scpi_scan` and every driver's `dev_open` do (`src/drivers/rigol_ds`). A port
+   that keeps the probe's connection differs from C in the `.tx`: one
+   `GET_CAPABILITIES`, one `tcp_connect`.
+4. **Expect these in the goldens.** Over TCP a silent instrument holds sigrok-cli for
+   ever, a read after a close returns nothing for ever, and a write after one kills
+   it with SIGPIPE: `--oracle-bug` for all three, with the texts in
+   `tools/emu/rigol-ds.sh`. `sr_scpi_get_opc` tries 100 times,
+   through timeouts, so 100 s of a muted `*OPC?`: `Scpi::get_opc` gives up after 3
+   silences, and a muted setting on a protocol with `*OPC?` belongs in a unit test.
+5. **Case time.** A plain case is about 0.3 s for both tools on either carrier, plus
+   what the driver sleeps; a DS1000's 100 ms per setting is the slow part of
+   `rigol-ds`. A `model=` that changes the USB ids adds about 5.5 s. A case where C
+   hangs costs its `--timeout`. Use a fast `timebase` so a trigger wait costs little.
+
 ## Beyond libsigrok's keys
 
 A device may do more than libsigrok's key set covers. Two hooks:
