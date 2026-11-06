@@ -298,6 +298,27 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A bound on silence is set after the send returns, not before: a send a
+  client keeps waiting is no silence of the device's, and a paused pager
+  fills a queue of 64 in milliseconds. A test of a bound should span
+  many bounds on a moved clock, with real gaps nowhere: removing the
+  reset passed every real-gap test.
+- A settle leaves only on an empty read past its time. A time check with
+  no read after it takes a descheduled thread for a quiet line. A quiet
+  line says nothing of a reply not started: after a stop with a request
+  unanswered, wait longer, with a bound, and say what a later reply
+  still does.
+- A scan with no write still holds a port long enough for a model's
+  stream to send. A model that streams unasked can wait for the first
+  command, as an artifact, with an option for the real habit; then add
+  one capture case with that option.
+- A bound on junk should run from the last thing that counts, not the
+  last byte.
+- One `-c a=x:a=y` keeps the last in both tools; two `-c` set twice.
+- A `timeout` around `emu-remote.sh` kills a run waiting for a shared
+  tester's lock.
+- A mutant that adds a line beside the real one can be equivalent: move
+  the line instead.
 - A C scan can be dead from the first commit: compare
   `serial_stream_detect`'s buffer with twice its packet size. A hidden
   symbol can't be preloaded, but the driver struct from `sr_driver_list`

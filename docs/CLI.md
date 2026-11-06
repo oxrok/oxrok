@@ -674,6 +674,14 @@ Deliberate, and kept small:
   value.
 - `mastech-ms6514`: `-C T1-T2` is refused by both tools, as a range, in
   their own words.
+- `pce-322a`: a get after a `-c` on `spl_weight_freq`, `spl_weight_time`
+  or `spl_meas_range` answers what was set; a second `-c` counts from
+  it, so fewer toggles may go out. This is a choice, not a C bug. A
+  first live reading that contradicts a setting warns.
+- `pce-322a`: `--samples` cuts a memory capture's output, with the same
+  requests on the wire. A status ending in 0x10 is read, with a warning.
+  A silent meter ends a `--samples` or memory capture after 5 s, and a
+  port that is gone ends a capture at once.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

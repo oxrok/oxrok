@@ -2558,6 +2558,36 @@ What it taught:
 Sources: sigrok's wiki pages, `tc2100` and `MS6514GUI`. No firmware
 found. No source says what follows a dump or how fast it comes.
 
+## PCE PCE-322A sound level meter (pce-322a)
+
+Serial, 115200/8n1 (the wiki and libsigrok; the older PCE manual says
+9600, which is unresolved): `-d pce-322a:conn=/dev/ttyUSB0`. Any port
+that opens is taken for a meter, as in libsigrok. Emulator-verified (95
+cases: 60 full, 12 full via library, 5 library-only, 9 `--oracle-bug`, 9
+`--oracle-differs`; gcov 88.1%), not on hardware. `data_source=Live`
+reads the stream; `Memory` reads the recordings by blocks and ends by
+itself, each recording starting with a reading of -1. A full memory of
+32,700 values takes about 44 s, and a small `--samples` still reads it
+all and cuts the output. The meter reports its settings only in its
+readings, so before a capture oxrok assumes A, F and 30-130. The
+settings are toggles: on a meter set otherwise they land on the wrong
+side, and the first live reading warns of what it contradicts. oxrok
+counts a toggle as done, where C counts only from readings. Neither is
+right on every meter: from the assumed start oxrok ends where asked and
+C may not, and elsewhere the reverse. A memory capture takes the
+weighting from each recording, which says nothing of the meter. `aa f2`
+is taken to step upwards, by the wiki's order; the 2022 manual lists
+50-100, 80-130, 30-80, automatic, which would put each step elsewhere if
+it is the key's cycle. A status ending in 0x10, which the wiki allows
+with no meaning, is read with a warning, by decision; C waits for ever.
+oxrok ends a limited live capture or a memory read after 5 s of silence
+(the display updates at 2 Hz; no source gives the stream's rate). A port
+that is gone ends a capture; C's had not ended at 90 s, with no read
+failing and `serial_timeout` never called. The block count C logs is one
+block less than it reads, and which is right is unknown. History:
+libsigrok ae87e02f added the memory read, and a4be2b32 fixed
+`send_command` with a user's `Tested-By`.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

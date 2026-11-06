@@ -93,6 +93,7 @@ Emulator and replay only, never run on hardware:
 | `motech-lps-301` | 149 | 79.3% |
 | `ols` | 213 | 94.7% |
 | `p-ols` (Pipistrello) | 107 | 97.0% |
+| `pce-322a` | 95 | 88.1% |
 | `rdtech-dps`, `rdtech-rd` | 226 | 89.2% |
 | `rdtech-tc` | 73 | 93.8% |
 | `rdtech-um` | 90 | 93.7% |
