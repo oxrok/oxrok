@@ -476,11 +476,11 @@ impl Capture {
             return;
         }
         let started = Instant::now();
-        if self.memory {
-            if let Err(e) = port.write(&[CMD_GET_STORED]) {
-                // C drops the result, and whatever comes decides what happens.
-                log::warn!("Could not ask for the stored values: {e}.");
-            }
+        // C drops the result, and whatever comes decides what happens.
+        if self.memory
+            && let Err(e) = port.write(&[CMD_GET_STORED])
+        {
+            log::warn!("Could not ask for the stored values: {e}.");
         }
         let limit_time = Duration::from_millis(self.limit_msec);
         let mut samples = 0u64;

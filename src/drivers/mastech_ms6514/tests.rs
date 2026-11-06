@@ -459,7 +459,8 @@ fn a_reading_goes_out_by_the_channel_it_names() {
         // T2 on main and T1 on aux.
         let mut f = frame(10, 20);
         f[11] |= 1;
-        let cases: [(&[usize], &[(usize, f32)]); 4] = [
+        type Case<'a> = (&'a [usize], &'a [(usize, f32)]);
+        let cases: [Case; 4] = [
             (&[0, 1, 2], &[(1, 1.0), (0, 2.0)]),
             (&[0], &[(0, 2.0)]),
             (&[1], &[(1, 1.0)]),
