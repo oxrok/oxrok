@@ -930,6 +930,28 @@ Deliberate, and kept small:
 - teleinfo: `--samples N` gives N whole frames, and a value that isn't
   all digits at its width is dropped with a warning, where sigrok-cli
   reports what `atoi` makes of it. See `docs/DEVICES.md`.
+- mic-98581, mic-98583: a field's third digit counts, `v 235` is 23.5,
+  where sigrok-cli says 23.0 (`protocol.c:83`, `:87`).
+- mic-98581, mic-98583: `-C` is honoured, so `-C Humidity` prints
+  humidity alone. sigrok-cli's default output prints both, as
+  `handle_packet` sends both (`protocol.c:122-142`); its csv output
+  honours `-C`, as here.
+- mic-98581, mic-98583: a port that hangs up fails a capture (exit 1),
+  where sigrok-cli keeps running at a sample limit
+  (`protocol.c:202-211`).
+- mic-98581, mic-98583: with only a sample limit to end a capture, bytes
+  enough for two frames that make no reading fail it after 30 s (exit
+  1), and silence fails it after 6 h 10 min, past the manual's longest
+  sample interval of 6 h. sigrok-cli waits for ever. A time limit or
+  `--continuous` is not failed.
+- mic-98581, mic-98583: warnings sigrok-cli does not have: no reading
+  for 30 s, once per capture, in any mode; a capture that ends with no
+  readings, which at a time limit still exits 0; and a real-time command
+  that found no room.
+- mic-98581, mic-98583: for a library client, each capture sends the
+  real-time command at its first silence, where C sends it once per
+  process (`protocol.c:189`); the receive buffer lasts one capture, and
+  a second capture on an open port drops what queued in between.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

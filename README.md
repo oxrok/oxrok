@@ -100,6 +100,7 @@ Emulator and replay only, never run on hardware:
 | `kern-ew-6200-2nm` | 62 | 93.5% |
 | `link-mso19` | 162 | 92.0% |
 | `maynuo-m97` | 210 | 95.8% |
+| `mic-98581`, `mic-98583` | 55 | 93.2% |
 | `motech-lps-301` | 149 | 79.3% |
 | `norma-dmm`, `siemens-b102x` | 95 | 93.5% |
 | `ols` | 213 | 94.7% |

@@ -3185,6 +3185,59 @@ and 16 Wh at 16.78, 33.55, 67.11 and 134.2 MWh. A three-phase meter's
 IINST1 to IINST3 give nothing, as in C. On a read-only node only a scan
 differs: C's scan opens read-only, and both captures fail.
 
+## MIC 98581 and 98583 loggers (mic-98581, mic-98583)
+
+A temperature logger and a temperature and humidity logger, each a
+PL2303 serial port on USB (067b:2303). Use: `oxrok -d
+mic-98583:conn=/dev/ttyUSB0 --samples 10`. The line is 38400/8n2;
+`serialcomm=` overrides it. A scan says nothing to the logger: it opens
+the port and closes it, so any port that opens is "found", and the
+driver you name is the model you get.
+
+A capture listens, and at the first 100 ms of silence sends `S 1 M 2 32
+3` once. The logger then sends `v ttt\r` or `v ttt hhh\r`. Live readings
+only: the logger's stored data and settings are not covered, as in
+libsigrok.
+
+Known limits, the same in sigrok-cli:
+- Temperatures below zero. The manual's range goes to -40.0, and nothing
+  says how a logger writes that. A sign in any place is no frame (`v -12
+  610`, `v-123 610`, `v -123 610`), so a freezer's capture may come out
+  empty. At a time limit it exits 0, with a warning that names this. At
+  a sample limit it fails after 30 s of bytes that make no reading.
+- Fahrenheit. The manual lists a Fahrenheit range, and nothing on the
+  line tells the two apart, so a logger set to Fahrenheit is labelled °C
+  (C's "TODO: Use C/F correctly", `protocol.c:127`).
+
+Emulated on the CDC-ACM shell: model `mic-985xx`, 55 cases on 2026-11-06
+(46 full, 2 `--oracle-bug`, 5 `--oracle-differs`, 2 library), gcov 93.2%
+of the driver. Not run on hardware. Sources: libsigrok's driver;
+sigrok's wiki pages for both models, with the manual
+(`File:Mic_98581_manual_specs.jpg`) and a display photo; an archived
+2013 vendor page. No firmware source or recording was found. What the
+command's numbers mean, how often a logger sends in real-time mode, and
+whether it answers are unknown, and the model's rate is a count of read
+offers.
+
+What the model found:
+- `packet_parse` divides each field by 10 in integers (`protocol.c:83`,
+  `:87`), so `v 235` is 23.0 under sigrok-cli and 23.5 here. That the
+  third digit is real is an inference: the manual and the vendor's page
+  give -40.0 to 85.0 °C and RH 0.1 to 99.9 %, which map exactly onto 001
+  to 999 and 850, and a display photo shows `25.7 °C`. No frame was ever
+  recorded. If the digit is real, C's readings are cut by up to 0.9,
+  over the ±0.6 °C spec. If it is always 0, the two agree.
+- `first_time` is a function's `static` (`protocol.c:189`), so in one
+  process only the first capture of any MIC logger sends the command.
+  Here each capture does.
+- `receive_data` takes a hung up port for a timeout
+  (`protocol.c:202-211`), so a sample limit never ends there. Here the
+  capture fails.
+- The manual's sample interval is 1 s to 6 h, set by the vendor's
+  program, and nothing says real-time mode ignores it. So silence only
+  warns at 30 s, and fails a capture only a sample limit could end at 6
+  h 10 min.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

@@ -355,6 +355,33 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A bound on silence needs the device's slowest pace, not a guess at it:
+  a manual gave this logger's sample interval as up to 6 h, and a 30 s
+  bound would have failed a working logger where C works. Look for the
+  manual's photo on the wiki before choosing one. Separate "silent" from
+  "bytes that make nothing": only the second is quick to call a failure,
+  and a few bytes may be an answer to a command.
+- A test of a bound that "does not end" a capture must set that bound
+  short: with the give-up time long, a mutant applying it in the wrong
+  mode passes.
+- Read before the timer can be pinned with a test-only stall between the
+  capture's start and its first read, with bytes waiting.
+- A test that expects a warning and then an end assumes the read comes
+  back in between. At `SLOW=12` one read passes both times. Pin the
+  order in the pure rule and only what holds at any speed in the
+  capture.
+- `Device::channels` being enabled says nothing of what a C driver
+  sends: read whether it filters. The default output prints what comes,
+  csv does not.
+- An open's URBs count as `Serial::tick` offers: about 16 at once, and
+  more at a reopen. A reading due within them lands before the open's
+  flush and is lost. Count at least 60 offers for "a while after the
+  open".
+- `-c limit_samples=1` alone is no capture to sigrok-cli: it prints its
+  usage, exits 0, and an oracle case blesses that as output. Read the
+  golden.
+- `--unplug out=0:N` right after an open can beat the open's own
+  termios: run 15 rounds before keeping such a case.
 - A checksum of a sum's low bits misses a flipped high bit when parity
   isn't checked. Enumerate the single-bit flips of a frame, and check a
   value's form before believing it: `atoi` turns those into false
