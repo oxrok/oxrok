@@ -41,6 +41,8 @@ enum Reply {
     Silent,
     /// Those bytes, when the test says so.
     OnRelease(Vec<u8>),
+    /// Those bytes, while the next read returns empty after a stall of this long.
+    AcrossAStall(Vec<u8>, Duration),
 }
 
 /// How bytes on their way come. A read past their time finds them all, so a stall
@@ -95,6 +97,8 @@ struct State {
     arrives: VecDeque<Instant>,
     spacing: Spacing,
     fail_writes_after: Option<usize>,
+    /// What [`Reply::AcrossAStall`] has for the next read.
+    across_a_stall: Option<(Vec<u8>, Duration)>,
     /// A write takes this long, as behind a line that holds it.
     write_blocks: Duration,
     writes_time_out: bool,
@@ -159,6 +163,11 @@ impl Port for Fake {
         Ok(())
     }
     fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        if let Some((bytes, stall)) = self.with(|s| s.across_a_stall.take()) {
+            std::thread::sleep(stall);
+            self.with(|s| s.arrive(bytes));
+            return Ok(0);
+        }
         let got = {
             let mut s = self.0.lock().unwrap();
             if s.fail_reads {
@@ -207,6 +216,7 @@ impl Port for Fake {
             Some(Reply::Now(bytes)) => s.arrive(bytes),
             Some(Reply::Silent) => {}
             Some(Reply::OnRelease(bytes)) => s.held = bytes,
+            Some(Reply::AcrossAStall(bytes, stall)) => s.across_a_stall = Some((bytes, stall)),
             // The meter's sequence number: the request's plus one.
             None => {
                 let mut otherwise = s.otherwise.clone();
@@ -1101,6 +1111,23 @@ fn past_a_sample_a_dead_meter_fails_a_sample_limit_at_the_long_bound() {
         assert_eq!(got.failed.as_deref(), Some("device error: no answer to a request for 0.05 s"));
         d.close().unwrap();
         assert!(fake.writes().len() >= 3, "{:02x?}", fake.writes());
+    });
+}
+
+/// A stall past the bound just after a read found nothing, with the answer in by
+/// then: the look that counts is the next, so no bound holds against it.
+#[test]
+fn a_stall_after_an_empty_read_is_no_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([
+            Reply::AcrossAStall(GOOD_INIT.to_vec(), ms(60)),
+            Reply::AcrossAStall(OK.to_vec(), ms(60)),
+        ]);
+        let mut d = device_with(&fake, timing(ms(1), Duration::ZERO, ms(30)));
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_OK]);
     });
 }
 

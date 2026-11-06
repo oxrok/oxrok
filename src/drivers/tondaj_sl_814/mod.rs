@@ -382,7 +382,10 @@ impl Capture {
                 return Ok(());
             }
             let wanted = exchange.want(buf.len());
-            let wait = exchange.read_wait(STOP_CHECK, Instant::now());
+            // Stamped ahead of the read: what an empty read says holds from here, as a
+            // stall after it would pass for silence with the answer already in.
+            let looked = Instant::now();
+            let wait = exchange.read_wait(STOP_CHECK, looked);
             let got = match (read_blocking(port, &mut buf[..wanted], wait), exchange.owed()) {
                 (Ok(got), _) => got,
                 (Err(e), Some(command)) => {
@@ -398,7 +401,7 @@ impl Capture {
                 }
             };
             if got == 0 {
-                match exchange.empty_read(Instant::now()) {
+                match exchange.empty_read(looked) {
                     Next::Wait => {}
                     Next::Warn => self.warn_of_silence(&exchange),
                     // C checks no limit here: a silent meter never ended one.
