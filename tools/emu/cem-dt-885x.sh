@@ -105,7 +105,6 @@ s/^(..)$/bulk_out 02 \1 -> told/
     STALE_RANGE_BUG="protocol.c:806 does not store the range it set, so a get after the set answers the old one (:729); oxrok answers the new one"
     OVERSHOOT_BUG="send_data sends a whole packet of up to 50 levels (protocol.c:369-371) and looks at the limit after it (:210); session.c's limit cuts only the decoders' input, so stdout has them all; oxrok holds the limit"
     OVERFLOW_BUG="a record's head with no known token is never reset (protocol.c:338-341), so :330 stores each later byte on past buf[100] and over last_spl, hold_last_sent and the heap after devc; oxrok stores no more than the head"
-    TOGGLE_BUG="under the preload only: cem_dt_885x_toggle (protocol.c:459-467) sends again at each packet its time has run out on, and each one heard steps the meter, so it takes the first token that says what it wants with more commands behind it: C says success and the meter ends elsewhere. oxrok sends one command per announcement and has the next agree"
     NO_LEVEL_YET="a display token ahead of any level sends what last_spl holds (protocol.c:137-146), 0 at first; oxrok sends no level it has not had"
 
     # ---- The driver as it is: no wait_for_token. ----
@@ -138,14 +137,13 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "set range no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c spl_meas_range=10-20 --set
     emu_case "set data_source no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c data_source=Cloud --set
 
-    # The real non-blocking read: nearly every get and set fails. A block that beat
-    # C's first read could say what it asks for, so nothing comes for some 100 ms
-    # after the open, and these tools have read by then.
-    emu_options setters=0 first-block=8
+    # The real non-blocking read: nearly every get and set fails. No block comes
+    # for a period after the open, and these tools have read by then.
+    emu_options setters=0
     emu_case "stock get freq" --oracle-bug "$NO_BYTE_BUG" --tx-filter "$OUT" -- -d $X --get spl_weight_freq
     emu_case "stock get datalog" --oracle-bug "$NO_BYTE_BUG" --tx-filter "$OUT" -- -d $X --get datalog
     emu_case "stock show has no state" --oracle-differs "$NO_BYTE_SHOW" --keep-header --tx-filter "$OUT" -- -d $X --show
-    emu_options first-block=8
+    emu_options
     emu_case "stock set fails" --oracle-bug "$NO_BYTE_BUG" --no-output --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C --set
 
     # power_off: 33, 25 ms, and a look for a byte, with the real read; then the port
@@ -224,7 +222,7 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "log limit at the end" --tx-filter "$ONCE" -- -d $X -c data_source=Memory --samples 2
     # Levels with no record ahead of them keep the live flags, which have all come
     # by the second block of an open and which time-of-the-log's start can't change.
-    emu_options no-level=1 first-block=0 dump=bb0064ac0655dd
+    emu_options no-level=1 dump=bb0064ac0655dd
     emu_case "log levels with no record" --tx-filter "$ONCE" -- -d $X -c data_source=Memory --samples 100
     # No stray byte: nothing to cut.
     emu_options no-level=1 dump=bb0070aa26110512345601ac06550661dd
@@ -325,12 +323,15 @@ s/^(..)$/bulk_out 02 \1 -> told/
 
     # No token at once, as on a real meter: a command shows in a later block. What the
     # set ended in shows in the flags of a capture, or in a get. One level, as how many
-    # blocks a set takes depends on the time.
+    # blocks a set takes depends on the time. C under the preload resends by the clock
+    # (protocol.c:459-467), each one heard steps the meter, and it ended in the other
+    # state in each of 3 runs, but which goes with the clock: so oxrok alone, and its
+    # goldens by hand. A first level comes before that block's flags: the second shows.
     emu_options announce=0 levels=0654
-    emu_case "no token at once, freq" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C --samples 2
-    emu_case "no token at once, time" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c spl_weight_time=S --samples 2
-    emu_case "no token at once, hold" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c hold_max=on --samples 2
-    emu_case "no token at once, range" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c spl_meas_range=50-100 --get spl_meas_range
+    emu_case "no token at once, freq" --no-oracle-only --filter '1d' --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C --samples 2
+    emu_case "no token at once, time" --no-oracle-only --filter '1d' --tx-filter "$ONCE" -- -d $X -c spl_weight_time=S --samples 2
+    emu_case "no token at once, hold" --no-oracle-only --filter '1d' --tx-filter "$ONCE" -- -d $X -c hold_max=on --samples 2
+    emu_case "no token at once, range" --no-oracle-only --tx-filter "$ONCE" -- -d $X -c spl_meas_range=50-100 --get spl_meas_range
 
     # The toggle never lands, or the meter says nothing more after it.
     emu_options deaf=1000000
