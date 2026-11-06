@@ -9,7 +9,27 @@ repository.workspace = true
 authors.workspace = true
 keywords = ["sigrok", "logic-analyzer", "oscilloscope", "multimeter"]
 categories = ["hardware-support", "command-line-utilities"]
-exclude = ["hil/", "emu/", "tools/", "docs/"]
+# Anchored: a bare "emu/" also matches tests/emu/, the goldens, which was only
+# right by accident. tools/emu/*.firmware stay, as tests/emu_replay.rs builds
+# its firmware stand-ins from those lists of names and sizes.
+exclude = [
+    "/hil/",
+    "/emu/",
+    "/docs/",
+    "/tests/emu/",
+    "/tools/*",
+    "!/tools/emu/",
+    "/tools/emu/*",
+    "!/tools/emu/*.firmware",
+    "/.github/",
+    "/.gitattributes",
+    "/.gitignore",
+    "/Makefile",
+    "/clippy.toml",
+    "/deny.toml",
+    "/rust-toolchain.toml",
+    "/rustfmt.toml",
+]
 
 [lib]
 name = "oxrok"
@@ -92,7 +112,7 @@ resolver = "3"
 members = ["hil/oxrok-hil", "emu"]
 
 [workspace.package]
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
@@ -100,7 +120,7 @@ repository = "https://github.com/mangelajo/oxrok"
 authors = ["Miguel Angel Ajo <mangel.ajo@gmail.com>"]
 
 [workspace.dependencies]
-oxrok = { path = ".", version = "0.1.0-alpha.1", default-features = false }
+oxrok = { path = ".", version = "0.1.0-alpha.2", default-features = false }
 log = "0.4"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

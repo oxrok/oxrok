@@ -6,30 +6,148 @@ release may change the library API.
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0-alpha.2] - YYYY-MM-DD
+
+Still experimental, and still a pre-release: 25 of libsigrok's 87 drivers are
+not ported, and most of what is here has never met its device.
+
+**What has been checked how.** 63 driver modules, 55 of them new here. Four
+have run on real hardware (`intronix-logicport`, `fx2lafw`, `rigol-ds`,
+`raspberrypi-pico`), though `fx2lafw`'s upload and open order changed since
+and were checked on the emulator only. Three have met a microcontroller
+standing in for the device (`dcttech-usbrelay`, `microchip-pickit2`, the
+`serial-dmm` family). **All the drivers listed below are emulator-verified and
+have never run on hardware.** That means the same output and transactions as
+libsigrok against a device model written from the C driver and public sources,
+on the paths the cases reach, apart from the differences kept on purpose and
+listed per device. It shows parity with libsigrok, not correct behaviour on a real
+device: timing, real analog front ends and quirks the C relies on without
+saying are not tested. The README has the table, with cases and C coverage per
+driver.
+
+### Upgrading
 
 - A capture that fails exits 1 and says `capture failed: WHY` last on stderr,
-  on every driver and port, where sigrok-cli and earlier oxrok exit 0
-  (`docs/CLI.md`, "Exit status"). For the library, `Packet::Failed` is a new
-  variant, `PacketSink::end` is how an acquisition finishes, and
-  `Session::run` returns `Error::CaptureFailed` after the last packet.
-- `emu/` is on the `vusb` crate: the contract, the bus, the shells, USB/IP
-  and the control socket are vusb's, and `emu/` keeps the models, the `.tx`
-  log as an observer, `hidcable` and the checks on a firmware upload. The
-  server takes commands through `vusb-ctl` on `--control PATH` rather than
-  on standard input, and `tools/diffcli.sh` needs `vusb-ctl`
-  (`cargo install vusb-cli --version 0.2.1 --locked`). The goldens have not
-  changed.
+  on every driver and port. sigrok-cli and earlier oxrok exit 0, so a script
+  that relied on that sees a new failure (`docs/CLI.md`, "Exit status").
+- Library: `Packet::Failed` is a new variant and `Packet` is not
+  `#[non_exhaustive]`, so an exhaustive `match` stops compiling. A driver
+  finishes an acquisition with `PacketSink::end`, and `Session::run` returns
+  `Error::CaptureFailed` after the last packet. The rest of the library API
+  moved too; none of it is stable before 1.0, and a dependency on
+  `"0.1.0-alpha.1"` accepts this version on `cargo update`, so pin with `=`.
+- Values oxrok refuses where sigrok-cli takes them: `0x10` and `3.3V` for a
+  number, which `strtof` reads and oxrok does not, and a boolean in `-c` or
+  `-d` that is not clearly on or off (`docs/CLI.md`).
+- `-c` checks all its options before sending any, and sends `enabled=on` last.
+  A range error is still found at send time, so a set point ahead of it has
+  gone out.
+- `conn=bt/...` is refused with a message: oxrok has no Bluetooth path, and
+  RFCOMM goes through `/dev/rfcommN`.
+- The UT32x thermometers are their own driver module, `uni_t_ut32x`, with the
+  same id.
+- `oxrok::pydecode` has a module per host, `cpython` and `rustpython`;
+  `PyItem` stays the opaque item type of the CPython host, `RpItem` is the
+  RustPython one.
+
+### Drivers added
+
+<!-- One line per driver id or family, in alphabetical order, as ports merge. -->
+
+- `agilent-dmm`: Agilent and Keysight U12xx meters
+- `appa-55ii`: APPA 55II thermometer
+- `arachnid-labs-re-load-pro`: Re:load Pro load
+- `asix-sigma`: ASIX SIGMA and SIGMA2
+- `atorch`: Atorch meters and loads
+- `atten-pps3203`: Atten PPS3203T-3S supply
+- `bkprecision-1856d`: BK Precision 1856D frequency counter
+- `cem-dt-885x`: CEM DT-885x sound level meters
+- `chronovu-la`: ChronoVu LA8 and LA16
+- `conrad-digi-35-cpu`: Conrad DIGI 35 CPU supply
+- `devantech-eth008`: Devantech relay boards
+- `dreamsourcelab-dslogic`: DSLogic family
+- `fluke-dmm`: Fluke 8x, 18x, 199B and 28x meters
+- `ftdi-la`: FTDI chips as logic analyzers
+- `greatfet`: GreatFET One
+- `gwinstek-gpd`: GW Instek GPD-2303S and 3303S supplies
+- `gwinstek-psp`: GW Instek PSP supplies
+- `hantek-4032l`: Hantek 4032L
+- `hantek-6xxx`: Hantek 6022BE family
+- `hantek-dso`: Hantek DSO-2090 family
+- `icstation-usbrelay`: ICStation ICSE relay boards
+- `ikalogic-scanalogic2`: IKALOGIC Scanalogic-2
+- `ikalogic-scanaplus`: IKALOGIC ScanaPLUS
+- `itech-it8500`: ITECH IT8500 and BK 8500 loads
+- `juntek-jds6600`: Juntek JDS6600 signal generator
+- `kecheng-kc-330b`: Kecheng KC-330B sound level meter
+- `kern-ew-6200-2nm`: KERN EW and EG-N scales
+- `kingst-la2016`: Kingst LA2016 family
+- `korad-kaxxxxp`: Korad KA series supplies
+- `lascar-el-usb`: Lascar EasyLog EL-USB loggers
+- `lecroy-logicstudio`: LeCroy LogicStudio 16
+- `link-mso19`: Link Instruments MSO-19
+- `manson-hcs-3xxx`: Manson HCS-3xxx supplies
+- `mastech-ms6514`: Mastech MS6514 thermometer
+- `maynuo-m97`: Maynuo M97 and M98 loads
+- `motech-lps-301`: Motech LPS-301 supply
+- `norma-dmm`, `siemens-b102x`: Norma DM9x0 and Siemens B102x meters
+- `ols`: Open Bench Logic Sniffer
+- `p-ols`: Pipistrello OLS
+- `pce-322a`: PCE-322A sound level meter
+- `rdtech-dps`, `rdtech-rd`: RDTech DPS, DPH and RD supplies
+- `rdtech-tc`: RDTech TC66C
+- `rdtech-um`: RDTech UMxx meters
+- `rohde-schwarz-sme-0x`: Rohde & Schwarz SME generators
+- `saleae-logic16`: Saleae Logic16
+- `saleae-logic-pro`: Saleae Logic Pro 16
+- `deree-de5000`, `mastech-ms5308`, `peaktech-2170`, `uni-t-ut612`,
+  `voltcraft-4080` and others (module `serial_lcr`): ES51919 and VC4080 LCR meters
+- `sysclk-lwla`: Sysclk LWLA1034 and LWLA1016
+- `sysclk-sla5032`: Sysclk SLA5032
+- `testo`: Testo 435
+- `uni-t-dmm`: the UT-D04 cable's raw USB route, 27 meters
+- `uni-t-ut181a`: UNI-T UT181A meter
+- `uni-t-ut32x`: UNI-T UT32x thermometers, on a serial line and on the CH9325
+  cable, as a module of their own
+- `zeroplus-logic-cube`: ZEROPLUS Logic Cube, 13 boards
+- `zketech-ebd-usb`: ZKETECH EBD-USB load
+
+### Known issues
+
+- CI at this release is red on tests, and the release goes out with them. On
+  macOS: `atten_pps3xxx::tests::a_stop_with_an_answer_on_its_way_takes_it`,
+  `gwinstek_gpd::tests::a_stop_ends_a_capture_that_runs_and_asks_no_more`,
+  `manson_hcs_3xxx::tests::a_reading_starts_the_bound_afresh`,
+  `rdtech_um::tests::the_meter_reading_again_brings_the_frames_back` and
+  `serial::tcpraw::tests::a_peer_that_resets_is_a_disconnect`. On Windows:
+  `serial::tcpraw::tests::a_plain_write_to_a_peer_that_does_not_read_times_out`
+  and `a_write_to_a_peer_that_does_not_read_ends`. They look like timing on
+  those runners; not all are diagnosed. On the emulator job,
+  `sysclk-sla5032`'s `unplug at the chunk` differs from its golden in the error
+  number of one log line.
+- A demo capture with a trigger on an analog channel hangs.
+- `-O csv` holds rows in memory when it falls behind, with all 13 of `demo`'s
+  channels at 200 kHz, and makes up 0 for a channel absent from a packet.
+- BLE units have no path (`conn=bt/` above).
+- The libusb backend has only occasional emulator runs; the regular ones use
+  nusb.
+- `docs/CLI.md` lists the other differences from sigrok-cli, and
+  `docs/ROADMAP.md` the open items.
 
 ### Added
 
-- The `emu` crate (`oxrok-emu`): a USB/IP device server with a
+- `-O null`, an output that discards.
+- `conn=tcp-raw/HOST/PORT` for any serial driver.
+- `oxrok::modbus` (Modbus RTU) and `oxrok::lcr`, the LCR meter parsers.
+- The `emu` crate (`oxrok-emu`), not published: a USB/IP device server with a
   `DeviceModel` trait, attach and detach through Linux's `vhci-hcd`
   without the usbip tools, a transaction log in the fixture dialect
   and pedantic checks on what the host sends. The dcttech relay board
   is the first model; `tools/diffcli.sh --emu` runs sigrok-cli and
   oxrok against it and compares output and transactions
-  (`docs/USB.md`).
+  (`docs/USB.md`). Its core is now the `vusb` crate, and
+  `tools/diffcli.sh` needs `vusb-ctl`
+  (`cargo install vusb-cli --version 0.2.1 --locked`).
 - The `rustpython` feature: libsigrokdecode's Python decoders on a
   RustPython 0.6.0 interpreter built into the binary, with its
   standard library frozen in, so no Python installation is needed.
@@ -39,7 +157,9 @@ release may change the library API.
   each published release, which gets the archives attached): static
   Linux binaries (musl, x86_64 and aarch64), macOS (x86_64, arm64) and
   Windows (x86_64), built with `rustpython`, with the libsigrokdecode
-  0.5.3 decoders in `decoders/` next to the binary.
+  0.5.3 decoders in `decoders/` next to the binary, and a vendored source
+  tarball that builds offline; each has its third-party notices
+  (`docs/LICENSING.md`).
 - Python decoders are also looked for in `decoders` next to the
   executable.
 - Installation notes for the `python` feature in the README and the
@@ -51,9 +171,6 @@ release may change the library API.
 
 ### Changed
 
-- `oxrok::pydecode` has a module per host, `cpython` and `rustpython`;
-  `PyItem` stays the opaque item type of the CPython host, `RpItem` is
-  the RustPython one.
 - Decoder threads have an 8 MiB stack.
 
 ### Fixed
