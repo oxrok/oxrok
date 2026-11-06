@@ -14,7 +14,8 @@
 //! with `-` becomes an identifier with `_`) and builds the `NAMES`
 //! table and the `build` dispatch from the `NAME`, `ABOUT` and `build`
 //! each module exports, and the `log_rules` dispatch from the modules
-//! with a line that starts `pub fn log_rules(`. A new model is a new
+//! with a line that starts `pub fn log_rules(`, and likewise the
+//! `build_tcp` dispatch. A new model is a new
 //! file and nothing else, so models written in parallel never touch a
 //! shared list.
 
@@ -136,12 +137,42 @@ fn main() {
     }
     out.push_str("    let _ = (name, options);\n    crate::txlog::Rules::default()\n}\n");
 
+    out.push_str(&build_tcp_dispatch(&models));
+
     let dest = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("models.rs");
     // Rewritten only when it changes, so an unrelated build script run
     // does not recompile the crate.
     if fs::read_to_string(&dest).ok().as_deref() != Some(out.as_str()) {
         fs::write(&dest, out).unwrap_or_else(|e| panic!("{}: {e}", dest.display()));
     }
+}
+
+/// The `build_tcp` dispatch, from the modules with a line that starts
+/// `pub fn build_tcp(`.
+fn build_tcp_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "\n/// The model `name` on a socket, built with `options`.\n\
+         ///\n\
+         /// # Errors\n\
+         ///\n\
+         /// When the model has no `build_tcp`, or it rejects an option.\n\
+         pub fn build_tcp(\n    name: &str,\n    options: &[(String, String)],\n) -> Result<Box<dyn crate::shells::tcp::Stream>> {\n",
+    );
+    for (id, (_, path)) in models {
+        let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if source.lines().any(|l| l.starts_with("pub fn build_tcp(")) {
+            writeln!(
+                out,
+                "    if name == {id}::NAME {{\n        return {id}::build_tcp(options);\n    }}"
+            )
+            .unwrap();
+        }
+    }
+    out.push_str(
+        "    let _ = options;\n    Err(Error::Invalid(format!(\"{name} is not a model on TCP\")))\n}\n",
+    );
+    out
 }
 
 fn path_str(path: &Path) -> String {

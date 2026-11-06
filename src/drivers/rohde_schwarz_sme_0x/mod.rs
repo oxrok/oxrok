@@ -138,7 +138,7 @@ impl Driver for SmeDriver {
             Some(resource) => match scpi::open_keeping_line(&resource, comm) {
                 Ok(s) => probe(s, comm).into_iter().collect(),
                 Err(e) => {
-                    log::info!("Couldn't open SCPI device: {e}");
+                    log::warn!("Couldn't open SCPI device: {e}.");
                     Vec::new()
                 }
             },

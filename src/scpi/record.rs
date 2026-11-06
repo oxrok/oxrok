@@ -279,6 +279,18 @@ impl ScpiTransport for Recorder {
     fn read_complete(&self) -> bool {
         self.inner.read_complete()
     }
+
+    fn tags_answers(&self) -> bool {
+        self.inner.tags_answers()
+    }
+
+    fn close(&mut self) -> Result<()> {
+        self.inner.close()
+    }
+
+    fn reopen(&mut self) -> Result<()> {
+        self.inner.reopen()
+    }
 }
 
 /// A transport that answers from a fixture.

@@ -1,0 +1,117 @@
+gcov rigol-ds (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        42.2%  220 of 521
+  protocol.c   38.9%  207 of 532
+  total        40.6%  427 of 1053
+never reached, by function (line ranges hold no reached line):
+  api.c
+    probe_device: 330-335, 349-350, 368-387, 405-411
+    dev_open: 451-452, 456-457
+    dev_close: 472, 475
+    analog_frame_size: 494, 499-503
+    digital_frame_size: 514-518
+    config_get: 534, 540-541, 545-551, 556-561, 565-568, 578, 581-588, 594-598, 615-616, 621-655
+    config_set: 675-676, 683-701, 709-783
+    config_list: 801-830, 834, 836, 842, 851, 853-858, 864-865
+    dev_acquisition_start: 901, 904-934, 940, 944-947, 951-980, 988-991, 997, 1000, 1002, 1004-1005, 1010, 1024-1037, 1041
+  protocol.c
+    parse_int: 77-78, 81-82, 85-86
+    rigol_ds_set_wait_event: 97
+    rigol_ds_event_wait: never called (107-158)
+    rigol_ds_trigger_wait: 182, 202
+    rigol_ds_stop_wait: never called (207-209)
+    rigol_ds_check_stop: never called (213-264)
+    rigol_ds_block_wait: 276, 284-285, 298, 303
+    rigol_ds_config_set: 324, 328-330
+    rigol_ds_capture_start: 346, 352, 354, 361-384, 389, 392, 397-448
+    rigol_ds_channel_start: 463, 472-483, 486-487, 491, 494-497, 500-521, 529, 533, 537-539
+    rigol_ds_read_header: 565-566, 579-605
+    rigol_ds_receive: 627, 630, 635, 644, 646, 650, 652-662, 672-678, 683, 685, 689, 709-856
+    rigol_ds_get_dev_cfg: 875, 885-905, 911, 924, 928, 934, 942, 952, 962, 968, 975, 980
+    rigol_ds_get_dev_cfg_vertical: 1001, 1013
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/scpi/scpi.c          42.0%  213 of 507
+  src/scpi/scpi_serial.c   64.3%  54 of 84
+  src/serial.c             32.6%  131 of 402
+  src/serial_libsp.c       37.1%  95 of 256
+  total                    39.5%  493 of 1249
+never reached, by function (line ranges hold no reached line):
+  src/scpi/scpi.c
+    parse_strict_bool: 58, 74-75
+    sr_scpi_scan_resource: 117, 120-122, 132
+    scpi_write_data: never called (205-207)
+    scpi_read_response: 243-244, 253-254
+    scpi_get_data: 281, 286, 297-299, 306
+    sr_scpi_scan: 332-350
+    scpi_dev_inst_new: 385-386
+    sr_scpi_connection_id: never called (421-424)
+    sr_scpi_write_data: never called (552-561)
+    sr_scpi_free: 604
+    sr_scpi_get_string: 633-635, 644
+    sr_scpi_read_response: never called (664-673)
+    sr_scpi_get_bool: 708
+    sr_scpi_get_int: 741, 747-749
+    sr_scpi_get_float: 777, 782
+    sr_scpi_get_double: never called (799-818)
+    sr_scpi_get_opc: 842
+    sr_scpi_get_floatv: never called (859-902)
+    sr_scpi_get_uint8v: never called (919-961)
+    sr_scpi_get_block: never called (978-1124)
+    sr_scpi_get_hw_id: 1154, 1170-1173, 1176, 1186, 1190-1191
+    sr_scpi_hw_info_free: 1213
+    sr_scpi_unquote_string: never called (1231-1261)
+    sr_vendor_alias: never called (1264-1273)
+    sr_scpi_cmd_get: never called (1276-1293)
+    sr_scpi_cmd: never called (1296-1334)
+    sr_scpi_cmd_resp: never called (1337-1418)
+  src/scpi/scpi_serial.c
+    scpi_serial_scan: never called (54-77)
+    scpi_serial_dev_inst_new: 100-103
+    scpi_serial_open: 118
+    scpi_serial_connection_id: never called (125-133)
+    scpi_serial_send: 161-163
+    scpi_serial_read_data: 187, 199-201
+  src/serial.c
+    dev_is_supported: 62
+    serial_open: 87-88, 99, 101, 103, 107, 122, 125, 130, 140, 142
+    serial_close: 162-163, 169, 173-174
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 292
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: 461-462, 466
+    serial_read_blocking: never called (490-493)
+    serial_set_params: 541-542, 548
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: 651-656, 664-704, 715-716
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: 963, 969, 977-978
+    serial_source_add: 992-993, 997-998, 1002
+    serial_source_remove: 1013-1014, 1018
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    serial_timeout: never called (1141-1166)
+  src/serial_libsp.c
+    sr_ser_libsp_open: 60-64, 70-71, 76-84
+    sr_ser_libsp_close: 96-97, 103-111
+    sr_ser_libsp_flush: 126-127, 133-141
+    sr_ser_libsp_drain: never called (147-167)
+    sr_ser_libsp_write: 178-179, 183, 188-195
+    sr_ser_libsp_read: 209-210, 216, 219-226
+    sr_ser_libsp_set_params: 242-243, 253-260, 276-284
+    sr_ser_libsp_set_handshake: never called (290-311)
+    sr_ser_libsp_source_add_int: 330-331, 334-335, 339, 345, 347, 350-351, 354-357, 369, 371
+    sr_ser_libsp_source_add: 398
+    sr_ser_libsp_list: never called (414-432)
+    sr_ser_libsp_find_usb: 442, 448, 451-453
+    sr_ser_libsp_get_frame_format: never called (461-503)
+    sr_ser_libsp_get_rx_avail: never called (506-517)

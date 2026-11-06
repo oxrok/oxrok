@@ -869,6 +869,170 @@ What the first model taught:
   extras on Ubuntu. A distribution's brltty or gpsd may claim a tty;
   only ModemManager has been looked at.
 
+### Writing a SCPI model
+
+`emu/src/models/rigol-ds.rs` and `tools/emu/rigol-ds.sh` are the template, and
+`rigol-ds-serial` for a serial port. A SCPI instrument is an `Instrument`
+(`emu/src/shells/scpi.rs`); one file says its commands, and the same device goes on
+USBTMC, on TCP and on CDC-ACM:
+
+```rust
+struct Meter;
+impl Instrument for Meter {
+    fn idn(&self) -> Option<String> { Some("Acme,M1,1,2".to_owned()) }
+    fn settings(&self) -> Settings {
+        Settings::default()
+            .with("CONF:VOLT:RANG", "10")
+            .with("OUTP:STAT", "0")
+            .with("VOLT:LEV", "1.000")
+            .with_alias("VOLTAGE:LEVEL", "VOLT:LEV") // a set and a get spelled apart
+    }
+    fn command(&mut self, m: &Message<'_>, s: &mut Settings, v: &mut Violations) -> Answer {
+        match m.header.as_str() {
+            "READ?" => Answer::Text("+1.5E+00".to_owned()),
+            "OUTP" => { s.set("OUTP:STAT", if m.args == "ON" { "1" } else { "0" }); Answer::Done }
+            "WAV:DATA?" => Answer::Bytes(block(9, &self.wave(), b"\n")),
+            _ => Answer::Unknown,
+        }
+    }
+}
+fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config)> {
+    let mut config = scpi::Config::default();
+    for (k, v) in options {
+        if config.option(k, v)? { continue; }
+        return Err(Error::Invalid(format!("{NAME} has no option {k}")));
+    }
+    Ok((Meter, config))
+}
+pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
+    let (meter, config) = parts(options)?;
+    Ok(config.usbtmc(NAME, &Identity::new(0x1234, 0x5678, "Acme", "M1"), meter))
+}
+pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
+    let (meter, config) = parts(options)?;
+    Ok(config.tcp(meter))
+}
+```
+
+- `Instrument::idn` defaults to `None`: an HP of that age has no `*IDN?`, and a
+  driver that asks is flagged.
+- `Identity`: `speed` (high by default, 512 byte packets; `Speed::Full` for 64), and
+  `remote`, which says `RL1` in the capabilities. A tool sends `REN_CONTROL` and
+  `LOCAL_LOCKOUT` at each open and `GO_TO_LOCAL` at each close, unless the id is on
+  `scpi_usbtmc_libusb.c`'s table (the Rigol DS series it names, all Yokogawa, all
+  Siglent SDS). sigrok-cli skips its close at an error, so with `remote` on an id not
+  on that table every failing case differs by one line, and takes
+  `--tx-filter '/^ctl_in 21 a1 /d'`; pin the line in a case that succeeds
+  (`remote control` in `tools/emu/rigol-ds.sh`).
+- `Message`: `text` as sent, `header` in upper case with no leading colon,
+  `args`, `is_query()`, `name()` without the `?`. The match sees what the driver
+  sends, not SCPI's long and short forms: a port that sends another spelling
+  shows in the `.tx` anyway.
+- `Answer`: `Text` gets the line end (`eol=`, or `Config::with_eol`), `Bytes` goes
+  as it is, `Done` for a setting, `Silent` for nothing and no error, `Error(code,
+  text)` for the queue, `Unknown` for the `Engine`. What a command says goes out with
+  or without a question mark: an HP's `RMATH HIRES`.
+- What the `Engine` answers once the model says `Unknown`: `*IDN?`, `*OPC?`,
+  `*OPC`, `*WAI`, `*ESR?`, `*CLS`, `SYST:ERR?`, and then `Settings`. What nobody
+  has is a violation with `-113`. Lines are cut at `;`, for `scpi-dmm`'s
+  `*CLS;SYST:REM`.
+- Options all models take: `mute-at=N`, `silent-at=N`, `late-at=N:T`, `opc-late=N`,
+  `mark-at=N`, `idn=`, `eol=`, `framing=rigol`, counted in queries from 1; on USBTMC
+  `stall=caps|ren|llo|local`, `in-stall=N`, `empty-at=N`, `bad-tag-at=N`, `message=N`;
+  on CDC-ACM `stall=line|lines|break`, `chunk=`, `in-limit=`, `in-stall=`, `out-hold=`,
+  `uart=LINE`.
+- **A serial instrument:** `config.cdc(NAME, &cdc::Identity::new(..), instrument)` in
+  `build`, with no `build_tcp` and `EMU_CDC=1` in the scenario, under the rules of
+  "Writing a serial model". Text must end in a line feed, as that is what ends a
+  serial read. `emu/src/models/rigol-ds-serial.rs` and its scenario are the template.
+- A model on TCP alone (`beaglelogic`, `ipdbg-la`): implement `shells::tcp::Stream`
+  (`received`, `connected`, `closed`, `tick`, and `Port`'s `send`, `violation`,
+  `mark`, `hang_up`), `build_tcp`, and `build` returning `NoUsb::new(NAME)`, with
+  `EMU_TCP=only` and no `EMU_TMC`. A driver's wire with no SCPI on it needs no
+  `Engine`. One that streams gives a digest in `log_rules`: a run of bytes is kept
+  whole unless one says otherwise.
+
+The scenario, with `EMU_TMC` only where the model is on USBTMC:
+
+```sh
+EMU_MODEL=NAME
+EMU_TMC=1        # usbtmc off this device before each tool; --bound usbtmc puts it on
+EMU_TCP=1        # the socket as well; only: nothing attached
+EMU_DRIVER=NAME
+EMU_FULL=$EMU_DRIVER
+EMU_GCOV_SHARED="src/scpi/scpi.c src/scpi/scpi_usbtmc_libusb.c src/scpi/scpi_tcp.c src/tcp.c"
+emu_cases() {
+    U=NAME                                        # by scan: every USBTMC device
+    T=NAME:conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT   # after emu_start, so in here
+    emu_case "scan" --keep-header -- -d $U --scan
+    emu_case "scan tcp" --keep-header -- -d $T --scan
+    emu_options mute-at=3
+    emu_case "goes silent" --no-output --expect-fail -- -d $U --show
+    emu_options
+    emu_case "unplug tcp" --unplug tcp-in=18 --oxrok-fails "closed" ... -- -d $T ...
+}
+```
+
+The port is bound once per session and printed by the server, so nothing races for
+it, and the outputs say `tcp-raw/127.0.0.1/PORT`. Both carriers share the session,
+so one file holds all of a model's cases; a reset gives both a fresh instrument.
+
+A `.tx` on TCP: `tcp_connect`, `tcp_out DATA -> LEN`, `tcp_in LEN -> DATA`,
+`tcp_close`; a direction's consecutive bytes are one line, whatever the kernel cut,
+so a setting with no answer shares a line with the next command, and a tool that
+closes and connects again shows it, in that order. `tcp_in` is what the model sent,
+not what the host read. Above the digest of the model's `log_rules` it is
+`@LEN:SHA256`.
+
+- **An unplug on TCP** is `--unplug tcp-in=N`, after the model's Nth send (`N` counts
+  sends, and `framing=rigol` makes two of an answer), or `--unplug tcp-model`, at
+  `mark-at=`. What was sent gets out, then a FIN; the log says `unplug`. Until the
+  next `reset` a new connection is accepted and closed (`tcp_refused`), where a
+  pulled cable would time out. The event's `--interrupt` takes the same points. On
+  USBTMC, `--unplug in=2:N` counts bulk INs, two or more to an answer.
+- **A stall on TCP** is `mute-at=N`: the connection stays up with nothing on it.
+  libsigrok's `recv` has no timeout, so sigrok-cli stops for good
+  (`--oracle-bug --oracle-hangs --timeout 4`).
+- **What sigrok-cli does at a close** depends on what it does next, so pick the
+  point: a write gets SIGPIPE (exit 141), and a read gets 0 bytes, which is no error
+  to it, for ever (`--oracle-hangs --timeout 4`). Either is an `--oracle-bug`, for
+  every SCPI driver on TCP; `tools/emu/rigol-ds.sh` has both, with their texts.
+- **Time on TCP is the clock.** A tick is 20 ms of wall time there, with no host to
+  pace it; on USBTMC it is one offer of a held bulk IN. So `late-at=N:T` needs a T
+  well inside or well outside the tool's 1 s.
+
+What a model on these cannot show:
+
+- USBTMC: an interrupt endpoint, so `SR1` and service requests; a transfer that a
+  real device ends with a zero length packet, as vusb completes any answer whole;
+  what firmware does with a second request after an unanswered one, or with a
+  `DEV_DEP_MSG_OUT` during a reply (here the old answer goes); the abort sequence,
+  which no tool sends, is answered and not exercised.
+- TCP: how a real stack cuts a long answer, which matters since `tcp-raw` takes a
+  short read as the end of a response: here an answer of up to the socket's buffer
+  arrives whole. An RST, a connection refused, and a connect that times out. The
+  VXI and LXI paths: libsigrok has `vxi/` and oxrok does not.
+- A session with `EMU_TCP=1` attaches the USB device too, so a `model=` that changes
+  its ids costs about 5.5 s of re-attach even when the case is on TCP. A driver with
+  many identities on TCP alone wants `EMU_TCP=only`.
+- Both: the instrument's timing, and what it does with a setting beyond storing it.
+  Numbers come back as they were sent unless the model says otherwise.
+
+What the first model taught:
+
+- `sr_scpi_scan` closes the connection after a probe, and an open makes a new one,
+  so a scan and a capture are two USBTMC opens (`GET_CAPABILITIES` twice, with
+  `bTag` going on where it stopped, as the instance stays) and two TCP connections.
+  `Scpi::close` and `Scpi::reopen` do that; hold no connection in a device.
+- The kernel's `usbtmc` asks for the capabilities at each bind (`usbtmc_probe`), and a
+  tool that detached it gives it back at its close (`USBDEVFS_CONNECT`), in the tool's
+  section. So `EMU_TMC=1` unbinds it from this device before each tool, and nothing
+  binds it again, as libsigrok and nusb re-attach only what they detached. A udev rule
+  scoped to emulated interfaces of its class keeps udev from loading the module for
+  them. The module is never unloaded, so a real instrument on the machine keeps its
+  driver, through a crash too.
+- `REQUEST_DEV_DEP_MSG_IN` asks for `INT32_MAX`.
+
 ### Writing a device model
 
 Do no slow work inside a reply: the host's timeout is running, and a

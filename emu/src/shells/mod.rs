@@ -10,10 +10,16 @@
 //!   `ch9325`, `victor`) share: the Pico emulator's descriptors, the
 //!   meter packets they play, a poll counted stream.
 //!
-//! USBTMC comes next (`docs/ROADMAP.md`, "Emulation plan").
+//! - [`usbtmc`]: a USBTMC function with USB488, on [`crate::model`] alone.
+//! - [`tcp`]: a socket instead of a USB device, for what libsigrok reaches over
+//!   TCP, on the session's log and control socket.
+//! - [`scpi`]: what every SCPI instrument's model shares, on either.
 
 pub use vusb::shells::{ftdi, hid};
 
 pub mod cdc;
 pub mod ezusb;
 pub mod hidcable;
+pub mod scpi;
+pub mod tcp;
+pub mod usbtmc;

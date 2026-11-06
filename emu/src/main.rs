@@ -32,6 +32,10 @@
 //! arms `mark interrupt` for an interrupt of the tool under test, which
 //! it delivers itself.
 //!
+//! With `--tcp ADDRESS` the model is served on a socket too (`shells::tcp`): its
+//! port is on a line `TCP port=N` on standard output, before anything else, and
+//! without `--attach` a `READY` line with no device follows it.
+//!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
 //! with `--all` every attached port. A running session's port carries
@@ -50,6 +54,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use oxrok_emu::models;
+use oxrok_emu::shells::tcp;
 use oxrok_emu::txlog::{self, TxLog};
 use serde_json::Value;
 use vusb::attach::vhci;
@@ -113,6 +118,10 @@ struct Serve {
     /// The control socket, for vusb-ctl: a path, or host:port on loopback.
     #[arg(long)]
     control: Option<String>,
+    /// Serves the model's `build_tcp` on this address too (port 0 picks a free
+    /// one), and prints `TCP port=N`.
+    #[arg(long, value_name = "ADDRESS")]
+    tcp: Option<String>,
     /// Ends the session once this process is gone (Linux).
     #[arg(long, value_name = "PID")]
     while_alive: Option<u32>,
@@ -239,7 +248,17 @@ fn serve(args: &Serve) -> Result<u8> {
         None => Box::new(io::sink()),
     };
     let log = Arc::new(Mutex::new(TxLog::new(out, args.verbose)));
-    let factory = txlog::factory(&args.model, Arc::clone(&log));
+    let carrier = match &args.tcp {
+        Some(address) => {
+            let lines: Arc<Mutex<dyn tcp::Log>> = log.clone();
+            Some(tcp::Carrier::bind(address, lines)?)
+        }
+        None => None,
+    };
+    let factory = match &carrier {
+        Some(carrier) => txlog::factory_with_tcp(&args.model, Arc::clone(&log), carrier.clone()),
+        None => txlog::factory(&args.model, Arc::clone(&log)),
+    };
     let observer: SharedObserver = log;
     let mut builder = Builder::new(factory)
         .options(options::parse(&args.options)?)
@@ -249,12 +268,22 @@ fn serve(args: &Serve) -> Result<u8> {
         .open_devices(args.open_devices)
         .observer(observer)
         .watch(announce);
+    if let Some(carrier) = &carrier {
+        builder = carrier.commands(builder);
+    }
     if let Some(control) = &args.control {
         builder = builder.control_with(Address::parse(control), ListenOptions::default());
     }
     let session = builder.start()?;
     if let Some(addr) = session.addr() {
         println!("listening on {addr} busid 1-1");
+    }
+    if let Some(carrier) = &carrier {
+        println!("TCP port={}", carrier.port());
+        // Nothing to attach: ready now.
+        if !args.attach {
+            println!("READY port= busid= usb= usbfs= nodes=");
+        }
     }
     let stopper = session.stopper();
     if let Some(pid) = args.while_alive {
@@ -271,6 +300,7 @@ fn serve(args: &Serve) -> Result<u8> {
     ctrlc::set_handler(move || finish_process(&stopper))
         .map_err(|e| Error::Other(format!("signal handler: {e}")))?;
     let report = session.run()?;
-    println!("violations: {}", report.violations);
-    Ok(if report.violations == 0 { 0 } else { 2 })
+    let violations = report.violations + carrier.as_ref().map_or(0, tcp::Carrier::violations);
+    println!("violations: {violations}");
+    Ok(if violations == 0 { 0 } else { 2 })
 }
