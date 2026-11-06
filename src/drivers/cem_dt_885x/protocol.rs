@@ -13,9 +13,10 @@
 //! [`Parser`] takes them one byte at a time, as `process_byte`; what it finds goes
 //! to the [`Event`] list a capture sends, and in a wait for a token nowhere.
 //!
-//! A command is one byte. It is never acknowledged and is often lost, so a setting
-//! is: send it, wait for the token that says the state, send it again if that is
-//! not the state wanted ([`Link::toggle`]).
+//! A command is one byte. It is never acknowledged and is often lost, and each one
+//! heard steps the state, so a setting is: send it, wait for the next announcement of
+//! the state, send it again if that is not the state wanted, and when it is, have the
+//! next announcement agree ([`Link::toggle`]).
 //!
 //! A stored log starts with `bb` and a length, and then has records: `aa` or `cc`,
 //! seven bytes of date, time and interval, and after `ac` the levels, in BCD like the
@@ -101,16 +102,14 @@ const RECORD_HEAD: usize = 8;
 /// In hold the last level goes out again this often, as it does on the display.
 pub const HOLD_REPEAT_INTERVAL: Duration = Duration::from_millis(50);
 
-/// `wait_for_token`'s time for a state said at 2 Hz: just over that.
-pub const RECORDING_WAIT: Duration = Duration::from_millis(510);
-/// What the C found works best after a toggle of the frequency weighting.
-pub const FREQ_WAIT: Duration = Duration::from_millis(10);
-/// What the C found works best after a toggle of the time weighting or of hold.
-pub const TIME_WAIT: Duration = Duration::from_millis(51);
-/// Long enough for two announcements of the range.
-pub const RANGE_WAIT: Duration = Duration::from_millis(110);
-/// How soon the range's toggle goes again.
-pub const RANGE_TOGGLE_WAIT: Duration = Duration::from_millis(11);
+/// How long the next announcement of a state said in most blocks may take, about
+/// two blocks on a real one where C has 10 to 110 ms, and a few on a slow host.
+pub const FREQUENT_WAIT: Duration = Duration::from_millis(600);
+/// The same for a state said in the long block, at 2 Hz by the C's comment.
+pub const SLOW_WAIT: Duration = Duration::from_millis(1200);
+/// A 9600 baud packet of five bytes. What completes this soon after a command
+/// began before the meter could have heard it.
+pub const PACKET_TIME: Duration = Duration::from_millis(6);
 /// How long a meter's next token takes at most, in the C's comment.
 pub const POWER_OFF_WAIT: Duration = Duration::from_millis(25);
 
@@ -120,14 +119,14 @@ pub const WAIT_SILENCE: Duration = Duration::from_secs(1);
 /// How long a wait with no time of its own goes with bytes but not the token,
 /// where C waits for ever. The slowest token comes at 2 Hz.
 pub const WAIT_BOUND: Duration = Duration::from_secs(2);
-/// How long a toggle goes on, where C does for ever. A real one "nearly always"
-/// needs a resend, at most some 100 of these.
+/// How long a toggle goes on, where C does for ever: a hundred commands at one per
+/// block. It also bounds a power off.
 pub const TOGGLE_BOUND: Duration = Duration::from_secs(5);
+/// The same for a state said in the long block: some thirty commands at one per
+/// long block.
+pub const SLOW_TOGGLE_BOUND: Duration = Duration::from_secs(15);
 /// How long one read in a wait takes, at most.
 const WAIT_READ: Duration = Duration::from_millis(20);
-
-/// The error a get or a set ends in, as `sr_strerror` names `SR_ERR`.
-pub const GENERIC_ERROR: &str = "generic/unspecified error";
 
 /// The token's data bytes: `None`, a token no one knows, whose data ends where a
 /// new command seems to start.
@@ -187,6 +186,9 @@ pub struct Parser {
     pub recording: Option<bool>,
     /// `cur_meas_range`, a token.
     pub range: Option<u8>,
+    /// A level has come in this capture. A display token ahead of any says nothing:
+    /// C sends what `last_spl` holds, 0 or the last capture's.
+    have_level: bool,
     state: State,
     token: u8,
     buf: [u8; BUF_SIZE],
@@ -201,6 +203,7 @@ impl Default for Parser {
             flags: MqFlags::empty(),
             recording: None,
             range: None,
+            have_level: false,
             state: State::Init,
             token: 0,
             buf: [0; BUF_SIZE],
@@ -218,6 +221,7 @@ impl Parser {
         self.state = State::Init;
         self.buf_len = 0;
         self.hold_last_sent = None;
+        self.have_level = false;
     }
 
     /// In a log's header, the two bytes of its length: a capture asks for the log
@@ -249,12 +253,15 @@ impl Parser {
             TOKEN_HOLD_NONE => {
                 self.set(MqFlags::empty(), MqFlags::MAX | MqFlags::MIN | MqFlags::HOLD);
             }
-            TOKEN_MEASUREMENT => self.last_spl = decode_level(self.buf[0], self.buf[1]),
+            TOKEN_MEASUREMENT => {
+                self.last_spl = decode_level(self.buf[0], self.buf[1]);
+                self.have_level = true;
+            }
             TOKEN_MEAS_WAS_READOUT | TOKEN_MEAS_WAS_BARGRAPH => {
                 // In max or min hold the bar graph goes on, and the display does
                 // not show it.
                 let held = self.flags.contains(MqFlags::MAX) || self.flags.contains(MqFlags::MIN);
-                if !(held && self.token == TOKEN_MEAS_WAS_BARGRAPH) {
+                if self.have_level && !(held && self.token == TOKEN_MEAS_WAS_BARGRAPH) {
                     events.push(Event::Levels(vec![self.last_spl], self.flags));
                 }
             }
@@ -425,22 +432,83 @@ impl Parser {
     }
 }
 
-/// What ended a wait that did not fail.
+/// What ended a wait that did not fail on the port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Waited {
+enum Waited {
     /// A token of the list came.
     Found(u8),
-    /// A time of its own ran out.
-    TimedOut,
+    /// Its time ran out with bytes coming, or none yet.
+    TimeUp,
+    /// No byte for [`Link::silence`].
+    Silent,
+}
+
+/// What a get or a set of one state needs to know about it.
+#[derive(Clone, Copy, Debug)]
+pub struct Setting {
+    /// What an error calls it.
+    pub what: &'static str,
+    /// The command that steps it.
+    pub cmd: u8,
+    /// How long its next announcement may take.
+    pub announce: Duration,
+    /// How long a toggle of it goes on.
+    pub bound: Duration,
+}
+
+/// The frequency weighting, said in each block.
+pub const FREQ: Setting = Setting {
+    what: "the frequency weighting",
+    cmd: CMD_TOGGLE_WEIGHT_FREQ,
+    announce: FREQUENT_WAIT,
+    bound: TOGGLE_BOUND,
+};
+/// The time weighting, said in the long block.
+pub const TIME: Setting = Setting {
+    what: "the time weighting",
+    cmd: CMD_TOGGLE_WEIGHT_TIME,
+    announce: SLOW_WAIT,
+    bound: SLOW_TOGGLE_BOUND,
+};
+/// The hold mode, said in the short blocks.
+pub const HOLD: Setting = Setting {
+    what: "the hold mode",
+    cmd: CMD_TOGGLE_HOLD_MAX_MIN,
+    announce: FREQUENT_WAIT,
+    bound: TOGGLE_BOUND,
+};
+/// The range, said in the short blocks.
+pub const RANGE: Setting = Setting {
+    what: "the range",
+    cmd: CMD_TOGGLE_MEAS_RANGE,
+    announce: FREQUENT_WAIT,
+    bound: TOGGLE_BOUND,
+};
+/// Recording, said in the long block.
+pub const RECORDING: Setting = Setting {
+    what: "the recording state",
+    cmd: CMD_TOGGLE_RECORDING,
+    announce: SLOW_WAIT,
+    bound: SLOW_TOGGLE_BOUND,
+};
+
+/// A time as a message says it.
+fn spoken(time: Duration) -> String {
+    if time.subsec_millis() == 0 {
+        format!("{} s", time.as_secs())
+    } else {
+        format!("{} ms", time.as_millis())
+    }
 }
 
 /// The port and the state on it.
 ///
 /// `wait_for_token` in C reads without waiting, and a read with no byte is an
 /// error, "Device might have gone away" (`protocol.c:425-427`). At 9600 baud there
-/// is rarely a byte there yet, so no get or set of the meter's state can work:
-/// `power_off`'s comment says its read was once a blocking one. This waits for the
-/// byte, up to [`WAIT_SILENCE`]. See `docs/DEVICES.md`.
+/// is nearly never a byte there yet, so nearly every get or set of the meter's state
+/// fails. The read was a blocking one until libsigrok `d7b269da` (2014-09-21) opened
+/// the port without `SERIAL_RDWR`'s wait. This waits for the byte, up to
+/// [`WAIT_SILENCE`].
 pub struct Link {
     /// The open port.
     pub port: Option<Box<dyn Port>>,
@@ -452,8 +520,10 @@ pub struct Link {
     pub silence: Duration,
     /// [`WAIT_BOUND`], or a test's.
     pub wait_bound: Duration,
-    /// [`TOGGLE_BOUND`], or a test's.
-    pub toggle_bound: Duration,
+    /// A test's in place of [`Setting::bound`] of power off and every toggle.
+    pub toggle_bound: Option<Duration>,
+    /// A test's in place of [`Setting::announce`].
+    pub announce: Option<Duration>,
 }
 
 impl Link {
@@ -465,7 +535,8 @@ impl Link {
             parser: Parser::default(),
             silence: WAIT_SILENCE,
             wait_bound: WAIT_BOUND,
-            toggle_bound: TOGGLE_BOUND,
+            toggle_bound: None,
+            announce: None,
         }
     }
 
@@ -473,67 +544,111 @@ impl Link {
         self.port.as_mut().ok_or_else(|| Error::device("device is not open"))
     }
 
-    fn generic(why: &str) -> Error {
-        log::debug!("{why}");
-        Error::device(GENERIC_ERROR)
-    }
-
-    /// `wait_for_token`, with what is said above. A whole packet has to come, of
-    /// this wait: in C a first byte that is no `a5` also looks at the last wait's
-    /// token, which then says what the meter said before a command.
-    pub fn wait_for_token(&mut self, tokens: &[u8], timeout: Option<Duration>) -> Result<Waited> {
-        let (silence, bound) = (self.silence, self.wait_bound);
+    /// `wait_for_token`, with what is said above, and an end in every state of the
+    /// parser: a stray `bb` never comes back to where C looks at its time. A whole
+    /// packet has to come, of this wait: in C a first byte that is no `a5` also looks
+    /// at the last wait's token. A token that completes before `ignore_until` goes
+    /// by.
+    fn wait(
+        &mut self,
+        tokens: &[u8],
+        limit: Duration,
+        ignore_until: Option<Instant>,
+    ) -> Result<Waited> {
+        let silence = self.silence;
         let started = Instant::now();
         let mut last_byte = started;
         self.parser.state = State::Init;
         self.parser.token = 0;
         let mut ignored = Vec::new();
         loop {
-            let mut byte = [0];
-            let port = self.port()?;
-            let now = Instant::now();
-            if now.duration_since(started) > bound && timeout.is_none() {
-                return Err(Self::generic("The token did not come."));
+            if started.elapsed() > limit {
+                return Ok(Waited::TimeUp);
             }
-            if port.read(&mut byte, WAIT_READ)? == 0 {
+            let mut byte = [0];
+            if self.port()?.read(&mut byte, WAIT_READ)? == 0 {
                 if last_byte.elapsed() >= silence {
-                    return Err(Self::generic("Device might have gone away."));
+                    return Ok(Waited::Silent);
                 }
                 continue;
             }
             last_byte = Instant::now();
             ignored.clear();
             self.parser.byte(byte[0], false, last_byte, &mut ignored);
-            if self.parser.state != State::Init {
+            if self.parser.state != State::Init || !tokens.contains(&self.parser.token) {
                 continue;
             }
-            if tokens.contains(&self.parser.token) {
-                log::trace!("wait_for_token: got token 0x{:02x}", self.parser.token);
-                return Ok(Waited::Found(self.parser.token));
+            if ignore_until.is_some_and(|until| last_byte < until) {
+                // A later byte in Init must not take it again.
+                self.parser.token = 0;
+                continue;
             }
-            if timeout.is_some_and(|t| started.elapsed() > t) {
-                return Ok(Waited::TimedOut);
+            log::trace!("wait_for_token: got token 0x{:02x}", self.parser.token);
+            return Ok(Waited::Found(self.parser.token));
+        }
+    }
+
+    /// The token saying what `setting` is now, for a get or ahead of a first command.
+    fn current(&mut self, setting: &Setting, tokens: &[u8], limit: Duration) -> Result<u8> {
+        match self.wait(tokens, limit, None)? {
+            Waited::Found(token) => Ok(token),
+            Waited::TimeUp => Err(Error::device(format!(
+                "the meter did not say {} in {}",
+                setting.what,
+                spoken(limit)
+            ))),
+            Waited::Silent => {
+                Err(Error::device(format!("no byte from the meter in {}", spoken(self.silence))))
             }
         }
     }
 
-    /// `cem_dt_885x_toggle`: `tokens` say the state the command changes, the first
-    /// the state wanted.
-    pub fn toggle(&mut self, cmd: u8, tokens: &[u8], timeout: Duration) -> Result<()> {
-        let bound = self.toggle_bound;
+    /// The next announcement after a command, which may have changed the state.
+    fn announcement(
+        &mut self,
+        setting: &Setting,
+        tokens: &[u8],
+        ignore_until: Option<Instant>,
+    ) -> Result<u8> {
+        let limit = self.announce.unwrap_or(setting.announce);
+        match self.wait(tokens, limit, ignore_until)? {
+            Waited::Found(token) => Ok(token),
+            Waited::TimeUp => Err(Error::device(format!(
+                "the meter did not say {} in {}; its state is unknown",
+                setting.what,
+                spoken(limit)
+            ))),
+            Waited::Silent => Err(Error::device(format!(
+                "no byte from the meter in {}; its state is unknown",
+                spoken(self.silence)
+            ))),
+        }
+    }
+
+    /// `cem_dt_885x_toggle`, but it can't be sent as C sends it. A meter takes a
+    /// command when it takes it, and then a second sent while the first is on its way
+    /// undoes it: `dt8852.py:184-196` warns of the same "overshoot". So one command
+    /// per announcement, sent as one has just come and so well ahead of the next. What
+    /// completes within a packet's time of a command began before it and says nothing.
+    /// Once a token says `wanted`, nothing more goes out, and the next one has to agree:
+    /// one that doesn't was a command taken late. C takes the first token, and says
+    /// success with the meter in the other state.
+    fn toggle(&mut self, setting: &Setting, wanted: u8, tokens: &[u8]) -> Result<()> {
+        let bound = self.toggle_bound.unwrap_or(setting.bound);
         let started = Instant::now();
         loop {
-            // What has come so far says the state before this command. Read as its
-            // answer, it would send the command again, and undo it.
-            let port = self.port()?;
-            port.purge()?;
-            port.write(&[cmd])?;
-            let waited = self.wait_for_token(tokens, Some(timeout))?;
-            if waited == Waited::Found(tokens[0]) {
-                return Ok(());
-            }
             if started.elapsed() > bound {
-                return Err(Self::generic("The meter does not take the command."));
+                return Err(Error::device(format!(
+                    "the meter did not take the command in {}; its state is unknown",
+                    spoken(bound)
+                )));
+            }
+            self.port()?.write(&[setting.cmd])?;
+            let ignore_until = Instant::now() + PACKET_TIME;
+            if self.announcement(setting, tokens, Some(ignore_until))? == wanted
+                && self.announcement(setting, tokens, None)? == wanted
+            {
+                return Ok(());
             }
         }
     }
@@ -545,30 +660,24 @@ impl Link {
             return Ok(on);
         }
         let tokens = [TOKEN_RECORDING_ON, TOKEN_RECORDING_OFF];
-        match self.wait_for_token(&tokens, Some(RECORDING_WAIT))? {
-            Waited::Found(token) => Ok(token == TOKEN_RECORDING_ON),
-            Waited::TimedOut => Err(Self::generic("The recording state did not come.")),
-        }
+        Ok(self.current(&RECORDING, &tokens, RECORDING.announce)? == TOKEN_RECORDING_ON)
     }
 
     /// `recording_set`. Remembers what it did, as C does not: a later set of what
     /// the last capture saw would do nothing.
     pub fn recording_set(&mut self, on: bool) -> Result<()> {
-        let tokens = if on {
-            [TOKEN_RECORDING_ON, TOKEN_RECORDING_OFF]
-        } else {
-            [TOKEN_RECORDING_OFF, TOKEN_RECORDING_ON]
-        };
+        let wanted = if on { TOKEN_RECORDING_ON } else { TOKEN_RECORDING_OFF };
+        let tokens = [TOKEN_RECORDING_ON, TOKEN_RECORDING_OFF];
         match self.parser.recording {
             None => {
-                if self.wait_for_token(&tokens, None)? == Waited::Found(tokens[0]) {
+                if self.current(&RECORDING, &tokens, self.wait_bound)? == wanted {
                     return Ok(());
                 }
             }
             Some(now) if now == on => return Ok(()),
             Some(_) => {}
         }
-        self.toggle(CMD_TOGGLE_RECORDING, &tokens, RECORDING_WAIT)?;
+        self.toggle(&RECORDING, wanted, &tokens)?;
         if self.parser.recording.is_some() {
             self.parser.recording = Some(on);
         }
@@ -578,6 +687,7 @@ impl Link {
     /// `weight_freq_get`: whether it is C.
     pub fn weight_freq_get(&mut self) -> Result<bool> {
         self.weight_get(
+            &FREQ,
             MqFlags::SPL_FREQ_WEIGHT_A,
             MqFlags::SPL_FREQ_WEIGHT_C,
             [TOKEN_WEIGHT_FREQ_A, TOKEN_WEIGHT_FREQ_C],
@@ -587,65 +697,66 @@ impl Link {
     /// `weight_time_get`: whether it is slow.
     pub fn weight_time_get(&mut self) -> Result<bool> {
         self.weight_get(
+            &TIME,
             MqFlags::SPL_TIME_WEIGHT_F,
             MqFlags::SPL_TIME_WEIGHT_S,
             [TOKEN_WEIGHT_TIME_FAST, TOKEN_WEIGHT_TIME_SLOW],
         )
     }
 
-    fn weight_get(&mut self, first: MqFlags, second: MqFlags, tokens: [u8; 2]) -> Result<bool> {
+    fn weight_get(
+        &mut self,
+        setting: &Setting,
+        first: MqFlags,
+        second: MqFlags,
+        tokens: [u8; 2],
+    ) -> Result<bool> {
         if self.parser.flags.contains(first) {
             return Ok(false);
         }
         if self.parser.flags.contains(second) {
             return Ok(true);
         }
-        match self.wait_for_token(&tokens, None)? {
-            Waited::Found(token) => Ok(token == tokens[1]),
-            Waited::TimedOut => Err(Self::generic("The weighting did not come.")),
-        }
+        Ok(self.current(setting, &tokens, self.wait_bound)? == tokens[1])
     }
 
     /// `weight_freq_set`.
     pub fn weight_freq_set(&mut self, c_weight: bool) -> Result<()> {
         self.weight_set(
+            &FREQ,
             c_weight,
             [MqFlags::SPL_FREQ_WEIGHT_A, MqFlags::SPL_FREQ_WEIGHT_C],
             [TOKEN_WEIGHT_FREQ_A, TOKEN_WEIGHT_FREQ_C],
-            CMD_TOGGLE_WEIGHT_FREQ,
-            FREQ_WAIT,
         )
     }
 
     /// `weight_time_set`.
     pub fn weight_time_set(&mut self, slow: bool) -> Result<()> {
         self.weight_set(
+            &TIME,
             slow,
             [MqFlags::SPL_TIME_WEIGHT_F, MqFlags::SPL_TIME_WEIGHT_S],
             [TOKEN_WEIGHT_TIME_FAST, TOKEN_WEIGHT_TIME_SLOW],
-            CMD_TOGGLE_WEIGHT_TIME,
-            TIME_WAIT,
         )
     }
 
     fn weight_set(
         &mut self,
+        setting: &Setting,
         second: bool,
         flags: [MqFlags; 2],
         tokens: [u8; 2],
-        cmd: u8,
-        wait: Duration,
     ) -> Result<()> {
         let (wanted, other) = if second { (flags[1], flags[0]) } else { (flags[0], flags[1]) };
-        let order = if second { [tokens[1], tokens[0]] } else { [tokens[0], tokens[1]] };
+        let token = tokens[usize::from(second)];
         if self.parser.flags.contains(wanted) {
             return Ok(());
         }
         let known = self.parser.flags.contains(other);
-        if !known && self.wait_for_token(&order, None)? == Waited::Found(order[0]) {
+        if !known && self.current(setting, &tokens, self.wait_bound)? == token {
             return Ok(());
         }
-        self.toggle(cmd, &order, wait)?;
+        self.toggle(setting, token, &tokens)?;
         // C leaves the old flag, so a later set of it would do nothing. Only one
         // known is kept known: holdmode_set's test of no flags at all needs the
         // rest as C has them, or it sends other toggles.
@@ -659,12 +770,11 @@ impl Link {
     pub fn holdmode_get(&mut self) -> Result<MqFlags> {
         if self.parser.flags.is_empty() {
             let tokens = [TOKEN_HOLD_MAX, TOKEN_HOLD_MIN, TOKEN_HOLD_NONE];
-            if let Waited::Found(token) = self.wait_for_token(&tokens, None)? {
-                if token == TOKEN_HOLD_MAX {
-                    self.parser.flags = MqFlags::MAX;
-                } else if token == TOKEN_HOLD_MIN {
-                    self.parser.flags = MqFlags::MIN;
-                }
+            let token = self.current(&HOLD, &tokens, self.wait_bound)?;
+            if token == TOKEN_HOLD_MAX {
+                self.parser.flags = MqFlags::MAX;
+            } else if token == TOKEN_HOLD_MIN {
+                self.parser.flags = MqFlags::MIN;
             }
         }
         Ok(self.held())
@@ -679,22 +789,23 @@ impl Link {
 
     /// `holdmode_set`: `MAX`, `MIN`, or no flag for neither.
     pub fn holdmode_set(&mut self, mode: MqFlags) -> Result<()> {
-        let tokens = if mode == MqFlags::MAX {
-            [TOKEN_HOLD_MAX, TOKEN_HOLD_MIN, TOKEN_HOLD_NONE]
+        let tokens = [TOKEN_HOLD_MAX, TOKEN_HOLD_MIN, TOKEN_HOLD_NONE];
+        let wanted = if mode == MqFlags::MAX {
+            TOKEN_HOLD_MAX
         } else if mode == MqFlags::MIN {
-            [TOKEN_HOLD_MIN, TOKEN_HOLD_MAX, TOKEN_HOLD_NONE]
+            TOKEN_HOLD_MIN
         } else {
-            [TOKEN_HOLD_NONE, TOKEN_HOLD_MAX, TOKEN_HOLD_MIN]
+            TOKEN_HOLD_NONE
         };
         let known = !self.parser.flags.is_empty();
         if known {
             if self.held() == mode {
                 return Ok(());
             }
-        } else if self.wait_for_token(&tokens, None)? == Waited::Found(tokens[0]) {
+        } else if self.current(&HOLD, &tokens, self.wait_bound)? == wanted {
             return Ok(());
         }
-        self.toggle(CMD_TOGGLE_HOLD_MAX_MIN, &tokens, TIME_WAIT)?;
+        self.toggle(&HOLD, wanted, &tokens)?;
         if known {
             self.parser.set(mode, MqFlags::MAX | MqFlags::MIN);
         }
@@ -703,46 +814,45 @@ impl Link {
 
     /// `meas_range_get`, as low and high.
     pub fn meas_range_get(&mut self) -> Result<(u64, u64)> {
-        if self.parser.range.is_none() {
-            let tokens = RANGES.map(|r| r.2);
-            let Waited::Found(token) = self.wait_for_token(&tokens, None)? else {
-                return Err(Self::generic("The range did not come."));
-            };
-            self.parser.range = Some(token);
-        }
-        let token = self.parser.range;
+        let token = match self.parser.range {
+            Some(token) => token,
+            None => {
+                let token = self.current(&RANGE, &RANGES.map(|r| r.2), self.wait_bound)?;
+                self.parser.range = Some(token);
+                token
+            }
+        };
         RANGES
             .iter()
-            .find(|r| Some(r.2) == token)
+            .find(|r| r.2 == token)
             .map(|r| (r.0, r.1))
-            .ok_or_else(|| Self::generic("No such range."))
+            .ok_or_else(|| Error::device("no such range"))
     }
 
     /// `meas_range_set`. Remembers the range it set, where C leaves the old one for
-    /// a get after it (`protocol.c:806`).
+    /// a get after it (`protocol.c:806`). C resends every 11 ms and looks only for the
+    /// range it wants, and on a meter that takes them that goes round the four ranges
+    /// past it; this is [`Link::toggle`], with one command per announcement.
     pub fn meas_range_set(&mut self, token: u8) -> Result<()> {
         log::debug!("want 0x{token:02x}");
+        let tokens = RANGES.map(|r| r.2);
         if self.parser.range.is_none() {
-            let tokens = RANGES.map(|r| r.2);
-            let Waited::Found(now) = self.wait_for_token(&tokens, Some(RANGE_WAIT))? else {
-                return Err(Self::generic("The range did not come."));
-            };
+            let now = self.current(&RANGE, &tokens, RANGE.announce)?;
             self.parser.range = Some(now);
         }
         if self.parser.range == Some(token) {
             return Ok(());
         }
-        // Announcements of another range mean nothing here: toggle quickly.
-        self.toggle(CMD_TOGGLE_MEAS_RANGE, &[token], RANGE_TOGGLE_WAIT)?;
+        self.toggle(&RANGE, token, &tokens)?;
         self.parser.range = Some(token);
         Ok(())
     }
 
     /// `power_off`, up to the port's turn: flush, tell it, wait as long as the next
     /// token takes and look for one. Where C goes on for ever, a meter that talks
-    /// through [`Link::toggle_bound`] fails.
+    /// through [`TOGGLE_BOUND`] fails.
     pub fn power_off(&mut self) -> Result<()> {
-        let bound = self.toggle_bound;
+        let bound = self.toggle_bound.unwrap_or(TOGGLE_BOUND);
         let started = Instant::now();
         loop {
             let port = self.port()?;
@@ -755,7 +865,10 @@ impl Link {
                 return Ok(());
             }
             if started.elapsed() > bound {
-                return Err(Self::generic("The meter does not turn off."));
+                return Err(Error::device(format!(
+                    "the meter did not turn off in {}",
+                    spoken(bound)
+                )));
             }
         }
     }
@@ -873,8 +986,11 @@ mod tests {
         let mut p = Parser::default();
         let events = feed(&mut p, &[0xa5, 0xe1, 1, 2, 0xa5, 0x0d, 0x07, 0x02, 0xa5, 0x0c]);
         // The a5 ended the unknown one, so 0d, 07 and 02 meant nothing, and the
-        // display token that follows has the last level there is: none yet.
-        assert_eq!(events, [Event::Levels(vec![0.0], MqFlags::empty())]);
+        // display token that follows has no level to say.
+        assert_eq!(events, Vec::<Event>::new());
+        // The next level does.
+        let events = feed(&mut p, &[0xa5, 0x0d, 0x06, 0x55, 0xa5, 0x0c]);
+        assert_eq!(events, [Event::Levels(vec![65.5], MqFlags::empty())]);
     }
 
     #[test]
@@ -971,6 +1087,37 @@ mod tests {
     }
 
     #[test]
+    fn a_display_token_ahead_of_any_level_says_nothing_and_a_start_forgets_it() {
+        let mut p = Parser::default();
+        assert_eq!(feed(&mut p, &[0xa5, 0x0c, 0xa5, 0x0b, 0]), Vec::<Event>::new());
+        assert_eq!(feed(&mut p, &[0xa5, 0x0d, 0x06, 0x55, 0xa5, 0x0c]).len(), 1);
+        p.start();
+        assert_eq!(feed(&mut p, &[0xa5, 0x0c]), Vec::<Event>::new());
+        // Nor does a hold's repeat.
+        let t = Instant::now();
+        let mut events = Vec::new();
+        p.byte(0xff, true, t, &mut events);
+        p.byte(0xff, true, t + Duration::from_millis(60), &mut events);
+        assert_eq!(events, Vec::<Event>::new());
+    }
+
+    #[test]
+    fn a_second_record_head_with_no_levels_is_read_whole() {
+        let mut p = Parser::default();
+        let head = [0xaa, 0x26, 0x11, 5, 0x12, 0x34, 0x56, 0x07];
+        let mut log = vec![0xbb, 0, 100];
+        log.extend(head);
+        log.extend(head);
+        assert_eq!(feed(&mut p, &log), [Event::Interval(7000), Event::Interval(7000)]);
+    }
+
+    #[test]
+    fn times_are_said_in_the_unit_they_are_set_in() {
+        assert_eq!(spoken(Duration::from_secs(5)), "5 s");
+        assert_eq!(spoken(Duration::from_millis(600)), "600 ms");
+    }
+
+    #[test]
     fn a_log_says_its_levels_50_at_a_time() {
         let mut p = Parser::default();
         let mut log = vec![0xbb, 0, 100, 0xac];
@@ -1026,15 +1173,23 @@ mod tests {
 
     #[test]
     fn the_times_are_cs() {
-        assert_eq!(RECORDING_WAIT, Duration::from_millis(510));
-        assert_eq!(FREQ_WAIT, Duration::from_millis(10));
-        assert_eq!(TIME_WAIT, Duration::from_millis(51));
-        assert_eq!(RANGE_WAIT, Duration::from_millis(110));
-        assert_eq!(RANGE_TOGGLE_WAIT, Duration::from_millis(11));
+        assert_eq!(PACKET_TIME, Duration::from_millis(6));
         assert_eq!(POWER_OFF_WAIT, Duration::from_millis(25));
         assert_eq!(HOLD_REPEAT_INTERVAL, Duration::from_millis(50));
         assert_eq!(WAIT_SILENCE, Duration::from_secs(1));
         assert_eq!(WAIT_BOUND, Duration::from_secs(2));
         assert_eq!(TOGGLE_BOUND, Duration::from_secs(5));
+        assert_eq!(SLOW_TOGGLE_BOUND, Duration::from_secs(15));
+        for (setting, cmd, announce, bound) in [
+            (FREQ, 0x99, 600, 5),
+            (HOLD, 0x11, 600, 5),
+            (RANGE, 0x88, 600, 5),
+            (TIME, 0x77, 1200, 15),
+            (RECORDING, 0x55, 1200, 15),
+        ] {
+            assert_eq!(setting.cmd, cmd, "{}", setting.what);
+            assert_eq!(setting.announce, Duration::from_millis(announce), "{}", setting.what);
+            assert_eq!(setting.bound, Duration::from_secs(bound), "{}", setting.what);
+        }
     }
 }

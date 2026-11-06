@@ -15,19 +15,29 @@
 //! once per byte until the log's start has come, and the log's end ends it, as a
 //! client could not tell stored levels from live ones.
 //!
-//! A get of the meter's state waits for the token that says it, and a set waits and
-//! then sends its toggle until that token says what was asked: no command has an
-//! answer. C keeps what a capture saw, and what a wait saw only for the range and
-//! hold: so what was never seen is waited for every time.
+//! A get of the meter's state waits for the token that says it. A set waits, sends
+//! its command once per announcement until one says what was asked, and has the next
+//! agree: no command has an answer, and a second one undoes the first. C keeps what a
+//! capture saw, and what a wait saw only for the range and hold: so what was never
+//! seen is waited for every time.
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
 //! - A wait gets its bytes with a read that waits: see [`protocol::Link`]. On stock
-//!   libsigrok every such get and set fails.
-//! - Those waits and toggles have bounds, where C has none.
-//! - A capture a meter's silence can hold for ever, one with a sample limit or a log,
-//!   ends after [`SILENCE_BOUND`] with no byte.
+//!   libsigrok nearly every such get and set fails.
+//! - A set's commands are throttled and confirmed, where C resends by the clock and
+//!   takes the first token: on a meter that takes them as they come, C says success
+//!   with it in the other state. A set costs two announcements of what it changes,
+//!   some 100 ms for the frequency weighting, hold and range, 900 ms for the time
+//!   weighting and recording. When they don't come the set fails and says the state
+//!   is unknown.
+//! - Waits, toggles and a power off have bounds in every state of the parser, where C
+//!   has none.
+//! - A capture a meter can hold for ever, one with a sample limit or a log, ends after
+//!   [`SILENCE_BOUND`] with no byte or [`LEVEL_BOUND`] with no level.
 //! - The limit is held exactly, also on a log's packets of 50, where C overshoots.
+//! - A display token ahead of the capture's first level sends nothing, where C sends
+//!   what it holds.
 //! - What a set changed is remembered where C's next get or set would use the old
 //!   state, and a capture of the log asks again each time.
 //! - Settings and gets that would read the port are refused during a capture.
@@ -68,6 +78,10 @@ static DEV_OPTIONS: [OptionDesc; 10] = [
     OptionDesc::new(Key::DataSource, Access::GET_SET_LIST),
 ];
 
+/// How long a capture that only samples or a log can end goes with bytes coming and
+/// no level: a stray `bb`, or a meter in max hold whose display stays. 20 Hz is the
+/// meter's rate of levels.
+pub const LEVEL_BOUND: Duration = Duration::from_secs(5);
 /// How long a scan looks for an `a5`, where C has 25 ms from a comment's 23 between
 /// tokens. A real one has one there; a loaded host has to get to it too.
 const SCAN_WINDOW: Duration = Duration::from_millis(500);
@@ -166,6 +180,7 @@ pub struct CemDt885xDevice {
     /// A capture is running: settings would take its bytes.
     capturing: Arc<AtomicBool>,
     silence_bound: Duration,
+    level_bound: Duration,
 }
 
 struct Worker {
@@ -194,6 +209,7 @@ impl CemDt885xDevice {
             worker: None,
             capturing: Arc::new(AtomicBool::new(false)),
             silence_bound: SILENCE_BOUND,
+            level_bound: LEVEL_BOUND,
         }
     }
 
@@ -233,11 +249,10 @@ impl CemDt885xDevice {
     }
 }
 
-fn named(key: &Key, value: &Value, names: &[&str; 2]) -> Result<bool> {
-    let text = value.as_str().ok_or_else(|| Error::arg(key.id()))?;
-    match names.iter().position(|n| *n == text) {
+fn named(value: &Value, names: &[&str; 2]) -> Result<bool> {
+    match names.iter().position(|n| value.as_str() == Some(*n)) {
         Some(i) => Ok(i == 1),
-        None => Err(Error::Arg(format!("invalid value for {}", key.id()))),
+        None => Err(Error::Arg(format!("must be {} or {}", names[0], names[1]))),
     }
 }
 
@@ -311,6 +326,7 @@ impl Device for CemDt885xDevice {
         }
         self.refuse_while_capturing(key)?;
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
+        let no_range = || Error::arg("must be 30-130, 30-80, 50-100 or 80-130");
         match key {
             // `core::config_set` refuses a 0 and says so; this is for a library
             // caller that comes straight here.
@@ -320,11 +336,11 @@ impl Device for CemDt885xDevice {
             }
             Key::Datalog => self.link().recording_set(value.as_bool().ok_or_else(bad)?),
             Key::SplWeightFreq => {
-                let c_weight = named(key, value, &WEIGHT_FREQ)?;
+                let c_weight = named(value, &WEIGHT_FREQ)?;
                 self.link().weight_freq_set(c_weight)
             }
             Key::SplWeightTime => {
-                let slow = named(key, value, &WEIGHT_TIME)?;
+                let slow = named(value, &WEIGHT_TIME)?;
                 self.link().weight_time_set(slow)
             }
             Key::HoldMax | Key::HoldMin => {
@@ -333,8 +349,9 @@ impl Device for CemDt885xDevice {
                 self.link().holdmode_set(if on { flag } else { MqFlags::empty() })
             }
             Key::SplMeasurementRange => {
-                let Value::RangeU64(low, high) = value else { return Err(bad()) };
-                let range = RANGES.iter().find(|r| r.0 == *low && r.1 == *high).ok_or_else(bad)?;
+                let Value::RangeU64(low, high) = value else { return Err(no_range()) };
+                let range =
+                    RANGES.iter().find(|r| r.0 == *low && r.1 == *high).ok_or_else(no_range)?;
                 self.link().meas_range_set(range.2)
             }
             Key::PowerOff => {
@@ -344,7 +361,7 @@ impl Device for CemDt885xDevice {
                 Ok(())
             }
             Key::DataSource => {
-                self.from_memory = named(key, value, &DATA_SOURCES)?;
+                self.from_memory = named(value, &DATA_SOURCES)?;
                 Ok(())
             }
             other => Err(Error::UnknownKey(other.id().to_owned())),
@@ -417,6 +434,7 @@ impl Device for CemDt885xDevice {
             from_memory: self.from_memory,
             enabled: self.channels[0].enabled,
             silence_bound: self.silence_bound,
+            level_bound: self.level_bound,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -479,6 +497,7 @@ struct Capture {
     /// `-C`, which C ignores: its packets go out whatever it says.
     enabled: bool,
     silence_bound: Duration,
+    level_bound: Duration,
 }
 
 /// What one pass of the read brought.
@@ -501,8 +520,10 @@ impl Capture {
 
     /// A read's worth, with the link's lock. Each byte goes as far as C's callback
     /// took it, so a request for the log follows each byte that was read before the
-    /// log's start, and nothing follows the byte that ended the capture but that.
-    fn pass(&self, samples: u64, wants_log: &mut bool) -> Result<Pass> {
+    /// log's start, and nothing follows the byte that ended the capture but that. A
+    /// request that finds the line full ends the asking for this pass, and a stop the
+    /// pass, or a close would wait for each byte's [`ASK_WAIT`].
+    fn pass(&self, samples: u64, wants_log: &mut bool, stop: &AtomicBool) -> Result<Pass> {
         let mut link = self.link.lock().expect("link lock");
         let link = &mut *link;
         let port = link.port.as_mut().ok_or_else(|| Error::device("device is not open"))?;
@@ -510,7 +531,11 @@ impl Capture {
         let bytes = port.read(&mut buf, CAPTURE_READ)?;
         let mut pass = Pass { bytes, events: Vec::new(), done: false };
         let mut count = samples;
+        let mut line_free = true;
         for byte in &buf[..bytes] {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             let seen = pass.events.len();
             link.parser.byte(*byte, true, Instant::now(), &mut pass.events);
             for event in &pass.events[seen..] {
@@ -526,9 +551,12 @@ impl Capture {
             if *wants_log {
                 if link.parser.in_log_header() {
                     *wants_log = false;
-                } else if let Err(e) = port.write_timeout(&[CMD_TRANSFER_MEMORY], ASK_WAIT) {
-                    // C drops the result: the next byte asks again.
-                    log::debug!("Asking for the log: {e}.");
+                } else if line_free {
+                    // C drops the result: a later byte asks again.
+                    line_free = matches!(
+                        port.write_timeout(&[CMD_TRANSFER_MEMORY], ASK_WAIT),
+                        Ok(n) if n > 0
+                    );
                 }
             }
             if pass.done {
@@ -585,16 +613,26 @@ impl Capture {
         let mut samples = 0;
         let mut wants_log = self.from_memory;
         let mut last_byte = Instant::now();
-        // A meter that goes silent would otherwise hold these for ever.
+        let mut last_level = last_byte;
+        // A meter that goes silent or stops saying levels would hold these for ever.
         let bounded = self.limit_samples > 0 || self.from_memory;
         loop {
             if stop.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            let pass = self.pass(samples, &mut wants_log)?;
+            let pass = self.pass(samples, &mut wants_log, stop)?;
+            if bounded && last_level.elapsed() >= self.level_bound {
+                return Err(Error::device(format!(
+                    "no level from the meter in {} s",
+                    self.level_bound.as_secs()
+                )));
+            }
             if pass.bytes == 0 {
                 if bounded && last_byte.elapsed() >= self.silence_bound {
-                    return Err(Error::device("no byte from the meter"));
+                    return Err(Error::device(format!(
+                        "no byte from the meter in {} s",
+                        self.silence_bound.as_secs()
+                    )));
                 }
                 // With the lock free: a get must not starve behind this loop.
                 std::thread::sleep(Duration::from_millis(1));
@@ -602,6 +640,9 @@ impl Capture {
             }
             last_byte = Instant::now();
             let Some(sent) = self.send(pass.events, samples, sink, stop) else { return Ok(()) };
+            if sent > samples {
+                last_level = last_byte;
+            }
             samples = sent;
             if pass.done {
                 return Ok(());
