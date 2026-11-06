@@ -11,7 +11,10 @@
 //!   driver without saying the meter has that chip, and a `CP210x` could not keep
 //!   its ids on this shell anyway, so this is a `CDC-ACM` function with test ids, an
 //!   artifact of the emulation. The tools see a tty either way.
-//! - The line, 115200/8n1: the wiki, and the libsigrok driver.
+//! - The line, 115200/8n1: the wiki, and the libsigrok driver, whose writes were
+//!   fixed with a user's `Tested-By` (libsigrok `a4be2b32`). The older PCE manual
+//!   says otherwise, "USB signal output is a 9600 bps serial interface", which is not
+//!   kept, and the conflict stays open.
 //! - The commands: the wiki's table, the same as the driver's header. `ac ff`
 //!   connects, `ca ff` disconnects, `aa f1` to `aa f8` toggle or act, `ad da` asks
 //!   for the memory's status, `d3 da XX YY` for block `YYXX`.
@@ -29,17 +32,24 @@
 //!   little endian tenths, and takes `-1` for a new recording from the header
 //!   alone.
 //!
-//! What is an inference, as no source says. The manual was looked for: PCE's link
-//! gave a web page and no PDF, and another copy refused the fetch. No firmware
-//! source, recording or other program for this meter was found, which is not to
-//! say there is none.
+//! The manuals: the older one
+//! (<https://www.industrial-needs.com/manual/manual-noise-meter-PCE-322-A.pdf>) and
+//! PCE's of 2022 (<https://organametrisis.gr/cdn/shop/files/PCE-323_manual.pdf>).
+//! They give a display update of 2 Hz, an automatic power off after about 15 minutes
+//! with no use, which is not modelled, and a memory of 32,700 values. No firmware
+//! source, recording or other program for this meter was found, which is not to say
+//! there is none.
+//!
+//! What is an inference, as no source says:
 //!
 //! - That `ca ff` stops the stream and `ac ff` starts it again. The wiki says the
 //!   commands aren't needed for it, and the driver disconnects before it asks for
 //!   memory, which would make no sense if the two streams could mix.
 //! - That `aa f2` steps the range upwards: the wiki's order, "Auto, 30-80, 50-100,
 //!   80-130", which the driver's `MEAS_RANGE_*` numbers follow, with Auto as its
-//!   30-130.
+//!   30-130. The 2022 manual (5.1.2) has the LEVEL key select "50 ... 100, 80 ... 130,
+//!   30 ... 80 and automatic". That may be only a list; if it is the key's cycle and
+//!   `aa f2` is that key, the steps here are wrong, as the driver's would be.
 //! - What the blocks number. The driver reads blocks 0 to `used`, all 256 bytes but
 //!   the last, of which it takes `last`, yet logs `used - 1` blocks of 256 and one
 //!   of `last`. Those can't both be right, and nothing says which is. This model
@@ -50,7 +60,8 @@
 //!   still on the way.
 //! - That a meter that was powered off answers nothing, and takes nothing until
 //!   its next power on, a new session here. The rate of the stream, of which the
-//!   driver says nothing and which it never waits for by time.
+//!   driver says nothing and which it never waits for by time: the display's 2 Hz is
+//!   the nearest fact.
 //!
 //! Emulation artifacts:
 //!
