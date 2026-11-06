@@ -2716,6 +2716,34 @@ first value counts as a sample and a limit drops the rest of that frame,
 a failed frame stays open until the next closes it, and in a live
 capture what comes behind garbage waits for the next bytes.
 
+## Atorch meters and loads (atorch)
+
+Atorch DC meters and loads (`DC Meter`, the DL24 family) and USB meters
+(`USB Meter`, the J7-C, UD18 and others), which report unasked about
+once a second. `conn=` names a tty: on Bluetooth SPP an RFCOMM tty,
+`/dev/rfcommN`, bound by the user; libsigrok's table has DL24M and UC96
+`_SPP` units on channel 2, which `rfcomm bind` must be told. `bt/...`
+names are refused, so `/channel=N` is lost, and `*_BLE` units (`ac6328`,
+and C's `ble122`, `nrf51`, `cc254x`, `dialog`, `notify` types) have no
+tty and no path in oxrok. Default 9600/8n1, which an RFCOMM tty ignores.
+Channels V, I, C, E, T, plus D-, D+ on a USB meter; one frame per
+report; use `--frames` or `--time`. An AC meter (type 01) is refused, as
+in C. Nothing is ever written to a unit. A scan waits up to 10 s.
+Emulator-verified on a CDC-ACM stand-in, model `atorch` (`meter=`,
+`packet=`, `noise=`, `period=`, `scan=`, `burst=`, and the shell's
+faults), whose default reports are recordings quoted by
+esphome-atorch-dl24; not verified on hardware. No firmware source was
+found. NiceLabs/atorch-console's `docs/UD18-SPP.pcap`, a capture of a
+real UD18 over SPP, has 91 reports with good sums, 0.987 to 1.039 s
+apart, 1 C count = 1 mAh and 1 E count = 10 mWh. That program's USB mAh
+(×10) and DC energy differ from C's tables, and C's are kept. Its USB
+temperature is signed where C's is not, so a reading below 0 would show
+about 65535 °C, as in C. 70 cases, 2026-11-06: 58 full, 5
+`--oracle-differs`, 4 `--oracle-bug`, 3 library; gcov 95.8%. The sum at
+a message's end is not checked, as in C: esphome-atorch-dl24's README
+says the J7-C, DL24M and DT24PW fail it, and the DL24M log in its issue
+59 is cited for last bytes that look random.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

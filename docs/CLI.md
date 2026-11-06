@@ -737,6 +737,29 @@ Deliberate, and kept small:
   P1,P2` the frame separator falls between rows, where sigrok-cli has it
   ahead of the header and reads past the packet for channels with no
   data.
+- All serial drivers: `conn=bt/...` is refused, naming `/dev/rfcommN`,
+  where sigrok-cli opens the link itself.
+- atorch: `-C` selects the channels sent; sigrok-cli's driver sends all
+  of them, and the analog output prints them.
+- atorch: all the messages of a read are taken at once. sigrok-cli's
+  driver looks only after a read that brought bytes, so a second report
+  in a read waits for the next byte. `--frames 2` with two reports in
+  one read and nothing after hangs there, and `--time 1500` with two
+  reports per read gives 2 frames against 3 here.
+- atorch: each capture starts empty. sigrok-cli can give a report left
+  from the scan as the first frame. A second capture on an open device
+  (library only) drops what the port gathered.
+- atorch: a time limit with no report ends 3 s past the limit with a
+  warning, and `--frames` alone ends after 30 s of silence with an
+  error; sigrok-cli waits with no end (runs passed 120 s). While reports
+  come, the first past a time limit is the last, as in sigrok-cli.
+- atorch: an unplug ends the capture; sigrok-cli never ends. A real read
+  error ends it too, where C dies of a SIGSEGV (EIO injected on a pty).
+  The limit is the end: C's callback goes on after its stop, with frames
+  and a repeated End on a pty, which sigrok-cli hides and a library
+  client would see.
+- atorch: "Unrecognized device type" names the report's type; sigrok-cli
+  names the fourth byte of its buffer, another byte with noise ahead.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

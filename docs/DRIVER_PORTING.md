@@ -297,6 +297,32 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- `chunk=N` cuts transfers, not reads: a tool that sleeps or polls may
+  read them all at once. Check with `-l 5`'s "Read N/M bytes" before
+  calling a case "cut across reads". A real cut is `packet=` pieces a
+  period apart. Don't explain a gcov gap away as merged code: look at
+  the compile flags and at what the case really does.
+- `Serial::tick` offers come fast at an open, with the kernel's 16 reads
+  to fill, so a short `period` lands a report inside the tool's open,
+  whose flush takes it. `period=5` lost reports, and at 25 a stall of
+  about 0.45 s in an open failed a case.
+- Give a streaming model a count per open (`scan=`, `burst=`). Keep the
+  count equal to what the limit takes: a surplus races the close.
+- A filter for a C message can be one-sided: rewrite C's line before the
+  rule that gives oxrok's the same prefix. The case then pins oxrok's
+  value, where a mask of two values hides it.
+- A reader that reads before it looks at its buffer leaves whole
+  messages waiting for the next byte. Two messages in one transfer show
+  it.
+- A message that formats a value needs a function the code path uses,
+  and a test through that path: a test that formats its own string holds
+  nothing.
+- A test of anything but a bound must not have that bound at a short
+  value: at a 5% quota a stall tripped a 60 ms silence. Use a pace with
+  the bounds off.
+- A `break` where the loop looks again may look equivalent, until a
+  failed read comes next. Test what a read holds followed by a read that
+  fails.
 - A coverage build shows what an optimised one hides. A one-byte write
   past a buffer zeroed the count of bytes left only at -O0: read the
   frame's layout from DWARF (`objdump --dwarf=info`, DW_OP_fbreg) before
