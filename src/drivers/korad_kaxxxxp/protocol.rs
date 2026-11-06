@@ -369,6 +369,12 @@ impl Link {
         self.next_request = None;
     }
 
+    /// How long the next request would wait now. A stall only makes it less.
+    #[cfg(test)]
+    pub fn wait_left(&self) -> Duration {
+        self.next_request.map_or(Duration::ZERO, |at| at.saturating_duration_since(Instant::now()))
+    }
+
     fn give_device_time(&self) {
         if let Some(at) = self.next_request {
             let now = Instant::now();

@@ -486,11 +486,7 @@ if [ $emu = 1 ]; then
     # oxrok searches its own variable first; the stand-ins must be what
     # both tools upload.
     unset OXROK_FIRMWARE_DIR
-    if sh "$TOOLS/emu-firmware.sh" "$EMU_FIRMWARE_DIR" >"$TMP/fw.out" 2>&1; then
-        export SIGROK_FIRMWARE_DIR="$EMU_FIRMWARE_DIR"
-    else
-        emu_fail "firmware stand-ins"; cat "$TMP/fw.out"
-    fi
+    export SIGROK_FIRMWARE_DIR="$EMU_FIRMWARE_DIR"
     # A --hangs case stops sigrok-cli with timeout's SIGTERM, of which
     # it would die without writing its gcov counts. This preload makes
     # the signal an exit(), whose handlers write them. An exit() from a
@@ -1657,6 +1653,12 @@ EOF
                 exec 8<&-
                 emu_fail "$EMU_MODEL: $EMU_LOCK still held after $EMU_LOCK_WAIT s"; return
             fi
+        fi
+        # Under the lock: a scenario keeps its own form of a stand-in in this
+        # directory, which every run on the host shares (sysclk-sla5032's has its
+        # sync word), and a run just starting must not write over it.
+        if ! sh "$TOOLS/emu-firmware.sh" "$EMU_FIRMWARE_DIR" >"$TMP/fw.out" 2>&1; then
+            emu_fail "firmware stand-ins"; cat "$TMP/fw.out"
         fi
         # A run that crashed may have left its device attached.
         sudo -n "$EMU" cleanup --locked || echo "emulator cleanup failed; carrying on with a free port"

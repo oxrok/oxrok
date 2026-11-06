@@ -540,8 +540,11 @@ mod tests {
         period: Duration::from_millis(20),
         wait: Duration::from_millis(2),
         stall: Duration::from_millis(60),
-        silence: Duration::from_millis(100),
+        // Out of the way: a stall of the host outlasts anything short, and only
+        // the tests of silence want it to bite, with SILENT.
+        silence: Duration::from_secs(60),
     };
+    const SILENT: Pace = Pace { silence: Duration::from_millis(500), ..QUICK };
 
     /// What the fake saw.
     #[derive(Default)]
@@ -558,7 +561,8 @@ mod tests {
     enum Reply {
         Dump,
         Bytes(Vec<u8>),
-        /// Bytes, then the rest of the dump after a pause.
+        /// Bytes, then the rest of the dump once reads have waited for it this long,
+        /// or longer on a host whose sleeps run long or that stalls.
         Parts(Vec<u8>, Duration, Vec<u8>),
     }
 
@@ -573,6 +577,9 @@ mod tests {
         fail_read: bool,
         /// From this many polls on, so many timed writes find no room.
         block: Option<(usize, usize)>,
+        /// [`Reply::Parts`]' rest, at the head of what is held back in `input`: how
+        /// long reads have yet to wait for it, and its length.
+        held: Option<(Duration, usize)>,
     }
 
     fn dump(energy: u32) -> Vec<u8> {
@@ -597,6 +604,7 @@ mod tests {
                 fail_write_at: None,
                 fail_read: false,
                 block: None,
+                held: None,
             };
             (fake, seen)
         }
@@ -624,7 +632,9 @@ mod tests {
                 Some(Reply::Bytes(b)) => self.push(now, &b),
                 Some(Reply::Parts(a, pause, b)) => {
                     self.push(now, &a);
-                    self.push(now + pause, &b);
+                    self.held = Some((pause, b.len()));
+                    // Past all a test waits, until a read lets it through.
+                    self.push(now + BOUND * 100, &b);
                 }
                 None => {}
             }
@@ -665,6 +675,16 @@ mod tests {
                     return Ok(0);
                 }
                 std::thread::sleep(Duration::from_micros(200));
+                // By the slice, so never ahead of the clock, whatever it does.
+                if let Some((left, len)) = self.held.take() {
+                    match left.checked_sub(Duration::from_micros(200)) {
+                        Some(left) if !left.is_zero() => self.held = Some((left, len)),
+                        _ => {
+                            let rest = self.input.iter_mut().filter(|(at, _)| *at > now);
+                            rest.take(len).for_each(|(at, _)| *at = now);
+                        }
+                    }
+                }
             }
         }
         fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
@@ -700,7 +720,16 @@ mod tests {
     }
 
     fn capture(fake: Fake, frames: u64, msec: u64) -> (UmDevice, Receiver<(usize, Packet)>) {
-        let mut d = UmDevice::from_port(um24c(), Box::new(fake), QUICK);
+        capture_at(QUICK, fake, frames, msec)
+    }
+
+    fn capture_at(
+        pace: Pace,
+        fake: Fake,
+        frames: u64,
+        msec: u64,
+    ) -> (UmDevice, Receiver<(usize, Packet)>) {
+        let mut d = UmDevice::from_port(um24c(), Box::new(fake), pace);
         d.limit_frames = frames;
         d.limit_msec = msec;
         d.open().unwrap();
@@ -843,9 +872,10 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         let d0 = dump(0);
         let pause = QUICK.period * 2;
-        assert!(pause < QUICK.stall, "the reply must end before it is dropped");
         fake.script.push_back(Reply::Parts(d0[..60].to_vec(), pause, d0[60..].to_vec()));
-        let (mut d, rx) = capture(fake, 1, 0);
+        // Not dropped, however long this host stalls.
+        let pace = Pace { stall: BOUND, ..QUICK };
+        let (mut d, rx) = capture_at(pace, fake, 1, 0);
         let packets = until_end(&rx);
         assert_eq!(frame_count(&packets), 1);
         assert_eq!(seen.lock().unwrap().polls.len(), 1, "the second part ended it");
@@ -901,7 +931,8 @@ mod tests {
         fake.script.push_back(Reply::Bytes(bad));
         let (mut d, rx) = capture(fake, 0, 0);
         assert_eq!(energies(&until_end(&rx)), [0.0]);
-        assert_eq!(seen.lock().unwrap().polls.len(), 3);
+        // At least: a poll can go while the rest of the first is still to come.
+        assert!(seen.lock().unwrap().polls.len() >= 3);
         d.close().unwrap();
     }
 
@@ -987,9 +1018,9 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.after = None;
         let started = Instant::now();
-        let (mut d, rx) = capture(fake, 2, 0);
+        let (mut d, rx) = capture_at(SILENT, fake, 2, 0);
         assert_eq!(frame_count(&until_end(&rx)), 0);
-        assert!(started.elapsed() >= QUICK.silence);
+        assert!(started.elapsed() >= SILENT.silence);
         assert!(seen.lock().unwrap().polls.len() >= 3, "it kept asking");
         d.close().unwrap();
 
@@ -997,7 +1028,7 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.after = None;
         let started = Instant::now();
-        let time = QUICK.silence * 3;
+        let time = SILENT.silence * 3;
         let (mut d, rx) = capture(fake, 2, u64::try_from(time.as_millis()).expect("a short time"));
         until_end(&rx);
         assert!(started.elapsed() >= time, "{:?}", started.elapsed());
@@ -1009,7 +1040,7 @@ mod tests {
     fn junk_for_ever_ends_a_capture_only_a_frame_limit_can_end() {
         let (mut fake, seen) = Fake::new();
         fake.after = Some(Reply::Bytes(vec![0x55; 130]));
-        let (mut d, rx) = capture(fake, 1, 0);
+        let (mut d, rx) = capture_at(SILENT, fake, 1, 0);
         assert_eq!(frame_count(&until_end(&rx)), 0);
         assert!(seen.lock().unwrap().polls.len() >= 3, "it kept asking");
         d.close().unwrap();
@@ -1019,10 +1050,10 @@ mod tests {
     fn a_continuous_capture_waits_out_silence_until_stopped() {
         let (mut fake, _) = Fake::new();
         fake.after = None;
-        let (mut d, rx) = capture(fake, 0, 0);
+        let (mut d, rx) = capture_at(SILENT, fake, 0, 0);
         assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
         assert!(
-            rx.recv_timeout(QUICK.silence * 3).is_err(),
+            rx.recv_timeout(SILENT.silence * 3).is_err(),
             "no End by itself, well past the bound"
         );
         d.stop().unwrap();
@@ -1080,9 +1111,9 @@ mod tests {
         let (mut fake, seen) = Fake::new();
         fake.block = Some((0, usize::MAX));
         let started = Instant::now();
-        let (mut d, rx) = capture(fake, 0, 200);
+        let (mut d, rx) = capture(fake, 0, 600);
         assert_eq!(frame_count(&until_end(&rx)), 0);
-        assert!(started.elapsed() >= Duration::from_millis(200), "the time limit ended it");
+        assert!(started.elapsed() >= Duration::from_millis(600), "the time limit ended it");
         let seen = seen.lock().unwrap();
         assert_eq!(seen.polls.len(), 0);
         assert!(seen.blocked.len() >= 3, "it kept trying, {} times", seen.blocked.len());

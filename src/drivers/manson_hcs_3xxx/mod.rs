@@ -553,6 +553,9 @@ mod tests {
     #[derive(Default)]
     struct Seen {
         writes: crate::serial::WriteLog,
+        /// How long the reads that found nothing asked to wait, added up: a wait
+        /// as the code sets it, whatever this host's sleeps make of it.
+        asked_to_wait: Duration,
     }
 
     /// A supply that answers as the protocol says, unless told otherwise, and
@@ -597,6 +600,7 @@ mod tests {
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
             if self.input.is_empty() {
+                self.seen.lock().unwrap().asked_to_wait += timeout;
                 std::thread::sleep(timeout);
                 return Ok(0);
             }
@@ -702,10 +706,9 @@ mod tests {
     fn a_scan_of_a_silent_port_ends() {
         let (mut fake, seen) = Fake::new();
         fake.gmod = Vec::new();
-        let started = Instant::now();
         assert!(matches!(probe(Box::new(fake)), Err(Error::Timeout)));
         assert_eq!(writes(&seen), ["GMOD\r"]);
-        assert!(started.elapsed() < protocol::REPLY_TIMEOUT * 2);
+        assert!(seen.lock().unwrap().asked_to_wait < protocol::REPLY_TIMEOUT * 2);
     }
 
     #[test]
@@ -919,10 +922,12 @@ mod tests {
     fn a_reading_starts_the_bound_afresh() {
         let (mut fake, seen) = Fake::new();
         let good = || b"050000251\rOK\r".to_vec();
-        // Each is 500 ms late, the bound is 700 ms, and they take 1 s in all.
+        // Each is at least REQ_TIMEOUT late, 500 ms, so the two take 1 s at the very
+        // least: past a bound of 950 ms only if the first started it afresh. What's
+        // left, 450 ms a reading, is for sleeps that run long and for stalls.
         fake.getd = [Vec::new(), good(), Vec::new(), good()].into_iter().collect();
         let mut d = device(fake);
-        d.no_reading_bound = Duration::from_millis(700);
+        d.no_reading_bound = Duration::from_millis(950);
         d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
         let packets = capture(&mut d);
         assert_eq!(readings(&packets), [5.0, 0.25, 5.0, 0.25]);

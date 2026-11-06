@@ -548,12 +548,12 @@ impl Capture {
             if stop.load(Ordering::SeqCst) {
                 return Ok(Wait::End);
             }
+            // The read comes first, also at the time: what a stall let arrive is no
+            // reply to the next round, as C's `revents` come before its timer.
             let left = due.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(Wait::Go(None));
-            }
             let mut link = self.link.lock().expect("link lock");
             match link.read_byte(left.min(STOP_CHECK))? {
+                None | Some(b'\r' | b'\n') if left.is_zero() => return Ok(Wait::Go(None)),
                 None | Some(b'\r' | b'\n') => {}
                 Some(byte) => {
                     log::error!("No reply pending.");
@@ -678,6 +678,14 @@ mod tests {
 
     type Seen = Arc<Mutex<Vec<(Instant, Vec<u8>)>>>;
 
+    /// Holds a capture in the wait between two rounds until the test has done
+    /// what it wants done there, so that no sleep has to hit that wait.
+    #[derive(Default)]
+    struct IdleGate {
+        reached: AtomicBool,
+        go_on: AtomicBool,
+    }
+
     /// A supply that answers as the protocol says, noting each write and when.
     struct Fake {
         seen: Seen,
@@ -695,6 +703,11 @@ mod tests {
         chatter_pause: Duration,
         /// The answers to the write of this number come this much later.
         late: Option<(usize, Duration)>,
+        /// A read with nothing left to come, after this many writes, waits here.
+        idle_gate: Option<(usize, Arc<IdleGate>)>,
+        /// How long the reads that found nothing asked to wait, added up: a wait
+        /// as the code sets it, whatever this host's sleeps make of it.
+        asked_to_wait: Arc<Mutex<Duration>>,
     }
 
     impl Fake {
@@ -710,6 +723,8 @@ mod tests {
                 chatter: None,
                 chatter_pause: Duration::ZERO,
                 late: None,
+                idle_gate: None,
+                asked_to_wait: Arc::default(),
             };
             (fake, seen)
         }
@@ -754,7 +769,17 @@ mod tests {
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
             let now = Instant::now();
             let n = self.arrived(now).min(buf.len());
+            if let Some((after, gate)) = &self.idle_gate
+                && self.input.is_empty()
+                && self.seen.lock().unwrap().len() >= *after
+            {
+                gate.reached.store(true, Ordering::SeqCst);
+                while !gate.go_on.load(Ordering::SeqCst) && now.elapsed() < CAPTURE_BOUND {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
             if n == 0 {
+                *self.asked_to_wait.lock().unwrap() += timeout;
                 let until = now + timeout;
                 let next = self.input.front().map_or(until, |(at, _)| *at);
                 std::thread::sleep(next.min(until).saturating_duration_since(now));
@@ -822,6 +847,38 @@ mod tests {
         }
         fn purge(&mut self) -> Result<()> {
             self.0.purge()
+        }
+    }
+
+    /// Stops for a while after the read that first finds nothing once the round
+    /// is in: a host's stall just where the wait between rounds runs out.
+    struct StallsInTheWait {
+        fake: Fake,
+        stalled: bool,
+    }
+    impl Port for StallsInTheWait {
+        fn name(&self) -> &'static str {
+            "/dev/ttyFAKE"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            let n = self.fake.read(buf, timeout)?;
+            if n == 0 && !self.stalled && self.fake.seen.lock().unwrap().len() >= 2 {
+                self.stalled = true;
+                std::thread::sleep(POLL_INTERVAL * 2);
+            }
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.fake.write(data)
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.fake.purge()
         }
     }
 
@@ -1021,12 +1078,14 @@ mod tests {
     fn a_reply_has_250_ms_to_come_whole() {
         let (mut fake, _) = Fake::new(b"\n");
         fake.offer(b"12.3");
+        let asked = Arc::clone(&fake.asked_to_wait);
         let mut link = Link::new(Some(Box::new(fake)), params(), &protocol::MODELS[0]);
         let began = Instant::now();
         assert_eq!(link.read_line(CAPTURE_BUFFER, None).unwrap(), None, "no line end");
         let took = began.elapsed();
         assert!(took >= Duration::from_millis(250), "{took:?}");
-        assert!(took < Duration::from_millis(600), "{took:?}");
+        let asked = *asked.lock().unwrap();
+        assert!(asked < Duration::from_millis(600), "{asked:?}");
     }
 
     #[test]
@@ -1052,6 +1111,21 @@ mod tests {
         let seen = seen.lock().unwrap();
         let gap = seen[2].0 - seen[0].0;
         assert!(gap >= Duration::from_millis(155), "{gap:?}");
+        assert!(logged_about_stray_data(), "{:?}", logged());
+    }
+
+    #[test]
+    fn data_that_a_stall_let_arrive_at_the_time_of_a_round_is_no_reply_to_it() {
+        let _gate = recording();
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.chatter = Some(b"hello");
+        fake.chatter_pause = POLL_INTERVAL;
+        let port = StallsInTheWait { fake, stalled: false };
+        let mut d = GpdDevice::from_port(&protocol::MODELS[1], Box::new(port));
+        d.open().unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [ROUND, ROUND].concat());
         assert!(logged_about_stray_data(), "{:?}", logged());
     }
 
@@ -1155,14 +1229,23 @@ mod tests {
             fake.late = Some((2, REPLY_BOUND + Duration::from_millis(500)));
             let mut d = device(fake);
             if time_limit {
-                d.set(&Key::LimitMsec, &Value::U64(3500), None).unwrap();
+                d.set(&Key::LimitMsec, &Value::U64(4500), None).unwrap();
             }
             let rx = start(&mut d);
+            let mut got = Vec::new();
             if !time_limit {
-                std::thread::sleep(REPLY_BOUND + Duration::from_millis(900));
+                let deadline = Instant::now() + CAPTURE_BOUND;
+                while got.len() < 8 {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    match rx.recv_timeout(left).expect("the late round").1 {
+                        Packet::Analog(a) => got.push((a.channels[0], a.samples[0])),
+                        Packet::End | Packet::Failed(_) => panic!("ended: {got:?}"),
+                        _ => {}
+                    }
+                }
                 d.stop().unwrap();
             }
-            let got = readings(&rx);
+            got.extend(readings(&rx));
             assert!(got.len() >= 8, "{time_limit}: {got:?}");
             assert_eq!(got[..8], [ROUND, ROUND].concat()[..], "{time_limit}");
         }
@@ -1193,17 +1276,19 @@ mod tests {
 
     #[test]
     fn a_stop_ends_a_capture_that_runs_and_asks_no_more() {
-        let (fake, seen) = Fake::new(b"\r\n");
+        let (mut fake, seen) = Fake::new(b"\r\n");
+        let gate = Arc::new(IdleGate::default());
+        fake.idle_gate = Some((2, Arc::clone(&gate)));
         let mut d = device(fake);
         let rx = start(&mut d);
         // Up to its first round, then into the 100 ms before the next.
         let deadline = Instant::now() + CAPTURE_BOUND;
-        while seen.lock().unwrap().len() < 2 {
+        while !gate.reached.load(Ordering::SeqCst) {
             assert!(Instant::now() < deadline, "no round");
             std::thread::sleep(Duration::from_millis(1));
         }
-        std::thread::sleep(POLL_INTERVAL / 3);
         d.stop().unwrap();
+        gate.go_on.store(true, Ordering::SeqCst);
         assert_eq!(readings(&rx), ROUND);
         std::thread::sleep(POLL_INTERVAL * 2);
         assert_eq!(seen.lock().unwrap().len(), 2, "a query after the stop");

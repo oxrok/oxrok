@@ -695,6 +695,10 @@ mod tests {
     struct Seen {
         writes: crate::serial::WriteLog,
         purges: usize,
+        /// The test lets [`Fake::held`] come.
+        release: bool,
+        /// Reads, after a write, that found nothing with [`Fake::held`] to come.
+        starved: usize,
     }
 
     /// What a fake says to a write: bytes after a pause, in pieces.
@@ -711,6 +715,11 @@ mod tests {
         scripted: Vec<(usize, Answer)>,
         /// Answers after this many writes: none.
         silent_after: Option<usize>,
+        /// Bytes on their way, there at the first read after [`Seen::release`],
+        /// or at the read of the number [`Fake::held_until_read`] or one that waits.
+        held: Vec<u8>,
+        held_until_read: Option<usize>,
+        reads: usize,
     }
 
     fn reading() -> Vec<u8> {
@@ -738,6 +747,9 @@ mod tests {
                 fail_reads: false,
                 scripted: Vec::new(),
                 silent_after: None,
+                held: Vec::new(),
+                held_until_read: None,
+                reads: 0,
             };
             (fake, seen)
         }
@@ -761,9 +773,19 @@ mod tests {
             if self.fail_reads {
                 return Err(Error::device("Input/output error"));
             }
+            self.reads += 1;
             let deadline = Instant::now() + timeout;
+            if self.input.is_empty() && !self.held.is_empty() {
+                let mut seen = self.seen.lock().unwrap();
+                seen.starved += usize::from(!seen.writes.is_empty());
+            }
             loop {
                 let now = Instant::now();
+                let waits = timeout > Duration::from_millis(1);
+                let by_read = self.held_until_read.is_some_and(|n| waits || self.reads >= n);
+                if !self.held.is_empty() && (by_read || self.seen.lock().unwrap().release) {
+                    self.input.extend(std::mem::take(&mut self.held).into_iter().map(|b| (now, b)));
+                }
                 let n = self.arrived(now).min(buf.len());
                 if n > 0 {
                     for b in &mut buf[..n] {
@@ -886,8 +908,11 @@ mod tests {
 
     #[test]
     fn a_scan_takes_an_answer_only_by_its_time() {
+        // The one read a scan makes comes up empty, however long its wait ran.
         let (mut fake, _seen) = Fake::new();
-        fake.scripted = vec![(0, vec![(SCAN_WAIT + Duration::from_millis(100), reading())])];
+        fake.silent_after = Some(0);
+        fake.held = reading();
+        fake.held_until_read = Some(2);
         assert!(probe(Box::new(fake)).is_none());
     }
 
@@ -1158,11 +1183,19 @@ mod tests {
     fn no_poll_goes_out_before_the_answer_is_whole() {
         let (mut fake, seen) = Fake::new();
         let (head, tail) = (reading()[..10].to_vec(), reading()[10..].to_vec());
-        fake.scripted = vec![(0, vec![(Duration::ZERO, head), (Duration::from_millis(200), tail)])];
+        fake.scripted = vec![(0, vec![(Duration::ZERO, head)])];
+        fake.held = tail;
         let mut d = device(fake);
         let rx = start(&mut d);
-        std::thread::sleep(Duration::from_millis(100));
+        // Back for more twice with the first part in hand, the second time after a
+        // read's whole slice: a poll would be out by now.
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while seen.lock().unwrap().starved < 2 {
+            assert!(Instant::now() < deadline, "no read after the first part");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(writes(&seen).len(), 1, "still in the first answer");
+        seen.lock().unwrap().release = true;
         let packets = until(&rx, is_analog, CAPTURE_BOUND);
         assert_eq!(blocks(&packets), [[12.34, 5.0, 3.3]], "put together");
         d.close().unwrap();
@@ -1187,12 +1220,25 @@ mod tests {
 
     #[test]
     fn a_stop_with_an_answer_on_its_way_takes_it() {
-        let (mut fake, _seen) = Fake::new();
-        fake.scripted = vec![(0, vec![(Duration::from_millis(100), reading())])];
+        let (mut fake, seen) = Fake::new();
+        fake.silent_after = Some(0);
+        fake.held = reading();
         let mut d = device(fake);
         let rx = start(&mut d);
-        std::thread::sleep(Duration::from_millis(20));
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while writes(&seen).is_empty() {
+            assert!(Instant::now() < deadline, "no request");
+            std::thread::sleep(Duration::from_millis(1));
+        }
         d.stop().unwrap();
+        // Two reads begun after it, so the capture has looked at the stop between
+        // them. The answer comes only now, however long anything here took.
+        let at_stop = seen.lock().unwrap().starved;
+        while seen.lock().unwrap().starved < at_stop + 2 {
+            assert!(Instant::now() < deadline, "it did not wait for the answer");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        seen.lock().unwrap().release = true;
         let packets = until(&rx, is_end, CAPTURE_BOUND);
         assert_eq!(blocks(&packets).len(), 2, "its volts and amperes");
         d.close().unwrap();

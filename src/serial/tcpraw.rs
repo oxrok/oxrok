@@ -75,6 +75,18 @@ fn read_result(result: std::io::Result<usize>) -> Result<usize> {
     }
 }
 
+/// A socket timeout set. macOS refuses any `setsockopt` once both directions are
+/// shut, as a reset does, with `EINVAL` (XNU's `sosetoptlock`, `uipc_socket.c`: "the
+/// socket has been shutdown, no more sockopt's"); Linux and Windows take it. No time
+/// given here is zero, the one other case that gives `InvalidInput`. Such a socket
+/// can't block, so the `read` or `write` that follows says what has become of it.
+fn timeout_set(result: std::io::Result<()>) -> Result<()> {
+    match result {
+        Err(e) if e.kind() == ErrorKind::InvalidInput => Ok(()),
+        other => Ok(other?),
+    }
+}
+
 /// Whether a port's name means this transport: `ser_name_is_tcpraw`.
 pub fn is_tcpraw_name(name: &str) -> bool {
     name.starts_with(PREFIX)
@@ -150,7 +162,7 @@ impl Port for TcpRaw {
             return Ok(0);
         }
         // A zero duration is refused here, and would mean no timeout anyway.
-        self.stream.set_read_timeout(Some(timeout.max(Duration::from_millis(1))))?;
+        timeout_set(self.stream.set_read_timeout(Some(timeout.max(Duration::from_millis(1)))))?;
         read_result(self.stream.read(buf))
     }
 
@@ -164,7 +176,7 @@ impl Port for TcpRaw {
             if left.is_zero() {
                 return Err(Error::Timeout);
             }
-            self.stream.set_write_timeout(Some(left))?;
+            timeout_set(self.stream.set_write_timeout(Some(left)))?;
             match self.stream.write(&data[done..]) {
                 Ok(n) => {
                     done += n;
@@ -189,7 +201,7 @@ impl Port for TcpRaw {
             if left.is_zero() {
                 break;
             }
-            self.stream.set_write_timeout(Some(left))?;
+            timeout_set(self.stream.set_write_timeout(Some(left)))?;
             match self.stream.write(&data[done..]) {
                 Ok(n) => done += n,
                 Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => break,
@@ -363,7 +375,17 @@ mod tests {
         assert!(matches!(of(ErrorKind::PermissionDenied), Err(Error::Io(_))));
     }
 
-    /// A close with what was sent still unread makes the kernel reset.
+    #[test]
+    fn a_timeout_refused_on_a_socket_that_is_down_is_no_error() {
+        let of = |kind: ErrorKind| timeout_set(Err(std::io::Error::from(kind)));
+        assert!(timeout_set(Ok(())).is_ok());
+        assert!(of(ErrorKind::InvalidInput).is_ok());
+        assert!(matches!(of(ErrorKind::PermissionDenied), Err(Error::Io(_))));
+    }
+
+    /// A close with what was sent still unread makes the kernel reset, on macOS
+    /// too (XNU's `tcp_disconnect`, `tcp_usrreq.c`, drops a connection with data
+    /// in its receive buffer), and there the read's timeout is refused first.
     #[test]
     fn a_peer_that_resets_is_a_disconnect() {
         let (name, peer) = peer(|s| {
@@ -373,10 +395,8 @@ mod tests {
         port.write(&[1]).expect("a write");
         peer.join().expect("the peer");
         let mut buf = [0u8; 1];
-        assert!(matches!(
-            read_blocking(&mut port, &mut buf, Duration::from_secs(60)),
-            Err(Error::Disconnected)
-        ));
+        let got = read_blocking(&mut port, &mut buf, Duration::from_secs(60));
+        assert!(matches!(got, Err(Error::Disconnected)), "{got:?}");
         // The write after it finds the socket gone, at the latest on a second try.
         let gone = (0..20).find_map(|_| port.write(&[1]).err());
         assert!(matches!(gone, Some(Error::Disconnected)), "{gone:?}");
@@ -399,17 +419,25 @@ mod tests {
         peer.join().expect("the peer");
     }
 
+    /// How many writes of [`STUFFING`] bytes it may take to find a socket full. On
+    /// Linux and macOS the first fills the buffers and blocks. On Windows a blocking
+    /// send took all 16 MiB in 10 ms on CI's runner, with the peer reading nothing,
+    /// so a write there can be all gone to the kernel and only a later one blocks.
+    const STUFFING_WRITES: usize = 8;
+    const STUFFING: usize = 16 * 1024 * 1024;
+
     /// A peer that doesn't read: a write gives up, and doesn't say it all went.
     #[test]
     fn a_plain_write_to_a_peer_that_does_not_read_times_out() {
-        const SIZE: usize = 16 * 1024 * 1024;
         let (done, wait) = mpsc::channel::<()>();
         let (name, peer) = peer(move |_s| {
             let _ = wait.recv();
         });
         let mut port = TcpRaw::open(&name).expect("a connection");
+        let data = vec![0x55u8; STUFFING];
         let began = Instant::now();
-        assert!(matches!(port.write(&vec![0x55u8; SIZE]), Err(Error::Timeout)));
+        let refused = (0..STUFFING_WRITES).find_map(|_| port.write(&data).err());
+        assert!(matches!(refused, Some(Error::Timeout)), "{refused:?}");
         assert!(began.elapsed() < Duration::from_secs(60), "{:?}", began.elapsed());
         done.send(()).expect("the peer waits");
         peer.join().expect("the peer");
@@ -435,21 +463,23 @@ mod tests {
 
     /// A peer that doesn't read: `write_timeout` keeps to its bound and says how
     /// much went, short of all. Nothing here rests on how fast this host is, since
-    /// the data is more than a socket's buffers hold.
+    /// the writes go on until they are more than a socket's buffers hold.
     #[test]
     fn a_write_to_a_peer_that_does_not_read_ends() {
-        const SIZE: usize = 16 * 1024 * 1024;
         let (done, wait) = mpsc::channel::<()>();
         let (name, peer) = peer(move |_s| {
             let _ = wait.recv();
         });
         let mut port = TcpRaw::open(&name).expect("a connection");
-        let data = vec![0x55u8; SIZE];
-        let began = Instant::now();
-        let went = port.write_timeout(&data, Duration::from_millis(200)).expect("a write");
-        assert!(went < SIZE, "{went}");
-        assert!(began.elapsed() >= Duration::from_millis(200), "{:?}", began.elapsed());
-        assert!(began.elapsed() < Duration::from_secs(60), "{:?}", began.elapsed());
+        let data = vec![0x55u8; STUFFING];
+        let short = (0..STUFFING_WRITES).find_map(|_| {
+            let began = Instant::now();
+            let went = port.write_timeout(&data, Duration::from_millis(200)).expect("a write");
+            (went < STUFFING).then(|| began.elapsed())
+        });
+        let took = short.expect("a write that came up short");
+        assert!(took >= Duration::from_millis(200), "{took:?}");
+        assert!(took < Duration::from_secs(60), "{took:?}");
         done.send(()).expect("the peer waits");
         peer.join().expect("the peer");
     }

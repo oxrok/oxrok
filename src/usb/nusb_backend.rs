@@ -166,7 +166,26 @@ fn interface_driver_link(bus: u8, ports: &[u8], config: u8, interface: u8) -> St
     format!("/sys/bus/usb/devices/{bus}-{}:{config}.{interface}/driver", ports.join("."))
 }
 
+/// What a failed look for an endpoint means, with whether each claimed interface
+/// still has descriptors. They go by the active configuration, which nusb reads
+/// from sysfs at each look on Linux: while the kernel takes apart a device that has
+/// left, that reads empty and none has any. That is the device gone, as the
+/// transfer would have said, and no endpoint missing from an interface.
+fn lookup_error(e: Error, has_descriptors: &[bool]) -> Error {
+    if has_descriptors.is_empty() || has_descriptors.contains(&true) {
+        e
+    } else {
+        Error::Disconnected
+    }
+}
+
 impl Nusb {
+    /// [`lookup_error`] for this device.
+    fn endpoint_lookup_error(&self, e: Error) -> Error {
+        let has: Vec<bool> = self.interfaces.values().map(|i| i.descriptor().is_some()).collect();
+        lookup_error(e, &has)
+    }
+
     /// `WinUSB` sends no control transfer without a claimed interface:
     /// one is claimed for it, the request's own for an interface
     /// recipient, else the active configuration's first. Drivers keep
@@ -196,7 +215,9 @@ impl Nusb {
                 i.descriptor().is_some_and(|d| d.endpoints().any(|e| e.address() == endpoint))
             })
             .ok_or_else(|| {
-                Error::device(format!("endpoint 0x{endpoint:02x} is not on a claimed interface"))
+                self.endpoint_lookup_error(Error::device(format!(
+                    "endpoint 0x{endpoint:02x} is not on a claimed interface"
+                )))
             })
     }
 
@@ -205,7 +226,7 @@ impl Nusb {
             let ep = self
                 .interface_for(endpoint)?
                 .endpoint::<Bulk, In>(endpoint)
-                .map_err(|e| map(&e, "usb"))?;
+                .map_err(|e| self.endpoint_lookup_error(map(&e, "usb")))?;
             self.in_endpoints.insert(endpoint, ep);
         }
         Ok(self.in_endpoints.get_mut(&endpoint).expect("inserted"))
@@ -216,7 +237,7 @@ impl Nusb {
             let ep = self
                 .interface_for(endpoint)?
                 .endpoint::<Bulk, Out>(endpoint)
-                .map_err(|e| map(&e, "usb"))?;
+                .map_err(|e| self.endpoint_lookup_error(map(&e, "usb")))?;
             self.out_endpoints.insert(endpoint, ep);
         }
         Ok(self.out_endpoints.get_mut(&endpoint).expect("inserted"))
@@ -227,7 +248,7 @@ impl Nusb {
             let ep = self
                 .interface_for(endpoint)?
                 .endpoint::<Interrupt, In>(endpoint)
-                .map_err(|e| map(&e, "usb"))?;
+                .map_err(|e| self.endpoint_lookup_error(map(&e, "usb")))?;
             self.int_in_endpoints.insert(endpoint, ep);
         }
         Ok(self.int_in_endpoints.get_mut(&endpoint).expect("inserted"))
@@ -238,7 +259,7 @@ impl Nusb {
             let ep = self
                 .interface_for(endpoint)?
                 .endpoint::<Interrupt, Out>(endpoint)
-                .map_err(|e| map(&e, "usb"))?;
+                .map_err(|e| self.endpoint_lookup_error(map(&e, "usb")))?;
             self.int_out_endpoints.insert(endpoint, ep);
         }
         Ok(self.int_out_endpoints.get_mut(&endpoint).expect("inserted"))
@@ -379,7 +400,9 @@ impl Transport for Nusb {
 
     fn max_packet_size(&mut self, endpoint: u8) -> Result<usize> {
         let i = self.interface_for(endpoint)?;
-        let d = i.descriptor().ok_or_else(|| Error::device("no interface descriptor"))?;
+        let d = i
+            .descriptor()
+            .ok_or_else(|| self.endpoint_lookup_error(Error::device("no interface descriptor")))?;
         d.endpoints()
             .find(|e| e.address() == endpoint)
             .map(|e| e.max_packet_size())
@@ -645,8 +668,18 @@ impl Drop for NusbStream {
 
 #[cfg(test)]
 mod tests {
-    use super::claim_or_detach;
+    use super::{claim_or_detach, lookup_error};
+    use crate::core::Error;
     use std::cell::Cell;
+
+    #[test]
+    fn an_endpoint_not_found_on_a_device_with_no_descriptors_left_is_the_device_gone() {
+        let missing = || Error::device("not there");
+        assert!(matches!(lookup_error(missing(), &[false, false]), Error::Disconnected));
+        assert!(matches!(lookup_error(missing(), &[false, true]), Error::Device(_)));
+        // Nothing claimed is the caller's mistake, whatever the device is doing.
+        assert!(matches!(lookup_error(missing(), &[]), Error::Device(_)));
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
