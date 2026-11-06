@@ -1,2 +1,1 @@
-sr: session: ipdbg-la device (null) has no enabled channels.
-Failed to start session.
+ipdbg-la device has no enabled channels

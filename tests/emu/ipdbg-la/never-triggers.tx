@@ -6,4 +6,6 @@ tcp_in 8 -> 1000000009000000
 tcp_close
 tcp_connect
 tcp_out f0f1f30000f0f1f70000f0f9fb0000f0f9ff0000f0f5f600000f1f0003fe -> 30
+interrupt
+tcp_out ee -> 1
 tcp_close

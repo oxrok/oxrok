@@ -4,5 +4,3 @@ tcp_in 4 -> 49444247
 tcp_out aa -> 1
 tcp_in 8 -> 1000000021000000
 tcp_close
-tcp_connect
-tcp_close

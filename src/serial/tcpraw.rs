@@ -144,6 +144,41 @@ impl TcpRaw {
     }
 }
 
+impl TcpRaw {
+    /// A connection a driver made itself, for its own words on a failed connect.
+    ///
+    /// # Errors
+    ///
+    /// When the socket refuses its option.
+    pub fn from_stream(name: String, stream: TcpStream) -> Result<TcpRaw> {
+        stream.set_nodelay(true)?;
+        Ok(TcpRaw { name, stream })
+    }
+
+    /// Closes after the peer has: shuts the sending side and reads, up to `wait`,
+    /// until the peer closes. For a server that serves one connection at a time.
+    pub fn close_waiting(self, wait: Duration) {
+        if self.stream.shutdown(std::net::Shutdown::Write).is_err() {
+            return;
+        }
+        let mut stream = self.stream;
+        let deadline = Instant::now() + wait;
+        let mut buf = [0u8; 256];
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+                return;
+            }
+            match stream.read(&mut buf) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(_) => return,
+            }
+        }
+    }
+}
+
 impl Port for TcpRaw {
     fn name(&self) -> &str {
         &self.name

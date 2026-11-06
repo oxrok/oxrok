@@ -1,0 +1,1 @@
+sr: ipdbg-la: 513 samples are more than the core's memory of 512: the limit stays 512.

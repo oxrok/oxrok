@@ -1,0 +1,7 @@
+tcp_connect
+tcp_out eeeebb -> 3
+tcp_in 4 -> 49444247
+tcp_out aa -> 1
+tcp_in 8 -> 1000000009000000
+unplug
+tcp_refused
