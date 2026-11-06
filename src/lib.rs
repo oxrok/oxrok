@@ -28,13 +28,14 @@
 //! # Installing
 //!
 //! ```text
-//! cargo install oxrok --version 0.1.0-alpha.1 --locked
-//! cargo install oxrok --version 0.1.0-alpha.1 --locked --features rustpython
-//! cargo install oxrok --version 0.1.0-alpha.1 --locked --features python
+//! cargo install oxrok --version 0.1.0-alpha.2 --locked
+//! cargo install oxrok --version 0.1.0-alpha.2 --locked --features rustpython
+//! cargo install oxrok --version 0.1.0-alpha.2 --locked --features python
 //! ```
 //!
-//! The release archives on GitHub hold a `rustpython` build with the
-//! libsigrokdecode 0.5.3 decoders next to it, and need nothing else.
+//! The archives of a GitHub release, where it has them, hold a `rustpython`
+//! build with the libsigrokdecode 0.5.3 decoders next to it, and need nothing
+//! else.
 //!
 //! The `rustpython` feature relies on a pin in `Cargo.lock`, so install
 //! with `--locked`. As a dependency, pin it in your own lockfile:
@@ -55,7 +56,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxrok = { version = "0.1.0-alpha.1", default-features = false, features = ["nusb"] }
+//! oxrok = { version = "0.1.0-alpha.2", default-features = false, features = ["nusb"] }
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses

@@ -1,5 +1,5 @@
 FRAME-BEGIN
-oxrok 0.1.0-alpha.1
+oxrok 0.1.0-alpha.2
 Acquisition with 16/18 channels at 1 MHz
 FRAME-END
 CH0:0f 0f 0f 0c 

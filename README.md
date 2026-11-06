@@ -21,16 +21,16 @@ mind, and read the table below for what has met which kind of evidence.
 
 Early, and most of it has never touched the device it drives.
 
-On 2026-11-05 `src/lib.rs` registers 39 driver modules, with 135 driver
-ids (`oxrok -L`; most ids are multimeters). 38 of the modules are
+On 2026-11-06 `src/lib.rs` has 63 driver modules, with 164 driver
+ids (`oxrok -L`; most ids are multimeters). 62 of the modules are
 counterparts of libsigrok's 87 `src/hardware` directories, and one, the
-LogicPort, is not in libsigrok; the `serial-dmm` module also takes in
-`uni-t-ut32x`. More are being ported: [docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
+LogicPort, is not in libsigrok. More are being ported:
+[docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
 
-Also there: the `bits`, `hex`, `ascii`, `analog`, `csv`, `vcd`, `binary`
-and `srzip` outputs; `.sr`, VCD and binary inputs (no CSV input yet, see
-[docs/CLI.md](docs/CLI.md)); USB, serial, HID and SCPI transports with
-record and replay; native `uart`, `i2c` and `spi` decoders.
+Also there: the `bits`, `hex`, `ascii`, `analog`, `csv`, `vcd`, `binary`,
+`srzip` and `null` outputs; `.sr`, VCD and binary inputs (no CSV input yet, see
+[docs/CLI.md](docs/CLI.md)); USB, serial, TCP, HID and SCPI transports, most
+with record and replay; native `uart`, `i2c` and `spi` decoders.
 
 ### What has been checked how
 
@@ -150,18 +150,23 @@ and command lines for real devices in [docs/DEVICES.md](docs/DEVICES.md).
 
 ## Installing
 
-### From a checkout
+### From crates.io or a checkout
 
-No binaries have been released yet: the repository's Releases page is empty
-on 2026-11-04. Build it with Rust 1.95 or newer:
+With Rust 1.95 or newer:
+
+```sh
+cargo install oxrok --version 0.1.0-alpha.2 --locked
+```
+
+The version is needed: with only pre-releases published, cargo finds nothing
+without it. Or, from a checkout, which has what was merged since:
 
 ```sh
 cargo install --path . --locked
 ```
 
-crates.io has one version, `0.1.0-alpha.1` of 2026-10-23, published to
-claim the name. It has 8 of the 23 driver modules and none of the
-emulator's work, so use the checkout.
+Binary archives, where a release has them, are on the repository's
+[Releases page](https://github.com/mangelajo/oxrok/releases).
 
 On Linux a USB device is root only without a udev rule, and oxrok ships no
 rules yet; [docs/USB.md](docs/USB.md#troubleshooting) has this and the
@@ -213,9 +218,9 @@ as long. [docs/DECODERS.md](docs/DECODERS.md) describes the host.
 
 ### Release artefacts
 
-None is published yet. This is what a release will hold, built by `make
-dist` and `make dist-src` in the `Release binaries` workflow
-(`.github/workflows/release.yml`), each file with a `.sha256`:
+A GitHub release holds these, built by `make dist` and `make dist-src` in the
+`Release binaries` workflow (`.github/workflows/release.yml`), each file with a
+`.sha256`:
 
 - One archive per target: Linux x86_64 and aarch64 (static, musl), macOS
   x86_64 and arm64, Windows x86_64. It has `oxrok` built with `rustpython`,
@@ -268,8 +273,9 @@ tool knows the difference. sigrok-cli runs unmodified.
 Transport shells, vusb's, carry what a kind of device shares: HID, the FTDI
 chips, EZ-USB firmware upload and renumeration, CDC-ACM. `emu/` holds the
 models, the `.tx` log and what knows sigrok's fixtures. On
-2026-11-04 there are 24 models (`oxrok-emu list`), all USB: serial and SCPI
-instruments are still open.
+2026-11-06 there are 65 models (`oxrok-emu list`), all USB, with the serial
+instruments on CDC-ACM: SCPI over TCP and USBTMC, and the odd transports, are
+still open.
 
 ### Differential testing
 
@@ -469,7 +475,8 @@ The `oxrok` crate has the library and the binary:
 | `formats` | text outputs, srzip and the `.sr` session format, VCD and binary input and output |
 | `usb`, `serial`, `hid`, `scpi` | transports, each with record and replay |
 | `ftdi`, `ezusb` | FTDI requests, FIFO reads and libftdi's behaviour; Cypress FX2 firmware upload |
-| `dmm` | multimeter packet parsers |
+| `dmm`, `lcr` | multimeter and LCR meter packet parsers |
+| `modbus` | Modbus RTU over a serial port |
 | `drivers::*` | one module per driver, as in the tables above |
 | `decode`, `decoders` | the decoder API and the native `uart`, `i2c`, `spi` decoders |
 | `pydecode` | runs libsigrokdecode's Python decoders (features `rustpython`, `python`) |

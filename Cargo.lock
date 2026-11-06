@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "oxrok"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "aes",
  "async-hid",
@@ -1846,7 +1846,7 @@ dependencies = [
 
 [[package]]
 name = "oxrok-emu"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "aes",
  "clap",
@@ -1858,7 +1858,7 @@ dependencies = [
 
 [[package]]
 name = "oxrok-hil"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 dependencies = [
  "log",
  "oxrok",
