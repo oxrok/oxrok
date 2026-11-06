@@ -1,2 +1,1 @@
-sr: beaglelogic: Insufficient buffer space has been allocated.
-sr: beaglelogic: Please use 'echo <size in bytes> > /sys/devices/virtual/misc/beaglelogic/memalloc' to increase the buffer size, this capture is now truncated to 0 Msamples
+Failed to open device: device error: The answer to 'memalloc' is not a number: "abc".

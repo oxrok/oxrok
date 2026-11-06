@@ -18,4 +18,6 @@ tcp_in 4 -> 4f4b0d0a
 tcp_out 73616d706c65756e697420300a -> 13
 tcp_in 4 -> 4f4b0d0a
 tcp_out 6765740a -> 4
+interrupt
+tcp_out 636c6f73650a -> 6
 tcp_close
