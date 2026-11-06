@@ -659,6 +659,21 @@ Deliberate, and kept small:
   only, say when a log's records were dropped, when it ended short and
   when it had no metadata. `--samples` in `data_source=Memory` can give
   more than asked, as in sigrok-cli: a read's records all go out.
+- `mastech-ms6514`: a scan finds the device, where stock sigrok-cli
+  never does (`api.c:85`, `serial.c:833`). It listens for 1 s.
+  Comparisons are against C with that argument patched.
+- `mastech-ms6514`: `-C` picks by the channel a reading names, where C
+  goes by display, so its `-C T1` with T2 on main gives T2's reading.
+- `mastech-ms6514`: a time limit ends at its time, also on a silent
+  unit, where C waits for bytes. A hung-up port ends the capture, where
+  C hangs.
+- `mastech-ms6514`: a second capture on an open port drops what is
+  queued.
+- `mastech-ms6514`: a warning with `-O csv` (a known limit: rows by
+  count can mix frames), and one when a dump ends before any stored
+  value.
+- `mastech-ms6514`: `-C T1-T2` is refused by both tools, as a range, in
+  their own words.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

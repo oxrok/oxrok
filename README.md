@@ -88,6 +88,7 @@ Emulator and replay only, never run on hardware:
 | `icstation-usbrelay` | 43 | 83.0% |
 | `itech-it8500` | 223 | 93.6% |
 | `juntek-jds6600` | 229 | 89.2% |
+| `mastech-ms6514` | 72 | 94.9% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |
 | `ols` | 213 | 94.7% |

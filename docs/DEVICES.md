@@ -2508,6 +2508,56 @@ Kept from C: a size over 32 ends a capture, now with a warning; a limit
 is checked after a whole read, so a limit of 2 in a log gets 3 records.
 These log paths end normally with exit 0.
 
+## MASTECH MS6514 (mastech-ms6514)
+
+Dual-channel thermometer behind a CP2102, 9600/8n1, about 2 frames a
+second once PC-Link is on. `conn=` is required. Options:
+`data_source=Live|Memory`, `limit_samples`, `limit_time`. Not checked on
+hardware.
+
+**Stock libsigrok finds no device through a scan, in any build since the
+driver's first commit.** `api.c:85` asks `serial_stream_detect` for a
+packet of 36 bytes with a 36 byte buffer, and `serial.c:833` wants two
+packets' room, so every scan ends at `:839`. The check is from 2012
+(`2546b05c`, moved by `766456be`; `maxlen < packet_size * 2` at
+`23669c3d^`), and the driver had the same 36 and 36 from its pull
+request (`13b72fa9`) on. **So every "full" case here is against a
+patched C:** the unmodified driver with that one argument changed to 18
+in memory (`tools/emu/mastech-ms6514-scan.c`, through wrappers for this
+model's tools only). `gcov.txt` doesn't say so, and its figures are that
+patched C's. Two stock cases pin the failure.
+
+Emulated: model `mastech-ms6514` on the CDC-ACM shell (options `frame=`,
+`stored=`, `period=`, `first=`, `burst=`, `bunch=`, `still=`), 72 cases
+(49 full against the patched C, 5 `--oracle-bug`, 11 `--oracle-differs`,
+5 library, 2 oxrok alone), 2026-11-06. gcov 94.9% of the driver. Not
+emulated: `protocol.c:223-224` (a read of 0 with exactly `G_IO_IN`),
+`:240-241` (dead: the parse always leaves under 18 bytes), and the
+default branches of `config_get`, `config_set` and `config_list`.
+
+What it taught:
+- A live frame that crosses the `a1` request ends a dump before it
+  starts, with exit 0. At 2 Hz a frame is on the line at least 3.75% of
+  the time. C says nothing, so it looks like an empty memory. oxrok
+  keeps the behaviour and warns.
+- `-C` in C selects by display, not channel. oxrok goes by the channel a
+  reading names.
+- A time limit in C is checked only when bytes arrive.
+- A sample limit alone waits on a silent unit in both tools.
+  `MS6514GUI.pde:465` says "BUG IN DEVICE!! doesn't send serial in this
+  mode".
+- **Known limit of `-O csv`:** a frame names two of three channels,
+  often the same one twice, and csv takes readings by count. With all
+  channels on, three frames gave four rows, with a T1 paired to the
+  previous frame's T2 and made-up zeros. With T1 and T1 MAX, the label
+  is `°C MAX,` and each reading is a row. oxrok warns, and `-O analog`
+  is the output to use. `-C T1,T2` gives one row per frame only on
+  frames showing T1 and T2 alone. C's csv prints an unset label there,
+  which can crash, and it differs from run to run even with `perturb`.
+
+Sources: sigrok's wiki pages, `tc2100` and `MS6514GUI`. No firmware
+found. No source says what follows a dump or how fast it comes.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

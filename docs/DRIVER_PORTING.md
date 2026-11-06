@@ -298,6 +298,36 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A C scan can be dead from the first commit: compare
+  `serial_stream_detect`'s buffer with twice its packet size. A hidden
+  symbol can't be preloaded, but the driver struct from `sr_driver_list`
+  gives the scan's address, so a preload can change one immediate in
+  memory and leave the gcov counts real. Require exactly one match, and
+  fail loudly otherwise. Say in bold that "full" then means against a
+  patched C: `gcov.txt` won't.
+- A tool's close can take many stream periods. A stream's count in a
+  scan's `.tx` is then the clock's, and a frame sent during that close
+  can be lost to the next open's flush, which hangs a capture counting
+  on its burst. Give the scan's open one send.
+- A `first=` or `period=` that delays a frame eats the margin of a time
+  limit in the same case. The scan's first frame comes at `first +
+  period` offers, so a longer `period=` on an event case needs
+  `first=0`, or the scan's time runs out.
+- A C callback that returns on `revents != G_IO_IN` skips its limit
+  check on every timeout, so a time limit there never ends a silent
+  capture.
+- When both tools refuse in their own words, pin each alone
+  (`--libsigrok`, `--no-oracle-only`), not `--oracle-bug`.
+  `--oracle-differs` needs a difference on what it compares: two empty
+  stdouts need `--stderr`.
+- `csv.c:187` leaves labels unset. A channel no packet names prints what
+  the heap holds, and `perturb` doesn't make that stable: one case gave
+  a blank, `(null)` or a crash from run to run. Compare oxrok alone
+  there, and repeat any csv oracle case before pinning it.
+- A filter that trims a message hides a change to it: assert the full
+  text in a unit test.
+- A silent success is a finding: when a capture can end empty for two
+  reasons a user can't tell apart, keep C's behaviour and warn.
 - vusb offers held reads after every submission and unlink as well as on
   its tick, so a CDC model's period is a count, not a time. A period of
   2 or less free-runs, each frame's resubmit feeding the next, and hit
