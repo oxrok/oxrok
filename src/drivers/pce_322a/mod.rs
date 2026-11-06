@@ -21,41 +21,65 @@
 //! **The meter says how it is set only in its readings,** and only a capture reads
 //! them. Before one, this assumes A, F and 30-130, whatever the meter holds, as C
 //! does, and the settings are toggles: `spl_weight_freq=A` on a meter at C sends
-//! nothing and leaves it at C, and `=C` on it toggles it to A. A reading then sets
-//! things right, in what the capture says and in the next toggle. There is no
-//! other way to know. `aa f2` is taken to step upwards, from what `MEAS_RANGE_*`
-//! number in C and the wiki's list of ranges.
+//! nothing and leaves it at C, and `=C` on it toggles it to A. A live reading then
+//! sets things right, in what the capture says and in the next toggle, and warns if
+//! it contradicts what was set. There is no other way to know. A memory capture is
+//! different: it takes the weighting from each recording, as C does
+//! (`protocol.c:226-232`), which says nothing of the meter, and the next toggle
+//! counts from that.
+//!
+//! `aa f2` is taken to step upwards, from what `MEAS_RANGE_*` number in C and the
+//! wiki's list, "Auto, 30-80, 50-100, 80-130". The 2022 manual (5.1.2) has the LEVEL
+//! key select "50 ... 100, 80 ... 130, 30 ... 80 and automatic". That may be only a
+//! list; if it is that key's cycle and `aa f2` is that key, then each step lands
+//! elsewhere, in C and here alike. C's reading is kept.
+//!
+//! A memory of the 32,700 values the manuals give is 256 blocks, about 44 s at C's
+//! pace, and a small `--samples` still reads it all.
 //!
 //! Where this differs from C, each with its cause:
 //!
-//! - A setting counts as done, so the next one and a get know of it. C only ever
-//!   takes the settings from a reading (`protocol.c:374,395,452`). There `-c
-//!   spl_meas_range=30-80 -c spl_meas_range=50-100` steps three times, to 80-130;
-//!   `spl_weight_freq=C` set twice toggles the meter back to A; and a get right after
-//!   a set says what it was before.
+//! - A setting counts as done, so the next one and a get know of it, by choice. C
+//!   only ever takes the settings from a reading (`protocol.c:374,395,452`), so a get
+//!   right after a set says what it was before. Neither is right on every meter: this
+//!   ends where it was asked only if the assumed start is true. From A, F and 30-130,
+//!   `-c spl_meas_range=30-80 -c spl_meas_range=50-100` steps twice here and ends
+//!   right, and three times in C and ends at 80-130. On a meter at range 3 C ends
+//!   right and this does not; on a meter at C, `spl_weight_freq=C` twice sends two
+//!   toggles in C and ends at C, and one here and ends at A. The first live reading
+//!   after a set warns if it contradicts it, whichever way that came about.
 //! - A sample count starts again with each capture, where `num_samples`
 //!   (`protocol.c:91`) goes on, so C's second capture on an open device ends at its
 //!   first sample once the first has reached a limit.
 //! - A limit cuts a memory capture's output, with the same requests on the wire.
 //!   C ignores the limit there, on purpose (`protocol.c:92`), and reads and sends it
 //!   all.
-//! - The status may end in `10` as well as `20`, the wiki's two values. C's check
-//!   (`protocol.c:185`) never takes `10`, and waits for ever.
+//! - The status may end in `10` as well as `20`, the wiki's two values, with a
+//!   warning. This is a decision: no recording backs it and no source says what `10`
+//!   means, so if it means something else this reads what may not be samples. C's
+//!   check (`protocol.c:185`) never takes `10` and waits for ever, which is a bug only
+//!   if the wiki is right.
 //! - A silent meter ends a capture that only a sample limit could end, and any
 //!   memory capture, after [`SILENCE_BOUND`], as nothing else would: C waits for
 //!   ever (`protocol.c:321`), and the scan vouches for no meter. A live capture with
 //!   no limit waits for a stop.
 //! - A port that is gone ends a capture. C's callback reads only when `revents` is
-//!   `G_IO_IN` alone (`protocol.c:321`), and a run after an unplug neither read a
-//!   failure (gcov: 323 unreached) nor ended within 20 s.
+//!   `G_IO_IN` alone (`protocol.c:321`). A run after an unplug had not ended at 90 s,
+//!   and gcov shows no read failing (323) and `serial_timeout` never called, so this
+//!   is no slow fallback.
 //! - A failed `connect` closes the port it opened, where `dev_open` leaves it open
 //!   (`api.c:240`).
 //! - What a capture leaves behind does not reach the next. A capture after a memory
 //!   capture first waits for the line to go quiet, which is what a stop in mid-block
 //!   needs, and a live one then connects again, as the memory capture disconnected.
-//!   A live capture after another first drops what has queued up, which is old. C
-//!   does none of this: its only client that runs twice is a library's, and no run
-//!   here compares them. A first capture is as in C.
+//!   A stop with a request not yet answered waits longer ([`LATE_QUIET`]), as the
+//!   reply can start after any quiet: otherwise an old status is taken for the new one
+//!   and the new one lands in the memory, wrong for the whole capture. No source gives
+//!   the meter's latency, so a reply later than that still does this, as does one to a
+//!   device closed and opened again, which waits for nothing. A live capture after
+//!   another first drops what has queued up, which is old. C does none of this: its
+//!   only client that runs twice is a library's, and no run here compares them. A
+//!   first capture is as in C.
 //!
 //! See [`protocol`].
 
@@ -70,7 +94,7 @@ use crate::core::{
 use crate::serial::{Params, Port};
 use protocol::{Item, Measurement, Memory, Mode, RANGES, SERIALCOMM, StatusWindow, Stream};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -88,7 +112,8 @@ static DEV_OPTIONS: [OptionDesc; 7] = [
     OptionDesc::new(Key::DataSource, Access::GET_SET_LIST),
 ];
 /// How long a capture that nothing else can end waits for a meter that says
-/// nothing. No source gives the stream's rate. A block's bytes take 22 ms.
+/// nothing. No source gives the stream's rate; the nearest fact is the manuals'
+/// display update of 2 Hz, so this is some ten readings. A block's bytes take 22 ms.
 pub const SILENCE_BOUND: Duration = Duration::from_secs(5);
 /// `serial_source_add`'s timeout: how long C's callback waits before it goes on to
 /// a request, if nothing comes. C's requests keep this pace.
@@ -101,8 +126,11 @@ const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
 /// How long with no byte says a stopped block is over. A byte takes 87 us, and a
 /// USB adapter holds bytes for some ms.
 const QUIET: Duration = Duration::from_millis(50);
+/// The same with a request not yet answered, whose reply may not have started. No
+/// source gives the latency, so this is only a long time for a meter to think.
+pub const LATE_QUIET: Duration = Duration::from_secs(1);
 /// The most that wait lasts, if something goes on sending.
-const QUIET_BOUND: Duration = Duration::from_secs(1);
+const QUIET_BOUND: Duration = Duration::from_secs(2);
 /// How long a stopped capture tries to get its End to a queue no one may read.
 const END_AFTER_STOP: Duration = Duration::from_secs(1);
 
@@ -165,6 +193,66 @@ struct Shared {
     /// A memory capture has told the meter to disconnect, and may have left a block
     /// on its way.
     disconnected: bool,
+    /// A request went out and nothing of its reply has come.
+    unanswered: bool,
+    /// What was set since the last live reading.
+    asked: Asked,
+}
+
+/// What was set since the last live reading, for it to confirm.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Asked {
+    c_weight: Option<bool>,
+    slow: Option<bool>,
+    range: Option<u8>,
+}
+
+impl Asked {
+    /// What a reading of `mode` contradicts, in words.
+    fn contradictions(self, mode: Mode) -> Vec<String> {
+        let weight = |c| if c { "C" } else { "A" };
+        let time = |s| if s { "S" } else { "F" };
+        let range = |r: u8| {
+            let (low, high) = RANGES[usize::from(r)];
+            format!("{low}-{high}")
+        };
+        let mut said = Vec::new();
+        if let Some(c) = self.c_weight.filter(|c| *c != mode.c_weight) {
+            said.push(("spl_weight_freq", weight(c).to_owned(), weight(mode.c_weight).to_owned()));
+        }
+        if let Some(s) = self.slow.filter(|s| *s != mode.slow) {
+            said.push(("spl_weight_time", time(s).to_owned(), time(mode.slow).to_owned()));
+        }
+        if let Some(r) = self.range.filter(|r| *r != mode.range) {
+            said.push(("spl_meas_range", range(r), range(mode.range)));
+        }
+        said.into_iter()
+            .map(|(key, asked, reads)| {
+                format!(
+                    "{key}={asked} was asked and the meter reads {reads}: it did not start where \
+                     this assumes, or does not step as it assumes. Setting it again now goes by \
+                     the reading."
+                )
+            })
+            .collect()
+    }
+}
+
+/// A clock, which tests move by hand.
+#[derive(Clone, Debug)]
+struct Clock {
+    began: Instant,
+    /// Microseconds, where a test holds the time.
+    fake: Option<Arc<AtomicU64>>,
+}
+
+impl Clock {
+    fn now(&self) -> Duration {
+        match &self.fake {
+            Some(micros) => Duration::from_micros(micros.load(Ordering::SeqCst)),
+            None => self.began.elapsed(),
+        }
+    }
 }
 
 impl Shared {
@@ -181,17 +269,29 @@ impl Shared {
 }
 
 /// How long the waits of a capture are: the constants, but for tests.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Waits {
     silence: Duration,
     poll: Duration,
     quiet: Duration,
+    late_quiet: Duration,
     quiet_bound: Duration,
+    /// On the real clock: it is the client's time, not the meter's.
+    end_after_stop: Duration,
+    clock: Clock,
 }
 
 impl Default for Waits {
     fn default() -> Waits {
-        Waits { silence: SILENCE_BOUND, poll: POLL, quiet: QUIET, quiet_bound: QUIET_BOUND }
+        Waits {
+            silence: SILENCE_BOUND,
+            poll: POLL,
+            quiet: QUIET,
+            late_quiet: LATE_QUIET,
+            quiet_bound: QUIET_BOUND,
+            end_after_stop: END_AFTER_STOP,
+            clock: Clock { began: Instant::now(), fake: None },
+        }
     }
 }
 
@@ -245,6 +345,8 @@ impl Pce322aDevice {
                 capturing: false,
                 stream_read: false,
                 disconnected: false,
+                unanswered: false,
+                asked: Asked::default(),
             })),
             worker: None,
         }
@@ -329,6 +431,7 @@ impl Device for Pce322aDevice {
                     _ => return Err(bad()),
                 };
                 let mut s = self.shared();
+                s.asked.c_weight = Some(want);
                 if s.mode.c_weight != want {
                     s.send(&protocol::TOGGLE_WEIGHT_FREQ)?;
                     s.mode.c_weight = want;
@@ -342,6 +445,7 @@ impl Device for Pce322aDevice {
                     _ => return Err(bad()),
                 };
                 let mut s = self.shared();
+                s.asked.slow = Some(want);
                 if s.mode.slow != want {
                     s.send(&protocol::TOGGLE_WEIGHT_TIME)?;
                     s.mode.slow = want;
@@ -353,6 +457,7 @@ impl Device for Pce322aDevice {
                 let want = RANGES.iter().position(|r| *r == (*low, *high)).ok_or_else(bad)?;
                 let want = u8::try_from(want).expect("four ranges");
                 let mut s = self.shared();
+                s.asked.range = Some(want);
                 for _ in 0..protocol::range_steps(s.mode.range, want) {
                     s.send(&protocol::TOGGLE_MEAS_RANGE)?;
                     s.mode.range = (s.mode.range + 1) & 3;
@@ -451,14 +556,15 @@ impl Device for Pce322aDevice {
         let shared = Arc::clone(&self.shared);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
-        let waits = self.waits;
+        let waits = self.waits.clone();
         let handle = std::thread::Builder::new()
             .name("pce-322a acquisition".to_owned())
             .spawn(move || {
+                let end_after_stop = waits.end_after_stop;
                 let mut capture = Capture::new(&shared, &sink, &stop2, waits);
                 capture.run();
                 shared.lock().expect("state lock").capturing = false;
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, end_after_stop);
             })
             .map_err(|e| {
                 self.shared().capturing = false;
@@ -478,8 +584,8 @@ impl Device for Pce322aDevice {
 }
 
 /// The End, which a client that goes on reading gets however long it takes, and
-/// after a stop only if there is room within [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+/// after a stop only if there is room within `end_after_stop`.
+fn send_end(sink: &PacketSink, stop: &AtomicBool, end_after_stop: Duration) {
     let stopped_at = std::cell::Cell::new(None);
     sink.send_while(Packet::End, || {
         if !stop.load(Ordering::SeqCst) {
@@ -487,7 +593,7 @@ fn send_end(sink: &PacketSink, stop: &AtomicBool) {
         }
         let at = stopped_at.get().unwrap_or_else(Instant::now);
         stopped_at.set(Some(at));
-        at.elapsed() < END_AFTER_STOP
+        at.elapsed() < end_after_stop
     });
 }
 
@@ -502,8 +608,9 @@ struct Capture<'a> {
     input: VecDeque<u8>,
     /// Readings sent in this capture, each recording's -1 too.
     samples: u64,
-    /// When the last reading came, or block byte, or request went.
-    heard: Instant,
+    /// When the last reading was taken up, or block byte, or request went: a client
+    /// that keeps a send waiting is no silence of the meter's.
+    heard: Duration,
 }
 
 impl<'a> Capture<'a> {
@@ -513,15 +620,8 @@ impl<'a> Capture<'a> {
         stop: &'a AtomicBool,
         waits: Waits,
     ) -> Self {
-        Capture {
-            shared,
-            sink,
-            stop,
-            waits,
-            input: VecDeque::new(),
-            samples: 0,
-            heard: Instant::now(),
-        }
+        let heard = waits.clock.now();
+        Capture { shared, sink, stop, waits, input: VecDeque::new(), samples: 0, heard }
     }
 
     fn state(&self) -> MutexGuard<'a, Shared> {
@@ -532,16 +632,21 @@ impl<'a> Capture<'a> {
         self.stop.load(Ordering::SeqCst)
     }
 
+    fn now(&self) -> Duration {
+        self.waits.clock.now()
+    }
+
     fn run(&mut self) {
         let go_on = || !self.stop.load(Ordering::SeqCst);
         if !self.sink.send_while(Packet::header(), go_on) {
             return;
         }
-        let (memory, disconnected) = {
-            let s = self.state();
-            (s.memory, s.disconnected)
+        let (memory, disconnected, unanswered) = {
+            let mut s = self.state();
+            (s.memory, s.disconnected, std::mem::take(&mut s.unanswered))
         };
-        if disconnected && self.settle().is_none() {
+        let quiet = if unanswered { self.waits.late_quiet } else { self.waits.quiet };
+        if disconnected && self.settle(quiet).is_none() {
             return;
         }
         if memory {
@@ -573,21 +678,29 @@ impl<'a> Capture<'a> {
         Some(true)
     }
 
-    /// Drops what comes until the line has been quiet for a while, as what follows a
-    /// stop in mid-block is still on its way, and a purge drops only what has come.
-    fn settle(&mut self) -> Option<()> {
-        let began = Instant::now();
-        let mut quiet_since = Instant::now();
-        while quiet_since.elapsed() < self.waits.quiet && began.elapsed() < self.waits.quiet_bound {
+    /// Drops what comes until the line has been quiet for `quiet`, as what follows a
+    /// stop in mid-block is still on its way, and a purge drops only what has come. It
+    /// leaves only on a read that found nothing, past that time: time alone can be a
+    /// thread that was not running.
+    fn settle(&mut self, quiet: Duration) -> Option<()> {
+        let began = self.now();
+        let mut quiet_since = began;
+        loop {
             if self.stopped() {
                 return None;
             }
-            if self.read_some()? {
+            let got = self.read_some()?;
+            let now = self.now();
+            if got {
                 self.input.clear();
-                quiet_since = Instant::now();
+                quiet_since = now;
+            } else if now.saturating_sub(quiet_since) >= quiet {
+                return Some(());
+            }
+            if now.saturating_sub(began) >= self.waits.quiet_bound {
+                return Some(());
             }
         }
-        Some(())
     }
 
     /// One byte, with a bound if `bounded` on the time since `heard`, which only
@@ -601,19 +714,19 @@ impl<'a> Capture<'a> {
             if let Some(byte) = self.input.pop_front() {
                 return Some(byte);
             }
-            self.read_some()?;
-            if bounded(self) && self.heard.elapsed() >= self.waits.silence {
+            if bounded(self) && self.now().saturating_sub(self.heard) >= self.waits.silence {
                 log::error!("Nothing has come of the meter for {:?}.", self.waits.silence);
                 return None;
             }
+            self.read_some()?;
         }
     }
 
     /// What the callback's way to a request waits: until a byte is there, which it
     /// leaves there, or for the source's timeout.
     fn pause_before_request(&mut self) -> Option<()> {
-        let began = Instant::now();
-        while self.input.is_empty() && began.elapsed() < self.waits.poll {
+        let began = self.now();
+        while self.input.is_empty() && self.now().saturating_sub(began) < self.waits.poll {
             if self.stopped() {
                 return None;
             }
@@ -663,14 +776,21 @@ impl<'a> Capture<'a> {
             }
             s.stream_read = true;
         }
-        self.heard = Instant::now();
+        self.heard = self.now();
         let mut stream = Stream::default();
         loop {
             let byte = self.next_byte(|c| c.limit() > 0)?;
             if let Some(Measurement { value, mode }) = stream.feed(byte) {
-                self.heard = Instant::now();
-                self.state().mode = mode;
+                {
+                    let mut s = self.state();
+                    for words in s.asked.contradictions(mode) {
+                        log::warn!("{words}");
+                    }
+                    s.asked = Asked::default();
+                    s.mode = mode;
+                }
                 self.send_reading(protocol::tenths(value))?;
+                self.heard = self.now();
                 if self.limit_reached() {
                     return Some(());
                 }
@@ -686,11 +806,12 @@ impl<'a> Capture<'a> {
         {
             let mut s = self.state();
             s.disconnected = true;
+            s.unanswered = true;
             // C drops what these return: what a failure leaves is a silent line.
             let _ = s.send(&protocol::DISCONNECT);
             let _ = s.send(&protocol::MEMORY_STATUS);
         }
-        self.heard = Instant::now();
+        self.heard = self.now();
         let mut window = StatusWindow::default();
         let status = loop {
             let byte = self.next_byte(|_| true)?;
@@ -698,6 +819,13 @@ impl<'a> Capture<'a> {
                 break status;
             }
         };
+        self.state().unanswered = false;
+        if status.end == 0x10 {
+            log::warn!(
+                "The memory's status ends in 10, which no source explains and libsigrok does not \
+                 take. Reading on: what follows may not be samples."
+            );
+        }
         log::warn!(
             "Memory usage: {} blocks of 256 bytes, 1 block of {} bytes",
             i32::from(status.used) - 1,
@@ -709,16 +837,21 @@ impl<'a> Capture<'a> {
             log::warn!("Requesting memory block {}.", memory.block());
             {
                 let mut s = self.state();
+                s.unanswered = true;
                 let _ = s.send(&protocol::memory_block(memory.block()));
             }
-            self.heard = Instant::now();
+            self.heard = self.now();
+            let mut answered = false;
             loop {
                 if memory.done(status) {
                     log::warn!("Done reading memory ({} bytes).", memory.logged_size());
                     return Some(());
                 }
                 let byte = self.next_byte(|_| true)?;
-                self.heard = Instant::now();
+                if !answered {
+                    answered = true;
+                    self.state().unanswered = false;
+                }
                 match memory.feed(byte) {
                     Item::Nothing => {}
                     Item::Recording(recording) => {
@@ -728,6 +861,7 @@ impl<'a> Capture<'a> {
                     }
                     Item::Sample(value) => self.send_memory_reading(protocol::tenths(value))?,
                 }
+                self.heard = self.now();
                 if memory.at_block_start() {
                     break;
                 }

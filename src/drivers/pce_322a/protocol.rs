@@ -29,7 +29,8 @@
 //! is nothing else to check.
 //!
 //! The status is 9 bytes: `d1 05 00 01 d2`, the blocks in two bytes, big endian,
-//! the length of the last block, and `20`; the wiki says `10` or `20`.
+//! the length of the last block, and `20`; the wiki says `10` or `20`, and what they
+//! mean no source says.
 //!
 //! The memory is a run of recordings. Each has a header of 11 bytes, `7f f7` or
 //! `ff ff` (the driver looks at the bits `7f` and `f7` only), `01 00`, `0a` for
@@ -200,6 +201,8 @@ pub struct Status {
     pub used: u16,
     /// The length of the last block.
     pub last: u8,
+    /// Its last byte: `20`, or `10`, which the wiki gives with no meaning.
+    pub end: u8,
 }
 
 /// Finds the status in what comes.
@@ -224,7 +227,8 @@ impl StatusWindow {
         {
             return None;
         }
-        let status = Status { used: u16::from_be_bytes([b[5], b[6]]), last: b[7] };
+        let status =
+            Status { used: u16::from_be_bytes([b[5], b[6]]), last: b[7], end: b[STATUS_LEN - 1] };
         self.0.clear();
         Some(status)
     }
@@ -443,6 +447,9 @@ mod tests {
         assert_eq!(tenths(654), 65.4_f32);
         assert_eq!(tenths(0), 0.0);
         assert_eq!(tenths(0xffff), 6553.5);
+        for value in 0..=u16::MAX {
+            assert_eq!(tenths(value), (f64::from(value) / 10.0) as f32, "{value}");
+        }
     }
 
     #[test]
@@ -476,12 +483,12 @@ mod tests {
         for b in [0x55, 0xd1, 0x05, 0x00, 0x01, 0xd2, 0x01, 0x02, 0x36, 0x20] {
             found = w.feed(b).or(found);
         }
-        assert_eq!(found, Some(Status { used: 0x0102, last: 0x36 }));
+        assert_eq!(found, Some(Status { used: 0x0102, last: 0x36, end: 0x20 }));
         let mut found = None;
         for b in [0xd1, 0x05, 0x00, 0x01, 0xd2, 0x00, 0x00, 0x00, 0x10] {
             found = w.feed(b).or(found);
         }
-        assert_eq!(found, Some(Status { used: 0, last: 0 }));
+        assert_eq!(found, Some(Status { used: 0, last: 0, end: 0x10 }));
     }
 
     #[test]
@@ -564,7 +571,7 @@ mod tests {
     #[test]
     fn a_cursor_counts_blocks_and_done_comes_at_the_last_bytes_length() {
         let mut m = Memory::default();
-        let status = Status { used: 1, last: 2 };
+        let status = Status { used: 1, last: 2, end: 0x20 };
         assert!(!m.done(status));
         for _ in 0..255 {
             m.feed(0);
@@ -585,7 +592,7 @@ mod tests {
     #[test]
     fn an_empty_memory_is_done_at_once_and_logs_as_c() {
         let m = Memory::default();
-        assert!(m.done(Status { used: 0, last: 0 }));
+        assert!(m.done(Status { used: 0, last: 0, end: 0x20 }));
         assert_eq!(m.logged_size(), -256);
     }
 

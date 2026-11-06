@@ -51,9 +51,27 @@ struct Meter {
     blocks: Vec<Vec<u8>>,
     reads: usize,
     read_fails: bool,
+    /// The meter's time, which each read moves on by `us_per_read`.
+    clock: Arc<AtomicU64>,
+    us_per_read: u64,
+    /// How long a reply takes to start.
+    latency: Duration,
+    /// Replies not started yet: when, in the meter's time, and what.
+    due: VecDeque<(Duration, Vec<u8>)>,
+    /// How much was still on the way when each status request went out.
+    coming_at_status: Vec<usize>,
     /// Writes are refused from this count on.
     fail_writes_after: Option<usize>,
     purges: usize,
+    /// Bytes the reads have given.
+    delivered: usize,
+}
+
+impl Meter {
+    fn reply(&mut self, bytes: Vec<u8>) {
+        let at = Duration::from_micros(self.clock.load(Ordering::SeqCst)) + self.latency;
+        self.due.push_back((at, bytes));
+    }
 }
 
 /// A meter: the test sets what comes, and sees what goes. It holds a lock only for
@@ -67,6 +85,7 @@ impl Fake {
             per_read: 256,
             period: 1,
             connected: true,
+            us_per_read: 1000,
             ..Meter::default()
         })))
     }
@@ -83,13 +102,26 @@ impl Fake {
         self.lock().writes.clone()
     }
 
+    /// The meter's time.
+    fn now(&self) -> Duration {
+        Duration::from_micros(self.lock().clock.load(Ordering::SeqCst))
+    }
+
+    /// Time goes by with no read.
+    fn advance(&self, by: Duration) {
+        self.lock().clock.fetch_add(by.as_micros() as u64, Ordering::SeqCst);
+    }
+
     fn device(&self) -> Pce322aDevice {
         let mut device = Pce322aDevice::from_port(Box::new(self.clone()));
         device.waits = Waits {
             silence: Duration::from_secs(600),
             poll: Duration::from_millis(1),
             quiet: Duration::from_millis(20),
+            late_quiet: Duration::from_millis(40),
             quiet_bound: Duration::from_secs(5),
+            end_after_stop: Duration::from_millis(200),
+            clock: Clock { began: Instant::now(), fake: Some(Arc::clone(&self.lock().clock)) },
         };
         device.open().unwrap();
         device
@@ -113,6 +145,12 @@ impl Port for Fake {
         }
         m.reads += 1;
         m.reads_since_frame += 1;
+        let step = m.us_per_read;
+        let now = Duration::from_micros(m.clock.fetch_add(step, Ordering::SeqCst) + step);
+        while m.due.front().is_some_and(|(at, _)| *at <= now) {
+            let (_, reply) = m.due.pop_front().expect("not empty");
+            m.coming.extend(reply);
+        }
         if m.connected && m.reads_since_frame >= m.period && !m.stream.is_empty() {
             let f = m.stream.pop_front().expect("not empty");
             m.coming.extend(f);
@@ -131,9 +169,10 @@ impl Port for Fake {
             buf[n] = b;
             n += 1;
         }
+        m.delivered += n;
         drop(m);
         if n == 0 {
-            std::thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_micros(50));
         }
         Ok(n)
     }
@@ -147,14 +186,16 @@ impl Port for Fake {
             [0xac, 0xff] => m.connected = true,
             [0xca, 0xff] => m.connected = false,
             [0xad, 0xda] => {
+                let left = m.coming.len();
+                m.coming_at_status.push(left);
                 if let Some(status) = m.status.clone() {
-                    m.coming.extend(status);
+                    m.reply(status);
                 }
             }
             [0xd3, 0xda, low, high] => {
                 let n = usize::from(u16::from_le_bytes([*low, *high]));
                 if let Some(block) = m.blocks.get(n).cloned() {
-                    m.coming.extend(block);
+                    m.reply(block);
                 }
             }
             _ => {}
@@ -241,7 +282,8 @@ fn the_constants_are_what_the_module_says() {
     assert_eq!(SILENCE_BOUND, Duration::from_secs(5));
     assert_eq!(POLL, Duration::from_millis(150));
     assert_eq!(QUIET, Duration::from_millis(50));
-    assert_eq!(QUIET_BOUND, Duration::from_secs(1));
+    assert_eq!(LATE_QUIET, Duration::from_secs(1));
+    assert_eq!(QUIET_BOUND, Duration::from_secs(2));
     assert_eq!(END_AFTER_STOP, Duration::from_secs(1));
 }
 
@@ -570,9 +612,9 @@ fn a_silent_meter_ends_a_limited_capture_at_the_bound_and_not_before() {
         let mut device = fake.device();
         device.waits.silence = Duration::from_millis(300);
         limit(&mut device, 1);
-        let began = Instant::now();
         assert_eq!(values(&run(&mut device)), [0.0_f32; 0]);
-        assert!(began.elapsed() >= Duration::from_millis(300), "{:?}", began.elapsed());
+        assert!(fake.now() >= Duration::from_millis(300), "{:?}", fake.now());
+        assert!(fake.now() < Duration::from_millis(310), "{:?}", fake.now());
     });
 }
 
@@ -589,16 +631,86 @@ fn a_meter_sending_only_junk_ends_a_limited_capture_at_the_bound() {
 }
 
 #[test]
-fn a_meter_slower_than_nothing_but_within_the_bound_is_waited_for() {
+fn frames_that_span_many_bounds_are_no_silence() {
     bounded(|| {
         let fake = Fake::new();
-        // A frame per 50 reads, each at least 1 ms, well within 5 s.
-        fake.lock().period = 50;
-        fake.stream((0..4).map(|i| frame(100 + i, 0, 0)));
+        // A frame a second for 8 s, under the bound of 5 s.
+        fake.lock().us_per_read = 10_000;
+        fake.lock().period = 100;
+        fake.stream((0..8).map(|i| frame(100 + i, 0, 0)));
         let mut device = fake.device();
         device.waits.silence = SILENCE_BOUND;
+        limit(&mut device, 8);
+        assert_eq!(values(&run(&mut device)).len(), 8);
+        assert!(fake.now() >= Duration::from_secs(7), "{:?}", fake.now());
+    });
+}
+
+#[test]
+fn memory_bytes_that_span_many_bounds_are_no_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut block = header(0x0a);
+        block.resize(256, 0);
+        fake.lock().status = Some(status(0, 255));
+        fake.lock().blocks = vec![block];
+        // A byte per 50 ms, so 12.8 s of block under the bound of 5 s.
+        fake.lock().per_read = 1;
+        fake.lock().us_per_read = 50_000;
+        let mut device = fake.device();
+        device.waits.silence = SILENCE_BOUND;
+        memory_source(&mut device);
+        assert_eq!(values(&run(&mut device)).len(), 1 + 122);
+    });
+}
+
+/// Waits for the capture to have taken `bytes` bytes, one a read: it now holds a
+/// reading for a queue left full, and reads no more.
+fn wait_for_bytes(fake: &Fake, bytes: usize) {
+    wait_for(fake, "the bytes", |m| m.delivered >= bytes);
+}
+
+#[test]
+fn a_client_that_keeps_a_live_send_waiting_is_no_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.lock().per_read = 1;
+        fake.stream((0..4).map(|_| frame(654, 0, 0)));
+        let mut device = fake.device();
+        device.waits.silence = Duration::from_secs(5);
         limit(&mut device, 4);
-        assert_eq!(values(&run(&mut device)).len(), 4);
+        let (tx, rx) = sync_channel(1);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        // The first reading sits in the queue, and the second has been read whole and
+        // waits to be sent: past this it reads nothing.
+        wait_for_bytes(&fake, 26);
+        fake.advance(Duration::from_secs(60));
+        let v = values(&collect(&rx));
+        assert_eq!(v.len(), 4, "the pause was taken for silence");
+    });
+}
+
+#[test]
+fn a_client_that_keeps_a_memory_send_waiting_is_no_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut block = header(0x0a);
+        block.extend_from_slice(&[0x8e, 0x02, 0x8f, 0x02, 0x90, 0x02]);
+        fake.lock().status = Some(status(0, u8::try_from(block.len()).unwrap()));
+        fake.lock().blocks = vec![block];
+        fake.lock().per_read = 1;
+        let mut device = fake.device();
+        device.waits.silence = Duration::from_secs(5);
+        memory_source(&mut device);
+        let (tx, rx) = sync_channel(1);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        // 9 of the status; then the header's -1 sits in the queue, and the first
+        // sample has been read and waits to be sent.
+        wait_for_bytes(&fake, 9 + 11 + 2);
+        fake.advance(Duration::from_secs(60));
+        assert_eq!(values(&collect(&rx)), [-1.0, 65.4, 65.5, 65.6]);
     });
 }
 
@@ -744,9 +856,8 @@ fn silence_ends_a_memory_capture_at_any_step_without_a_limit() {
         let mut device = fake.device();
         device.waits.silence = Duration::from_millis(100);
         memory_source(&mut device);
-        let began = Instant::now();
         run(&mut device);
-        assert!(began.elapsed() >= Duration::from_millis(100));
+        assert!(fake.now() >= Duration::from_millis(100));
         assert_eq!(fake.writes().last().unwrap(), &[0xd3, 0xda, 0, 0]);
     });
 }
@@ -760,7 +871,8 @@ fn a_blocks_wait_counts_from_its_request_not_from_the_status() {
         let mut device = fake.device();
         // The pause alone outlasts the bound, and a block must still be waited for.
         device.waits.silence = Duration::from_secs(1);
-        device.waits.poll = Duration::from_millis(1200);
+        device.waits.poll = Duration::from_millis(1_250);
+        fake.lock().us_per_read = 10_000;
         memory_source(&mut device);
         assert_eq!(values(&run(&mut device)).len(), 2, "the block was given up on");
     });
@@ -774,10 +886,10 @@ fn a_request_waits_the_sources_time_when_nothing_comes() {
         let mut device = fake.device();
         device.waits.poll = Duration::from_millis(120);
         memory_source(&mut device);
-        let began = Instant::now();
         run(&mut device);
         // Two waits: before the status and before the block.
-        assert!(began.elapsed() >= Duration::from_millis(240), "{:?}", began.elapsed());
+        assert!(fake.now() >= Duration::from_millis(240), "{:?}", fake.now());
+        assert!(fake.now() < Duration::from_millis(260), "{:?}", fake.now());
     });
 }
 
@@ -874,13 +986,222 @@ fn settling_has_a_bound_if_the_line_never_goes_quiet() {
         // The meter goes on regardless, a byte per read.
         fake.lock().noise = true;
         device.waits.quiet_bound = Duration::from_millis(50);
-        let began = Instant::now();
+        let began = fake.now();
         // Silence means the wait for a status: the bound ends this.
         device.waits.silence = Duration::from_millis(1);
         fake.lock().status = None;
         run(&mut device);
-        assert!(began.elapsed() >= Duration::from_millis(50));
-        assert!(fake.writes().iter().filter(|w| *w == &[0xad, 0xda]).count() >= 1);
+        assert!(fake.now().saturating_sub(began) >= Duration::from_millis(50));
+        assert!(fake.writes().iter().filter(|w| *w == &[0xad, 0xda]).count() >= 2);
+    });
+}
+
+#[test]
+fn settling_leaves_only_on_an_empty_read_however_the_clock_jumps() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.lock().status = Some(status(0, 0));
+        let mut device = fake.device();
+        memory_source(&mut device);
+        run(&mut device);
+        // A tail at a byte a read, while the thread keeps losing the CPU: the clock
+        // jumps past the quiet time between any two reads.
+        fake.lock().coming.extend(std::iter::repeat_n(0_u8, 3000));
+        fake.lock().per_read = 1;
+        device.waits.quiet_bound = Duration::from_secs(3_000_001);
+        let (tx, rx) = sync_channel(4);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let jumps = fake.clone();
+        let jumping = Arc::new(AtomicBool::new(true));
+        let on = Arc::clone(&jumping);
+        let jumper = std::thread::spawn(move || {
+            while on.load(Ordering::SeqCst) {
+                jumps.advance(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_micros(50));
+            }
+        });
+        wait_for(&fake, "the second status request", |m| m.coming_at_status.len() >= 2);
+        jumping.store(false, Ordering::SeqCst);
+        jumper.join().unwrap();
+        assert_eq!(fake.lock().coming_at_status[1], 0, "it left with bytes on their way");
+        collect(&rx);
+    });
+}
+
+#[test]
+fn settling_leaves_at_the_quiet_time() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.lock().status = Some(status(0, 0));
+        let mut device = fake.device();
+        memory_source(&mut device);
+        run(&mut device);
+        let began = fake.now();
+        device.waits.poll = Duration::ZERO;
+        run(&mut device);
+        // The block's request was answered by nothing, so this is the longer wait.
+        let took = fake.now().saturating_sub(began);
+        assert!(took >= Duration::from_millis(40), "{took:?}");
+        assert!(took < Duration::from_millis(45), "{took:?}");
+    });
+}
+
+#[test]
+fn with_every_request_answered_settling_takes_the_short_wait() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.lock().status = Some(status(0, 1));
+        fake.lock().blocks = vec![vec![0]];
+        let mut device = fake.device();
+        memory_source(&mut device);
+        run(&mut device);
+        let began = fake.now();
+        device.waits.poll = Duration::ZERO;
+        run(&mut device);
+        let took = fake.now().saturating_sub(began);
+        assert!(took >= Duration::from_millis(20), "{took:?}");
+        assert!(took < Duration::from_millis(30), "{took:?}");
+    });
+}
+
+#[test]
+fn a_late_status_after_a_stop_is_not_taken_for_the_next_one() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut block = header(0x0a);
+        for sample in [600_u16, 601, 602, 603] {
+            block.extend_from_slice(&sample.to_le_bytes());
+        }
+        fake.lock().status = Some(status(0, u8::try_from(block.len()).unwrap()));
+        fake.lock().blocks = vec![block];
+        fake.lock().latency = Duration::from_millis(120);
+        let mut device = fake.device();
+        device.waits.quiet = QUIET;
+        device.waits.late_quiet = LATE_QUIET;
+        device.waits.quiet_bound = QUIET_BOUND;
+        memory_source(&mut device);
+        let (tx, rx) = sync_channel(16);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for(&fake, "the status request", |m| m.writes.len() >= 3);
+        device.stop().unwrap();
+        collect(&rx);
+        assert_eq!(values(&run(&mut device)), [-1.0, 60.0, 60.1, 60.2, 60.3]);
+    });
+}
+
+#[test]
+fn a_late_block_after_a_stop_is_not_read_as_the_next_status() {
+    bounded(|| {
+        let fake = Fake::new();
+        // An old block that holds what looks like a status of a large memory.
+        let mut old = vec![0; 20];
+        old.extend(status(9, 9));
+        fake.lock().status = Some(status(1, 0));
+        fake.lock().blocks = vec![old];
+        let mut device = fake.device();
+        device.waits.late_quiet = LATE_QUIET;
+        device.waits.quiet = QUIET;
+        device.waits.quiet_bound = QUIET_BOUND;
+        memory_source(&mut device);
+        let (tx, rx) = sync_channel(16);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for(&fake, "the status's bytes", |m| m.delivered >= 9);
+        fake.lock().latency = Duration::from_millis(300);
+        wait_for(&fake, "the block request", |m| m.writes.len() >= 4);
+        device.stop().unwrap();
+        collect(&rx);
+        fake.lock().latency = Duration::ZERO;
+        fake.lock().status = Some(status(0, 0));
+        fake.lock().blocks.clear();
+        assert_eq!(values(&run(&mut device)), [0.0_f32; 0]);
+        assert_eq!(fake.writes().last().unwrap(), &[0xd3, 0xda, 0, 0], "it took the old status");
+    });
+}
+
+#[test]
+fn a_stop_ends_the_pause_before_a_request() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut device = fake.device();
+        device.waits.poll = Duration::from_secs(3_000_001);
+        memory_source(&mut device);
+        let (tx, rx) = sync_channel(4);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        wait_for(&fake, "a read", |m| m.reads > 5);
+        device.stop().unwrap();
+        collect(&rx);
+        assert_eq!(fake.writes().len(), 1, "a request went out after the stop");
+    });
+}
+
+#[test]
+fn a_client_that_reads_on_after_a_stop_gets_its_end() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.stream([frame(654, 0, 0)]);
+        let mut device = fake.device();
+        device.waits.end_after_stop = BOUND * 2;
+        limit(&mut device, 1);
+        let (tx, rx) = sync_channel(1);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        // The reading sits in the queue of one, so the End can't go yet.
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        wait_for(&fake, "the frame", |m| m.delivered >= 13);
+        device.stop().unwrap();
+        // Time for a thread that gives up at once to do so, with the queue full.
+        std::thread::sleep(Duration::from_millis(50));
+        let packets = collect(&rx);
+        assert!(matches!(packets.last(), Some(Packet::End)));
+    });
+}
+
+#[test]
+fn a_stop_ends_a_start_stuck_on_its_header() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut device = fake.device();
+        let (tx, _rx) = sync_channel(1);
+        tx.send((0, Packet::Trigger)).unwrap();
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        device.close().unwrap();
+        assert_eq!(fake.lock().reads, 0, "it went past the header");
+    });
+}
+
+#[test]
+fn a_reading_warns_only_of_what_it_contradicts() {
+    let mode = Mode { c_weight: true, slow: false, range: 2, ..Mode::default() };
+    assert_eq!(Asked::default().contradictions(mode), Vec::<String>::new());
+    let asked = Asked { c_weight: Some(true), slow: Some(false), range: Some(2) };
+    assert_eq!(asked.contradictions(mode), Vec::<String>::new());
+    let said = Asked { c_weight: Some(false), ..Asked::default() }.contradictions(mode);
+    assert_eq!(said.len(), 1);
+    assert!(said[0].starts_with("spl_weight_freq=A was asked and the meter reads C:"), "{said:?}");
+    let said = Asked { slow: Some(true), ..Asked::default() }.contradictions(mode);
+    assert!(said[0].starts_with("spl_weight_time=S was asked and the meter reads F:"), "{said:?}");
+    let said = Asked { range: Some(1), ..Asked::default() }.contradictions(mode);
+    assert!(said[0].starts_with("spl_meas_range=30-80 was asked and the meter reads 50-100:"));
+    let all = Asked { c_weight: Some(false), slow: Some(true), range: Some(0) };
+    assert_eq!(all.contradictions(mode).len(), 3);
+}
+
+#[test]
+fn a_set_is_asked_whether_it_toggled_or_not_and_a_live_reading_clears_it() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.stream([frame(654, 0, 0)]);
+        let mut device = fake.device();
+        let s = |v: &str| Value::Str(v.to_owned());
+        device.set(&Key::SplWeightFreq, &s("A"), None).unwrap();
+        device.set(&Key::SplWeightTime, &s("S"), None).unwrap();
+        device.set(&Key::SplMeasurementRange, &Value::RangeU64(30, 130), None).unwrap();
+        assert_eq!(
+            device.shared().asked,
+            Asked { c_weight: Some(false), slow: Some(true), range: Some(0) }
+        );
+        limit(&mut device, 1);
+        run(&mut device);
+        assert_eq!(device.shared().asked, Asked::default());
     });
 }
 
@@ -894,7 +1215,7 @@ fn a_stop_ends_settling() {
         run(&mut device);
         let requests = fake.writes().len();
         fake.lock().noise = true;
-        device.waits.quiet_bound = Duration::from_secs(600);
+        device.waits.quiet_bound = Duration::from_secs(3_000_001);
         let (tx, rx) = sync_channel(4);
         device.start(PacketSink::new(tx, 0)).unwrap();
         let (_, first) = rx.recv_timeout(BOUND).unwrap();

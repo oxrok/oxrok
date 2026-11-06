@@ -19,12 +19,16 @@ emu_cases() {
 s/^(bulk_out 02 [0-9a-f]+) -> [0-9]+$/\1/'
     # What oxrok adds after the error sigrok-cli names.
     FN="$F
-s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
-    SET_BUG="C takes what the meter holds from readings alone (protocol.c:374,395,452), so a set leaves it as it was: a get says the old value, and the next set counts from there; oxrok counts a sent toggle as done"
+s/^(Failed to set device option .spl_weight_freq.: invalid argument): spl_weight_freq: invalid value\\.$/\\1./
+s/^(Failed to set device option .spl_weight_time.: invalid argument): spl_weight_time: invalid value\\.$/\\1./
+s/^(Failed to set device option .spl_meas_range.: invalid argument): spl_meas_range: invalid value\\.$/\\1./
+s/^(Failed to set device option .data_source.: invalid argument): data_source: invalid value\\.$/\\1./"
+    SET_BUG="a choice, no C bug: C takes what the meter holds from readings alone (protocol.c:374,395,452), so a get says the old value and the next set counts from there; oxrok counts a toggle as done. Each ends right on some meters only: oxrok if the assumed start (A, F, 30-130) is true, and it warns at a first reading that contradicts it"
+    SAYS="oxrok sends what sigrok-cli sends and warns of what the reading shows; sigrok-cli says nothing"
     CUT_BUG="C sends all of a memory capture past its limit, by choice (protocol.c:92), and sigrok-cli shows it; oxrok honours the limit in the output, with the same requests"
     HANG_BUG="with no answer C waits for ever, as no read has a bound (protocol.c:285,312,321) and no limit counts what never came; oxrok ends after 5 s, and that wait is what this case costs"
-    TEN_BUG="the wiki gives a status's last byte as 10 or 20, and protocol.c:185 takes 20 alone, so C waits for ever; oxrok reads the memory"
-    GONE_BUG="on a port that is gone the source's revents is no longer G_IO_IN alone, so protocol.c:285,312,321 skip the read and the callback returns TRUE, by reading; a run after an unplug read no failure (gcov: 323 unreached) and had not ended at 20 s. oxrok's read fails and ends the capture"
+    TEN_BUG="a decision, and a C bug only if the wiki is right: it gives a status's last byte as 10 or 20 with no meaning and no recording backs it; protocol.c:185 takes 20 alone, so C waits for ever; oxrok reads the memory and warns"
+    GONE_BUG="on a port that is gone the source's revents is no longer G_IO_IN alone, so protocol.c:285,312,321 skip the read and the callback returns TRUE, by reading; a run after an unplug read no failure (gcov: 323 unreached, serial_timeout never called) and had not ended at 90 s, so this is no slow fallback. oxrok's read fails and ends the capture"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # Most of what follows has no use for the stream, and frames=0 keeps it from
     # the .tx whatever the timing.
@@ -88,6 +92,11 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "lib limit_samples" --libsigrok --oxrok -- -d $A -c limit_samples=2 --continuous
     emu_case "lib continuous" --libsigrok --no-output -- -d $A --continuous --stop-after 0
     emu_case "lib stop after one" --libsigrok -- -d $A --continuous --stop-after 1
+    # The wiki's meter, streaming from the open: which bulk INs land where is the
+    # clock's, and with one reply all frames are alike. Three readings lie between
+    # the connect and the disconnect, so those two stay on lines of their own.
+    emu_options unprompted=1 period=2 frames=40 replies=$G
+    emu_case "capture a streaming meter" --tx-filter '/^bulk_in 82 /d' -- -d $A --samples 3
     emu_options frames=1 chunk=1
     emu_case "one byte per transfer" -- -d $A --samples 1
     # How the meter is set, in what comes.
@@ -108,6 +117,12 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "settings the frame undoes" -- -d $A -c spl_weight_freq=A -c spl_weight_time=F --samples 1
     emu_options frames=1 period=100 freq=c
     emu_case "toggles a meter at C" -- -d $A -c spl_weight_freq=C --samples 1
+    emu_case "toggles a meter at C says so" --oracle-differs "$SAYS" --stderr --filter "$F" -- -d $A -c spl_weight_freq=C --samples 1
+    # Where the assumed start is false, the count ends wrong and the first reading
+    # says so. See SET_BUG.
+    emu_case "freq twice on a meter at C" --oracle-differs "$SET_BUG" -- -d $A -c spl_weight_freq=C -c spl_weight_freq=C --samples 1
+    emu_options frames=1 period=100 range=3
+    emu_case "range twice on a meter at 3" --oracle-differs "$SET_BUG" -- -d $A -c spl_meas_range=30-80 -c spl_meas_range=50-100 --samples 1
     emu_options frames=1 period=100 range=3
     emu_case "range on a meter elsewhere" -- -d $A -c spl_meas_range=30-80 --samples 1
     # What the window does with what isn't a frame.
@@ -175,6 +190,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "memory no status" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A $M --samples 1000
     emu_options frames=0 status=d1050001d200003610
     emu_case "memory status ending in 10" --oracle-bug "$TEN_BUG" --oracle-hangs --timeout 3 -- -d $A $M --samples 1000
+    emu_case "memory status ending in 10 says so" --oracle-bug "$TEN_BUG" --oracle-hangs --timeout 3 --stderr --filter "$F" -- -d $A $M --samples 1000
     emu_options frames=0 records=1 samples=300 no-block=1
     emu_case "memory a block lost" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 -- -d $A $M --samples 1000
 

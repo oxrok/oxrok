@@ -1,0 +1,8 @@
+sr: pce-322a: Requesting memory usage.
+sr: pce-322a: The memory's status ends in 10, which no source explains and libsigrok does not take. Reading on: what follows may not be samples.
+sr: pce-322a: Memory usage: -1 blocks of 256 bytes, 1 block of 54 bytes
+sr: pce-322a: Requesting memory block 0.
+sr: pce-322a: Recording dB(A) 26/11/05 12:00:30 
+sr: pce-322a: Recording dB(C) 26/11/05 12:01:30 
+sr: pce-322a: Done reading memory (-202 bytes).
+oxrok: warn: oxrok::cli::pipeline: Device only sent 18 samples.
