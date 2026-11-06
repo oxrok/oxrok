@@ -4,6 +4,7 @@
 EMU_MODEL=kern-scale
 EMU_CDC=1
 EMU_DRIVER=kern-ew-6200-2nm
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=kern-scale
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c src/scale/kern.c"
 
@@ -49,7 +50,7 @@ emu_cases() {
     F='s/^oxrok: [a-z]+: oxrok::drivers::kern_scale(::protocol)?: /sr: kern-scale: /'
     HUP_BUG="kern_scale_receive_data reads only when revents is exactly G_IO_IN (protocol.c:121), so a port that hangs up is never read and only a limit could end the capture, which a sample limit never does; oxrok ends the capture"
     SILENT_BUG="kern_scale_receive_data has no bound (protocol.c:121-129), so a scale that stops sending keeps a sample limit open for ever; oxrok ends such a capture after 10 s with no packet"
-    NOISE_BUG="the same, for a scale whose bytes never make a packet: handle_new_data steps over them for ever (protocol.c:89-96); oxrok counts packets, not bytes"
+    STEP_BUG="handle_new_data takes 15 bytes for any packet (protocol.c:89-92: offset += scale->packet_size), so at 14 bytes it eats the next packet's sign and loses that packet; oxrok takes a packet's own length and reads each"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # The scan: O1, then a packet within 3 s and 128 bytes.
@@ -98,7 +99,6 @@ emu_cases() {
     emu_options period=10 scan-burst=1 burst=2
     emu_case "samples 2" --keep-header -- -d $K --samples 2
     emu_case "samples 0" --expect-fail --stderr -- -d $K --samples 0 --time 800ms
-    emu_case "limit_samples 0" --expect-fail --stderr -- -d $K -c limit_samples=0 --time 800ms
     # The limit is checked once all of a read is out: a read holding two packets
     # sends both.
     emu_options period=10 scan-burst=1 burst=1 group=2
@@ -138,8 +138,13 @@ emu_cases() {
     kern_sweep "14 bytes points" 3 $(kp '+.123456 G S') $(kp '-0000.04 G S') $(kp '+123456. G S')
     KERN_OPTS=
     # What a real unit sends at 14 bytes: distinct packets with nothing between.
+    # C reads each second one, 0.01 0.03 0.05 here.
     emu_options period=10 scan-burst=1 burst=1 group=6 packet=$KP15,$(kp '+0000.01 G S'),$(kp '+0000.02 G S'),$(kp '+0000.03 G S'),$(kp '+0000.04 G S'),$(kp '+0000.05 G S'),$(kp '+0000.06 G S')
-    emu_case "14 bytes in a row" --keep-header -- -d $K --time 800ms
+    emu_case "14 bytes in a row" --oracle-differs "$STEP_BUG" --keep-header -- -d $K --time 800ms
+    # The same loop wants 15 bytes to look at a packet: C holds a last one of 14
+    # until a byte follows.
+    emu_options period=10 scan-burst=1 burst=1 packet=$KP15,$KP14
+    emu_case "14 bytes alone" --oracle-differs "$STEP_BUG" --keep-header -- -d $K --time 800ms
     # A scan's search looks at 15 bytes, so one 14-byte packet alone is not enough.
     emu_options period=10 scan-burst=1 burst=0 packet=$KP14
     emu_case "scan of one 14-byte packet" --keep-header --no-output -- -d $K --scan
@@ -175,8 +180,15 @@ emu_cases() {
     emu_case "a stalled read" --keep-header -- -d $K --scan
     emu_options
 
-    # What sigrok-cli waits for for ever.
+    # An unplug with the tty open. The mark is a period after the packet, and 1 s
+    # outlasts a stall that would leave the packet unread at the hangup.
+    emu_options period=50 scan-burst=1 burst=1
+    emu_case "unplug" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --stderr --filter "$F" --timeout 8 -- -d $K --samples 5
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $K --samples 5
+    # Silence at a sample limit: for ever in C. This case costs oxrok's 10 s: a seam
+    # tests the times, this the message and the end.
     emu_options period=10 scan-burst=1 burst=1
     emu_case "lib silent at a sample limit" --libsigrok --hangs --timeout 3 -- -d $K --samples 5
+    emu_case "silent ends at the bound" --oxrok-fails "no usable packet from the scale" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $K --samples 5
     emu_options
 }
