@@ -106,6 +106,7 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
+    pub mod hp_59306a;
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
@@ -192,6 +193,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::norma_dmm::SiemensB102xDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
+    registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));
