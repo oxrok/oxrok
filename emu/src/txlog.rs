@@ -10,12 +10,14 @@
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
+use vusb::arm::Event;
 pub use vusb::observer::fixture::{DIGEST_ABOVE as HASH_ABOVE, Rules, hex};
 use vusb::observer::fixture::{Log, line};
 use vusb::observer::{Notice, Observer, Outcome, Transfer};
 use vusb::session::ModelFactory;
 
 use crate::models;
+use crate::shells::tcp;
 
 /// The log, with its comments on standard error too when verbose.
 #[derive(Debug)]
@@ -57,6 +59,22 @@ impl<W: Write + Send> Observer for TxLog<W> {
     }
 }
 
+impl<W: Write + Send> tcp::Log for TxLog<W> {
+    /// A line of the log's own: the one way the log writes one from outside is
+    /// the word of an event that fired.
+    fn line(&mut self, text: &str) {
+        self.log.notice(Notice::Fired(&Event::Mark(text.to_owned())));
+    }
+
+    fn violation(&mut self, message: &str) {
+        self.log.violation(message);
+    }
+
+    fn rules(&self) -> Rules {
+        self.log.rules()
+    }
+}
+
 /// What builds the model `name` for a session, for the start and for each
 /// reset, and gives `log` the rules of what it built.
 ///
@@ -67,6 +85,22 @@ pub fn factory<W: Write + Send + 'static>(name: &str, log: Arc<Mutex<TxLog<W>>>)
     let name = name.to_owned();
     Box::new(move |options: &[(String, String)]| {
         let model = models::build(&name, options)?;
+        log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
+        Ok(model)
+    })
+}
+
+/// [`factory`], with the model's other half going to `carrier`. So a `reset` or
+/// a new set of options gives each tool a fresh device on both.
+pub fn factory_with_tcp<W: Write + Send + 'static>(
+    name: &str,
+    log: Arc<Mutex<TxLog<W>>>,
+    carrier: tcp::Carrier,
+) -> ModelFactory {
+    let name = name.to_owned();
+    Box::new(move |options: &[(String, String)]| {
+        let model = models::build(&name, options)?;
+        carrier.install(models::build_tcp(&name, options)?);
         log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
         Ok(model)
     })

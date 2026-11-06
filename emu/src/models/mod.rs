@@ -14,7 +14,9 @@
 //! - `pub const ABOUT: &str`, one line for `oxrok-emu list`: what the
 //!   device is and the options it takes;
 //! - `pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>>`,
-//!   which parses the `-o KEY=VALUE` options and rejects unknown ones.
+//!   which parses the `-o KEY=VALUE` options and rejects unknown ones;
+//! - optionally `pub fn build_tcp(options)`, the same device on a socket
+//!   (`shells::tcp`), for `oxrok-emu serve --tcp`.
 
 use crate::model::DeviceModel;
 use crate::{Error, Result};

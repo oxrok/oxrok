@@ -1,0 +1,51 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+    serialcomm
+rigol-ds - Rigol DS1054Z 00.04.04.04.03 [S/N: EMU0001] with 4 channels: CH1 CH2 CH3 CH4
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    CH3: channel CH3
+    CH4: channel CH4
+Supported configuration options across all channel groups:
+    limit_frames: 0 (current)
+    samplerate
+    timebase - supported values:
+      5 ns
+      10 ns
+      20 ns
+      50 ns
+      100 ns
+      500 ns
+      1 us
+      2 us
+      5 us
+      10 us
+      20 us
+      50 us
+      100 us
+      200 us
+      500 us
+      1 ms (current)
+      2 ms
+      5 ms
+      10 ms
+      20 ms
+      50 ms
+      100 ms
+      200 ms
+      500 ms
+      1 s
+      2 s
+      5 s
+      10 s
+      20 s
+      50 s
+    num_hdiv
+    horiz_triggerpos: 
+    triggersource: CH1 (current), CH2, CH3, CH4, EXT, AC Line
+    triggerslope: r (current), f
+    triggerlevel: 0.000000 (current)
+    data_source: Live (current), Memory, Segmented
