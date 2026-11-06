@@ -52,6 +52,19 @@ pub trait ScpiTransport: Send {
     fn read_data(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
     /// True once the whole response has been read.
     fn read_complete(&self) -> bool;
+    /// Drops what has arrived and nobody asked for, where the transport has a
+    /// queue of that. Nothing on the wire.
+    fn purge(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// Reads what arrives within `timeout` and drops it, leaving no step in a
+    /// recording, for a transport where a read is only a read and sends nothing.
+    /// How much came, or `None` where a transport has no such read: USBTMC asks
+    /// the device for each message, so a look at the line is a request.
+    fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        let _ = timeout;
+        Ok(None)
+    }
 }
 
 /// The identification an instrument gives for `*IDN?`.
@@ -87,6 +100,16 @@ impl Scpi {
     /// The resource string.
     pub fn resource(&self) -> &str {
         self.transport.resource()
+    }
+
+    /// Drops what has arrived unasked; see [`ScpiTransport::purge`].
+    pub fn purge(&mut self) -> Result<()> {
+        self.transport.purge()
+    }
+
+    /// Reads and drops what arrives; see [`ScpiTransport::discard`].
+    pub fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
+        self.transport.discard(timeout)
     }
 
     /// Sends `command`, adding the newline when it lacks one.
@@ -154,7 +177,7 @@ impl Scpi {
             data.pop();
         }
         let text = String::from_utf8_lossy(&data).into_owned();
-        log::debug!("SCPI response: {}", &text[..text.len().min(70)]);
+        log::debug!("SCPI response: {}", text.chars().take(70).collect::<String>());
         Ok(text)
     }
 
@@ -396,14 +419,31 @@ pub fn open(resource: &Resource, serialcomm: Option<&str>) -> Result<Scpi> {
             Box::new(serial::Serial::open(path, params)?)
         }
     };
-    let transport = match std::env::var("OXROK_SCPI_RECORD") {
+    Ok(Scpi::new(recording(transport)))
+}
+
+/// `transport`, recorded when `OXROK_SCPI_RECORD` is set.
+fn recording(transport: Box<dyn ScpiTransport>) -> Box<dyn ScpiTransport> {
+    match std::env::var("OXROK_SCPI_RECORD") {
         Ok(file) if !file.is_empty() => {
             log::info!("Recording the SCPI session to {file}.");
             Box::new(record::Recorder::to_file(transport, file))
         }
         _ => transport,
-    };
-    Ok(Scpi::new(transport))
+    }
+}
+
+/// [`open`], but with no `serialcomm` a serial port keeps the line it has, as
+/// `scpi_serial_open` does when it has none, where [`open`] has a default. It does
+/// not look in `scpi_serial.c`'s table of USB ids: see
+/// [`crate::serial::open_keeping_line`], also for where it has no line to keep.
+pub fn open_keeping_line(resource: &Resource, serialcomm: Option<&str>) -> Result<Scpi> {
+    match (resource, serialcomm) {
+        (Resource::Serial(path), None) => {
+            Ok(Scpi::new(recording(Box::new(serial::Serial::open_keeping_line(path)?))))
+        }
+        _ => open(resource, serialcomm),
+    }
 }
 
 /// Finds instruments the way libsigrok's `sr_scpi_scan` does: with no
@@ -485,6 +525,32 @@ mod tests {
         assert_eq!(vendor_alias("RIGOL TECHNOLOGIES"), "Rigol");
         assert_eq!(vendor_alias("Rigol Technologies"), "Rigol");
         assert_eq!(vendor_alias("Other"), "Other");
+    }
+
+    /// A long reply of what is no text, as a wrong line rate gives: the debug
+    /// log's cut must fall between characters.
+    #[test]
+    fn a_long_reply_that_is_no_text_can_be_logged() {
+        struct Everything;
+        impl log::Log for Everything {
+            fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record<'_>) {
+                let _ = record.args().to_string();
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: Everything = Everything;
+        // Fails only when another test set one first, which is as good.
+        let _ = log::set_logger(&LOGGER);
+        log::set_max_level(log::LevelFilter::Debug);
+        // Each lossy byte becomes three, so byte 70 falls inside a character.
+        let bytes = "ff".repeat(100);
+        let mut s = scpi(&format!(
+            "# oxrok scpi fixture 1\nresource usbtmc/1.5\nsend \"X?\\n\"\nresponse hex {bytes}0a\n"
+        ));
+        assert_eq!(s.get_string("X?").unwrap().chars().count(), 100);
     }
 
     #[test]
