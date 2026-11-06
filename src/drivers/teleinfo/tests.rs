@@ -622,8 +622,8 @@ fn a_value_that_is_no_reading_is_dropped_between_good_ones() {
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
         assert_eq!(values(&got, 1), [12000.0, 12001.0]);
-        assert!(values(&got, 2).is_empty());
-        assert!(values(&got, 3).is_empty());
+        assert_eq!(values(&got, 2), [0f32; 0]);
+        assert_eq!(values(&got, 3), [0f32; 0]);
         assert_eq!(failure(&got), None);
     });
 }

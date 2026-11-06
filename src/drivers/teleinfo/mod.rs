@@ -82,8 +82,9 @@
 //!   s (2.43 s at the line's rate).
 //! - The `P` channel exists and never gets a reading: no group feeds it. A three-phase
 //!   meter's `IINST1` to `IINST3` give nothing either.
-//! - A reading is an `f32`, as in C. An index above 16.78 MWh rounds: 2 Wh steps, 4 above
-//!   33.55 MWh, 8 above 67.11 MWh, 16 above 134.2 MWh. A house's meter can reach that.
+//! - A reading is an `f32`, as in C. An index above 16.78 `MWh` rounds: 2 `Wh` steps, 4
+//!   above 33.55 `MWh`, 8 above 67.11 `MWh`, 16 above 134.2 `MWh`. A house's meter can
+//!   reach that.
 //!
 //! A scan opens the port for reading and writing, where C's scan opens it read-only,
 //! so on a node a user may only read, this finds nothing where C's scan would find it.
@@ -339,10 +340,16 @@ struct Watch {
     interrupted: bool,
     /// An `ADCO` has come in this capture.
     sampled: bool,
-    /// Said already, until bytes or an `ADCO` come.
-    warned_bytes: bool,
-    /// Said already, until an `ADCO` comes.
-    warned_sample: bool,
+    warned: Warned,
+}
+
+/// What a capture has said already.
+#[derive(Debug, Default)]
+struct Warned {
+    /// That no byte comes, until bytes or an `ADCO` come.
+    bytes: bool,
+    /// That no `ADCO` comes, until one does.
+    sample: bool,
 }
 
 impl Watch {
@@ -354,8 +361,7 @@ impl Watch {
             back: now,
             interrupted: false,
             sampled: false,
-            warned_bytes: false,
-            warned_sample: false,
+            warned: Warned::default(),
         }
     }
 
@@ -366,14 +372,14 @@ impl Watch {
         }
         self.heard = now;
         self.interrupted = last == EOT;
-        self.warned_bytes = false;
+        self.warned.bytes = false;
     }
 
     /// An `ADCO` group came.
     fn counted(&mut self, now: Instant) {
         self.counted = now;
         self.sampled = true;
-        self.warned_sample = false;
+        self.warned.sample = false;
     }
 
     /// The consumer held the capture for this long, in which it read nothing: a slow
@@ -403,8 +409,8 @@ impl Watch {
             if limited && time >= bounds.interrupted {
                 return Wait::Fail(lack, bounds.interrupted);
             }
-            if since(self.heard) >= bounds.first && !self.warned_bytes {
-                self.warned_bytes = true;
+            if since(self.heard) >= bounds.first && !self.warned.bytes {
+                self.warned.bytes = true;
                 return Wait::Warn(Lack::Interrupted, bounds.first);
             }
             return Wait::Fine;
@@ -426,8 +432,8 @@ impl Watch {
             }
         }
         let warned = match lack {
-            Lack::NoBytes => &mut self.warned_bytes,
-            _ => &mut self.warned_sample,
+            Lack::NoBytes => &mut self.warned.bytes,
+            _ => &mut self.warned.sample,
         };
         if *warned {
             return Wait::Fine;
