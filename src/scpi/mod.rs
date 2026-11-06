@@ -225,6 +225,17 @@ impl Scpi {
         read
     }
 
+    /// Reads what has come, waiting at most `timeout`, for a driver that finds an
+    /// instrument's lines itself and answers for what a late one means: a read that
+    /// finds nothing leaves [`Scpi::send`] with nothing to settle. Returns 0 on a
+    /// timeout.
+    pub fn read_some(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+        match self.transport.read_data(buf, timeout) {
+            Err(Error::Timeout) => Ok(0),
+            read => read,
+        }
+    }
+
     /// True once the response started with [`Scpi::read_begin`] is
     /// complete.
     pub fn read_complete(&self) -> bool {
@@ -555,6 +566,13 @@ impl Scpi {
     /// `*IDN?`, split into its fields.
     pub fn hw_id(&mut self) -> Result<HwInfo> {
         let response = self.get_string("*IDN?")?;
+        parse_hw_id(&response)
+    }
+}
+
+/// An answer to `*IDN?`, split into its fields.
+pub fn parse_hw_id(response: &str) -> Result<HwInfo> {
+    {
         let fields: Vec<&str> = response.split(',').collect();
         if fields.len() < 3 {
             return Err(Error::device(format!("SCPI: short *IDN? response '{response}'")));
