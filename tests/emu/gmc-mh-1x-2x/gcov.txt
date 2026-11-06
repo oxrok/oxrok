@@ -1,0 +1,73 @@
+gcov gmc-mh-1x-2x (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        97.7%  170 of 174
+  protocol.c   96.1%  895 of 931
+  total        96.4%  1065 of 1105
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan_2x_bd232: 263
+    config_get: 333, 344-345
+  protocol.c
+    decode_rs_18: 257
+    decode_send_interval: 811-812
+    dump_msg14: 872, 881
+    chk_msg14: 919-920
+    process_msg14: 1016-1025
+    gmc_mh_1x_2x_receive_data: 1095, 1098
+    gmc_mh_2x_receive_data: 1179, 1182, 1219
+    create_cmd_14: 1244
+    req_meas14: 1279
+    req_stat14: 1310, 1321, 1325, 1329, 1338
+    gmc_decode_model_sm: 1355-1356
+    gmc_model_str: 1476-1477
+    config_set: 1496, 1507, 1514-1515
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/serial.c         33.8%  136 of 402
+  src/serial_libsp.c   45.7%  117 of 256
+  total                38.4%  253 of 658
+never reached, by function (line ranges hold no reached line):
+  src/serial.c
+    dev_is_supported: 62
+    serial_open: 87-88, 99, 101, 103, 107, 122, 140, 142
+    serial_close: 162-163, 169, 173-174
+    serial_flush: 193-194, 202
+    serial_drain: never called (217-229)
+    serial_set_read_chunk_cb: never called (267-276)
+    sr_ser_discard_queued_data: 292
+    sr_ser_has_queued_data: never called (303-308)
+    sr_ser_queue_rx_data: never called (321-330)
+    sr_ser_unqueue_rx_data: never called (343-364)
+    serial_has_receive_data: never called (379-392)
+    _serial_write: 402-403, 407
+    serial_write_nonblocking: never called (449-452)
+    _serial_read: 461-462, 466
+    serial_read_blocking: never called (490-493)
+    serial_set_params: 541-542, 548
+    serial_set_handshake: never called (578-594)
+    serial_set_paramstr: 651-656, 665-666, 675-679, 684-688, 693-699
+    serial_readline: never called (739-786)
+    serial_stream_detect: never called (815-927)
+    sr_serial_extract_options: never called (952-981)
+    serial_source_add: 992-993, 997-998, 1002
+    serial_source_remove: 1013-1014, 1018
+    sr_serial_new: never called (1033-1045)
+    sr_serial_free: never called (1053-1059)
+    append_port_list: never called (1062-1064)
+    sr_serial_list: never called (1074-1096)
+    append_port_find: never called (1099-1104)
+    sr_serial_find_usb: never called (1119-1137)
+    serial_timeout: 1152-1155
+  src/serial_libsp.c
+    sr_ser_libsp_open: 70-71, 76-78
+    sr_ser_libsp_close: 96-97, 103-111
+    sr_ser_libsp_flush: 126-127, 133-141
+    sr_ser_libsp_drain: never called (147-167)
+    sr_ser_libsp_write: 178-179, 183, 188-190
+    sr_ser_libsp_read: 209-210, 216, 219-226
+    sr_ser_libsp_set_params: 242-243, 253-260, 276-284
+    sr_ser_libsp_set_handshake: never called (290-311)
+    sr_ser_libsp_source_add_int: 330-331, 334-335, 339, 345, 347, 350-351, 354-357, 369, 371
+    sr_ser_libsp_source_add: 398
+    sr_ser_libsp_list: never called (414-432)
+    sr_ser_libsp_find_usb: never called (435-458)
+    sr_ser_libsp_get_frame_format: 469, 479-480, 486-487, 491-492, 496-497
+    sr_ser_libsp_get_rx_avail: never called (506-517)

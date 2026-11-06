@@ -1,0 +1,4 @@
+sr: gmc-mh-1x-2x: process_msg_14(): Invalid checksum!
+sr: gmc-mh-1x-2x: A digit above 0x0f: not an answer.
+sr: gmc-mh-1x-2x: process_msg_14(): Address mismatch, msg for other device!
+sr: gmc-mh-1x-2x: Device: Illegal error code!
