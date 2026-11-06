@@ -15,13 +15,21 @@
 //! - `src/lcr/es51919.c` and `src/lcr/vc4080.c` in libsigrok for both layouts,
 //!   which are reverse engineered by their authors. The sample lines in the
 //!   latter are from a `PeakTech` 2165.
-//! - sigrok's wiki (Voltcraft 4080) and the C's comment: the meter's line is
-//!   1200/7e1, its cable an FT232R with which a host at 7e1 got nothing, and
-//!   8n1 gets each character with its parity bit in bit 7. Hence
-//!   `parity=` here. The protocol documents of Conrad and `PeakTech`, which the
-//!   C names, were not reachable, so nothing here comes from them.
-//! - `github.com/4x1md/de5000_lcr_py` agrees on 9600/8n1 and 17 bytes, but
-//!   says it took them from sigrok.
+//! - Conrad's protocol description, through `web.archive.org` (the C's link is
+//!   dead): 1200/7E1, the 39 characters, every range and Rs table for both
+//!   displays and L, C and R, `S` and `[BXXXXXX]` for setup, and a secondary
+//!   range of 9 for over the range. `N` gives data from before REL is applied.
+//! - sigrok's wiki (Voltcraft 4080) and the C's comment: the cable is an FT232R
+//!   with which a host at 7e1 got nothing, and 8n1 gets each character with its
+//!   parity bit in bit 7. A 7E1 meter and an 8n1 host share a 10-bit frame, so
+//!   that bit is physically right, hence `parity=` here; a host at 7e1 should
+//!   decode by Conrad's numbers, and getting nothing there is what this model
+//!   repeats of the C's comment, an artifact until a cable says otherwise.
+//! - sigrok's wiki (ES51919): the chip takes no commands and outputs all the
+//!   time.
+//! - `github.com/4x1md/de5000_lcr_py` agrees on 9600/8n1 and 17 bytes, says it
+//!   took them from sigrok, and sets DTR=1 RTS=0, reported working on a UT61E's
+//!   IR cable. So the `rts=1` the C sets is not needed by at least that cable.
 //! - No firmware source, no recording, no unit on a desk. The default
 //!   packets are built from the layouts.
 //!
@@ -35,6 +43,10 @@
 //!   each open; nobody has said what a real ES51919 meter's is.
 //! - `burst=` and `scan-burst=` are silences no meter is known to have: they
 //!   make a capture's packets independent of how long a tool listens.
+//! - A free stream sends one packet more around a tool's close and reopen, which
+//!   no scan needs: about 16 URBs killed and 16 resubmitted count as offers,
+//!   against a `period=` up to 15 on a close alone and up to 35 on both. Inferred
+//!   from those thresholds, not from a trace.
 //! - The vc4080's sequence counter at byte 16 stands still, unless `packet=`
 //!   moves it: no driver reads it.
 //! - Of the meter's other commands (`A`, `B`, `[...]` setup, see the wiki) the
@@ -58,8 +70,8 @@
 //!   to the next and marks the event point.
 //!
 //! The pedantic checks: the vc4080 takes `N` alone, and the ES51919 nothing.
-//! `rts=1/dtr=1` in the ES51919's `serialcomm` is not checked: no source says
-//! what the meter does without them.
+//! The lines in the ES51919's `serialcomm` are not checked: C sets `rts=1/dtr=1`,
+//! and another program works with `rts=0/dtr=1`.
 
 use crate::model::DeviceModel;
 use crate::shells::cdc::{Cdc, Faults, Identity, Line, LineEvent, Port, Serial};

@@ -23,6 +23,13 @@
 //! 37 38   CR LF
 //! ```
 //!
+//! Conrad's description of the protocol agrees with all the range and Rs tables
+//! here. It also says a secondary range of 9 means over the range: as in C, that
+//! reads nothing rather than infinity, since C found values starting with `9` in
+//! that display and does not trust either mark. It says `N` gives the data from
+//! before REL is applied, so the Relative flag here, which is C's, sits on raw
+//! data: kept as in C.
+//!
 //! Not copied from C: `d_range`, `q_range`, `d_invalid` and `q_invalid`
 //! (vc4080.c:393-404), for channels `VC4080_WITH_DQ_CHANS` leaves out; line 404
 //! subtracts `'0'` from `d_range` twice and never from `q_range`, which nothing

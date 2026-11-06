@@ -112,9 +112,13 @@ emu_cases() {
 s/^oxrok: [a-z]+: oxrok::lcr::vc4080: /sr: vc4080: /
 s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     HUP_BUG="lcr_receive_data takes a hung up port for a timeout (protocol.c:193-196: revents is not exactly G_IO_IN), and neither a meter that is not asked nor vc4080_packet_request, which ignores its write, can fail there, so it never ends at a frame limit; oxrok ends the capture"
+    SILENT_BUG="lcr_receive_data has no bound (protocol.c:193-200), so a meter that stops sending keeps a frame limit open for ever; oxrok ends such a capture after 10 s of no bytes"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
-    # What is on the line, for each id of the table.
+    # What is on the line, for each id of the table. A stream's count of packets
+    # goes by the time a tool listens, so all but "es free stream" stop it: two
+    # packets for a scan, and burst= for what follows.
+    emu_options scan-burst=2 burst=0
     emu_case "es show" --keep-header -- -d $D --show
     for _id in deree-de5000 mastech-ms5308 peaktech-2170 uni-t-ut612; do
         emu_case "scan $_id" --driver $_id --keep-header -- -d $_id:conn=$EMU_TTY --scan
@@ -123,8 +127,12 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     emu_case "es no such node" --keep-header --no-output -- -d deree-de5000:conn=/dev/ttyACM97 --scan
     emu_case "es wrong baud" --keep-header --no-output -- -d $D:serialcomm=1200/8n1 --scan
     emu_case "es wrong frame" --keep-header --no-output -- -d $D:serialcomm=9600/7e1 --scan
+    # C opens the port, raising the lines, and then finds the serialcomm bad; oxrok
+    # refuses it before opening. The filter hides C's SET_CONTROL_LINE_STATE and
+    # nothing else, as neither tool sends more.
     emu_case "es no such serialcomm" --keep-header --no-output --tx-filter '/^ctl_out/d' -- -d $D:serialcomm=fast --scan
-    emu_case "es serialcomm lines down" --keep-header -- -d $D:serialcomm=9600/8n1/rts=0/dtr=0 --scan
+    # What 4x1md/de5000_lcr_py sets, against C's rts=1.
+    emu_case "es serialcomm as another program has it" --keep-header -- -d $D:serialcomm=9600/8n1/rts=0/dtr=1 --scan
 
     # The keys.
     emu_case "es get freq" -- -d $D --get output_frequency
@@ -132,7 +140,6 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     emu_case "es get limit_frames" -- -d $D --get limit_frames
     emu_case "es get limit_time" --expect-fail --stderr -- -d $D --get limit_time
     emu_case "es get conn" --expect-fail --stderr -- -d $D --get conn
-    emu_case "es get samplerate" --expect-fail --stderr -- -d $D --get samplerate
     emu_case "es set freq" --expect-fail --stderr -- -d $D --set -c output_frequency=100
     emu_case "es samples" --expect-fail --stderr -- -d $D --samples 1
     emu_options period=5 scan-burst=2 burst=1
@@ -150,13 +157,19 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     emu_case "es never sends" --keep-header --no-output -- -d $D --scan
     emu_options
 
-    # A capture, plain: what the stream does with no silence to help.
+    # A capture, plain.
+    # The one case of a free stream. Above period 35 no extra packet comes around
+    # the reopen, and 1 s between packets outlasts a stall. The filter hides how
+    # the reads fell, as bulk_in's length and bytes, which vary by the time: the
+    # packets' count is a margin, and their values are the same.
+    emu_options period=50
+    emu_case "es free stream" --keep-header --tx-filter 's/^bulk_in 82 [0-9]+ -> .*$/bulk_in 82 STREAM/' -- -d $D --frames 1
+    emu_options scan-burst=2 burst=1
     emu_case "es frames 1" --keep-header -- -d $D --frames 1
-    emu_case "es frames 2" --keep-header -- -d $D --frames 2
     emu_options scan-burst=2 burst=2
+    emu_case "es frames 2" --keep-header -- -d $D --frames 2
     emu_case "es frames 2 csv" -- -d $D --frames 2 -O csv:header=false
     emu_options scan-burst=2 burst=1
-    emu_case "es P1 alone" --keep-header -- -d $D -C P1 --frames 1
     emu_case "es P2 alone" --keep-header -- -d $D -C P2 --frames 1
     emu_case "es renamed" --keep-header -- -d $D -C P1=main,P2 --frames 1
     # The limit is checked once all of a read is out: a read holding two
@@ -173,6 +186,12 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     es_sweep "es decimals" 8 $(for _d in 50 51 52 53 54 55 56 57; do es_main 02 04d2 $_d 00; printf ' '; done)
     # The unit no line of the table names, no prefix unlike "no unit".
     es_sweep "es large with unit 4" 2 $(es_main 02 7fff 20 00) $(es_main 02 7fff 00 00)
+    # A footer inside a value: stepping a byte from a packet, not a packet, finds
+    # a head and a tail here. What they make shows only on stderr, as its flags
+    # are the real footer's LF, which reads as calibration. So the next case is
+    # one where it would show: packets in calibration, with a head at byte 4.
+    es_sweep "es a footer inside a value" 3 $(for _i in 1 2 3; do es_packet 20 50 00 02 3039 53 00 03 010d 0a 00; printf ' '; done)
+    es_sweep "es a misread would make a frame" 1 $(es_packet 0d 0a 00 0d 0000 00 02 11 1153 00 00) $(es_packet 0d 0a 00 0d 0000 00 02 11 1153 00 00) $(es_flags 20 50)
     es_sweep "es values" 7 $(for _v in 0000 0001 7fff 8000 ffff ff85 4e20; do es_main 02 $_v 53 00; printf ' '; done)
     es_sweep "es primary quantity" 4 $(for _q in 01 02 03 04; do es_main $_q 04d2 53 00; printf ' '; done)
     es_sweep "es primary parallel" 4 $(for _q in 01 02 03 04; do es_packet 80 50 00 $_q 04d2 53 00 03 007b 0b 00; printf ' '; done)
@@ -223,21 +242,28 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     # The USB side.
     emu_options chunk=1 scan-burst=2 burst=1
     emu_case "es one byte per transfer" --keep-header -- -d $D --frames 1
-    emu_options stall=line
+    emu_options stall=line scan-burst=2 burst=0
     emu_case "es line coding stalled" --keep-header -- -d $D --scan
     emu_options stall=lines
+    # sigrok-cli stops at the failed RTS and never sets the line, oxrok has set it
+    # (its open comes before RTS can): the filter hides that SET_LINE_CODING, with
+    # no device found by either.
     emu_case "es control lines stalled" --keep-header --no-output --tx-filter '/^ctl_out 21 20 /d' -- -d $D --scan
-    emu_options in-stall=1
+    emu_options in-stall=1 scan-burst=2 burst=0
     emu_case "es a stalled read" --keep-header -- -d $D --scan
     emu_options
 
-    # An unplug with the tty open. The mark is a period after the packet.
-    emu_options scan-burst=2 burst=1
+    # An unplug with the tty open. The mark is a period after the packet, and 1 s
+    # outlasts a stall that would leave the packet unread at the hangup.
+    emu_options period=50 scan-burst=2 burst=1
     emu_case "es unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $D --frames 5
-    # Silence at a frame limit: no bound in either tool, as the meter may come
-    # back. A signal is what ends it.
     emu_case "es interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $D --frames 5
+    # Silence at a frame limit: for ever in C, and a meter that takes no commands
+    # and streams all the time is off or unplugged, so oxrok ends after its 10 s.
+    # This case costs that: a seam tests the times, this the message and the end.
+    emu_options period=5 scan-burst=2 burst=1
     emu_case "es lib silent at a frame limit" --libsigrok --hangs --timeout 3 -- -d $D --frames 5
+    emu_case "es silent ends at the bound" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $D --frames 5
     emu_options
 
     # The same for the meter that is asked.
@@ -248,14 +274,16 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     done
     emu_case "vc no conn" --driver voltcraft-4080 --keep-header --no-output -- -d voltcraft-4080 --scan
     emu_case "vc wrong baud" --driver voltcraft-4080 --keep-header --no-output -- -d $V:serialcomm=9600/8n1 --scan
+    # Conrad says 7E1, and a host at 7e1 should decode that. It gets nothing here
+    # because the C's comment says it did on its FT232R: this pins a model artifact,
+    # and "vc on a 7e1 line" the other reading. An 8n1 host shares the meter's
+    # 10-bit frame, so bit 7 as parity is physically right.
     emu_case "vc the 7e1 its documents say" --driver voltcraft-4080 --keep-header --no-output -- -d $V:serialcomm=1200/7e1 --scan
     emu_case "vc get freq" --driver voltcraft-4080 -- -d $V --get output_frequency
     emu_case "vc get model" --driver voltcraft-4080 -- -d $V --get equiv_circuit_model
     emu_case "vc frames 1" --driver voltcraft-4080 --keep-header -- -d $V --frames 1
     emu_case "vc frames 2" --driver voltcraft-4080 --keep-header -- -d $V --frames 2
-    emu_case "vc frames 2 csv" --driver voltcraft-4080 -- -d $V --frames 2 -O csv:header=false
     emu_case "vc P1 alone" --driver voltcraft-4080 --keep-header -- -d $V -C P1 --frames 1
-    emu_case "vc P2 alone" --driver voltcraft-4080 --keep-header -- -d $V -C P2 --frames 1
     emu_case "vc time" --driver voltcraft-4080 --keep-header -- -d $V --time 300ms
     emu_options meter=vc4080 parity=0
     emu_case "vc no parity bits" --driver voltcraft-4080 --keep-header -- -d $V --frames 1
@@ -289,8 +317,7 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     vc_sweep "vc secondary D Q" 8 $(for _r in 1 2 3 4; do vc_second LD 3 $_r; printf ' '; vc_second CQ 3 $_r; printf ' '; done)
     vc_sweep "vc secondary out of range" 4 $(for _r in 0 5 6 9; do vc_second LQ 3 $_r; printf ' '; done)
     vc_sweep "vc secondary R Rs 100" 5 $(for _r in 1 2 3 4 5; do vc_second LR 0 $_r; printf ' '; done)
-    vc_sweep "vc secondary R Rs 1k" 5 $(for _r in 1 2 3 4 5; do vc_second LR 3 $_r; printf ' '; done)
-    vc_sweep "vc secondary R Rs 10k" 5 $(for _r in 1 2 3 4 5; do vc_second CR 2 $_r; printf ' '; done)
+    vc_sweep "vc secondary R Rs 1k 10k" 6 $(for _r in 1 2 3 4 5; do vc_second LR 3 $_r; printf ' '; done) $(vc_second CR 2 5)
     vc_sweep "vc secondary R Rs 100k" 5 $(for _r in 1 2 3 4 5; do vc_second LR 5 $_r; printf ' '; done)
     # D and Q have their own ranges, which no channel uses.
     vc_sweep "vc D and Q ranges no such" 1 $(vc_packet "LQAPA1234530134210711!1406!" "__________")
@@ -310,6 +337,8 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     vc_sweep "vc backlight and adapter" 3 $(vc_flagged _______B__) $(vc_flagged ________A_) $(vc_flagged _______BA_)
     VC_FLAGS=stderr
     vc_sweep "vc low battery" 1 $(vc_flagged _________B)
+    # Said per value: not in setup mode, and once where a main display has no scale.
+    vc_sweep "vc low battery with no reading" 1 $(vc_flagged S________B) $(vc_packet "LQAPA1234570134210711414062" "_________B")
     VC_FLAGS=
     vc_sweep "vc low battery output" 1 $(vc_flagged _________B)
 

@@ -42,6 +42,8 @@ struct Line {
     write_fails: bool,
     /// Requests take no room: `write_timeout` gives 0.
     no_room: bool,
+    /// The timeout each `write_timeout` got.
+    write_timeouts: Vec<Duration>,
     /// When requests were written, and whether they met bytes on the way.
     writes: Vec<Instant>,
     writes_during_a_reply: usize,
@@ -146,7 +148,8 @@ impl Port for FakePort {
         }
         Ok(())
     }
-    fn write_timeout(&mut self, data: &[u8], _: Duration) -> Result<usize> {
+    fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
+        self.0.line().write_timeouts.push(timeout);
         if self.0.line().no_room {
             self.0.line().writes.push(Instant::now());
             return Ok(0);
@@ -416,6 +419,8 @@ fn the_probes_times_are_literal() {
     assert_eq!(SETTINGS_TIMEOUT, Duration::from_millis(1500));
     assert_eq!(READ_TIMEOUT, Duration::from_millis(50));
     assert_eq!(BUF_SIZE, 128);
+    assert_eq!(END_AFTER_STOP, Duration::from_millis(500));
+    assert_eq!(SILENCE_BOUND, Duration::from_secs(10));
 }
 
 #[test]
@@ -799,6 +804,199 @@ fn an_answer_longer_than_the_interval_is_not_talked_over() {
 }
 
 #[test]
+fn the_interval_counts_from_the_last_request_after_a_long_answer() {
+    // A request that went late, because its forerunner's answer outlasted the
+    // interval, still puts the next one a whole interval away.
+    bounded(|| {
+        let mut long = vec![0x3f; 39];
+        long.extend(vc_packet("11111"));
+        let line = Shared::default().with(|l| {
+            l.per_read = 1;
+            l.byte_time = VC_BYTE;
+            l.answers.push_back(long);
+        });
+        let mut d = device(vc_model(), &line);
+        let rx = start(&mut d);
+        line.wait_for_writes(3);
+        d.stop().unwrap();
+        packets(&rx);
+        assert!(line.least_gap() >= Duration::from_millis(500), "{:?}", line.least_gap());
+    });
+}
+
+#[test]
+fn the_interval_holds_across_captures_on_one_open_device() {
+    bounded(|| {
+        let line = Shared::default().with(|l| {
+            for v in ["11111", "22222", "33333"] {
+                l.answers.push_back(vc_packet(v));
+            }
+        });
+        let mut d = device(vc_model(), &line);
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        for _ in 0..3 {
+            let rx = start(&mut d);
+            assert_eq!(frames(&packets(&rx)), 1);
+        }
+        assert_eq!(line.line().writes.len(), 3);
+        assert!(line.least_gap() >= Duration::from_millis(500), "{:?}", line.least_gap());
+    });
+}
+
+#[test]
+fn a_request_may_wait_500_ms_for_room() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device(vc_model(), &line);
+        let rx = start(&mut d);
+        line.wait_for_writes(1);
+        d.stop().unwrap();
+        packets(&rx);
+        assert_eq!(line.line().write_timeouts[0], Duration::from_millis(500));
+    });
+}
+
+#[test]
+fn a_packet_is_stepped_over_whole() {
+    // A meter in calibration, no frame, with a head at byte 4 and the next
+    // packet's tail 15 bytes on from it, reading 4.369 nF if it were looked at.
+    bounded(|| {
+        let p = vec![0, 0x0d, 0x0d, 0x0a, 0, 0x0d, 0, 0, 0, 2, 0x11, 0x11, 0x53, 0, 0, 0x0d, 0x0a];
+        let line = Shared::default().with(|l| {
+            l.queued.extend(&p);
+            l.queued.extend(&p);
+            l.queued.extend(es_packet(7));
+        });
+        let mut d = device(es_model(), &line);
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        let main = values(&packets(&rx), 0);
+        assert_eq!(main.len(), 1, "{main:?}");
+        assert!((main[0] - 7.0 * 1e-12).abs() < 1e-14, "{main:?}");
+    });
+}
+
+/// A device as [`device`], whose silence has this bound.
+fn device_with_bound(model: &'static Model, line: &Shared, bound: Duration) -> LcrDevice {
+    let mut d = device(model, line);
+    d.silence_bound = bound;
+    d
+}
+
+#[test]
+fn silence_means_what_the_chip_makes_it_mean() {
+    let at = Instant::now();
+    let later = |ms| at + Duration::from_millis(ms);
+    let bound = Duration::from_secs(10);
+    // An ES51919 at a frame limit, from both sides of the bound.
+    let mut s = Silence::new(bound, at);
+    assert_eq!(s.verdict(Chip::Es51919, true, later(9_999)), Silent::Listen);
+    assert_eq!(s.verdict(Chip::Es51919, true, later(10_000)), Silent::End);
+    // Bytes put it off.
+    let mut s = Silence::new(bound, at);
+    s.heard(later(5_000));
+    assert_eq!(s.verdict(Chip::Es51919, true, later(14_999)), Silent::Listen);
+    assert_eq!(s.verdict(Chip::Es51919, true, later(15_000)), Silent::End);
+    // Something else can end the capture: no say.
+    let mut s = Silence::new(bound, at);
+    assert_eq!(s.verdict(Chip::Es51919, false, later(100_000)), Silent::Listen);
+    // A Voltcraft: a warning once, at any limit, and it never ends.
+    for only_frames in [true, false] {
+        let mut s = Silence::new(bound, at);
+        assert_eq!(s.verdict(Chip::Vc4080, only_frames, later(9_999)), Silent::Listen);
+        assert_eq!(s.verdict(Chip::Vc4080, only_frames, later(10_000)), Silent::Warn);
+        assert_eq!(s.verdict(Chip::Vc4080, only_frames, later(10_001)), Silent::Listen);
+        // Bytes do not bring the warning back.
+        s.heard(later(20_000));
+        assert_eq!(s.verdict(Chip::Vc4080, only_frames, later(40_000)), Silent::Listen);
+    }
+}
+
+#[test]
+fn a_silent_es51919_at_a_frame_limit_ends() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device_with_bound(es_model(), &line, Duration::from_millis(100));
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let at = Instant::now();
+        let rx = start(&mut d);
+        assert_eq!(packets(&rx).len(), 1, "the header");
+        assert!(at.elapsed() >= Duration::from_millis(100));
+    });
+}
+
+#[test]
+fn a_time_limit_keeps_a_silent_es51919_past_the_bound() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device_with_bound(es_model(), &line, Duration::from_millis(50));
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        d.set(&Key::LimitMsec, &Value::U64(300), None).unwrap();
+        let at = Instant::now();
+        let rx = start(&mut d);
+        packets(&rx);
+        assert!(at.elapsed() >= Duration::from_millis(300));
+    });
+}
+
+/// Whether a capture is still going once its bound has long passed.
+fn still_going_past_the_bound(rx: &Received, wait: Duration) -> bool {
+    let until = Instant::now() + wait;
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((_, Packet::End)) => return false,
+            Ok(_) => {}
+            Err(_) => return true,
+        }
+    }
+}
+
+#[test]
+fn a_silent_es51919_with_no_limit_goes_on() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device_with_bound(es_model(), &line, Duration::from_millis(50));
+        let rx = start(&mut d);
+        assert!(still_going_past_the_bound(&rx, Duration::from_millis(300)));
+        d.stop().unwrap();
+        packets(&rx);
+    });
+}
+
+#[test]
+fn noise_counts_as_bytes_as_calibration_has_no_frames() {
+    bounded(|| {
+        // Blank packets, a byte at a time: a capture of no frames, with bytes.
+        let line = Shared::default().with(|l| {
+            l.per_read = 1;
+            l.byte_time = Duration::from_millis(1);
+            l.stream = Some(es_blank());
+        });
+        let mut d = device_with_bound(es_model(), &line, Duration::from_secs(1));
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        assert!(still_going_past_the_bound(&rx, Duration::from_secs(2)));
+        d.stop().unwrap();
+        assert_eq!(frames(&packets(&rx)), 0);
+    });
+}
+
+#[test]
+fn a_silent_voltcraft_at_a_frame_limit_goes_on_and_keeps_asking() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device_with_bound(vc_model(), &line, Duration::from_millis(50));
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let rx = start(&mut d);
+        line.wait_for_writes(2);
+        assert!(still_going_past_the_bound(&rx, Duration::from_millis(100)));
+        d.stop().unwrap();
+        packets(&rx);
+    });
+}
+
+#[test]
 fn a_late_answer_shifts_nothing() {
     bounded(|| {
         // The first request is answered after the next was asked for: the
@@ -940,8 +1138,14 @@ fn a_start_after_an_end_stuck_on_a_full_queue_does_not_hang() {
         // A new capture on a new queue, with the first queue left unread.
         let (tx2, rx2) = sync_channel(1024);
         d.start(PacketSink::new(tx2, 0)).unwrap();
+        // The start told the old thread and joined it: it is gone, with its
+        // End given up. Had it only been let go, it would now send that End.
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        assert_eq!(
+            rx.recv_timeout(BOUND).err(),
+            Some(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        );
         packets(&rx2);
-        drop(rx);
     });
 }
 
@@ -1010,7 +1214,8 @@ fn a_start_during_a_capture_says_busy() {
 fn a_port_that_hangs_up_ends_the_capture() {
     bounded(|| {
         let line = Shared::default().with(|l| l.read_fails = true);
-        let mut d = device(es_model(), &line);
+        // Far from the silence's bound, which must not be what ends it.
+        let mut d = device_with_bound(es_model(), &line, BOUND * 10);
         d.set(&Key::LimitFrames, &Value::U64(5), None).unwrap();
         let rx = start(&mut d);
         assert_eq!(packets(&rx).len(), 1, "the header");

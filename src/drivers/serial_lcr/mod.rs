@@ -22,12 +22,25 @@
 //! A capture ends at `limit_frames`, `limit_time` or a stop. Each packet with a
 //! value is a frame, with the frequency and the model as `Meta` when they
 //! changed, on every capture from nothing. A packet with no value (a blank
-//! display, calibration, a range switching) counts for nothing, so a meter in
-//! such a mode, or silent, keeps a `--frames` capture open as long as in C: no
-//! bound here, as the meter may come back, and a stop or a Ctrl-C ends it.
+//! display, calibration, a range switching) counts for nothing.
+//!
+//! Silence differs by chip. An ES51919 takes no commands and streams all the
+//! time, with calibration, sorting and hold as flags inside its packets, so no
+//! bytes at all means it is off or its cable is out: when only a frame limit
+//! could end the capture, [`SILENCE_BOUND`] of no bytes ends it with an error.
+//! Bytes count, not frames, as calibration streams with none. C waits for ever.
+//! A Voltcraft 4080 that does not answer may be in setup mode, which ends when
+//! its user acts, so it is warned about once and waited for, as in C. A time
+//! limit ends a silent capture of either as it does in C.
+//!
+//! `equiv_circuit_model` has no value until a packet told it, so `options()`
+//! has its `get` off until then: a library client sees that flip at a scan's
+//! second listen or at a capture's first `Meta`, where C's list is static and
+//! its get says `SR_ERR_NA`. sigrok-cli and oxrok then say the same.
 //!
 //! A Voltcraft 4080 is asked for each packet with `N`, once the line has been
-//! silent for a read and at least 500 ms after the last time. The meter says
+//! silent for a read and at least 500 ms after the last time, which a device
+//! remembers across captures as C's `req_next_at` does. The meter says
 //! nothing of which request it answers, but its packets end in CR LF, so a late
 //! answer cannot shift anything: the bytes before a frame are stepped over. The
 //! receive buffer lives for one capture, where C keeps it between two: the head
@@ -74,8 +87,11 @@ const READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// the next request is due soon.
 const REQUEST_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 /// How long a thread that was told to stop waits to put its `End` in a queue
-/// no one reads. A close joins it.
-const END_AFTER_STOP: Duration = Duration::from_millis(200);
+/// no one reads. A close joins it. An output may have rows pending on the `End`
+/// (`formats/output/csv.rs`), so this outlasts a reader's short stall.
+const END_AFTER_STOP: Duration = Duration::from_millis(500);
+/// How long no byte may come before [`Silence`] has a say.
+const SILENCE_BOUND: Duration = Duration::from_secs(10);
 
 /// A meter of the table.
 #[derive(Debug)]
@@ -308,6 +324,53 @@ impl Values {
     }
 }
 
+/// What a capture does about bytes that do not come.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Silent {
+    /// Nothing.
+    Listen,
+    /// Says the meter may be in setup mode, once.
+    Warn,
+    /// Ends the capture with an error.
+    End,
+}
+
+/// How long the line has been silent, and what that means for a chip. Times come
+/// in as arguments, so that its tests take no time.
+#[derive(Debug)]
+struct Silence {
+    bound: Duration,
+    since: Instant,
+    warned: bool,
+}
+
+impl Silence {
+    fn new(bound: Duration, now: Instant) -> Silence {
+        Silence { bound, since: now, warned: false }
+    }
+
+    /// Bytes came, whatever they were.
+    fn heard(&mut self, now: Instant) {
+        self.since = now;
+    }
+
+    /// `only_frames`: a frame limit is all that could end the capture.
+    fn verdict(&mut self, chip: Chip, only_frames: bool, now: Instant) -> Silent {
+        if now.saturating_duration_since(self.since) < self.bound {
+            return Silent::Listen;
+        }
+        match chip {
+            Chip::Es51919 if only_frames => Silent::End,
+            Chip::Es51919 => Silent::Listen,
+            Chip::Vc4080 if self.warned => Silent::Listen,
+            Chip::Vc4080 => {
+                self.warned = true;
+                Silent::Warn
+            }
+        }
+    }
+}
+
 /// The software limits, which a set changes under a running capture, as in C.
 #[derive(Debug, Default)]
 struct Limits {
@@ -324,6 +387,11 @@ pub struct LcrDevice {
     params: Params,
     limits: Arc<Limits>,
     values: Arc<Mutex<Values>>,
+    /// `req_next_at`: when the next request may go, on the device as a capture
+    /// may follow another straight away.
+    next_request: Arc<Mutex<Option<Instant>>>,
+    /// [`SILENCE_BOUND`], which a test shortens.
+    silence_bound: Duration,
     /// A port to use instead of opening `conn`, for tests.
     pending: Option<Box<dyn Port>>,
     /// The port, unless a capture holds it. It comes back before `End`.
@@ -362,6 +430,8 @@ impl LcrDevice {
             params,
             limits: Arc::new(Limits::default()),
             values: Arc::new(Mutex::new(Values::of(settings))),
+            next_request: Arc::new(Mutex::new(None)),
+            silence_bound: SILENCE_BOUND,
             pending: port,
             port: Arc::new(Mutex::new(None)),
             worker: None,
@@ -515,6 +585,8 @@ impl Device for LcrDevice {
             enabled: self.channels.iter().map(|c| c.enabled).collect(),
             limits: Arc::clone(&self.limits),
             values: Arc::clone(&self.values),
+            next_request: Arc::clone(&self.next_request),
+            silence_bound: self.silence_bound,
         };
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
@@ -567,6 +639,8 @@ struct Capture {
     enabled: Vec<bool>,
     limits: Arc<Limits>,
     values: Arc<Mutex<Values>>,
+    next_request: Arc<Mutex<Option<Instant>>>,
+    silence_bound: Duration,
 }
 
 impl Capture {
@@ -581,7 +655,7 @@ impl Capture {
         let mut known = Values::default();
         let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
         let mut chunk = [0u8; BUF_SIZE];
-        let mut next_request: Option<Instant> = None;
+        let mut silence = Silence::new(self.silence_bound, started);
         while !stop.load(Ordering::SeqCst) {
             let room = BUF_SIZE - buf.len();
             match port.read(&mut chunk[..room], READ_TIMEOUT) {
@@ -593,12 +667,16 @@ impl Capture {
                     // handle_timeout: at the first silence, and then once the
                     // time has passed.
                     let now = Instant::now();
-                    if self.chip.request().is_some() && next_request.is_none_or(|at| now >= at) {
+                    let due =
+                        self.next_request.lock().expect("request lock").is_none_or(|at| now >= at);
+                    if self.chip.request().is_some() && due {
                         request(port, self.chip);
-                        next_request = Some(now + self.chip.request_interval());
+                        *self.next_request.lock().expect("request lock") =
+                            Some(now + self.chip.request_interval());
                     }
                 }
                 Ok(n) => {
+                    silence.heard(Instant::now());
                     buf.extend_from_slice(&chunk[..n]);
                     // handle_new_data: as many packets as there are, stepping
                     // over the bytes that start none.
@@ -629,6 +707,21 @@ impl Capture {
             let msec = self.limits.msec.load(Ordering::SeqCst);
             if msec > 0 && started.elapsed() > Duration::from_millis(msec) {
                 return;
+            }
+            let seconds = self.silence_bound.as_secs();
+            match silence.verdict(self.chip, limit > 0 && msec == 0, Instant::now()) {
+                Silent::Listen => {}
+                Silent::Warn => log::warn!(
+                    "No answer from the meter for {seconds} s. It may be in setup mode, which \
+                     ends when you act on it."
+                ),
+                Silent::End => {
+                    log::error!(
+                        "No bytes from the meter for {seconds} s. It sends without being asked, \
+                         so it is off or its cable is out."
+                    );
+                    return;
+                }
             }
         }
     }

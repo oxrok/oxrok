@@ -24,8 +24,11 @@
 //! ```
 //!
 //! Both are in `parse_mq` and the other tables as in C, with the sign of the
-//! value (`int16_t`). A value outside limits is `value * INFINITY`, so a zero
-//! there is NaN, as in C.
+//! value (`int16_t`). Another program written against a DE-5000
+//! (`4x1md/de5000_lcr_py`) takes only a secondary in % or degrees as signed; C's
+//! signed primary is kept, as nothing shows a real meter sending a high bit
+//! there. A value outside limits is `value * INFINITY`, so a zero there is NaN,
+//! as in C.
 
 use super::{Reading, Settings, pow10};
 use crate::core::{Mq, MqFlags, Unit};

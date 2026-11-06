@@ -17,9 +17,9 @@ never reached, by function (line ranges hold no reached line):
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/lcr/es51919.c    96.1%  99 of 103
   src/lcr/vc4080.c     97.4%  266 of 273
-  src/serial.c         43.5%  175 of 402
+  src/serial.c         43.0%  173 of 402
   src/serial_libsp.c   44.1%  113 of 256
-  total                63.2%  653 of 1034
+  total                63.0%  651 of 1034
 never reached, by function (line ranges hold no reached line):
   src/lcr/es51919.c
     get_equiv_model: 159-160
@@ -45,7 +45,7 @@ never reached, by function (line ranges hold no reached line):
     serial_read_blocking: never called (490-493)
     serial_set_params: 541-542, 548
     serial_set_handshake: never called (578-594)
-    serial_set_paramstr: 654-656, 665-666, 678-679, 687-699
+    serial_set_paramstr: 654-656, 665-666, 678-679, 684-699
     serial_readline: never called (739-786)
     serial_stream_detect: 839-840, 866-869, 876-895, 907
     sr_serial_extract_options: never called (952-981)
