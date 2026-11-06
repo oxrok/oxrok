@@ -315,6 +315,30 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A device with no answer leaves the `.tx` as all a case can pin, and a
+  `--no-output` case then shows nothing of a scan that wrongly succeeds:
+  a serialcomm fallback survived every case until the scan took its
+  opener as an argument and a unit test counted the opens.
+- An `--oracle-differs` case on a set holds oxrok's `.tx`, so what C
+  sent is in no golden, and its `.oracle` can be empty. Add a
+  `--libsigrok` case with the same `-c`: with no limit it sends the
+  frames and then fails the start.
+- An unplug in the pause between two writes is stable only if every
+  later write ends the same way. Repeat one key over several `-c`, and
+  cut the `.tx` at the unplug.
+- `snprintf` into a field too small for `INT_MIN` turns a NaN into a
+  well-formed-looking command: try `nan` on any setter whose check is
+  two comparisons.
+- A write that returns only says the tty took the bytes. On a device
+  with no answer, a frame stuck in the queue exits 0 unless the driver
+  drains with a bound. `TIOCOUTQ` sees it on `cdc_acm`, and is always 0
+  on a pty, so a pty test can't show a stuck frame.
+- A wait and a write can each meet a hangup first, with different
+  causes: give both one wording, and fold only the cause in the case
+  that pins it.
+- When a failure has no pause and a real-time test can't show that,
+  inject the pause and log it beside the write and the wait: the order
+  and its absence on each failure then both fail a mutant.
 - `Host::open` and a real tool's open can raise the lines more than once
   (oxrok's second descriptor does), so a model counting opens by
   `LineEvent::opened()` miscounts. Count what it sent instead.

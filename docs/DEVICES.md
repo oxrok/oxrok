@@ -2852,6 +2852,52 @@ whether one stays silent only when off or unplugged (from the wiki's
 "continually outputs"), the VC4080 warning's wording against a real
 setup mode, macOS and Windows.
 
+## Conrad DIGI 35 CPU (conrad-digi-35-cpu)
+
+A power supply of 0 to 35 V and 0 to 2.55 A from 1992, whose RS-232 port
+only receives. `conn=` is required; `serialcomm=` defaults to 9600/8n1.
+
+    oxrok -d conrad-digi-35-cpu:conn=/dev/ttyUSB0 --set -c voltage_target=5 -c current_limit=0.5
+
+**It can't be found or read.** Any port that opens lists a device, and
+nothing can be got. A setting that went nowhere (a wrong `serialcomm=`,
+the supply off, another device on the port) looks the same as one that
+worked: only the front panel shows. By sigrok's wiki the output can't be
+enabled remotely, so it has to be on already. `ocp_enabled=on` sends
+`V900` (reaching the limit disables the output); `off` sends `V901`,
+constant current, the power-on default. There is no capture.
+
+**Order matters.** Each setting takes effect in the order given, at
+least 50 ms apart. sigrok-cli's order for `-c a:b` is its hash's,
+current first here. Order them for your load: with `V900` active,
+raising both voltage-first can trip the output off, which can't be
+re-enabled remotely. A `set` refused partway leaves earlier settings
+applied.
+
+**When a setting fails.** A set waits, for about a second, until its
+frame has left the tty's queue, and fails if it hasn't; libsigrok
+returns success there. After a frame cut short, stuck in the queue or
+met by a port failure, oxrok warns that the state is unknown and refuses
+more sets until the device is reopened, as the bytes that went out stay
+in the supply's buffer and run into the next command. A reopen ends the
+refusal, not what that buffer holds: check the front panel.
+
+The model is `emu/src/models/conrad-digi-35-cpu.rs`, a CDC-ACM stand-in
+with test ids; cases `tools/emu/conrad-digi-35-cpu.sh`, goldens
+`tests/emu/conrad-digi-35-cpu` (58 cases on 2026-11-06: 50 full, 4
+`--oracle-differs`, 2 `--libsigrok`, 2 `--no-oracle-only`). gcov of the
+C driver over them is 93.3%; the rest is default arms and an argument
+check that no client reaches. The pause is tested on a fake `Port`, as a
+model has no clock. Sources: sigrok's wiki and the driver. Conrad's
+manual could not be fetched, and no firmware source or recording was
+found.
+
+Not on hardware: everything above. It has never run on a real unit or
+over real RS-232. That the device swallows a command within 50 ms rests
+on the driver's comment, what it does with a frame cut short on the
+wiki's protocol, and the wait for the queue has run only on `cdc_acm`
+and a pty on Linux.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with two patches, in

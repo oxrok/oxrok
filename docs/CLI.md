@@ -807,6 +807,26 @@ Deliberate, and kept small:
   `equiv_circuit_model`'s `get` off until a packet told the model, where
   C's list is static and its get says `SR_ERR_NA`. sigrok-cli and oxrok
   say the same "not applicable".
+- `conrad-digi-35-cpu`: `voltage_target=nan` and `current_limit=nan` are
+  refused. libsigrok sends `V-21` or `C-21` on x86-64 to a live output.
+  A typo such as `voltage_target=abc` or an empty value is refused by
+  the shared CLI, where sigrok-cli's `strtof` makes it 0 and sends
+  `V000`.
+- `conrad-digi-35-cpu`: a set fails if its frame stays in the tty's
+  queue for about a second (exit 1), where sigrok-cli exits 0 and fails
+  only once the queue is full, on the 17th write on `cdc_acm`. After a
+  frame cut short, stuck or met by a port failure, later sets are
+  refused until a reopen, and a warning says the state is unknown;
+  libsigrok carries on. Each failure has its own words, where libsigrok
+  says `Write error` and a generic error for all.
+- `conrad-digi-35-cpu`: `-c a:b` goes out in the order given. sigrok-cli
+  uses its hash's order, current first here.
+- `conrad-digi-35-cpu`, library clients: values are narrowed to single
+  precision to match sigrok-cli's `strtof`, though C's driver keeps a
+  double. 1.15 V goes out as `V011` here and `V012` through libsigrok,
+  1.2499999999 V as `V013` and `V012`. Up to about 35.0000019 V and
+  2.55000007 A are accepted, and -1e-50 as `V000`, where libsigrok
+  refuses them. No listed step moves.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
