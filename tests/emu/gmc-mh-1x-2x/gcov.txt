@@ -1,10 +1,10 @@
 gcov gmc-mh-1x-2x (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        92.0%  160 of 174
+  api.c        97.7%  170 of 174
   protocol.c   96.1%  895 of 931
-  total        95.5%  1055 of 1105
+  total        96.4%  1065 of 1105
 never reached, by function (line ranges hold no reached line):
   api.c
-    scan_2x_bd232: 238-240, 244, 251, 263, 306-311
+    scan_2x_bd232: 263
     config_get: 333, 344-345
   protocol.c
     decode_rs_18: 257
