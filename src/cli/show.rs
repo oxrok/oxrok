@@ -436,6 +436,16 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
             }
             ValueKind::Mq | ValueKind::KeyValue => {
                 print!("    {id}: ");
+                if let Some(ValueList::Mq(values)) = list() {
+                    let current = get();
+                    println!(" - supported measurements:");
+                    for (mq, flags) in values {
+                        let value = Value::Mq(mq, flags);
+                        let mark = if current.as_ref() == Some(&value) { " (current)" } else { "" };
+                        println!("      {value}{mark}");
+                    }
+                    return;
+                }
                 if let Some(v) = get() {
                     print!("{v}");
                 }

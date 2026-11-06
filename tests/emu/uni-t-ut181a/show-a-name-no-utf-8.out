@@ -1,0 +1,33 @@
+Driver functions:
+    Multimeter
+    Thermometer
+Scan options:
+    conn
+    serialcomm
+uni-t-ut181a:conn=/dev/ttyACMN - UNI-T UT181A with 5 channels: P1 P2 P3 P4 bar
+Supported configuration options:
+    conn: /dev/ttyACMN (current)
+    continuous: on, off
+    limit_frames: 0 (current)
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    data_source: Live (current), Save, R�1
+    datalog: on, off (current)
+    measured_quantity:  - supported measurements:
+      voltage/ac
+      voltage/dc (current)
+      voltage/ac/dc
+      gain
+      current/ac
+      current/dc
+      current/ac/dc
+      resistance
+      conductance
+      continuity
+      voltage/dc/diode
+      capacitance
+      frequency
+      duty_cycle
+      pulse_width
+      temperature
+    range: auto (current), 60mV, 600mV, 6V, 60V, 600V, 1000V, 600uA, 6000uA, 60mA, 600mA, 20A, 600Ω, 6kΩ, 60kΩ, 600kΩ, 6MΩ, 60MΩ, 60nS, 6nF, 60nF, 600nF, 6uF, 60uF, 600uF, 6mF, 600mF, 60Hz, 600Hz, 6kHz, 60kHz, 600kHz, 6MHz, 60MHz, 1000°C, 1832F

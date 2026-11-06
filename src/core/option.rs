@@ -106,6 +106,8 @@ pub enum ValueList {
     /// A list of unsigned pairs, e.g. a sound level meter's measurement ranges
     /// (`std_gvar_tuple_array()`).
     RangeU64(Vec<(u64, u64)>),
+    /// The measured quantities a device can be set to, with their flags.
+    Mq(Vec<(crate::core::Mq, crate::core::MqFlags)>),
 }
 
 impl ValueList {
