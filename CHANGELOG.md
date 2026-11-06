@@ -6,7 +6,7 @@ release may change the library API.
 
 ## [Unreleased]
 
-## [0.1.0-alpha.2] - YYYY-MM-DD
+## [0.1.0-alpha.2] - 2026-11-06
 
 Still experimental, and still a pre-release: 25 of libsigrok's 87 drivers are
 not ported, and most of what is here has never met its device.
@@ -114,17 +114,13 @@ driver.
 
 ### Known issues
 
-- CI at this release is red on tests, and the release goes out with them. On
-  macOS: `atten_pps3xxx::tests::a_stop_with_an_answer_on_its_way_takes_it`,
-  `gwinstek_gpd::tests::a_stop_ends_a_capture_that_runs_and_asks_no_more`,
-  `manson_hcs_3xxx::tests::a_reading_starts_the_bound_afresh`,
-  `rdtech_um::tests::the_meter_reading_again_brings_the_frames_back` and
-  `serial::tcpraw::tests::a_peer_that_resets_is_a_disconnect`. On Windows:
-  `serial::tcpraw::tests::a_plain_write_to_a_peer_that_does_not_read_times_out`
-  and `a_write_to_a_peer_that_does_not_read_ends`. They look like timing on
-  those runners; not all are diagnosed. On the emulator job,
-  `sysclk-sla5032`'s `unplug at the chunk` differs from its golden in the error
-  number of one log line.
+- The emulator job in CI can lose a session: at this release `cem-dt-885x`'s
+  model lost its emulator after an interrupt's close, and that model's later
+  cases failed with it. It looks like the unlink race tracked in
+  `docs/ROADMAP.md`, though its kernel line was not seen. It is in the test
+  tooling, which is not in this crate. A few unit tests still fail under long
+  stalls of the host (`docs/ROADMAP.md`), and `csv_matches_sigrok_cli` fails
+  now and then.
 - A demo capture with a trigger on an analog channel hangs.
 - `-O csv` holds rows in memory when it falls behind, with all 13 of `demo`'s
   channels at 200 kHz, and makes up 0 for a channel absent from a packet.
