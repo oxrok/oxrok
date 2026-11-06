@@ -600,6 +600,7 @@ struct Output {
 }
 
 /// A supply.
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct Supply {
     kind: &'static Kind,
     selected: usize,
@@ -615,6 +616,8 @@ pub(super) struct Supply {
     oper_event: u32,
     ques_event: u32,
     fault: u32,
+    /// An EA's `STAT:OPER?`, as rising CV and CC.
+    ea_oper: u32,
     oper_enabled: bool,
     ques_enabled: bool,
     channels: Option<usize>,
@@ -723,6 +726,7 @@ impl Supply {
             | flip(old.ur, new.ur, 10);
         // The FAULT register and an EA's: rising edges.
         let rise = |a: bool, b: bool, bit: u32| if !a && b { 1 << bit } else { 0 };
+        self.ea_oper |= rise(old.cv, new.cv, 0) | rise(old.cc, new.cc, 1);
         self.fault |= rise(old.cv, new.cv, 0)
             | rise(old.cc, new.cc, 1)
             | rise(old.ur, new.ur, 2)
@@ -839,7 +843,11 @@ impl Supply {
 
     fn active(&self, trip: bool, name: Option<String>) -> Answer {
         match self.kind.dialect {
-            Dialect::HpComp => self.word(Self::sts(self.output().cond)),
+            // `STS?` is one text with four actions in the table, and this one is first.
+            Dialect::HpComp => match &self.reg_text {
+                Some(text) => Answer::Text(text.clone()),
+                None => self.word(Self::sts(self.output().cond)),
+            },
             Dialect::Hp66xxb => self.word(Self::ques_cond(self.output().cond)),
             Dialect::Hmp if name.is_some() => self.isum(name),
             Dialect::Plain if self.kind.table.as_ptr() == RIGOL_DP800_CMD.as_ptr() => {
@@ -1004,9 +1012,10 @@ impl Supply {
                 self.word(q)
             }
             ("STAT:OPER?", Extra::Ea, _) => {
-                let e = std::mem::take(&mut self.oper_event);
-                let oper = (e >> 8 & 1) << 8 | (e >> 10 & 1) << 9;
-                self.word(oper)
+                // Rising edges, in its places, as what `profiles.c` reads of them says
+                // a change to one state; no unit was asked.
+                let e = std::mem::take(&mut self.ea_oper);
+                self.word((e & 1) << 8 | (e >> 1 & 1) << 9)
             }
             ("SYST:CHAN:COUN?", Extra::Eez, _) => {
                 let n = self.channels.unwrap_or(self.outputs.len());
@@ -1207,6 +1216,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Supply, scpi::Confi
         oper_event: 0,
         ques_event: 0,
         fault: 0,
+        ea_oper: 0,
         oper_enabled: false,
         ques_enabled: false,
         channels,
