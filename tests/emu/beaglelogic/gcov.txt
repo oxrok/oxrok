@@ -1,0 +1,48 @@
+gcov beaglelogic (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c                  89.1%  163 of 183
+  beaglelogic_native.c    0.0%  0 of 48
+  beaglelogic_tcp.c      80.6%  145 of 180
+  protocol.c             50.0%  37 of 74
+  total                  71.1%  345 of 485
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 116-117, 130
+    dev_open: 161, 167, 184-187
+    dev_close: 202
+    config_get: 240-241
+    config_set: 279-280
+    config_list: 299-300
+    dev_acquisition_start: 342, 351-352
+    dev_acquisition_stop: 371
+  beaglelogic_native.c
+    beaglelogic_open_nonblock: never called (23-27)
+    beaglelogic_close: never called (30-32)
+    beaglelogic_get_buffersize: never called (35-37)
+    beaglelogic_set_buffersize: never called (40-42)
+    beaglelogic_get_samplerate: never called (46-53)
+    beaglelogic_set_samplerate: never called (56-59)
+    beaglelogic_get_sampleunit: never called (62-64)
+    beaglelogic_set_sampleunit: never called (67-69)
+    beaglelogic_get_triggerflags: never called (72-74)
+    beaglelogic_set_triggerflags: never called (77-79)
+    beaglelogic_get_lasterror: never called (82-99)
+    beaglelogic_start: never called (102-104)
+    beaglelogic_stop: never called (107-109)
+    beaglelogic_get_bufunitsize: never called (112-114)
+    beaglelogic_set_bufunitsize: never called (117-119)
+    beaglelogic_mmap: never called (122-129)
+    beaglelogic_munmap: never called (132-134)
+  beaglelogic_tcp.c
+    beaglelogic_tcp_open: 67
+    beaglelogic_tcp_send_cmd: 109-111, 115
+    beaglelogic_tcp_read_data: 134-135
+    beaglelogic_tcp_get_string: 178, 186-187
+    beaglelogic_close: 259
+    beaglelogic_set_buffersize: never called (270-284)
+    beaglelogic_get_triggerflags: never called (340-343)
+    beaglelogic_get_lasterror: never called (363-367)
+    beaglelogic_set_bufunitsize: never called (388-402)
+    dummy: never called (405-409)
+  protocol.c
+    beaglelogic_native_receive_data: never called (44-117)
+    beaglelogic_tcp_receive_data: 134, 144-145

@@ -1,0 +1,13 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+    logic_channels
+beaglelogic - BeagleLogic 1.0 with 14 channels: P8_45 P8_46 P8_43 P8_44 P8_41 P8_42 P8_39 P8_40 P8_27 P8_29 P8_28 P8_30 P8_21 P8_20
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 10000000 (current)
+    samplerate (10 Hz - 100 MHz in steps of 1 Hz)
+    Supported triggers: 0 1 r f e 
+    captureratio: 0 (current)
+    logic_channels
