@@ -318,6 +318,11 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A fake's clock runs on the same slowed sleeps as the driver, so the
+  shim can't show a race between a test's sleep and a fake's timed
+  bytes; release by the read or by the test. A bound under a host's
+  stall (150 ms and over) ends captures in tests not about it. To bound
+  a wait from above, sum what the code asks to wait, not the wall clock.
 - `g_source_get_time` is cached per main-loop iteration, and
   `fd_source_check` asks for it only when `revents` is 0. So a
   callback's sleep eats a source's timeout after an expiry, and not

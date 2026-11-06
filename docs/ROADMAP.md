@@ -463,6 +463,14 @@ each with where it belongs:
   the bound and go on, with a 10-minute limit. Ports merged earlier fail
   at their bound after a sample too (`kern-scale`, `serial-lcr`,
   `cem-dt-885x`, and others): sweep them to the same rule.
+- `csv_matches_sigrok_cli` (`tests/formats_cli.rs:201`) fails about 2 of
+  30 here with an extra row at 5 us, likely `dedup` flushing at a demo
+  packet boundary. Tests that still flake under stalls:
+  `motech_lps_30x::a_status_that_is_no_number_keeps_its_sample_only_with_no_expiry`
+  about 1 in 3 at 150 ms; at 400 ms two `fluke_dmm`, `gwinstek`
+  `the_second_half_of_a_line_end`, `korad` `a_long_gap`.
+- `manson` checks its bound between bytes of a reply, so a stall over
+  its 5 s bound mid-reply could end a capture falsely.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).
