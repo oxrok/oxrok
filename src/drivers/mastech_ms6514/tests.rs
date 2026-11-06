@@ -657,7 +657,7 @@ fn a_failed_read_ends_the_capture() {
     bounded(|| {
         let fake = Fake::new(Line { fail_reads: true, ..Line::default() });
         let got = capture(&fake, |d| limit(d, 2));
-        assert_eq!(got.len(), 1, "the header alone");
+        assert!(matches!(got[1..], [Packet::Failed(_), ..]), "the header and the failure: {got:?}");
     });
 }
 

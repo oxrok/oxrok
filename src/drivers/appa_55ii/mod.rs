@@ -406,9 +406,9 @@ impl Device for Appa55iiDevice {
             .name("appa-55ii acquisition".to_owned())
             .spawn(move || {
                 let capture = Capture { settings, sink: &sink, stop: &stop2, silence_bound };
-                capture.run(port.as_mut());
+                let outcome = capture.run(port.as_mut());
                 *slot.lock().expect("port lock") = Some(port);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -433,9 +433,9 @@ impl Drop for Appa55iiDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
 /// after a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -462,9 +462,9 @@ impl Capture<'_> {
         self.sink.send_while(packet, || !self.stopped())
     }
 
-    fn run(&self, port: &mut dyn Port) {
+    fn run(&self, port: &mut dyn Port) -> Result<()> {
         if !self.send(Packet::header()) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         let mut last_byte = started;
@@ -474,20 +474,23 @@ impl Capture<'_> {
         let mut chunk = [0u8; BUF_SIZE];
         loop {
             if self.stopped() || self.time_is_up(started) {
-                return;
+                return Ok(());
             }
             let room = parser.room();
             let n = match port.read(&mut chunk[..room], READ_WAIT) {
                 Ok(n) => n,
                 Err(e) => {
                     log::error!("Serial port read error: {e}.");
-                    return;
+                    return Err(e);
                 }
             };
             if n == 0 {
                 if self.silence_is_final(last_byte) {
                     log::error!("No byte from the device for {:?}.", self.silence_bound);
-                    return;
+                    return Err(Error::device(format!(
+                        "no byte from the device for {:?}",
+                        self.silence_bound
+                    )));
                 }
                 continue;
             }
@@ -498,29 +501,29 @@ impl Capture<'_> {
                 match event {
                     Event::Live { probes, flags } => {
                         if !self.send_live(&probes, flags) {
-                            return;
+                            return Ok(());
                         }
                         samples += 1;
                     }
                     Event::Record { probes, time } => {
                         log::debug!("Timestamp: {:02}:{:02}:{:02}", time[0], time[1], time[2]);
                         if !self.send_record(probes) {
-                            return;
+                            return Ok(());
                         }
                         samples += 1;
                     }
-                    Event::LogEnd => return,
+                    Event::LogEnd => return Ok(()),
                 }
             }
             if full {
                 log::warn!("A frame's size is out of range: the capture ends.");
-                return;
+                return Err(Error::device("a frame's size is out of range"));
             }
             // As C: after all a read has brought, so a piece of a log that finishes
             // two records sends both.
             let limit = self.settings.limit_samples.load(Ordering::SeqCst);
             if limit > 0 && samples >= limit {
-                return;
+                return Ok(());
             }
         }
     }

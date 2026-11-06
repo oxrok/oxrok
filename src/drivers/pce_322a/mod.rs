@@ -562,9 +562,9 @@ impl Device for Pce322aDevice {
             .spawn(move || {
                 let end_after_stop = waits.end_after_stop;
                 let mut capture = Capture::new(&shared, &sink, &stop2, waits);
-                capture.run();
+                let outcome = capture.run();
                 shared.lock().expect("state lock").capturing = false;
-                send_end(&sink, &stop2, end_after_stop);
+                send_end(&sink, &stop2, end_after_stop, outcome);
             })
             .map_err(|e| {
                 self.shared().capturing = false;
@@ -585,9 +585,9 @@ impl Device for Pce322aDevice {
 
 /// The End, which a client that goes on reading gets however long it takes, and
 /// after a stop only if there is room within `end_after_stop`.
-fn send_end(sink: &PacketSink, stop: &AtomicBool, end_after_stop: Duration) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, end_after_stop: Duration, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -611,6 +611,8 @@ struct Capture<'a> {
     /// When the last reading was taken up, or block byte, or request went: a client
     /// that keeps a send waiting is no silence of the meter's.
     heard: Duration,
+    /// Why the capture gave up.
+    failure: Option<Error>,
 }
 
 impl<'a> Capture<'a> {
@@ -621,7 +623,16 @@ impl<'a> Capture<'a> {
         waits: Waits,
     ) -> Self {
         let heard = waits.clock.now();
-        Capture { shared, sink, stop, waits, input: VecDeque::new(), samples: 0, heard }
+        Capture {
+            shared,
+            sink,
+            stop,
+            waits,
+            input: VecDeque::new(),
+            samples: 0,
+            heard,
+            failure: None,
+        }
     }
 
     fn state(&self) -> MutexGuard<'a, Shared> {
@@ -636,10 +647,10 @@ impl<'a> Capture<'a> {
         self.waits.clock.now()
     }
 
-    fn run(&mut self) {
+    fn run(&mut self) -> Result<()> {
         let go_on = || !self.stop.load(Ordering::SeqCst);
         if !self.sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let (memory, disconnected, unanswered) = {
             let mut s = self.state();
@@ -647,13 +658,15 @@ impl<'a> Capture<'a> {
         };
         let quiet = if unanswered { self.waits.late_quiet } else { self.waits.quiet };
         if disconnected && self.settle(quiet).is_none() {
-            return;
+            return self.failure.take().map_or(Ok(()), Err);
         }
         if memory {
             let _ = self.read_memory();
         } else {
             let _ = self.read_stream();
         }
+        // A memory capture reads on past its limit: nothing is lost there.
+        if self.limit_reached() { Ok(()) } else { self.failure.take().map_or(Ok(()), Err) }
     }
 
     /// One read into `input`, and whether it gave anything. With the lock held for
@@ -666,6 +679,7 @@ impl<'a> Capture<'a> {
                 Ok(got) => got,
                 Err(e) => {
                     log::error!("Reading the port failed: {e}.");
+                    self.failure = Some(e);
                     return None;
                 }
             }
@@ -716,6 +730,10 @@ impl<'a> Capture<'a> {
             }
             if bounded(self) && self.now().saturating_sub(self.heard) >= self.waits.silence {
                 log::error!("Nothing has come of the meter for {:?}.", self.waits.silence);
+                self.failure = Some(Error::device(format!(
+                    "nothing has come of the meter for {:?}",
+                    self.waits.silence
+                )));
                 return None;
             }
             self.read_some()?;

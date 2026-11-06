@@ -844,9 +844,9 @@ impl Device for UniTUt181aDevice {
         let spawned = std::thread::Builder::new()
             .name("uni-t-ut181a acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -884,8 +884,16 @@ fn send_while_wanted(sink: &PacketSink, stop: &AtomicBool, packet: Packet) -> bo
     })
 }
 
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
-    send_while_wanted(sink, stop, Packet::End);
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
+    let stopped_at = std::cell::Cell::new(None);
+    sink.end_while(outcome, || {
+        if !stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let at = stopped_at.get().unwrap_or_else(Instant::now);
+        stopped_at.set(Some(at));
+        at.elapsed() < AFTER_STOP
+    });
 }
 
 /// `sr_sw_limits`; 0 is none.
@@ -931,8 +939,10 @@ struct Capture {
     frames_read: u64,
     began: Instant,
     last_byte: Instant,
-    /// `SR_ST_STOPPING`: a limit, a stop, or the end of a download.
+    /// `SR_ST_STOPPING`: a limit, a stop, the end of a download, or a failure.
     stopping: bool,
+    /// Why the capture gave up.
+    failure: Option<Error>,
 }
 
 /// `Packet`s of the protocol that a pass has read, taken with the link free.
@@ -960,10 +970,17 @@ impl Capture {
             began: now,
             last_byte: now,
             stopping: false,
+            failure: None,
         }
     }
 
-    fn run(mut self, sink: &PacketSink, stop: &AtomicBool) {
+    /// The capture ends, failed.
+    fn give_up(&mut self, why: Error) {
+        self.failure.get_or_insert(why);
+        self.stopping = true;
+    }
+
+    fn run(mut self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         if !send_while_wanted(sink, stop, Packet::header()) {
             self.stopping = true;
         }
@@ -985,6 +1002,7 @@ impl Capture {
                 Ok(read) => read,
                 Err(e) => {
                     log::error!("{e}");
+                    self.failure.get_or_insert(e);
                     break true;
                 }
             };
@@ -1001,6 +1019,7 @@ impl Capture {
             }
         };
         self.finish(ended_by_error, sink, stop);
+        self.failure.map_or(Ok(()), Err)
     }
 
     /// One read, and the frames it made whole, with the link's lock held for that
@@ -1064,14 +1083,20 @@ impl Capture {
         if self.flow != Flow::Live {
             if quiet >= self.silence.download {
                 log::error!("No answer from the meter for {} s.", quiet.as_secs());
-                self.stopping = true;
+                self.give_up(Error::device(format!(
+                    "no answer from the meter for {} s",
+                    quiet.as_secs()
+                )));
             }
         } else if self.limits.msec == 0
             && (self.limits.samples > 0 || self.limits.frames > 0)
             && quiet >= self.silence.live
         {
             log::warn!("No reading from the meter for {} s.", quiet.as_secs());
-            self.stopping = true;
+            self.give_up(Error::device(format!(
+                "no reading from the meter for {} s",
+                quiet.as_secs()
+            )));
         }
     }
 
@@ -1152,7 +1177,7 @@ impl Capture {
             protocol::Packet::ReplyCode(false) if self.flow != Flow::Live && !self.stopping => {
                 self.awaiting = false;
                 log::error!("The meter refused the request.");
-                self.stopping = true;
+                self.give_up(Error::device("the meter refused the request"));
             }
             // Stale, or stray: no sample and no next request comes of them.
             _ => {}
@@ -1165,8 +1190,10 @@ impl Capture {
             return;
         }
         let mut link = self.link.lock().expect("link lock");
-        if link.send(frame).is_err() {
-            self.stopping = true;
+        if let Err(e) = link.send(frame) {
+            drop(link);
+            self.give_up(e);
+            return;
         }
         self.awaiting = true;
     }
@@ -1211,7 +1238,10 @@ impl Capture {
                 self.samples_done,
                 self.samples_total
             );
-            self.stopping = true;
+            self.give_up(Error::device(format!(
+                "the meter has {} samples of the {} it said",
+                self.samples_done, self.samples_total
+            )));
             return;
         }
         self.request(&protocol::get_rec_samples(self.recording, self.samples_done));

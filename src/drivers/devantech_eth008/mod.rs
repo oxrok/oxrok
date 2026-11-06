@@ -320,7 +320,7 @@ impl Device for EthDevice {
     /// channels"); a session here ends at once.
     fn start(&mut self, sink: PacketSink) -> Result<()> {
         sink.send(Packet::header());
-        sink.send(Packet::End);
+        sink.end(Ok(()));
         Ok(())
     }
 

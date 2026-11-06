@@ -655,10 +655,10 @@ impl Device for MsoDevice {
         let stop2 = Arc::clone(&stop);
         let spawned = std::thread::Builder::new().name("link-mso19 acquisition".to_owned()).spawn(
             move || {
-                let done = capture.run(port.as_mut(), &sink, &stop2);
+                let (done, outcome) = capture.run(port.as_mut(), &sink, &stop2);
                 shared.in_flight.store(!done, Ordering::SeqCst);
                 *shared.port.lock().expect("port lock") = Some(port);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             },
         );
         match spawned {
@@ -682,9 +682,9 @@ impl Device for MsoDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
 /// after a stop only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -711,23 +711,24 @@ struct Capture {
 }
 
 impl Capture {
-    /// True when nothing is left on its way: the whole dump came.
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> bool {
+    /// True when nothing is left on its way: the whole dump came. And how it went.
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> (bool, Result<()>) {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return false;
+            return (false, Ok(()));
         }
-        match self.acquire(port, stop) {
+        let mut gave_up = None;
+        match self.acquire(port, stop, &mut gave_up) {
             Ok(Some(dump)) => {
                 self.send(&dump, sink, stop);
                 log::info!("Requested number of samples reached.");
-                true
+                (true, Ok(()))
             }
             // A reply may be on its way.
-            Ok(None) => false,
+            Ok(None) => (false, gave_up.map_or(Ok(()), Err)),
             Err(e) => {
                 log::error!("{e}");
-                false
+                (false, Err(e))
             }
         }
     }
@@ -752,14 +753,20 @@ impl Capture {
     }
 
     /// The polls and the dump. `None` when no dump is to come, with what went
-    /// wrong logged, or on a stop.
-    fn acquire(&self, port: &mut dyn Port, stop: &AtomicBool) -> Result<Option<Vec<u8>>> {
+    /// wrong logged and in `gave_up`, or on a stop.
+    fn acquire(
+        &self,
+        port: &mut dyn Port,
+        stop: &AtomicBool,
+        gave_up: &mut Option<Error>,
+    ) -> Result<Option<Vec<u8>>> {
         let mut buf = vec![0u8; PASS_BYTES];
         loop {
             match self.wait(port, &mut buf[..1], stop)? {
                 Waited::Stopped => return Ok(None),
                 Waited::Silent => {
                     log::error!("The device stopped answering.");
+                    *gave_up = Some(Error::device("the device stopped answering"));
                     return Ok(None);
                 }
                 Waited::Bytes(_) => {}
@@ -770,6 +777,7 @@ impl Capture {
             let status = buf[0];
             if !protocol::status_valid(status) {
                 log::error!("Invalid status byte {status:02x}");
+                *gave_up = Some(Error::device(format!("invalid status byte {status:02x}")));
                 return Ok(None);
             }
             log::debug!("Status is: {status:#x}.");
@@ -792,6 +800,7 @@ impl Capture {
                 // that sends a little short is possible, and loses this capture.
                 Waited::Silent => {
                     log::error!("{got} of {DUMP_BYTES} bytes came.");
+                    *gave_up = Some(Error::device(format!("{got} of {DUMP_BYTES} bytes came")));
                     return Ok(None);
                 }
                 Waited::Bytes(n) => got += n,

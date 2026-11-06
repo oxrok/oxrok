@@ -406,9 +406,9 @@ impl Device for PspDevice {
         let handle = std::thread::Builder::new()
             .name("gwinstek-psp acquisition".to_owned())
             .spawn(move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 done2.store(true, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, done, handle });
@@ -445,10 +445,10 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
         if !sink.send_while(Packet::header(), go_on) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         let limit = Duration::from_millis(self.limit_msec);
@@ -458,7 +458,7 @@ impl Capture {
         let mut last_heard = started;
         loop {
             if !wait(SAMPLE_INTERVAL, stop) {
-                return;
+                return Ok(());
             }
             // The lock is held for the poll alone, so that a setting gets in
             // between two, and the packets go out with no lock.
@@ -470,7 +470,7 @@ impl Capture {
                 Ok(Pass::Sample(packets)) => {
                     last_heard = Instant::now();
                     if !packets.into_iter().all(|p| sink.send_while(p, go_on)) {
-                        return;
+                        return Ok(());
                     }
                     samples += 1;
                 }
@@ -478,21 +478,24 @@ impl Capture {
                 Ok(Pass::Silent) => {
                     if only_samples_can_end && last_heard.elapsed() >= self.no_reply_bound {
                         log::error!("No status from the device for {:?}.", self.no_reply_bound);
-                        return;
+                        return Err(Error::device(format!(
+                            "no status from the device for {:?}",
+                            self.no_reply_bound
+                        )));
                     }
                 }
-                Ok(Pass::Stopped) => return,
+                Ok(Pass::Stopped) => return Ok(()),
                 // The port failed: nothing more will come of this capture.
                 Err(e) => {
                     log::error!("Acquisition failed: {e}.");
-                    return;
+                    return Err(e);
                 }
             }
             if self.limit_samples > 0 && samples >= self.limit_samples {
-                return;
+                return Ok(());
             }
             if self.limit_msec > 0 && started.elapsed() >= limit {
-                return;
+                return Ok(());
             }
         }
     }
@@ -556,9 +559,9 @@ fn target_news(link: &Link) -> bool {
 
 /// The End, for which a client that goes on reading is waited for without a
 /// bound, and after a stop only for [`END_AFTER_STOP`].
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
