@@ -30,7 +30,8 @@ emu_cases() {
     F='s/^oxrok: [a-z]+: oxrok::drivers::mic_985xx: /sr: mic-985xx: /'
     TENTHS="packet_parse divides the field by 10 in integers (protocol.c:83, :87) and throws away the third digit, under the 1 decimal digit its sr_analog_init reports (protocol.c:115); oxrok keeps it. That a logger's third digit is real is an inference: no recording"
     HUP_BUG="receive_data takes a hung up port for a timeout (protocol.c:202-211: revents is not exactly G_IO_IN), so a sample limit is never met; oxrok ends the capture"
-    SILENT_BUG="receive_data has no bound (protocol.c:202-216), so a logger that says nothing keeps a sample limit open for ever; oxrok ends such a capture after 30 s with no reading"
+    CHANNELS="handle_packet sends both channels whatever is enabled (protocol.c:122-142), and the default output prints them; oxrok sends a channel only if it is on"
+    NO_READINGS="sigrok-cli says nothing of a capture that ends with no readings; oxrok warns"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What a scan is: an open and a close, and no word to the logger.
@@ -56,14 +57,15 @@ emu_cases() {
     # what ends it.
     emu_case "limit_samples" --keep-header -- -d $S -c limit_samples=1 --time 5s
     emu_case "csv" -- -d $S --samples 1 -O csv:header=false
-    emu_case "Temperature alone" --keep-header -- -d $S -C Temperature --samples 1
-    emu_case "Humidity alone" --keep-header -- -d $S -C Humidity --samples 1
+    emu_case "Temperature alone" --oracle-differs "$CHANNELS" --keep-header -- -d $S -C Temperature --samples 1
+    emu_case "Humidity alone" --oracle-differs "$CHANNELS" --keep-header -- -d $S -C Humidity --samples 1
+    emu_case "Humidity alone in csv" -- -d $S -C Humidity --samples 1 -O csv:header=false
     emu_case "renamed" --keep-header -- -d $S -C Temperature=air,Humidity --samples 1
     emu_case "time holds the burst" --keep-header -- -d $S --time 800ms
     emu_options device=98581 burst=1
     emu_case "98581 samples 1" --driver mic-98581 --keep-header -- -d $T --samples 1
     emu_case "98581 time" --driver mic-98581 --keep-header -- -d $T --time 800ms
-    emu_options burst=2 period=10
+    emu_options burst=2
     emu_case "samples 2" --keep-header -- -d $S --samples 2
     # The one free stream. Each read's length is a matter of time; the readings
     # and the count are not, as a period of 1 s outlasts a stall.
@@ -75,6 +77,7 @@ emu_cases() {
     emu_options burst=0
     emu_case "time before the first silence" --no-output -- -d $S --time 50ms
     emu_case "silent at a time limit" --no-output -- -d $S --time 300ms
+    emu_case "silent at a time limit warns" --oracle-differs "$NO_READINGS" --stderr --filter "$F" -- -d $S --time 300ms
     emu_options burst=0 ack=$(mic_text 'OK|')
     emu_case "only an answer to the command" --no-output -- -d $S --time 300ms
 
@@ -85,9 +88,9 @@ emu_cases() {
     emu_case "98581 a read of two at samples 1" --driver mic-98581 --keep-header -- -d $T --samples 1
 
     # A frame in two reads.
-    emu_options burst=2 period=10 packet=$(mic_text 'v 230 6'),$(mic_text '10|')
+    emu_options burst=2 packet=$(mic_text 'v 230 6'),$(mic_text '10|')
     emu_case "a frame in two reads" --keep-header -- -d $S --samples 1
-    emu_options device=98581 burst=2 period=10 packet=$(mic_text 'v 2'),$(mic_text '30|')
+    emu_options device=98581 burst=2 packet=$(mic_text 'v 2'),$(mic_text '30|')
     emu_case "98581 a frame in two reads" --driver mic-98581 --keep-header -- -d $T --samples 1
 
     # The values, whole degrees. Then a third digit that is not 0.
@@ -101,7 +104,7 @@ emu_cases() {
     emu_case "98581 tenths" --oracle-differs "$TENTHS" --driver mic-98581 --keep-header -- -d $T --samples 3
 
     # What is no frame: each byte's check in turn, and a good one to end on.
-    emu_options burst=2 period=10 packet=$(mic_text 'w 230 610|vx230 610|v x30 610|v 2x0 610|v 23x 610|'),$(mic_text 'v 230x610|v 230 x10|v 230 6x0|v 230 61x|v 230 610x|v 240 620|')
+    emu_options burst=2 packet=$(mic_text 'w 230 610|vx230 610|v x30 610|v 2x0 610|v 23x 610|'),$(mic_text 'v 230x610|v 230 x10|v 230 6x0|v 230 61x|v 230 610x|v 240 620|')
     emu_case "each check of a frame" --keep-header -- -d $S --samples 1
     emu_options device=98581 burst=1 packet=$(mic_text 'w 230|vx230|v x30|v 2x0|v 23x|v 230x|v 240|')
     emu_case "98581 each check of a frame" --driver mic-98581 --keep-header -- -d $T --samples 1
@@ -111,8 +114,13 @@ emu_cases() {
     emu_options device=98581 burst=1 packet=$(mic_text 'v 2v 240|')
     emu_case "98581 a frame inside a false start" --driver mic-98581 --keep-header -- -d $T --samples 1
 
+    # How a temperature below 0 is written is not known: no sign makes a frame, in
+    # either tool. A known limit.
+    emu_options burst=1 packet=$(mic_text 'v -12 610|v-123 610|v -123 610|v 240 620|')
+    emu_case "a sign is no frame" --keep-header -- -d $S --samples 1
+
     # Bytes that are no reading, with the readings.
-    emu_options burst=2 period=10 noise=3f3f3f
+    emu_options burst=2 noise=3f3f3f
     emu_case "noise before each reading" --keep-header -- -d $S --samples 2
     emu_options burst=1 ack=$(mic_text 'OK|')
     emu_case "an answer to the command" --keep-header -- -d $S --samples 1
@@ -154,10 +162,7 @@ emu_cases() {
     # A silent logger, and one whose bytes are no frames.
     emu_options burst=0
     emu_case "lib silent at a sample limit" --libsigrok --hangs --no-output --timeout 3 -- -d $S --samples 5
-    # This case costs the 30 s, and C's as many: a unit test has the times and the
-    # other message, this the end and the words on a real tty.
-    emu_case "silent ends at the bound" --oxrok-fails "no bytes from the logger" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 33 -- -d $S --samples 5
-    emu_options period=10
+    emu_options
     emu_case "lib no frames at a sample limit" --libsigrok --hangs --driver mic-98581 --no-output --timeout 3 -- -d $T --samples 5
     emu_options
 }

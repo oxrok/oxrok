@@ -26,19 +26,27 @@
 //! Not as in C, each with what it costs:
 //! - The third digit of a field counts: `v 235` is 23.5. C divides it away and
 //!   says 23.0 (protocol.c:83, :87). That the digit is real is an inference from
-//!   the field's scale and the driver's one decimal: there is no recording. If a
-//!   logger's third digit is always 0, nothing changes.
+//!   the manual's ranges and a display photo ([`protocol`]): no frame was ever
+//!   recorded. If a logger's third digit is always 0, nothing changes.
 //! - The command is sent per capture. C's flag is a function's `static`
 //!   (protocol.c:189), so in one process only the first capture of any MIC logger
 //!   sends it, and a second logger, or one replugged, stays silent.
 //! - A port that hangs up ends the capture. `receive_data` takes it for a timeout
 //!   (protocol.c:202-211), for ever at a sample limit.
-//! - When only a sample limit could end a capture, [`NO_READING_BOUND`] without
-//!   a reading ends it with an error, whether or not bytes came. C waits for ever.
-//!   Nobody has said how often a logger sends, so the bound is wide.
+//! - When only a sample limit could end a capture, bytes that make no reading for
+//!   [`WARN_AFTER`] end it with an error: a wrong driver, or a format not understood.
+//!   Silence gets a warning then, and ends it only past [`GIVE_UP_AFTER`], as a
+//!   logger's sample interval can be up to 6 h. C waits for ever.
+//! - `-C` is honoured: a channel that is off gets no packet. C sends both whatever
+//!   is enabled (protocol.c:122-142), and sigrok-cli's default output prints them.
+//! - A command that found no room is warned about, and so is a capture that ends
+//!   with no readings. C says nothing of either.
 //! - A capture's receive buffer lives as long as the capture, where C keeps it
 //!   between two, and the bytes queued between two captures on an open port are
 //!   dropped when the second starts: they are old readings.
+//!
+//! Known limits, as in C: temperatures below zero and a logger set to Fahrenheit
+//! ([`protocol`]). A freezer's capture may be empty, and the warning says so.
 
 #![forbid(unsafe_code)]
 
@@ -49,8 +57,8 @@ use crate::core::{
     Mq, MqFlags, OptionDesc, Packet, PacketSink, Result, Unit, Value, ValueList,
 };
 use crate::serial::{Params, Port};
+use protocol::{Finding, REALTIME, Realtime, Starved, Watch};
 pub use protocol::{MODELS, Model};
-use protocol::{REALTIME, Realtime, Starved, Watch};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -74,8 +82,12 @@ const DIGITS: i32 = 1;
 /// one reads. A close joins it. An output may have rows pending on the `End`, so
 /// this outlasts a reader's short stall.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
-/// How long a capture that only a sample limit could end goes without a reading.
-pub const NO_READING_BOUND: Duration = Duration::from_secs(30);
+/// How long without a reading before a capture says so, and before one that only
+/// a sample limit could end fails if bytes came that made none.
+pub const WARN_AFTER: Duration = Duration::from_secs(30);
+/// How long a silent capture that only a sample limit could end goes on: the
+/// manual's longest sample interval, 6 h, and ten minutes.
+pub const GIVE_UP_AFTER: Duration = Duration::from_mins(370);
 
 /// The driver of one logger.
 pub struct MicDriver(pub &'static Model);
@@ -159,8 +171,15 @@ pub struct MicDevice {
     conn: String,
     params: Params,
     limits: Arc<Limits>,
-    /// [`NO_READING_BOUND`], which a test shortens.
-    bound: Duration,
+    /// [`WARN_AFTER`] and [`GIVE_UP_AFTER`], which a test shortens.
+    warn_after: Duration,
+    give_up_after: Duration,
+    /// A stall between a capture's start and its first read.
+    #[cfg(test)]
+    stall_at_start: Duration,
+    /// What captures warned.
+    #[cfg(test)]
+    said: Arc<Mutex<Vec<String>>>,
     /// A port to use instead of opening `conn`, for tests.
     pending: Option<Box<dyn Port>>,
     /// The port, unless a capture holds it. It comes back before `End`.
@@ -200,7 +219,12 @@ impl MicDevice {
             conn,
             params,
             limits: Arc::new(Limits::default()),
-            bound: NO_READING_BOUND,
+            warn_after: WARN_AFTER,
+            give_up_after: GIVE_UP_AFTER,
+            #[cfg(test)]
+            stall_at_start: Duration::ZERO,
+            #[cfg(test)]
+            said: Arc::default(),
             pending: port,
             port: Arc::new(Mutex::new(None)),
             captured: false,
@@ -333,7 +357,13 @@ impl Device for MicDevice {
             model: self.model,
             params: self.params,
             limits: Arc::clone(&self.limits),
-            bound: self.bound,
+            enabled: self.channels.iter().map(|c| c.enabled).collect(),
+            warn_after: self.warn_after,
+            give_up_after: self.give_up_after,
+            #[cfg(test)]
+            stall_at_start: self.stall_at_start,
+            #[cfg(test)]
+            said: Arc::clone(&self.said),
         };
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
@@ -385,21 +415,47 @@ struct Capture {
     model: &'static Model,
     params: Params,
     limits: Arc<Limits>,
-    bound: Duration,
+    enabled: Vec<bool>,
+    warn_after: Duration,
+    give_up_after: Duration,
+    #[cfg(test)]
+    stall_at_start: Duration,
+    #[cfg(test)]
+    said: Arc<Mutex<Vec<String>>>,
 }
 
 impl Capture {
     /// Runs until a limit, a stop, a port that fails, a bound or a consumer that
-    /// left.
+    /// left, and says so if that was with no readings.
     fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let send = |p: Packet| sink.send_while(p, || !stop.load(Ordering::SeqCst));
         if !send(Packet::header()) {
             return Ok(());
         }
         let started = Instant::now();
-        let mut realtime = Realtime::new(started);
-        let mut watch = Watch::new(self.bound, started);
+        let size = self.model.packet_size();
+        let mut watch = Watch::new(self.warn_after, self.give_up_after, size, started);
         let mut samples = 0u64;
+        let outcome = self.listen(port, &send, stop, started, &mut watch, &mut samples);
+        if outcome.is_ok() && samples == 0 {
+            self.warn(&no_readings_line(watch.any_bytes(), self.model));
+        }
+        outcome
+    }
+
+    /// The capture's loop.
+    fn listen(
+        &self,
+        port: &mut dyn Port,
+        send: &impl Fn(Packet) -> bool,
+        stop: &AtomicBool,
+        started: Instant,
+        watch: &mut Watch,
+        samples: &mut u64,
+    ) -> Result<()> {
+        let mut realtime = Realtime::new(started);
+        #[cfg(test)]
+        std::thread::sleep(self.stall_at_start);
         let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
         let mut chunk = [0u8; BUF_SIZE];
         while !stop.load(Ordering::SeqCst) {
@@ -420,7 +476,7 @@ impl Capture {
                     }
                 }
                 Ok(n) => {
-                    watch.heard();
+                    watch.heard(n);
                     buf.extend_from_slice(&chunk[..n]);
                     // handle_new_data: as many frames as there are, stepping
                     // over the bytes that start none.
@@ -432,10 +488,10 @@ impl Capture {
                             at += 1;
                             continue;
                         }
-                        if !self.reading(window, &send) {
+                        if !self.reading(window, send) {
                             return Ok(());
                         }
-                        samples += 1;
+                        *samples += 1;
                         // After the send: a slow client's time is not the
                         // logger's.
                         watch.reading(Instant::now());
@@ -449,16 +505,14 @@ impl Capture {
             }
             // The limits are looked at once all of a read is out.
             let limit = self.limits.samples.load(Ordering::SeqCst);
-            if limit > 0 && samples >= limit {
+            if limit > 0 && *samples >= limit {
                 return Ok(());
             }
             let msec = self.limits.msec.load(Ordering::SeqCst);
             if msec > 0 && started.elapsed() > Duration::from_millis(msec) {
                 return Ok(());
             }
-            if limit > 0 && msec == 0 {
-                self.check_starved(&watch)?;
-            }
+            self.check_starved(watch, limit > 0 && msec == 0)?;
         }
         Ok(())
     }
@@ -469,12 +523,15 @@ impl Capture {
         let timeout = crate::serial::serial_timeout(&self.params, REALTIME.len() as u32);
         match port.write_timeout(REALTIME.as_bytes(), timeout) {
             Ok(n) if n == REALTIME.len() => {}
-            Ok(n) => log::debug!("The command found room for {n} bytes."),
+            Ok(n) => self.warn(&short_command_line(n)),
             Err(e) => log::error!("{}", command_error_line(&e)),
         }
     }
 
-    /// `handle_packet`: false when the sink would not take it.
+    /// `handle_packet`, for the channels that are on: false when the sink would
+    /// not take it. Everything is labelled Celsius, as with C's "TODO: Use C/F
+    /// correctly" (protocol.c:127): a logger set to Fahrenheit has its degrees
+    /// labelled wrong in both tools, as nothing on the line tells them apart.
     fn reading(&self, frame: &[u8], send: &impl Fn(Packet) -> bool) -> bool {
         let (temperature, humidity) = self.model.parse(frame);
         let packet = |channel, value, mq, unit| {
@@ -487,20 +544,83 @@ impl Capture {
                 digits: DIGITS,
             })
         };
-        if !send(packet(0, temperature, Mq::Temperature, Unit::Celsius)) {
+        let on = |channel: usize| self.enabled.get(channel).copied().unwrap_or(false);
+        if on(0) && !send(packet(0, temperature, Mq::Temperature, Unit::Celsius)) {
             return false;
         }
-        humidity.is_none_or(|h| send(packet(1, h, Mq::RelativeHumidity, Unit::Percentage)))
+        match humidity {
+            Some(h) if on(1) => send(packet(1, h, Mq::RelativeHumidity, Unit::Percentage)),
+            _ => true,
+        }
     }
 
-    /// The bound, when only a sample limit could end the capture.
-    fn check_starved(&self, watch: &Watch) -> Result<()> {
-        let Some(starved) = watch.starved(Instant::now()) else {
-            return Ok(());
-        };
-        let (line, why) = starved_words(starved, self.model, self.bound.as_secs());
-        log::error!("{line}");
-        Err(Error::device(why))
+    /// What the time since the last reading comes to. `only_samples`: a sample
+    /// limit is all that could end the capture.
+    fn check_starved(&self, watch: &mut Watch, only_samples: bool) -> Result<()> {
+        match watch.look(only_samples, Instant::now()) {
+            Finding::Fine => Ok(()),
+            Finding::Warn(kind) => {
+                self.warn(&warn_line(kind, self.model, self.warn_after.as_secs()));
+                Ok(())
+            }
+            Finding::Fail(kind) => {
+                let seconds = match kind {
+                    Starved::Quiet => self.give_up_after.as_secs(),
+                    Starved::NoReading => self.warn_after.as_secs(),
+                };
+                let (line, why) = fail_words(kind, self.model, seconds);
+                log::error!("{line}");
+                Err(Error::device(why))
+            }
+        }
+    }
+
+    /// A warning, which a test can read: `self` is for that alone.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
+    fn warn(&self, line: &str) {
+        #[cfg(test)]
+        self.said.lock().expect("said lock").push(line.to_owned());
+        log::warn!("{line}");
+    }
+}
+
+/// What a command that found no room logs.
+fn short_command_line(n: usize) -> String {
+    format!(
+        "The real-time command found room for {n} of its {} bytes: the logger may not start.",
+        REALTIME.len()
+    )
+}
+
+/// What a capture says of no readings when it goes on.
+fn warn_line(kind: Starved, model: &Model, seconds: u64) -> String {
+    match kind {
+        Starved::Quiet => format!(
+            "No reading from the logger for {seconds} s, and still waiting: its sample interval \
+             can be up to 6 h, or it is off, or its cable is out."
+        ),
+        Starved::NoReading => no_usable_line(model, seconds),
+    }
+}
+
+fn no_usable_line(model: &Model, seconds: u64) -> String {
+    format!(
+        "No usable data from the logger for {seconds} s: bytes came, but none made a reading of \
+         a {}.",
+        model.long_name
+    )
+}
+
+/// What a capture that ended with no readings says. `bytes`: some came.
+fn no_readings_line(bytes: bool, model: &Model) -> String {
+    if bytes {
+        format!(
+            "The capture ended with no readings: bytes came, but none made a reading of a {}. A \
+             temperature below 0 could do that, as nothing says how a logger sends one.",
+            model.long_name
+        )
+    } else {
+        "The capture ended with no readings: the logger said nothing.".to_owned()
     }
 }
 
@@ -515,21 +635,17 @@ fn command_error_line(e: &Error) -> String {
 }
 
 /// What a capture that starved logs, and what it fails with.
-fn starved_words(starved: Starved, model: &Model, seconds: u64) -> (String, String) {
-    match starved {
-        Starved::NoBytes => (
+fn fail_words(kind: Starved, model: &Model, seconds: u64) -> (String, String) {
+    match kind {
+        Starved::Quiet => (
             format!(
-                "No bytes from the logger for {seconds} s: it is off, its cable is out, or it \
-                 did not take the command."
+                "No reading from the logger for {seconds} s, past its longest sample interval: it \
+                 is off, its cable is out, or it did not take the command."
             ),
-            format!("no bytes from the logger for {seconds} s"),
+            format!("no reading from the logger for {seconds} s"),
         ),
         Starved::NoReading => (
-            format!(
-                "No usable data from the logger for {seconds} s: bytes came, but none made a \
-                 reading of a {}.",
-                model.long_name
-            ),
+            no_usable_line(model, seconds),
             format!("no usable data from the logger for {seconds} s"),
         ),
     }

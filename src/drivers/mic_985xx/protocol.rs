@@ -18,7 +18,17 @@
 //!
 //! A field is three digits, in tenths. C divides it by 10 in integers
 //! (protocol.c:83 and :87), which throws away the third digit and prints it as a
-//! `.0`, though the digits it reports are 1. Here it is a division in floats.
+//! `.0`, though the digits it reports are 1. Here it is a division in floats. No
+//! frame was ever recorded, so the tenths are an inference, from the manual
+//! (photo `File:Mic_98581_manual_specs.jpg` on sigrok's wiki) and an archived 2013
+//! vendor page: -40.0 to 85.0 degrees and RH 0.1 to 99.9 % map exactly onto 001 to
+//! 999 and 850, and a display photo shows `25.7 °C`. If C's reading were kept and
+//! the digit is real, readings are cut by up to 0.9, over the +-0.6 degrees spec.
+//!
+//! The range goes down to -40.0 and nothing says how a logger writes that: a sign
+//! in any place is no frame here or in C (`v -12 610`, `v-123 610`, `v -123 610`).
+//! Nor does anything tell degrees Celsius from Fahrenheit, which the manual also
+//! lists, and all is labelled Celsius (protocol.c:127's TODO).
 
 use std::time::{Duration, Instant};
 
@@ -139,49 +149,84 @@ impl Realtime {
     }
 }
 
-/// What went wrong with a capture that a sample limit alone could end.
+/// How a capture has gone without readings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Starved {
-    /// Not one byte since the start or the last reading.
-    NoBytes,
-    /// Bytes, but none made a reading.
+    /// Silence, or a few bytes that could be an answer to the command.
+    Quiet,
+    /// Bytes enough for two frames, and none made a reading.
     NoReading,
 }
 
-/// How long a capture has gone with no reading. It is readings that count, not
-/// bytes: bytes that make no frame would hold a sample limit open for ever.
+/// What [`Watch::look`] finds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Finding {
+    /// Nothing to say.
+    Fine,
+    /// Worth saying, once, and the capture goes on.
+    Warn(Starved),
+    /// The capture ends with an error.
+    Fail(Starved),
+}
+
+/// How long a capture has gone with no reading. Readings count, not bytes: bytes
+/// that make no frame would hold a sample limit open for ever.
+///
+/// A logger's sample interval is 1 s to 6 h, set by the vendor's program, and
+/// nothing says real-time mode ignores it. So silence is no failure until past
+/// the longest interval. Bytes that make no reading are: a wrong driver, or a
+/// format not understood. A few bytes are not, as a logger may answer its command
+/// and then be silent for an interval: it takes two frames' worth.
 #[derive(Debug)]
 pub(super) struct Watch {
-    bound: Duration,
+    warn_after: Duration,
+    give_up_after: Duration,
+    /// How many bytes that make no reading mean more than an answer.
+    too_many: usize,
     since: Instant,
-    bytes: bool,
+    bytes: usize,
+    warned: bool,
 }
 
 impl Watch {
-    pub(super) fn new(bound: Duration, now: Instant) -> Watch {
-        Watch { bound, since: now, bytes: false }
+    pub(super) fn new(
+        warn_after: Duration,
+        give_up_after: Duration,
+        packet_size: usize,
+        now: Instant,
+    ) -> Watch {
+        let too_many = 2 * packet_size;
+        Watch { warn_after, give_up_after, too_many, since: now, bytes: 0, warned: false }
     }
 
-    /// Bytes came.
-    pub(super) fn heard(&mut self) {
-        self.bytes = true;
+    /// `n` bytes came.
+    pub(super) fn heard(&mut self, n: usize) {
+        self.bytes = self.bytes.saturating_add(n);
     }
 
     /// A reading came and went out: `now` must be after the send, as a slow
     /// client's time is not the logger's.
     pub(super) fn reading(&mut self, now: Instant) {
         self.since = now;
-        self.bytes = false;
+        self.bytes = 0;
     }
 
-    /// Whether the bound has passed.
-    pub(super) fn starved(&self, now: Instant) -> Option<Starved> {
-        if now.saturating_duration_since(self.since) < self.bound {
-            None
-        } else if self.bytes {
-            Some(Starved::NoReading)
-        } else {
-            Some(Starved::NoBytes)
+    /// Whether any bytes came since the start or the last reading.
+    pub(super) fn any_bytes(&self) -> bool {
+        self.bytes > 0
+    }
+
+    /// What the time says. `only_samples`: a sample limit is all that could end
+    /// this capture, the one case that is failed for going on too long.
+    pub(super) fn look(&mut self, only_samples: bool, now: Instant) -> Finding {
+        let gone = now.saturating_duration_since(self.since);
+        if gone < self.warn_after {
+            return Finding::Fine;
         }
+        let kind = if self.bytes >= self.too_many { Starved::NoReading } else { Starved::Quiet };
+        if only_samples && (kind == Starved::NoReading || gone >= self.give_up_after) {
+            return Finding::Fail(kind);
+        }
+        if std::mem::replace(&mut self.warned, true) { Finding::Fine } else { Finding::Warn(kind) }
     }
 }

@@ -70,7 +70,7 @@ struct Line {
     /// The command finds no room: `write_timeout` gives 0.
     no_room: bool,
     write_timeouts: Vec<Duration>,
-    writes: Vec<(Instant, Vec<u8>)>,
+    writes: crate::serial::WriteLog,
     purges: usize,
     reads: usize,
     /// Writes since the port was dropped, once it was.
@@ -322,6 +322,16 @@ fn each_byte_of_a_frame_is_checked() {
     assert!(!m98583().valid(b"v 230 61\xb2\r"));
 }
 
+/// The range goes to -40.0 and nothing says how a logger writes that: a known
+/// limit, as in C.
+#[test]
+fn a_sign_is_no_frame() {
+    for frame in [b"v -12 610\r", b"v-123 610\r", b"v 230 -10\r"] {
+        assert!(!m98583().valid(frame), "{frame:?}");
+    }
+    assert!(!m98581().valid(b"v -12\r"));
+}
+
 #[test]
 fn a_field_is_in_tenths() {
     assert_eq!(m98581().parse(b"v 235\r"), (23.5, None));
@@ -342,7 +352,8 @@ fn the_table_says_what_cs_says() {
     assert_eq!(REALTIME, "S 1 M 2 32 3\r");
     assert_eq!(BUF_SIZE, 256);
     assert_eq!(SILENCE, Duration::from_millis(100));
-    assert_eq!(NO_READING_BOUND, Duration::from_secs(30));
+    assert_eq!(WARN_AFTER, Duration::from_secs(30));
+    assert_eq!(GIVE_UP_AFTER, Duration::from_mins(370));
 }
 
 // The rules, with no time passing.
@@ -398,23 +409,63 @@ fn a_slow_logger_for_a_minute_gets_one_command() {
     assert_eq!(readings_at.len(), 23);
 }
 
-#[test]
-fn the_bound_counts_from_both_sides() {
-    let t0 = Instant::now();
-    let w = Watch::new(Duration::from_secs(30), t0);
-    assert_eq!(w.starved(t0 + Duration::from_millis(29_999)), None);
-    assert_eq!(w.starved(t0 + Duration::from_secs(30)), Some(Starved::NoBytes));
+fn watch(t0: Instant) -> Watch {
+    Watch::new(Duration::from_secs(30), Duration::from_mins(370), 10, t0)
 }
 
 #[test]
-fn only_a_reading_resets_the_bound() {
+fn silence_warns_once_at_30_s_and_fails_past_the_longest_interval() {
     let t0 = Instant::now();
-    let mut w = Watch::new(Duration::from_secs(30), t0);
-    w.heard();
-    assert_eq!(w.starved(t0 + Duration::from_secs(30)), Some(Starved::NoReading));
-    w.reading(t0 + Duration::from_secs(20));
-    assert_eq!(w.starved(t0 + Duration::from_secs(49)), None);
-    assert_eq!(w.starved(t0 + Duration::from_secs(50)), Some(Starved::NoBytes), "bytes forgotten");
+    let mut w = watch(t0);
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    assert_eq!(w.look(true, at(29_999)), Finding::Fine);
+    assert_eq!(w.look(true, at(30_000)), Finding::Warn(Starved::Quiet));
+    assert_eq!(w.look(true, at(30_001)), Finding::Fine, "once");
+    assert_eq!(w.look(true, at(22_199_999)), Finding::Fine);
+    assert_eq!(w.look(true, at(22_200_000)), Finding::Fail(Starved::Quiet));
+}
+
+#[test]
+fn silence_never_fails_a_capture_something_else_can_end() {
+    let t0 = Instant::now();
+    let mut w = watch(t0);
+    let far = t0 + Duration::from_secs(1_000_000);
+    assert_eq!(w.look(false, far), Finding::Warn(Starved::Quiet));
+    assert_eq!(w.look(false, far), Finding::Fine);
+}
+
+#[test]
+fn two_frames_of_bytes_with_no_reading_fail_at_30_s() {
+    let t0 = Instant::now();
+    let at = |s: u64| t0 + Duration::from_secs(s);
+    let mut w = watch(t0);
+    w.heard(20);
+    assert_eq!(w.look(true, at(29)), Finding::Fine);
+    assert_eq!(w.look(true, at(30)), Finding::Fail(Starved::NoReading));
+    assert_eq!(w.look(false, at(30)), Finding::Warn(Starved::NoReading), "only at a sample limit");
+}
+
+/// A logger may answer its command, and then be silent for an interval.
+#[test]
+fn fewer_bytes_than_two_frames_are_silence() {
+    let t0 = Instant::now();
+    let mut w = watch(t0);
+    w.heard(19);
+    assert!(w.any_bytes());
+    assert_eq!(w.look(true, t0 + Duration::from_secs(30)), Finding::Warn(Starved::Quiet));
+    assert_eq!(w.look(true, t0 + Duration::from_secs(60)), Finding::Fine);
+}
+
+#[test]
+fn only_a_reading_resets_the_clock_and_the_bytes() {
+    let t0 = Instant::now();
+    let at = |s: u64| t0 + Duration::from_secs(s);
+    let mut w = watch(t0);
+    w.heard(20);
+    w.reading(at(20));
+    assert!(!w.any_bytes());
+    assert_eq!(w.look(true, at(49)), Finding::Fine);
+    assert_eq!(w.look(true, at(50)), Finding::Warn(Starved::Quiet), "the bytes forgotten");
 }
 
 #[test]
@@ -432,22 +483,49 @@ fn what_a_failed_read_and_command_say() {
 #[test]
 fn what_a_starved_capture_says() {
     assert_eq!(
-        starved_words(Starved::NoBytes, m98583(), 30),
+        fail_words(Starved::Quiet, m98583(), 22_200),
         (
-            "No bytes from the logger for 30 s: it is off, its cable is out, or it did not take \
-             the command."
+            "No reading from the logger for 22200 s, past its longest sample interval: it is off, \
+             its cable is out, or it did not take the command."
                 .to_owned(),
-            "no bytes from the logger for 30 s".to_owned()
+            "no reading from the logger for 22200 s".to_owned()
         )
     );
     assert_eq!(
-        starved_words(Starved::NoReading, m98581(), 30),
+        fail_words(Starved::NoReading, m98581(), 30),
         (
             "No usable data from the logger for 30 s: bytes came, but none made a reading of a \
              MIC 98581."
                 .to_owned(),
             "no usable data from the logger for 30 s".to_owned()
         )
+    );
+    assert_eq!(
+        warn_line(Starved::Quiet, m98583(), 30),
+        "No reading from the logger for 30 s, and still waiting: its sample interval can be up \
+         to 6 h, or it is off, or its cable is out."
+    );
+    assert_eq!(
+        warn_line(Starved::NoReading, m98583(), 30),
+        "No usable data from the logger for 30 s: bytes came, but none made a reading of a MIC \
+         98583."
+    );
+}
+
+#[test]
+fn what_a_capture_with_no_readings_says() {
+    assert_eq!(
+        no_readings_line(false, m98583()),
+        "The capture ended with no readings: the logger said nothing."
+    );
+    assert_eq!(
+        no_readings_line(true, m98581()),
+        "The capture ended with no readings: bytes came, but none made a reading of a MIC 98581. \
+         A temperature below 0 could do that, as nothing says how a logger sends one."
+    );
+    assert_eq!(
+        short_command_line(4),
+        "The real-time command found room for 4 of its 13 bytes: the logger may not start."
     );
 }
 
@@ -682,74 +760,205 @@ fn a_long_read_of_noise_keeps_the_buffer_within_its_size() {
 
 // How a capture ends.
 
+/// A short time to warn, and a long one to give up, unless a test shortens it.
 fn short_bound(d: &mut MicDevice) -> Duration {
-    d.bound = Duration::from_millis(300);
-    d.bound
+    d.warn_after = Duration::from_millis(300);
+    d.give_up_after = 10 * BOUND;
+    d.warn_after
+}
+
+fn said(d: &MicDevice) -> Vec<String> {
+    d.said.lock().unwrap().clone()
 }
 
 #[test]
-fn a_silent_logger_ends_at_the_bound_at_a_sample_limit() {
+fn a_silent_logger_fails_only_past_the_longer_time_and_warns_before() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(m98583(), &line);
-        let bound = short_bound(&mut d);
+        d.warn_after = Duration::from_millis(100);
+        d.give_up_after = Duration::from_secs(1);
         limit_samples(&mut d, 5);
         let begun = Instant::now();
         let rx = start(&mut d);
         let got = to_end(&rx);
-        assert!(begun.elapsed() >= bound, "after {:?}", begun.elapsed());
-        assert!(failure(&got).unwrap().contains("no bytes from the logger"), "{got:?}");
+        assert!(begun.elapsed() >= d.give_up_after, "after {:?}", begun.elapsed());
+        assert_eq!(failure(&got), Some("device error: no reading from the logger for 1 s"));
         assert_eq!(line.writes(), 1, "it was told");
+        // A slow box's one read can pass both times, and go straight to the failure.
+        let words = said(&d);
+        assert!(words.len() <= 1, "{words:?}");
+        assert!(words.iter().all(|w| *w == warn_line(Starved::Quiet, m98583(), 0)), "{words:?}");
+    });
+}
+
+/// A logger whose interval is past the warning: C works, and so must this.
+#[test]
+fn a_logger_slower_than_the_warning_is_no_failure() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut d = device(m98583(), &line);
+        let warn_after = short_bound(&mut d);
+        limit_samples(&mut d, 2);
+        let rx = start(&mut d);
+        for t in [b"v 230 610\r", b"v 240 620\r"] {
+            std::thread::sleep(2 * warn_after);
+            line.queue(t);
+        }
+        let got = to_end(&rx);
+        assert!(failure(&got).is_none(), "{got:?}");
+        assert_eq!(readings(&got).len(), 4);
+        assert_eq!(said(&d), [warn_line(Starved::Quiet, m98583(), 0)]);
+    });
+}
+
+/// An answer to the command, then an interval: still no failure.
+#[test]
+fn an_answer_then_silence_is_no_failure() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(b"OK\r");
+        let mut d = device(m98583(), &line);
+        let warn_after = short_bound(&mut d);
+        limit_samples(&mut d, 1);
+        let rx = start(&mut d);
+        std::thread::sleep(2 * warn_after);
+        line.queue(b"v 230 610\r");
+        let got = to_end(&rx);
+        assert!(failure(&got).is_none(), "{got:?}");
+        assert_eq!(readings(&got).len(), 2);
     });
 }
 
 #[test]
-fn bytes_with_no_frame_end_at_the_bound_at_a_sample_limit() {
+fn bytes_with_no_frame_fail_at_the_shorter_time() {
     bounded(|| {
         let line = Shared::default().with(|l| {
             l.stream = Some(b"v 230\r".to_vec());
             l.byte_time = BYTE_TIME;
         });
         let mut d = device(m98583(), &line);
-        let bound = short_bound(&mut d);
+        let warn_after = short_bound(&mut d);
         limit_samples(&mut d, 1);
         let begun = Instant::now();
         let rx = start(&mut d);
         let got = to_end(&rx);
-        assert!(begun.elapsed() >= bound);
-        assert!(failure(&got).unwrap().contains("no usable data from the logger"), "{got:?}");
+        assert!(begun.elapsed() >= warn_after);
+        assert_eq!(failure(&got), Some("device error: no usable data from the logger for 0 s"));
         assert_eq!(readings(&got), Vec::<(usize, f32)>::new());
     });
 }
 
 #[test]
-fn a_bound_does_not_end_a_capture_a_time_limit_can() {
+fn a_time_limit_ends_a_silent_capture_with_a_warning_and_no_failure() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(m98583(), &line);
-        let bound = short_bound(&mut d);
+        let warn_after = short_bound(&mut d);
+        // Past both times: a time limit can end this, so neither fails it.
+        d.give_up_after = warn_after;
         limit_samples(&mut d, 5);
         limit_msec(&mut d, 900);
         let begun = Instant::now();
         let rx = start(&mut d);
         let got = to_end(&rx);
-        assert!(begun.elapsed() >= 3 * bound, "after {:?}", begun.elapsed());
+        assert!(begun.elapsed() >= 3 * warn_after, "after {:?}", begun.elapsed());
         assert!(failure(&got).is_none(), "{got:?}");
+        // A slow box's one read can pass the time limit before the warning's time.
+        assert_eq!(said(&d).last(), Some(&no_readings_line(false, m98583())));
+    });
+}
+
+/// A freezer's capture, say: bytes that make no reading, at a time limit.
+#[test]
+fn a_time_limit_ends_a_capture_of_no_frames_with_its_warning() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(b"v -12 610\r");
+        let mut d = device(m98583(), &line);
+        limit_msec(&mut d, 50);
+        let rx = start(&mut d);
+        let got = to_end(&rx);
+        assert!(failure(&got).is_none(), "{got:?}");
+        assert_eq!(said(&d), [no_readings_line(true, m98583())]);
     });
 }
 
 #[test]
-fn a_bound_does_not_end_a_continuous_capture() {
+fn a_capture_with_readings_says_nothing() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(b"v 230 610\r");
+        let mut d = device(m98583(), &line);
+        limit_samples(&mut d, 1);
+        let rx = start(&mut d);
+        to_end(&rx);
+        assert_eq!(said(&d), Vec::<String>::new());
+    });
+}
+
+#[test]
+fn a_silence_does_not_end_a_continuous_capture() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(m98583(), &line);
-        let bound = short_bound(&mut d);
+        let warn_after = short_bound(&mut d);
+        d.give_up_after = warn_after;
         let rx = start(&mut d);
         assert!(matches!(rx.recv_timeout(BOUND), Ok((_, Packet::Header { .. }))));
-        std::thread::sleep(2 * bound);
+        std::thread::sleep(2 * warn_after);
         assert!(rx.try_recv().is_err(), "nothing but the header");
         d.stop().unwrap();
         assert!(failure(&to_end(&rx)).is_none());
+    });
+}
+
+/// `-C`: a channel that is off gets no packet, and a frame still counts.
+#[test]
+fn a_channel_that_is_off_gets_no_packet() {
+    for (off, want) in [(0, (1, 61.0)), (1, (0, 23.0))] {
+        bounded(move || {
+            let line = Shared::default();
+            line.queue(b"v 230 610\rv 240 620\r");
+            line.line().per_read = 10;
+            let mut d = device(m98583(), &line);
+            d.enable_channel(off, false).unwrap();
+            limit_samples(&mut d, 1);
+            let rx = start(&mut d);
+            assert_eq!(readings(&to_end(&rx)), [want]);
+        });
+    }
+}
+
+/// `fd_source_check` looks at `revents` first: a stall past the timer between the
+/// start and the first read, with bytes waiting, is no silence.
+#[test]
+fn bytes_ready_win_after_a_stall_before_the_first_read() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(b"v 230 610\r");
+        let mut d = device(m98583(), &line);
+        d.stall_at_start = 2 * SILENCE;
+        limit_samples(&mut d, 1);
+        let rx = start(&mut d);
+        to_end(&rx);
+        assert_eq!(line.writes(), 0);
+    });
+}
+
+#[test]
+fn a_command_with_no_room_warns() {
+    bounded(|| {
+        let line = Shared::default().with(|l| {
+            l.no_room = true;
+            l.hold = 3;
+        });
+        line.queue(b"v 230 610\r");
+        let mut d = device(m98583(), &line);
+        limit_samples(&mut d, 1);
+        let rx = start(&mut d);
+        to_end(&rx);
+        assert_eq!(said(&d), [short_command_line(0)]);
     });
 }
 
@@ -866,6 +1075,7 @@ fn a_slow_client_is_no_silence() {
         line.queue(b"v 230 610\r");
         let mut d = device(m98583(), &line);
         let bound = short_bound(&mut d);
+        d.give_up_after = bound;
         limit_samples(&mut d, 2);
         let (tx, rx) = sync_channel(1);
         d.start(PacketSink::new(tx, 0)).unwrap();
