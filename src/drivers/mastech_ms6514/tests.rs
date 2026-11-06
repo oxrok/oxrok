@@ -11,6 +11,9 @@ use crate::core::{MqFlags, Unit};
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, sync_channel};
 
+/// The channels enabled, and the readings they should give.
+type EnabledAndReadings<'a> = (&'a [usize], &'a [(usize, f32)]);
+
 /// A bound no good run comes near, under any load; a test past it fails.
 const BOUND: Duration = Duration::from_secs(60);
 
@@ -459,8 +462,7 @@ fn a_reading_goes_out_by_the_channel_it_names() {
         // T2 on main and T1 on aux.
         let mut f = frame(10, 20);
         f[11] |= 1;
-        type Case<'a> = (&'a [usize], &'a [(usize, f32)]);
-        let cases: [Case; 4] = [
+        let cases: [EnabledAndReadings; 4] = [
             (&[0, 1, 2], &[(1, 1.0), (0, 2.0)]),
             (&[0], &[(0, 2.0)]),
             (&[1], &[(1, 1.0)]),
