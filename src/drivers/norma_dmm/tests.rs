@@ -576,8 +576,9 @@ fn a_late_reply_asks_nothing_until_the_other_is_answered() {
     bounded(|| {
         let fake = Fake::new();
         fake.script([Reply::AtNext(S2.to_vec()), Reply::OnRelease(S.to_vec())]);
-        let mut d = quick(&fake);
-        // The second one's wait must outlast the test's look at the writes.
+        // The real 2 s: the second one's wait, then 4 s, must outlast the test's
+        // look at the writes at any speed of this machine.
+        let mut d = device(&fake);
         limit(&mut d, 2);
         let rx = start(&mut d);
         fake.wait_for("the late reply to be read", |s| s.delivered >= S2.len());
@@ -807,7 +808,7 @@ fn the_limit_ends_at_its_time() {
 fn the_silence_is_told_once_and_a_line_starts_it_over() {
     let base = Instant::now();
     let at = |ms: u64| base + Duration::from_millis(ms);
-    let after = Duration::from_millis(30_000);
+    let after = Duration::from_secs(30);
     let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
     assert!(!r.silence_to_tell(after, at(29_999)));
     r.line(at(10_000));
