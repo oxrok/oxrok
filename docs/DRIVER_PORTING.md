@@ -297,6 +297,32 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A C parser that cuts a line to its length and keeps a partial buffer
+  past a timeout can splice two replies into a reading that passes every
+  check. Try a partial reply followed by a full one.
+- A request/reply loop with a timeout that also sends on each reply
+  gains a request at each expiry for as long as the latency exceeds it.
+  Resetting a count at the expiry does not help: the late reply then
+  brings it to 0 with one really out. Keep the count, and lengthen the
+  wait while nothing is heard.
+- A count cut at a limit's last line loses what is still on its way, and
+  the next capture takes it as a reading. Keep the count on the link,
+  and time what is left from the new start, or an old stamp lets the
+  second leftover through.
+- A rule on requests is a pure struct over `Instant`: a simulated meter
+  on its own clock tests a minute in milliseconds and cannot flake.
+- A digit converter or shift that is wrong leaves code unreachable: read
+  gcov's unreached lines as a claim about the arithmetic, and pin it
+  with a case.
+- libsigrok's logger takes line breaks out of a message (`log.c:228`),
+  so a driver printing a raw line must too.
+- `serial_readline` stops at CR or LF, so under CR LF the LF is an empty
+  read that takes a try: a wait on the Nth try may be unreachable under
+  one line end.
+- `flow=1` makes libserialport drop `rts=` (`serial_libsp.c:263`).
+- A warning on a long silence costs too much as a case. A pty and the
+  real binary check it once: omit the modem lines from `serialcomm`, as
+  a pty has none and the open fails with ENOTTY.
 - A channel's index can be shared: the MSO-19's analog channel has logic
   4's, from a loop counter C reused. Anything going by index alone
   confuses them, and anything going by list position is off where analog

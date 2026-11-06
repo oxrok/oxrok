@@ -776,6 +776,16 @@ Deliberate, and kept small:
   probe, and `--get offset` after 3.3 reads 3.2999999999999998 where
   sigrok-cli reads 3.2999999523162842. It costs a step at 52 of 399
   tenths from 0.1 to 39.9 V.
+- norma-dmm, siemens-b102x: hex letters and flag pairs read as their
+  values, so other models, units and flags than sigrok-cli on such
+  lines. A line with a 21st hex digit and a line of 255 bytes with no LF
+  are errors. Part of a line is dropped when its request expires. After
+  an expiry requests go less often than in sigrok-cli: 2, 4, then 8 s
+  while nothing is heard, and a late reply asks nothing until the others
+  are answered. A silent `--samples` warns once after 30 s, and replies
+  ended by CR alone warn once.
+- Under `flow=1`, `rts=` is not applied by any driver, as in libsigrok's
+  use of libserialport.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

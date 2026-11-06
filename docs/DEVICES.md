@@ -2777,6 +2777,51 @@ callout ports alone here, and the serial number may not reach us there;
 on Windows a unit with no serial gives an instance id, which is refused,
 and the strings are friendly names.
 
+## Norma DM9x0 and Siemens B102x (norma-dmm, siemens-b102x)
+
+Norma DM910 to DM950 and Siemens B1024 to B1028, with the RS-232
+interface board, at 4800/8n1 with RTS/CTS. `-d
+norma-dmm:conn=/dev/ttyUSB0` or `-d siemens-b102x:conn=...`; the two
+differ only in vendor and model names. Emulated: 95 cases on 2026-11-06:
+81 full, 12 `--oracle-differs`, 2 `--oracle-bug`. gcov 93.5% of the
+driver. Not checked on a unit, so the digits' meanings, the line end and
+the reply latency are unverified.
+
+What the model taught:
+- C's `xgittoint` gives a to f as 0 to 5 (`protocol.c:67-74`), so modes
+  0xa and 0xb never run, though the wiki's table has a diode as
+  `DC,DIODE` and A≃ as `AC,DC,RMS`, which only they give; oxrok gives
+  each digit its value. An unknown value type or mode logs C's error and
+  still sends, as gain or unitless. That choice has no C run behind it,
+  since C's digit conversion stops at 9.
+- C shifts a flag pair's first digit by 8 from its first patch on
+  (`protocol.c:282`, `:300`, `:316`), so continuity is always 0 and
+  every reading AUTO; oxrok shifts by 4. No recording settles that a
+  pair is a byte. If it is not, the damage is flags, a warning and
+  continuity's 0 or 1, never a numeric value.
+- C keeps part of a line past its request's expiry and cuts what follows
+  at 20 digits (`protocol.c:97`), which made 24.03 with no unit of 24.91
+  V DC. oxrok drops the part and refuses a 21st hex digit; another tail
+  is cut as in C.
+- C stops reading for good at 255 bytes with no LF (`protocol.c:393`);
+  oxrok takes one bad line.
+- C asks at every line and every 2 s, so at a steady 2.5 s latency 24
+  replies are due after a minute. oxrok counts requests: a line asks
+  with none out, and an expiry asks with a wait of 2, 4, then 8 s. A
+  silent meter is asked less often than in C, and a lost reply costs 4
+  s. A meter slower than 8 s still gains a request per wait.
+- Replies left over from a capture are no sample of the next one on an
+  open device.
+- A silent `--samples` warns once after 30 s and goes on, as the
+  interface can take 10 s to charge. Replies ended by CR alone warn
+  once.
+
+Sources: the sigrok wiki's page has the only real lines; it writes
+replies ending in CR and C reads CR LF, which stays open (`eol=` has
+each). The Wayback Machine has set.nl's product page, with "NM 950 with
+interface, A 1834 06512", the `1834 065` of `IDN?`, and no protocol. No
+manual, firmware or recording was found.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

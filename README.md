@@ -94,6 +94,7 @@ Emulator and replay only, never run on hardware:
 | `link-mso19` | 162 | 92.0% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |
+| `norma-dmm`, `siemens-b102x` | 95 | 93.5% |
 | `ols` | 213 | 94.7% |
 | `p-ols` (Pipistrello) | 107 | 97.0% |
 | `pce-322a` | 95 | 88.1% |
