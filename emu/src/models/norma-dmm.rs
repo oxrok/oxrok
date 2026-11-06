@@ -14,8 +14,10 @@
 //! - The rate, 4800 8n1, the commands' CR LF and the replies' CR LF are what
 //!   libsigrok's driver uses or says in its comments, written with a DM950 and a
 //!   B1026 in hand. That conflict with the wiki on the line end stays open, so
-//!   `eol=` has each reading. No manual or recording was found: the wiki's link
-//!   to set.nl no longer resolves.
+//!   `eol=` has each reading. No manual or recording was found. The wiki's link
+//!   to set.nl no longer resolves; the Wayback Machine has the product page, with
+//!   specifications and "NM 950 with interface, A 1834 06512", which is what the
+//!   `1834 065` of `IDN?` is, and no protocol.
 //! - What each digit of a status means: only that driver's comments. So this
 //!   model plays a status as a string and gives its digits no meaning.
 //!
