@@ -31,12 +31,21 @@
 //!
 //! - A real unit is a UART behind an optical cable, an IC50 or IC70. This one is
 //!   a CDC-ACM function with invented ids, behind 9600/8n1.
-//! - Pacing counts offers of a read, about 20 ms each, from each open, so a tool
-//!   that closes within a period of the last frame it needed has caused exactly
-//!   those. The default of 17 is the unit's three a second: 11 frames came in 3 s
-//!   on a tester. A tool flushes what came before its open is done, and a scan
-//!   gives up after 500 ms, so the first frame comes between the two, [`LEAD`]
-//!   offers from the open.
+//! - Pacing counts offers of a read, from each open. They come every 20 ms or so
+//!   while a read is held, and also after every submission and unlink, so a period
+//!   is no fixed time. The default of 17 is the unit's three a second: 11 frames
+//!   came in 3 s on a tester. A period of 2 or less free-runs, as each frame's
+//!   resubmit feeds the next: tens of thousands of frames a second, which hit
+//!   vusb's unlink race and ended the session (`vhci_hcd: cannot find a urb of
+//!   seqnum`). Give it a `burst=` or use 3 or more.
+//! - A tool flushes what came before its open is done, and a scan gives up after
+//!   500 ms, so the first frame comes between the two, [`LEAD`] offers from the
+//!   open.
+//! - The second frame in the `.tx` of `--show`, `--get` and `--set` is read by no
+//!   one: the kernel's kills of its reads at the close make offers enough to reach
+//!   [`LEAD`]. It was there at a lead of 10, 13 and 16 and gone at 19. That is
+//!   inferred, not traced, and it is a count that holds only while the lead stays
+//!   under about 17.
 //! - The stream and the log start over at each open, where a real unit neither
 //!   knows of an open nor sends a log twice for one button.
 //! - With `burst=`, the first open after power on gets one frame and no log: that
@@ -65,7 +74,9 @@
 //!   all at once; the log starts a period after the last live frame before it;
 //! - `piece=N`, bytes per piece of the log (1 to 32, default 32);
 //! - `claim=N`, the record count the metadata says, if not the truth;
-//! - `bad=N`, the log's Nth frame from 0, the start, has a wrong sum.
+//! - `bad=N`, the log's Nth frame from 0, the start, has a wrong sum;
+//! - `sync=N`, that frame's first sync byte is `54`;
+//! - `drop=N`, that frame never comes.
 //!
 //! The pedantic check: a byte written is a violation, as the driver never writes.
 
@@ -81,7 +92,8 @@ pub const NAME: &str = "appa-55ii";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "The APPA 55II thermometer on a CDC-ACM cable; \
                          reading=T1/F1/T2/F2/MODE[,...], packet=HEX[,HEX...], period=N, burst=N, \
-                         mute=1, records=N, after=N, gap=N, piece=N, claim=N, bad=N, and the shell's \
+                         mute=1, records=N, after=N, gap=N, piece=N, claim=N, bad=N, sync=N, drop=N, and \
+                         the shell's \
                          stall=, chunk=, in-limit=, in-stall=, out-hold=";
 
 const LIVE: u8 = 0x00;
@@ -90,9 +102,9 @@ const DATA: u8 = 0x14;
 const START: u8 = 0x18;
 const END: u8 = 0x19;
 
-/// Offers from an open to the first frame, about 160 ms: after a tool's flush, and
-/// well within a scan's 500 ms.
-const LEAD: u32 = 10;
+/// Offers from an open to the first frame, about 95 ms (10 came to 188 ms): after a
+/// tool's flush, and five times inside a scan's 500 ms.
+const LEAD: u32 = 5;
 /// Bytes of a record in the log.
 const RECORD: usize = 20;
 /// The flags of a probe in tenths of a degree Celsius.
@@ -124,7 +136,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Thermometer>> {
     let mut gap = 1;
     let mut piece = 32;
     let mut claim = None;
-    let mut bad = None;
+    let mut faults_of_log = LogFaults::default();
     for (k, v) in options {
         if faults.option(k, v)? {
             continue;
@@ -140,12 +152,14 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Thermometer>> {
             "gap" => gap = parse_number(k, v, 0..=1000)?,
             "piece" => piece = parse_number(k, v, 1..=32)?,
             "claim" => claim = Some(parse_number(k, v, 0..=65535)?),
-            "bad" => bad = Some(parse_number(k, v, 0..=100_000)?),
+            "bad" => faults_of_log.bad = Some(parse_number(k, v, 0..=100_000)?),
+            "sync" => faults_of_log.sync = Some(parse_number(k, v, 0..=100_000)?),
+            "drop" => faults_of_log.drop = Some(parse_number(k, v, 0..=100_000)?),
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
     let frames = frames.unwrap_or_else(default_readings);
-    let log = records.map_or_else(Vec::new, |n| log_frames(n, claim, piece as usize, bad));
+    let log = records.map_or_else(Vec::new, |n| log_frames(n, claim, piece as usize, faults_of_log));
     let thermometer = Thermometer {
         all_frames: Packets::new(frames.clone()),
         frames: Packets::new(frames),
@@ -240,9 +254,17 @@ fn record(index: u16) -> [u8; RECORD] {
     r
 }
 
+/// What a line does to a log's frames, by their numbers from 0.
+#[derive(Clone, Copy, Default)]
+struct LogFaults {
+    bad: Option<u32>,
+    sync: Option<u32>,
+    drop: Option<u32>,
+}
+
 /// The frames of a log: computed when the model is built, as no reply may take
 /// long.
-fn log_frames(records: u32, claim: Option<u32>, piece: usize, bad: Option<u32>) -> Vec<Vec<u8>> {
+fn log_frames(records: u32, claim: Option<u32>, piece: usize, faults: LogFaults) -> Vec<Vec<u8>> {
     let n = records as usize;
     let mut memory = Vec::with_capacity(n * RECORD);
     for i in 0..records {
@@ -257,10 +279,18 @@ fn log_frames(records: u32, claim: Option<u32>, piece: usize, bad: Option<u32>) 
     ];
     frames.extend(memory.chunks(piece).map(|p| frame(DATA, p)));
     frames.push(frame(END, &[]));
-    if let Some(f) = bad.and_then(|b| frames.get_mut(b as usize))
+    if let Some(f) = faults.bad.and_then(|b| frames.get_mut(b as usize))
         && let Some(sum) = f.last_mut()
     {
         *sum = sum.wrapping_add(1);
+    }
+    if let Some(f) = faults.sync.and_then(|b| frames.get_mut(b as usize)) {
+        f[0] = 0x54;
+    }
+    if let Some(n) = faults.drop.map(|d| d as usize)
+        && n < frames.len()
+    {
+        frames.remove(n);
     }
     frames
 }
@@ -473,7 +503,7 @@ mod tests {
     #[test]
     fn nothing_comes_within_the_lead_of_an_open() {
         let mut h = opened(&[("period", "1")]);
-        assert_eq!(offers(&mut h, 9), b"");
+        assert_eq!(offers(&mut h, 4), b"");
         assert_eq!(offers(&mut h, 1).len(), 25);
     }
 
@@ -553,6 +583,29 @@ mod tests {
         assert_eq!(bytes[6 + 4], 9);
         let right: u32 = bytes[6..6 + 12].iter().map(|b| u32::from(*b)).sum();
         assert_eq!(u32::from(bytes[6 + 12]), (right + 1) & 0xff);
+    }
+
+    #[test]
+    fn sync_and_drop_change_only_what_they_say() {
+        let whole = |extra: &[(&str, &str)]| {
+            let mut o = vec![
+                ("period", "1"),
+                ("after", "0"),
+                ("gap", "0"),
+                ("records", "6"),
+            ];
+            o.extend_from_slice(extra);
+            let mut h = opened(&o);
+            offers(&mut h, LEAD + 2)
+        };
+        let good = whole(&[]);
+        let first_two = 6 + 13;
+        let mut hit = good.clone();
+        hit[first_two + 37] = 0x54;
+        assert_eq!(whole(&[("sync", "3")]), hit);
+        let mut gone = good.clone();
+        gone.drain(first_two + 37..first_two + 74);
+        assert_eq!(whole(&[("drop", "3")]), gone);
     }
 
     #[test]
