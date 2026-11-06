@@ -550,8 +550,13 @@ impl Device for Sdl10x0Device {
 }
 
 impl Drop for Sdl10x0Device {
+    /// A close, but in a panic, where a thread that doesn't end must not hold it.
     fn drop(&mut self) {
-        let _ = self.close();
+        if std::thread::panicking() {
+            let _ = self.stop();
+        } else {
+            let _ = self.close();
+        }
     }
 }
 

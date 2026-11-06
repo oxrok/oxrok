@@ -153,12 +153,19 @@ impl Wire {
 
 struct Fake(Arc<Mutex<Wire>>, &'static str);
 
+impl Fake {
+    /// The wire, also when a failed test poisoned it: a close comes through here.
+    fn wire(&self) -> std::sync::MutexGuard<'_, Wire> {
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
 impl ScpiTransport for Fake {
     fn resource(&self) -> &str {
         self.1
     }
     fn send(&mut self, data: &[u8]) -> Result<()> {
-        let mut wire = self.0.lock().unwrap();
+        let mut wire = self.wire();
         if wire.fail_writes_after.is_some_and(|most| wire.writes.len() >= most) {
             return Err(Error::device("the write failed"));
         }
@@ -168,13 +175,13 @@ impl ScpiTransport for Fake {
         Ok(())
     }
     fn read_begin(&mut self) -> Result<()> {
-        let mut wire = self.0.lock().unwrap();
+        let mut wire = self.wire();
         wire.done = false;
         wire.look();
         Ok(())
     }
     fn read_data(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-        let mut wire = self.0.lock().unwrap();
+        let mut wire = self.wire();
         if wire.read_error {
             return Err(Error::device("the line is gone"));
         }
@@ -188,10 +195,10 @@ impl ScpiTransport for Fake {
         Ok(0)
     }
     fn read_complete(&self) -> bool {
-        self.0.lock().unwrap().done
+        self.wire().done
     }
     fn close(&mut self) -> Result<()> {
-        let mut wire = self.0.lock().unwrap();
+        let mut wire = self.wire();
         wire.closes += 1;
         // What's on its way to a connection dies with it, if the line has those.
         if self.1.starts_with("tcp") {
@@ -200,11 +207,11 @@ impl ScpiTransport for Fake {
         Ok(())
     }
     fn reopen(&mut self) -> Result<()> {
-        self.0.lock().unwrap().reopens += 1;
+        self.wire().reopens += 1;
         Ok(())
     }
     fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
-        let mut wire = self.0.lock().unwrap();
+        let mut wire = self.wire();
         wire.discards += 1;
         // A wait for quiet outlasts what's only some looks late.
         if let Some((Some(Due::Looks(n)), _)) = wire.coming.front_mut() {
@@ -260,6 +267,16 @@ fn until_end(rx: &Receiver<(usize, Packet)>) -> Vec<Packet> {
             return out;
         }
     }
+}
+
+/// A close, failing at a bound where a thread that doesn't end would hang the run.
+fn close_within_bound(mut d: Sdl10x0Device) -> Sdl10x0Device {
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        d.close().unwrap();
+        let _ = done.send(d);
+    });
+    result.recv_timeout(BOUND).expect("a close that ends")
 }
 
 fn capture(d: &mut Sdl10x0Device) -> Vec<Packet> {
@@ -933,7 +950,7 @@ fn a_close_joins_and_lets_go_of_the_sink() {
     until("the thread to hold the link", move || Arc::strong_count(&shared) > 1);
     std::thread::sleep(READ);
     assert!(Arc::strong_count(&d.shared.link) > 1, "still running");
-    d.close().unwrap();
+    let d = close_within_bound(d);
     assert_eq!(Arc::strong_count(&d.shared.link), 1, "joined");
     // The sender went with it.
     while rx.try_recv().is_ok() {}
@@ -951,7 +968,7 @@ fn a_second_start_is_busy_and_a_closed_device_is_refused() {
     assert!(matches!(d.start(PacketSink::new(tx2, 0)), Err(Error::Busy)));
     d.stop().unwrap();
     drop(rx);
-    d.close().unwrap();
+    let mut d = close_within_bound(d);
     let (tx3, _rx3) = sync_channel(1);
     assert!(d.start(PacketSink::new(tx3, 0)).is_err());
 }
@@ -1003,15 +1020,7 @@ fn a_client_gets_in_during_a_capture_and_reads_its_own_answer() {
     assert_eq!(lines(&w).iter().filter(|l| *l == ":CURR:LEV:IMM 1.500").count(), 20);
     d.stop().unwrap();
     // Every frame's voltage is a voltage, and its current a current.
-    let mut packets = Vec::new();
-    while let Ok((_, p)) = rx.recv_timeout(BOUND) {
-        let end = matches!(p, Packet::End);
-        packets.push(p);
-        if end {
-            break;
-        }
-    }
-    let got = frames(&packets);
+    let got = frames(&until_end(&rx));
     assert_ne!(got.len(), 0);
     assert!(got.iter().all(|(v, a)| *v >= 10.0 && *a < 10.0), "{got:?}");
 }
@@ -1033,6 +1042,7 @@ fn with_a_question_out_a_set_goes_and_a_get_is_busy() {
     assert!(!lines(&w).contains(&":INPUT?".to_owned()));
     d.stop().unwrap();
     drop(rx);
+    close_within_bound(d);
 }
 
 /// A consumer that holds the queue up is no silence of the load's.
@@ -1046,6 +1056,7 @@ fn a_slow_client_is_no_silence() {
     d.start(PacketSink::new(tx, 0)).unwrap();
     let mut packets = Vec::new();
     loop {
+        assert!(packets.len() < 100, "a limit was ignored");
         std::thread::sleep(READ * 2);
         let (_, p) = rx.recv_timeout(BOUND).unwrap();
         let end = matches!(p, Packet::End);
