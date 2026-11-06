@@ -140,6 +140,7 @@ pub mod drivers {
     pub mod serial_lcr;
     pub mod sysclk_lwla;
     pub mod sysclk_sla5032;
+    pub mod teleinfo;
     pub mod testo;
     pub mod uni_t_dmm;
     pub mod uni_t_ut181a;
@@ -171,6 +172,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::mastech_ms6514::MastechMs6514Driver));
     registry.register(Box::new(drivers::gmc_mh_1x_2x::GmcRs232Driver));
     registry.register(Box::new(drivers::gmc_mh_1x_2x::GmcBd232Driver));
+    registry.register(Box::new(drivers::teleinfo::TeleinfoDriver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::bkprecision_1856d::Bkprecision1856dDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
