@@ -88,6 +88,7 @@ pub mod drivers {
     pub mod atten_pps3xxx;
     pub mod bkprecision_1856d;
     pub mod cem_dt_885x;
+    pub mod center_3xx;
     pub mod chronovu_la;
     pub mod colead_slm;
     pub mod conrad_digi_35_cpu;
@@ -159,6 +160,8 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
     registry.register(Box::new(drivers::agilent_dmm::AgilentDmmDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
+    registry.register(Box::new(drivers::center_3xx::Center309Driver));
+    registry.register(Box::new(drivers::center_3xx::VoltcraftK204Driver));
     registry.register(Box::new(drivers::itech_it8500::ItechIt8500Driver));
     registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
