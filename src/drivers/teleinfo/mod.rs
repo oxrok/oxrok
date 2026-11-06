@@ -30,7 +30,7 @@
 //!
 //! - A group whose control is a space is taken. A sum's low six bits of 0 give one
 //!   group in 64 that control, which the specification allows (Enedis-NOI-CPT_02E,
-//!   1.5.2, a control of 0x20 to 0x7e; `PTEC HP..` always has it; LibTeleinfo's parser
+//!   1.5.2, a control of 0x20 to 0x7e; `PTEC HP..` always has it; `LibTeleinfo`'s parser
 //!   notes "checksum last one can be space separator"). In `sscanf`'s
 //!   format (`protocol.c:134`) the space ahead of `%c` steps over it, so C reads the
 //!   CR as the control and drops the group: `BASE` at 399 Wh gives no reading, and an
@@ -451,10 +451,10 @@ impl Device for TeleinfoDevice {
         // A last capture's thread may wait to send its End to a queue nobody reads:
         // tell it, and it gives up within a bound.
         self.join();
-        if self.read_before {
-            if let Err(e) = port.purge() {
-                log::debug!("Flush: {e}.");
-            }
+        if self.read_before
+            && let Err(e) = port.purge()
+        {
+            log::debug!("Flush: {e}.");
         }
         self.read_before = true;
         let capture = Capture {
@@ -556,12 +556,12 @@ impl Capture {
                         }
                         at += used;
                     }
-                    let sent = Instant::now();
-                    watch.excuse(sent - seen);
+                    let parsed = Instant::now();
+                    watch.excuse(parsed - seen);
                     if sample {
-                        watch.counted(sent);
+                        watch.counted(parsed);
                     }
-                    seen = sent;
+                    seen = parsed;
                     buf.copy_within(at..held, 0);
                     held -= at;
                     if held >= BUF_SIZE {

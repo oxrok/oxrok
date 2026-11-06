@@ -103,7 +103,7 @@ impl Port for FakePort {
             line.failed_reads -= 1;
             return Err(Error::Disconnected);
         }
-        let held = line.every > 0 && line.reads % line.every != 0;
+        let held = line.every > 0 && !line.reads.is_multiple_of(line.every);
         if line.queued.is_empty()
             && !held
             && let Some(p) = line.stream.clone()
@@ -286,7 +286,7 @@ fn the_constants_are_c_s_and_the_specification_s() {
 fn a_scan_without_a_conn_or_a_port_finds_nothing_and_does_not_fail() {
     assert!(TeleinfoDriver.scan(&[]).unwrap().is_empty());
     let conn = (Key::Conn, Value::Str("/dev/ttyDOESNOTEXIST".to_owned()));
-    assert!(TeleinfoDriver.scan(&[conn.clone()]).unwrap().is_empty());
+    assert!(TeleinfoDriver.scan(std::slice::from_ref(&conn)).unwrap().is_empty());
     let comm = (Key::Serialcomm, Value::Str("fast".to_owned()));
     assert!(TeleinfoDriver.scan(&[conn, comm]).unwrap().is_empty());
 }
@@ -681,7 +681,7 @@ fn a_time_limit_ends_a_stream() {
         let mut d = device(Optarif::Base, &line);
         limit_msec(&mut d, 100);
         let got = packets(&start(&mut d));
-        assert!(!values(&got, 1).is_empty());
+        assert_ne!(values(&got, 1), [0f32; 0]);
         assert_eq!(failure(&got), None);
     });
 }

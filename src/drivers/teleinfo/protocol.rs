@@ -257,8 +257,8 @@ mod tests {
         })
     }
 
-    fn some(label: &str, data: &str) -> Option<(String, String)> {
-        Some((label.to_owned(), data.to_owned()))
+    fn fields(label: &str, data: &str) -> (String, String) {
+        (label.to_owned(), data.to_owned())
     }
 
     #[test]
@@ -266,7 +266,7 @@ mod tests {
         // A sum done by hand, in the emulator model's test too.
         assert_eq!(control(b"IINST", b"002"), 0x59);
         assert_eq!(control(b"PTEC", b"HP.."), 0x20);
-        assert_eq!(parsed(b"\nIINST 002 Y\r"), some("IINST", "002"));
+        assert_eq!(parsed(b"\nIINST 002 Y\r"), Some(fields("IINST", "002")));
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn a_control_of_a_space_is_right() {
-        assert_eq!(parsed(b"\nPTEC HP..  \r"), some("PTEC", "HP.."));
+        assert_eq!(parsed(b"\nPTEC HP..  \r"), Some(fields("PTEC", "HP..")));
         // Only with the separator and the control both there.
         assert_eq!(parsed(b"\nPTEC HP.. \r"), None, "no control");
         assert_eq!(parsed(b"\nPTEC HP..\r"), None, "no separator");
@@ -298,22 +298,22 @@ mod tests {
 
     #[test]
     fn white_space_is_as_in_a_format() {
-        assert_eq!(parsed(b"\n\n IINST  002 \t Y\r"), some("IINST", "002"));
-        assert_eq!(parsed(b"\nIINST\t002\tY\r"), some("IINST", "002"));
-        assert_eq!(parsed(b"\nIINST\x0b002\x0cY\r"), some("IINST", "002"));
-        assert_eq!(parsed(b"\nIINST\r\n002 Y\r"), some("IINST", "002"), "across a CR");
+        assert_eq!(parsed(b"\n\n IINST  002 \t Y\r"), Some(fields("IINST", "002")));
+        assert_eq!(parsed(b"\nIINST\t002\tY\r"), Some(fields("IINST", "002")));
+        assert_eq!(parsed(b"\nIINST\x0b002\x0cY\r"), Some(fields("IINST", "002")));
+        assert_eq!(parsed(b"\nIINST\r\n002 Y\r"), Some(fields("IINST", "002")), "across a CR");
     }
 
     #[test]
     fn a_field_is_cut_at_its_width_and_goes_on_as_the_next() {
         // "BBRHCJBX 000000001 d": eight of a label.
         let eight = line("BBRHCJBX", "000000001");
-        assert_eq!(parsed(&eight), some("BBRHCJBX", "000000001"));
+        assert_eq!(parsed(&eight), Some(fields("BBRHCJBX", "000000001")));
         // Nine: the ninth is data, the rest does not fit the format.
         assert_eq!(parsed(&line("BBRHCJBXY", "000000001")), None);
         // Twelve of data are taken, thirteen overrun C's array, and a fourteenth is
         // read for the control.
-        assert_eq!(parsed(&line("BASE", "000000000012")), some("BASE", "000000000012"));
+        assert_eq!(parsed(&line("BASE", "000000000012")), Some(fields("BASE", "000000000012")));
         assert_eq!(parsed(&line("BASE", "0000000000013")), None);
         assert_eq!(parsed(&line("BASE", "00000000000014")), None);
         // A label's ninth byte starts the data, with no white space between.
@@ -324,7 +324,7 @@ mod tests {
         let mut text = b"\nBASEBASEB ".to_vec();
         text.push(u8::try_from(control(b"BASEBASE", b"B")).unwrap());
         text.push(CR);
-        assert_eq!(parsed(&text), some("BASEBASE", "B"));
+        assert_eq!(parsed(&text), Some(fields("BASEBASE", "B")));
     }
 
     #[test]
@@ -338,7 +338,7 @@ mod tests {
     fn high_bytes_sum_as_signed_chars() {
         // 0xe9 is -23, so "BASE 000000001" has 'L', 0x4c, and with it 0x35, '5'.
         // tests/emu/teleinfo's "a high byte in data" shows C agrees.
-        assert_eq!(parsed(b"\nBASE 000000001\xe9 5\r"), some("BASE", "000000001\u{fffd}"));
+        assert_eq!(parsed(b"\nBASE 000000001\xe9 5\r"), Some(fields("BASE", "000000001\u{fffd}")));
         assert_eq!(parsed(b"\nBASE 000000001\xe9 B\r"), None);
         assert_eq!(parsed(b"\nBASE 000000001 \xcc\r"), None, "a high control is never right");
     }
