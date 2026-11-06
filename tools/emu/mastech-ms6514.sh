@@ -10,9 +10,9 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # api.c:85 asks serial_stream_detect for a packet of two frames with a buffer of
 # two frames, and serial.c:833 wants a buffer of two packets: every scan fails, so
 # stock sigrok-cli finds no device and nothing behind the scan has ever run. The
-# check is from 2012 (2546b05c; maxlen < packet_size * 2 at 23669c3d^), and the
-# driver has had the same 36 and 36 from its pull request on (13b72fa9, 23669c3d,
-# 2019). So the oracle carries a one-line patch of api.c:85, which asks for one
+# doubling is from d03815a0 (2019-05-01, / 2 until then), ahead of the driver's
+# first commit (13b72fa9, 2019-08-17), which had the same 36 and 36. So the oracle
+# carries a one-line patch of api.c:85, which asks for one
 # frame (tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch).
 
 # A frame: main, aux (16 bit hex), then the bytes 10, 11, 12.

@@ -1,0 +1,22 @@
+diff --git a/src/hardware/teleinfo/api.c b/src/hardware/teleinfo/api.c
+index e7b4e234..c4cf95ec 100644
+--- a/src/hardware/teleinfo/api.c
++++ b/src/hardware/teleinfo/api.c
+@@ -46,7 +46,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	struct sr_dev_inst *sdi;
+ 	GSList *devices = NULL, *l;
+ 	const char *conn = NULL, *serialcomm = NULL;
+-	uint8_t buf[292];
++	uint8_t buf[2 * 292];
+ 	size_t len;
+ 	struct sr_config *src;
+ 
+@@ -76,7 +76,7 @@ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ 	sr_info("Probing serial port %s.", conn);
+ 
+ 	/* Let's get a bit of data and see if we can find a packet. */
+-	if (serial_stream_detect(serial, buf, &len, len,
++	if (serial_stream_detect(serial, buf, &len, len / 2,
+ 			teleinfo_packet_valid, NULL, NULL, 3000) != SR_OK)
+ 		goto scan_cleanup;
+ 

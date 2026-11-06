@@ -2516,11 +2516,11 @@ hardware.
 **Stock libsigrok finds no device through a scan, in any build since the
 driver's first commit.** `api.c:85` asks `serial_stream_detect` for a
 packet of 36 bytes with a 36 byte buffer, and `serial.c:833` wants two
-packets' room, so every scan ends at `:839`. The check is from 2012
-(`2546b05c`, moved by `766456be`; `maxlen < packet_size * 2` at
-`23669c3d^`), and the driver had the same 36 and 36 from its pull
-request (`13b72fa9`) on. **So every case here is against a patched C:**
-the oracle's `api.c:85` asks for 18 bytes, one frame
+packets' room, so every scan ends at `:839`. That doubling is from
+`d03815a0` (2019-05-01, `/ 2` until then), ahead of the driver's first
+commit (`13b72fa9`, 2019-08-17), which already had the same 36 and 36.
+**So every case here is against a patched C:** the oracle's `api.c:85`
+asks for 18 bytes, one frame
 (`tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch`). `gcov.txt`
 doesn't say so, and its figures are that patched C's.
 
@@ -2943,8 +2943,10 @@ session to the vusb unlink race.
 
 ## Oracle
 
-The oracle is libsigrok 0bc24877 with two patches, in
-`tools/oracle-patches/`. Apply both when building the oracle.
+The oracle is libsigrok 0bc24877 with three patches, in
+`tools/oracle-patches/`. Apply all when building the oracle, and mark
+each file `git update-index --assume-unchanged`, or `--dirty` changes
+attribution and gcov headers.
 
 - `libsigrok-testo-sdi-driver.patch` restores the `sdi->driver = di;`
   that `b258c09f` (2017) removed from testo's scan: without it,
@@ -2954,6 +2956,10 @@ The oracle is libsigrok 0bc24877 with two patches, in
 - `libsigrok-mastech-ms6514-scan.patch` makes the MS6514's scan ask for
   one frame: asking for two with a buffer of two refuses every scan, so
   stock libsigrok finds no MS6514.
+- `libsigrok-teleinfo-scan.patch` gives teleinfo's scan a buffer of two
+  packets, for the same reason: `d03815a0` left stock libsigrok finding
+  no Teleinfo since 0.5.2. It looks at byte 292 as 0.5.1 did, and differs
+  from 0.5.1 only on an option past that byte.
 
 The sigrok build that `tools/diffcli.sh` and the emulation work of
 phase 9 compare against, built from source under `~/work/sigrok` with
