@@ -805,13 +805,14 @@ mod tests {
         d.get(&Key::Voltage, None).unwrap();
         d.set(&Key::Enabled, &Value::Bool(true), None).unwrap();
         d.get(&Key::Voltage, None).unwrap();
+        let after_a_reading = d.link.lock().unwrap().wait_left();
+        assert!(after_a_reading <= Duration::from_millis(80), "not long: {after_a_reading:?}");
         d.get(&Key::Voltage, None).unwrap();
         let seen = seen.lock().unwrap();
         let gap = |i: usize| seen.writes[i + 1].0 - seen.writes[i].0;
         assert!(gap(0) >= Duration::from_millis(530), "status: {:?}", gap(0));
         assert!(gap(2) >= Duration::from_millis(530), "setting: {:?}", gap(2));
         assert!(gap(3) >= Duration::from_millis(80), "{:?}", gap(3));
-        assert!(gap(3) < Duration::from_millis(530), "a reading is not long: {:?}", gap(3));
     }
 
     #[test]
@@ -824,12 +825,13 @@ mod tests {
             let (fake, seen) = Fake::new();
             let d = device(fake, b"VELLEMANPS3005DV1.3");
             d.get(&key, None).unwrap();
+            let left = d.link.lock().unwrap().wait_left();
+            assert!(left <= Duration::from_millis(80), "{key:?}: {left:?}");
             d.get(&Key::Voltage, None).unwrap();
             let seen = seen.lock().unwrap();
             let gap = seen.writes[1].0 - seen.writes[0].0;
             assert_eq!(seen.writes[0].1, b"STATUS?");
             assert!(gap >= Duration::from_millis(80), "{key:?}: {gap:?}");
-            assert!(gap < Duration::from_millis(530), "{key:?}: {gap:?}");
         }
     }
 

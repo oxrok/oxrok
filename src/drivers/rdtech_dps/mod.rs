@@ -1298,14 +1298,21 @@ mod tests {
 
     #[test]
     fn a_time_limit_goes_past_the_bound_and_recovers() {
-        let (mut d, _, _, mode) = switchable();
-        set(&mut d, &Key::LimitMsec, 2500_u64).unwrap();
+        let (mut d, writes, _, mode) = switchable();
+        set(&mut d, &Key::LimitMsec, 4000_u64).unwrap();
         d.no_reply_bound = Duration::from_millis(100);
         let (tx, rx) = sync_channel(4096);
         d.start(PacketSink::new(tx, 0)).unwrap();
         wait_for_frame(&rx);
         *mode.lock().unwrap() = Mode::Silent;
-        std::thread::sleep(Duration::from_millis(1000));
+        // A read failed after its three tries, far past the bound, and the next gone
+        // out: waited for, as a sleep can run out the limit where sleeps run long.
+        let asked = writes.lock().unwrap().len();
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        while writes.lock().unwrap().len() < asked + 4 {
+            assert!(Instant::now() < deadline, "the capture ended in the quiet");
+            std::thread::sleep(Duration::from_millis(5));
+        }
         *mode.lock().unwrap() = Mode::Good;
         let started = Instant::now();
         let packets = packets_until_end(&rx);

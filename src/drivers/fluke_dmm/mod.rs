@@ -700,16 +700,23 @@ mod tests {
 
     #[test]
     fn an_answered_question_paces_at_the_poll_period() {
+        // A pace by the timeout shows at a timeout no stall of this host reaches.
+        static LONG_TIMEOUT: Profile = Profile {
+            name: "quick",
+            family: protocol::Family::Fields,
+            poll_period: Duration::from_millis(30),
+            timeout: Duration::from_secs(60),
+        };
         let (fake, seen) = Fake::new(reading);
-        let mut d = device(&QUICK, fake);
+        let mut d = device(&LONG_TIMEOUT, fake);
         d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
         let rx = start(&mut d);
         packets_to_end(&rx);
         let seen = seen.lock().unwrap();
         for pair in seen.writes.windows(2) {
             let gap = pair[1].0 - pair[0].0;
-            assert!(gap > QUICK.poll_period, "{gap:?}");
-            assert!(gap < QUICK.timeout, "{gap:?}");
+            assert!(gap > LONG_TIMEOUT.poll_period, "{gap:?}");
+            assert!(gap < LONG_TIMEOUT.timeout, "{gap:?}");
         }
     }
 

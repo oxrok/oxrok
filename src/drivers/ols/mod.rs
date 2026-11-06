@@ -765,6 +765,8 @@ mod tests {
         /// Reads fail from this much data read on: a hangup.
         hangup_after: Option<usize>,
         read: usize,
+        /// Bytes that come at the read of this number, however long that takes.
+        at_read: Option<(usize, Vec<u8>)>,
     }
 
     impl Fake {
@@ -778,6 +780,7 @@ mod tests {
                 fail_drains: false,
                 hangup_after: None,
                 read: 0,
+                at_read: None,
             };
             (fake, seen)
         }
@@ -794,7 +797,16 @@ mod tests {
             Ok(())
         }
         fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
-            self.seen.lock().unwrap().reads_from.push(Instant::now());
+            let reads = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.reads_from.push(Instant::now());
+                seen.reads_from.len()
+            };
+            if self.at_read.as_ref().is_some_and(|(n, _)| reads >= *n) {
+                let (_, bytes) = self.at_read.take().expect("just seen");
+                let now = Instant::now();
+                self.input.extend(bytes.into_iter().map(|b| (now, b)));
+            }
             if self.hangup_after.is_some_and(|n| self.read >= n) {
                 return Err(Error::device("Broken pipe"));
             }
@@ -994,17 +1006,21 @@ mod tests {
         assert!(packets.iter().any(|p| matches!(p, Packet::Failed(_))), "cut short: {packets:?}");
     }
 
-    /// A capture where a word comes, `gap` of nothing, then another: the bytes
-    /// it kept, and how long from the first word it took.
-    fn capture_with_a_gap(gap: Duration) -> (Vec<u8>, Duration) {
+    /// A capture where a word comes, then reads with nothing, then another word at
+    /// the read of number `second_at`: the bytes it kept, and how long from the
+    /// first word it took. An empty read asks for [`STOP_CHECK`], so that is
+    /// `second_at` slices of time at the least, and more where sleeps run long,
+    /// which only makes the silence's end come sooner by the count of reads.
+    fn capture_with_a_gap(second_at: usize, silence: Duration) -> (Vec<u8>, Duration) {
         fn none(_: &[u8]) -> Option<(Duration, Vec<u8>)> {
             None
         }
         let (mut fake, _) = Fake::new(none);
         let at = Instant::now();
         fake.input.extend([1u8, 0, 0, 0].map(|b| (at, b)));
-        fake.input.extend([2u8, 0, 0, 0].map(|b| (at + gap, b)));
+        fake.at_read = Some((second_at, vec![2, 0, 0, 0]));
         let mut dev = device(fake);
+        dev.end_of_data = silence;
         let (s, rx) = sink();
         dev.start(s).unwrap();
         let packets = until_end(&rx);
@@ -1015,14 +1031,16 @@ mod tests {
 
     #[test]
     fn silence_ends_a_capture_at_a_hundred_milliseconds() {
-        // Literal, not from END_OF_DATA: a constant of 2000 ms passed the rest.
-        let (kept, took) = capture_with_a_gap(Duration::from_millis(80));
-        assert_eq!(kept, [2, 0, 0, 0, 1, 0, 0, 0], "80 ms is inside the capture");
-        assert!(took >= Duration::from_millis(180), "then 100 ms more, took {took:?}");
-        let (kept, took) = capture_with_a_gap(Duration::from_millis(200));
+        // A few empty reads inside the silence don't end it, and it ends after.
+        let silence = Duration::from_millis(500);
+        let (kept, took) = capture_with_a_gap(3, silence);
+        assert_eq!(kept, [2, 0, 0, 0, 1, 0, 0, 0], "inside the capture");
+        assert!(took >= silence, "then the silence, took {took:?}");
+        // Literal, not from END_OF_DATA: a constant of 2000 ms passed the rest. Ten
+        // slices are 200 ms, which no capture that ends at 100 ms reads as far as.
+        let (kept, took) = capture_with_a_gap(11, END_OF_DATA);
         assert_eq!(kept, [1, 0, 0, 0], "the silence ended it before the rest");
         assert!(took >= Duration::from_millis(100), "too soon: {took:?}");
-        assert!(took < Duration::from_millis(200), "too late: {took:?}");
     }
 
     #[test]
