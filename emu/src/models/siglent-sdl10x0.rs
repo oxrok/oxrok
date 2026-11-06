@@ -7,7 +7,7 @@
 //! The device, and how sure this is. The manual is the maker's SDL1000X Programming
 //! Guide (`siglentna.com/download/8968`, sha256 `bd3ec689...`), by PDF page:
 //!
-//! - USB and LAN are its carriers, the LAN with VXI-11, sockets and telnet (9, 10). A
+//! - USB and LAN are its carriers, the LAN with VXI-11, sockets and telnet (7). A
 //!   serial port it has none of, so this model is on no CDC-ACM.
 //! - `*IDN?`: `Siglent Technologies,SDL1020X,0123456789,1.01.01.15` (15; the page has a
 //!   full stop after it, taken for the sentence's).
