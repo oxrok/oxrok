@@ -16,6 +16,7 @@
 EMU_MODEL=cem-dt-885x
 EMU_CDC=1
 EMU_DRIVER=cem-dt-885x
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=cem-dt-885x
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -116,6 +117,17 @@ s/.*/bulk_out 02 99 -> told/
 s/^(Failed to get .[a-z_]+.: )device error: generic\/unspecified error$/\1generic\/unspecified error/
 s/^(Failed to set device option .[a-z_]+.: )device error: generic\/unspecified error\.$/\1generic\/unspecified error./
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
+    NO_BYTE_BUG="protocol.c:425-427 takes a read that found no byte yet for a meter that left, and at 9600 baud that is nearly every read: a get or a set of the meter's state fails on a meter that is talking; oxrok waits for the byte. The other cases here hold what C's wire would be, under a preload that makes the read wait"
+    NO_BYTE_SHOW="As NO_BYTE_BUG: a get finds no byte (protocol.c:425-427), and show.c prints each list with no (current), which oxrok has"
+    NO_END_BUG="wait_for_token with a timeout of 0 goes on for as long as bytes come (protocol.c:424-440): with the preload's read a meter that does not say it holds it for ever; oxrok gives up after 2 s"
+    DEAF_BUG="cem_dt_885x_toggle goes on for ever on a meter that does not hear it (protocol.c:459-467); oxrok gives up after 5 s"
+    POWER_BUG="cem_dt_885x_power_off goes on for ever on a meter that goes on talking (protocol.c:819-828); oxrok gives up after 5 s"
+    SILENT_BUG="receive_data never hears of a silent meter, so a --samples capture never ends; oxrok ends it after 3 s with no byte"
+    UNPLUG_BUG="after an unplug a --samples capture hangs in C, by reading protocol.c:392 as nothing arriving with revents just G_IO_IN; oxrok's read fails and ends it"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    STALE_RANGE_BUG="protocol.c:806 does not store the range it set, so a get after the set answers the old one (:729); oxrok answers the new one"
+    OVERSHOOT_BUG="send_data sends a whole packet of up to 50 levels (protocol.c:369-371) and looks at the limit after it (:210); session.c's limit cuts only the decoders' input, so stdout has them all; oxrok holds the limit"
+    OVERFLOW_BUG="a record's head with no known token is never reset (protocol.c:338-341), so :330 stores each later byte on past buf[100] and over last_spl, hold_last_sent and the heap after devc; oxrok stores no more than the head"
 
     # The scan: the first a5.
     # No chunk= on this stream: with every read completing all the time, a close
@@ -171,10 +183,10 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     done
     emu_case "show a meter gone quiet" --keep-header --tx-filter "$OUT" -- -d $X --show
     emu_options setters=0 time-only=1
-    :
+    emu_case "get freq that never comes" --oracle-bug "$NO_END_BUG" --oracle-hangs --timeout 4 --stderr --filter "$F" --expect-fail --tx-filter "$OUT" -- -d $X --get spl_weight_freq
     # In hold nothing but ff comes, and the first of them sets the flag.
     emu_options setters=0 time-only=1 hold-blocks=2
-    :
+    emu_case "get freq in hold" --oracle-bug "$NO_END_BUG" --oracle-hangs --timeout 4 --stderr --filter "$F" --expect-fail --tx-filter "$OUT" -- -d $X --get spl_weight_freq
 
     # A setting: nothing to do, one toggle, and toggles lost. A block that goes out
     # as a command does brings the old state after it, and C takes that as the
@@ -216,7 +228,8 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_options deaf=2
     emu_case "set range lost twice" --no-output --tx-filter "$OUT" -- -d $X -c spl_meas_range=30-80 --set
     emu_options deaf=1000000
-    :
+    emu_case "set freq on a deaf meter" --oracle-bug "$DEAF_BUG" --oracle-hangs --timeout 7 --stderr --filter "$F" --expect-fail --tx-filter '/^bulk_in 82 /d
+/^bulk_out 02 99 -> 1$/d' -- -d $X -c spl_weight_freq=C --set
     emu_options hold-mode=max $QH
     emu_case "set hold_max off from max" --no-output --tx-filter "$OUT" -- -d $X -c hold_max=off --set
     emu_case "set hold_min on from max" --no-output --tx-filter "$OUT" -- -d $X -c hold_min=on --set
@@ -228,7 +241,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_options blocks=3 startup=3
     emu_case "set two" --no-output --tx-filter "$FREQ" -- -d $X -c spl_weight_freq=C:spl_weight_time=S --set
     emu_options
-    :
+    emu_case "set range then get it" --oracle-differs "$STALE_RANGE_BUG" --tx-filter "$OUT" -- -d $X -c spl_meas_range=30-80 --get spl_meas_range
     # Refused.
     emu_options setters=0
     emu_case "set freq no such" --stderr --filter "$F" --expect-fail --tx-filter "$OUT" -- -d $X -c spl_weight_freq=Z --set
@@ -243,7 +256,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_options deaf=2
     emu_case "power off lost twice" --no-output --tx-filter "$POWER" -- -d $X -c power_off=on --set
     emu_options deaf=1000000
-    :
+    emu_case "power off on a deaf meter" --oracle-bug "$POWER_BUG" --oracle-hangs --timeout 7 --stderr --filter "$F" --expect-fail --tx-filter "$POWER" -- -d $X -c power_off=on --set
 
     # Live levels. Which ones show depends on the display token after each.
     emu_options setters=0
@@ -309,7 +322,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_options no-level=1 log=a02:120
     emu_case "log over the packet size" --tx-filter "$ASK" --digest --filter '$=' -- -d $X -c data_source=Memory --samples 500
     emu_case "log limit between packets" --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 50 -O csv:header=false
-    :
+    emu_case "log limit in a packet" --oracle-differs "$OVERSHOOT_BUG" --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 3
     # The stop inside the last record, on the byte of its end marker.
     emu_options no-level=1 log=a02:2
     emu_case "log limit at the end" --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 2
@@ -329,28 +342,28 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     JUNK=$(printf '12%.0s' $(seq 1 4000))
     emu_options no-level=1 dump=bb0064${JUNK}dd
     [ "$no_oracle" = 1 ] || SIGROK_CLI=$TMP/cem-quiet-cli
-    :
+    emu_case "log unknown record token, long" --oracle-bug "$OVERFLOW_BUG" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 --no-output --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 100
     [ "$no_oracle" = 1 ] || SIGROK_CLI=$CEM_BLOCKING_CLI
 
     # What ends a capture or does not.
     emu_options setters=0 time-only=1 blocks=2
-    :
+    emu_case "silence" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 6 --no-output --tx-filter "$OUT" -- -d $X --samples 1
     # Its log has no end and no more bytes.
     emu_options time-only=1 blocks=2 dump=bb0064
-    :
+    emu_case "silence ends a log" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 6 --no-output --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 1
     emu_options setters=0 mark=20
-    :
+    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 --filter '1!d;s/.*/levels/' --tx-filter "$OUT" -- -d $X --samples 100000
     # The model goes on sending after the point, so only a stop ends it. oxrok
     # takes SIGINT only once its capture is under way, so the point comes late.
     emu_options setters=0 mark=20
-    :
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --filter '1!d;s/.*/levels/' --tx-filter "$OUT" -- -d $X --continuous
 
     # The library runner finds libsigrok by sigrok-cli's path, so the real one; the
     # scan's read waits through its environment.
     SIGROK_CLI=$CEM_STOCK_CLI
     SCAN=LD_PRELOAD=$TMP/cem-scan.so
     emu_options no-level=1
-    emu_case "log with no limit" --libsigrok --oracle-env "$SCAN" --tx-filter "$ASK" -- -d $X -c data_source=Memory --continuous
+    emu_case "log with no limit" --libsigrok --oxrok --oracle-env "$SCAN" --tx-filter "$ASK" -- -d $X -c data_source=Memory --continuous
     emu_options setters=0
     emu_case "lib stop" --libsigrok --oracle-env "$SCAN" --tx-filter "$OUT" -- -d $X --continuous --stop-after 2
 
@@ -358,12 +371,12 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     [ "$no_oracle" = 1 ] || SIGROK_CLI=$TMP/cem-scan-cli
     emu_case "stock levels" --tx-filter "$OUT" -- -d $X --samples 3
     for key in spl_weight_freq spl_weight_time spl_meas_range datalog hold_max hold_min; do
-        :
+        emu_case "stock get $key" --oracle-bug "$NO_BYTE_BUG" --tx-filter "$OUT" -- -d $X --get $key
     done
     emu_case "stock get what needs no meter" --tx-filter "$OUT" -- -d $X --get power_off --get data_source --get limit_samples
-    :
+    emu_case "stock show has no state" --oracle-differs "$NO_BYTE_SHOW" --keep-header --tx-filter "$OUT" -- -d $X --show
     emu_options
-    :
+    emu_case "stock set fails" --oracle-bug "$NO_BYTE_BUG" --no-output --tx-filter "$OUT" -- -d $X -c spl_weight_freq=C --set
     emu_case "stock power off" --no-output --tx-filter "$POWER" -- -d $X -c power_off=on --set
     emu_options no-level=1
     emu_case "stock log" --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 100
