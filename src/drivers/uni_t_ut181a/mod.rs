@@ -30,6 +30,8 @@
 //!   (`protocol.c:2682`, whose field nothing sets).
 //! - An `ER` during a download ends it, an empty chunk ends it, and so does
 //!   [`DOWNLOAD_SILENCE`] with nothing read: C waits for ever, or asks for ever.
+//!   Such a capture exits 0 with its message on stderr, like every failed capture
+//!   for now. An `ER` to a count or an info ends that wait at once; C waits it out.
 //! - A time limit is checked on every pass of the loop, not only at a packet
 //!   (`protocol.c:2643`), so a silent meter ends. A live capture with only a
 //!   sample or frame limit ends after [`LIVE_SILENCE`] with nothing read.
@@ -42,9 +44,13 @@
 //! bytes, so what comes behind garbage waits for the next bytes.
 //!
 //! A reply code says nothing of what it answers, so after a wait that expired or
-//! a capture that left something on its way nothing goes out until the line is
-//! quiet ([`Link::settle`]). A download sends no request ahead of an answer, so
-//! a late answer cannot shift the ones behind it inside a capture.
+//! a capture that left something on its way nothing goes out until that answer
+//! has come, or a reply wait has passed, and the line is quiet ([`Link::settle`]).
+//! A download sends no request ahead of an answer, so a late answer cannot shift
+//! the ones behind it inside a capture. A capture takes only its own kind of
+//! packet: live measurements, or saved ones, or chunks, where C feeds any of them
+//! and a stray one can end its capture. A record info must carry the name the
+//! list had, or the start is refused: its unit gives every sample's scale.
 //!
 //! See [`protocol`].
 
@@ -92,7 +98,8 @@ const EMPTY_PAUSE: Duration = Duration::from_millis(1);
 /// How long the line must be silent before a request follows an answer that may
 /// still be on its way: much more than a pause inside a frame.
 const QUIET: Duration = Duration::from_millis(100);
-/// The most a line that never falls silent can hold the next request.
+/// The most a line that never falls silent can hold the next request, past the
+/// wait for what is owed.
 const SETTLE_MAX: Duration = Duration::from_secs(3);
 /// How long a download goes with nothing read. The longest chunk takes 2.4 s on
 /// the line, and its first byte may not come at once.
@@ -100,6 +107,8 @@ pub const DOWNLOAD_SILENCE: Duration = Duration::from_secs(5);
 /// How long a live capture that only a sample or frame limit can end goes with
 /// nothing read. The meter's rate is not known, and a range change may pause it.
 pub const LIVE_SILENCE: Duration = Duration::from_secs(10);
+/// What the meter's refusal reads as.
+const REFUSED: &str = "the meter refused the request";
 /// How long a stopped capture tries to hand over a packet on a full queue.
 const AFTER_STOP: Duration = Duration::from_millis(500);
 
@@ -178,6 +187,8 @@ struct Want {
     /// count, is wanted.
     data: Option<u8>,
     measurement: bool,
+    /// What a download's request gets: a saved measurement, a chunk or a code.
+    answer: bool,
 }
 
 /// What a wait saw, the rest of `wait_state`.
@@ -187,6 +198,9 @@ struct Got {
     data: Option<u32>,
     measurement: bool,
     info: Option<RecInfo>,
+    /// An `ER` where data was wanted.
+    refused: bool,
+    answered: bool,
 }
 
 impl Got {
@@ -194,6 +208,8 @@ impl Got {
         (want.code && self.code.is_some())
             || (want.data.is_some() && self.data.is_some())
             || (want.measurement && self.measurement)
+            || (want.answer && self.answered)
+            || self.refused
     }
 }
 
@@ -210,9 +226,12 @@ struct Link {
     info_index: usize,
     /// Something may still be on its way.
     unsettled: bool,
+    /// What the last request is still owed, when that is known.
+    owed: Option<Want>,
     /// The waits, for tests.
     reply_wait: Duration,
     first_reading: Duration,
+    settle_max: Duration,
 }
 
 impl Link {
@@ -226,8 +245,10 @@ impl Link {
             record_count: 0,
             info_index: 0,
             unsettled: false,
+            owed: None,
             reply_wait: REPLY_WAIT,
             first_reading: FIRST_READING,
+            settle_max: SETTLE_MAX,
         }
     }
 
@@ -256,11 +277,19 @@ impl Link {
             protocol::Packet::ReplyCode(ok) => {
                 if want.code {
                     got.code = Some(ok);
+                } else if !ok && want.data.is_some() {
+                    got.refused = true;
                 }
+                got.answered = true;
                 true
             }
-            protocol::Packet::Measurement(m) | protocol::Packet::Saved(m) => {
+            protocol::Packet::Measurement(m) => {
                 got.measurement |= m.began;
+                m.whole
+            }
+            protocol::Packet::Saved(m) => {
+                got.measurement |= m.began;
+                got.answered = true;
                 m.whole
             }
             protocol::Packet::RecInfo(name, info) => {
@@ -282,7 +311,11 @@ impl Link {
                 }
                 true
             }
-            protocol::Packet::Chunk(_) | protocol::Packet::Unknown(_) => true,
+            protocol::Packet::Chunk(_) => {
+                got.answered = true;
+                true
+            }
+            protocol::Packet::Unknown(_) => true,
             protocol::Packet::Bad => false,
         }
     }
@@ -307,6 +340,7 @@ impl Link {
             }
             if left.is_zero() {
                 self.unsettled = true;
+                self.owed = Some(want);
                 return Err(Error::Timeout);
             }
             if n == 0 {
@@ -315,17 +349,33 @@ impl Link {
         }
     }
 
-    /// Before a request, when something may still be on its way: reads and drops
-    /// until the line has been silent for [`QUIET`], then drops what is left. A
-    /// purge alone drops only what has arrived.
+    /// A wait for data: an `ER` is the end of it, with no more to wait for.
+    fn wait_data(&mut self, code: u8) -> Result<Got> {
+        let patience = self.reply_wait;
+        let got = self.wait(Want { data: Some(code), ..Want::default() }, patience)?;
+        if got.refused {
+            return Err(Error::device(REFUSED));
+        }
+        Ok(got)
+    }
+
+    /// Before a request, when something may still be on its way: gives an answer
+    /// that is owed a reply wait to come, for it would answer this request else,
+    /// then reads and drops until the line has been silent for [`QUIET`], then
+    /// drops what is left. A purge alone drops only what has arrived.
     fn settle(&mut self) -> Result<()> {
         if !self.unsettled {
             return Ok(());
         }
+        if let Some(owed) = self.owed.take() {
+            let patience = self.reply_wait;
+            let _ = self.wait(owed, patience);
+            self.owed = None;
+        }
         let began = Instant::now();
         let mut last = began;
         let mut buf = [0u8; 512];
-        while last.elapsed() < QUIET && began.elapsed() < SETTLE_MAX {
+        while last.elapsed() < QUIET && began.elapsed() < self.settle_max {
             if self.port()?.read(&mut buf, PASS_WAIT)? > 0 {
                 last = Instant::now();
             } else {
@@ -353,17 +403,24 @@ impl Link {
     /// `ut181a_update_recordings`.
     fn update_recordings(&mut self) -> Result<()> {
         self.send(&protocol::get_recs_count())?;
-        let want = Want { data: Some(protocol::CMD_GET_RECS_COUNT), ..Want::default() };
-        let patience = self.reply_wait;
-        let got = self.wait(want, patience)?;
+        let got = self.wait_data(protocol::CMD_GET_RECS_COUNT)?;
         let count = (got.data.unwrap_or(0) as usize).min(protocol::MAX_RECORDINGS);
         for index in 0..count {
             self.info_index = index;
             self.send(&protocol::get_rec_info(index))?;
-            let want = Want { data: Some(protocol::CMD_GET_REC_INFO), ..Want::default() };
-            self.wait(want, patience)?;
+            self.wait_data(protocol::CMD_GET_REC_INFO)?;
         }
         self.record_count = count;
+        Ok(())
+    }
+
+    /// Reads away what has come, so it answers no request. No purge: C has no flush
+    /// at a setting, and on a HID cable a flush is a report on the wire.
+    fn drop_arrived(&mut self) -> Result<()> {
+        let began = Instant::now();
+        let mut buf = [0u8; 512];
+        while began.elapsed() < self.settle_max && self.port()?.read(&mut buf, EMPTY_PAUSE)? > 0 {}
+        self.rx.clear();
         Ok(())
     }
 
@@ -371,12 +428,21 @@ impl Link {
     /// nothing is a failure.
     fn command(&mut self, frame: &[u8]) -> Result<()> {
         self.settle()?;
-        self.port()?.purge()?;
-        self.rx.clear();
+        self.drop_arrived()?;
         self.send(frame)?;
         let patience = self.reply_wait;
         let got = self.wait(Want { code: true, ..Want::default() }, patience)?;
-        if got.code == Some(true) { Ok(()) } else { Err(Error::device("the meter refused it")) }
+        if got.code == Some(true) { Ok(()) } else { Err(Error::device(REFUSED)) }
+    }
+
+    /// An entry of the list of data sources. A recording the list has lost keeps
+    /// its name, as `record_names` does, and a start refuses it.
+    fn source_name(&self, source: usize) -> &str {
+        match source {
+            SOURCE_LIVE => "Live",
+            SOURCE_SAVE => "Save",
+            _ => self.names.get(source - SOURCE_RECORDINGS).map_or("", String::as_str),
+        }
     }
 
     fn source_names(&self) -> Vec<String> {
@@ -525,6 +591,10 @@ impl UniTUt181aDevice {
         let mut link = self.link();
         link.command(&protocol::set_mode(mode))?;
         link.head.mode = mode;
+        // The range byte was the last mode's: it says nothing here until a reading
+        // does, and auto is all that a change of mode is known to leave.
+        link.head.range = 0;
+        link.head.auto_range = true;
         Ok(())
     }
 
@@ -570,11 +640,9 @@ impl UniTUt181aDevice {
             }
             SOURCE_SAVE => {
                 link.send(&protocol::get_saved_count())?;
-                let want = Want { data: Some(protocol::CMD_GET_SAVED_COUNT), ..Want::default() };
-                let patience = link.reply_wait;
-                let got = link.wait(want, patience)?;
+                let got = link.wait_data(protocol::CMD_GET_SAVED_COUNT)?;
                 capture.save_count = got.data.unwrap_or(0) as usize;
-                capture.flow = Flow::Download;
+                capture.flow = Flow::Saved;
                 link.send(&protocol::get_saved(0))?;
             }
             source => {
@@ -583,19 +651,31 @@ impl UniTUt181aDevice {
                     return Err(Error::device("no such recording"));
                 }
                 link.info_index = index;
+                let name = link.names[index].clone();
                 link.send(&protocol::get_rec_info(index))?;
-                let want = Want { data: Some(protocol::CMD_GET_REC_INFO), ..Want::default() };
-                let patience = link.reply_wait;
-                let got = link.wait(want, patience)?;
-                let info = got.info.unwrap_or_default();
+                let got = link.wait_data(protocol::CMD_GET_REC_INFO)?;
+                let info = got.info.unwrap_or_else(|| RecInfo {
+                    name: name.clone().into_bytes(),
+                    ..RecInfo::default()
+                });
+                // A late answer of another recording would label these samples, and
+                // nothing in the samples can say so.
+                if String::from_utf8_lossy(&info.name) != name.as_str() {
+                    link.names[index] = name;
+                    link.unsettled = true;
+                    return Err(Error::device("the meter's info is of another recording"));
+                }
                 capture.samples_total = info.samples as usize;
                 capture.unit = info.unit;
                 capture.interval = Some(info.interval);
                 capture.recording = index;
-                capture.flow = Flow::Download;
+                capture.flow = Flow::Recording;
                 link.send(&protocol::get_rec_samples(index, 0))?;
             }
         }
+        capture.awaiting = capture.flow != Flow::Live;
+        // The head of a frame kept here would take its tail, if that is still on its
+        // way, for a whole one.
         link.rx.clear();
         Ok(capture)
     }
@@ -643,7 +723,7 @@ impl Device for UniTUt181aDevice {
             Key::LimitFrames => Value::U64(self.limit_frames),
             Key::LimitSamples => Value::U64(self.limit_samples),
             Key::LimitMsec => Value::U64(self.limit_msec),
-            Key::DataSource => Value::from(link.source_names()[self.source].as_str()),
+            Key::DataSource => Value::from(link.source_name(self.source)),
             Key::Datalog => Value::Bool(link.head.recording),
             Key::MeasuredQuantity => {
                 let (mq, flags) = protocol::mq_of_mode(link.head.mode)
@@ -706,6 +786,16 @@ impl Device for UniTUt181aDevice {
             Key::MeasuredQuantity => Ok(ValueList::Mq(protocol::mq_list())),
             Key::Range => Ok(ValueList::Str(protocol::range_list())),
             other => Err(Error::UnknownKey(other.id().to_owned())),
+        }
+    }
+
+    /// One packet per value, of the channels a frame has: csv makes up the rest.
+    fn note_output(&self, module: &str) {
+        if module == "csv" {
+            log::warn!(
+                "Resulting CSV output data may be incomplete or incorrect: each value gets a \
+                 row of its own, with 0 for the channels it is not of. Use -O analog."
+            );
         }
     }
 
@@ -806,13 +896,15 @@ struct Limits {
     msec: u64,
 }
 
-/// What ends a capture and what comes in it.
+/// What comes in a capture and what ends it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Flow {
     /// Monitor mode's stream.
     Live,
-    /// A request after each answer.
-    Download,
+    /// Saved measurements, a request after each answer.
+    Saved,
+    /// A recording's chunks, a request after each answer.
+    Recording,
 }
 
 /// A running capture: the rest of `dev_context`.
@@ -831,6 +923,8 @@ struct Capture {
     /// `last_data.unit_text`.
     unit: Vec<u8>,
     interval: Option<u16>,
+    /// A request has gone with no answer yet.
+    awaiting: bool,
     /// `frame_started`.
     frame_open: bool,
     samples_read: u64,
@@ -859,6 +953,7 @@ impl Capture {
             recording: 0,
             unit: Vec::new(),
             interval: None,
+            awaiting: false,
             frame_open: false,
             samples_read: 0,
             frames_read: 0,
@@ -966,7 +1061,7 @@ impl Capture {
 
     fn check_silence(&mut self) {
         let quiet = self.last_byte.elapsed();
-        if self.flow == Flow::Download {
+        if self.flow != Flow::Live {
             if quiet >= self.silence.download {
                 log::error!("No answer from the meter for {} s.", quiet.as_secs());
                 self.stopping = true;
@@ -1033,15 +1128,19 @@ impl Capture {
     /// The feed and the next request, `process_packet` in a capture.
     fn handle(&mut self, packet: protocol::Packet, sink: &PacketSink, stop: &AtomicBool) {
         match packet {
-            protocol::Packet::Measurement(m) => self.feed_measurement(&m, sink, stop),
-            protocol::Packet::Saved(m) => {
+            protocol::Packet::Measurement(m) if self.flow == Flow::Live => {
+                self.feed_measurement(&m, sink, stop);
+            }
+            protocol::Packet::Saved(m) if self.flow == Flow::Saved => {
+                self.awaiting = false;
                 self.save_index += 1;
                 self.feed_measurement(&m, sink, stop);
                 if m.whole {
                     self.next_saved();
                 }
             }
-            protocol::Packet::Chunk(Some(chunk)) => {
+            protocol::Packet::Chunk(Some(chunk)) if self.flow == Flow::Recording => {
+                self.awaiting = false;
                 if self.stopping {
                     return;
                 }
@@ -1050,16 +1149,13 @@ impl Capture {
                     self.next_chunk(chunk.count);
                 }
             }
-            protocol::Packet::ReplyCode(false) if self.flow == Flow::Download && !self.stopping => {
+            protocol::Packet::ReplyCode(false) if self.flow != Flow::Live && !self.stopping => {
+                self.awaiting = false;
                 log::error!("The meter refused the request.");
                 self.stopping = true;
             }
-            protocol::Packet::ReplyCode(_)
-            | protocol::Packet::RecInfo(..)
-            | protocol::Packet::Chunk(None)
-            | protocol::Packet::ReplyData(..)
-            | protocol::Packet::Unknown(_)
-            | protocol::Packet::Bad => {}
+            // Stale, or stray: no sample and no next request comes of them.
+            _ => {}
         }
     }
 
@@ -1072,6 +1168,7 @@ impl Capture {
         if link.send(frame).is_err() {
             self.stopping = true;
         }
+        self.awaiting = true;
     }
 
     fn next_saved(&mut self) {
@@ -1128,14 +1225,22 @@ impl Capture {
         let live = self.flow == Flow::Live && !ended_by_error;
         if live {
             let _ = link.send(&protocol::monitor(false));
+            link.owed = Some(Want { code: true, ..Want::default() });
+        } else if self.awaiting {
+            link.owed = Some(Want { answer: true, ..Want::default() });
         }
         drop(link);
         if live {
             self.stopping = true;
             if let Ok((read, _)) = self.pass() {
                 for packet in read {
-                    if let protocol::Packet::Measurement(m) = packet {
-                        self.feed_measurement(&m, sink, stop);
+                    match packet {
+                        protocol::Packet::Measurement(m) => self.feed_measurement(&m, sink, stop),
+                        // The monitor off's code has come: nothing is owed.
+                        protocol::Packet::ReplyCode(_) => {
+                            self.link.lock().expect("link lock").owed = None;
+                        }
+                        _ => {}
                     }
                 }
             }

@@ -1,10 +1,10 @@
 gcov uni-t-ut181a (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        83.9%  240 of 286
-  protocol.c   91.7%  1133 of 1235
-  total        90.3%  1373 of 1521
+  api.c        83.6%  239 of 286
+  protocol.c   91.7%  1132 of 1235
+  total        90.1%  1371 of 1521
 never reached, by function (line ranges hold no reached line):
   api.c
-    ut181a_update_recordings: 74, 84, 96, 101
+    ut181a_update_recordings: 74, 80, 84, 96, 101
     ut181a_query_initial_state: 125, 132, 136, 145-146, 152
     config_get: 296, 300, 305, 310, 313, 320, 326-327
     config_set: 355, 359, 383, 399, 409-419, 423-424
@@ -15,7 +15,7 @@ never reached, by function (line ranges hold no reached line):
     ut181a_get_range_from_packet_bytes: 518, 527, 649-650
     ut181a_set_range_from_text: 671, 673, 676, 679, 814-815
     ut181a_get_mq_details_from_text: 879, 974-977
-    ut181a_send_frame: 1088
+    ut181a_send_frame: 1088, 1119
     ut181a_configure_waitfor: 1265
     ut181a_waitfor_response: 1317
     ut181a_get_value_params: 1338
@@ -34,8 +34,8 @@ never reached, by function (line ranges hold no reached line):
     ut181a_handle_events: 2889, 2892
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/serial.c         27.4%  110 of 402
-  src/serial_libsp.c   37.5%  96 of 256
-  total                31.3%  206 of 658
+  src/serial_libsp.c   35.5%  91 of 256
+  total                30.5%  201 of 658
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
@@ -73,7 +73,7 @@ never reached, by function (line ranges hold no reached line):
     sr_ser_libsp_close: 103-111
     sr_ser_libsp_flush: 126-127, 133-141
     sr_ser_libsp_drain: never called (147-167)
-    sr_ser_libsp_write: 178-179, 183, 188-190
+    sr_ser_libsp_write: 178-179, 183, 188-195
     sr_ser_libsp_read: 209-210, 216, 219-226
     sr_ser_libsp_set_params: 242-243, 253-260, 276-284
     sr_ser_libsp_set_handshake: never called (290-311)

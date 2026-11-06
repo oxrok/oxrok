@@ -9,6 +9,9 @@
 //!
 //! A frame is the magic `AB CD`, a 16 bit length of what follows, the payload,
 //! and a 16 bit sum of the length's and the payload's bytes, all little endian.
+//! `antage/ut181a` sums 2 and the bytes of the payload's length instead. The two
+//! differ when that length's low byte is 0xfe or 0xff, as in a chunk of 28 or 85
+//! samples, and nothing says which a meter does: this is C's, unsettled.
 //! The first payload byte says what the packet is: a reply code (`OK` or `ER`), a
 //! measurement, a saved measurement, a recording's info or samples, or a reply
 //! with a value and the code of the command it answers. Only that last one says
@@ -659,7 +662,7 @@ fn read_measurement(head: &mut Head, r: &mut Reader<'_>, out: &mut Measurement) 
 /// A recording's info: what a capture and a list want of it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecInfo {
-    /// The name, trimmed; none when the rest did not come but this did.
+    /// The name, trimmed.
     pub name: Vec<u8>,
     /// The unit text.
     pub unit: Vec<u8>,

@@ -78,6 +78,13 @@ struct State {
     each_read: Duration,
     /// A chunk's last byte does not come, in a frame still good.
     cut_chunks: bool,
+    /// An answer of this code comes this much later, on a paced line.
+    code_delay: Option<(u8, Duration)>,
+    /// A reading comes ahead of a monitor off's `OK`, as `antage/ut181a` allows.
+    reading_before_off: Option<Vec<u8>>,
+    /// Behind the answer of this code the head of a frame comes at once, and its
+    /// tail some reads later.
+    stale_behind: Option<(u8, Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Clone)]
@@ -124,6 +131,11 @@ impl State {
         if self.paced {
             let mut at = self.by_time.back().map_or_else(Instant::now, |(t, _)| *t);
             at = at.max(Instant::now()) + self.answer_after;
+            if let Some((delayed, by)) = self.code_delay
+                && delayed == code
+            {
+                at += by;
+            }
             for byte in bytes {
                 at += BYTE;
                 self.by_time.push_back((at, byte));
@@ -131,6 +143,10 @@ impl State {
             return;
         }
         self.ready.extend(bytes);
+        if let Some((_, head, tail)) = self.stale_behind.take_if(|(c, _, _)| *c == code) {
+            self.ready.extend(head);
+            self.by_reads.push_back((self.reads + 3, tail));
+        }
     }
 
     fn command(&mut self, payload: &[u8]) {
@@ -154,6 +170,12 @@ impl State {
                     && let Some(reading) = self.readings.pop_front()
                 {
                     out.extend(reading);
+                }
+                if !self.monitor
+                    && let Some(mut reading) = self.reading_before_off.clone()
+                {
+                    reading.extend(out);
+                    out = reading;
                 }
                 out
             }
@@ -588,6 +610,8 @@ fn the_bounds_on_silence_are_what_they_say() {
     assert_eq!(DOWNLOAD_SILENCE, Duration::from_secs(5));
     assert_eq!(LIVE_SILENCE, Duration::from_secs(10));
     assert_eq!(REPLY_WAIT, Duration::from_millis(500));
+    assert_eq!(SETTLE_MAX, Duration::from_secs(3));
+    assert_eq!(QUIET, Duration::from_millis(100));
     assert_eq!(FIRST_READING, Duration::from_secs(2));
 }
 
@@ -826,6 +850,50 @@ fn a_recording_with_no_samples_ends_at_its_first_answer() {
 }
 
 #[test]
+fn a_start_says_how_it_failed() {
+    let fake = live(&[]).with(|s| {
+        s.recordings = vec![("One", "VDC", 1, 1)];
+        s.saved = vec![saved_reading(1.0)];
+    });
+    let mut d = fake.device();
+    d.link().reply_wait = Duration::from_millis(30);
+    let start = |d: &mut UniTUt181aDevice, source: &str| {
+        d.set(&Key::DataSource, &Value::from(source), None).unwrap();
+        let (tx, _rx) = sync_channel(16);
+        d.start(PacketSink::new(tx, 0)).unwrap_err().to_string()
+    };
+    // Refused, within a wait far too short for this to be its expiry.
+    fake.state().refused.insert(0x08);
+    fake.state().refused.insert(0x0c);
+    let refused = "device error: the meter refused the request";
+    assert_eq!(start(&mut d, "Save"), refused);
+    assert_eq!(start(&mut d, "One"), refused);
+    {
+        let mut s = fake.state();
+        s.refused.clear();
+        s.silent.insert(0x08);
+        s.silent.insert(0x0c);
+    }
+    assert_eq!(start(&mut d, "Save"), "timeout");
+    assert_eq!(start(&mut d, "One"), "timeout");
+}
+
+#[test]
+fn an_er_ends_a_wait_for_data_at_once() {
+    let fake = live(&[]);
+    let d = fake.device();
+    // A wait this long would fail the test's bound if it ran out.
+    d.link().reply_wait = 2 * CAPTURE_BOUND;
+    fake.state().refused.insert(0x0e);
+    in_time(move || {
+        assert_eq!(
+            d.list(&Key::DataSource, None).unwrap_err().to_string(),
+            "device error: the meter refused the request"
+        );
+    });
+}
+
+#[test]
 fn a_start_fails_on_a_count_or_an_info_that_does_not_come() {
     let fake = live(&[]).with(|s| {
         s.recordings = vec![("One", "VDC", 1, 1)];
@@ -906,26 +974,34 @@ fn a_capture_and_a_second_one_on_an_open_device() {
 #[test]
 fn a_stop_during_a_saved_answer_leaves_nothing_for_the_next_capture() {
     in_time(|| {
-        let fake = live(&[]).with(|s| s.saved = (1..=4).map(|i| saved_reading(i as f32)).collect());
-        let mut d = fake.device();
-        d.set(&Key::DataSource, &Value::from("Save"), None).unwrap();
-        // The next capture's answers come at the line's rate, a frame in 25 ms.
-        fake.state().paced = true;
-        let (tx, rx) = sync_channel(4096);
-        d.start(PacketSink::new(tx, 0)).unwrap();
-        // Its first answer has come, so the next request is out and answering.
-        loop {
-            let (_, packet) = rx.recv_timeout(CAPTURE_BOUND).unwrap();
-            if matches!(packet, Packet::Analog(_)) {
-                break;
+        // The next capture's answers come at the line's rate, a frame in 25 ms, and
+        // then later than the quiet that follows what is owed.
+        for latency in [0u64, 300] {
+            let fake =
+                live(&[]).with(|s| s.saved = (1..=4).map(|i| saved_reading(i as f32)).collect());
+            let mut d = fake.device();
+            d.set(&Key::DataSource, &Value::from("Save"), None).unwrap();
+            {
+                let mut s = fake.state();
+                s.paced = true;
+                s.answer_after = Duration::from_millis(latency);
             }
+            let (tx, rx) = sync_channel(4096);
+            d.start(PacketSink::new(tx, 0)).unwrap();
+            // Its first answer has come, so the next request is out and answering.
+            loop {
+                let (_, packet) = rx.recv_timeout(CAPTURE_BOUND).unwrap();
+                if matches!(packet, Packet::Analog(_)) {
+                    break;
+                }
+            }
+            d.stop().unwrap();
+            drain(&rx);
+            fake.reset_writes();
+            let got = values(&capture(&mut d));
+            assert_eq!(got, [(0, 1.0), (0, 2.0), (0, 3.0), (0, 4.0)], "{latency} ms");
+            assert_eq!(fake.writes().len(), 5, "one chain of requests: {:?}", fake.writes());
         }
-        d.stop().unwrap();
-        drain(&rx);
-        fake.reset_writes();
-        let got = values(&capture(&mut d));
-        assert_eq!(got, [(0, 1.0), (0, 2.0), (0, 3.0), (0, 4.0)]);
-        assert_eq!(fake.writes().len(), 5, "one chain of requests: {:?}", fake.writes());
     });
 }
 
@@ -946,13 +1022,292 @@ fn a_setting_right_after_a_capture_gets_its_own_answer() {
 }
 
 #[test]
+fn a_refused_setting_is_refused_however_late_the_monitor_off_is_answered() {
+    in_time(|| {
+        for latency in [40u64, 110, 300] {
+            let fake = live(&[1.0]);
+            let mut d = fake.device();
+            set_u64(&mut d, &Key::LimitSamples, 1);
+            {
+                let mut s = fake.state();
+                s.paced = true;
+                s.answer_after = Duration::from_millis(latency);
+            }
+            capture(&mut d);
+            fake.state().refused.insert(0x02);
+            let r = d.set(&Key::Range, &Value::from("6V"), None);
+            assert!(r.is_err(), "{latency} ms: {r:?}");
+            assert_eq!(d.get(&Key::Range, None).unwrap(), Value::from("auto"), "{latency} ms");
+        }
+    });
+}
+
+#[test]
+fn a_reading_ahead_of_the_monitor_off_s_ok_answers_nothing() {
+    in_time(|| {
+        // A scan meets one, and takes it for a reading.
+        let mut mv = reading(1.0);
+        mv[3..5].copy_from_slice(&0x2111u16.to_le_bytes());
+        let fake = live(&[]).with(|s| s.reading_before_off = Some(frame(&mv)));
+        let mut d = fake.device();
+        assert_eq!(
+            d.get(&Key::MeasuredQuantity, None).unwrap(),
+            Value::Mq(Mq::Voltage, MqFlags::AC)
+        );
+        // A capture leaves one with its OK on the way, and the OK does not answer
+        // the next setting, nor is the reading any answer to it.
+        set_u64(&mut d, &Key::LimitSamples, 1);
+        {
+            let mut s = fake.state();
+            s.readings = readings(&[1.0]);
+            s.paced = true;
+            s.answer_after = Duration::from_millis(150);
+        }
+        assert_eq!(values(&capture(&mut d)), [(0, 1.0)]);
+        fake.state().refused.insert(0x02);
+        assert!(d.set(&Key::Range, &Value::from("6V"), None).is_err());
+    });
+}
+
+#[test]
+fn a_live_capture_takes_no_stale_saved_answer() {
+    in_time(|| {
+        for latency in [40u64, 150] {
+            let fake = live(&[9.0, 9.0]).with(|s| {
+                s.saved = (1..=4).map(|i| saved_reading(i as f32)).collect();
+            });
+            let mut d = fake.device();
+            d.set(&Key::DataSource, &Value::from("Save"), None).unwrap();
+            {
+                let mut s = fake.state();
+                s.paced = true;
+                s.answer_after = Duration::from_millis(latency);
+                s.every = 1_000_000;
+            }
+            let (tx, rx) = sync_channel(4096);
+            d.start(PacketSink::new(tx, 0)).unwrap();
+            loop {
+                let (_, packet) = rx.recv_timeout(CAPTURE_BOUND).unwrap();
+                if matches!(packet, Packet::Analog(_)) {
+                    break;
+                }
+            }
+            d.stop().unwrap();
+            drain(&rx);
+            d.set(&Key::DataSource, &Value::from("Live"), None).unwrap();
+            set_u64(&mut d, &Key::LimitSamples, 1);
+            assert_eq!(values(&capture(&mut d)), [(0, 9.0)], "{latency} ms");
+        }
+    });
+}
+
+#[test]
+fn each_capture_takes_its_own_kind_of_packet_alone() {
+    in_time(|| {
+        // What no wait has dropped: a saved answer and a chunk in a live capture.
+        let chunk = frame(&[0x05, 1, 0, 0, 0x10, 0x41, 0x10, 0, 0, 0, 0]);
+        let fake = live(&[]);
+        let mut d = fake.device();
+        fake.state().readings =
+            [frame(&saved_reading(3.0)), chunk.clone(), frame(&reading(1.0))].into();
+        set_u64(&mut d, &Key::LimitSamples, 1);
+        assert_eq!(values(&capture(&mut d)), [(0, 1.0)]);
+        // A live reading and a chunk in a saved download.
+        let fake = live(&[]).with(|s| s.saved = vec![saved_reading(1.0), saved_reading(2.0)]);
+        let mut d = fake.device();
+        d.set(&Key::DataSource, &Value::from("Save"), None).unwrap();
+        let strays = [frame(&reading(8.0)), chunk.clone()].concat();
+        fake.state().stale_behind = Some((0x07, strays, Vec::new()));
+        assert_eq!(values(&capture(&mut d)), [(0, 1.0), (0, 2.0)]);
+        // A live reading and a saved answer in a recording.
+        let fake = live(&[]).with(|s| s.recordings = vec![("One", "VDC", 1, 2)]);
+        let mut d = fake.device();
+        d.set(&Key::DataSource, &Value::from("One"), None).unwrap();
+        let strays = [frame(&reading(8.0)), frame(&saved_reading(8.0))].concat();
+        fake.state().stale_behind = Some((0x0d, strays, Vec::new()));
+        assert_eq!(values(&capture(&mut d)), [(0, 101.0), (0, 102.0)]);
+    });
+}
+
+#[test]
+fn a_late_record_info_labels_no_other_recording() {
+    in_time(|| {
+        // One's info is on its way for the list that gave up on it, later than two
+        // reply waits at the line: then the start asks for Two's and gets it.
+        let fake = live(&[]).with(|s| {
+            s.recordings = vec![("One", "VDC", 1, 3), ("Two", "mVAC", 1, 2)];
+        });
+        let mut d = fake.device();
+        d.set(&Key::DataSource, &Value::from("Two"), None).unwrap();
+        d.link().reply_wait = Duration::from_millis(20);
+        {
+            let mut s = fake.state();
+            s.paced = true;
+            s.code_delay = Some((0x0c, Duration::from_millis(200)));
+        }
+        assert!(d.list(&Key::DataSource, None).is_err());
+        {
+            let mut s = fake.state();
+            s.code_delay = None;
+        }
+        d.link().reply_wait = Duration::from_millis(500);
+        d.link().settle_max = Duration::from_millis(1);
+        d.link().owed = None;
+        // The late info comes now: as an answer it says One; refused, or the right
+        // unit. Either way no volts for millivolts.
+        let (tx, rx) = sync_channel(4096);
+        match d.start(PacketSink::new(tx, 0)) {
+            Err(e) => {
+                assert_eq!(e.to_string(), "device error: the meter's info is of another recording");
+                assert_eq!(d.link().names[1], "Two", "the list's name stays, for the next try");
+            }
+            Ok(()) => {
+                for packet in drain(&rx) {
+                    if let Packet::Analog(a) = packet {
+                        assert_eq!(a.flags, MqFlags::AC, "{:?}", a.samples);
+                    }
+                }
+            }
+        }
+    });
+}
+
+#[test]
+fn an_info_of_another_name_is_refused() {
+    let fake = live(&[]).with(|s| {
+        s.recordings = vec![("One", "VDC", 1, 3), ("Two", "mVAC", 1, 2)];
+    });
+    let mut d = fake.device();
+    d.set(&Key::DataSource, &Value::from("Two"), None).unwrap();
+    fake.state().recordings[1].0 = "Other";
+    let (tx, _rx) = sync_channel(16);
+    let e = d.start(PacketSink::new(tx, 0)).unwrap_err();
+    assert_eq!(e.to_string(), "device error: the meter's info is of another recording");
+    assert_eq!(d.link().names[1], "Two");
+}
+
+#[test]
+fn a_selected_recording_the_list_has_lost_is_no_panic() {
+    let fake = live(&[]).with(|s| {
+        s.recordings = vec![("One", "VDC", 1, 3), ("Two", "VDC", 1, 2), ("Three", "VDC", 1, 2)];
+    });
+    let mut d = fake.device();
+    d.set(&Key::DataSource, &Value::from("Three"), None).unwrap();
+    fake.state().recordings.truncate(1);
+    d.list(&Key::DataSource, None).unwrap();
+    assert_eq!(d.get(&Key::DataSource, None).unwrap(), Value::from("Three"));
+    let (tx, _rx) = sync_channel(16);
+    assert_eq!(
+        d.start(PacketSink::new(tx, 0)).unwrap_err().to_string(),
+        "device error: no such recording"
+    );
+}
+
+#[test]
+fn a_mode_set_leaves_no_range_of_the_last_mode() {
+    let fake = live(&[]);
+    let mut d = fake.device();
+    d.set(&Key::Range, &Value::from("60V"), None).unwrap();
+    assert_eq!(d.get(&Key::Range, None).unwrap(), Value::from("60V"));
+    d.set(&Key::MeasuredQuantity, &Value::Mq(Mq::Resistance, MqFlags::empty()), None).unwrap();
+    assert_eq!(d.get(&Key::Range, None).unwrap(), Value::from("auto"));
+}
+
+#[test]
+fn a_line_that_never_falls_silent_holds_a_setting_for_a_bound() {
+    in_time(|| {
+        let fake = live(&[1.0]);
+        let mut d = fake.device();
+        set_u64(&mut d, &Key::LimitSamples, 1);
+        capture(&mut d);
+        d.link().settle_max = Duration::from_millis(100);
+        {
+            // A stream past the test's own bound, if nothing else ended the wait.
+            let mut s = fake.state();
+            s.readings = (0..20_000).map(|_| frame(&reading(2.0))).collect();
+            s.every = 1;
+            s.each_read = Duration::from_millis(4);
+            s.monitor = true;
+        }
+        d.set(&Key::Range, &Value::from("6V"), None).unwrap();
+        assert!(fake.state().readings.len() > 1000, "well before they ran out");
+    });
+}
+
+#[test]
+fn a_settle_waits_for_the_quiet_when_nothing_is_known_to_be_owed() {
+    in_time(|| {
+        let fake = live(&[]);
+        let mut d = fake.device();
+        {
+            // A late ER on its way, ahead of the setting's own OK.
+            let mut s = fake.state();
+            s.paced = true;
+            s.answer_after = Duration::from_millis(200);
+            let at = Instant::now() + Duration::from_millis(40);
+            s.by_time.extend(frame(b"\x01ER").into_iter().map(|b| (at, b)));
+        }
+        d.link().unsettled = true;
+        d.set(&Key::Range, &Value::from("6V"), None).expect("its own OK");
+    });
+}
+
+#[test]
+fn a_settle_leaves_no_head_of_a_frame_to_swallow_the_next_answer() {
+    let fake = live(&[]);
+    let d = fake.device();
+    {
+        let mut link = d.link();
+        // A head that says more is to come than any answer has.
+        link.rx.push(&[0xab, 0xcd, 0xe8, 0x03, 0x72]);
+        link.unsettled = true;
+    }
+    assert!(d.list(&Key::DataSource, None).is_ok());
+}
+
+#[test]
+fn the_head_of_a_frame_left_behind_makes_no_sample_with_its_tail() {
+    let stale = frame(&reading(9.0));
+    let (head, tail) = stale.split_at(10);
+    in_time({
+        let (head, tail) = (head.to_vec(), tail.to_vec());
+        move || {
+            // In a live capture: the head kept from a wait, the tail still to come.
+            let fake = live(&[]);
+            let mut d = fake.device();
+            d.link().rx.push(&head);
+            {
+                let mut s = fake.state();
+                let at = s.reads;
+                s.by_reads.push_back((at + 1, tail.clone()));
+                s.readings = readings(&[1.0, 1.0, 1.0]);
+                // The meter's answer comes behind the tail.
+                s.paced = true;
+                s.answer_after = Duration::from_millis(30);
+            }
+            set_u64(&mut d, &Key::LimitSamples, 1);
+            assert_eq!(values(&capture(&mut d)), [(0, 1.0)]);
+            // In a download: behind the count, ahead of the first answer.
+            let fake = live(&[]).with(|s| s.saved = vec![saved_reading(1.0)]);
+            let mut d = fake.device();
+            d.set(&Key::DataSource, &Value::from("Save"), None).unwrap();
+            let saved = frame(&saved_reading(9.0));
+            let (head, tail) = saved.split_at(10);
+            fake.state().stale_behind = Some((0x08, head.to_vec(), tail.to_vec()));
+            assert_eq!(values(&capture(&mut d)), [(0, 1.0)]);
+        }
+    });
+}
+
+#[test]
 fn a_late_ok_does_not_answer_the_next_setting() {
     in_time(|| {
         let fake = live(&[]);
         let mut d = fake.device();
         d.link().reply_wait = Duration::from_millis(20);
         fake.state().paced = true;
-        fake.state().answer_after = Duration::from_millis(50);
+        // Later than the quiet too, so it is what is owed that holds the next one.
+        fake.state().answer_after = Duration::from_millis(250);
         // The first has its OK late, and fails unless a stall has let it come. The
         // second is refused.
         let _ = d.set(&Key::Range, &Value::from("6V"), None);
@@ -1010,20 +1365,28 @@ fn settings_that_fail() {
     fake.state().refused.insert(0x01);
     fake.state().refused.insert(0x02);
     let quantity = Value::Mq(Mq::Voltage, MqFlags::AC);
-    assert!(matches!(d.set(&Key::Range, &Value::from("6V"), None), Err(Error::Device(_))));
-    assert!(matches!(d.set(&Key::MeasuredQuantity, &quantity, None), Err(Error::Device(_))));
+    let text = |r: Result<()>| r.unwrap_err().to_string();
+    let refused = "device error: the meter refused the request";
+    assert_eq!(text(d.set(&Key::Range, &Value::from("6V"), None)), refused);
+    assert_eq!(text(d.set(&Key::MeasuredQuantity, &quantity, None)), refused);
     assert_eq!(d.get(&Key::Range, None).unwrap(), Value::from("auto"), "not what was refused");
     let fake = live(&[]);
     let mut d = fake.device();
     d.link().reply_wait = Duration::from_millis(20);
     fake.state().silent.insert(0x02);
-    assert!(matches!(d.set(&Key::Range, &Value::from("6V"), None), Err(Error::Timeout)));
+    assert_eq!(text(d.set(&Key::Range, &Value::from("6V"), None)), "timeout");
     fake.reset_writes();
     // What is refused here sends nothing.
-    assert!(matches!(d.set(&Key::Range, &Value::from("7V"), None), Err(Error::Arg(_))));
+    assert_eq!(
+        text(d.set(&Key::Range, &Value::from("7V"), None)),
+        "invalid argument: invalid value for range"
+    );
     let none = Value::Mq(Mq::Power, MqFlags::empty());
-    assert!(matches!(d.set(&Key::MeasuredQuantity, &none, None), Err(Error::NotSupported(_))));
-    assert!(matches!(d.set(&Key::Datalog, &Value::Bool(true), None), Err(Error::NotSupported(_))));
+    assert_eq!(
+        text(d.set(&Key::MeasuredQuantity, &none, None)),
+        "not supported: measured_quantity"
+    );
+    assert_eq!(text(d.set(&Key::Datalog, &Value::Bool(true), None)), "not supported: datalog");
     assert_eq!(fake.writes(), [[0u8; 0]; 0]);
 }
 

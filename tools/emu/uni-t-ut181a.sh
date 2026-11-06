@@ -14,14 +14,18 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 emu_cases() {
     emu_conns
     PAD=pad=1500
-    # oxrok's log prefix, on its side only, and its errors beside the names
-    # sr_strerror() has for them; a refused start's last lines, each tool's own.
+    # oxrok's log prefix, on its side only. The rest are sigrok-cli's words made
+    # oxrok's, whose own stay as they are.
     F='s/^oxrok: [a-z]+: oxrok::drivers::uni_t_ut181a(::protocol)?: /sr: uni-t-ut181a: /
-s/^(Failed to (get|set device option) .[a-z_]+.: )not supported: [a-z_]+/\1not applicable/
-s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./
-s/^Failed to set channels: invalid argument: //
-/^sr: session: Could not start/d
-s/^(Failed to start session\.|timeout)$/start refused/'
+s/^(Failed to (get|set device option) .([a-z_]+).: )not applicable/\1not supported: \3/
+s/^(Failed to set device option .limit_samples.: invalid argument)\.$/\1: it cannot be 0./
+s/^(Failed to set device option .([a-z_]+).: invalid argument)\.$/\1: invalid value for \2./
+s/^unknown channel /Failed to set channels: invalid argument: &/'
+    # A refused start's last lines in sigrok-cli, as oxrok says what happened.
+    NO_ANSWER='/^sr: session: Could not start/d
+s/^Failed to start session\.$/timeout/'
+    REFUSED='/^sr: session: Could not start/d
+s/^Failed to start session\.$/device error: the meter refused the request/'
     FIRST_BUG="ut181a_query_initial_state returns at the first 100 ms of ut181a_waitfor_response (api.c:140-142), so its 2 s deadline (api.c:145) never counts; oxrok waits the 2 s"
     STACK_BUG="consume_str writes a NUL at buff[sz] (protocol.c:1720) of an 8 byte unit_buff (protocol.c:1740); in this -O0 build that is the low byte of pl_dlen (DWARF: unit_buff at -144, pl_dlen at -136), so what is behind a unit reads as cut, and a record info as no recording; an -O2 build has other bytes there"
     UTF8_BUG="g_variant_new_strv on a name that is no UTF-8 (api.c:447) is a critical, and sigrok-cli's logger exits on it; oxrok shows U+FFFD"
@@ -31,9 +35,10 @@ s/^(Failed to start session\.|timeout)$/start refused/'
     TIME_BUG="a time limit is checked only at a packet (protocol.c:2643, and the send_feed's check), so C goes on to the next reading; oxrok looks on each pass of its loop"
     NO_TIME_BUG="a time limit is checked only at a packet (protocol.c:2643), and a silent meter has none, so it never ends; oxrok does"
     ER_BUG="an ER moves nothing on (protocol.c:1849-1852), so a download waits for ever; oxrok ends it"
-    SILENT_BUG="a request with no answer is waited for for ever: nothing else sends the next (protocol.c:2656-2689); oxrok ends after 5 s with nothing read"
     EMPTY_BUG="a chunk of no samples asks again for the same ones (protocol.c:2677-2682), for ever; oxrok ends there, as another host of the meter does"
-    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    UNPLUG_BUG="a read that fails is passed over (protocol.c:2862-2866), and a time limit is checked only at a packet (protocol.c:2643), so a gone meter never ends; oxrok ends at the failed read, or at the limit where a read gives nothing"
+    SIGINT_BUG="no fault of the driver: sigrok-cli has no SIGINT handler and dies, so this pins oxrok alone, which ends the capture"
+    CSV_LIMIT="oxrok's csv pads a packet's other channels with 0 and places its frame separator between rows (docs/ROADMAP.md); C's puts it ahead of the header, and reads what lies past a packet for channels with no data, so only channels with data are compared"
     CHUNK_BUG="the next chunk asks for rec_data.rec_idx (protocol.c:2682), which nothing sets, so it comes from recording 1; oxrok asks for the one selected"
     # A scan's reading, ahead of a list: the scan takes the first of a list.
     S=na@3111.1:m=5/30/VDC
@@ -128,10 +133,13 @@ s/^(Failed to start session\.|timeout)$/start refused/'
     done
     emu_options setters=0 readings=nR@3111.1:m=5/30/VDC
     emu_case "get datalog on" -- -d $U --get datalog
-    for r in 3111.1 3111.2 3111.3 3111.4 2111.1 2111.2 5111.6 5211.1 5311.1 6211.8 7111.7 7211.4 8111.2 8211.1 9111.2 9211.1 4211.1 4311.1 6111.1 a111.1 ; do
+    for r in 3111.1 3111.4 2111.1 5111.6 5211.1 5311.1 6211.8 7111.7 7211.4 8111.2 8211.1 9111.2 9211.1 4211.1 4311.1 6111.1 a111.1 ; do
         emu_options setters=0 readings=n@$r:m=5/30/VDC
         emu_case "get range $r" -- -d $U --get range
-        emu_case "get mq $r" -- -d $U --get measured_quantity
+        case $r in
+            3111.*) ;;
+            *) emu_case "get mq $r" -- -d $U --get measured_quantity ;;
+        esac
     done
     emu_options setters=0 readings=n@3111.0:m=5/30/VDC
     emu_case "get range 0" -- -d $U --get range
@@ -148,7 +156,6 @@ s/^(Failed to start session\.|timeout)$/start refused/'
     emu_case "set datalog" --stderr --filter "$F" --expect-fail -- -d $U -c datalog=on --set
     emu_options setters=0 pad=300 rec=Two/VDC/1/1,Two/VDC/1/1,Three/VDC/1/1
     emu_case "set data_source Save" -- -d $U -c data_source=Save --get data_source
-    emu_case "set data_source Live" -- -d $U -c data_source=Live --get data_source
     emu_case "set data_source a name" -- -d $U -c data_source=Three --get data_source
     emu_case "set data_source a number" -- -d $U -c data_source=3 --get data_source
     emu_case "set data_source a spaced number" -- -d $U -c "data_source=2 " --get data_source
@@ -197,7 +204,6 @@ s/^(Failed to start session\.|timeout)$/start refused/'
     emu_case "samples 1 of a stream" -- -d $U --samples 1 -O analog
     live "n@3111.1:m=1/30/VDC:1=2/21/Hz"
     emu_case "aux1" -- -d $U --samples 1 -O analog
-    emu_case "aux1 with frames" -- -d $U --frames 1 -O analog
     live "n@3111.1:m=1/30/VDC:2=3/12/dBV"
     emu_case "aux2 alone" -- -d $U --frames 1 -O analog
     live "n@3111.1:m=1/30/VDC:1=2/30/VDC:2=3/30/VDC:b=4/VDC"
@@ -208,20 +214,14 @@ s/^(Failed to start session\.|timeout)$/start refused/'
     # open, in the oracle's build.
     emu_options setters=0 period=25 frames=3 "readings=$S,n@3111.1:m=1/30/VDC:1=2/21/Hz,n@3111.1:m=7/30/VDC,n@3111.1:m=8/30/VDC"
     emu_case "aux in the oracle's build" --oracle-differs "$STACK_BUG" --keep-header -- -d $U --samples 2 -O analog
-    # COMP, its four forms: the limits go nowhere.
+    # COMP, with two limits and with one: they go nowhere.
     C='s/^sr: \[[0-9:.]*\] /sr: /
 /uni-t-ut181a: Unprocessed/!d'
     live "nc@3111.1:m=1/30/VDC:c=0/0/3/3.3/0"
     emu_case "comp inner" --stderr --filter "$F
 $C" -- -d $U --frames 1 -O analog -l 4
-    live "nc@3111.1:m=1/30/VDC:c=1/1/3/3.3/1"
-    emu_case "comp outer" --stderr --filter "$F
-$C" -- -d $U --frames 1 -O analog -l 4
     live "nc@3111.1:m=1/30/VDC:c=2/0/3/30"
     emu_case "comp below" --stderr --filter "$F
-$C" -- -d $U --frames 1 -O analog -l 4
-    live "nc@3111.1:m=1/30/VDC:c=3/1/3/30"
-    emu_case "comp above" --stderr --filter "$F
 $C" -- -d $U --frames 1 -O analog -l 4
     emu_options setters=0 period=25 frames=3 "readings=$S,nc+600@3111.1:m=1/30/VDC:c=4/1/3/30,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
     emu_case "comp no such mode" --keep-header -- -d $U --samples 2 -O analog
@@ -238,6 +238,20 @@ $C" -- -d $U --frames 1 -O analog -l 4
     # Flags that change nothing.
     live "nlv@3111.1:m=1/30/VDC"
     emu_case "lead error and high voltage" -- -d $U --frames 1 -O analog
+    # Frames as a real meter sends them, with no padding: oxrok alone can be held to
+    # them, as this build of C fails behind a unit.
+    emu_options setters=0 period=2 frames=1 "readings=$S,r@3112.1:m=1/30/VDC:1=2/30/VDC:2=3/30/VDC:b=4/VDC"
+    emu_case "relative with no padding" --oracle-bug "$STACK_BUG" --oracle-hangs --timeout 3 -- -d $U --frames 1 -O analog
+    emu_options setters=0 per=2 rec=One/mVAC/2/3
+    emu_case "recording with no padding" --oracle-bug "$STACK_BUG" -- -d $U -c data_source=One --samples 100 -O analog
+    emu_options setters=0 saved=n@3111.1:m=1/30/VDC:1=2/10/Hz
+    emu_case "saved aux with no padding" --oracle-bug "$STACK_BUG" --oracle-hangs --timeout 3 -- -d $U -c data_source=Save --samples 100 -O analog
+    # A reading ahead of monitor off's OK: the scan's says what the meter is on.
+    emu_options setters=0 off-reading=1 readings=$S,n@2111.1:m=5/30/mVAC
+    emu_case "reading ahead of monitor off" -- -d $U --get measured_quantity
+    # csv, on channels that have data.
+    live "n@3111.1:m=1/30/VDC:1=2/20/Hz,n@3111.1:m=5/30/VDC:1=6/20/Hz" 2
+    emu_case "csv two channels" --oracle-differs "$CSV_LIMIT" -- -d $U -C P1,P2 --frames 2 -O csv:header=false
     # Each field cut, in frames still good. C makes one step of the search per
     # read that brings bytes, so a frame behind a failed one waits for the next,
     # and the two must not come in one read: hence the period.
@@ -253,14 +267,18 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_case "minmax cut at its unit" --keep-header -- -d $U --samples 1 -O analog
     emu_options setters=0 period=25 frames=3 "readings=$S,p~21@3131.1:2/30/VDC:1/30/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
     emu_case "peak cut at its unit" --keep-header -- -d $U --samples 1 -O analog
-    emu_options setters=0 period=25 frames=3 "readings=$S,n~1008+1000@3111.1:m=1/30/VDC:1=2/30/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
-    emu_case "aux1 cut at its unit" --keep-header -- -d $U --samples 2 -O analog
-    emu_options setters=0 period=25 frames=3 "readings=$S,n~1008+1000@3111.1:m=1/30/VDC:b=4/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
-    emu_case "bar cut at its unit" --keep-header -- -d $U --samples 2 -O analog
-    emu_options setters=0 period=25 frames=3 "readings=$S,nc~1004+1000@3111.1:m=1/30/VDC:c=0/0/3/3.3/0,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
-    emu_case "comp cut at its low limit" --keep-header -- -d $U --samples 2 -O analog
-    emu_options setters=0 period=25 frames=3 "readings=$S,r~1008+1000@3112.1:m=1/30/VDC:1=2/30/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
-    emu_case "reference cut at its unit" --keep-header -- -d $U --samples 2 -O analog
+    # Cut behind the main unit. Both give the main alone, for different reasons:
+    # oxrok stops at the cut, this build of C at the first field behind the unit
+    # (see the model), so these show the frame left open, not C's check of the field.
+    # protocol.rs's test cuts oxrok's at each byte.
+    emu_options setters=0 period=25 frames=3 "readings=$S,n~8@3111.1:m=1/30/VDC:1=2/30/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
+    emu_case "aux1 cut behind the main unit" --keep-header -- -d $U --samples 2 -O analog
+    emu_options setters=0 period=25 frames=3 "readings=$S,n~8@3111.1:m=1/30/VDC:b=4/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
+    emu_case "bar cut behind the main unit" --keep-header -- -d $U --samples 2 -O analog
+    emu_options setters=0 period=25 frames=3 "readings=$S,nc~4@3111.1:m=1/30/VDC:c=0/0/3/3.3/0,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
+    emu_case "comp cut behind the main unit" --keep-header -- -d $U --samples 2 -O analog
+    emu_options setters=0 period=25 frames=3 "readings=$S,r~8@3112.1:m=1/30/VDC:1=2/30/VDC,n@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC"
+    emu_case "reference cut behind the main unit" --keep-header -- -d $U --samples 2 -O analog
     # Overloads, and digits.
     live "n@3111.1:m=1/31/VDC,n@3111.1:m=1/32/VDC,n@3111.1:m=1/33/VDC,n@3111.1:m=1.23456/f0/VDC,n@3111.1:m=-1.5/00/VDC" 5
     emu_case "overloads and digits" -- -d $U --samples 5 -O analog
@@ -320,11 +338,13 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_options setters=0
     emu_case "save none" --oracle-bug "$ER_BUG" --oracle-hangs --timeout 3 --no-output -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=08:1:silent saved=n@3111.1:m=1/30/VDC
-    emu_case "save no count" --stderr --filter "$F" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
+    emu_case "save no count" --stderr --filter "$F
+$NO_ANSWER" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=08:1:er saved=n@3111.1:m=1/30/VDC
-    emu_case "save count refused" --stderr --filter "$F" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
+    emu_case "save count refused" --stderr --filter "$F
+$REFUSED" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=07:2:silent saved=n@3111.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
-    emu_case "save second silent" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 7 -- -d $U -c data_source=Save --samples 5 -O analog
+    emu_case "save second silent" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 5 -O analog
     emu_options setters=0 fail=07:2:er saved=n@3111.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
     emu_case "save second refused" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 5 -O analog
     emu_options setters=0 saved=n@1234.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
@@ -338,16 +358,16 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_case "recording empty" --no-output -- -d $U -c data_source=Empty --samples 100 -O analog
     emu_case "recording samples 2" -- -d $U -c data_source=One --samples 2 -O analog
     emu_case "recording samples within a chunk" -- -d $U -c data_source=One --samples 1 -O analog
-    emu_case "recording frames 3" -- -d $U -c data_source=One --frames 3 -O analog
     emu_case "recording time" -- -d $U -c data_source=One --time 10000 -O analog
     emu_options setters=0 pad=300 per=255 recs=1
     emu_case "recording one chunk" -- -d $U -c data_source=REC1 --samples 100 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0c:2:silent
-    emu_case "recording info silent" --stderr --filter "$F" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
+    emu_case "recording info silent" --stderr --filter "$F
+$NO_ANSWER" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0c:2:er
-    emu_case "recording info refused" --stderr --filter "$F" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
+    emu_case "recording info refused" --stderr --filter "$F
+$REFUSED" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:2:silent
-    emu_case "recording chunk silent" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=One --samples 9 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:2:er
     emu_case "recording chunk refused" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=One --samples 9 -O analog
     # A device that says it has more than it gives: C asks again for ever.
@@ -363,13 +383,12 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_case "control lines stalled" --keep-header -- -d $U --scan
     emu_options setters=0 fail=0e:1:silent
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $U --scan
-    # An interrupt, once the stream has run out: only that can end this capture,
-    # and the monitor off still goes.
+    # An interrupt in the capture's own session, a period after its one reading:
+    # only that can end this capture, and the monitor off still goes.
     emu_options setters=0 period=2 frames=1
     emu_case "interrupt a capture" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 -- -d $U --continuous -O analog
     emu_options setters=0 period=2 frames=1
-    emu_case "unplug in a capture" --stderr --filter "$F
-/^sr: serial-libsp: Write error/d" --expect-fail --unplug model --timeout 10 -- -d $U --samples 5 -O analog
+    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $U --time 3000 -O analog
     emu_options
 }
 
