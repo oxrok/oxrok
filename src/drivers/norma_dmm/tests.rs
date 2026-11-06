@@ -434,7 +434,8 @@ fn a_time_limit_ends_a_silent_capture_and_only_the_time_does() {
         let rx = start(&mut d);
         assert_eq!(readings(&rx), [0.0f32; 0]);
         assert!(began.elapsed() >= Duration::from_millis(150));
-        assert_eq!(fake.writes().len(), 1);
+        // A stall can take the first pass past the limit, and then nothing goes.
+        assert!(fake.writes().len() <= 1);
         d.close().unwrap();
     });
 }
@@ -556,8 +557,7 @@ fn the_buffer_holds_255_with_its_bound() {
 }
 
 /// A reply is a whole status, so one that is late is a true reading that is
-/// old, and nothing after it shifts. C's wire: each line asks again, so two run
-/// from then on.
+/// old, and nothing after it shifts.
 #[test]
 fn a_late_reply_shifts_nothing() {
     bounded(|| {
@@ -567,6 +567,255 @@ fn a_late_reply_shifts_nothing() {
         limit(&mut d, 3);
         let rx = start(&mut d);
         assert_eq!(readings(&rx), [V_S2, V_S, V_S]);
+        d.close().unwrap();
+    });
+}
+
+#[test]
+fn a_late_reply_asks_nothing_until_the_other_is_answered() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::AtNext(S2.to_vec()), Reply::OnRelease(S.to_vec())]);
+        let mut d = quick(&fake);
+        // The second one's wait must outlast the test's look at the writes.
+        limit(&mut d, 2);
+        let rx = start(&mut d);
+        fake.wait_for("the late reply to be read", |s| s.delivered >= S2.len());
+        // Its line is in; the second request is out, and nothing more goes.
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(fake.writes().len(), 2);
+        fake.release();
+        assert_eq!(readings(&rx), [V_S2, V_S]);
+        assert_eq!(fake.writes().len(), 2);
+        d.close().unwrap();
+    });
+}
+
+/// One late reply, a limit on it, a pause: with the other reply on the wire, C and
+/// a port that forgets the count take it as the next capture's first reading.
+#[test]
+fn every_reply_left_behind_is_dropped_whatever_the_gap() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::AtNext(S2.to_vec()), Reply::Now(S2.to_vec())]);
+        let mut d = quick(&fake);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_S2]);
+        fake.wait_for("the other reply", |s| s.input.len() == S2.len());
+        // Longer than a request's life, which must not give the old one a pass.
+        std::thread::sleep(Duration::from_millis(120));
+        d.request_timeout = Duration::from_secs(3600);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_S]);
+        assert_eq!(fake.writes().len(), 3);
+        d.close().unwrap();
+    });
+}
+
+/// What was left may be lost, not late: the expiry stops looking for it.
+#[test]
+fn a_reply_left_behind_that_never_comes_costs_one_wait() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::Silent]);
+        let mut d = quick(&fake);
+        let rx = start(&mut d);
+        fake.wait_for_writes(1);
+        d.stop().unwrap();
+        assert_eq!(readings(&rx), [0.0f32; 0]);
+        let asked = fake.writes().len();
+        limit(&mut d, 1);
+        fake.script([Reply::Now(S2.to_vec())]);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_S2]);
+        assert_eq!(fake.writes().len(), asked + 1);
+        d.close().unwrap();
+    });
+}
+
+/// A meter at `latency` of the time in ms, in order, on a clock of our own, so no
+/// machine can stretch it. `dead` holds the requests until then; `lost` loses those
+/// numbered so. What it says: the most and the last replies due, and requests sent.
+fn simulate(
+    latency: impl Fn(u64) -> u64,
+    dead: u64,
+    lost: &[u32],
+    limit_ms: u64,
+) -> (usize, usize, u32) {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    let mut due: VecDeque<u64> = VecDeque::new();
+    let mut held = 0u32;
+    let mut free = 0;
+    let (mut most, mut sent) = (0, 0u32);
+    for t in (100..limit_ms).step_by(10) {
+        if t >= dead {
+            for _ in 0..std::mem::take(&mut held) {
+                free = free.max(t) + latency(t) + 46;
+                due.push_back(free);
+            }
+        }
+        // A pass reads one line.
+        if due.front().is_some_and(|d| *d <= t) {
+            due.pop_front();
+            r.line(at(t));
+        }
+        let turn = r.turn(at(t));
+        if turn == Turn::Expired {
+            r.expire();
+        }
+        if turn != Turn::Wait {
+            sent += 1;
+            r.asked(at(t));
+            if t < dead {
+                held += 1;
+            } else if !lost.contains(&sent) {
+                free = free.max(t) + latency(t) + 46;
+                due.push_back(free);
+            }
+        }
+        most = most.max(due.len() + held as usize);
+    }
+    (most, due.len() + held as usize, sent)
+}
+
+#[test]
+fn a_steady_latency_past_the_expiry_does_not_pile_up() {
+    let (most, _, sent) = simulate(|_| 2500, 0, &[], 60_000);
+    assert!(most <= 3, "{most}");
+    // It keeps reading, at about the meter's rate.
+    assert!(sent >= 20, "{sent}");
+}
+
+#[test]
+fn what_piled_up_drains_when_the_meter_is_back() {
+    let (most, last, sent) = simulate(|t| if t < 20_000 { 2500 } else { 200 }, 0, &[], 45_000);
+    assert!(most <= 3, "{most}");
+    assert!(last <= 1, "{last}");
+    assert!(sent >= 70, "{sent}");
+    let (most, last, sent) = simulate(|_| 200, 10_000, &[], 40_000);
+    assert!(most <= 4, "{most}");
+    assert!(last <= 1, "{last}");
+    assert!(sent >= 70, "{sent}");
+}
+
+/// The rate comes back: a count that stayed up by one would ask once per wait.
+#[test]
+fn a_lost_reply_costs_one_wait_and_not_the_rate() {
+    let (_, last, sent) = simulate(|_| 100, 0, &[3], 30_000);
+    assert!(last <= 1, "{last}");
+    assert!(sent >= 120, "{sent}");
+}
+
+/// Literal times, as a changed constant must fail.
+#[test]
+fn an_unanswered_meter_is_asked_after_2_4_8_8_s() {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    assert_eq!(r.turn(at(100)), Turn::Ask);
+    r.asked(at(100));
+    let mut last = 100;
+    for wait in [2000, 4000, 8000, 8000] {
+        assert_eq!(r.turn(at(last + wait)), Turn::Wait, "{wait}");
+        assert_eq!(r.turn(at(last + wait + 1)), Turn::Expired, "{wait}");
+        r.expire();
+        last += wait + 1;
+        r.asked(at(last));
+    }
+    assert_eq!(r.in_flight, 5);
+}
+
+#[test]
+fn a_reply_in_good_time_sets_the_wait_back() {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    r.asked(at(0));
+    r.expire();
+    assert_eq!(r.wait, Duration::from_secs(4));
+    r.asked(at(2001));
+    // In good time, with the first one still counted: not yet.
+    r.line(at(2100));
+    assert_eq!(r.wait, Duration::from_secs(4));
+    assert_eq!(r.turn(at(2100)), Turn::Wait);
+    r.line(at(2200));
+    assert_eq!(r.wait, Duration::from_secs(2));
+    assert_eq!(r.turn(at(2200)), Turn::Ask);
+}
+
+#[test]
+fn a_line_too_slow_keeps_the_wait() {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    r.asked(at(0));
+    r.expire();
+    r.asked(at(2001));
+    r.line(at(2500));
+    r.line(at(5000));
+    assert_eq!(r.wait, Duration::from_secs(4));
+}
+
+#[test]
+fn an_expiry_after_a_line_counts_the_rest_as_lost_and_the_wait_stays() {
+    let base = Instant::now();
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    r.asked(base);
+    r.asked(base);
+    r.line(base);
+    r.expire();
+    assert_eq!(r.in_flight, 0);
+    assert_eq!(r.wait, Duration::from_secs(2));
+}
+
+#[test]
+fn the_limit_ends_at_its_time() {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    assert!(!time_is_up(150, base, at(150)));
+    assert!(time_is_up(150, base, at(151)));
+    assert!(!time_is_up(0, base, at(1_000_000)));
+}
+
+#[test]
+fn the_silence_is_told_once_and_a_line_starts_it_over() {
+    let base = Instant::now();
+    let at = |ms: u64| base + Duration::from_millis(ms);
+    let after = Duration::from_millis(30_000);
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, base);
+    assert!(!r.silence_to_tell(after, at(29_999)));
+    r.line(at(10_000));
+    assert!(!r.silence_to_tell(after, at(30_000)));
+    assert!(r.silence_to_tell(after, at(40_000)));
+    assert!(!r.silence_to_tell(after, at(80_000)));
+    assert_eq!(SILENCE_WARNING, Duration::from_secs(30));
+    assert_eq!(MAX_WAIT, Duration::from_secs(8));
+}
+
+#[test]
+fn cr_alone_is_told_once() {
+    let mut r = Requests::new(0, REQUEST_TIMEOUT, Instant::now());
+    assert!(!r.cr_alone_to_tell(b"0303"));
+    assert!(r.cr_alone_to_tell(b"03030024913100400040\r"));
+    assert!(!r.cr_alone_to_tell(b"03030024913100400040\r"));
+}
+
+/// No bound on a silent `--samples`: the warning does not end it.
+#[test]
+fn the_warning_does_not_end_a_silent_capture() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.otherwise = None);
+        let mut d = quick(&fake);
+        d.silence_warning = Duration::from_millis(1);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        fake.wait_for_writes(3);
+        assert!(rx.try_iter().all(|(_, p)| !matches!(p, Packet::End)));
+        d.stop().unwrap();
         d.close().unwrap();
     });
 }
@@ -621,6 +870,8 @@ fn a_stop_in_a_reply_leaves_no_part_of_it_for_the_next_capture() {
     });
 }
 
+/// What the "time" mutant and its kin must meet: limit on the last line, nothing
+/// out, so a second capture has no wait.
 #[test]
 fn a_capture_after_a_clean_end_starts_at_once_with_nothing_left() {
     bounded(|| {
@@ -672,9 +923,11 @@ fn a_restart_after_an_end_stuck_on_a_full_queue_does_not_hang() {
             std::thread::sleep(Duration::from_millis(1));
         }
         let rx = start(&mut d);
+        // The old worker is gone, its End given up: a start joins it.
+        while old.try_recv().is_ok() {}
+        assert!(matches!(old.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)));
         assert_eq!(readings(&rx), [V_S]);
         d.close().unwrap();
-        drop(old);
     });
 }
 

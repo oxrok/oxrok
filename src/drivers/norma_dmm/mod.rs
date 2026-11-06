@@ -21,18 +21,26 @@
 //! A capture has one `STATUS?` out at a time. The first goes 100 ms after the
 //! start and each next one in the pass that read a line, or 2 s after the last if
 //! no line came, for as long as the capture runs. A line ends at an LF. `--get`
-//! has nothing to answer: C has no `config_get`.
+//! has nothing to answer: C has no `config_get`. A `--samples` capture with no
+//! reply for 30 s says so once and goes on, as does one whose replies end in CR
+//! alone, at its first expiry.
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
 //! - Hex digits have their values, and a pair of digits is a byte: see
 //!   [`protocol::hex_digit`].
-//! - Part of a line is dropped when its request expires, and a line longer than
-//!   20 digits is an error, so what came of two replies is no reading. C keeps
-//!   the part, adds the next reply to it and cuts it at 20.
+//! - Part of a line is dropped when its request expires, and a 21st hex digit makes
+//!   a line an error, so what came of two replies is no reading. C keeps the part,
+//!   adds the next reply to it and cuts it at 20. Anything else after 20 digits is
+//!   cut as in C.
 //! - A line that fills the buffer is one bad line, where C stops reading for good.
+//! - Requests are counted, see [`Requests`]: C asks at every line and at every 2 s,
+//!   so a meter slower than that has its requests pile up with no bound. After an
+//!   expiry the wire differs from C's.
 //! - A reply a capture left on its way is no sample of the next one on an open
-//!   device: C's request state stays, and so does the wire, but it takes the line.
+//!   device, however many there are: C takes each as a reading.
+//! - `-C` with the channel disabled sends no packets and still counts samples,
+//!   where C ignores it and sends them.
 //!
 //! See [`protocol`].
 
@@ -74,6 +82,10 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const STOP_CHECK: Duration = Duration::from_millis(5);
 /// `serial_readline`'s pause after a read that gave nothing.
 const EMPTY_READ_PAUSE: Duration = Duration::from_millis(2);
+/// The longest a request is left unanswered before the next, when none has come.
+const MAX_WAIT: Duration = Duration::from_secs(8);
+/// How long a `--samples` capture goes with no line before it says so.
+const SILENCE_WARNING: Duration = Duration::from_secs(30);
 /// How long a stopped capture tries to hand over its End on a full queue.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
 
@@ -194,8 +206,8 @@ fn request_timeout(params: &Params, request: &[u8]) -> Duration {
 struct Link {
     port: Option<Box<dyn Port>>,
     params: Params,
-    /// A capture ended with a request unanswered, sent then.
-    open_request: Option<Instant>,
+    /// Requests sent and not answered when a capture ended.
+    in_flight: u32,
 }
 
 /// One meter.
@@ -212,6 +224,7 @@ pub struct NormaDevice {
     worker: Option<Worker>,
     capturing: Arc<AtomicBool>,
     request_timeout: Duration,
+    silence_warning: Duration,
 }
 
 struct Worker {
@@ -243,10 +256,11 @@ impl NormaDevice {
             limit_msec: 0,
             meter_type,
             pending: None,
-            link: Arc::new(Mutex::new(Link { port: None, params, open_request: None })),
+            link: Arc::new(Mutex::new(Link { port: None, params, in_flight: 0 })),
             worker: None,
             capturing: Arc::new(AtomicBool::new(false)),
             request_timeout: REQUEST_TIMEOUT,
+            silence_warning: SILENCE_WARNING,
         }
     }
 
@@ -362,6 +376,7 @@ impl Device for NormaDevice {
             meter_type: self.meter_type,
             enabled: self.channels[0].enabled,
             request_timeout: self.request_timeout,
+            silence_warning: self.silence_warning,
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -450,13 +465,130 @@ struct Capture {
     /// `-C`, which C ignores: its packets go out whatever it says.
     enabled: bool,
     request_timeout: Duration,
+    silence_warning: Duration,
 }
 
-/// `last_req_pending` and `req_sent_at`.
+/// What is to be done about requests now.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Turn {
+    /// Nothing: a reply is due.
+    Wait,
+    /// All were answered: ask.
+    Ask,
+    /// The last went unanswered for too long: drop what came of a line and ask.
+    Expired,
+}
+
+/// `last_req_pending` and `req_sent_at`, with a count, since no reply says what it
+/// answers. A late reply and the next one's are told apart by counting them all.
+///
+/// A line asks again only when none is out. An expiry asks anyway, as replies may
+/// have been lost, and the wait doubles up to [`MAX_WAIT`] for as long as nothing
+/// is heard; a reply within the first wait, with none out, sets it back. If a line
+/// was heard since the last request when that expires, what is still counted was
+/// lost. So at a steady latency the wait grows past it after a few expiries, and
+/// what has queued drains; a lost reply costs one wait of 4 s. C sends at every line
+/// and at every 2 s, whichever comes, so the requests pile up: 24 at a latency of
+/// 2.5 s after a minute. A meter slower than [`MAX_WAIT`] still gains a request per
+/// wait, and is told to the user only if `--samples` goes silent.
+#[derive(Debug)]
 struct Requests {
+    in_flight: u32,
     sent_at: Option<Instant>,
-    /// The next line answers a request of the capture before.
-    drop_next: bool,
+    first_wait: Duration,
+    wait: Duration,
+    /// A line came after the last request.
+    heard: bool,
+    /// Lines still to come that answer requests of the capture before.
+    to_drop: u32,
+    last_line: Instant,
+    warned_silence: bool,
+    warned_cr: bool,
+}
+
+impl Requests {
+    /// As a capture finds them: what is left of the last one is dropped as it
+    /// comes, for the time of one request from now, however old it is.
+    fn new(left: u32, first_wait: Duration, now: Instant) -> Requests {
+        Requests {
+            in_flight: left,
+            sent_at: (left > 0).then_some(now),
+            first_wait,
+            wait: first_wait,
+            heard: false,
+            to_drop: left,
+            last_line: now,
+            warned_silence: false,
+            warned_cr: false,
+        }
+    }
+
+    /// A line came: whether it is to be dropped.
+    fn line(&mut self, now: Instant) -> bool {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        self.heard = true;
+        self.last_line = now;
+        if self.in_flight == 0
+            && self.sent_at.is_some_and(|at| now.saturating_duration_since(at) <= self.first_wait)
+        {
+            self.wait = self.first_wait;
+        }
+        if self.to_drop > 0 {
+            self.to_drop -= 1;
+            return true;
+        }
+        false
+    }
+
+    fn turn(&self, now: Instant) -> Turn {
+        if self.in_flight == 0 {
+            return Turn::Ask;
+        }
+        if self.sent_at.is_some_and(|at| now.saturating_duration_since(at) > self.wait) {
+            return Turn::Expired;
+        }
+        Turn::Wait
+    }
+
+    /// The request out has expired. What is left of the last capture stops being
+    /// looked for, and a line heard says the rest were lost.
+    fn expire(&mut self) {
+        if self.to_drop > 0 || self.heard {
+            self.in_flight = 0;
+        } else {
+            self.wait = (self.wait * 2).min(self.first_wait.max(MAX_WAIT));
+        }
+        self.to_drop = 0;
+    }
+
+    fn asked(&mut self, now: Instant) {
+        self.in_flight = self.in_flight.saturating_add(1);
+        self.sent_at = Some(now);
+        self.heard = false;
+    }
+
+    /// Whether to say now that no line has come for `after`: once.
+    fn silence_to_tell(&mut self, after: Duration, now: Instant) -> bool {
+        if self.warned_silence || now.saturating_duration_since(self.last_line) < after {
+            return false;
+        }
+        self.warned_silence = true;
+        true
+    }
+
+    /// Whether to say that what an expiry found is a reply ended by a CR: once.
+    fn cr_alone_to_tell(&mut self, buffer: &[u8]) -> bool {
+        if self.warned_cr || !protocol::ends_in_cr_alone(buffer) {
+            return false;
+        }
+        self.warned_cr = true;
+        true
+    }
+}
+
+/// Whether a capture begun at `started` has run its limit, in ms, 0 being none.
+fn time_is_up(limit_msec: u64, started: Instant, now: Instant) -> bool {
+    limit_msec > 0 && now.saturating_duration_since(started) > Duration::from_millis(limit_msec)
 }
 
 impl Capture {
@@ -464,10 +596,10 @@ impl Capture {
         if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
             return;
         }
-        let open = self.link.lock().expect("link lock").open_request.take();
-        let mut requests = Requests { sent_at: open, drop_next: open.is_some() };
+        let left = std::mem::take(&mut self.link.lock().expect("link lock").in_flight);
+        let mut requests = Requests::new(left, self.request_timeout, Instant::now());
         self.passes(sink, stop, &mut requests);
-        self.link.lock().expect("link lock").open_request = requests.sent_at;
+        self.link.lock().expect("link lock").in_flight = requests.in_flight;
     }
 
     /// Reads up to the end of a line, as a pass of C's callback, whose read loop
@@ -512,8 +644,7 @@ impl Capture {
 
     /// What a finished line says: a sample to send, if it holds one.
     fn take_line(&self, line: &[u8], requests: &mut Requests) -> Option<Reading> {
-        requests.sent_at = None;
-        if std::mem::take(&mut requests.drop_next) {
+        if requests.line(Instant::now()) {
             log::debug!("Dropping a reply from the capture before.");
             return None;
         }
@@ -527,13 +658,11 @@ impl Capture {
             return false;
         };
         log::trace!("Sending request: 'STATUS?'.");
-        requests.sent_at = Some(Instant::now());
         if port.write_timeout(STATUS, timeout).is_err() {
-            requests.sent_at = None;
             log::error!("Unable to send request.");
             return false;
         }
-        requests.sent_at = Some(Instant::now());
+        requests.asked(Instant::now());
         true
     }
 
@@ -561,20 +690,33 @@ impl Capture {
                 }
                 samples += 1;
             }
-            let time_up =
-                self.limit_msec > 0 && started.elapsed() > Duration::from_millis(self.limit_msec);
-            if time_up || (self.limit_samples > 0 && samples >= self.limit_samples) {
+            let now = Instant::now();
+            if time_is_up(self.limit_msec, started, now)
+                || (self.limit_samples > 0 && samples >= self.limit_samples)
+            {
                 return;
             }
-            if requests.sent_at.is_some_and(|at| at.elapsed() > self.request_timeout) {
+            if self.limit_samples > 0
+                && self.limit_msec == 0
+                && requests.silence_to_tell(self.silence_warning, now)
+            {
+                log::warn!(
+                    "No reply from the meter for {} s; still asking.",
+                    self.silence_warning.as_secs()
+                );
+            }
+            let turn = requests.turn(now);
+            if turn == Turn::Expired {
                 log::trace!("Request timeout!");
-                requests.sent_at = None;
-                requests.drop_next = false;
+                if requests.cr_alone_to_tell(&buffer.bytes) {
+                    log::warn!("The meter ends its replies in CR with no LF, so none is read.");
+                }
+                requests.expire();
                 // Its tail may yet come, and ends its own line; the next reply
                 // must not be read as the tail of this.
                 buffer.clear();
             }
-            if requests.sent_at.is_none() && !self.send_request(requests) {
+            if turn != Turn::Wait && !self.send_request(requests) {
                 return;
             }
         }

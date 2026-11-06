@@ -20,12 +20,14 @@ emu_cases() {
     L='s/^oxrok: (err|warn|info): oxrok::drivers::norma_dmm(::protocol)?: /sr: norma-dmm: /
 /^sr: serial-libsp: /d'
     # sr_strerror's words against core::config_set's reason.
-    A='s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
-    HEX="protocol.c:67-74: xgittoint gives a to f as 0 to 5, so its modes 0xa and 0xb (:248-258) and its defaults (:164-166, :258) never run, and a letter reads as another digit; oxrok gives each its value"
-    PAIR="protocol.c:282, :300 and :316 shift a pair's first digit by 8, so no mask above 0x08 ever holds (:287, :304, :319-320 never ran): no beep, always AUTO, no warning; the wiki's real line has 0x40, remote mode, in its last pair, so a pair is a byte; oxrok shifts by 4"
-    CUT="protocol.c:97 cuts a line at 20 digits with no look at the rest, so what ran into another line passes as a reading neither held; oxrok takes it as a bad line"
+    # Exactly those words of oxrok's, so another wording fails.
+    A='s/^(Failed to set device option .limit_samples.: invalid argument): it cannot be 0\.$/\1./'
+    HEX="protocol.c:67-74: xgittoint gives a to f as 0 to 5, so its modes 0xa and 0xb (:248-258) and its defaults (:164-166, :256-258) never run, though the wiki's table has a diode as DC,DIODE and A~ as AC,DC,RMS, which only those modes give; oxrok gives each digit its value"
+    PAIR="protocol.c:282, :300 and :316 shift a pair's first digit by 8 from the first patch on, so no mask of 0x10 or above ever holds (:287, :304, :319-320 never ran): continuity always 0, always AUTO, no warning, whatever a meter sends; oxrok shifts by 4. No recording settles it; if that is wrong the damage is flags, a warning and continuity's 0 or 1, never a numeric value"
+    CUT="protocol.c:97 cuts a line at 20 digits with no look at the rest, so what ran into another line passes as a reading neither held; oxrok takes a 21st hex digit as a bad line"
     KEEP="protocol.c:417-421 sets nothing back when a request expires, so the part of a line stays and the next reply adds to it; oxrok drops the part"
     FULL_BUF="protocol.c:393 stops reading at 255 bytes with no LF, and the buffer never empties, so no more of the meter is read; oxrok takes it as one bad line"
+    CR="protocol.c:399 ends a line at LF alone, and C says nothing of a meter that sends CR as the wiki writes; oxrok warns once"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     D950=1834_065_V1.06,IF_V1.02
     # The wiki's: 24.91 V DC.
@@ -42,10 +44,13 @@ emu_cases() {
     # sigrok-cli opens the port before it reads the parameters, oxrok refuses them
     # first: the open's lines are all that differs.
     emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
-    # 14 s in each tool: the one case of seven tries running out on silence.
-    emu_case "serialcomm does not fit" --keep-header --no-output -- -d $K:serialcomm=9600/8n1 --scan
+    # The line coding reaches the wire: this meter hears 9600 alone.
+    emu_options uart=9600/8n1
+    emu_case "serialcomm reaches the line" --keep-header -- -d $K:serialcomm=9600/8n1 --scan
+    emu_options
     # The table: each type on each driver.
-    for dmtype in 1 2 3 4 5; do
+    # The DM950 is the first case's, and the B1028 the second's.
+    for dmtype in 1 2 3 4; do
         emu_options idn=1834_06${dmtype}_V1.04,IF_V1.02
         emu_case "scan type $dmtype" --keep-header -- -d $K --scan
         emu_case "scan siemens type $dmtype" --driver siemens-b102x --keep-header -- -d $Z --scan
@@ -81,7 +86,7 @@ emu_cases() {
     # With LF alone each answer is one line, so the fourth try reaches C's wait of
     # 5 s, the only way to it: under CR LF that try falls on an empty read.
     emu_options eol=lf idn=junk
-    emu_case "scan junk with LF waits" --keep-header --no-output -- -d $K --scan
+    emu_case "scan junk with LF waits" --timeout 120 --keep-header --no-output -- -d $K --scan
     # The interface charging: 4 s of silence, which has no such wait.
     emu_options "idn=~;~;$D950"
     emu_case "scan silent at first" --keep-header -- -d $K --scan
@@ -164,11 +169,11 @@ emu_cases() {
     emu_case "input loop and TRANS" -- -d $K --samples 2
     # Hex letters: C's digit conversion gives a to f as 0 to 5.
     emu_options "status=$(norma_st a 0 0 0 0001);$(norma_st f 0 0 0 0001);$S"
-    emu_case "value type letters" --oracle-differs "$HEX" -- -d $K --samples 2 -O analog
+    emu_case "value type letters" --oracle-differs "$HEX" --stderr --filter "$L" -- -d $K --samples 2 -O analog
     emu_options "status=$(norma_st 0 a 0 0 0001);$(norma_st 0 f 0 0 0001)"
     emu_case "range letters" --oracle-differs "$HEX" -- -d $K --samples 2 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 a1);$(norma_st 0 3 0 0 2491 b1);$(norma_st 0 3 0 0 2491 c1);$(norma_st 0 3 0 0 2491 f1);$S"
-    emu_case "mode letters" --oracle-differs "$HEX" -- -d $K --samples 4 -O analog
+    emu_case "mode letters" --oracle-differs "$HEX" --stderr --filter "$L" -- -d $K --samples 4 -O analog
     emu_options "status=$(norma_st 0 3 0 0 2491 3e);$S"
     emu_case "device status letter" --oracle-differs "$HEX" --stderr --filter "$L" -- -d $K --samples 1
     # The first digit of a pair counts for nothing in C.
@@ -190,26 +195,34 @@ emu_cases() {
     emu_case "an empty line" --stderr --filter "$L" -- -d $K --samples 1
     # A line longer than 20 digits is cut to them.
     emu_options "status=${S}99;$S"
+    emu_options "status=${S}_xy"
+    emu_case "digits with a tail that is no digit" -- -d $K --samples 1 -O analog
+    emu_options "status=${S}99;$S"
     emu_case "a line too long" --oracle-differs "$CUT" -- -d $K --samples 1 -O analog
 
     # No answer: a request expires at 2 s, and the next goes.
     emu_options "status=~;$S"
     emu_case "a reply lost" -- -d $K --samples 1
-    # Part of a line, and what comes next carries on from it: 24.91 V DC reads
-    # as 2.4 Hz, as C cuts the line at 20 digits.
+    # Part of a line, and what comes next carries on from it, and C cuts that at 20
+    # digits: 24.91 V DC reads as 24.03 with no unit.
     emu_options "status=03030024~;$S"
     emu_case "part of a line" --oracle-differs "$KEEP" -- -d $K --samples 1 -O analog
     # A line the buffer cannot hold never ends for C.
     L100=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
     emu_options "status=$L100$L100$L100;$S"
     emu_case "a line of 300" --oracle-bug "$FULL_BUF" --oracle-hangs --timeout 4 -- -d $K --samples 1
-    # A reply late by more than the 2 s, with the request after it unanswered.
-    # Far past 2 s at any pace; whichever comes first, the samples are the same.
+    # A reply late by about 3 s, with the request after it unanswered. Whichever
+    # comes first, the samples are the same. The .tx folds the requests that may or
+    # may not run together: when the next goes is where oxrok differs from C, which
+    # asks at the late line and is pinned by the driver's tests.
     emu_options late=1:150 "status=$S;~;$(norma_st 0 3 0 0 0001);$S"
-    emu_case "a reply late" --tx-filter "$Q1" -- -d $K --samples 2 -O analog
+    emu_case "a reply late" --tx-filter "s/(5354415455533f0d0a)+/\\1/
+$Q1" -- -d $K --samples 2 -O analog
     # Replies with no line feed: the capture never has a line.
     emu_options eol=cr
     emu_case "replies end in CR alone" --no-output --tx-filter "$Q1" -- -d $K --time 1s
+    # And oxrok says so at the first expiry.
+    emu_case "replies end in CR alone, told" --oracle-differs "$CR" --stderr --filter "$L" --tx-filter "$Q1" -- -d $K --time 2500ms
     # Silent from the start: a time limit ends it.
     emu_options answers=1
     emu_case "silent from the capture on" --no-output --tx-filter "$Q1" -- -d $K --time 300ms

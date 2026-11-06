@@ -1,4 +1,2 @@
-P1: 24.91 A AC DC RMS AUTO
-P1: 24.91 V DC DIODE AUTO
-P1: 24.91 V DC AUTO
-P1: 24.91 A AC DC RMS AUTO
+sr: norma-dmm: Unknown mmode: 0x0c.
+sr: norma-dmm: Unknown mmode: 0x0f.

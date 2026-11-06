@@ -29,8 +29,17 @@
 //! | 16, 17 | a byte: 0x10 low battery with readings off spec, 0x01 dB |
 //! | 18, 19 | a byte: 0x40 remote mode, among others not used |
 //!
-//! The wiki's `03030024913100400040` has its last byte at 0x40, from a meter under
-//! remote control, which is what says a pair is a byte with its high digit first.
+//! No recording settles that a pair is a byte with its high digit first; the
+//! masks say so and nothing else does. C shifts by 8 from its first patch on, so
+//! its masks of 0x10 and above can never hold: continuity is always 0 and every
+//! reading AUTO, whatever a meter sends. Only those masks change here. If this
+//! reading is wrong the damage is flags, a warning and continuity's 0 or 1, never a
+//! numeric value. Both real lines known have 0x40 in digits 14-15, low battery by
+//! this reading, which has no effect, so they neither prove nor disprove it.
+//!
+//! The hex digits are surer: the wiki's table has a diode as `DC,DIODE` and A≃ as
+//! `AC,DC,RMS`, which only modes 0xa and 0xb can produce, and C's digit conversion
+//! can never give those.
 
 use crate::core::{Mq, MqFlags, Unit};
 
@@ -93,6 +102,14 @@ pub fn hex_digit(c: u8) -> u32 {
 /// so none of its masks above 0x08 ever holds.
 fn pair(line: &[u8], at: usize) -> u32 {
     (hex_digit(line[at]) << 4) | hex_digit(line[at + 1])
+}
+
+/// What a meter that ends its replies in CR alone leaves at an expiry: the wiki
+/// writes them so, and a capture then never has a line.
+pub fn ends_in_cr_alone(buffer: &[u8]) -> bool {
+    buffer.len() > LINE_LENGTH
+        && buffer[LINE_LENGTH] == b'\r'
+        && buffer[..LINE_LENGTH].iter().all(u8::is_ascii_hexdigit)
 }
 
 /// A reply as C reads it: a string, up to its first NUL.
@@ -188,18 +205,16 @@ fn mode(mode: u32, meter_type: u32) -> Option<(Unit, MqFlags, Option<Mq>)> {
     })
 }
 
-/// The line's own checks, as C's and one more: what is left after its line end
-/// must not be longer than the 20 digits. C cuts it to them, so a line that lost
-/// its end and ran into the next one passes as a reading neither of them held.
+/// The line's own checks, as C's and one more: a 21st hex digit. C cuts a line to
+/// 20, so one that lost its end and ran into the next passes as a reading neither
+/// of them held. Anything else after the 20 digits is cut as in C.
 fn well_formed(line: &[u8]) -> bool {
     let text = c_string(line);
-    let text = text.strip_suffix(b"\n").unwrap_or(text);
-    let text = text.strip_suffix(b"\r").unwrap_or(text);
-    if text.len() > LINE_LENGTH {
+    if text.get(LINE_LENGTH).is_some_and(u8::is_ascii_hexdigit) {
         log::error!("line: Invalid status '{}', must be 20 hex digits.", show(line));
         return false;
     }
-    let digits = &c_string(line)[..c_string(line).len().min(LINE_LENGTH)];
+    let digits = &text[..text.len().min(LINE_LENGTH)];
     if digits.len() != LINE_LENGTH {
         log::error!("line: Invalid status '{}', must be 20 hex digits.", show(digits));
         return false;
@@ -214,9 +229,10 @@ fn well_formed(line: &[u8]) -> bool {
 /// `nma_process_line`: a line with its CR LF, to the reading it holds. There is no
 /// reading in a line that is wrong, in a device error, or in a duplicate.
 ///
-/// A value type or a mode C has no entry for gives its error and no reading,
-/// as a value of no known quantity is none. No C run has either: its digit
-/// conversion stops at 9.
+/// A value type or a mode C has no entry for gives its error and still a reading,
+/// as C's defaults go on, like an unknown device status. C leaves the quantity or
+/// the unit at 0, which `Mq` and `Unit` have no name for: here it is gain and
+/// unitless. No C run has either: its digit conversion stops at 9.
 pub fn process_line(line: &[u8], meter_type: u32) -> Option<Reading> {
     log::trace!("Received line '{}'.", show(line));
     if !well_formed(line) {
@@ -263,10 +279,8 @@ pub fn process_line(line: &[u8], meter_type: u32) -> Option<Reading> {
         }
         other => log::error!("Unknown device status: 0x{other:02x}"),
     }
-    let (Some(mq), Some((mut unit, mut flags, new_mq))) = (mq, meaning) else {
-        return None;
-    };
-    let mq = new_mq.unwrap_or(mq);
+    let (mut unit, mut flags, new_mq) = meaning.unwrap_or((Unit::Unitless, MqFlags::empty(), None));
+    let mq = new_mq.or(mq).unwrap_or(Mq::Gain);
 
     let symbols = pair(line, 12);
     if mq == Mq::Continuity {
@@ -512,13 +526,27 @@ mod tests {
     }
 
     #[test]
-    fn what_c_has_no_entry_for_is_no_reading() {
+    fn what_c_has_no_entry_for_is_still_a_reading() {
         for vt in ['a', 'f'] {
-            assert_eq!(process_line(format!("00{vt}00000013100000000").as_bytes(), 5), None);
+            let r = reading(&format!("00{vt}00000013100000000"));
+            assert_eq!((r.mq, r.unit), (Mq::Gain, Unit::Volt), "{vt}");
+            assert_eq!(r.value, 1.0, "{vt}");
         }
         for m in ['c', 'f'] {
-            assert_eq!(process_line(format!("0000000001{m}100000000").as_bytes(), 5), None);
+            let r = reading(&format!("0000000001{m}100000000"));
+            assert_eq!((r.mq, r.unit), (Mq::Voltage, Unit::Unitless), "{m}");
+            assert_eq!(r.flags, MqFlags::AUTORANGE, "{m}");
         }
+    }
+
+    #[test]
+    fn cr_alone_is_20_digits_and_a_cr() {
+        assert!(ends_in_cr_alone(b"03030024913100400040\r"));
+        assert!(ends_in_cr_alone(b"03030024913100400040\r0303"));
+        assert!(!ends_in_cr_alone(b"03030024913100400040"));
+        assert!(!ends_in_cr_alone(b"0303002491310040004x\r"));
+        assert!(!ends_in_cr_alone(b"0303002491310040004\r"));
+        assert!(!ends_in_cr_alone(b""));
     }
 
     #[test]
@@ -531,16 +559,21 @@ mod tests {
             b"000000000131000000\r\n",
             b"0000000001310000000x\r\n",
             b" 0000000013100000000\r\n",
-            b"00000000013100000000 \r\n",
             b"000000000131000000000\r\n",
             b"0303002403030024913100400040\r\n",
             b"0000000001310000\x00000\r\n",
         ] {
             assert_eq!(process_line(bad, 5), None, "{}", bad.escape_ascii());
         }
-        for good in
-            [&b"00000000013100000000"[..], b"00000000013100000000\n", b"00000000013100000000\r\n"]
-        {
+        for good in [
+            &b"00000000013100000000"[..],
+            b"00000000013100000000\n",
+            b"00000000013100000000\r\n",
+            // Cut as in C: what follows is no digit, so no second line ran in.
+            b"00000000013100000000 \r\n",
+            b"00000000013100000000 99\r\n",
+            b"00000000013100000000xyz\r\n",
+        ] {
             assert!(process_line(good, 5).is_some(), "{}", good.escape_ascii());
         }
     }
