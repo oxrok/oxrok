@@ -550,6 +550,9 @@ pub struct Link {
     pub threshold_cal: i32,
     /// Last DAC value written.
     threshold_dac: Option<u16>,
+    /// The last configuration ended on the image check: the FPGA holds
+    /// another image or none, which a resync does not change.
+    pub image_refused: bool,
 }
 
 impl Link {
@@ -565,6 +568,7 @@ impl Link {
             fpga_image: None,
             threshold_cal: 0,
             threshold_dac: None,
+            image_refused: false,
         })
     }
 
@@ -928,6 +932,9 @@ impl Link {
             step = "bit-bang";
             result = self.bitbang_configure(&stream);
             if result.is_err() {
+                // Out of bit-bang mode, or the resync below sends its flood
+                // and its commands to the FPGA's configuration pins.
+                let _ = self.ftdi.set_bitmode(0, BitMode::Reset);
                 continue;
             }
             // A close/reopen is needed before the resync here.
@@ -958,6 +965,7 @@ impl Link {
         }
         if result.is_err() {
             log::error!("Failed to configure the FPGA.");
+            self.image_refused = step == "image check";
         }
         result
     }

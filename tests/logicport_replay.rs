@@ -146,6 +146,40 @@ fn compressed_capture_expands_count_records() {
     assert_eq!(at, Some(250));
 }
 
+/// A close joins the capture thread, which must not stay on a full queue
+/// nobody reads.
+#[test]
+fn a_close_does_not_wait_for_a_reader() {
+    let replay = Replay::from_text(include_str!("fixtures/logicport/capture-1m-rle.txt")).unwrap();
+    let mut dev = LogicPortDevice::from_transport(Box::new(replay));
+    dev.open().unwrap();
+    dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+    dev.set(&Key::Rle, &Value::Bool(true), None).unwrap();
+    dev.set(&Key::VoltageThreshold, &Value::RangeF64(1.5, 1.5), None).unwrap();
+    for pos in 0..dev.channels().len() {
+        dev.enable_channel(pos, pos == 32).unwrap();
+    }
+    dev.set(&Key::LimitSamples, &Value::U64(500), None).unwrap();
+    let mut trigger = Trigger::new();
+    trigger.add(0, 32, TriggerMatch::Rising);
+    dev.set_trigger(Some(trigger)).unwrap();
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    dev.start(oxrok::core::PacketSink::new(tx, 0)).unwrap();
+    // The queue is full once the thread has sent something.
+    let t0 = std::time::Instant::now();
+    while rx.try_recv().is_err() && t0.elapsed() < std::time::Duration::from_secs(20) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let (done, ended) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        dev.close().unwrap();
+        done.send(()).unwrap();
+    });
+    assert!(ended.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "the close hangs");
+    drop(rx);
+}
+
 #[test]
 fn a_different_setting_fails_the_replay() {
     let replay = Replay::from_text(include_str!("fixtures/logicport/capture-1m-rle.txt")).unwrap();

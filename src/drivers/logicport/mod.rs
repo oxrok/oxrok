@@ -693,7 +693,7 @@ impl Device for LogicPortDevice {
                 if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.end(outcome);
+                send_end(&sink, &stop2, outcome);
                 *slot.lock().expect("link lock") = Some(link);
             })
             .map_err(Error::Io)?;
@@ -721,6 +721,7 @@ struct Acquisition {
 /// Feeds samples to the packet sink in chunks.
 struct Feed<'a> {
     sink: &'a PacketSink,
+    stop: &'a AtomicBool,
     buf: Vec<u8>,
     alive: bool,
 }
@@ -731,7 +732,8 @@ impl Feed<'_> {
     fn flush(&mut self) {
         if !self.buf.is_empty() {
             let data = std::mem::take(&mut self.buf);
-            if !self.sink.send(Packet::logic(UNIT_SIZE, data)) {
+            let go_on = || !self.stop.load(Ordering::SeqCst);
+            if !self.sink.send_while(Packet::logic(UNIT_SIZE, data), go_on) {
                 self.alive = false;
             }
         }
@@ -757,7 +759,8 @@ impl SampleOut for Feed<'_> {
 
     fn trigger(&mut self) {
         self.flush();
-        self.sink.send(Packet::Trigger);
+        let go_on = || !self.stop.load(Ordering::SeqCst);
+        self.alive &= self.sink.send_while(Packet::Trigger, go_on);
     }
 }
 
@@ -769,8 +772,14 @@ impl Acquisition {
     }
 
     fn run(&self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
+        // A bad file is no fault of the link: don't resync and try it again.
+        if link.fpga_image != Some(self.program.image()) {
+            firmware::load_image(self.program.image())?;
+        }
         let mut r = self.prepare(link);
-        if let Err(Error::Device(_) | Error::Timeout) = &r {
+        if let Err(Error::Device(_) | Error::Timeout) = &r
+            && !link.image_refused
+        {
             // The link may be out of step, resync and try once more.
             log::debug!("Retrying acquisition setup after resync.");
             if link.resync(true, 1).is_ok() {
@@ -786,8 +795,10 @@ impl Acquisition {
             log::debug!("Acquisition armed.");
             // The header goes out once the device is armed, so a test
             // bench can start its stimulus when it sees it.
-            if frames_done == 0 {
-                sink.send(Packet::header());
+            let go_on = || !stop.load(Ordering::SeqCst);
+            if frames_done == 0 && !sink.send_while(Packet::header(), go_on) {
+                let _ = link.halt();
+                return Ok(());
             }
             let status = loop {
                 if stop.load(Ordering::SeqCst) {
@@ -802,12 +813,12 @@ impl Acquisition {
                 fill.check(link, status)?;
             };
             log::debug!("Acquisition done, status 0x{status:02x}.");
-            if self.limit_frames > 0 {
-                sink.send(Packet::FrameBegin);
+            if self.limit_frames > 0 && !sink.send_while(Packet::FrameBegin, go_on) {
+                return Ok(());
             }
-            self.read_samples(link, sink, status)?;
-            if self.limit_frames > 0 {
-                sink.send(Packet::FrameEnd);
+            self.read_samples(link, sink, stop, status)?;
+            if self.limit_frames > 0 && !sink.send_while(Packet::FrameEnd, go_on) {
+                return Ok(());
             }
             frames_done += 1;
             if frames_done >= self.limit_frames.max(1) {
@@ -816,12 +827,18 @@ impl Acquisition {
         }
     }
 
-    fn read_samples(&self, link: &mut Link, sink: &PacketSink, status: u8) -> Result<()> {
+    fn read_samples(
+        &self,
+        link: &mut Link,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+        status: u8,
+    ) -> Result<()> {
         let mut limit = self.limit_samples;
         if self.program.rle && limit == 0 {
             limit = RLE_DEFAULT_LIMIT;
         }
-        let mut feed = Feed { sink, buf: Vec::with_capacity(FEED_CHUNK), alive: true };
+        let mut feed = Feed { sink, stop, buf: Vec::with_capacity(FEED_CHUNK), alive: true };
         let sent;
         {
             let mut s = Sink::new(&mut feed, limit, self.program.capture_ratio);
@@ -837,6 +854,21 @@ impl Acquisition {
         log::debug!("Sent {sent} samples.");
         Ok(())
     }
+}
+
+/// The End: a client that goes on reading is waited for without a bound, and
+/// after a stop only so long, as a close joins this thread.
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
+    const AFTER_STOP: Duration = Duration::from_secs(1);
+    let stopped_at = std::cell::Cell::new(None);
+    sink.end_while(outcome, || {
+        if !stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let at = stopped_at.get().unwrap_or_else(Instant::now);
+        stopped_at.set(Some(at));
+        at.elapsed() < AFTER_STOP
+    });
 }
 
 /// With compression, memory fills with transitions rather than samples,
