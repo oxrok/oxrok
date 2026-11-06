@@ -1,4 +1,4 @@
 ctl_out 21 09 0300 0000 8025000003 -> ok
 ctl_out 21 09 0300 0000 8025000003 -> ok
-int_out 02 0101 and C's stack -> 8
-int_out 02 0102 and C's stack -> 8
+int_out 02 0101000000000000 -> 8
+int_out 02 0102000000000000 -> 8

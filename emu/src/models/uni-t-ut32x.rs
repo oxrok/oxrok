@@ -10,7 +10,7 @@
 //! - The commands and the record: the sigrok wiki's "UNI-T UT325" page, from
 //!   someone's reverse engineering. `01` starts live records, `02` stops, `07`
 //!   starts the stored ones, `03` is a calibration mode and `04` twice clears the
-//!   memory. A record is 19 bytes: a type digit (`0` stored, `2` live), four
+//!   memory. A record is 19 bytes: a type digit (`0` stored, `2` live, `6` unknown), four
 //!   characters of tenths of a degree with `:` for a blank and `;` for a minus
 //!   (`;;;;` is no probe), a unit digit (`1` C, `2` F, `3` K, and `0` "in recall
 //!   mode"), a two digit slot number (00 to 99, `00` when live), `0`, hour, minute,
@@ -18,7 +18,8 @@
 //!   CR LF.
 //! - The line, 2400/8n1: only the default in libsigrok's scan. The wiki gives none.
 //! - The rate: the wiki says 6 Hz, a comment in libsigrok "two or three packets per
-//!   second". Nothing depends on it here, as a record is due every `period=` offers
+//!   second", and a libsigrok commit message (f0e6b41f) "some 60 times per second".
+//!   Nothing depends on it here, as a record is due every `period=` offers
 //!   of a read, not after a time.
 //! - How a memory dump is paced, what it sends for a free slot and how it ends: not
 //!   found. A libsigrok comment says unused slots "come through" as no measurement,

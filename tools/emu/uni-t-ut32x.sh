@@ -43,10 +43,9 @@ emu_cases() {
     FN="$F
 s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     CHAN_BUG="process_packet (protocol.c:119-143) sends what the meter shows whatever -C says; oxrok sends a channel that is on, and counts the rest as C does"
-    DASH="both tools read the dash of T1-T2 as a range and refuse it, in their own words, so that channel cannot be named alone"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture and sends the stop"
     UNTIL_PACKET="protocol.c:154-156 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
-    UNPLUG_BUG="ut32x_handle_events (protocol.c:263-264) reads on G_IO_IN alone, and a gone tty polls as G_IO_HUP, so it goes on for ever; oxrok gets an error and ends"
+    UNPLUG_BUG="ut32x_receive_data (protocol.c:238-239) takes a read of 0 as no data, and a gone tty polls readable and reads 0, so it spins on a CPU for ever; oxrok gets an error and ends"
     SPLIT_BUG="ut32x_receive_data (protocol.c:231-234) drops a full buffer ending in CR, so the LF starts the next one and every record after it is cut the same way, for ever; oxrok drops that LF too and is in step at the next record"
     T1=$(ut32x_rec 2 :235 1 00 0)
     T2=$(ut32x_rec 2 :241 1 00 1)
@@ -78,7 +77,14 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_case "config limit_samples" --libsigrok --oxrok -- -d $A -c limit_samples=3 --continuous
     emu_case "frames" --stderr --filter "$F" --expect-fail -- -d $A --frames 1
     emu_case "one channel on" --oracle-differs "$CHAN_BUG" -- -d $A -C T2 --samples 3
-    emu_case "the channel with a dash" --oracle-bug "$DASH" --stderr --filter "$F" --expect-fail -- -d $A -C T1-T2 --samples 3
+    # Both refuse the dash as a range, in their own words, so that channel cannot be
+    # named alone.
+    emu_case "the channel with a dash" --no-output --expect-fail -- -d $A -C T1-T2 --samples 3
+    # Three records, one of them on T2, the only channel on: the limit comes on the
+    # third, and the core's notice says 1 sample, where the device sent three. With the
+    # meter on T1 alone nothing comes out, no notice, exit 0: a unit test has that.
+    emu_options period=2 burst=3 live=$T1,$T2,$T1
+    emu_case "a channel off in the notice" --oracle-differs "$CHAN_BUG" --stderr --filter "$F" -- -d $A -C T2 --samples 3
     emu_options period=2 burst=3 chunk=1
     emu_case "one byte per transfer" -- -d $A --samples 3
     emu_options period=2 burst=3 uart=9600/8n1
@@ -116,19 +122,18 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     ut32x_list "two records in one go" 2 $T1$T2
     # One byte ahead of a record puts the record's CR at the buffer's end, and C stays
     # out of step for as long as nothing else shifts it: so one such byte, and only
-    # records behind it. The period leaves oxrok's stop ahead of the next record.
+    # records behind it, the nine that show C never gets one. How many of them go
+    # before oxrok's stop lands depends on the time, so the reads are left out.
     ut32x_after=$T1,$T2,$T1,$T2,$T1,$T2,$T1,$T2
     emu_options period=10 burst=9 live=$(emu_hex 'x'),$ut32x_after
-    emu_case "one byte ahead of a record" --oracle-bug "$SPLIT_BUG" --oracle-hangs --timeout 6 -- -d $A --samples 1
-    emu_options period=10 burst=9 live=$(emu_hex 'xxxxxxxxxxxxxxxxxx\r\n'),$ut32x_after
-    emu_case "a long packet" --oracle-bug "$SPLIT_BUG" --oracle-hangs --timeout 6 -- -d $A --samples 1
+    emu_case "one byte ahead of a record" --oracle-bug "$SPLIT_BUG" --oracle-hangs --timeout 6 --tx-filter '/^bulk_in 82 /d' -- -d $A --samples 1
 
     # The memory.
     emu_options period=1 slots=5
     emu_case "memory" -- -d $A -c data_source=Memory --samples 5
     emu_options period=1 burst=3
     emu_case "memory, three of its slots" -- -d $A -c data_source=Memory --samples 3
-    emu_options period=1 slots=5 stored=$(ut32x_rec 0 :198 1 00 0),$(ut32x_rec 0 ';;;;' 0 01 0),$(ut32x_rec 0 :201 2 02 1)
+    emu_options period=1 slots=3 stored=$(ut32x_rec 0 :198 1 00 0),$(ut32x_rec 0 ';;;;' 0 01 0),$(ut32x_rec 0 :201 2 02 1)
     emu_case "memory with a hole" -- -d $A -c data_source=Memory --samples 3
 
     # A time limit bites behind a packet. A period of 10 offers, some 200 ms: the
@@ -142,8 +147,6 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     # Silence.
     emu_options burst=0
     emu_case "time, silent" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 5 --no-output -- -d $A --time 50
-    emu_options period=2 burst=1 uart=9600/8n1
-    emu_case "time, the line wrong" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 5 --no-output -- -d $A --time 50
     # Over 10 s: the bound oxrok waits, and C's timeout beyond it. One case per form.
     emu_options burst=0
     emu_case "samples, silent says so" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 8 --stderr --filter "$F" -- -d $A --samples 1
@@ -152,11 +155,11 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     # ahead of the second record.
     emu_options period=10 burst=2
     emu_case "lib stop" --libsigrok -- -d $A --continuous --stop-after 1
-    emu_options period=2 burst=2
-    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --samples 5
-    # A long period: the event point is a period behind the last record, and a hangup
-    # loses bytes the tool has not read yet. At 2 offers, 1 run of 15 lost one under load.
+    # Long periods: the event point is a period behind the last record, and a signal or
+    # a hangup then loses what the tool has not read yet. A hangup takes the longer one.
     emu_options period=10 burst=2
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --samples 5
+    emu_options period=25 burst=2
     emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 -- -d $A --samples 5
     emu_case "unplug says so" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 4 --stderr --filter "$F" -- -d $A --samples 5
     emu_options

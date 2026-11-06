@@ -27,10 +27,11 @@ emu_cases() {
     UNTIL_PACKET="protocol.c:154-156 checks the limits only behind a packet, so a device that says nothing never ends a capture; oxrok ends it"
     UNPLUG_BUG="the read errors end hidapi_source_cb's loop (serial_hid.c:451-458) and nothing tells ut32x_handle_events, so it goes on for ever; oxrok gets an error and ends"
     # ch9325_write_bytes (serial_hid_ch9325.c:130,149-150) sends 8 bytes and sets
-    # only the count and the data: the rest is C's stack, oxrok's zeros. A unit test
-    # pins those.
+    # only the count and the data: the rest is C's stack, and it varies, oxrok's zeros.
+    # Only where C's .tx is compared: an --oracle-bug golden pins oxrok's zeros.
     TAIL='s/^(int_out 02 01[0-9a-f]{2})[0-9a-f]{12} -> /\1 and C'"'"'s stack -> /'
-    NOHID="the VID.PID form is a tty's name to libsigrok here, and no tty has it; oxrok takes it for the cable"
+    NOHID="no C bug: an oxrok extension. 1a86.e008 is a retired C form, and to libsigrok now a tty's name that no tty has. oxrok takes it for the chip, not those ids: it means hid/ch9325, and of two cables the first the search finds"
+    WRAP_BUG="ut32x_receive_data (protocol.c:236-241) keeps SR_ERR from a read in a size_t, so packet_len wraps and process_buffer runs off its buffer. oxrok ends the capture at the first bad report, which is a choice in the shared HidPort: C goes on after a lone one with nothing queued"
     T1=$(ut32x_hid_rec 2 :235 1 00 0)
     T2=$(ut32x_hid_rec 2 :241 1 00 1)
 
@@ -40,9 +41,9 @@ emu_cases() {
 
     # The forms users type, which sigrok-cli cannot open: oxrok alone.
     emu_options period=2 burst=1
-    emu_case "search chip" --oracle-bug "$SEARCH_BUG" --tx-filter "$TAIL" -- -d uni-t-ut32x:conn=hid/ch9325 --samples 1
-    emu_case "search bare" --oracle-bug "$SEARCH_BUG" --tx-filter "$TAIL" -- -d uni-t-ut32x:conn=hid --samples 1
-    emu_case "by usb ids" --oracle-bug "$NOHID" --tx-filter "$TAIL" -- -d uni-t-ut32x:conn=1a86.e008 --samples 1
+    emu_case "search chip" --oracle-bug "$SEARCH_BUG" -- -d uni-t-ut32x:conn=hid/ch9325 --samples 1
+    emu_case "search bare" --oracle-bug "$SEARCH_BUG" -- -d uni-t-ut32x:conn=hid --samples 1
+    emu_case "by usb ids" --oracle-bug "$NOHID" -- -d uni-t-ut32x:conn=1a86.e008 --samples 1
 
     emu_options period=2 burst=3
     emu_case "three samples" --tx-filter "$TAIL" -- -d $H --samples 3
@@ -62,7 +63,7 @@ emu_cases() {
     emu_case "another line, as the device is set" --tx-filter "$TAIL" -- -d $H:serialcomm=9600/8n1 --samples 2
     emu_options period=2 burst=2
     emu_case "a rate the chip has not" --tx-filter "$TAIL" -- -d $H:serialcomm=1200/8n1 --samples 2
-    emu_case "time, the line wrong" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 5 --no-output --tx-filter "$TAIL" -- -d $H:serialcomm=9600/8n1 --time 50
+    emu_case "time, the line wrong" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 5 --no-output -- -d $H:serialcomm=9600/8n1 --time 50
 
     # The noise that needs a look through the cable's chunks too.
     emu_options period=2 burst=3 live=$(emu_hex 'xxxxx'),$T1,$T2
@@ -71,6 +72,10 @@ emu_cases() {
     # Faults. A chip that takes no setting: the open fails, and that is no device.
     emu_options stall-report=1
     emu_case "the setting stalled" --keep-header --no-output -- -d $H --scan
+    # A report with no f0 in its header, behind the first of each record. How far the
+    # reports get before oxrok's stop depends on the time, so the reads are left out.
+    emu_options period=2 burst=3 bad-report=00
+    emu_case "a bad report" --oracle-bug "$WRAP_BUG" --stderr --filter "$F" --tx-filter '/^int_in 82 /d' -- -d $H --samples 3
     # A stalled stop: it logs and the capture still ends.
     emu_options period=2 burst=2 stall-out=2
     emu_case "the stop stalled" --tx-filter "$TAIL" -- -d $H --samples 2
@@ -78,11 +83,10 @@ emu_cases() {
     # A long period: the stop lands ahead of the second record.
     emu_options period=10 burst=2
     emu_case "lib stop" --libsigrok --tx-filter "$TAIL" -- -d $H --continuous --stop-after 1
-    emu_options period=2 burst=2
-    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter "$TAIL" -- -d $H --samples 5
-    # A long period: the event point is a period behind the last record, and a hangup
-    # loses bytes the tool has not read yet. At 2 offers, 1 run of 15 lost one under load.
+    # A long period: the event point is a period behind the last record, and a signal or
+    # a hangup then loses what the tool has not read yet.
     emu_options period=10 burst=2
-    emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 --tx-filter "$TAIL" -- -d $H --samples 5
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $H --samples 5
+    emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $H --samples 5
     emu_options
 }

@@ -35,7 +35,10 @@
 //! instrument's line (2400, 8); `chunk=N`, UART bytes per report, 1 to 7 (2);
 //! `idle=N`, idle reports before each record (0). Faults, all off by default:
 //! `stall-report=1` STALLs the setting, as a chip that has hung, and `stall-out=N`
-//! STALLs the Nth OUT transfer, one-shot, which is an emulation artifact.
+//! STALLs the Nth OUT transfer, one-shot, which is an emulation artifact;
+//! `bad-report=HH` puts a report with this first byte behind the first of each record.
+//! No chip is known to send that, only `ch9325_read_bytes` checks for it, and it is
+//! here for what the check's error does.
 //!
 //! The pedantic checks: the setting is the five bytes above, with bytes 2 and 3
 //! zero and a known data bits code; an output report is 8 bytes, its count 1 to 7;
@@ -54,7 +57,7 @@ pub const NAME: &str = "uni-t-ut32x-hid";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A UNI-T UT32x thermometer on its CH9325 cable (HID, 1a86:e008); live=, \
                          stored=, slots=, period=, burst= as uni-t-ut32x, baud=N (2400), bits=N \
-                         (8), chunk=N (2), idle=N, stall-report=1, stall-out=N";
+                         (8), chunk=N (2), idle=N, stall-report=1, stall-out=N, bad-report=HH";
 
 /// The USB vendor id.
 pub const VENDOR_ID: u16 = 0x1a86;
@@ -94,6 +97,10 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
             continue;
         }
         match k.as_str() {
+            "bad-report" => {
+                let list = cable::parse_packets(v, 1, 1)?;
+                chip.bad_report = Some(list[0][0]);
+            }
             "baud" => chip.baud = cable::parse_number(k, v, 1..=0xffff)? as u16,
             "bits" => chip.bits = cable::parse_number(k, v, 5..=8)? as u8,
             "chunk" => chip.chunk = cable::parse_number(k, v, 1..=CHUNK as u32)? as usize,
@@ -124,6 +131,7 @@ struct Chip {
     idle: u32,
     stall_report: bool,
     stall_out: Option<u32>,
+    bad_report: Option<u8>,
     /// The line as the host set it, if it did.
     line: Option<(u16, u8)>,
     reports: Reports,
@@ -140,6 +148,7 @@ impl Default for Chip {
             idle: 0,
             stall_report: false,
             stall_out: None,
+            bad_report: None,
             line: None,
             reports: Reports::default(),
             outs: 0,
@@ -161,7 +170,14 @@ impl Chip {
             r.resize(REPORT_BYTES, 0);
             r
         });
-        idle.chain(data).collect()
+        let mut reports: Vec<Vec<u8>> = idle.chain(data).collect();
+        if let Some(header) = self.bad_report {
+            let mut bad = vec![header];
+            bad.resize(REPORT_BYTES, 0);
+            let at = reports.len().min(self.idle as usize + 1);
+            reports.insert(at, bad);
+        }
+        reports
     }
 
     fn line(&mut self, data: &[u8], v: &mut Violations) {
@@ -348,6 +364,7 @@ mod tests {
                 "idle" => chip.idle = value.parse().unwrap(),
                 "stall-report" => chip.stall_report = *value == "1",
                 "stall-out" => chip.stall_out = Some(value.parse().unwrap()),
+                "bad-report" => chip.bad_report = Some(value.parse().unwrap()),
                 "baud" => chip.baud = value.parse().unwrap(),
                 _ => assert!(chip.meter.option(k, value).unwrap(), "{k}"),
             }
@@ -512,6 +529,13 @@ mod tests {
         assert_eq!(write(&mut d, &mut v, CMD_STOP), Reply::Stall);
         assert!(!reports(&mut d, &mut v, 2).is_empty(), "a stalled stop does not stop it");
         assert_eq!(write(&mut d, &mut v, CMD_STOP), Reply::ack(), "one-shot");
+        let mut d = cable(&[("bad-report", "255"), ("period", "1"), ("live", "414243")]);
+        set_line(&mut d, &mut v, &LINE);
+        write(&mut d, &mut v, CMD_LIVE);
+        let got = reports(&mut d, &mut v, 3);
+        assert_eq!(got[0], [0xf2, 0x41, 0x42, 0, 0, 0, 0, 0]);
+        assert_eq!(got[1], [0xff, 0, 0, 0, 0, 0, 0, 0], "behind the record's first");
+        assert_eq!(got[2], [0xf1, 0x43, 0, 0, 0, 0, 0, 0]);
     }
 
     #[test]
@@ -549,6 +573,8 @@ mod tests {
         assert!(build(&o("bits", "9")).is_err());
         assert!(build(&o("stall-out", "0")).is_err());
         assert!(build(&o("stall-report", "2")).is_err());
+        assert!(build(&o("bad-report", "0000")).is_err());
+        assert!(build(&o("bad-report", "00")).is_ok());
         assert!(build(&o("period", "3")).is_ok());
     }
 }
