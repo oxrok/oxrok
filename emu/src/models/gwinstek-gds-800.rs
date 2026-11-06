@@ -28,7 +28,8 @@
 //!   a trigger and a sweep: the manual doesn't say. `late-at=` shows that.
 //! - The trace is a triangle free of the byte 0x0A, as `src/scpi/scpi_serial.c` makes
 //!   stock C see such a byte at a read's end twice, and where reads end goes with the
-//!   clock. `wave=full` has every low byte, which any real signal has.
+//!   clock. `wave=full` has every low byte, which any real signal has: libsigrok's
+//!   unmerged pull request 121 reports what C does then, from a real GDS-2000.
 //! - The record length comes from `points=`, not from `:ACQ:LENG`, which no driver sends.
 //!
 //! Options, besides the shell's ([`scpi::Config::option`]):
@@ -327,7 +328,7 @@ mod tests {
 
     #[test]
     fn the_plain_trace_has_no_line_feed_and_the_full_one_does() {
-        let lf = |block: &[u8]| block[14..].iter().filter(|b| **b == b'\n').count();
+        let lf = |block: &[u8]| block[14..].split(|b| *b == b'\n').count() - 1;
         let mut s = armed(&[("points", "125000")]);
         assert_eq!(lf(&ask(&mut s, ":ACQ1:MEM?\n").0), 0);
         assert_eq!(lf(&ask(&mut s, ":ACQ2:MEM?\n").0), 0);
