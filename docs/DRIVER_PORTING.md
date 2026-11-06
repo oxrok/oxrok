@@ -355,6 +355,20 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A device that never answers leaves a write's success as all a setting knows, and a bridge with
+  one client accepts a second and closes it. A short look at the line after a command finds that
+  close, with nothing on the wire. It is wrong both ways: say what still passes and what fails
+  falsely.
+- `SO_RCVTIMEO` makes a stop and continue end `recv` with EINTR. That is neither an error nor
+  silence: on `tcp-raw`, silence after a full read ends the answer. Read again for what is left
+  of the wait, not all of it, or stops closer together than the wait hold it for ever. Stop the
+  real binary to test this, aiming at the request.
+- A read can report a closed peer as the FIN or as the reset, by system, once the test has sent
+  into it. Pin the words of a close only where nothing was sent first.
+- A second `send` into a closed connection need not reach SIGPIPE: two writes in a row can go out
+  ahead of the close. Run it before citing it for a driver.
+- A mutant script that replaces every match also edits the test's literal, and looks like a
+  survivor. Replace the first match, and read a survivor before believing it.
 - Take a bound's time ahead of the read that found nothing. A stall
   between the two passes for silence with the answer already in; a fake
   whose read returns empty after a stall, with bytes for the next, tests

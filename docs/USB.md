@@ -951,6 +951,9 @@ pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
   `EMU_TCP=only` and no `EMU_TMC`. A driver's wire with no SCPI on it needs no
   `Engine`. One that streams gives a digest in `log_rules`: a run of bytes is kept
   whole unless one says otherwise.
+  `hp-59306a` is the smallest example: it never sends. `Port::marked` tells a unit test that a
+  model reached its mark. `mark-conn=1` with `--unplug tcp-model` closes a scan's connection and
+  makes the next one `tcp_refused`, which is how a bridge with one client behaves.
 
 The scenario, with `EMU_TMC` only where the model is on USBTMC:
 

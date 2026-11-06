@@ -1219,16 +1219,20 @@ limits = []
 [drivers.hp-59306a]
 name = "HP 59306A"
 libsigrok = "hp-59306a"
-ids = []
-kind = "generator"
+ids = ["hp-59306a"]
+kind = "other"
 connection = "tcp"
 vendor = "HP"
 models = ["59306A"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hp-59306a"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
+behaviour = [
+  "A relay box on HP-IB, reached through a TCP bridge named by `conn=`; no bridge has been tried.",
+  "Relays are channel groups R1 to R6: `-g R3 -c enabled=on --set` joins R3 to A, `enabled=off` to B, and with no group it is all six.",
+  "A setting fails if the connection closes within 100 ms of the command, even if the device took it first.",
+  "Of `-c enabled=on -c enabled=off` only the last is sent, with a warning: a pulse takes two runs.",
+]
 limits = []
 
 [drivers.hung-chang-dso-2100]

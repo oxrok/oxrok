@@ -188,6 +188,8 @@ Deliberate, and kept small:
   sigrok-cli pulses that output. `-c enabled=on -c
   channel_group=R1:enabled=off` (all but R1) keeps its order, so R1 has
   power between the two.
+  An `enabled` from another `-c` that this drops gets a warning naming it, which fails a
+  `--strict` run. A pulse takes two runs.
 - A failed start leaves the output as it is, as in sigrok-cli and as a
   finished capture does: the state before is not known and the device
   may be gone. oxrok says so on stderr ("The capture failed with the
@@ -957,6 +959,9 @@ Deliberate, and kept small:
   sample yet, 10 minutes after one), ends with a warning at a time
   limit, and warns once with no limit. A stray byte costs one reading,
   where sigrok-cli reads nothing more.
+- `hp-59306a`: a setting fails if the connection has closed within 100 ms of the command ("It may
+  not have reached the device, and where its relays lie is not known"), even if the device took
+  it first. A later close passes.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

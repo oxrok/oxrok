@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 68 of libsigrok's 87 `src/hardware` drivers are
-ported; the 19 still missing are listed below. Native decoder porting is
+crates.io. 69 of libsigrok's 87 `src/hardware` drivers are
+ported; the 18 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 19 libsigrok drivers with no oxrok port. Each needs a device model,
+The 18 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (15)
+### SCPI instruments (14)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -36,9 +36,8 @@ remaining drivers can start there.
 | `lecroy-xstream` | scope | XStream series |
 | `yokogawa-dlm` | scope | DLM series |
 | `fluke-45` | meter | Fluke 45 |
-| `hp-3457a` | meter | needs `get_uint8v` in `src/scpi` |
+| `hp-3457a` | meter | HP-IB; reached over a TCP bridge, as `hp-59306a` is |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
-| `hp-59306a` | switch/relay | |
 | `beaglelogic` | logic analyzer | TCP; no SCPI |
 | `ipdbg-la` | logic analyzer | TCP; no SCPI |
 
@@ -223,6 +222,18 @@ The models are plain Rust with no I/O for this reason; see
   differs there too.
 
 ### Driver behaviour
+
+- `Scpi::get_block` (`src/scpi/mod.rs`) returns `Ok` with a cut block when
+  a read ends in LF on a serial transport, or on a short `tcp-raw` read:
+  its `read_complete()` check ends the block early. A fake port serving
+  `#210abc\n` then `defghi` gives `Ok("abc\n")`. No driver calls it yet;
+  fix it before the first one does.
+- `Serial::read_data` (`src/scpi/serial.rs`) drops a CR from a read that
+  ends in LF CR, so `rigol-ds` on a serial port loses a sample byte when
+  a pair 0x0A 0x0D ends a read, and the block comes up one short. C's
+  `scpi_serial_read_data` has the same lines (a0ade2f9). Read binary
+  blocks without the strip, and add a `rigol-ds-serial` case that places
+  those bytes.
 
 - `Session`'s `End` is sent before the link goes back in its slot, so
   `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,

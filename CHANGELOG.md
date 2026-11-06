@@ -62,7 +62,9 @@ rounding.
 - Firmware dependencies: drivers declare the firmware and bitstream files
   they need, and `--list-firmware` prints them as JSON.
 - Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`, `mic-985xx`, `teleinfo`,
-  `tondaj-sl-814`.
+  `tondaj-sl-814`, `hp-59306a`.
+- A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
+  which fails a `--strict` run.
 - Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
 
 ### Changed

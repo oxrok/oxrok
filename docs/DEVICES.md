@@ -3281,6 +3281,27 @@ truth is 26.9. Sources: the sigrok wiki's page and its examples, which
 agree with C on the bits and contradict the page's "BCD". No firmware
 source found.
 
+### HP 59306A (`hp-59306a`)
+
+Six relays, each joining its common contact to A or to B, as channel groups `R1` to `R6`:
+`-d hp-59306a:conn=tcp-raw/HOST/PORT -g R3 -c enabled=on --set` sends `A3`, `enabled=off`
+sends `B3`, and with no group it is all six. The real one is on HP-IB, and oxrok has no GPIB, so it
+is reached through what `conn=` names: a bridge on TCP, untested with any real one.
+
+The device only listens. It can't say what it is, so anything that opens counts as a 59306A, and
+with no `conn=` nothing is found or probed. It can't say where its relays lie, so `enabled` has
+no get. After each command oxrok watches the line for 100 ms, and a connection that closed fails
+the setting and says the state isn't known. That can be wrong both ways: a close after the device
+took the command reports a setting that went through as failed, and a close after the look, or a
+bridge that drops the command, passes with exit 0. A pulse takes two runs: of `-c enabled=on -c
+enabled=off` only the last is sent, with a warning. It acquires nothing, so a capture is refused.
+
+Not verified: no real unit or bridge, and the HP manual couldn't be read here. Owners on time-nuts
+(May 2008) disagree on the line feed sent with each command: one says it's ignored, others not
+to send one. One says to send a remote command, `$`, first and allow a delay after a command.
+oxrok sends no `$` and waits for nothing, so what a real unit does with this is unknown. Model:
+`emu/src/models/hp-59306a.rs`, 52 cases on TCP alone.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in
