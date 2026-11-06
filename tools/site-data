@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Generate site data for oxrok.dev from this repository.
+
+Usage: tools/site-data [repo-dir]
+
+Reads docs/drivers.toml, the driver list from the oxrok binary, the
+emulator goldens and gcov reports, and the libsigrok driver list, and
+prints JSON to stdout. It fails if a driver has no entry in
+docs/drivers.toml, or if an entry names a libsigrok driver that is not
+in the list. The libsigrok list comes from $SIGROK_DIR/src/hardware
+when set, else from tools/libsigrok-drivers.txt, which is the list at
+the pinned oracle commit.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+from pathlib import Path
+
+repo = Path(sys.argv[1] if len(sys.argv) > 1 else ".").resolve()
+
+
+def fail(msg):
+    print(f"site-data: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+# 1. docs/drivers.toml
+toml_path = repo / "docs" / "drivers.toml"
+if not toml_path.is_file():
+    fail(f"missing {toml_path}")
+with open(toml_path, "rb") as f:
+    entries = tomllib.load(f)["drivers"]
+
+# 2. the oxrok binary, for `oxrok -L` and the demo capture
+binary = repo / "target" / "debug" / "oxrok"
+if not binary.is_file():
+    print("site-data: building oxrok", file=sys.stderr)
+    subprocess.run(["cargo", "build"], cwd=repo, check=True)
+
+listing = subprocess.run(
+    [str(binary), "-L"], capture_output=True, text=True, check=True
+).stdout
+ids = {}
+in_drivers = False
+for line in listing.splitlines():
+    if line.startswith("Supported hardware drivers:"):
+        in_drivers = True
+        continue
+    if in_drivers and line.startswith("Supported"):
+        break
+    if in_drivers:
+        m = re.match(r"\s+(\S+)\s+(.*)", line)
+        if m:
+            ids[m.group(1)] = m.group(2)
+
+# 3. the libsigrok driver list
+sigrok_hw = Path(os.environ.get("SIGROK_DIR", "")) / "src" / "hardware"
+if sigrok_hw.is_dir():
+    libsigrok = sorted(p.name for p in sigrok_hw.iterdir() if p.is_dir())
+else:
+    vendored = repo / "tools" / "libsigrok-drivers.txt"
+    if not vendored.is_file():
+        fail(f"no $SIGROK_DIR/src/hardware and no {vendored}")
+    libsigrok = [
+        l.strip() for l in vendored.read_text().splitlines() if l.strip()
+    ]
+
+# 4. version and date of the checkout
+version = ""
+cargo = repo / "Cargo.toml"
+if cargo.is_file():
+    m = re.search(r'^version\s*=\s*"([^"]+)"', cargo.read_text(), re.M)
+    version = m.group(1) if m else ""
+try:
+    date = subprocess.run(
+        ["git", "-C", str(repo), "log", "-1", "--format=%cs"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+except (subprocess.CalledProcessError, FileNotFoundError):
+    date = ""
+
+# 5. emulator goldens and gcov, per model directory
+def model_stats(name):
+    d = repo / "tests" / "emu" / name
+    if not d.is_dir():
+        return None
+    cases = len(list(d.glob("*.out")))
+    pct = None
+    gcov = d / "gcov.txt"
+    if gcov.is_file():
+        m = re.search(r"total\s+([\d.]+)%", gcov.read_text())
+        if m:
+            pct = float(m.group(1))
+    show = d / "show.out"
+    show_text = show.read_text() if show.is_file() else ""
+    return {"model": name, "cases": cases, "pct": pct, "show": show_text}
+
+
+# 6. the demo capture, taken from a real run
+demo = subprocess.run(
+    [str(binary), "-d", "demo", "--samples", "8", "-O", "bits"],
+    capture_output=True, text=True, check=True,
+)
+demo_out = demo.stdout
+
+# 7. assemble per driver
+drivers = []
+seen_libsigrok = set()
+errors = []
+for key, e in entries.items():
+    lib = e.get("libsigrok", "")
+    if lib:
+        if lib not in libsigrok:
+            errors.append(f"{key}: libsigrok driver {lib!r} not in the list")
+        seen_libsigrok.add(lib)
+    emu = [model_stats(m) for m in e.get("emu", [])]
+    emu = [m for m in emu if m]
+    unknown = [m for m in e.get("emu", []) if not (repo / "tests" / "emu" / m).is_dir()]
+    if unknown:
+        errors.append(f"{key}: unknown emu model directory {unknown}")
+    bad_ids = [i for i in e.get("ids", []) if i not in ids]
+    if bad_ids and e.get("status") != ["not-ported"]:
+        errors.append(f"{key}: driver ids not in `oxrok -L`: {bad_ids}")
+    drivers.append(
+        {
+            "key": key,
+            "name": e.get("name", key),
+            "libsigrok": lib,
+            "ids": e.get("ids", []),
+            "kind": e.get("kind", "other"),
+            "connection": e.get("connection", ""),
+            "vendor": e.get("vendor", ""),
+            "models": e.get("models", []),
+            "status": e.get("status", []),
+            "reason": e.get("reason", ""),
+            "evidence": e.get("evidence", []),
+            "behaviour": e.get("behaviour", []),
+            "limits": e.get("limits", []),
+            "cases": sum(m["cases"] for m in emu),
+            "coverage": [{"model": m["model"], "pct": m["pct"]} for m in emu if m["pct"] is not None],
+            "show": emu[0]["show"] if emu and emu[0]["show"] else "",
+        }
+    )
+
+# 8. every libsigrok driver must have an entry
+missing = [l for l in libsigrok if l not in seen_libsigrok]
+if missing:
+    errors.append(f"libsigrok drivers with no entry in docs/drivers.toml: {missing}")
+
+if errors:
+    for err in errors:
+        print(f"site-data: {err}", file=sys.stderr)
+    sys.exit(1)
+
+# 9. counts
+strength = {"hardware": 4, "stand-in": 3, "emulated": 2, "replay": 1, "not-ported": 0}
+ported = sum(1 for d in drivers if d["libsigrok"] and "not-ported" not in d["status"])
+meta = {
+    "version": version,
+    "date": date,
+    "libsigrok_total": len(libsigrok),
+    "ported": ported,
+    "cases_total": sum(d["cases"] for d in drivers),
+    "models": len({p.name for p in (repo / "tests" / "emu").iterdir() if p.is_dir()}),
+    "hardware": sum(1 for d in drivers if "hardware" in d["status"]),
+    "standin": sum(1 for d in drivers if "stand-in" in d["status"]),
+    "demo": {
+        "install": f"cargo install oxrok --version {version} --locked",
+        "cmd": "oxrok -d demo --samples 8 -O bits",
+        "out": demo_out,
+    },
+}
+
+json.dump({"meta": meta, "drivers": drivers}, sys.stdout, indent=1)
+print()

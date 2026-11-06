@@ -1,0 +1,1382 @@
+# Per-driver facts for the oxrok.dev site (and the README tables).
+#
+# This is the file a person maintains. tools/site-data reads it, merges in
+# the case counts and gcov figures from tests/emu, and fails the build if a
+# driver has no entry here, so a new port cannot appear without its status.
+#
+# status: hardware, stand-in, emulated, replay, software, not-ported. A
+# driver can hold more than one; the table shows the strongest, the page
+# shows them all.
+#   hardware   run on the real device, by us
+#   stand-in   run over a real bus on a microcontroller acting as the device
+#   emulated   compared with libsigrok on an emulated device; never on hardware
+#   replay     checked only against recordings
+#   software   a software driver, checked by the software cases of diffcli.sh
+#   not-ported in libsigrok, not here yet
+# kind: logic-analyzer, scope, meter, supply, load, generator, other
+# connection: usb, serial, tcp, hid, none
+# emu: the tests/emu model directories whose cases and gcov belong to this
+#     driver. A family names every model directory it spans.
+# evidence: what unit, what was run, when (hardware and stand-in rows).
+# behaviour and limits: plain lines, in oxrok's terms. No line names what
+# libsigrok gets wrong; where oxrok differs from sigrok-cli a user needs to
+# know the behaviour, and it is stated with no judgement of the C.
+
+[drivers.demo]
+name = "Demo driver and pattern generator"
+libsigrok = "demo"
+ids = ["demo"]
+kind = "other"
+connection = "none"
+vendor = ""
+models = []
+status = ["software"]
+emu = []
+evidence = []
+behaviour = [
+  "A software device with 13 channels (D0-D7, A0-A4); no hardware needed.",
+  "Honours triggers: samples before the trigger are dropped and the trigger is marked.",
+]
+limits = [
+  "The random analog channel (A4) differs from run to run in both tools.",
+]
+
+[drivers.intronix-logicport]
+name = "Intronix LogicPort LA1034"
+libsigrok = ""
+ids = ["intronix-logicport"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Intronix"
+models = ["LA1034"]
+status = ["hardware"]
+emu = []
+evidence = [
+  "Two LogicPort LA1034 units; 60 bench checks with an ESP32 signal generator; captures match the libsigrok fork that has this driver.",
+]
+behaviour = [
+  "34 channels (D0-D31, CLK1, CLK2), 1 kHz to 500 MHz, state mode on CLK1 or CLK2, run length compression up to 200 MHz.",
+  "Options beyond the common set: clock_qualifier, sample_point, invert, frequency_channel, frequency (read only).",
+  "Triggers take the extended forms (counts, durations, value ranges, or/and combines, two stages).",
+]
+limits = [
+  "The clock qualifier input check is still unverified (needs a wire from GPIO15 to CLK2).",
+  "Firmware is the vendor's LogicPort.ccf, unmodified, looked up in the firmware directories.",
+]
+
+[drivers.fx2lafw]
+name = "fx2lafw (generic driver for FX2 based LAs)"
+libsigrok = "fx2lafw"
+ids = ["fx2lafw"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = ""
+models = []
+status = ["hardware", "emulated"]
+emu = ["fx2lafw"]
+evidence = [
+  "A Saleae Logic clone (0925:3881); 60 s at 24 MS/s without a missing byte.",
+]
+behaviour = [
+  "Uploads firmware and renumerates on open; the USBee AX analog input is ported.",
+  "Sends frame packets only when limit_frames is not 1.",
+]
+limits = [
+  "The upload and open order changed since the bench run; that change is checked on the emulator only.",
+]
+
+[drivers.rigol-ds]
+name = "Rigol DS/MSO oscilloscope"
+libsigrok = "rigol-ds"
+ids = ["rigol-ds"]
+kind = "scope"
+connection = "tcp"
+vendor = "Rigol"
+models = ["DS1000", "DS1000Z", "DS2000", "DS4000", "MSO5000"]
+status = ["hardware", "emulated"]
+emu = ["rigol-ds", "rigol-ds-serial"]
+evidence = [
+  "A Rigol DS1102E; byte identical to sigrok-cli on the real unit and on the Pico's USBTMC emulation of it.",
+]
+behaviour = [
+  "SCPI over USBTMC, TCP and serial; all 61 models.",
+]
+limits = [
+  "The other series (DS2000, DS1000Z, DS4000, MSO5000, the Agilent DSO1000) are emulated from guesses at their ids and limits; each needs a recording to verify.",
+]
+
+[drivers.raspberrypi-pico]
+name = "Raspberry Pi Pico (sigrok-pico firmware)"
+libsigrok = "raspberrypi-pico"
+ids = ["raspberrypi-pico"]
+kind = "logic-analyzer"
+connection = "serial"
+vendor = "Raspberry Pi"
+models = ["Pico"]
+status = ["hardware"]
+emu = []
+evidence = [
+  "A Pico with the sigrok-pico firmware; digital, analog and mixed captures, byte identical to sigrok-cli.",
+]
+behaviour = [
+  "Over USB serial; two recorded replay fixtures.",
+]
+limits = []
+
+[drivers.dcttech-usbrelay]
+name = "dcttech usbrelay"
+libsigrok = "dcttech-usbrelay"
+ids = ["dcttech-usbrelay"]
+kind = "other"
+connection = "hid"
+vendor = "dcttech"
+models = []
+status = ["stand-in", "emulated"]
+emu = ["usbrelay"]
+evidence = [
+  "A Pico standing in for the relay board over a real HID bus.",
+]
+behaviour = [
+  "Relays are read and set by index; a STALLed switch request fails the set.",
+]
+limits = [
+  "A real relay board is the open hardware check.",
+]
+
+[drivers.microchip-pickit2]
+name = "Microchip PICkit2"
+libsigrok = "microchip-pickit2"
+ids = ["microchip-pickit2"]
+kind = "other"
+connection = "hid"
+vendor = "Microchip"
+models = ["PICkit2"]
+status = ["stand-in", "emulated"]
+emu = ["pickit2"]
+evidence = [
+  "A Pico standing in for the PICkit2 over a real HID bus.",
+]
+behaviour = [
+  "Talks HID reports instead of raw USB, so it also works on macOS.",
+  "A stop from the device's own cancel button ends the capture.",
+]
+limits = [
+  "A real PICkit2 is the open hardware check.",
+]
+
+[drivers.serial-dmm]
+name = "Serial multimeters"
+libsigrok = "serial-dmm"
+ids = [
+  "bbcgm-2010", "brymen-bm25x", "brymen-bm52x", "brymen-bm82x", "brymen-bm85x",
+  "brymen-bm86x", "digitech-qm1578", "digitek-dt4000zc", "eevblog-121gw",
+  "gwinstek-gdm-397", "iso-tech-idm103n", "mastech-mas345", "mastech-ms2115b",
+  "mastech-ms8250b", "mastech-ms8250d", "meterman-38xr", "metex-m3640d",
+  "metex-m3860m", "metex-m4650cr", "metex-me21", "metex-me31", "metrix-mx56c",
+  "pce-pce-dm32", "peaktech-2025", "peaktech-3330", "peaktech-3410",
+  "peaktech-3415", "peaktech-4370", "peaktech-4390a", "radioshack-22-168",
+  "radioshack-22-805", "radioshack-22-812", "sparkfun-70c", "tekpower-tp4000ZC",
+  "tecpel-dmm-8061-ser", "tenma-72-7730-ser", "tenma-72-7732-ser",
+  "tenma-72-7745-ser", "tenma-72-7750-ser", "tenma-72-9380a-ser",
+  "uni-t-ut60a-ser", "uni-t-ut60e-ser", "uni-t-ut60g-ser", "uni-t-ut61b-ser",
+  "uni-t-ut61c-ser", "uni-t-ut61d-ser", "uni-t-ut61e-ser", "uni-t-ut71a-ser",
+  "uni-t-ut71b-ser", "uni-t-ut71c-ser", "uni-t-ut71d-ser", "uni-t-ut71e-ser",
+  "uni-t-ut804-ser", "va-va18b", "va-va40b", "velleman-dvm4100", "victor-dmm",
+  "voltcraft-m3650cr", "voltcraft-m3650d", "voltcraft-m4650cr", "voltcraft-me42",
+  "voltcraft-vc820-ser", "voltcraft-vc830-ser", "voltcraft-vc840-ser",
+  "voltcraft-vc870-ser", "voltcraft-vc920-ser", "voltcraft-vc940-ser",
+  "voltcraft-vc96", "voltcraft-vc960-ser",
+]
+kind = "meter"
+connection = "serial"
+vendor = "UNI-T, Brymen, Metex, PeakTech, Voltcraft, Tenma, and others"
+models = [
+  "UT61E", "UT60A", "UT61B", "UT61C", "UT61D", "UT71A", "UT71B", "UT71C",
+  "UT71D", "UT71E", "UT804", "BM25x", "BM52x", "BM82x", "BM85x", "BM86x",
+  "M-3640D", "M-3860M", "M-4650CR", "ME-21", "ME-31", "MX56C", "2025", "3330",
+  "3410", "3415", "4370", "4390A", "22-168", "22-805", "22-812", "72-7730",
+  "72-7732", "72-7745", "72-7750", "72-9380A", "VA18B", "VA40B", "DVM4100",
+  "GDM-397", "TP4000ZC",
+  "VC-820", "VC-830", "VC-840", "VC-870", "VC-920", "VC-940", "VC-96", "VC-960",
+]
+status = ["stand-in", "emulated", "replay"]
+emu = ["serial-dmm", "bu86x", "ch9325", "cp2110", "victor"]
+evidence = [
+  "ESP32 for UT61E and UT60A streams; a Pico for the BU-86X, CH9325 and Victor cables.",
+]
+behaviour = [
+  "One driver id per meter, as in sigrok; the byte stream does not say which meter is talking, so the id picks the chipset protocol and the cable's serial parameters.",
+  "conn= names the port, serialcomm= overrides the parameters.",
+  "Readings stream as analog packets, one per display, on P1 (and P2 to P4 for the four display meters); --samples counts packets.",
+  "The scan listens for up to three seconds for a packet the chipset parser accepts.",
+]
+limits = [
+  "CP2110 and CDC-ACM are on the emulator only; the other meters have replay tests only.",
+  "Nothing past the FS9721 and ES519xx families has met a real meter.",
+  "The recordings a BM52x stores in memory are not ported.",
+]
+
+[drivers.asix-sigma]
+name = "ASIX SIGMA/SIGMA2"
+libsigrok = "asix-sigma"
+ids = ["asix-sigma"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "ASIX"
+models = ["SIGMA", "SIGMA2"]
+status = ["emulated"]
+emu = ["asix-sigma"]
+evidence = []
+behaviour = []
+limits = [
+  "The last event is an open hardware check.",
+]
+
+[drivers.agilent-dmm]
+name = "Agilent U12xx series DMMs"
+libsigrok = "agilent-dmm"
+ids = ["agilent-dmm"]
+kind = "meter"
+connection = "usb"
+vendor = "Agilent / Keysight"
+models = ["U1201A", "U1202A", "U1203A", "U1206A", "U1208A", "U1210A"]
+status = ["emulated"]
+emu = ["agilent-dmm"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.appa-55ii]
+name = "APPA 55II"
+libsigrok = "appa-55ii"
+ids = ["appa-55ii"]
+kind = "meter"
+connection = "serial"
+vendor = "APPA"
+models = ["55II"]
+status = ["emulated"]
+emu = ["appa-55ii"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.arachnid-labs-re-load-pro]
+name = "Arachnid Labs Re:load Pro"
+libsigrok = "arachnid-labs-re-load-pro"
+ids = ["arachnid-labs-re-load-pro"]
+kind = "load"
+connection = "usb"
+vendor = "Arachnid Labs"
+models = ["Re:load Pro"]
+status = ["emulated"]
+emu = ["arachnid-labs-re-load-pro"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.atorch]
+name = "atorch meters and loads"
+libsigrok = "atorch"
+ids = ["atorch"]
+kind = "load"
+connection = "serial"
+vendor = "atorch"
+models = []
+status = ["emulated"]
+emu = ["atorch"]
+evidence = []
+behaviour = []
+limits = [
+  "BLE units have no path in oxrok; a *-BLE unit cannot be reached.",
+]
+
+[drivers.atten-pps3203]
+name = "Atten PPS3203T-3S"
+libsigrok = "atten-pps3xxx"
+ids = ["atten-pps3203"]
+kind = "supply"
+connection = "serial"
+vendor = "Atten"
+models = ["PPS3203T-3S"]
+status = ["emulated"]
+emu = ["atten-pps3xxx"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.chronovu-la]
+name = "ChronoVu LA8/LA16"
+libsigrok = "chronovu-la"
+ids = ["chronovu-la"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "ChronoVu"
+models = ["LA8", "LA16"]
+status = ["emulated"]
+emu = ["chronovu-la"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.devantech-eth008]
+name = "Devantech ETH008"
+libsigrok = "devantech-eth008"
+ids = ["devantech-eth008"]
+kind = "other"
+connection = "tcp"
+vendor = "Devantech"
+models = ["ETH008"]
+status = ["emulated"]
+emu = ["devantech-eth008"]
+evidence = []
+behaviour = []
+limits = [
+  "Forces 9600/8n1 on a tty and refuses serialcomm, so a user cannot correct the speed.",
+]
+
+[drivers.dreamsourcelab-dslogic]
+name = "DreamSourceLab DSLogic"
+libsigrok = "dreamsourcelab-dslogic"
+ids = ["dreamsourcelab-dslogic"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "DreamSourceLab"
+models = ["DSLogic"]
+status = ["emulated"]
+emu = ["dreamsourcelab-dslogic"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.fluke-dmm]
+name = "Fluke 8x/18x/28x series DMMs"
+libsigrok = "fluke-dmm"
+ids = ["fluke-dmm"]
+kind = "meter"
+connection = "serial"
+vendor = "Fluke"
+models = ["87V", "88V", "17B", "18B", "28B"]
+status = ["emulated"]
+emu = ["fluke-dmm"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.ftdi-la]
+name = "FTDI LA"
+libsigrok = "ftdi-la"
+ids = ["ftdi-la"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "FTDI"
+models = []
+status = ["emulated"]
+emu = ["ftdi-la"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.greatfet]
+name = "Great Scott Gadgets GreatFET One"
+libsigrok = "greatfet"
+ids = ["greatfet"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Great Scott Gadgets"
+models = ["GreatFET One"]
+status = ["emulated"]
+emu = ["greatfet"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.gwinstek-gpd]
+name = "GW Instek GPD"
+libsigrok = "gwinstek-gpd"
+ids = ["gwinstek-gpd"]
+kind = "supply"
+connection = "serial"
+vendor = "GW Instek"
+models = ["GPD-3303", "GPD-3305", "GPD-3310"]
+status = ["emulated"]
+emu = ["gwinstek-gpd"]
+evidence = []
+behaviour = []
+limits = [
+  "Sends one packet per reading, so -O csv mixes units in a column.",
+]
+
+[drivers.gwinstek-psp]
+name = "GW Instek PSP series"
+libsigrok = "gwinstek-psp"
+ids = ["gwinstek-psp"]
+kind = "supply"
+connection = "serial"
+vendor = "GW Instek"
+models = ["PSP3005", "PSP3205", "PSP3305", "PSP3405", "PSP6005", "PSP6105", "PSP6205"]
+status = ["emulated"]
+emu = ["gwinstek-psp"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.hantek-4032l]
+name = "Hantek 4032L"
+libsigrok = "hantek-4032l"
+ids = ["hantek-4032l"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Hantek"
+models = ["4032L"]
+status = ["emulated"]
+emu = ["hantek-4032l"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.hantek-6xxx]
+name = "Hantek 6xxx"
+libsigrok = "hantek-6xxx"
+ids = ["hantek-6xxx"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Hantek"
+models = ["6022BE", "6022BL"]
+status = ["emulated"]
+emu = ["hantek-6xxx"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.hantek-dso]
+name = "Hantek DSO-2090 family"
+libsigrok = "hantek-dso"
+ids = ["hantek-dso"]
+kind = "scope"
+connection = "usb"
+vendor = "Hantek"
+models = ["DSO2090", "DSO2091", "DSO21160", "DSO21162"]
+status = ["emulated"]
+emu = ["hantek-dso"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.icstation-usbrelay]
+name = "ICStation USBRelay"
+libsigrok = "icstation-usbrelay"
+ids = ["icstation-usbrelay"]
+kind = "other"
+connection = "usb"
+vendor = "ICStation"
+models = ["USBRelay"]
+status = ["emulated"]
+emu = ["icstation-usbrelay"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.ikalogic-scanalogic2]
+name = "IKALOGIC Scanalogic-2"
+libsigrok = "ikalogic-scanalogic2"
+ids = ["ikalogic-scanalogic2"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "IKALOGIC"
+models = ["Scanalogic-2"]
+status = ["emulated"]
+emu = ["ikalogic-scanalogic2"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.ikalogic-scanaplus]
+name = "IKALOGIC ScanaPLUS"
+libsigrok = "ikalogic-scanaplus"
+ids = ["ikalogic-scanaplus"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "IKALOGIC"
+models = ["ScanaPLUS"]
+status = ["emulated"]
+emu = ["ikalogic-scanaplus"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.itech-it8500]
+name = "ITECH IT8500 series, BK Precision 8500 series"
+libsigrok = "itech-it8500"
+ids = ["itech-it8500"]
+kind = "load"
+connection = "usb"
+vendor = "ITECH / BK Precision"
+models = ["IT8500", "IT8510", "IT8515", "IT8520", "IT8524", "8500", "8510", "8515", "8520", "8524"]
+status = ["emulated"]
+emu = ["itech-it8500"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.juntek-jds6600]
+name = "JUNTEK JDS6600 signal generator"
+libsigrok = "juntek-jds6600"
+ids = ["juntek-jds6600"]
+kind = "generator"
+connection = "usb"
+vendor = "JUNTEK"
+models = ["JDS6600"]
+status = ["emulated"]
+emu = ["juntek-jds6600"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.kecheng-kc-330b]
+name = "Kecheng KC-330B"
+libsigrok = "kecheng-kc-330b"
+ids = ["kecheng-kc-330b"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Kecheng"
+models = ["KC-330B"]
+status = ["emulated"]
+emu = ["kecheng-kc-330b"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.kern-scale]
+name = "KERN scales"
+libsigrok = "kern-scale"
+ids = ["kern-ew-6200-2nm"]
+kind = "other"
+connection = "serial"
+vendor = "KERN"
+models = ["EW 6200-2NM"]
+status = ["emulated"]
+emu = ["kern-scale"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.kingst-la2016]
+name = "Kingst LA2016 family"
+libsigrok = "kingst-la2016"
+ids = ["kingst-la2016"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Kingst"
+models = ["LA2016", "LA2032"]
+status = ["emulated"]
+emu = ["kingst-la2016"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.korad-kaxxxxp]
+name = "Korad KAxxxxP power supplies"
+libsigrok = "korad-kaxxxxp"
+ids = ["korad-kaxxxxp"]
+kind = "supply"
+connection = "serial"
+vendor = "Korad"
+models = ["KA3005P", "KA3010P", "KA3020P", "KA6005P", "KA6010P", "KA6020P", "KA3609P"]
+status = ["emulated"]
+emu = ["korad-kaxxxxp"]
+evidence = []
+behaviour = []
+limits = [
+  "Has the old silence bound on --time and --continuous, holds its lock across a send, and ignores -C.",
+]
+
+[drivers.lascar-el-usb]
+name = "Lascar EL-USB data loggers"
+libsigrok = "lascar-el-usb"
+ids = ["lascar-el-usb"]
+kind = "other"
+connection = "usb"
+vendor = "Lascar"
+models = ["EL-USB"]
+status = ["emulated"]
+emu = ["lascar-el-usb"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.lecroy-logicstudio]
+name = "LeCroy LogicStudio 16"
+libsigrok = "lecroy-logicstudio"
+ids = ["lecroy-logicstudio"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "LeCroy"
+models = ["LogicStudio 16"]
+status = ["emulated"]
+emu = ["lecroy-logicstudio"]
+evidence = []
+behaviour = [
+  "Offers no sample limit, so a capture is started through the library, not the command line.",
+]
+limits = []
+
+[drivers.link-mso19]
+name = "Link Instruments MSO-19"
+libsigrok = "link-mso19"
+ids = ["link-mso19"]
+kind = "scope"
+connection = "usb"
+vendor = "Link Instruments"
+models = ["MSO-19"]
+status = ["emulated"]
+emu = ["link-mso19"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.manson-hcs-3xxx]
+name = "Manson HCS-3xxx power supplies"
+libsigrok = "manson-hcs-3xxx"
+ids = ["manson-hcs-3xxx"]
+kind = "supply"
+connection = "serial"
+vendor = "Manson"
+models = ["HCS-3010", "HCS-3020", "HCS-3030", "HCS-3060"]
+status = ["emulated"]
+emu = ["manson-hcs-3xxx"]
+evidence = []
+behaviour = []
+limits = [
+  "Checks its silence bound between bytes of a reply, so a stall mid-reply could end a capture falsely.",
+]
+
+[drivers.mastech-ms6514]
+name = "MASTECH MS6514"
+libsigrok = "mastech-ms6514"
+ids = ["mastech-ms6514"]
+kind = "meter"
+connection = "serial"
+vendor = "MASTECH"
+models = ["MS6514"]
+status = ["emulated"]
+emu = ["mastech-ms6514"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.maynuo-m97]
+name = "maynuo M97/M98 series"
+libsigrok = "maynuo-m97"
+ids = ["maynuo-m97"]
+kind = "load"
+connection = "serial"
+vendor = "maynuo"
+models = ["M97", "M98"]
+status = ["emulated"]
+emu = ["maynuo-m97"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.mic-985xx]
+name = "MIC 98581 and 98583 loggers"
+libsigrok = "mic-985xx"
+ids = ["mic-98581", "mic-98583"]
+kind = "other"
+connection = "usb"
+vendor = "MIC"
+models = ["98581", "98583"]
+status = ["emulated"]
+emu = ["mic-985xx"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.motech-lps-30x]
+name = "Motech LPS-300 series"
+libsigrok = "motech-lps-30x"
+ids = ["motech-lps-301"]
+kind = "supply"
+connection = "serial"
+vendor = "Motech"
+models = ["LPS-301", "LPS-302", "LPS-303"]
+status = ["emulated"]
+emu = ["motech-lps-30x"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.norma-dmm]
+name = "Norma DM9x0 and Siemens B102x"
+libsigrok = "norma-dmm"
+ids = ["norma-dmm", "siemens-b102x"]
+kind = "meter"
+connection = "serial"
+vendor = "Norma / Siemens"
+models = ["DM910", "DM920", "DM930", "B1021", "B1022", "B1023"]
+status = ["emulated"]
+emu = ["norma-dmm"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.openbench-logic-sniffer]
+name = "Openbench Logic Sniffer & SUMP compatibles"
+libsigrok = "openbench-logic-sniffer"
+ids = ["ols"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "OpenBench"
+models = ["OLS", "SUMP"]
+status = ["emulated"]
+emu = ["openbench-logic-sniffer"]
+evidence = []
+behaviour = [
+  "A stored download comes whole: silence once the board has sent what it holds, or anything under RLE.",
+]
+limits = []
+
+[drivers.pce-322a]
+name = "PCE PCE-322A sound level meter"
+libsigrok = "pce-322a"
+ids = ["pce-322a"]
+kind = "other"
+connection = "serial"
+vendor = "PCE"
+models = ["PCE-322A"]
+status = ["emulated"]
+emu = ["pce-322a"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.pipistrello-ols]
+name = "Pipistrello OLS"
+libsigrok = "pipistrello-ols"
+ids = ["p-ols"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Pipistrello"
+models = ["OLS"]
+status = ["emulated"]
+emu = ["pipistrello-ols"]
+evidence = []
+behaviour = []
+limits = [
+  "Has the Busy on a second capture that ols fixed by reaping once the port is back.",
+]
+
+[drivers.rdtech-dps]
+name = "RDTech DPS/DPH and RD series power supplies"
+libsigrok = "rdtech-dps"
+ids = ["rdtech-dps", "rdtech-rd"]
+kind = "supply"
+connection = "serial"
+vendor = "RDTech"
+models = ["DPS", "DPH", "RD"]
+status = ["emulated"]
+emu = ["rdtech-dps"]
+evidence = []
+behaviour = []
+limits = [
+  "Writes at close (the panel lock); the CLI closes a device only on its happy path.",
+]
+
+[drivers.rdtech-tc]
+name = "RDTech TC66C USB power meter"
+libsigrok = "rdtech-tc"
+ids = ["rdtech-tc"]
+kind = "meter"
+connection = "usb"
+vendor = "RDTech"
+models = ["TC66C"]
+status = ["emulated"]
+emu = ["rdtech-tc"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.rdtech-um]
+name = "RDTech UMxx USB power meter"
+libsigrok = "rdtech-um"
+ids = ["rdtech-um"]
+kind = "meter"
+connection = "usb"
+vendor = "RDTech"
+models = ["UM12", "UM16", "UM18"]
+status = ["emulated"]
+emu = ["rdtech-um"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.rohde-schwarz-sme-0x]
+name = "Rohde&Schwarz SME signal generators"
+libsigrok = "rohde-schwarz-sme-0x"
+ids = ["rohde-schwarz-sme-0x"]
+kind = "generator"
+connection = "usb"
+vendor = "Rohde&Schwarz"
+models = ["SME-01", "SME-02", "SME-03"]
+status = ["emulated"]
+emu = ["rohde-schwarz-sme-0x"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.saleae-logic16]
+name = "Saleae Logic16"
+libsigrok = "saleae-logic16"
+ids = ["saleae-logic16"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Saleae"
+models = ["Logic16"]
+status = ["emulated"]
+emu = ["saleae-logic16"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.saleae-logic-pro]
+name = "Saleae Logic Pro"
+libsigrok = "saleae-logic-pro"
+ids = ["saleae-logic-pro"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Saleae"
+models = ["Logic Pro"]
+status = ["emulated"]
+emu = ["saleae-logic-pro"]
+evidence = []
+behaviour = []
+limits = [
+  "A stream with no limit runs out and fails the capture.",
+]
+
+[drivers.serial-lcr]
+name = "LCR meters"
+libsigrok = "serial-lcr"
+ids = ["deree-de5000", "mastech-ms5308", "peaktech-2170", "uni-t-ut612", "peaktech-2165", "voltcraft-4080"]
+kind = "meter"
+connection = "serial"
+vendor = "DER EE, MASTECH, PeakTech, UNI-T, Voltcraft"
+models = ["DE-5000", "MS5308", "2170", "UT612", "2165", "4080"]
+status = ["emulated"]
+emu = ["serial-lcr"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.sysclk-lwla]
+name = "Sysclk LWLA series"
+libsigrok = "sysclk-lwla"
+ids = ["sysclk-lwla"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Sysclk"
+models = ["LWLA1034", "LWLA1016"]
+status = ["emulated"]
+emu = ["sysclk-lwla"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.sysclk-sla5032]
+name = "Sysclk SLA5032"
+libsigrok = "sysclk-sla5032"
+ids = ["sysclk-sla5032"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "Sysclk"
+models = ["SLA5032"]
+status = ["emulated"]
+emu = ["sysclk-sla5032"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.teleinfo]
+name = "Teleinfo"
+libsigrok = "teleinfo"
+ids = ["teleinfo"]
+kind = "other"
+connection = "serial"
+vendor = ""
+models = []
+status = ["emulated"]
+emu = ["teleinfo"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.testo]
+name = "Testo 435/635/735"
+libsigrok = "testo"
+ids = ["testo"]
+kind = "meter"
+connection = "usb"
+vendor = "Testo"
+models = ["435", "635", "735"]
+status = ["emulated"]
+emu = ["testo"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.tondaj-sl-814]
+name = "Tondaj SL-814"
+libsigrok = "tondaj-sl-814"
+ids = ["tondaj-sl-814"]
+kind = "other"
+connection = "serial"
+vendor = "Tondaj"
+models = ["SL-814"]
+status = ["emulated"]
+emu = ["tondaj-sl-814"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.uni-t-dmm]
+name = "UNI-T DMM (raw USB)"
+libsigrok = "uni-t-dmm"
+ids = [
+  "uni-t-ut372", "uni-t-ut60a", "uni-t-ut60e", "uni-t-ut60g", "uni-t-ut612",
+  "uni-t-ut61b", "uni-t-ut61c", "uni-t-ut61d", "uni-t-ut61e", "uni-t-ut71a",
+  "uni-t-ut71b", "uni-t-ut71c", "uni-t-ut71d", "uni-t-ut71e", "uni-t-ut804",
+]
+kind = "meter"
+connection = "usb"
+vendor = "UNI-T"
+models = ["UT372", "UT60A", "UT60E", "UT60G", "UT612", "UT61B", "UT61C", "UT61D", "UT61E", "UT71A", "UT71B", "UT71C", "UT71D", "UT71E", "UT804"]
+status = ["emulated"]
+emu = ["uni-t-dmm"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.uni-t-ut181a]
+name = "UNI-T UT181A"
+libsigrok = "uni-t-ut181a"
+ids = ["uni-t-ut181a"]
+kind = "meter"
+connection = "usb"
+vendor = "UNI-T"
+models = ["UT181A"]
+status = ["emulated"]
+emu = ["uni-t-ut181a", "uni-t-ut181a-cp2110"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.uni-t-ut32x]
+name = "UNI-T UT32x thermometers"
+libsigrok = "uni-t-ut32x"
+ids = ["uni-t-ut32x"]
+kind = "meter"
+connection = "hid"
+vendor = "UNI-T"
+models = ["UT32X", "UT33X"]
+status = ["emulated"]
+emu = ["uni-t-ut32x", "uni-t-ut32x-hid"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.zeroplus-logic-cube]
+name = "ZEROPLUS Logic Cube LAP-C series"
+libsigrok = "zeroplus-logic-cube"
+ids = ["zeroplus-logic-cube"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "ZEROPLUS"
+models = ["LAP-C"]
+status = ["emulated"]
+emu = ["zeroplus-logic-cube"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.zketech-ebd-usb]
+name = "ZKETECH EBD-USB"
+libsigrok = "zketech-ebd-usb"
+ids = ["zketech-ebd-usb"]
+kind = "other"
+connection = "usb"
+vendor = "ZKETECH"
+models = ["EBD-USB"]
+status = ["emulated"]
+emu = ["zketech-ebd-usb"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.center-3xx]
+name = "Center 309 and Voltcraft K204 thermometers"
+libsigrok = "center-3xx"
+ids = ["center-309", "voltcraft-k204"]
+kind = "meter"
+connection = "serial"
+vendor = "Center / Voltcraft"
+models = ["309", "K204"]
+status = ["emulated"]
+emu = ["center-3xx"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.gmc-mh-1x-2x]
+name = "Gossen Metrawatt METRAHit"
+libsigrok = "gmc-mh-1x-2x"
+ids = ["gmc-mh-1x-2x-rs232", "gmc-mh-2x-bd232"]
+kind = "meter"
+connection = "serial"
+vendor = "Gossen Metrawatt"
+models = ["METRAHit 1x/2x"]
+status = ["emulated"]
+emu = ["gmc-mh-1x-2x"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.bkprecision-1856d]
+name = "B&K Precision 1856D frequency counter"
+libsigrok = "bkprecision-1856d"
+ids = ["bkprecision-1856d"]
+kind = "other"
+connection = "serial"
+vendor = "B&K Precision"
+models = ["1856D"]
+status = ["emulated"]
+emu = ["bkprecision-1856d"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.cem-dt-885x]
+name = "CEM DT-885x"
+libsigrok = "cem-dt-885x"
+ids = ["cem-dt-885x"]
+kind = "meter"
+connection = "serial"
+vendor = "CEM"
+models = ["DT-8851", "DT-8852"]
+status = ["emulated"]
+emu = ["cem-dt-885x"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.colead-slm]
+name = "Colead SL-5868P sound level meter"
+libsigrok = "colead-slm"
+ids = ["colead-slm"]
+kind = "other"
+connection = "serial"
+vendor = "Colead"
+models = ["SL-5868P"]
+status = ["emulated"]
+emu = ["colead-slm"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.conrad-digi-35-cpu]
+name = "Conrad DIGI 35 CPU"
+libsigrok = "conrad-digi-35-cpu"
+ids = ["conrad-digi-35-cpu"]
+kind = "other"
+connection = "serial"
+vendor = "Conrad"
+models = ["DIGI 35"]
+status = ["emulated"]
+emu = ["conrad-digi-35-cpu"]
+evidence = []
+behaviour = []
+limits = []
+
+[drivers.asix-omega-rtm-cli]
+name = "ASIX Omega RTM (vendor CLI)"
+libsigrok = "asix-omega-rtm-cli"
+ids = []
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "ASIX"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "Spawns the vendor's program and reads its stream; a stand-in executable is the model."
+behaviour = []
+limits = []
+
+[drivers.baylibre-acme]
+name = "Baylibre ACME"
+libsigrok = "baylibre-acme"
+ids = []
+kind = "logic-analyzer"
+connection = "none"
+vendor = "Baylibre"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "Reads hard-coded /sys paths (sysfs and iio); a fake tree in a user namespace is the model."
+behaviour = []
+limits = []
+
+[drivers.beaglelogic]
+name = "Beagle Logic"
+libsigrok = "beaglelogic"
+ids = []
+kind = "logic-analyzer"
+connection = "tcp"
+vendor = "Beagle"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.fluke-45]
+name = "Fluke 45"
+libsigrok = "fluke-45"
+ids = []
+kind = "meter"
+connection = "tcp"
+vendor = "Fluke"
+models = ["45"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.gwinstek-gds-800]
+name = "GW Instek GDS-800"
+libsigrok = "gwinstek-gds-800"
+ids = []
+kind = "scope"
+connection = "tcp"
+vendor = "GW Instek"
+models = ["GDS-820", "GDS-822", "GDS-824", "GDS-832", "GDS-834", "GDS-842", "GDS-844"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.hameg-hmo]
+name = "HAMEG HMO"
+libsigrok = "hameg-hmo"
+ids = []
+kind = "scope"
+connection = "tcp"
+vendor = "HAMEG"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.hp-3457a]
+name = "HP 3457A"
+libsigrok = "hp-3457a"
+ids = []
+kind = "meter"
+connection = "tcp"
+vendor = "HP"
+models = ["3457A"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; needs get_uint8v, which the SCPI helper does not have yet."
+behaviour = []
+limits = []
+
+[drivers.hp-3478a]
+name = "HP 3478A"
+libsigrok = "hp-3478a"
+ids = []
+kind = "meter"
+connection = "tcp"
+vendor = "HP"
+models = ["3478A"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "GPIB only; the only instrument with no other port. Needs the GPIB work first, and is not in the oracle build for want of libgpib."
+behaviour = []
+limits = []
+
+[drivers.hp-59306a]
+name = "HP 59306A"
+libsigrok = "hp-59306a"
+ids = []
+kind = "generator"
+connection = "tcp"
+vendor = "HP"
+models = ["59306A"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.hung-chang-dso-2100]
+name = "Hung Chang DSO-2100"
+libsigrok = "hung-chang-dso-2100"
+ids = []
+kind = "scope"
+connection = "none"
+vendor = "Hung Chang"
+models = ["DSO-2100"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "Parallel port; the kernel drives a USB adapter for it, so a model of the adapter is the path."
+behaviour = []
+limits = []
+
+[drivers.ipdbg-la]
+name = "IPDBG LA"
+libsigrok = "ipdbg-la"
+ids = []
+kind = "logic-analyzer"
+connection = "tcp"
+vendor = ""
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.lecroy-xstream]
+name = "LeCroy X-Stream"
+libsigrok = "lecroy-xstream"
+ids = []
+kind = "logic-analyzer"
+connection = "tcp"
+vendor = "LeCroy"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.mooshimeter-dmm]
+name = "Mooshimeter DMM"
+libsigrok = "mooshimeter-dmm"
+ids = []
+kind = "meter"
+connection = "none"
+vendor = "Mooshimeter"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "Bluetooth LE (GATT through BlueZ); the bench ESP32 as a BLE peripheral is the practical path."
+behaviour = []
+limits = []
+
+[drivers.rigol-dg]
+name = "Rigol DG"
+libsigrok = "rigol-dg"
+ids = []
+kind = "generator"
+connection = "tcp"
+vendor = "Rigol"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.scpi-dmm]
+name = "SCPI DMM (generic)"
+libsigrok = "scpi-dmm"
+ids = []
+kind = "meter"
+connection = "tcp"
+vendor = ""
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.scpi-pps]
+name = "SCPI PPS (generic)"
+libsigrok = "scpi-pps"
+ids = []
+kind = "supply"
+connection = "tcp"
+vendor = ""
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.siglent-sdl10x0]
+name = "Siglent SDL10x0"
+libsigrok = "siglent-sdl10x0"
+ids = []
+kind = "load"
+connection = "tcp"
+vendor = "Siglent"
+models = ["SDL1020P", "SDL1030P", "SDL1060P"]
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.siglent-sds]
+name = "Siglent SDS"
+libsigrok = "siglent-sds"
+ids = []
+kind = "scope"
+connection = "tcp"
+vendor = "Siglent"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
+
+[drivers.yokogawa-dlm]
+name = "Yokogawa DLM"
+libsigrok = "yokogawa-dlm"
+ids = []
+kind = "meter"
+connection = "tcp"
+vendor = "Yokogawa"
+models = []
+status = ["not-ported"]
+emu = []
+evidence = []
+reason = "SCPI over TCP; can start on the SCPI foundation."
+behaviour = []
+limits = []
