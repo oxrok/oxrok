@@ -9,7 +9,7 @@ decoders/COPYING.
 
 The complete corresponding source of this binary, its Rust dependencies
 included, is the oxrok-<version>-vendored.tar.xz asset of the same GitHub
-release as this archive: https://github.com/mangelajo/oxrok/releases
+release as this archive: https://github.com/oxrok/oxrok/releases
 
 This covers the source requirements of the GPL-3.0, of the LGPL-3.0 crates
 (malachite-*), whose text below reads together with the GPL-3.0 in LICENSE,

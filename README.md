@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/mangelajo/oxrok/main/docs/logo/lockup.svg" alt="oxrok" width="250"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/oxrok/oxrok/main/docs/logo/lockup.svg" alt="oxrok" width="250"></p>
 
 An experimental sigrok compatible stack for logic analyzers, scopes and
 meters, in Rust: a library, drivers and a command line tool. It builds
@@ -172,7 +172,7 @@ cargo install --path . --locked
 ```
 
 Binary archives, where a release has them, are on the repository's
-[Releases page](https://github.com/mangelajo/oxrok/releases).
+[Releases page](https://github.com/oxrok/oxrok/releases).
 
 On Linux a USB device is root only without a udev rule, and oxrok ships no
 rules yet; [docs/USB.md](docs/USB.md#troubleshooting) has this and the
