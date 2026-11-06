@@ -468,7 +468,13 @@ impl Link {
         }
         log::trace!("Sending command: {command:?}.");
         let line = format!("{command}\n");
-        self.port()?.write(line.as_bytes())
+        match self.port()?.write(line.as_bytes()) {
+            Err(Error::Disconnected) => {
+                self.close();
+                Err(closed_error())
+            }
+            other => other,
+        }
     }
 
     /// Reads one answer: `beaglelogic_tcp_get_string`, whose single `recv` takes a
@@ -747,7 +753,7 @@ mod tests {
         assert!(past_buffer(5, Unit::Sixteen, 9));
         assert!(!past_buffer(5, Unit::Sixteen, 10));
         assert!(!past_buffer(10, Unit::Eight, 10));
-        assert!(past_buffer(u64::MAX, Unit::Sixteen, u32::MAX), "no wrap");
+        assert!(past_buffer(1 << 63, Unit::Sixteen, 10), "no wrap");
     }
 
     #[test]

@@ -546,6 +546,21 @@ fn a_close_says_nothing_and_an_open_after_it_connects_again() {
     });
 }
 
+#[test]
+fn an_open_after_a_close_starts_continuous_again_and_keeps_the_limit() {
+    bounded(|| {
+        let s = server();
+        let mut d = opened(&s);
+        d.set(&Key::LimitSamples, &Value::U64(7), None).unwrap();
+        assert!(d.settings.oneshot);
+        d.close().unwrap();
+        d.open().unwrap();
+        assert_eq!(written(&s).last().unwrap(), "triggerflags 1");
+        assert!(!d.settings.oneshot, "as the device was just told");
+        assert_eq!(d.get(&Key::LimitSamples, None).unwrap(), Value::U64(7));
+    });
+}
+
 // An answer.
 
 fn link(server: &Shared, times: Times) -> Link {
@@ -642,6 +657,18 @@ fn an_endless_line_is_no_usable_answer() {
         let e = l.ask("version").unwrap_err().to_string();
         assert!(e.contains("No usable answer to 'version'"), "{e}");
         assert!(l.is_stale());
+    });
+}
+
+#[test]
+fn a_write_to_a_closed_connection_says_so_and_claims_nothing_of_a_setting() {
+    bounded(|| {
+        let s = server();
+        let mut l = link(&s, TIMES);
+        s.lock().unwrap().closed = true;
+        let e = l.set("samplerate", 1000).unwrap_err().to_string();
+        assert!(e.contains("The device closed the connection"), "{e}");
+        assert!(!l.is_connected());
     });
 }
 
@@ -985,6 +1012,25 @@ fn a_stop_ends_a_stream_that_floods() {
         // A close joins: it holds the time a drain has against a flood.
         d.close().unwrap();
         assert_eq!(written(&s).last().unwrap(), "close");
+    });
+}
+
+#[test]
+fn a_drain_has_an_end_against_a_stream_that_does_not_stop() {
+    bounded(|| {
+        let s = server();
+        s.lock().unwrap().flood = Flood(1024);
+        // The server takes no notice of its close.
+        reply(&s, "close", Reply::Mute);
+        let mut d = opened(&s);
+        d.link.as_mut().unwrap().times.drain_most = Duration::from_millis(50);
+        let rx = start(&mut d);
+        let (_, first) = rx.recv_timeout(BOUND).unwrap();
+        assert!(matches!(first, Packet::Header { .. }));
+        d.stop().unwrap();
+        d.close().unwrap();
+        assert_eq!(written(&s).last().unwrap(), "close");
+        drop(rx);
     });
 }
 
