@@ -57,9 +57,11 @@ s/^tcp_out ([0-9a-f]+) -> [0-9]+$/tcp_out \1/'
     emu_reset
     emu_case "usbtmc by address" --keep-header -- -d rigol-ds:conn=usbtmc/$EMU_USB --scan
     emu_case "usbtmc scan names it" --keep-header -- -d rigol-ds:conn=usbtmc --scan
-    # The kernel's driver on it: each tool detaches it. Its probes ask for the
-    # capabilities at a time of their own, and not at all on a kernel with no
-    # usbtmc, so those lines go, and the rest shows the tool got through.
+    # The kernel's driver on it: each tool detaches it and gives it back, and its
+    # probe at that asks for the capabilities, which a kernel with no usbtmc doesn't,
+    # so those lines go. With the module this proves a tool gets through a driver that
+    # holds the interface; without it, only a note says so, and it proves nothing more
+    # than the plain frame.
     emu_case "usbtmc kernel driver bound" --bound usbtmc --tx-filter '/^ctl_in 21 07 /d' --digest --filter "$A" -- -d $U --frames 1 -O analog
     emu_case "tcp nothing listens" --no-output -- -d rigol-ds:conn=tcp-raw/127.0.0.1/1 --scan
 
@@ -113,6 +115,19 @@ s/^tcp_out ([0-9a-f]+) -> [0-9]+$/tcp_out \1/'
     emu_options model=DS2072 in-stall=1
     emu_case "usbtmc bulk in stalled" --expect-fail -- -d $U --show
 
+    # A DS1000Z's id is on no list, so remote control goes on the wire: REN_CONTROL and
+    # LOCAL_LOCKOUT at each open, GO_TO_LOCAL at each close. sigrok-cli skips its close
+    # at an error, so there GO_TO_LOCAL goes from the comparison.
+    emu_options model=DS1054Z
+    emu_case "remote control" --keep-header -- -d $U --scan
+    emu_case "remote control in a frame" --digest --filter "$A" -- -d $U -C CH1 --frames 1 -O analog
+    emu_options model=DS1054Z stall=ren
+    emu_case "remote control stalled" --keep-header -- -d $U --scan
+    emu_options model=DS1054Z stall=llo
+    emu_case "local lockout stalled" --keep-header -- -d $U --scan
+    emu_options model=DS1054Z mute-at=3
+    emu_case "remote control when it goes silent" --expect-fail --tx-filter '/^ctl_in 21 a1 /d' -- -d $U --show
+
     # What the instrument answers, and when.
     emu_options idn=Acme,X,1,2
     emu_case "scan another instrument" --no-output -- -d $U --scan
@@ -128,6 +143,7 @@ s/^tcp_out ([0-9a-f]+) -> [0-9]+$/tcp_out \1/'
     emu_case "show goes silent" --expect-fail -- -d $U --show
     emu_options model=DS2072 late-at=1:5
     emu_case "scan late" --keep-header -- -d $U --scan
+    emu_case "scan late tcp" --keep-header -- -d $T --scan
 
     # An unplug. On TCP the instrument closes the connection.
     emu_options
@@ -135,6 +151,5 @@ s/^tcp_out ([0-9a-f]+) -> [0-9]+$/tcp_out \1/'
     emu_case "unplug before a capture tcp" --digest --filter "$A" --oracle-bug "$SIGPIPE" --unplug tcp-in=16 --oxrok-fails "unplug" -- -d $T --frames 2 -O analog
     # After a frame's data: C reads 0 bytes for ever, which is no error to it.
     emu_case "unplug in a frame tcp" --digest --filter "$A" --oracle-bug "$TCP_EOF" --oracle-hangs --timeout 4 --unplug tcp-in=18 --oxrok-fails "unplug" -- -d $T --frames 2 -O analog
-    # What gets to the bus after the event is the pace's (1 round in 15 differed).
-    emu_case "unplug in a frame" --digest --filter "$A" --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 6 --tx-filter '/^unplug$/q' --unplug in=2:18 --oxrok-fails "unplug" -- -d $U --frames 2 -O analog
+    emu_case "unplug in a frame" --digest --filter "$A" --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 6 --unplug in=2:18 --oxrok-fails "unplug" -- -d $U --frames 2 -O analog
 }

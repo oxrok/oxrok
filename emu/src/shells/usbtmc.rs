@@ -253,6 +253,9 @@ impl<M: Messages> Usbtmc<M> {
     fn message_out(&mut self, tag: u8, size: u32, data: &[u8], v: &mut Violations) -> Reply {
         let size = size as usize;
         let body = &data[HEADER..];
+        if size == 0 {
+            v.report("DEV_DEP_MSG_OUT of 0 bytes");
+        }
         if size > LONGEST || body.len() < size {
             v.report(format!(
                 "DEV_DEP_MSG_OUT {tag} says {size} bytes and carries {}: a message in one \
@@ -409,14 +412,25 @@ impl<M: Messages> DeviceModel for Usbtmc<M> {
         }
         match setup.request {
             GET_CAPABILITIES if self.faults.stall_caps => Reply::Stall,
-            GET_CAPABILITIES => Reply::Data(self.capabilities()),
-            INITIATE_ABORT_BULK_OUT | CHECK_ABORT_BULK_OUT_STATUS | CHECK_CLEAR_STATUS => {
-                Self::status(setup, &[0], v)
+            GET_CAPABILITIES => {
+                if !setup.is_in() || setup.value != 0 || setup.length != 24 {
+                    v.report(format!(
+                        "GET_CAPABILITIES type {:#04x} wValue {} wLength {}",
+                        setup.request_type, setup.value, setup.length
+                    ));
+                }
+                Reply::Data(self.capabilities())
             }
-            INITIATE_ABORT_BULK_IN | CHECK_ABORT_BULK_IN_STATUS => {
+            // The initiating requests answer the status and a tag, the checks the
+            // status, three bytes and NBYTES.
+            INITIATE_ABORT_BULK_OUT | INITIATE_ABORT_BULK_IN => {
                 self.drop_transfer();
-                Self::status(setup, &[0, 0, 0, 0, 0, 0, 0], v)
+                Self::status(setup, &[(setup.value & 0xff) as u8], v)
             }
+            CHECK_ABORT_BULK_OUT_STATUS | CHECK_ABORT_BULK_IN_STATUS => {
+                Self::status(setup, &[0; 7], v)
+            }
+            CHECK_CLEAR_STATUS => Self::status(setup, &[0], v),
             INITIATE_CLEAR => {
                 self.drop_transfer();
                 self.messages.clear();
@@ -631,6 +645,38 @@ mod tests {
     }
 
     #[test]
+    fn a_new_message_drops_the_answer_on_its_way() {
+        let mut h = host(&[]);
+        h.tmc.messages.said.push(vec![7u8; 5000]);
+        h.request();
+        assert!(matches!(h.offer(2048), Reply::Data(d) if d.len() == 2048));
+        h.send(b"new\n");
+        assert_eq!(h.answer().unwrap(), b"new\n", "not the rest of the old one");
+    }
+
+    #[test]
+    fn an_answer_keeps_to_what_the_request_asked_for() {
+        let mut h = host(&[]);
+        h.tmc.messages.said.push(b"abcdef".to_vec());
+        let request = [DEV_DEP_MSG_IN, 1, !1, 0, 4, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(h.tmc.out(EP_OUT, &request, &mut h.v), Reply::ack());
+        let Reply::Data(m) = h.offer(2048) else { panic!() };
+        assert_eq!(&m[4..9], &[4, 0, 0, 0, 0], "four bytes, no EOM");
+        assert_eq!(&m[12..], b"abcd");
+    }
+
+    #[test]
+    fn an_answer_is_padded_to_four() {
+        let mut h = host(&[]);
+        h.send(b"abc\n");
+        h.send(b"abcde\n");
+        h.request();
+        let Reply::Data(m) = h.offer(2048) else { panic!() };
+        assert_eq!(m.len(), HEADER + 8, "{m:?}");
+        assert_eq!(&m[4..8], &6u32.to_le_bytes());
+    }
+
+    #[test]
     fn no_request_or_no_answer_naks_and_counts_the_offer() {
         let mut h = host(&[]);
         assert_eq!(h.offer(64), Reply::Nak);
@@ -667,6 +713,7 @@ mod tests {
             (vec![2, 1, 0xfe, 0, 0, 0, 0, 0, 0, 0, 0, 0], "for 0 bytes"),
             (vec![2, 1, 0xfe, 0, 9, 0, 0, 0, 2, 0, 0, 0], "TermChar"),
             (vec![1, 1, 0xfe, 1, 0, 0, 0, 0, 1, 0, 0, 0], "reserved bytes"),
+            (vec![1, 1, 0xfe, 0, 0, 0, 0, 0, 1, 0, 0, 0], "of 0 bytes"),
         ] {
             let mut h = host(&[]);
             h.tmc.out(EP_OUT, &bytes, &mut h.v);
@@ -683,6 +730,10 @@ mod tests {
         };
         assert_eq!(c.len(), 24);
         assert_eq!((c[0], c[15] & CAP_RL1), (STATUS_SUCCESS, CAP_RL1));
+        assert!(h.v.is_empty());
+        h.tmc.control(class_in(GET_CAPABILITIES, 0, 2), &[], &mut h.v);
+        h.tmc.control(class_in(GET_CAPABILITIES, 1, 24), &[], &mut h.v);
+        assert_eq!(h.v.drain().len(), 2);
     }
 
     #[test]
@@ -718,11 +769,15 @@ mod tests {
         let abort = Setup {
             request_type: 0xa2,
             request: INITIATE_ABORT_BULK_IN,
-            value: 1,
+            value: 7,
             index: 0x82,
-            length: 8,
+            length: 2,
         };
-        assert!(matches!(h.tmc.control(abort, &[], &mut h.v), Reply::Data(d) if d.len() == 8));
+        let answer = h.tmc.control(abort, &[], &mut h.v);
+        assert_eq!(answer, Reply::Data(vec![STATUS_SUCCESS, 7]), "as the kernel asks");
+        let check = Setup { request: CHECK_ABORT_BULK_OUT_STATUS, length: 8, ..abort };
+        let answer = h.tmc.control(Setup { index: 1, ..check }, &[], &mut h.v);
+        assert!(matches!(answer, Reply::Data(d) if d.len() == 8), "as the kernel asks");
         assert!(h.v.is_empty());
         let on_the_wrong_one = Setup { index: 3, ..class_in(GET_CAPABILITIES, 0, 24) };
         assert_eq!(h.tmc.control(on_the_wrong_one, &[], &mut h.v), Reply::Stall);

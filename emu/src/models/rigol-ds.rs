@@ -13,12 +13,20 @@
 //!   a DS1102D; it is flagged here.
 //! - The other series: from what libsigrok's driver sends and what its comments
 //!   say of answers (`#9` headers and a line end after each block on a DS2072,
-//!   `READ,nnnn` and `IDLE,nnnn`), and the programming guides' 250000 byte limit
-//!   of one read on a DS1000Z. None was compared with a real one.
-//! - USB ids: Rigol 1ab1:0588, 04b0, 04b1, 04ce, 0515 and Agilent 0957:0588, as
-//!   libsigrok's table of models that lie about remote control lists most of
-//!   them. The speed and endpoints are the shell's, not the scope's: a real one
-//!   has an interrupt endpoint too.
+//!   `READ,nnnn` and `IDLE,nnnn`). None was compared with a real one.
+//! - USB ids: 1ab1:0588, 04b0, 04b1, 0515 and 0957:0588 are in libsigrok's table of
+//!   models that lie about remote control, for those series.
+//!
+//! Guesses, from memory and from no source, which no test should lean on:
+//!
+//! - The 250000 byte limit of one read on a DS1000Z.
+//! - 1ab1:04ce for the DS1000Z, which is what makes it the model that takes remote
+//!   control here; 1ab1:0588 for the VS5102, on the DS1000's table entry; 0957:1755
+//!   for the MSO7034A, chosen only to stay off the DSO1000's entry and the remote
+//!   table, as a real MSO7000 is not on it.
+//! - Every firmware string but the DS1102E's, and the serial numbers.
+//! - The bus speeds. And a real scope may have an interrupt endpoint, which the shell
+//!   has none of.
 //!
 //! Emulation artifacts:
 //!
@@ -95,12 +103,12 @@ const KINDS: &[Kind] = &[
     Kind { vendor: AGILENT, name: "DSO1052B", protocol: 3, analog: 2, digital: false, usb: (0x0957, 0x0588), speed: Speed::Full, firmware: "00.04.02", live: 600, digits: 9, probe_x: true },
     Kind { vendor: RIGOL, name: "DS1054Z", protocol: 4, analog: 4, digital: false, usb: (0x1ab1, 0x04ce), speed: Speed::High, firmware: "00.04.04.04.03", live: 1200, digits: 9, probe_x: false },
     Kind { vendor: RIGOL, name: "DS4024", protocol: 4, analog: 4, digital: false, usb: (0x1ab1, 0x04b1), speed: Speed::High, firmware: "00.02.03", live: 1400, digits: 9, probe_x: false },
-    Kind { vendor: AGILENT, name: "MSO7034A", protocol: 4, analog: 4, digital: false, usb: (0x0957, 0x0588), speed: Speed::High, firmware: "06.20.0002", live: 1000, digits: 9, probe_x: false },
+    Kind { vendor: AGILENT, name: "MSO7034A", protocol: 4, analog: 4, digital: false, usb: (0x0957, 0x1755), speed: Speed::High, firmware: "06.20.0002", live: 1000, digits: 9, probe_x: false },
     Kind { vendor: RIGOL, name: "MSO5074", protocol: 5, analog: 4, digital: true, usb: (0x1ab1, 0x0515), speed: Speed::High, firmware: "00.01.03.03.03", live: 1000, digits: 9, probe_x: false },
 ];
 
 /// A scope.
-struct Scope {
+pub(super) struct Scope {
     kind: &'static Kind,
     firmware: String,
     /// It has a block header. A DS1000 before 0.2.4 and a VS5000 have none.
@@ -200,8 +208,8 @@ impl Scope {
 }
 
 impl Instrument for Scope {
-    fn idn(&self) -> String {
-        format!("{},{},EMU0001,{}", self.kind.vendor, self.kind.name, self.firmware)
+    fn idn(&self) -> Option<String> {
+        Some(format!("{},{},EMU0001,{}", self.kind.vendor, self.kind.name, self.firmware))
     }
 
     fn settings(&self) -> Settings {
@@ -333,7 +341,8 @@ impl Scope {
     }
 }
 
-fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config)> {
+/// The scope and the shell's options, whichever carrier they go on.
+pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config)> {
     let mut config = scpi::Config::default();
     let mut kind = &KINDS[0];
     let mut firmware = None;
@@ -403,7 +412,9 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
     let (vendor, product) = scope.kind.usb;
     let mut id = Identity::new(vendor, product, scope.kind.vendor, scope.kind.name);
     id.speed = scope.kind.speed;
-    // They say they take remote control. The tools' table says not to believe it.
+    // They say they take remote control. The tools' table says not to believe it for
+    // the ids it lists, and for any other it goes on the wire: REN_CONTROL and
+    // LOCAL_LOCKOUT at each open, GO_TO_LOCAL at each close.
     id.remote = true;
     Ok(config.usbtmc(NAME, &id, scope))
 }

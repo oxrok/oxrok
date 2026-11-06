@@ -107,12 +107,17 @@
 # minor) fails rather than running against nothing.
 #
 # A scenario that sets EMU_TMC=1 is a model on the USBTMC shell. The kernel's
-# usbtmc asks for the capabilities each time it binds, and it binds again when a
-# tool lets go of the interface, on its own time: those would land among the
-# tool's transactions, or not, and not at all on a machine without the module. So
-# for the session the module is unloaded and kept from loading (emu_tmc_quiet),
-# and put back as it was at the end. A case with --bound usbtmc loads it for each
-# tool's run, in a section of its own.
+# usbtmc asks for the capabilities each time it binds, which would land among a
+# tool's transactions, or not on a machine without the module. So before each tool
+# it is unbound from this device's interfaces, after udev has settled (emu_unbind).
+# Nothing binds it again, as libsigrok and nusb re-attach only what they detached.
+# A udev rule keeps udev from loading it for an emulated device (emu_tmc_quiet); the
+# rule names nothing else, and left behind by a crash it does nothing to a real
+# instrument. The module is never unloaded or blacklisted. A case with --bound usbtmc
+# loads it, which stays loaded, and binds it to this device: each tool then meets a
+# driver it must detach and give back, if the kernel has the module at all. libusb's
+# listing reads string descriptors, which under OXROK_USB_BACKEND=libusb go from
+# oxrok's transactions, as nothing else in such a model's cases reads them.
 #
 # A scenario that sets EMU_TCP=1 serves its model on a socket too (--tcp, its
 # build_tcp, emu/src/shells/tcp.rs), and EMU_TCP=only there alone, with nothing
@@ -788,29 +793,33 @@ if [ $emu = 1 ]; then
     # Each unbind is a section of the
     # session log of its own, so that whatever traffic it causes is in
     # no case's transactions.
-    # EMU_TMC=1, before attaching: no usbtmc but for a case that asks for it. A
-    # blacklist stops udev's load by alias, and an explicit modprobe still works.
-    EMU_TMC_CONF=/run/modprobe.d/90-oxrok-emu-usbtmc.conf
-    EMU_TMC_WAS=0
+    # EMU_TMC=1, before attaching: udev loads no usbtmc for an emulated interface of
+    # its class, by taking away the modalias 80-drivers.rules loads by. A module that
+    # is loaded still binds at the attach, which emu_unbind undoes.
+    EMU_TMC_RULE=/run/udev/rules.d/70-oxrok-emu-usbtmc.rules
     emu_tmc_quiet() {
-        EMU_TMC_WAS=0
-        ! grep -q '^usbtmc ' /proc/modules || EMU_TMC_WAS=1
-        sudo -n mkdir -p /run/modprobe.d
-        echo 'blacklist usbtmc' | sudo -n tee "$EMU_TMC_CONF" >/dev/null
-        sudo -n modprobe -r usbtmc 2>/dev/null
+        sudo -n mkdir -p /run/udev/rules.d
+        printf '%s\n' 'SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", DEVPATH=="*/vhci_hcd.0/*", ATTR{bInterfaceClass}=="fe", ENV{MODALIAS}=""' \
+            | sudo -n tee "$EMU_TMC_RULE" >/dev/null
+        sudo -n udevadm control --reload
     }
     emu_tmc_unquiet() {
-        [ -e "$EMU_TMC_CONF" ] || return 0
-        sudo -n rm -f "$EMU_TMC_CONF"
-        [ "$EMU_TMC_WAS" = 0 ] || sudo -n modprobe usbtmc
+        [ -e "$EMU_TMC_RULE" ] || return 0
+        sudo -n rm -f "$EMU_TMC_RULE"
+        sudo -n udevadm control --reload
     }
     emu_unbind() {
         [ -n "$EMU_BUSID" ] || return 0
+        un_class=ff
+        if [ "$EMU_TMC" = 1 ]; then
+            un_class=fe
+            sudo -n udevadm settle -t 5 || echo "note: $1: udev has not settled" >&2
+        fi
         for intf in /sys/bus/usb/devices/"$EMU_BUSID":*; do
             [ -e "$intf/driver" ] || continue
             drv=$(basename "$(readlink "$intf/driver")")
             [ "$drv" != usbfs ] || continue
-            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = ff ] || continue
+            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = "$un_class" ] || continue
             intf=$(basename "$intf")
             emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
             printf '%s' "$intf" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null || return 1
@@ -959,17 +968,18 @@ flush_setup()
     # with a note, as the transactions then show nothing else.
     emu_bind() {
         [ -n "$EMU_BUSID" ] || return 0
+        bi_class=ff
         if [ "$EMU_TMC" = 1 ]; then
+            bi_class=fe
             emu_cmd "section load $2 before $1" >/dev/null || return 1
-            sudo -n modprobe "$2" 2>/dev/null || echo "note: $1: no $2 in this kernel, the case runs unbound"
-            return 0
+            sudo -n modprobe "$2" 2>/dev/null
         fi
         if [ ! -d "/sys/bus/usb/drivers/$2" ]; then
             echo "note: $1: no $2 in this kernel, the case runs unbound"
             return 0
         fi
         for intf in /sys/bus/usb/devices/"$EMU_BUSID":*; do
-            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = ff ] || continue
+            [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = "$bi_class" ] || continue
             [ ! -e "$intf/driver" ] || continue
             intf=$(basename "$intf")
             emu_cmd "section bind $2 to $intf before $1" >/dev/null || return 1
@@ -1306,7 +1316,7 @@ EOF
             # (ftdi_sio's probe would land among oxrok's transactions).
             replugged=0
             case "$t: $event" in "b: unplug"*) replugged=1 ;; esac
-            if [ -z "$bound" ] && { [ $no_oracle = 1 ] || [ $replugged = 1 ]; } && ! emu_unbind "$name"; then
+            if [ -z "$bound" ] && { [ $no_oracle = 1 ] || [ $replugged = 1 ] || [ "$EMU_TMC" = 1 ]; } && ! emu_unbind "$name"; then
                 emu_fail "$name: could not unbind the kernel drivers as sigrok-cli's run would have"; return
             fi
             if [ -n "$bound" ] && ! emu_bind "$name" "$bound"; then
@@ -1431,7 +1441,6 @@ EOF
             if ! emu_cmd sync >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
-            if [ "$EMU_TMC" = 1 ] && [ -n "$bound" ]; then sudo -n modprobe -r "$bound" 2>/dev/null; fi
             case "$event" in
                 unplug*)
                     if ! emu_replug; then emu_fail "$name: the emulator did not replug the device"; return; fi ;;
@@ -1447,6 +1456,9 @@ EOF
             emu_case_v=$((emu_case_v + v))
             if [ "$EMU_CDC" = 1 ]; then
                 emu_tx_tty "$t" <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+            fi
+            if [ "$EMU_TMC" = 1 ] && [ $t = b ] && [ "${OXROK_USB_BACKEND:-}" = libusb ]; then
+                sed -E '/^ctl_in 00 06 03[0-9a-f]{2} /d' "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
             if [ -n "$tx_filter" ]; then
                 sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
@@ -1655,6 +1667,8 @@ EOF
                 diff "$golden.oracle" "$TMP/a.uniq" | head -${DIFF_LINES:-6}
             elif [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
                 diff "$golden.out" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
+            elif [ -f "$golden.tx" ] && ! cmp -s "$golden.tx" "$TMP/b.tx"; then
+                diff "$golden.tx" "$TMP/b.tx" | head -${DIFF_LINES:-6}
             fi
         fi
     }
@@ -1688,6 +1702,8 @@ EOF
                 diff "$golden.oracle" "$TMP/a.cmp" | head -${DIFF_LINES:-6}
             elif [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
                 diff "$golden.out" "$TMP/b.cmp" | head -${DIFF_LINES:-6}
+            elif [ -f "$golden.tx" ] && ! cmp -s "$golden.tx" "$TMP/b.tx"; then
+                diff "$golden.tx" "$TMP/b.tx" | head -${DIFF_LINES:-6}
             fi
         fi
     }

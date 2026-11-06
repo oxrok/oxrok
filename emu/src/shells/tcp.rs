@@ -41,8 +41,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use vusb::arm::{Arm, Event};
-use vusb::observer::fixture::{Rules, data};
+use vusb::observer::fixture::{Rules, hex};
 use vusb::session::{Builder, Ctx};
 
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
@@ -142,13 +143,46 @@ struct Conn {
     closing: bool,
 }
 
-/// The bytes of a direction, until it changes.
-#[derive(Default)]
-enum Run {
-    #[default]
-    None,
-    Out(Vec<u8>),
-    In(Vec<u8>),
+/// A direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Way {
+    Out,
+    In,
+}
+
+/// The bytes of a direction, until it changes. Hashed as they come, and kept only as
+/// far as the digest rule shows them, as an analyzer's stream may not end soon. Under
+/// no digest rule all of it is kept, so a model that streams gives one in `log_rules`.
+struct Run {
+    way: Way,
+    kept: Vec<u8>,
+    len: usize,
+    hash: Sha256,
+}
+
+impl Run {
+    fn new(way: Way) -> Run {
+        Run { way, kept: Vec::new(), len: 0, hash: Sha256::new() }
+    }
+
+    fn add(&mut self, bytes: &[u8], above: Option<usize>) {
+        self.len += bytes.len();
+        self.hash.update(bytes);
+        if above.is_some_and(|n| self.len > n) {
+            self.kept = Vec::new();
+        } else {
+            self.kept.extend_from_slice(bytes);
+        }
+    }
+
+    /// As `fixture::data` writes it.
+    fn text(self, above: Option<usize>) -> String {
+        if above.is_some_and(|n| self.len > n) {
+            format!("@{}:{}", self.len, hex(&self.hash.finalize()))
+        } else {
+            hex(&self.kept)
+        }
+    }
 }
 
 struct Inner {
@@ -158,7 +192,7 @@ struct Inner {
     /// Of `conns`, the one that last spoke, which a tick answers.
     current: usize,
     log: Arc<Mutex<dyn Log>>,
-    run: Run,
+    run: Option<Run>,
     armed: Option<(Event, When)>,
     sends: u32,
     unplugged: bool,
@@ -190,7 +224,7 @@ impl Carrier {
             conns: Vec::new(),
             current: 0,
             log,
-            run: Run::None,
+            run: None,
             armed: None,
             sends: 0,
             unplugged: false,
@@ -339,31 +373,28 @@ impl Inner {
 
     /// Writes the run of bytes out.
     fn flush(&mut self) {
-        let above = self.log.lock().expect("log lock").rules().digest_above;
-        match std::mem::take(&mut self.run) {
-            Run::None => {}
-            Run::Out(d) => self.line(&format!("tcp_out {} -> {}", data(&d, above), d.len())),
-            Run::In(d) => self.line(&format!("tcp_in {} -> {}", d.len(), data(&d, above))),
+        let Some(run) = self.run.take() else { return };
+        let above = self.above();
+        let (way, len) = (run.way, run.len);
+        let text = run.text(above);
+        match way {
+            Way::Out => self.line(&format!("tcp_out {text} -> {len}")),
+            Way::In => self.line(&format!("tcp_in {len} -> {text}")),
         }
     }
 
-    fn logged_out(&mut self, bytes: &[u8]) {
-        if !matches!(self.run, Run::Out(_)) {
-            self.flush();
-            self.run = Run::Out(Vec::new());
-        }
-        if let Run::Out(d) = &mut self.run {
-            d.extend_from_slice(bytes);
-        }
+    fn above(&self) -> Option<usize> {
+        self.log.lock().expect("log lock").rules().digest_above
     }
 
-    fn logged_in(&mut self, bytes: &[u8]) {
-        if !matches!(self.run, Run::In(_)) {
+    fn logged(&mut self, way: Way, bytes: &[u8]) {
+        if self.run.as_ref().is_none_or(|r| r.way != way) {
             self.flush();
-            self.run = Run::In(Vec::new());
+            self.run = Some(Run::new(way));
         }
-        if let Run::In(d) = &mut self.run {
-            d.extend_from_slice(bytes);
+        let above = self.above();
+        if let Some(run) = &mut self.run {
+            run.add(bytes, above);
         }
     }
 
@@ -384,7 +415,7 @@ impl Inner {
             self.log.lock().expect("log lock").violation(&message);
         }
         for bytes in &port.sent {
-            self.logged_in(bytes);
+            self.logged(Way::In, bytes);
             if let Some(c) = self.conns.get_mut(at) {
                 c.pending.extend_from_slice(bytes);
             }
@@ -434,7 +465,7 @@ impl Inner {
                 Ok(n) => {
                     moved = true;
                     self.current = at;
-                    self.logged_out(&buf[..n]);
+                    self.logged(Way::Out, &buf[..n]);
                     let bytes = &buf[..n];
                     self.with_model(at, violations, |m, p| m.received(bytes, p));
                 }
@@ -616,8 +647,12 @@ mod tests {
         }
     }
 
-    /// `h` answers `H`, `b` a long burst, `x` hangs up, `v` is flagged, `m` marks.
-    struct Toy;
+    /// `h` answers `H`, `b` a long burst, `B` one no socket holds, `x` hangs up, `v` is flagged, `m` marks,
+    /// `l` answers `L` on the next tick.
+    #[derive(Default)]
+    struct Toy {
+        later: bool,
+    }
 
     impl Stream for Toy {
         fn received(&mut self, data: &[u8], port: &mut Port) {
@@ -625,11 +660,19 @@ mod tests {
                 match b {
                     b'h' => port.send(b"H"),
                     b'b' => port.send(&vec![7; 1 << 20]),
+                    b'B' => port.send(&vec![7; 1 << 25]),
                     b'x' => port.hang_up(),
                     b'v' => port.violation("v it is"),
                     b'm' => port.mark(),
+                    b'l' => self.later = true,
                     _ => {}
                 }
+            }
+        }
+
+        fn tick(&mut self, port: &mut Port) {
+            if std::mem::take(&mut self.later) {
+                port.send(b"L");
             }
         }
     }
@@ -638,7 +681,7 @@ mod tests {
         let lines = Arc::new(Mutex::new(Lines::default()));
         let log: Arc<Mutex<dyn Log>> = lines.clone();
         let c = Carrier::bind("127.0.0.1:0", log).unwrap();
-        c.install(Box::new(Toy));
+        c.install(Box::new(Toy::default()));
         (c, lines)
     }
 
@@ -659,11 +702,10 @@ mod tests {
     }
 
     #[test]
-    fn a_connection_is_logged_and_its_cut_means_nothing() {
+    fn a_connection_is_logged() {
         let (c, lines) = carrier();
         let mut s = connect(&c);
-        s.write_all(b"a").unwrap();
-        s.write_all(b"h").unwrap();
+        s.write_all(b"ah").unwrap();
         assert_eq!(read_n(&mut s, 1), b"H");
         drop(s);
         c.sync();
@@ -672,6 +714,113 @@ mod tests {
             logged(&lines),
             ["tcp_connect", "tcp_out 6168 -> 2", "tcp_in 1 -> 48", "tcp_close"]
         );
+    }
+
+    #[test]
+    fn a_direction_is_one_line_however_it_came() {
+        let (c, lines) = carrier();
+        {
+            let mut inner = c.lock();
+            inner.logged(Way::Out, b"a");
+            inner.logged(Way::Out, b"h");
+            inner.logged(Way::In, b"H");
+            inner.logged(Way::In, b"I");
+            inner.logged(Way::Out, b"b");
+            inner.flush();
+        }
+        c.stop();
+        assert_eq!(logged(&lines), ["tcp_out 6168 -> 2", "tcp_in 2 -> 4849", "tcp_out 62 -> 1"]);
+    }
+
+    #[test]
+    fn a_long_run_is_hashed_as_it_comes_and_keeps_nothing() {
+        let mut run = Run::new(Way::In);
+        let whole = vec![7u8; 100];
+        for piece in whole.chunks(9) {
+            run.add(piece, Some(16));
+        }
+        assert_eq!(run.kept, Vec::<u8>::new());
+        assert_eq!(run.text(Some(16)), vusb::observer::fixture::data(&whole, Some(16)));
+        let mut run = Run::new(Way::In);
+        run.add(&whole[..16], Some(16));
+        assert_eq!(run.text(Some(16)), vusb::observer::fixture::data(&whole[..16], Some(16)));
+    }
+
+    #[test]
+    fn a_tick_comes_with_a_host_connected() {
+        let (c, _lines) = carrier();
+        let mut s = connect(&c);
+        s.write_all(b"l").unwrap();
+        assert_eq!(read_n(&mut s, 1), b"L");
+        c.stop();
+    }
+
+    #[test]
+    fn a_fresh_model_forgets_what_was_armed() {
+        let (c, lines) = carrier();
+        c.arm(Event::Unplug, "tcp-in=1").unwrap();
+        c.install(Box::new(Toy::default()));
+        let mut s = connect(&c);
+        s.write_all(b"h").unwrap();
+        assert_eq!(read_n(&mut s, 1), b"H");
+        s.write_all(b"h").unwrap();
+        assert_eq!(read_n(&mut s, 1), b"H", "still up");
+        drop(s);
+        c.sync();
+        c.stop();
+        assert!(!logged(&lines).contains(&"unplug".to_owned()));
+    }
+
+    #[test]
+    fn a_fresh_model_is_plugged_in() {
+        let (c, lines) = carrier();
+        c.arm(Event::Unplug, "tcp-in=1").unwrap();
+        let mut s = connect(&c);
+        s.write_all(b"h").unwrap();
+        assert_eq!(read_n(&mut s, 1), b"H");
+        let mut rest = Vec::new();
+        s.read_to_end(&mut rest).unwrap();
+        c.install(Box::new(Toy::default()));
+        let mut s = connect(&c);
+        s.write_all(b"h").unwrap();
+        assert_eq!(read_n(&mut s, 1), b"H", "served, not refused");
+        drop(s);
+        c.sync();
+        c.stop();
+        assert!(!logged(&lines).contains(&"tcp_refused".to_owned()));
+    }
+
+    #[test]
+    fn sync_waits_for_a_host_on_its_way_out() {
+        let (c, lines) = carrier();
+        let s = connect(&c);
+        // Accepted, and logged.
+        let began = Instant::now();
+        while logged(&lines).is_empty() && began.elapsed() < Duration::from_secs(30) {
+            thread::sleep(IDLE);
+        }
+        let closer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(100));
+            drop(s);
+        });
+        c.sync();
+        c.stop();
+        closer.join().unwrap();
+        assert_eq!(logged(&lines), ["tcp_connect", "tcp_close"]);
+    }
+
+    #[test]
+    fn a_close_of_the_device_sends_all_it_had_first() {
+        let (c, _lines) = carrier();
+        c.arm(Event::Unplug, "tcp-in=1").unwrap();
+        let mut s = connect(&c);
+        s.write_all(b"B").unwrap();
+        // More than a socket holds, with the host reading only now.
+        assert_eq!(read_n(&mut s, 1 << 25).len(), 1 << 25);
+        let mut rest = Vec::new();
+        s.read_to_end(&mut rest).unwrap();
+        assert_eq!(rest, Vec::<u8>::new());
+        c.stop();
     }
 
     #[test]
@@ -772,7 +921,7 @@ mod tests {
         // Not sync: it would wait for this connection to go.
         c.lock().flush();
         let before = logged(&lines);
-        c.install(Box::new(Toy));
+        c.install(Box::new(Toy::default()));
         let mut rest = Vec::new();
         s.read_to_end(&mut rest).unwrap();
         assert_eq!(rest, Vec::<u8>::new());

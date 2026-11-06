@@ -28,9 +28,9 @@ never reached, by function (line ranges hold no reached line):
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/scpi/scpi.c                 46.2%  234 of 507
   src/scpi/scpi_tcp.c             70.6%  77 of 109
-  src/scpi/scpi_usbtmc_libusb.c   72.3%  217 of 300
+  src/scpi/scpi_usbtmc_libusb.c   78.7%  236 of 300
   src/tcp.c                       63.1%  77 of 122
-  total                           58.3%  605 of 1038
+  total                           60.1%  624 of 1038
 never reached, by function (line ranges hold no reached line):
   src/scpi/scpi.c
     parse_strict_bool: 58, 69-73, 78
@@ -71,8 +71,8 @@ never reached, by function (line ranges hold no reached line):
   src/scpi/scpi_usbtmc_libusb.c
     scpi_usbtmc_libusb_scan: 135-137, 144-147
     scpi_usbtmc_libusb_dev_inst_new: 184-185, 191-193
-    scpi_usbtmc_remote: 231-257
-    scpi_usbtmc_local: 276-289
+    scpi_usbtmc_remote: 239, 252
+    scpi_usbtmc_local: 281-285
     scpi_usbtmc_libusb_open: 307, 310, 317-320, 327, 344-346, 357-358, 364-366, 373-376, 381-383, 390
     scpi_usbtmc_libusb_connection_id: never called (418-427)
     scpi_usbtmc_bulkout: 487-488, 514-516

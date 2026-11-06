@@ -6,7 +6,8 @@
 //! [`Engine`] does the rest:
 //!
 //! - lines, ended by LF, CR LF too, and cut at `;` outside quotes;
-//! - `*IDN?` (from [`Instrument::idn`], or `idn=`), `*OPC?`, `*OPC`, `*WAI`,
+//! - `*IDN?` (from [`Instrument::idn`], or `idn=`; an HP of that age has none),
+//!   `*OPC?`, `*OPC`, `*WAI`,
 //!   `*ESR?`, `*CLS` and `SYST:ERR?` with its queue;
 //! - [`Settings`]: a header with a value, `HEADER?` answers it and `HEADER X`
 //!   sets it, so that most of a model is a list;
@@ -27,10 +28,12 @@
 //!   - `idn=TEXT`; `eol=lf|crlf|none`, how text answers end;
 //!   - `framing=rigol`: on TCP, the length before each answer that `tcp-rigol`
 //!     reads;
-//!   - and [`usbtmc::Faults`]'s.
+//!   - `uart=LINE`: on CDC-ACM, what the host must set before anything passes;
+//!   - and [`usbtmc::Faults`]' and `cdc::Faults`'. `in-stall=` goes to whichever
+//!     carrier the model is on, and `stall=` by its value.
 //!
-//! A tick is one offer of a bulk IN on USBTMC (host paced, about 20 ms) and 20 ms
-//! of wall time on TCP.
+//! A tick is one offer of a read on USBTMC and CDC-ACM (host paced, about 20 ms)
+//! and 20 ms of wall time on TCP.
 //!
 //! No driver reads the error queue, and only `rigol-ds`'s single shot check reads
 //! `*ESR?`; they are here since the instrument has them and a test can look.
@@ -39,12 +42,15 @@ use std::collections::{BTreeMap, VecDeque};
 
 use crate::model::{DeviceModel, Violations};
 use crate::options::parse_number;
+use crate::shells::cdc;
 use crate::shells::tcp::{Port, Stream};
 use crate::shells::usbtmc::{self, Messages, Usbtmc};
 use crate::{Error, Result};
 
 /// The longest line taken; what is longer is flagged and dropped.
 const LONGEST: usize = 1 << 16;
+/// The error queue's length; the last place says it overflowed, as SCPI has it.
+const ERRORS: usize = 16;
 
 /// One program message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,9 +100,10 @@ pub enum Answer {
     Unknown,
 }
 
-/// IEEE 488.2 definite length block data: `#`, the number of digits, the length
-/// in that many digits, the bytes, and `end`.
+/// IEEE 488.2 definite length block data: `#`, the number of digits (1 to 9), the
+/// length in that many digits, the bytes, and `end`.
 pub fn block(digits: usize, data: &[u8], end: &[u8]) -> Vec<u8> {
+    assert!((1..=9).contains(&digits), "a block's length has 1 to 9 digits, not {digits}");
     let mut out = format!("#{digits}{:0digits$}", data.len()).into_bytes();
     out.extend_from_slice(data);
     out.extend_from_slice(end);
@@ -104,14 +111,24 @@ pub fn block(digits: usize, data: &[u8], end: &[u8]) -> Vec<u8> {
 }
 
 /// A header's value: `HEADER?` answers it, `HEADER VALUE` changes it. Headers are
-/// as [`Message::header`] has them.
+/// as [`Message::header`] has them. [`Settings::with_alias`] gives one value a second
+/// spelling, as a driver that sets `:VOLT:LEV:IMM` and reads `:VOLTage:LEVel?`.
 #[derive(Clone, Debug, Default)]
-pub struct Settings(BTreeMap<String, String>);
+pub struct Settings {
+    values: BTreeMap<String, String>,
+    aliases: BTreeMap<String, String>,
+}
 
 impl Settings {
     /// Sets a header's value, adding the header.
     pub fn set(&mut self, header: &str, value: impl Into<String>) {
-        self.0.insert(header.to_ascii_uppercase(), value.into());
+        let key = self.key(header);
+        self.values.insert(key, value.into());
+    }
+
+    fn key(&self, header: &str) -> String {
+        let upper = header.to_ascii_uppercase();
+        self.aliases.get(&upper).cloned().unwrap_or(upper)
     }
 
     /// With this header added.
@@ -121,9 +138,16 @@ impl Settings {
         self
     }
 
+    /// With `alias` a second name of `header`, for a get and a set alike.
+    #[must_use]
+    pub fn with_alias(mut self, alias: &str, header: &str) -> Settings {
+        self.aliases.insert(alias.to_ascii_uppercase(), header.to_ascii_uppercase());
+        self
+    }
+
     /// A header's value.
     pub fn get(&self, header: &str) -> Option<&str> {
-        self.0.get(&header.to_ascii_uppercase()).map(String::as_str)
+        self.values.get(&self.key(header)).map(String::as_str)
     }
 
     /// A header's value as a number; 0 when it is none.
@@ -134,8 +158,10 @@ impl Settings {
 
 /// An instrument's commands.
 pub trait Instrument: Send {
-    /// The answer to `*IDN?`.
-    fn idn(&self) -> String;
+    /// The answer to `*IDN?`. By default it has none, and the command is unknown.
+    fn idn(&self) -> Option<String> {
+        None
+    }
 
     /// What it starts with; what is here takes no code.
     fn settings(&self) -> Settings {
@@ -161,7 +187,9 @@ pub struct Config {
     idn: Option<String>,
     eol: Vec<u8>,
     rigol_tcp: bool,
+    uart: Option<cdc::Line>,
     tmc: usbtmc::Faults,
+    tty: cdc::Faults,
 }
 
 impl Default for Config {
@@ -175,7 +203,9 @@ impl Default for Config {
             idn: None,
             eol: b"\n".to_vec(),
             rigol_tcp: false,
+            uart: None,
             tmc: usbtmc::Faults::default(),
+            tty: cdc::Faults::default(),
         }
     }
 }
@@ -221,7 +251,17 @@ impl Config {
                 "rigol" => self.rigol_tcp = true,
                 _ => return Err(Error::Invalid(format!("framing={value}: rigol"))),
             },
-            _ => return self.tmc.option(key, value),
+            "uart" => self.uart = Some(cdc::Line::parse(value)?),
+            // The same word on both carriers, with values of its own on each.
+            "stall" if matches!(value, "line" | "lines" | "break") => {
+                return self.tty.option(key, value);
+            }
+            "stall" => return self.tmc.option(key, value),
+            _ => {
+                let on_tty = self.tty.option(key, value)?;
+                let on_tmc = self.tmc.option(key, value)?;
+                return Ok(on_tty || on_tmc);
+            }
         }
         Ok(true)
     }
@@ -235,6 +275,21 @@ impl Config {
     ) -> Box<dyn DeviceModel> {
         let tmc = self.tmc.clone();
         Box::new(Usbtmc::new(name, id, tmc, Engine::new(instrument, self)))
+    }
+
+    /// The instrument on CDC-ACM, for what libsigrok reaches as a serial port.
+    pub fn cdc<I: Instrument + 'static>(
+        self,
+        name: &'static str,
+        id: &cdc::Identity,
+        instrument: I,
+    ) -> Box<dyn DeviceModel> {
+        let (tty, uart) = (self.tty.clone(), self.uart);
+        let model = cdc::Cdc::new(name, id, tty, OnTty(Engine::new(instrument, self)));
+        match uart {
+            Some(line) => Box::new(model.behind_uart(line)),
+            None => Box::new(model),
+        }
     }
 
     /// The instrument on a socket.
@@ -302,7 +357,6 @@ impl<I: Instrument> Engine<I> {
             self.error(-120, "Invalid character");
             return;
         };
-        let text = text.strip_suffix('\r').unwrap_or(text);
         // An answer ready and not read. One held back is still to come.
         let before = self.answers.len();
         self.answers.retain(|a| a.ticks > 0);
@@ -332,7 +386,12 @@ impl<I: Instrument> Engine<I> {
             -499..=-400 => 0x04,
             _ => 0,
         };
-        self.errors.push_back((code, text.to_owned()));
+        if self.errors.len() + 1 >= ERRORS {
+            self.errors.truncate(ERRORS - 1);
+            self.errors.push_back((-350, "Queue overflow".to_owned()));
+        } else {
+            self.errors.push_back((code, text.to_owned()));
+        }
     }
 
     fn execute(&mut self, text: &str, v: &mut Violations) {
@@ -350,9 +409,10 @@ impl<I: Instrument> Engine<I> {
     /// What every instrument has: the common commands, then the settings.
     fn common(&mut self, m: &Message<'_>) -> Answer {
         match m.header.as_str() {
-            "*IDN?" => {
-                Answer::Text(self.config.idn.clone().unwrap_or_else(|| self.instrument.idn()))
-            }
+            "*IDN?" => match self.config.idn.clone().or_else(|| self.instrument.idn()) {
+                Some(text) => Answer::Text(text),
+                None => Answer::Unknown,
+            },
             "*OPC?" => {
                 self.opcs += 1;
                 Answer::Text(if self.opcs > self.config.opc_late { "1" } else { "0" }.to_owned())
@@ -405,7 +465,8 @@ impl<I: Instrument> Engine<I> {
                 Vec::new()
             }
         };
-        if !m.is_query() {
+        // What a command has to say goes out, query or not: an HP's `RMATH HIRES`.
+        if !m.is_query() && bytes.is_empty() {
             return;
         }
         self.queries += 1;
@@ -464,6 +525,36 @@ impl<I: Instrument> Messages for Engine<I> {
     }
 }
 
+/// An [`Engine`] on a tty.
+struct OnTty<I>(Engine<I>);
+
+impl<I: Instrument> OnTty<I> {
+    fn out(&mut self, port: &mut cdc::Port<'_>) {
+        while let Some(bytes) = self.0.take() {
+            port.send(&bytes);
+        }
+        if std::mem::take(&mut self.0.mark) {
+            port.mark();
+        }
+    }
+}
+
+impl<I: Instrument> cdc::Serial for OnTty<I> {
+    fn received(&mut self, data: &[u8], port: &mut cdc::Port<'_>) {
+        let mut v = Violations::default();
+        self.0.input(data, &mut v);
+        for message in v.drain() {
+            port.violation(message);
+        }
+        self.out(port);
+    }
+
+    fn tick(&mut self, port: &mut cdc::Port<'_>) {
+        self.0.pass_time();
+        self.out(port);
+    }
+}
+
 /// An [`Engine`] as a stream of bytes.
 struct OnSocket<I> {
     engine: Engine<I>,
@@ -508,12 +599,17 @@ mod tests {
     struct Bench;
 
     impl Instrument for Bench {
-        fn idn(&self) -> String {
-            "Acme,B1,1,2".to_owned()
+        fn idn(&self) -> Option<String> {
+            Some("Acme,B1,1,2".to_owned())
         }
 
         fn settings(&self) -> Settings {
-            Settings::default().with("SOUR:VOLT", "1.5").with("OUTP:STAT", "0")
+            Settings::default()
+                .with("SOUR:VOLT", "1.5")
+                .with("OUTP:STAT", "0")
+                .with("VOLT:LEV", "2.5")
+                .with_alias("VOLTAGE:LEVEL", "VOLT:LEV")
+                .with("TEXT", "")
         }
 
         fn command(&mut self, m: &Message<'_>, s: &mut Settings, _v: &mut Violations) -> Answer {
@@ -527,6 +623,11 @@ mod tests {
                 "BAD" => Answer::Error(-222, "Data out of range".to_owned()),
                 "WAV:DATA?" => Answer::Bytes(block(9, b"abc", b"\n")),
                 "NEVER?" => Answer::Silent,
+                "RMATH" => Answer::Text("1.0".to_owned()),
+                "TEXT" => {
+                    s.set("TEXT", m.args);
+                    Answer::Done
+                }
                 _ => Answer::Unknown,
             }
         }
@@ -579,6 +680,93 @@ mod tests {
         assert!(r.v.is_empty());
         assert_eq!(r.ask("CONF?;*OPC?\n").unwrap(), "\"VOLT +1.0E+01,+3.0E-06\"\n");
         assert_eq!(r.e.take().unwrap(), b"1\n", "a second answer stays behind the first");
+    }
+
+    #[test]
+    fn what_a_command_has_to_say_goes_out_with_no_question_mark() {
+        let mut r = Rig::new(&[]);
+        assert_eq!(r.ask("RMATH HIRES\n").unwrap(), "1.0\n");
+        assert!(r.v.is_empty());
+        // It counts among the queries for the faults.
+        let mut r = Rig::new(&[("mute-at", "1")]);
+        assert_eq!(r.ask("RMATH HIRES\n"), None);
+    }
+
+    #[test]
+    fn one_value_can_have_two_spellings() {
+        let mut r = Rig::new(&[]);
+        assert_eq!(r.ask(":VOLT:LEV 5\n"), None);
+        assert_eq!(r.ask(":VOLTAGE:LEVEL?\n").unwrap(), "5\n");
+        assert_eq!(r.ask(":VOLTAGE:LEVEL 6\n"), None);
+        assert_eq!(r.ask(":VOLT:LEV?\n").unwrap(), "6\n");
+        assert!(r.v.is_empty());
+    }
+
+    #[test]
+    fn an_instrument_with_no_idn_has_no_such_command() {
+        struct Old;
+        impl Instrument for Old {}
+        let mut e = Engine::new(Old, Config::default());
+        let mut v = Violations::default();
+        e.input(b"*IDN?\n", &mut v);
+        assert_eq!(e.take(), None);
+        assert_eq!(v.drain().len(), 1);
+    }
+
+    #[test]
+    fn a_semicolon_in_quotes_is_no_separator() {
+        let mut r = Rig::new(&[]);
+        assert_eq!(r.ask("TEXT \"a;b\"\n"), None);
+        assert!(r.v.is_empty(), "no message that starts b");
+        assert_eq!(r.e.settings.get("TEXT"), Some("\"a;b\""));
+    }
+
+    #[test]
+    fn the_error_queue_has_an_end_and_says_so() {
+        let mut r = Rig::new(&[]);
+        for _ in 0..40 {
+            r.send("BAD\n");
+        }
+        let mut codes = Vec::new();
+        loop {
+            let text = r.ask("SYST:ERR?\n").unwrap();
+            let code: i32 = text.split(',').next().unwrap().parse().unwrap();
+            if code == 0 {
+                break;
+            }
+            codes.push(code);
+        }
+        assert_eq!(codes.len(), ERRORS);
+        assert_eq!(codes.last(), Some(&-350));
+    }
+
+    #[test]
+    fn it_runs_on_a_tty() {
+        use crate::model::Reply;
+        let id = cdc::Identity::new(1, 2, "M", "P");
+        let tty = cdc::Cdc::new(
+            "t",
+            &id,
+            cdc::Faults::default(),
+            OnTty(Engine::new(Bench, Config::default())),
+        );
+        let mut h = cdc::host::Host::open(tty, cdc::Line::parse("9600/8n1").unwrap(), true, true);
+        assert_eq!(h.write(b"*IDN?\n"), Reply::ack());
+        assert_eq!(h.read(), b"Acme,B1,1,2\n");
+        assert!(h.v.is_empty());
+    }
+
+    #[test]
+    fn the_carriers_share_their_words_by_value() {
+        let mut c = Config::default();
+        assert!(c.option("stall", "caps").unwrap());
+        assert!(c.option("stall", "line").unwrap());
+        assert!(c.option("in-stall", "3").unwrap());
+        assert!(c.option("chunk", "3").unwrap(), "the tty's alone");
+        assert!(c.option("empty-at", "3").unwrap(), "USBTMC's alone");
+        assert!(c.option("stall", "nothing").is_err());
+        assert!(c.option("uart", "fast").is_err());
+        assert!(c.option("uart", "2400/8n1").unwrap());
     }
 
     #[test]
