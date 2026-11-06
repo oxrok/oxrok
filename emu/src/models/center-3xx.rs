@@ -12,7 +12,9 @@
 //!   the default here: `02 80 80 01 02 02 02 00 EF 7F FF 7F FF 7F FF`, 24 bytes of
 //!   00, then `0E 00 00 00 0E 03`, read as T1 23.9 C and T2 to T4 over limit.
 //! - By that document, counting from 0: byte 1 holds REC (bit 0), the mode (bits 1
-//!   and 2), T1-T2, REL, HOLD, low battery and Celsius (bits 3 to 7); byte 2 memory
+//!   and 2, of which it defines only `00`, normal: `01` as MAX and `10` as MIN are
+//!   libsigrok's reading alone), T1-T2, REL, HOLD, low battery and Celsius (bits 3 to
+//!   7); byte 2 memory
 //!   full (bit 0) and auto power off (bit 7); bytes 7 to 14 the four values, big
 //!   endian; 15 to 22, 23 to 30 and 31 to 38 the same in REL, MIN and MAX; 39 to 42
 //!   the over limit bits per channel, normal, REL, MAX and MIN in that order; and
@@ -20,6 +22,12 @@
 //! - It says nothing of how long an answer takes, of what else a unit answers, or
 //!   of what a unit does with another command. So a list of answers here stands in
 //!   for a meter in other modes, and all but the default are stand-ins.
+//! - Jakob Unterwurzacher, with a K204 on his desk, in libsigrok's pull requests 300
+//!   and 302 (commits 47cbc0e1, 71d69573, 2026-09-02; in no stock release): a reply
+//!   can be lost through a loose RS-232 line or the unit's auto power off, and it
+//!   answers again on reconnecting; a unit "ignores duplicate" `A`s, so here one that
+//!   comes while an answer is on its way, or in the same write as the one before, gets
+//!   none; he shows T1 -17.0 C with T2 to T4 `inf`, which the model's bits can give.
 //! - No recording of a unit was found, and no firmware. The sigrok wiki has no page
 //!   on the Center 309 itself, and calls the K204 a rebadged 309.
 //!
@@ -45,7 +53,7 @@
 //! - `split=N:K:T`, the Nth answer's first K bytes at once, the rest T offers later;
 //! - `mark=N:T`, the event point T offers after the Nth `A`, a quiet moment.
 //!
-//! What is held back keeps its turn: a unit's answers do not overtake each other.
+//! What is held back keeps its turn, and no `A` is heard while it waits.
 //!
 //! The pedantic checks: only `A`. The vendor's program may send others, and no path
 //! of the driver does, so they are flagged and get no answer, which is itself a
@@ -179,12 +187,17 @@ impl Meter {
         }
     }
 
-    fn command(&mut self, port: &mut Port<'_>) {
+    /// `answered_now`: this write has had its answer.
+    fn command(&mut self, port: &mut Port<'_>, answered_now: &mut bool) {
         if self.config.answers.is_some_and(|n| self.asked >= n) {
             port.mark();
             return;
         }
+        if !self.held.is_empty() || *answered_now {
+            return;
+        }
         self.asked += 1;
+        *answered_now = true;
         if let Some((_, offers)) = self.config.mark.filter(|(n, _)| *n == self.asked) {
             self.to_mark = Some(offers);
         }
@@ -206,9 +219,10 @@ impl Meter {
 
 impl Serial for Meter {
     fn received(&mut self, data: &[u8], port: &mut Port<'_>) {
+        let mut answered_now = false;
         for &byte in data {
             if byte == b'A' {
-                self.command(port);
+                self.command(port, &mut answered_now);
             } else {
                 port.violation(format!("0x{byte:02x}: nothing the driver sends"));
             }
@@ -277,10 +291,13 @@ mod tests {
     }
 
     #[test]
-    fn two_commands_in_one_write_get_two_answers() {
+    fn a_repeated_command_gets_no_second_answer() {
         let mut h = meter(&[("frames", "aa;bb")]);
         h.write(b"AA");
-        assert_eq!(h.read(), b"\xaa\xbb");
+        assert_eq!(h.read(), b"\xaa");
+        h.write(b"A");
+        assert_eq!(h.read(), b"\xbb");
+        assert_eq!(violations(&mut h), 0);
     }
 
     #[test]
@@ -305,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn a_late_answer_waits_for_its_offers_and_keeps_its_turn() {
+    fn a_late_answer_waits_for_its_offers_and_a_repeat_is_ignored() {
         let mut h = meter(&[("late", "2:5"), ("frames", "aa;bb;cc")]);
         h.write(b"A");
         assert_eq!(h.read(), b"\xaa");
@@ -318,7 +335,9 @@ mod tests {
         for _ in 0..3 {
             got.extend(h.read());
         }
-        assert_eq!(got, b"\xbb\xcc");
+        assert_eq!(got, b"\xbb");
+        h.write(b"A");
+        assert_eq!(h.read(), b"\xcc");
     }
 
     #[test]
