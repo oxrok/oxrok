@@ -1,0 +1,9 @@
+Driver functions:
+    Logic analyzer
+Scan options:
+    conn
+ipdbg-la - ipdbg.org IPDBG LA v1.0 with 16 channels: CH0 CH1 CH2 CH3 CH4 CH5 CH6 CH7 CH8 CH9 CH10 CH11 CH12 CH13 CH14 CH15
+Supported configuration options:
+    Supported triggers: 0 1 r f e 
+    captureratio: 50 (current)
+    limit_samples: 65536 (current)

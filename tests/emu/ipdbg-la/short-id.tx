@@ -1,0 +1,4 @@
+tcp_connect
+tcp_out eeeebb -> 3
+tcp_in 2 -> 4944
+tcp_close

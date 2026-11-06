@@ -1,0 +1,10 @@
+tcp_connect
+tcp_out eeeebb -> 3
+tcp_in 4 -> 49444247
+tcp_out aa -> 1
+tcp_in 8 -> 2000000009000000
+tcp_close
+tcp_connect
+tcp_out f0f1f302000000f0f1f702000000f0f9fb02000000f0f9ff00000000f0f5f6000000000f1f0003fe -> 40
+tcp_in 2048 -> @2048:c3dc10bf617bb7aea0bf9581466ef60de1fa2ad0747bddd5f35a2791e4683cdc
+tcp_close
