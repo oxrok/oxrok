@@ -60,7 +60,7 @@ mod tests {
 
     fn read(dev: &mut dyn DeviceModel, v: &mut Violations) -> Vec<u8> {
         let mut out = Vec::new();
-        while let Reply::Data(report) = dev.in_transfer(1, 64, v) {
+        for report in crate::shells::cdc::host::drain_offers(|| dev.in_transfer(1, 64, v)) {
             assert_eq!(usize::from(report[0]), report.len() - 1);
             out.extend_from_slice(&report[1..]);
         }

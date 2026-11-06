@@ -504,7 +504,7 @@ mod tests {
 
     #[derive(Default)]
     struct Seen {
-        writes: Vec<(Instant, Vec<u8>)>,
+        writes: crate::serial::WriteLog,
         purges: usize,
         open: bool,
     }

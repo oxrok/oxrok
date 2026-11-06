@@ -984,11 +984,8 @@ mod tests {
     fn config_faults_count_the_reads() {
         let mut v = Violations::default();
         let read = |d: &mut ElUsb, v: &mut Violations| -> Vec<Vec<u8>> {
-            let mut got = Vec::new();
             cmd(d, &[0, 0xff, 0xff], v);
-            while let Reply::Data(x) = d.in_transfer(EP, 256, v) {
-                got.push(x);
-            }
+            let got = crate::shells::cdc::host::drain_offers(|| d.in_transfer(EP, 256, v));
             d.in_unlinked(EP, 256);
             got
         };

@@ -745,7 +745,7 @@ mod tests {
     #[derive(Default)]
     struct Seen {
         /// Each write, with when it came.
-        writes: Vec<(Instant, Vec<u8>)>,
+        writes: crate::serial::WriteLog,
         drains: usize,
         purges: usize,
         reads_from: Vec<Instant>,

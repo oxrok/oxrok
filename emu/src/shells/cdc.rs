@@ -65,12 +65,34 @@ pub mod host {
 
         /// All there is to read now.
         pub fn read(&mut self) -> Vec<u8> {
-            let mut out = Vec::new();
-            while let Reply::Data(d) = self.offer() {
-                out.extend(d);
-            }
-            out
+            drain_offers(|| self.offer()).concat()
         }
+    }
+
+    /// What a read loop takes before giving up: vusb's `QUEUE_LIMIT`.
+    const DRAIN_LIMIT: usize = 1 << 20;
+
+    /// What `offer` gives up to its first refusal. A model with data on
+    /// every offer panics here rather than filling the machine; an empty
+    /// packet counts as a byte, for those grow the list and never end too.
+    pub fn drain_offers(mut offer: impl FnMut() -> Reply) -> Vec<Vec<u8>> {
+        let mut got = Vec::new();
+        let mut total = 0;
+        while let Reply::Data(d) = offer() {
+            total += d.len().max(1);
+            assert!(
+                total <= DRAIN_LIMIT,
+                "over {DRAIN_LIMIT} bytes: the model has data on every offer"
+            );
+            got.push(d);
+        }
+        got
+    }
+
+    #[test]
+    #[should_panic(expected = "data on every offer")]
+    fn endless_empty_packets_hit_the_bound_too() {
+        drain_offers(|| Reply::Data(Vec::new()));
     }
 
     /// A class setup packet to the control interface.

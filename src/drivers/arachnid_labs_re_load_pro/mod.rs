@@ -944,7 +944,7 @@ mod tests {
     /// What the fake saw and holds, shared with the test.
     #[derive(Default)]
     struct State {
-        writes: Vec<(Instant, Vec<u8>)>,
+        writes: crate::serial::WriteLog,
         purges: usize,
         input: VecDeque<(Instant, u8)>,
         /// Sent at `monitor 200`: each with the pause before it.

@@ -123,7 +123,15 @@ set -u
 SIGROK_CLI=${SIGROK_CLI:-sigrok-cli}
 OXROK=${OXROK:-$(dirname "$0")/../target/debug/oxrok}
 HIL=${HIL:-$(dirname "$0")/../target/debug/oxrok-hil}
-TMP=$(mktemp -d)
+# On disk by default: /tmp can be RAM, and a busy session logs megabytes a
+# second. target/ is there on any machine that built oxrok; an explicit
+# TMPDIR wins.
+TMP_BASE=$(cd "$(dirname "$0")/.." && pwd)/target
+if [ -z "${TMPDIR:-}" ] && [ -d "$TMP_BASE" ] && mkdir -p "$TMP_BASE/tmp"; then
+    TMP=$(mktemp -d "$TMP_BASE/tmp/diffcli.XXXXXX")
+else
+    TMP=$(mktemp -d)
+fi
 EMU_CTL_DIR=""
 trap 'rm -rf "$TMP" "$EMU_CTL_DIR"' EXIT
 # An interrupt stops the run: the emulator (when one runs) is detached

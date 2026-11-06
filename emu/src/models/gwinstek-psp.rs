@@ -676,6 +676,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "data on every offer")]
+    fn a_read_of_a_babbling_model_fails_rather_than_growing() {
+        supply(&[("babble", "1")]).read();
+    }
+
+    #[test]
     fn babble_sends_at_each_offer() {
         // One offer at a time: `Host::read` offers until nothing comes, which
         // on this device is never.

@@ -312,6 +312,9 @@ would have cost a user a long afternoon.
 
 ## Pitfalls met so far
 
+- A new fake keeps its writes in `crate::serial::WriteLog`, which panics when
+  a stop or pacing was ignored instead of growing until the box dies. A test
+  binary run outside lcargo, a mutant's for one, goes through `lrun`.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.

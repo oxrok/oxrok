@@ -694,9 +694,57 @@ pub fn list_usb_ports() -> Vec<UsbPort> {
         .collect()
 }
 
+/// A test fake's log of writes, with when each came. It reads as a slice.
+///
+/// `push` panics past [`WriteLog::CAP`]: a mutant or a bug that defeats a
+/// stop would otherwise grow it until the machine runs out of memory.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct WriteLog(Vec<(std::time::Instant, Vec<u8>)>);
+
+#[cfg(test)]
+impl WriteLog {
+    /// Six times the most a test makes: capturing for a second from a fake
+    /// that answers at once, `manson_hcs_3xxx` logs some 330,000 writes here
+    /// (10,000 fails four tests), and that goes with the machine's speed. At
+    /// that rate a runaway reaches this in seconds, at about 150 MB.
+    const CAP: usize = 2_000_000;
+
+    /// Logs a write.
+    pub(crate) fn push(&mut self, write: (std::time::Instant, Vec<u8>)) {
+        assert!(
+            self.0.len() < Self::CAP,
+            "over {} writes: a stop or pacing was ignored",
+            Self::CAP
+        );
+        self.0.push(write);
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Deref for WriteLog {
+    type Target = [(std::time::Instant, Vec<u8>)];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_write_log_takes_its_cap_and_panics_past_it() {
+        let mut log = WriteLog(vec![(std::time::Instant::now(), Vec::new()); WriteLog::CAP - 1]);
+        log.push((std::time::Instant::now(), vec![0]));
+        assert_eq!(log.len(), WriteLog::CAP);
+        let past = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            log.push((std::time::Instant::now(), vec![0]));
+        }));
+        let message = past.unwrap_err();
+        assert!(message.downcast_ref::<String>().unwrap().contains("a stop or pacing was ignored"));
+    }
 
     #[test]
     fn a_dial_in_node_has_its_callout_name() {
