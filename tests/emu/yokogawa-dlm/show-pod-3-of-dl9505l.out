@@ -1,0 +1,16 @@
+Driver functions:
+    Logic analyzer
+    Oscilloscope
+Scan options:
+    conn
+yokogawa-dlm - Yokogawa DL9505L F1.00 [S/N: EMU0001] with 20 channels: 1 2 3 4 A0 A1 A2 A3 A4 A5 A6 A7 B0 B1 B2 B3 B4 B5 B6 B7
+Channel groups:
+    1: channel 1
+    2: channel 2
+    3: channel 3
+    4: channel 4
+    POD0: channels A0 A1 A2 A3 A4 A5 A6 A7
+    POD1: channels B0 B1 B2 B3 B4 B5 B6 B7
+    POD2: No channels
+    POD3: No channels
+Supported configuration options on channel group POD3:

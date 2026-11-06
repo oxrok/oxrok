@@ -1,0 +1,4 @@
+sr: yokogawa-dlm: Invalid channel configuration specified!
+sr: session: Could not start yokogawa-dlm device (null) acquisition.
+sr: session: Cannot remove non-existing event source 0x7.
+Failed to start session.
