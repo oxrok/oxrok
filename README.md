@@ -114,6 +114,7 @@ Emulator and replay only, never run on hardware:
 | `serial-lcr` | 124 | 87.4% |
 | `sysclk-lwla` | 141 | 91.1% |
 | `sysclk-sla5032` | 165 | 91.5% |
+| `teleinfo` | 108 | 98.9% |
 | `testo` | 70 | 91.3% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |

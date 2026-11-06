@@ -355,6 +355,28 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A checksum of a sum's low bits misses a flipped high bit when parity
+  isn't checked. Enumerate the single-bit flips of a frame, and check a
+  value's form before believing it: `atoi` turns those into false
+  readings with exit 0.
+- A sample limit counted at a frame's first group, checked after each
+  read, ends a real-rate capture with nothing. An emulator that delivers
+  whole frames hides it: a paced test shows it.
+- A bound on silence needs one time taken right after the read, and a
+  slow consumer's time excused.
+- A clock that a repeating event resets needs a cap on the clock
+  underneath it: a stream of EOTs kept the wait going for ever.
+- A case whose limit must run out before a device's first bytes needs a
+  margin set by the model (`late=N`), or a tool's stall shows it the
+  bytes.
+- A stall wrapper's `wait` returns 130 when a trapped signal cuts it:
+  retry it, or a stop looks like a failure.
+- `emu_case -k` matches by substring, so bless by a name that is unique,
+  and read every golden it touched.
+- A case that fails is a finding: three cases deleted on `teleinfo` as
+  "not the driver's" or "predictable" showed a real difference when run.
+- A full case passes with no golden until `--no-oracle` needs one: check
+  for missing goldens after adding cases.
 - A framing check of two bytes passes a window one byte out. Replay
   damaged replies across value classes, not at room temperature alone:
   the failure on `center-3xx` needed byte 43 to be 3.

@@ -8,7 +8,7 @@ release may change the library API.
 
 ### Added
 
-- Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`.
+- Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`, `teleinfo`.
 - Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
 
 ### Changed

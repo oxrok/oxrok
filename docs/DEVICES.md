@@ -3148,6 +3148,43 @@ In MAX, MIN and REL it gives the values at other bytes (16-23, 24-31,
 over 2 s, a second capture's first sample can be an old reply, valid but
 stale by the latency.
 
+## EDF Teleinfo (teleinfo)
+
+French electricity meters' customer output, historic mode, 1200/7e1.
+Emulated, not on hardware: model `teleinfo`, 108 cases on 2026-11-06,
+gcov 98.9% of the driver. Stock libsigrok has found no such device since
+0.5.2: `api.c:79` passes a packet of 292 with a buffer of 292, and
+`serial.c:833` has wanted two packets since `d03815a0` (2019). The
+oracle carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`,
+which looks at byte 292 as 0.5.1 did, and all cases compare against it.
+Model built from Enedis-NOI-CPT_02E; no recording of a real line was
+found.
+
+oxrok differs from that C as follows:
+- An index, IINST or PAPP must be all digits at the specification's
+  width, or the group is dropped with a warning: a flipped bit 6 passes
+  the control, no parity is checked, and C reports 0 Wh. BASE, HCHC,
+  HCHP, EJPHN and EJPHPM take 8 digits too, as table 1 has them. A digit
+  changed for a digit, or swapped, can't be told, nor can a few lost
+  spans.
+- `--samples N` gives N whole frames, counted at ETX or the next ADCO. C
+  counts at ADCO and looks after each read. An ADCO with no ETX and no
+  next ADCO, then silence, counts for nothing, and the capture waits as
+  below.
+- A control of a space is taken (`protocol.c:134` drops it, 1 sum in
+  64), and a group ends at its first CR.
+- A renamed channel keeps its readings.
+- Time limits end on a silent meter. A failed read ends the capture.
+- Silence: 10 s fails only before any ADCO. After one it warns and waits
+  10 minutes, behind an EOT 5 minutes (a guess). With a time limit or
+  none it only warns.
+- Standard mode is not supported, as in C, and a scan says so.
+
+Readings are f32: above 16.78 MWh an index rounds, in steps of 2, 4, 8
+and 16 Wh at 16.78, 33.55, 67.11 and 134.2 MWh. A three-phase meter's
+IINST1 to IINST3 give nothing, as in C. On a read-only node only a scan
+differs: C's scan opens read-only, and both captures fail.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

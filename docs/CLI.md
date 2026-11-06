@@ -922,6 +922,14 @@ Deliberate, and kept small:
   sigrok-cli stops at stdin's end.
 - sigrok-cli also stops a capture on a key press, on every driver, and
   oxrok ignores a key on a pipe stdin.
+- `-C A=B,B=A` swaps the two names; sigrok-cli renames as it reads
+  (`parsers.c:139-149`), so both tokens hit one channel.
+- The refusal of an unknown `-C` channel reads `Failed to set channels:
+  invalid argument: unknown channel 'X'.`, where sigrok-cli says
+  `unknown channel 'X'.`, on every driver.
+- teleinfo: `--samples N` gives N whole frames, and a value that isn't
+  all digits at its width is dropped with a warning, where sigrok-cli
+  reports what `atoi` makes of it. See `docs/DEVICES.md`.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
