@@ -2822,6 +2822,37 @@ each). The Wayback Machine has set.nl's product page, with "NM 950 with
 interface, A 1834 06512", the `1834 065` of `IDN?`, and no protocol. No
 manual, firmware or recording was found.
 
+## LCR meters (serial-lcr)
+
+`deree-de5000`, `mastech-ms5308`, `peaktech-2170`, `uni-t-ut612`
+(Cyrustek ES51919, 9600/8n1/rts=1/dtr=1, streams 17 byte packets) and
+`peaktech-2165`, `voltcraft-4080` (1200/8n1, answers `N` with 39
+characters). `conn=` is required. A scan listens 3 s for a packet, then
+1.5 s for the settings. Output frequency and circuit model cannot be
+set: they are read, and sent as Meta before a frame when they change. A
+capture takes `--frames` or `--time`; `--samples` is refused, as in C.
+An ES51919 takes no commands and streams all the time, so at a frame
+limit alone 10 s of no bytes ends the capture with an error. A VC4080
+that does not answer may be in setup mode: oxrok warns once and goes on
+asking.
+
+Emulated on the CDC-ACM shell: model `serial-lcr`, 124 cases on
+2026-11-06 (118 full, 5 `--oracle-bug`, 1 library), gcov 87.4% of the
+driver. Not checked on a unit. Facts come from the C's reverse
+engineered layouts, sigrok's wiki and Conrad's protocol description
+(`web.archive.org`, the C's link is dead), whose range and Rs tables all
+match. Conrad says 7E1: a 7E1 meter and an 8n1 host share a 10-bit
+frame, so bit 7 as parity is physically right. The C's comment says its
+FT232R gave nothing at 7e1, and the model repeats that as an artefact.
+`4x1md/de5000_lcr_py` reads a DE-5000 with DTR=1, RTS=0 on a UT61E's IR
+cable. Not modelled: the meter's other commands (`A`, `B`, `S`,
+`[BXXXXXX]`).
+
+Unverified: a 7e1 host on a real cable, a real ES51919's packet rate and
+whether one stays silent only when off or unplugged (from the wiki's
+"continually outputs"), the VC4080 warning's wording against a real
+setup mode, macOS and Windows.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

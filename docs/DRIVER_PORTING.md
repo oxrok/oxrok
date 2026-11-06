@@ -297,6 +297,32 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- `Host::open` and a real tool's open can raise the lines more than once
+  (oxrok's second descriptor does), so a model counting opens by
+  `LineEvent::opened()` miscounts. Count what it sent instead.
+- `--keep-header` keeps `META` and `FRAME-` lines: use it on a driver
+  that sends them, or a golden pins neither.
+- A parser whose only check is a terminator wants the C's text-to-number
+  rules in full (strtod's hex, NUL, ERANGE). Five characters reach them
+  all from a packet, and a sweep through a full case proves it.
+- `--show` on a list of doubles is `%f`.
+- A free stream's golden is a margin, however long its period: give each
+  case a burst, and keep one free case with its lengths filtered. About
+  16 URBs killed and 16 resubmitted count as offers, so a period up to
+  35 sends one more packet around a close and reopen (inferred from
+  thresholds, not a trace).
+- A model's mark a period after its last packet must outlast a stall in
+  the tool, or an unplug takes unread bytes: `es unplug` failed at 0.7 s
+  stalls with a 0.5 s period.
+- A new bound can hide an old test: the silence bound ended a capture in
+  10 s for a mutant that ignored a hangup, and the test still passed.
+  Give such a test a far bound.
+- A packet whose flags byte is always a footer's LF reads as
+  calibration. So a misread inside a stream may show only on stderr:
+  craft the case where it makes a frame.
+- Put a bound's decision in a pure struct that takes its times as
+  arguments. Both sides then test in no time, and one integration test
+  checks the wiring.
 - A C parser that cuts a line to its length and keeps a partial buffer
   past a timeout can splice two replies into a reading that passes every
   check. Try a partial reply followed by a full one.

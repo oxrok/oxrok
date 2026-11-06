@@ -786,6 +786,21 @@ Deliberate, and kept small:
   ended by CR alone warn once.
 - Under `flow=1`, `rts=` is not applied by any driver, as in libsigrok's
   use of libserialport.
+- serial-lcr: a port that hangs up ends a capture, where sigrok-cli
+  keeps running at a frame limit (`protocol.c:193-196`).
+- serial-lcr: an ES51919 sending no bytes for 10 s ends a capture that
+  only a frame limit could end, with an error and C's exit status.
+  sigrok-cli waits for ever (`protocol.c:193-200`). A time limit or
+  `--continuous` is left alone.
+- serial-lcr: a VC4080 silent for 10 s gets one warning naming setup
+  mode, which sigrok-cli does not have, and the capture goes on, as
+  there.
+- serial-lcr: the receive buffer lasts one capture, so a capture cannot
+  join an old head to a new tail.
+- serial-lcr: for a library client, `options()` has
+  `equiv_circuit_model`'s `get` off until a packet told the model, where
+  C's list is static and its get says `SR_ERR_NA`. sigrok-cli and oxrok
+  say the same "not applicable".
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

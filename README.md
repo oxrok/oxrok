@@ -104,6 +104,7 @@ Emulator and replay only, never run on hardware:
 | `rohde-schwarz-sme-0x` | 76 | 94.9% |
 | `saleae-logic16` | 87 | 91.6% |
 | `saleae-logic-pro` | 109 | 97.1% |
+| `serial-lcr` | 124 | 87.4% |
 | `sysclk-lwla` | 141 | 91.1% |
 | `sysclk-sla5032` | 165 | 91.5% |
 | `testo` | 70 | 91.3% |
