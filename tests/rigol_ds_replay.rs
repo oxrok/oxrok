@@ -6,10 +6,11 @@
 //! unlock at close, with the exact commands libsigrok's driver sends.
 
 use oxrok::core::session::Flow;
-use oxrok::core::{Device, Key, Packet, Session, Value, ValueList};
+use oxrok::core::{Device, Key, Packet, PacketSink, Session, Value, ValueList};
 use oxrok::drivers::rigol_ds::{RigolDevice, models};
 use oxrok::scpi::record::Replay;
 use oxrok::scpi::{HwInfo, Scpi};
+use std::time::Duration;
 
 fn step(cmd: &str, response: Option<&str>) -> String {
     let mut s = format!("send \"{cmd}\\n\"\n");
@@ -74,8 +75,8 @@ fn readback_options_and_lists() {
     assert_eq!(dev.get(&Key::TriggerLevel, None).unwrap(), Value::F64(0.5));
     assert_eq!(dev.get(&Key::NumHdiv, None).unwrap(), Value::I32(12));
     assert_eq!(dev.get(&Key::DataSource, None).unwrap(), Value::Str("Live".into()));
-    // 600 samples over 12 divisions of 1 ms.
-    assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(50_000));
+    // What the last capture worked out; none yet, so 0, as C says.
+    assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(0));
     assert_eq!(
         dev.list(&Key::DataSource, None).unwrap(),
         ValueList::Str(vec!["Live".into(), "Memory".into()])
@@ -208,4 +209,39 @@ fn a_scpi_failure_in_a_capture_fails_the_run() {
     });
     assert!(failed && ended);
     assert!(matches!(result, Err(oxrok::core::Error::CaptureFailed(_))), "{result:?}");
+}
+
+/// A stop with no one reading: close joins the capture, which must not sit on the
+/// queue. On a thread with a bound, so a hang fails.
+#[test]
+fn a_stop_with_nobody_reading_does_not_hang() {
+    let wave = "00".repeat(600);
+    let fixture = format!(
+        "# oxrok scpi fixture 1\n{}{}{}{}{}send \":WAV:DATA? CHAN1\\n\"\nresponse hex 23383030303030363030{wave}\n",
+        open_steps(),
+        step(":CHAN2:DISP OFF", None),
+        step(":ACQ:MEMD LONG", None),
+        step(":RUN", None),
+        step(":WAV:POIN:MODE NORMAL", None),
+    );
+    let mut dev = device(&fixture);
+    dev.open().unwrap();
+    dev.enable_channel(1, false).unwrap();
+    // A queue of no room: each packet waits for a reader.
+    let (tx, rx) = std::sync::mpsc::sync_channel(0);
+    dev.start(PacketSink::new(tx, 0)).unwrap();
+    for _ in 0..2 {
+        rx.recv_timeout(Duration::from_secs(30)).unwrap();
+    }
+    // The frame has begun. Its first samples come in about 10 ms of sleep, and
+    // nothing takes them. A stop before that passes without showing anything.
+    std::thread::sleep(Duration::from_millis(300));
+    let (done, stopped) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = dev.stop();
+        done.send(r.is_ok()).unwrap();
+        std::mem::forget(dev);
+    });
+    assert!(stopped.recv_timeout(Duration::from_secs(60)).unwrap());
+    drop(rx);
 }

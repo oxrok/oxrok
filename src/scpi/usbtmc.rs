@@ -69,7 +69,9 @@ pub fn list() -> Result<Vec<UsbDeviceInfo>> {
 
 /// An open USBTMC device.
 pub struct Usbtmc {
-    usb: Box<dyn Transport>,
+    usb: Option<Box<dyn Transport>>,
+    /// Where it opens again; a replay's transport has no such place.
+    info: Option<UsbDeviceInfo>,
     resource: String,
     interface: u8,
     bulk_in: u8,
@@ -85,7 +87,7 @@ pub struct Usbtmc {
 }
 
 fn class_in(request: u8, value: u16, index: u16) -> ControlRequest {
-    ControlRequest { request_type: 0xa1, request, value, index }
+    ControlRequest { request_type: 0x21, request, value, index }
 }
 
 impl Usbtmc {
@@ -93,11 +95,40 @@ impl Usbtmc {
     /// capabilities.
     pub fn open(info: &UsbDeviceInfo) -> Result<Usbtmc> {
         let usb = crate::usb::open(info)?;
-        Self::from_transport(usb, format!("usbtmc/{}", info.conn()))
+        let mut dev = Self::from_transport(usb, format!("usbtmc/{}", info.conn()))?;
+        dev.info = Some(info.clone());
+        Ok(dev)
     }
 
     /// Sets up USBTMC on an open transport, e.g. a replay.
-    pub fn from_transport(mut usb: Box<dyn Transport>, resource: String) -> Result<Usbtmc> {
+    pub fn from_transport(usb: Box<dyn Transport>, resource: String) -> Result<Usbtmc> {
+        let mut dev = Usbtmc {
+            usb: Some(usb),
+            info: None,
+            resource,
+            interface: 0,
+            bulk_in: 0,
+            bulk_out: 0,
+            usb488_caps: 0,
+            tag: 0,
+            remote: false,
+            buffer: Vec::new(),
+            response_length: 0,
+            response_read: 0,
+            remaining: 0,
+            attributes: 0,
+        };
+        dev.start()?;
+        Ok(dev)
+    }
+
+    fn usb(&mut self) -> Result<&mut Box<dyn Transport>> {
+        self.usb.as_mut().ok_or_else(|| Error::device("USBTMC: the device is closed"))
+    }
+
+    /// What an open does on the wire: the interface, the capabilities, remote.
+    fn start(&mut self) -> Result<()> {
+        let usb = self.usb()?;
         let interfaces = usb.interfaces()?;
         let iface = interfaces
             .iter()
@@ -138,32 +169,25 @@ impl Usbtmc {
                 caps[15]
             );
         }
-        let mut dev = Usbtmc {
-            usb,
-            resource,
-            interface,
-            bulk_in,
-            bulk_out,
-            usb488_caps,
-            tag: 0,
-            remote: false,
-            buffer: Vec::new(),
-            response_length: 0,
-            response_read: 0,
-            remaining: 0,
-            attributes: 0,
-        };
-        dev.remote = dev.usb488_caps & USB488_CAP_RL1 != 0 && !listed(&NO_REMOTE, vid, pid);
-        if dev.remote {
-            dev.control(REN_CONTROL, 1)?;
-            dev.control(LOCAL_LOCKOUT, 0)?;
+        self.interface = interface;
+        self.bulk_in = bulk_in;
+        self.bulk_out = bulk_out;
+        self.usb488_caps = usb488_caps;
+        self.remote = usb488_caps & USB488_CAP_RL1 != 0 && !listed(&NO_REMOTE, vid, pid);
+        // A failure here leaves the instrument as it is, and open goes on
+        // (scpi_usbtmc_remote's result is dropped at its one call).
+        if self.remote
+            && self.control(REN_CONTROL, 1).is_ok()
+            && let Err(e) = self.control(LOCAL_LOCKOUT, 0)
+        {
+            log::debug!("Failed to enter local lockout state: {e}.");
         }
-        Ok(dev)
+        Ok(())
     }
 
     fn control(&mut self, request: u8, value: u16) -> Result<()> {
-        let status =
-            self.usb.control_in(class_in(request, value, u16::from(self.interface)), 1, TIMEOUT)?;
+        let setup = class_in(request, value, u16::from(self.interface));
+        let status = self.usb()?.control_in(setup, 1, TIMEOUT)?;
         if status.first() != Some(&STATUS_SUCCESS) {
             return Err(Error::device(format!("USBTMC request {request} failed: {status:?}")));
         }
@@ -191,7 +215,8 @@ impl Usbtmc {
         while !msg.len().is_multiple_of(4) {
             msg.push(0);
         }
-        let sent = self.usb.bulk_out(self.bulk_out, &msg, TIMEOUT)?;
+        let endpoint = self.bulk_out;
+        let sent = self.usb()?.bulk_out(endpoint, &msg, TIMEOUT)?;
         if sent < msg.len() {
             return Err(Error::device(format!("USBTMC short bulk out: {sent}/{}", msg.len())));
         }
@@ -201,7 +226,8 @@ impl Usbtmc {
     fn bulk_in_start(&mut self, timeout: Duration) -> Result<()> {
         let mut data = Vec::new();
         for attempt in 0..2 {
-            data = self.usb.bulk_in(self.bulk_in, MAX_TRANSFER, timeout)?;
+            let endpoint = self.bulk_in;
+            data = self.usb()?.bulk_in(endpoint, MAX_TRANSFER, timeout)?;
             if data.is_empty() && attempt == 0 {
                 // A Rigol DS1054Z sends an empty transfer at times and
                 // the real message right after.
@@ -230,7 +256,8 @@ impl Usbtmc {
     }
 
     fn bulk_in_continue(&mut self, timeout: Duration) -> Result<()> {
-        let data = self.usb.bulk_in(self.bulk_in, MAX_TRANSFER, timeout)?;
+        let endpoint = self.bulk_in;
+        let data = self.usb()?.bulk_in(endpoint, MAX_TRANSFER, timeout)?;
         self.response_length = data.len().min(self.remaining);
         self.response_read = 0;
         self.remaining -= self.response_length;
@@ -240,17 +267,15 @@ impl Usbtmc {
 
     fn begin(&mut self, timeout: Duration) -> Result<()> {
         self.remaining = 0;
-        self.bulk_out(REQUEST_DEV_DEP_MSG_IN, &[], u32::MAX, 0)?;
+        // INT32_MAX, as libsigrok asks: "all you have".
+        self.bulk_out(REQUEST_DEV_DEP_MSG_IN, &[], 0x7fff_ffff, 0)?;
         self.bulk_in_start(timeout)
     }
 }
 
 impl Drop for Usbtmc {
     fn drop(&mut self) {
-        if self.remote {
-            let _ = self.control(GO_TO_LOCAL, 0);
-        }
-        let _ = self.usb.release_interface(self.interface);
+        let _ = ScpiTransport::close(self);
     }
 }
 
@@ -287,5 +312,31 @@ impl ScpiTransport for Usbtmc {
         self.response_read >= self.response_length
             && self.remaining == 0
             && self.attributes & EOM != 0
+    }
+
+    /// `bTag` goes on from where it was, as an instance's does in libsigrok.
+    fn close(&mut self) -> Result<()> {
+        if self.usb.is_none() {
+            return Ok(());
+        }
+        if self.remote {
+            let _ = self.control(GO_TO_LOCAL, 0);
+        }
+        let interface = self.interface;
+        let released = self.usb()?.release_interface(interface);
+        // A device that came from a replay stays, with nothing to open again.
+        if self.info.is_some() {
+            self.usb = None;
+        }
+        released
+    }
+
+    fn reopen(&mut self) -> Result<()> {
+        if self.usb.is_none()
+            && let Some(info) = &self.info
+        {
+            self.usb = Some(crate::usb::open(info)?);
+        }
+        self.start()
     }
 }

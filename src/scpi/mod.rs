@@ -52,6 +52,16 @@ pub trait ScpiTransport: Send {
     fn read_data(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize>;
     /// True once the whole response has been read.
     fn read_complete(&self) -> bool;
+    /// Closes the connection, keeping what [`ScpiTransport::reopen`] needs, as
+    /// `sr_scpi_close` leaves an instance to open again. A transport with no
+    /// connection of its own, such as a replay, has nothing to do.
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+    /// Opens again what [`ScpiTransport::close`] closed.
+    fn reopen(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// Drops what has arrived and nobody asked for, where the transport has a
     /// queue of that. Nothing on the wire.
     fn purge(&mut self) -> Result<()> {
@@ -86,7 +96,14 @@ pub struct Scpi {
     /// How long one response may take to start, and how long a pause
     /// inside one may last.
     pub read_timeout: Duration,
+    /// A read timed out, so an answer may be on its way to no question.
+    stale: bool,
 }
+
+/// How many times `*OPC?` is asked.
+const OPC_TRIES: u32 = 100;
+/// How many `*OPC?` in a row may time out before the instrument counts as gone.
+const OPC_SILENCES: u32 = 3;
 
 /// Bytes read per call while collecting a response.
 const CHUNK: usize = 4096;
@@ -94,7 +111,7 @@ const CHUNK: usize = 4096;
 impl Scpi {
     /// Wraps an open transport.
     pub fn new(transport: Box<dyn ScpiTransport>) -> Scpi {
-        Scpi { transport, read_timeout: Duration::from_secs(1) }
+        Scpi { transport, read_timeout: Duration::from_secs(1), stale: false }
     }
 
     /// The resource string.
@@ -107,6 +124,18 @@ impl Scpi {
         self.transport.purge()
     }
 
+    /// Closes the connection; see [`ScpiTransport::close`]. libsigrok closes an
+    /// instrument after each probe, and a driver's open opens it again, which is
+    /// on the wire: USBTMC asks for the capabilities again, TCP connects again.
+    pub fn close(&mut self) -> Result<()> {
+        self.transport.close()
+    }
+
+    /// Opens again what [`Scpi::close`] closed.
+    pub fn reopen(&mut self) -> Result<()> {
+        self.transport.reopen()
+    }
+
     /// Reads and drops what arrives; see [`ScpiTransport::discard`].
     pub fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
         self.transport.discard(timeout)
@@ -115,6 +144,11 @@ impl Scpi {
     /// Sends `command`, adding the newline when it lacks one.
     pub fn send(&mut self, command: &str) -> Result<()> {
         log::debug!("SCPI send: {}", command.trim_end());
+        // A late answer must not pass for the answer to this. The purge takes what
+        // has come: one later still is beyond telling on a line with no tags.
+        if std::mem::take(&mut self.stale) {
+            self.transport.purge()?;
+        }
         let mut data = command.as_bytes().to_vec();
         if data.last() != Some(&b'\n') {
             data.push(b'\n');
@@ -154,13 +188,17 @@ impl Scpi {
             let n = match self.transport.read_data(&mut chunk, left.max(Duration::from_millis(1))) {
                 Ok(n) => n,
                 Err(Error::Timeout) => 0,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    self.stale = true;
+                    return Err(e);
+                }
             };
             if n > 0 {
                 out.extend_from_slice(&chunk[..n]);
                 deadline = Instant::now() + self.read_timeout;
             } else if Instant::now() >= deadline {
                 log::debug!("Timed out waiting for the SCPI response.");
+                self.stale = true;
                 return Err(Error::Timeout);
             }
         }
@@ -206,11 +244,22 @@ impl Scpi {
         s.trim().parse().map_err(|_| Error::device(format!("SCPI: not a number: '{s}'")))
     }
 
-    /// Waits for `*OPC?` to answer true, up to ten tries 10 ms apart.
+    /// Waits for `*OPC?` to answer true: up to a hundred tries 10 ms apart, as
+    /// `sr_scpi_get_opc`. libsigrok goes on through a timeout too, which makes
+    /// 100 s of a dead instrument, on each setting and with no way to stop it, so
+    /// [`OPC_SILENCES`] of those in a row end it here.
     pub fn get_opc(&mut self) -> Result<()> {
-        for _ in 0..10 {
-            if self.get_bool("*OPC?").unwrap_or(false) {
-                return Ok(());
+        let mut silences = 0;
+        for _ in 0..OPC_TRIES {
+            match self.get_bool("*OPC?") {
+                Ok(true) => return Ok(()),
+                Err(Error::Timeout) => {
+                    silences += 1;
+                    if silences >= OPC_SILENCES {
+                        return Err(Error::device("SCPI: no answer to *OPC?"));
+                    }
+                }
+                _ => silences = 0,
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -306,11 +355,16 @@ impl Scpi {
     }
 }
 
+/// As `parse_strict_bool`: `1` and `0` whole, the words by how they start, so
+/// that `T'D` is true and `NONE` false.
 fn parse_bool(s: &str) -> Option<bool> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "1" | "on" | "true" | "yes" => Some(true),
-        "0" | "off" | "false" | "no" => Some(false),
-        _ => None,
+    let s = s.trim().to_ascii_lowercase();
+    if s == "1" || s.starts_with(['y', 't']) || s.starts_with("on") {
+        Some(true)
+    } else if s == "0" || s.starts_with(['n', 'f']) || s.starts_with("off") {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -471,12 +525,14 @@ pub fn scan<T>(
                 }
             }
         }
-        Some(res) => {
-            let scpi = open(&res, serialcomm)?;
-            if let Some(d) = probe(scpi)? {
-                found.push(d);
-            }
-        }
+        Some(res) => match open(&res, serialcomm) {
+            Ok(scpi) => match probe(scpi) {
+                Ok(Some(d)) => found.push(d),
+                Ok(None) => {}
+                Err(e) => log::info!("Probe of {} failed: {e}", res.to_conn()),
+            },
+            Err(e) => log::info!("Couldn't open SCPI device {}: {e}", res.to_conn()),
+        },
     }
     Ok(found)
 }
@@ -485,6 +541,137 @@ pub fn scan<T>(
 mod tests {
     use super::*;
     use record::Replay;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    /// What a [`Fake`] did, and answers to give: `None` is a timeout.
+    #[derive(Default)]
+    struct Line {
+        answers: VecDeque<Option<&'static str>>,
+        sent: Vec<String>,
+        purges: u32,
+        /// What arrived unasked, which a purge drops.
+        arrived: Option<&'static str>,
+    }
+
+    struct Fake {
+        line: Arc<Mutex<Line>>,
+        done: bool,
+    }
+
+    impl ScpiTransport for Fake {
+        fn resource(&self) -> &'static str {
+            "fake"
+        }
+        fn send(&mut self, data: &[u8]) -> Result<()> {
+            self.line.lock().unwrap().sent.push(String::from_utf8_lossy(data).into_owned());
+            Ok(())
+        }
+        fn read_begin(&mut self) -> Result<()> {
+            self.done = false;
+            Ok(())
+        }
+        fn read_data(&mut self, buf: &mut [u8], _timeout: Duration) -> Result<usize> {
+            let mut line = self.line.lock().unwrap();
+            let next = line.arrived.take().map(Some).or_else(|| line.answers.pop_front());
+            if let Some(Some(text)) = next {
+                buf[..text.len()].copy_from_slice(text.as_bytes());
+                self.done = true;
+                Ok(text.len())
+            } else {
+                // Past the 1 ms deadline, so one None is one timeout.
+                std::thread::sleep(Duration::from_millis(3));
+                Err(Error::Timeout)
+            }
+        }
+        fn read_complete(&self) -> bool {
+            self.done
+        }
+        fn purge(&mut self) -> Result<()> {
+            let mut line = self.line.lock().unwrap();
+            line.purges += 1;
+            line.arrived = None;
+            Ok(())
+        }
+    }
+
+    fn faked(answers: &[Option<&'static str>]) -> (Scpi, Arc<Mutex<Line>>) {
+        let line = Arc::new(Mutex::new(Line {
+            answers: answers.iter().copied().collect(),
+            ..Line::default()
+        }));
+        let fake = Fake { line: Arc::clone(&line), done: false };
+        let mut scpi = Scpi::new(Box::new(fake));
+        scpi.read_timeout = Duration::from_millis(1);
+        (scpi, line)
+    }
+
+    #[test]
+    fn opc_waits_a_hundred_tries_and_gives_up_on_silence() {
+        let mut busy = vec![Some("0"); 99];
+        busy.push(Some("1"));
+        let (mut scpi, line) = faked(&busy);
+        scpi.get_opc().unwrap();
+        assert_eq!(line.lock().unwrap().sent.len(), 100, "C's count");
+
+        let (mut scpi, _) = faked(&[Some("0"); 100]);
+        let e = scpi.get_opc().unwrap_err().to_string();
+        assert!(e.contains("*OPC? never answered 1"), "{e}");
+
+        let (mut scpi, line) = faked(&[None, None, None, Some("1")]);
+        let e = scpi.get_opc().unwrap_err().to_string();
+        assert!(e.contains("no answer to *OPC?"), "{e}");
+        assert_eq!(line.lock().unwrap().sent.len(), 3, "three silences end it");
+
+        // Silences not in a row don't.
+        let (mut scpi, _) = faked(&[None, None, Some("0"), None, None, Some("1")]);
+        scpi.get_opc().unwrap();
+    }
+
+    #[test]
+    fn a_late_answer_is_not_taken_for_the_next() {
+        let (mut scpi, line) = faked(&[None, Some("right")]);
+        assert!(scpi.get_string("A?").is_err());
+        assert_eq!(line.lock().unwrap().purges, 0, "the timeout purges nothing yet");
+        line.lock().unwrap().arrived = Some("late");
+        assert_eq!(scpi.get_string("B?").unwrap(), "right");
+        assert_eq!(line.lock().unwrap().purges, 1);
+        // Once: the line is as good as new.
+        line.lock().unwrap().answers.push_back(Some("next"));
+        assert_eq!(scpi.get_string("C?").unwrap(), "next");
+        assert_eq!(line.lock().unwrap().purges, 1);
+    }
+
+    #[test]
+    fn booleans_read_as_c_reads_them() {
+        for (text, want) in [
+            ("1", Some(true)),
+            ("0", Some(false)),
+            ("ON", Some(true)),
+            ("off", Some(false)),
+            ("T'D", Some(true)),
+            ("YES", Some(true)),
+            ("NO", Some(false)),
+            ("FALSE", Some(false)),
+            ("2", None),
+            ("", None),
+            ("10", None),
+        ] {
+            assert_eq!(parse_bool(text), want, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_resource_that_does_not_open_is_no_device() {
+        // Nothing listens on the port of a socket just closed.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let conn = format!("tcp-raw/127.0.0.1/{port}");
+        let found: Vec<()> = scan(Some(&conn), None, |_| Ok(Some(()))).unwrap();
+        assert_eq!(found, Vec::<()>::new());
+        assert!(scan::<()>(Some(""), None, |_| Ok(Some(()))).is_err(), "a bad resource says so");
+    }
 
     fn scpi(fixture: &str) -> Scpi {
         Scpi::new(Box::new(Replay::from_text(fixture).unwrap()))

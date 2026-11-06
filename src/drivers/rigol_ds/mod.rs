@@ -123,13 +123,23 @@ impl Driver for RigolDsDriver {
                 Ok(id) => id,
                 Err(e) => {
                     log::info!("Couldn't get IDN response, retrying: {e}");
-                    scpi.hw_id()?
+                    scpi.close()?;
+                    scpi.reopen()?;
+                    match scpi.hw_id() {
+                        Ok(id) => id,
+                        Err(e) => {
+                            log::info!("Couldn't get IDN response: {e}");
+                            return Ok(None);
+                        }
+                    }
                 }
             };
             let Some(model) = models::find(&id.manufacturer, &id.model) else {
                 log::info!("{} {} is not a supported scope.", id.manufacturer, id.model);
                 return Ok(None);
             };
+            // The probe's connection ends with it; the device's open makes one.
+            scpi.close()?;
             Ok(Some(RigolDevice::new(model, &id, scpi)))
         })?;
         Ok(found.into_iter().map(|d| Box::new(d) as Box<dyn Device>).collect())
@@ -166,7 +176,8 @@ pub struct RigolDevice {
     channels: Vec<Channel>,
     groups: Vec<ChannelGroup>,
     state: State,
-    pending: Option<Scpi>,
+    /// The instrument while the device is closed.
+    closed: Option<Scpi>,
     scpi: Arc<Mutex<Option<Scpi>>>,
     worker: Option<Worker>,
 }
@@ -178,7 +189,7 @@ struct Worker {
 }
 
 impl RigolDevice {
-    /// A device of `model` on an open instrument.
+    /// A device of `model` on an instrument, which [`Device::open`] opens again.
     pub fn new(model: &'static Model, id: &crate::scpi::HwInfo, scpi: Scpi) -> RigolDevice {
         let mut channels = Vec::new();
         let mut groups = Vec::new();
@@ -239,7 +250,7 @@ impl RigolDevice {
                 data_source: DataSource::Live,
                 sample_rate: 0.0,
             },
-            pending: Some(scpi),
+            closed: Some(scpi),
             scpi: Arc::new(Mutex::new(None)),
             worker: None,
         }
@@ -332,18 +343,6 @@ impl RigolDevice {
         Ok(())
     }
 
-    fn analog_frame_size(&self) -> usize {
-        let enabled =
-            self.channels.iter().filter(|c| c.kind == ChannelKind::Analog && c.enabled).count();
-        if enabled == 0 {
-            return 0;
-        }
-        match self.state.data_source {
-            DataSource::Live => self.model.series.live_samples,
-            _ => self.model.series.buffer_samples / enabled,
-        }
-    }
-
     fn sync_state(&mut self) {
         if let Some(w) = &self.worker {
             let shared = w.state.lock().expect("state lock");
@@ -371,6 +370,13 @@ fn read_vertical(scpi: &mut Scpi, model: &Model, st: &mut State) -> Result<()> {
         st.vert_offset[i] = scpi.get_f32(&format!(":CHAN{}:OFFS?", i + 1))?;
     }
     Ok(())
+}
+
+/// A table's entry as libsigrok's `(float)p / q`, which it keeps and prints: the
+/// table's form of it, so that `500us` and 500/1000000 give the same bits.
+fn table_value(table: &[(u64, u64)], value: (u64, u64)) -> Option<f32> {
+    let (p, q) = *table.iter().find(|t| same_ratio(**t, value))?;
+    Some(p as f32 / q as f32)
 }
 
 /// True when two rationals are the same value, whatever their form:
@@ -465,17 +471,8 @@ impl Device for RigolDevice {
             Key::NumVdiv => Value::I32(self.model.vdivs().len() as i32),
             Key::DataSource => Value::Str(st.data_source.name().to_owned()),
             Key::LimitFrames => Value::U64(st.limit_frames),
-            Key::Samplerate => {
-                let rate = if st.sample_rate > 0.0 {
-                    st.sample_rate
-                } else {
-                    f64::from(
-                        self.analog_frame_size() as f32
-                            / (st.timebase * self.model.series.num_hdiv as f32),
-                    )
-                };
-                Value::U64(rate as u64)
-            }
+            // What the last capture worked out; 0 before one, as in libsigrok.
+            Key::Samplerate => Value::U64(st.sample_rate as u64),
             Key::TriggerSource => Value::Str(source_from_scope(&st.trigger_source).to_owned()),
             Key::TriggerSlope => {
                 if st.trigger_slope.starts_with("POS") {
@@ -540,12 +537,9 @@ impl Device for RigolDevice {
             }
             Key::Timebase => {
                 let Value::Rational(p, q) = value else { return Err(bad()) };
-                if !self.model.timebases().iter().any(|t| same_ratio(*t, (*p, *q))) {
-                    return Err(bad());
-                }
-                let tb = *p as f64 / *q as f64;
-                self.config_set(&format!(":TIM:SCAL {}", fixed(tb, 9)))?;
-                self.state.timebase = tb as f32;
+                let tb = table_value(self.model.timebases(), (*p, *q)).ok_or_else(bad)?;
+                self.config_set(&format!(":TIM:SCAL {}", fixed(f64::from(tb), 9)))?;
+                self.state.timebase = tb;
             }
             Key::TriggerSource => {
                 let s = value.as_str().ok_or_else(bad)?;
@@ -559,12 +553,9 @@ impl Device for RigolDevice {
             Key::Vdiv => {
                 let i = need_group(ch)?;
                 let Value::Rational(p, q) = value else { return Err(bad()) };
-                if !models::VDIVS.iter().any(|v| same_ratio(*v, (*p, *q))) {
-                    return Err(bad());
-                }
-                let v = *p as f64 / *q as f64;
-                self.config_set(&format!(":CHAN{}:SCAL {}", i + 1, fixed(v, 3)))?;
-                self.state.vdiv[i] = v as f32;
+                let v = table_value(models::VDIVS, (*p, *q)).ok_or_else(bad)?;
+                self.config_set(&format!(":CHAN{}:SCAL {}", i + 1, fixed(f64::from(v), 3)))?;
+                self.state.vdiv[i] = v;
             }
             Key::Coupling => {
                 let i = need_group(ch)?;
@@ -626,11 +617,15 @@ impl Device for RigolDevice {
         if self.scpi.lock().expect("scpi lock").is_some() {
             return Ok(());
         }
-        let scpi = if let Some(s) = self.pending.take() {
+        let mut scpi = if let Some(s) = self.closed.take() {
             s
         } else {
             crate::scpi::open(&crate::scpi::Resource::parse(&self.resource)?, None)?
         };
+        if let Err(e) = scpi.reopen() {
+            self.closed = Some(scpi);
+            return Err(e);
+        }
         *self.scpi.lock().expect("scpi lock") = Some(scpi);
         self.read_config()
     }
@@ -641,7 +636,10 @@ impl Device for RigolDevice {
             // The DS1000 locks its front panel while remote.
             let _ = self.config_set(":KEY:LOCK DISABLE");
         }
-        self.scpi.lock().expect("scpi lock").take();
+        if let Some(mut scpi) = self.scpi.lock().expect("scpi lock").take() {
+            let _ = scpi.close();
+            self.closed = Some(scpi);
+        }
         Ok(())
     }
 
@@ -677,7 +675,7 @@ impl Device for RigolDevice {
                 if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}.");
                 }
-                sink.end(outcome);
+                sink.end_while(outcome, || !stop2.load(Ordering::SeqCst));
                 *slot.lock().expect("scpi lock") = Some(scpi);
             })
             .map_err(Error::Io)?;
@@ -836,8 +834,8 @@ impl Acquisition {
             }
         }
         let mut analog_frame_size = match st.data_source {
-            DataSource::Live => series.live_samples,
             _ if analog_count == 0 => 0,
+            DataSource::Live => series.live_samples,
             _ => series.buffer_samples / analog_count,
         };
         let mut digital_frame_size = match st.data_source {
@@ -857,7 +855,9 @@ impl Acquisition {
         if st.data_source == DataSource::Live {
             self.set(scpi, ":RUN")?;
         }
-        sink.send(Packet::header());
+        // Close joins this thread, so a full queue no one reads must not hold it.
+        let send = |packet| sink.send_while(packet, || !stop.load(Ordering::SeqCst));
+        send(Packet::header());
         if st.data_source == DataSource::Live {
             st.sample_rate =
                 f64::from(analog_frame_size as f32 / (st.timebase * series.num_hdiv as f32));
@@ -865,11 +865,11 @@ impl Acquisition {
             if protocol < Protocol::V3 {
                 return Err(Error::not_supported("Cannot get samplerate (below V3)."));
             }
-            let xinc = scpi.get_f64(":WAV:XINC?")?;
+            let xinc = scpi.get_f32("WAV:XINC?")?;
             if xinc <= 0.0 {
                 return Err(Error::device("Invalid XINC value."));
             }
-            st.sample_rate = 1.0 / xinc;
+            st.sample_rate = 1.0 / f64::from(xinc);
         }
         self.state.lock().expect("state lock").clone_from(&st);
 
@@ -891,9 +891,6 @@ impl Acquisition {
                     "Starting data capture for frameset {} of {limit_frames}",
                     num_frames + 1
                 );
-            }
-            if !sink.send(Packet::FrameBegin) {
-                return Ok(());
             }
             // Start the capture.
             let wait = match protocol {
@@ -948,7 +945,7 @@ impl Acquisition {
                                 digital_frame_size = depth;
                             } else {
                                 let size = match num_channels {
-                                    0 | 1 => buffer_samples,
+                                    1 => buffer_samples,
                                     2 => buffer_samples / 2,
                                     _ => buffer_samples / 4,
                                 };
@@ -963,6 +960,9 @@ impl Acquisition {
                     }
                 }
             };
+            if !send(Packet::FrameBegin) {
+                return Ok(());
+            }
             // Wait for the frame.
             match wait {
                 Wait::Trigger => self.trigger_wait(scpi, &st, stop)?,
@@ -985,6 +985,7 @@ impl Acquisition {
             // Download every enabled channel.
             for ch in &enabled {
                 self.channel_start(scpi, ch, first_frame, &st, &mut vertical)?;
+                self.block_wait(scpi, analog_frame_size, stop)?;
                 let expected = if ch.kind == ChannelKind::Analog {
                     analog_frame_size
                 } else {
@@ -1055,12 +1056,12 @@ impl Acquisition {
                                 unit: Unit::Volt,
                                 digits,
                             };
-                            if !sink.send(Packet::Analog(data)) {
+                            if !send(Packet::Analog(data)) {
                                 return Ok(());
                             }
                         } else {
                             let unit_size = if protocol >= Protocol::V4 { 1 } else { 2 };
-                            if !sink.send(Packet::logic(unit_size, buf)) {
+                            if !send(Packet::logic(unit_size, buf)) {
                                 return Ok(());
                             }
                         }
@@ -1084,7 +1085,7 @@ impl Acquisition {
                     let _ = self.set(scpi, ":WAV:END");
                 }
             }
-            if !sink.send(Packet::FrameEnd) {
+            if !send(Packet::FrameEnd) {
                 return Ok(());
             }
             num_frames += 1;
