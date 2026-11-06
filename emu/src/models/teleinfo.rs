@@ -266,7 +266,7 @@ impl Meter {
             None => default_frame(&self.optarif, self.made),
         };
         self.made = self.made.saturating_add(1);
-        if self.eot.is_some_and(|n| self.made % n == 0) {
+        if self.eot.is_some_and(|n| self.made.is_multiple_of(n)) {
             bytes.truncate(bytes.len() / 2);
             bytes.push(EOT);
         }
@@ -341,16 +341,13 @@ mod tests {
         let mut ticks = 0;
         let mut more = false;
         while ticks < n || more {
-            match h.offer() {
-                Reply::Data(d) => {
-                    ticks += u32::from(!more);
-                    more = d.len() == 128;
-                    got.extend(d);
-                }
-                _ => {
-                    ticks += 1;
-                    more = false;
-                }
+            if let Reply::Data(d) = h.offer() {
+                ticks += u32::from(!more);
+                more = d.len() == 128;
+                got.extend(d);
+            } else {
+                ticks += 1;
+                more = false;
             }
         }
         got
@@ -414,7 +411,7 @@ mod tests {
     #[test]
     fn a_burst_stops_and_marks_a_period_later() {
         let mut h = meter(&[("period", "4"), ("burst", "1")]);
-        assert!(!offers(&mut h, 4).is_empty());
+        assert_ne!(offers(&mut h, 4), [0u8; 0]);
         assert!(offers(&mut h, 8).is_empty(), "silence");
         assert!(h.cdc.mark(), "the event point");
     }
@@ -465,9 +462,9 @@ mod tests {
         let o = vec![("period".to_owned(), "4".to_owned())];
         let cdc = function(&o).unwrap();
         let mut h = Host::open(cdc, Line::parse("1200/8n1").unwrap(), true, true);
-        assert!(offers(&mut h, 8).is_empty());
+        assert_eq!(offers(&mut h, 8), [0u8; 0]);
         h.set_line(Line::parse("1200/7e1").unwrap());
-        assert!(!offers(&mut h, 8).is_empty());
+        assert_ne!(offers(&mut h, 8), [0u8; 0]);
     }
 
     #[test]
