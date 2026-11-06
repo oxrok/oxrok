@@ -1,3 +1,12 @@
+// Counterpart in sigrok:
+//   libsigrok/src/hardware/uni-t-ut32x/api.c,
+//   libsigrok/src/hardware/uni-t-ut32x/protocol.c,
+//   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
+//   with commits by Uwe Hermann, Lars-Peter Clausen, Gerhard Sittig,
+//   Martin Ling, Soeren Apel, Daniel Elstner, Wolfram Sang, Aurelien Jacobs
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
+// This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+
 //! Captures on a fake meter: bytes come by the count of reads, not at a time, and
 //! each test that can hang runs under its own bound.
 
@@ -267,18 +276,31 @@ fn a_capture_is_the_command_the_records_and_the_stop() {
 }
 
 #[test]
-fn the_header_comes_before_the_command() {
+fn the_command_waits_for_the_header_and_a_stop_ends_that_wait() {
     within(|| {
-        // A queue of one, unread: the header fills it, and the write follows at once.
+        // A queue of one that is already full: the header cannot go.
         let fake = Fake::with(&[T1]);
         let mut d = device(&fake);
         set_samples(&mut d, 1);
         let (tx, rx) = sync_channel(1);
+        tx.send((0, Packet::End)).unwrap();
         d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(fake.writes(), Vec::<u8>::new(), "nothing before the header");
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::End), "the one put in");
         assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
         wait_for("the command", || !fake.writes().is_empty());
         assert_eq!(fake.writes()[0], 1);
         capture(&rx);
+
+        // The same wait, and a close: it does not block on the queue.
+        let fake = Fake::default();
+        let mut d = device(&fake);
+        let (tx, _unread) = sync_channel(1);
+        tx.send((0, Packet::End)).unwrap();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        d.close().unwrap();
+        assert_eq!(fake.writes(), [2], "no start, and the stop all the same");
     });
 }
 
@@ -368,6 +390,24 @@ fn a_silent_sample_limit_ends_after_the_bound_and_not_before() {
         assert!(capture(&rx).is_empty());
         assert!(began.elapsed() >= Duration::from_millis(300), "{:?}", began.elapsed());
         assert_eq!(fake.writes(), [1, 2]);
+    });
+}
+
+#[test]
+fn a_time_limit_outlasts_the_silence_bound_when_both_are_set() {
+    within(|| {
+        // As `--time 60000 --samples 2` with no record: the time limit decides, however
+        // far beyond the 5 s bound, here shortened.
+        let fake = Fake::default();
+        let mut d = device(&fake);
+        set_samples(&mut d, 2);
+        set_msec(&mut d, 600);
+        d.bounds.silence = Duration::from_millis(50);
+        d.bounds.time_grace = Duration::from_millis(50);
+        let began = Instant::now();
+        let rx = start(&mut d);
+        assert!(capture(&rx).is_empty());
+        assert!(began.elapsed() >= Duration::from_millis(650), "{:?}", began.elapsed());
     });
 }
 

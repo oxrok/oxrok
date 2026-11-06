@@ -23,15 +23,24 @@
 //!   that says nothing never ends a capture, whatever the limit. Here a time limit
 //!   allows [`TIME_GRACE`] past its end for that record, which is what C would stop
 //!   on, and a sample limit alone stops after [`SILENCE_BOUND`] with no record.
-//! - A failed read ends the capture. C does not see it: a gone tty polls as `G_IO_HUP`
-//!   and it reads on `G_IO_IN` alone (`protocol.c:263-264`).
+//!   The second is a choice on an inference: no source says a meter never pauses, and
+//!   a gap over 5 s, a menu say, ends a `--samples` capture with a warning and exit 0,
+//!   where C waits.
+//! - A failed read ends the capture. A gone tty polls readable and reads 0, which C
+//!   takes as no data (`protocol.c:238-239`), so it spins on a CPU for ever.
+//! - The first bad report on the cable ends the capture, as `HidPort` makes it a failed
+//!   read, a choice. C goes on after a lone one with nothing queued, and with bytes
+//!   queued it keeps `SR_ERR` in a `size_t` (`protocol.c:236-241`) and crashes.
 //! - C loses every record for good after a marker split over its buffer's end
 //!   (`protocol.c:231-234`), which one stray byte ahead of a record does; see
 //!   [`protocol`].
 //! - The port is given back and the `02` sent before `End`, where C has them behind
 //!   it, so a client can start again as soon as it sees `End`. The wire is the same.
 //! - A channel that is off gets no packet, and its records still count. C sends them
-//!   whatever `-C` says (`protocol.c:119-143`).
+//!   whatever `-C` says (`protocol.c:119-143`). So `-C T2` with the meter on T1 gives
+//!   no output and exit 0.
+//! - `conn=1a86.e008`, a form C retired, is taken for `hid/ch9325`: it means the chip
+//!   and not those ids, and of two cables the first the search finds.
 //! - A limit set during a capture bites at the next record, as in C.
 
 #![forbid(unsafe_code)]

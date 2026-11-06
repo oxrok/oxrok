@@ -16,12 +16,16 @@
 //! probe at byte 13, and `0` and `1` at bytes 8 and 16 as all that tells it from
 //! other bytes that end in CR LF.
 //!
-//! [`Receiver`] is C's 19 byte buffer: nothing here depends on how reads cut the
-//! stream. What ends in CR LF is a packet to try and is dropped if it is short, and a
-//! full buffer with no marker is dropped whole. That finds the next record after any
-//! noise but one: C loses the marker split over a buffer's end, its LF then starts
-//! the next buffer, and every record after it is cut the same way, for good. Here
-//! that LF goes too.
+//! [`Receiver`] is C's 19 byte buffer. What ends in CR LF is a packet to try and is
+//! dropped if it is short, and a full buffer with no marker is dropped whole. That
+//! finds the next record after any noise but one: C loses the marker split over a
+//! buffer's end, its LF then starts the next buffer, and every record after it is cut
+//! the same way, for good. Here that LF goes too.
+//!
+//! Nothing here depends on how reads cut the stream. In C one thing does: 19 bytes
+//! read in one go, with CR LF at their end and another inside, are a record
+//! (`protocol.c:181-189`), where the same bytes read one at a time are cut at the
+//! inner marker. Here they are always cut there, as C's byte-paced case.
 
 #![allow(clippy::doc_markdown)]
 
@@ -367,6 +371,14 @@ mod tests {
         rx.room()[0] = LF;
         rx.received(1, |p| got.push(p.to_vec()));
         assert_eq!(got, [b"ab\r\n".to_vec()]);
+    }
+
+    #[test]
+    fn a_marker_inside_a_record_cuts_it_however_it_is_read() {
+        let mut inner = *T1;
+        inner[3..5].copy_from_slice(b"\r\n");
+        assert_eq!(records(&inner), Vec::<Vec<u8>>::new());
+        assert_eq!(packets(&inner, PACKET_SIZE).len(), 2, "whole, unlike C in one go");
     }
 
     #[test]
