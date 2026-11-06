@@ -516,8 +516,9 @@ fn a_steady_latency_of_2500_ms_owes_one_reply_and_ages_a_reading_by_that() {
     let mut commands = 0;
     while now < t0 + Duration::from_secs(60) {
         now += ms(1);
-        if sent_at.front().is_some_and(|at| now.saturating_duration_since(*at) >= latency) {
-            let at: Instant = sent_at.pop_front().expect("counted");
+        if let Some(at) =
+            sent_at.pop_front_if(|at: &mut Instant| now.saturating_duration_since(*at) >= latency)
+        {
             let reply: &[u8] = if commands == 1 { &GOOD_INIT } else { &OK };
             match x.take(reply, now) {
                 Heard::InitOk => {}

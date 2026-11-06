@@ -460,7 +460,7 @@ mod tests {
     fn replies_held_have_a_bound() {
         let mut h = meter(&[("cut", "0:1000"), ("data", "1234")]);
         // The first reply's two bytes are one piece, held for its offers.
-        for _ in 0..MOST_HELD + 1 {
+        for _ in 0..=MOST_HELD {
             h.write(INIT);
         }
         assert_eq!(violations(&mut h), 1);
