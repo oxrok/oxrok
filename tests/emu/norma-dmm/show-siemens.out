@@ -1,0 +1,10 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+siemens-b102x - Siemens B1028 V1.06,IF V1.02 with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 
+    limit_time: 

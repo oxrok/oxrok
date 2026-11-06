@@ -417,6 +417,12 @@ fn frame_of(
     Params { baud, data_bits, parity, stop_bits, flow, rts: None, dtr: None }
 }
 
+/// The RTS level to set: none under RTS/CTS, where the line belongs to the flow
+/// control and `serial_libsp.c:263` drops what `rts=` says.
+fn rts_to_set(params: Params) -> Option<bool> {
+    if params.flow == Flow::RtsCts { None } else { params.rts }
+}
+
 impl Native {
     /// Opens `name` with `params`, as `serial_open` does: raw, without
     /// `HUPCL` or `INPCK`, the frame and speed set in one step (one
@@ -445,7 +451,7 @@ impl Native {
             termios,
         };
         native.settle_termios()?;
-        native.set_handshake(params.rts, params.dtr)?;
+        native.set_handshake(rts_to_set(params), params.dtr)?;
         native.port.clear(serialport::ClearBuffer::All).map_err(|e| map_err(&e))?;
         Ok(native)
     }
@@ -476,7 +482,7 @@ impl Port for Native {
         port.set_stop_bits(stop_bits(p)).map_err(|e| map_err(&e))?;
         port.set_flow_control(flow_control(p)).map_err(|e| map_err(&e))?;
         self.settle_termios()?;
-        self.set_handshake(p.rts, p.dtr)
+        self.set_handshake(rts_to_set(p), p.dtr)
     }
 
     fn set_handshake(&mut self, rts: Option<bool>, dtr: Option<bool>) -> Result<()> {
@@ -824,6 +830,16 @@ mod tests {
         // Only that form: a path that merely starts so goes to the port's open.
         assert!(refuse_bluetooth("/dev/bt/rfcomm0").is_ok());
         assert!(refuse_bluetooth("bt").is_ok());
+    }
+
+    #[test]
+    fn rts_flow_control_owns_the_rts_line() {
+        let level = |text: &str| rts_to_set(Params::parse(text).unwrap());
+        assert_eq!(level("4800/8n1/dtr=1/rts=0/flow=1"), None);
+        assert_eq!(level("4800/8n1/rts=1/flow=1"), None);
+        assert_eq!(level("4800/8n1/rts=0/flow=2"), Some(false));
+        assert_eq!(level("4800/8n1/rts=1"), Some(true));
+        assert_eq!(level("4800/8n1"), None);
     }
 
     #[test]
