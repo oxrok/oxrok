@@ -103,6 +103,9 @@ pub enum ValueList {
     /// A list of float pairs, e.g. the voltage thresholds of a device
     /// with fixed logic families (`std_gvar_thresholds()`).
     RangeF64(Vec<(f64, f64)>),
+    /// A list of unsigned pairs, e.g. a sound level meter's measurement ranges
+    /// (`std_gvar_tuple_array()`).
+    RangeU64(Vec<(u64, u64)>),
 }
 
 impl ValueList {

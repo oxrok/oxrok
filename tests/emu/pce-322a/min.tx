@@ -1,0 +1,5 @@
+ctl_out 21 20 0000 0000 00c20100000008 -> ok
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 acff -> 2
+bulk_in 82 13 -> 7f028e00080026110512300000
+bulk_out 02 caff -> 2

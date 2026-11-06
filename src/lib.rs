@@ -113,6 +113,7 @@ pub mod drivers {
     pub mod microchip_pickit2;
     pub mod motech_lps_30x;
     pub mod ols;
+    pub mod pce_322a;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
     pub mod rdtech_dps;
@@ -182,6 +183,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::hantek_4032l::Hantek4032lDriver));
     registry.register(Box::new(drivers::zeroplus_logic_cube::ZeroplusDriver));
     registry.register(Box::new(drivers::zketech_ebd_usb::ZketechEbdUsbDriver));
+    registry.register(Box::new(drivers::pce_322a::Pce322aDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
     registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
 }
