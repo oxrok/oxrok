@@ -148,8 +148,9 @@ emu_cases() {
     emu_case "unplug at a time limit" --oxrok-fails "the port gone" --unplug model -- -d $S --time 3s
     emu_case "unplug at a sample limit" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $S --samples 5
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 -- -d $S --samples 5
-    # The hang up comes before the first silence: its write fails, and goes on.
-    emu_case "lib a command to a port gone" --libsigrok --unplug out=0:3 --stderr -- -d $S --time 400ms
+    # No case for a hang up before the first silence, where C's write fails and it
+    # goes on (protocol.c:29-30): an --unplug out=0:3 reached it, but in 1 of 15
+    # runs it beat the open's termios and C failed the open instead.
     # A silent logger, and one whose bytes are no frames.
     emu_options burst=0
     emu_case "lib silent at a sample limit" --libsigrok --hangs --no-output --timeout 3 -- -d $S --samples 5
