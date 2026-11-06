@@ -1,0 +1,33 @@
+Driver functions:
+    Multiplexer
+Scan options:
+    conn
+devantech-eth008:conn=/dev/ttyACMN - Devantech ETH484 HW2 FW3 [S/N: 0004a3123456] 
+Channel groups:
+    DO1: No channels
+    DO2: No channels
+    DO3: No channels
+    DO4: No channels
+    DO9: No channels
+    DO10: No channels
+    DO11: No channels
+    DO12: No channels
+    DO13: No channels
+    DO14: No channels
+    DO15: No channels
+    DO16: No channels
+    DI1: No channels
+    DI2: No channels
+    DI3: No channels
+    DI4: No channels
+    DI5: No channels
+    DI6: No channels
+    DI7: No channels
+    DI8: No channels
+    AI1: No channels
+    AI2: No channels
+    AI3: No channels
+    AI4: No channels
+    Vsupply: No channels
+Supported configuration options on channel group AI1:
+    voltage: 513.000000 (current)

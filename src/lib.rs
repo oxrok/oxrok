@@ -86,6 +86,7 @@ pub mod drivers {
     pub mod chronovu_la;
     pub mod dcttech_usbrelay;
     pub mod demo;
+    pub mod devantech_eth008;
     pub mod dreamsourcelab_dslogic;
     pub mod fluke_dmm;
     pub mod ftdi_la;
@@ -152,6 +153,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
     registry.register(Box::new(drivers::appa_55ii::Appa55iiDriver));
+    registry.register(Box::new(drivers::devantech_eth008::DevantechEth008Driver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
