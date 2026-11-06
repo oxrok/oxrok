@@ -827,6 +827,22 @@ Deliberate, and kept small:
   1.2499999999 V as `V013` and `V012`. Up to about 35.0000019 V and
   2.55000007 A are accepted, and -1e-50 as `V000`, where libsigrok
   refuses them. No listed step moves.
+- cem-dt-885x: `--get` and `-c` of the meter's state work, where stock
+  sigrok-cli nearly always fails them, and `--show` shows `(current)`.
+- cem-dt-885x: a set of the meter's state takes two announcements, about
+  140 ms or 1.1 s, and fails with "its state is unknown" if they don't
+  come. C resends by the clock and can say success with the meter
+  elsewhere.
+- cem-dt-885x: a get gives up after 1 s with no byte or 2 s without its
+  token (recording 1.2 s), a toggle after 5 s (time and recording 15 s),
+  a power off after 5 s. C waits for ever.
+- cem-dt-885x: a capture with a sample limit or a log fails with exit 1
+  after 3 s with no byte or 5 s with no level. C waits for ever.
+- cem-dt-885x: `--samples` is held exactly on a log, where C prints the
+  whole packet of up to 50. A get after a range set answers the new
+  range. A display token before a capture's first level sends nothing,
+  where C sends 0. A scan looks for 500 ms, not 25. A refused value says
+  what is taken: `must be A or C`.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

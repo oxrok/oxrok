@@ -91,6 +91,7 @@ Emulator and replay only, never run on hardware:
 | `itech-it8500` | 223 | 93.6% |
 | `juntek-jds6600` | 229 | 89.2% |
 | `mastech-ms6514` | 70 | 94.9% |
+| `cem-dt-885x` | 107 | 94.0% |
 | `conrad-digi-35-cpu` | 58 | 93.3% |
 | `link-mso19` | 162 | 92.0% |
 | `maynuo-m97` | 210 | 95.8% |

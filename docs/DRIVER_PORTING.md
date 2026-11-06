@@ -318,6 +318,40 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A command that steps a state and is never acknowledged can't be resent
+  by the clock: a second one on its way undoes the first. One command
+  per announcement, sent as one has just come, and have the next
+  announcement agree. A fake that composes each packet when it starts
+  shows this. Neither an instant fake nor a model that answers at once
+  does.
+- A flush at each resend loses the answer when bytes come in chunks.
+  Ignore what completes within a packet's time of the send instead.
+- A timed wait that checks its time only between packets never ends on a
+  stray start of a dump. Give every wait a bound in every parser state,
+  and a limited capture a bound on no level as well as on no byte.
+- An open offers all 16 kernel reads at once, so a period in offers of
+  16 or less sends its first block inside the open itself. With `stty`
+  that lost 3 sessions of 5 to the unlink race: wait past that round.
+- `Host::read` drains all there is: on a model that never stops talking
+  it hits its bound. Use one `offer`.
+- `stty` is a tty's first open, with `ECHO` on, so a model that streams
+  gets its own bytes back: don't flag unknown bytes there, and keep
+  default values off command bytes.
+- What a capture reads first was sent since the open: a slow start puts
+  live data ahead of an asked-for dump. Keep such cases free of it.
+- A wrapper's preload hides libsigrok from the runner, which finds it by
+  sigrok-cli's path: put `--libsigrok` cases where `SIGROK_CLI` is the
+  real one, with `--oracle-env`.
+- A preload that makes a read wait compares with an old C, not today's:
+  count those cases apart, and don't take agreement at a bound for
+  agreement.
+- `--oracle-differs` needs sigrok-cli to exit 0. Where both tools fail
+  in their own words, use `--oracle-bug --stderr --expect-fail`.
+- A case can't hold oxrok's end state against C when C's own result goes
+  with the clock: use `--no-oracle-only`, and report C's result as
+  evidence from runs.
+- A `SIGINT` before the capture is under way gives exit 130: mark the
+  event well into the capture.
 - A device with no answer leaves the `.tx` as all a case can pin, and a
   `--no-output` case then shows nothing of a scan that wrongly succeeds:
   a serialcomm fallback survived every case until the scan took its

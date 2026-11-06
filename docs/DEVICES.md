@@ -2898,6 +2898,49 @@ on the driver's comment, what it does with a frame cut short on the
 wiki's protocol, and the wait for the queue has run only on `cdc_acm`
 and a pty on Linux.
 
+## CEM DT-885x (cem-dt-885x)
+
+Sound level meter on a serial port, 9600/8n1, on a CP2102. Emulated, not
+run on hardware. The model is CDC-ACM with test ids, as `cp210x` binds
+the real ones whatever the class. 107 cases on 2026-11-06, gcov 94.0%.
+
+Of the cases, 59 compare with libsigrok as it is, but for a scan's read;
+44 compare with C as it was before 2014, under a preload that makes
+reads wait, because nearly every get and set of the meter's state fails
+on stock libsigrok: `protocol.c:425-427` takes "no byte yet" for a meter
+gone, since commit d7b269da. 4 are oxrok alone.
+
+The meter talks all the time and answers no command, and each command
+heard steps the state. A set waits for the state, sends one command per
+announcement, and when a token says what was asked sends nothing more
+and has the next announcement agree. That costs two announcements: some
+140 ms for the frequency weighting, hold and range, some 1.1 s for the
+time weighting and recording. If they don't come the set fails and says
+the state is unknown. C resends by the clock and takes the first token,
+and on a meter that takes commands as they come it says success with the
+meter in the other state; the `dt8852` package warns of this overshoot.
+How a real meter takes commands is unknown: both ways pass here. An
+announcement queued by a stall of two blocks or more can still mislead a
+set.
+
+`data_source=Memory` asks for the log once per byte until its `bb`, and
+its `dd` ends the capture. A stream that stays silent for 3 s, or gives
+no level for 5 s, fails a capture that has a limit or a log, with exit
+1.
+
+The model found:
+- a record head with an unknown token stores bytes past the buffer
+  (`protocol.c:330`, `sigrok-cli` aborted with heap corruption);
+- a range set leaves the old range for a later get (`:806`);
+- a log overshoots its limit (`:369-371`);
+- a display token ahead of any level sends 0 (`:137-146`).
+
+The interval of a stored record has no oracle: the wiki says BCD, while
+C and the `dt8852` package read binary, and oxrok does what C does. The
+model streams slowly on purpose, 110 to 300 ms per block: a faster
+stream, or a first block inside an open's own round of reads, loses the
+session to the vusb unlink race.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with two patches, in
