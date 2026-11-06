@@ -1,0 +1,33 @@
+# oxrok hid fixture 1
+# emu uni-t-ut32x-hid: two samples recorded
+# arg: -d
+# arg: uni-t-ut32x:conn=hid/ch9325/raw=/dev/hidrawN
+# arg: --samples
+# arg: 2
+device vid=1a86 pid=e008 manufacturer="WCH.CN " product="USB to Serial" path="/dev/hidrawN"
+set_feature 006009000003 -> ok
+# oxrok hid fixture 1
+device vid=1a86 pid=e008 manufacturer="WCH.CN " product="USB to Serial" path="/dev/hidrawN"
+set_feature 006009000003 -> ok
+write 010100{6} -> ok
+read 64 -> f2323a00{5}
+read 64 -> f2323300{5}
+read 64 -> f2353100{5}
+read 64 -> f2303000{5}
+read 64 -> f2303100{5}
+read 64 -> f2323300{5}
+read 64 -> f2303000{5}
+read 64 -> f2303000{5}
+read 64 -> f2310d00{5}
+read 64 -> f10a00{6}
+read 64 -> f2323a00{5}
+read 64 -> f2323400{5}
+read 64 -> f2313100{5}
+read 64 -> f2303000{5}
+read 64 -> f2303100{5}
+read 64 -> f2323300{5}
+read 64 -> f2303100{5}
+read 64 -> f2303000{5}
+read 64 -> f2310d00{5}
+read 64 -> f10a00{6}
+write 010200{6} -> ok

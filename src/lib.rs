@@ -129,6 +129,7 @@ pub mod drivers {
     pub mod sysclk_sla5032;
     pub mod testo;
     pub mod uni_t_dmm;
+    pub mod uni_t_ut32x;
     pub mod zeroplus_logic_cube;
     pub mod zketech_ebd_usb;
 }
@@ -138,6 +139,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::demo::DemoDriver));
     registry.register(Box::new(drivers::logicport::LogicPortDriver));
     drivers::serial_dmm::register_all(registry);
+    registry.register(Box::new(drivers::uni_t_ut32x::Ut32xDriver));
     registry.register(Box::new(drivers::juntek_jds6600::JdsDriver));
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
