@@ -206,7 +206,8 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_case "set hold_max on" --no-output --tx-filter "$OUT" -- -d $X -c hold_max=on --set
     emu_case "set hold_min on" --no-output --tx-filter "$OUT" -- -d $X -c hold_min=on --set
     # Only the range's announcements count, and it needs the stream to time out on.
-    emu_options
+    # C waits 110 ms for the first, so no long block leads: startup=3.
+    emu_options startup=3
     for r in 30-80 50-100 80-130; do
         emu_case "set range $r" --no-output --tx-filter "$OUT" -- -d $X -c spl_meas_range=$r --set
     done
@@ -216,7 +217,9 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_case "set datalog off has nothing to do" --no-output --tx-filter "$OUT" -- -d $X -c datalog=off --set
     emu_case "set hold_max off has nothing to do" --no-output --tx-filter "$OUT" -- -d $X -c hold_max=off --set
     emu_case "set hold_min off has nothing to do" --no-output --tx-filter "$OUT" -- -d $X -c hold_min=off --set
+    emu_options setters=0 startup=3
     emu_case "set range has nothing to do" --no-output --tx-filter "$OUT" -- -d $X -c spl_meas_range=30-130 --set
+    emu_options setters=0
     emu_case "set power_off off" --no-output --tx-filter "$OUT" -- -d $X -c power_off=off --set
     emu_case "set data_source Live" --no-output --tx-filter "$OUT" -- -d $X -c data_source=Live --set
     emu_case "set data_source Memory" --no-output --tx-filter "$OUT" -- -d $X -c data_source=Memory --set
@@ -225,7 +228,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_case "set limit then get" --tx-filter "$OUT" -- -d $X -c limit_samples=7 --get limit_samples
     emu_options deaf=2 $QH
     emu_case "set hold_max lost twice" --no-output --tx-filter "$OUT" -- -d $X -c hold_max=on --set
-    emu_options deaf=2
+    emu_options deaf=2 startup=3
     emu_case "set range lost twice" --no-output --tx-filter "$OUT" -- -d $X -c spl_meas_range=30-80 --set
     emu_options deaf=1000000
     emu_case "set freq on a deaf meter" --oracle-bug "$DEAF_BUG" --oracle-hangs --timeout 7 --stderr --filter "$F" --expect-fail --tx-filter '/^bulk_in 82 /d
@@ -240,7 +243,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     emu_case "set freq no answer" --stderr --filter "$F" --expect-fail --tx-filter "$FREQ" -- -d $X -c spl_weight_freq=C --set
     emu_options blocks=3 startup=3
     emu_case "set two" --no-output --tx-filter "$FREQ" -- -d $X -c spl_weight_freq=C:spl_weight_time=S --set
-    emu_options
+    emu_options startup=3
     emu_case "set range then get it" --oracle-differs "$STALE_RANGE_BUG" --tx-filter "$OUT" -- -d $X -c spl_meas_range=30-80 --get spl_meas_range
     # Refused.
     emu_options setters=0
@@ -303,7 +306,7 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     # Hold: the last level again every 50 ms for as long as ff comes.
     emu_options setters=0 hold-after=1
     emu_case "hold repeats the level" --tx-filter "$OUT" -- -d $X --samples 3
-    emu_options setters=0 hold-blocks=4
+    emu_options setters=0 hold-blocks=2
     emu_case "hold with no level yet" --tx-filter "$OUT" -- -d $X --samples 2
     emu_options setters=0 hold-after=1 hold-for=1
     emu_case "hold ends at once" --tx-filter "$OUT" -- -d $X --samples 2
@@ -370,13 +373,17 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\1./'
     # The read the driver really has: no byte yet is an error.
     [ "$no_oracle" = 1 ] || SIGROK_CLI=$TMP/cem-scan-cli
     emu_case "stock levels" --tx-filter "$OUT" -- -d $X --samples 3
+    # A block that beat C's first read could say what it asks for: nothing comes
+    # for some 100 ms after the open, and these tools have read by then.
+    emu_options setters=0 first-block=8
     for key in spl_weight_freq spl_weight_time spl_meas_range datalog hold_max hold_min; do
         emu_case "stock get $key" --oracle-bug "$NO_BYTE_BUG" --tx-filter "$OUT" -- -d $X --get $key
     done
     emu_case "stock get what needs no meter" --tx-filter "$OUT" -- -d $X --get power_off --get data_source --get limit_samples
     emu_case "stock show has no state" --oracle-differs "$NO_BYTE_SHOW" --keep-header --tx-filter "$OUT" -- -d $X --show
-    emu_options
+    emu_options first-block=8
     emu_case "stock set fails" --oracle-bug "$NO_BYTE_BUG" --no-output --tx-filter "$OUT" -- -d $X -c spl_weight_freq=C --set
+    emu_options
     emu_case "stock power off" --no-output --tx-filter "$POWER" -- -d $X -c power_off=on --set
     emu_options no-level=1
     emu_case "stock log" --tx-filter "$ASK" -- -d $X -c data_source=Memory --samples 100

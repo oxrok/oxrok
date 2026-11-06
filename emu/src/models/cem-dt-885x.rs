@@ -72,6 +72,8 @@
 //!   each, for tokens no source names and other noise;
 //! - `period=N`, offers of a read per block, the first block of an open at the second
 //!   offer: see [`PERIOD`];
+//! - `first-block=N`, offers of a read with nothing after each open: a C get's first
+//!   read then has no byte to find, as it mostly has none on a real line;
 //! - `startup=N`, blocks with no level after each open;
 //! - `blocks=N`, blocks per open, then silence and the event point;
 //! - `time-only=1`, blocks of nothing but the time of day: a scan finds the meter,
@@ -108,7 +110,7 @@ pub const NAME: &str = "cem-dt-885x";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A CEM DT-8852 sound level meter on CDC-ACM; freq=, time=, hold-mode=, \
                          range=, recording=, battery=, store=, threshold=, levels=, bar=, extra=, \
-                         period=, startup=, blocks=, time-only=, mark=, hold-after=, \
+                         period=, first-block=, startup=, blocks=, time-only=, mark=, hold-after=, \
                          hold-blocks=, hold-for=, log=, dump=, announce=, mute=, no-level=, deaf=, setters=, uart=, and the shell's stall=, \
                          chunk=, in-limit=, in-stall=, out-hold=";
 
@@ -136,9 +138,9 @@ const LONGEST_EXTRA: usize = 256;
 /// The most levels a record of `log=` holds.
 const LONGEST_RECORD: u32 = 2000;
 /// Blocks with no level after an open.
-const STARTUP: u32 = 4;
-/// Offers of a read per block. The kernel holds 16 reads, so offers come at some
-/// 7 ms each here: about 57 ms per block, near the wiki's 50. A shorter one loses
+const STARTUP: u32 = 2;
+/// Offers of a read per block. Offers came at some 7 to 12 ms each on the testers:
+/// about 60 to 100 ms per block, against the wiki's 50. A shorter one loses
 /// the session: with reads completing all the time, a tool's close hits the kernel's
 /// `CMD_UNLINK` ahead of `CMD_SUBMIT` (`docs/ROADMAP.md`). Seen with `vhci_hcd`'s
 /// "cannot find a urb of seqnum": at 1 within some 20 closes, at 2 within some 30, at
@@ -194,6 +196,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "bar" => config.bar = parse_number(k, v, 0..=1000)?,
             "extra" => config.extra = parse_hex_list(k, v, 1, LONGEST_EXTRA)?,
             "period" => config.period = parse_number(k, v, 1..=100_000)?,
+            "first-block" => config.first_block = parse_number(k, v, 0..=100_000)?,
             "startup" => config.startup = parse_number(k, v, 0..=1000)?,
             "blocks" => config.blocks = Some(parse_number(k, v, 0..=1_000_000)?),
             "time-only" => config.time_only = parse_number(k, v, 0..=1)? == 1,
@@ -295,6 +298,7 @@ struct Config {
     bar: u32,
     extra: Vec<Vec<u8>>,
     period: u32,
+    first_block: u32,
     startup: u32,
     blocks: Option<u32>,
     time_only: bool,
@@ -326,6 +330,7 @@ impl Config {
             bar: 1,
             extra: Vec::new(),
             period: PERIOD,
+            first_block: 0,
             startup: STARTUP,
             blocks: None,
             time_only: false,
@@ -355,6 +360,8 @@ struct Meter {
     off: bool,
     /// Offers since the last block.
     offers: u32,
+    /// Offers left of `first-block=`.
+    quiet: u32,
     /// Blocks and levels of this open.
     blocks: u32,
     levels: u32,
@@ -384,6 +391,7 @@ impl Meter {
             deaf: config.deaf,
             off: false,
             offers: 0,
+            quiet: 0,
             blocks: 0,
             levels: 0,
             held: 0,
@@ -569,6 +577,7 @@ impl Serial for Meter {
     fn changed(&mut self, event: LineEvent, _port: &mut Port<'_>) {
         if event.opened() {
             self.offers = self.config.period.saturating_sub(2);
+            self.quiet = self.config.first_block;
             self.blocks = 0;
             self.levels = 0;
             self.held = 0;
@@ -580,6 +589,10 @@ impl Serial for Meter {
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
+        if self.quiet > 0 {
+            self.quiet -= 1;
+            return;
+        }
         self.offers = self.offers.saturating_add(1);
         if self.offers < self.config.period {
             return;
@@ -729,6 +742,16 @@ mod tests {
             h.write(&[TOGGLE_RANGE]);
             assert_eq!(one(&mut h), [SYNC, token]);
         }
+    }
+
+    #[test]
+    fn first_block_holds_each_open_back() {
+        let mut h = meter(&[("first-block", "2")]);
+        assert_eq!(one(&mut h), Vec::<u8>::new());
+        assert_eq!(one(&mut h), Vec::<u8>::new());
+        assert_eq!(one(&mut h)[0], SYNC);
+        h.set_lines(true, true);
+        assert_eq!(one(&mut h), Vec::<u8>::new());
     }
 
     #[test]
