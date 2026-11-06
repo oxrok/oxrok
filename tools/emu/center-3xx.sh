@@ -5,6 +5,7 @@
 EMU_MODEL=center-3xx
 EMU_CDC=1
 EMU_DRIVER="center-309 voltcraft-k204"
+EMU_FULL="center-309 voltcraft-k204"
 EMU_GCOV=center-3xx
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # gcov's unreached lines of the driver: protocol.c:146-147 (packet_parse always
@@ -16,6 +17,13 @@ emu_cases() {
     emu_conns
     # sr_strerror's words against core::config_set's reason.
     A='s/^(Failed to set device option .limit_samples.: invalid argument): it cannot be 0\.$/\1./'
+    # oxrok's log prefix, on its side only.
+    P='s/^oxrok: (err|warn|info): oxrok::drivers::center_3xx: /sr: center-3xx: /'
+    CHANNEL_BUG="handle_packet sends all four whatever -C said (protocol.c:158-166 has no ch->enabled), and the analog output prints them; csv honours it; oxrok sends those asked for"
+    NO_RETRY="receive_data sets request_new_packet from the last read alone and sends A only when it is set (protocol.c:233, :239-242), with no expiry, so no whole packet means no more A and no end to a --samples capture; oxrok asks again, and fails after 10 s with no sample"
+    STRAY_BUG="handle_new_data keeps what is left after a packet (protocol.c:207-208) and the search takes 02 and, 44 on, 03 (:48), so a stray 02 ahead of a reply whose byte 43 is 3 is a packet a byte out: T1 51.3 F, in place of 291 C; oxrok drops it ahead of a request"
+    HUP_BUG="revents == G_IO_IN fails with HUP set (protocol.c:231), so a port gone never reads, its A fails at most once (:240, center_send's result dropped) and the source calls back for ever; oxrok fails the capture"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
     # The first A goes at the source's first 500 ms; each next one 500 ms after the
     # last bytes.
     # 23.9, 25.6, -5.0 and 0.0, in Celsius.
@@ -31,7 +39,9 @@ emu_cases() {
     emu_case "serialcomm fits" --keep-header -- -d $K:serialcomm=9600/8n1 --scan
     emu_case "no such node" --keep-header --no-output -- -d center-309:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d center-309 --scan
-    emu_case "serialcomm no such thing" --keep-header --no-output -- -d $K:serialcomm=fast --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses them
+    # first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
     # The line coding reaches the wire: this one hears 4800 alone.
     emu_options uart=4800/8n1
     emu_case "serialcomm reaches the line" -- -d $K:serialcomm=4800/8n1 --samples 1
@@ -60,13 +70,13 @@ emu_cases() {
     emu_case "samples k204" --driver voltcraft-k204 -- -d $Z --samples 1
     emu_case "samples csv" -- -d $K --samples 2 -O csv:header=false:time=false
     emu_case "config limit_samples" -- -d $K -c limit_samples=2 --samples 1
-    # sigrok-cli stops at the end of stdin, before the first A.
-    emu_case "continuous" --no-output -- -d $K --continuous
+    # sigrok-cli stops at the end of stdin, before the first A, where oxrok goes on
+    # till its signal: see "interrupt".
     emu_case "lib continuous stopped" --libsigrok -- -d $K --continuous --stop-after 8
-    # What -C does: C's packets go out whatever it says.
+    # What -C does: C's packets go out whatever it says, here only those asked for.
     emu_options "frames=$F"
-    emu_case "channel T1" -- -d $K -C T1 --samples 1
-    emu_case "channels T2 T4" -- -d $K -C T2,T4 --samples 1
+    emu_case "channel T1" --oracle-differs "$CHANNEL_BUG" -- -d $K -C T1 --samples 1
+    emu_case "channels T2 T4" --oracle-differs "$CHANNEL_BUG" -- -d $K -C T2,T4 --samples 1
     emu_case "channel T1 csv" -- -d $K -C T1 --samples 1 -O csv:header=false:time=false
     emu_case "no such channel" --stderr --filter 's/^Failed to set channels: invalid argument: //' --expect-fail -- -d $K -C T5 --samples 1
     # Time decides the requests: kept up to the first.
@@ -126,34 +136,52 @@ emu_cases() {
     emu_options "frames=00$F"
     emu_case "a zero ahead" -- -d $K --samples 1 -O analog
 
-    # No reply, or none whole. A is not sent again, so a --samples never ends.
+    # No reply, or none whole. A is not sent again in C, so a --samples never ends:
+    # pinned by a hang for C, and a second request 2 s on for oxrok.
+    # The two that end on the bound take its 10 s, as nothing else shows the words
+    # of a failed capture from the binary.
     emu_options answers=0
-    emu_case "silent" --hangs --no-output --timeout 3 -- -d $K --samples 1
+    emu_case "silent" --oracle-bug "$NO_RETRY" --oracle-hangs --oxrok-fails "no answer from the thermometer for 10 s" --stderr --filter "$P" --timeout 14 -- -d $K --samples 1
     emu_options "frames=~;$F"
-    emu_case "a reply lost" --hangs --no-output --timeout 3 -- -d $K --samples 1
+    emu_case "a reply lost" --oracle-bug "$NO_RETRY" --oracle-hangs --timeout 5 -- -d $K --samples 1
     emu_options "frames=$(echo $F | cut -c1-40);$F"
-    emu_case "part of a reply" --hangs --no-output --timeout 3 -- -d $K --samples 1
+    emu_case "part of a reply" --oracle-bug "$NO_RETRY" --oracle-hangs --timeout 5 -- -d $K --samples 1
     # 45 bytes with no end byte.
     emu_options "frames=$(echo $F | cut -c1-88)ff;$F"
-    emu_case "wrong end byte" --hangs --no-output --timeout 3 -- -d $K --samples 1
+    emu_case "wrong end byte" --oracle-bug "$NO_RETRY" --oracle-hangs --timeout 5 -- -d $K --samples 1
     emu_options "frames=ff$(echo $F | cut -c3-90);$F"
-    emu_case "wrong start byte" --hangs --no-output --timeout 3 -- -d $K --samples 1
+    emu_case "wrong start byte" --oracle-bug "$NO_RETRY" --oracle-hangs --timeout 5 -- -d $K --samples 1
+    emu_options "frames=$(echo $F | cut -c1-88)ff"
+    emu_case "only wrong bytes" --oracle-bug "$NO_RETRY" --oracle-hangs --oxrok-fails "no usable answer from the thermometer for 10 s" --stderr --filter "$P" --timeout 14 -- -d $K --samples 1
     # One stray byte, a pass with no packet, after a good reply: no A from there on.
     emu_options "frames=${F}ee" split=1:45:5
-    emu_case "a stray byte between replies" --hangs --filter '5,$d' --timeout 3 -- -d $K --samples 2
+    emu_case "a stray byte between replies" --oracle-bug "$NO_RETRY" --oracle-hangs --timeout 5 -- -d $K --samples 2
+    # A reply past the expiry: whichever request it answers, the sample is the same.
+    # The .tx goes up to the first A, as the second goes where C has none, and may
+    # share its line: "a reply lost" pins how many go.
+    emu_options late=1:150 "frames=$F"
+    emu_case "a reply late" --tx-filter "s/^bulk_out 02 (41)+ -> [0-9]+\$/bulk_out 02 41 -> 1/
+$Q1" -- -d $K --samples 1 -O analog
     # A stray 2 ahead of a packet whose byte 43 is 3: one starting a byte early.
     STRAY=$(center_fr 80 00 0123 0456 0789 0abc 00 00 00 00 03)
     emu_options "frames=${F}02;$STRAY"
-    emu_case "a stray start byte makes a false packet" -- -d $K --samples 2 -O analog
+    emu_case "a stray start byte makes a false packet" --oracle-differs "$STRAY_BUG" -- -d $K --samples 2 -O analog
     emu_options late=1:150 "frames=$F"
     emu_case "time ends a reply lost" --no-output -- -d $K --time 1s
 
     # A port gone: the source calls back with HUP set and never with G_IO_IN alone.
     # With A due, the write fails; with A out, there is nothing to do.
     emu_options answers=1
-    emu_case "unplug with a request out" --hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 2
+    emu_case "unplug with a request out" --oracle-bug "$HUP_BUG" --oracle-hangs --oxrok-fails "the port gone" --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 2
+    # What it says: the OS's words are masked, and the line kept.
+    emu_case "unplug says so" --oracle-bug "$HUP_BUG" --oracle-hangs --oxrok-fails "the port gone" --stderr --filter "$P
+s/^(sr: center-3xx: Serial port read error: ).*/\1OS ERROR/" --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 2
     emu_options mark=1:5
-    emu_case "unplug with a request due" --hangs --stderr --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 2
+    emu_case "unplug with a request due" --oracle-bug "$HUP_BUG" --oracle-hangs --oxrok-fails "the port gone" --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 2
+
+    # A quiet point: the request goes unanswered, the signal lands in its wait.
+    emu_options answers=1
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 --tx-filter '/^interrupt$/q' -- -d $K --continuous
     emu_options
 }
 

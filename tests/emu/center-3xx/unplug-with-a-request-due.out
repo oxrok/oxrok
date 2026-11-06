@@ -1,2 +1,4 @@
-sr: serial-libsp: Write error (5): Input/output error.
-sr: center-3xx: Error sending 'A' command: -1.
+T1: 23.9 °C
+T2: inf °C
+T3: inf °C
+T4: inf °C
