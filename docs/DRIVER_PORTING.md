@@ -318,6 +318,36 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A driver with two packet sizes and one window may step the larger over
+  the smaller. Play distinct values, as equal ones hide it: `kern-scale`
+  lost every second reading, in the format the real unit sends most.
+- A trailing byte (`pad=`) lets a C that steps too far still read every
+  packet, so a format's parser gets a full oracle while another case
+  pins the step.
+- sigrok-dumps may hold captures of the very device: look there before
+  trusting a document. Sort a `.sr`'s chunks by number: in name order
+  `logic-1-10` comes before `logic-1-2`, and a short last chunk spliced
+  into the middle looked like a corrupt packet here. Run the real
+  decoder as a check on your own.
+- A `strtod` a C driver points at a device's field can make a reading of
+  anything, and 0 of what it can't read. Read what the document says the
+  field holds, and check any stricter rule against every captured
+  packet.
+- A test helper that collects packets needs a count cap as well as a
+  deadline: a limit mutant on a fake with no delay fills the memory
+  within the deadline.
+- `-c limit_samples=1` alone is no capture for either tool: both print
+  usage. Add `--time`.
+- `emu_hex` passes its text as printf's format, so a packet starting
+  with `-` is taken as an option: write `\055`.
+- A test outside `bounded` that closes a device hangs the whole binary
+  under a stop-ignored mutant, even when every other test has a bound.
+- A join test needs a thread that only the close can end, and must look
+  before draining anything. `worker.is_none()` is true with or without
+  the join.
+- `cdc_acm` buffers a short write, so a one-command driver's write
+  failure is unreachable over USB/IP: a pty with `tcflow(TCOOFF)` shows
+  it.
 - A command that steps a state and is never acknowledged can't be resent
   by the clock: a second one on its way undoes the first. One command
   per announcement, sent as one has just come, and have the next

@@ -843,6 +843,21 @@ Deliberate, and kept small:
   range. A display token before a capture's first level sends nothing,
   where C sends 0. A scan looks for 500 ms, not 25. A refused value says
   what is taken: `must be A or C`.
+- kern-ew-6200-2nm: a stream of 14-byte packets gives every packet where
+  sigrok-cli gives every second one, and a last 14-byte packet needs no
+  byte after it. A number behind spaces reads as that number, where
+  sigrok-cli prints 0 for `+  127.20`. A digit field that is not digits,
+  one point and spaces is no reading and no sample, with a warning the
+  first time, where sigrok-cli prints 0, or what `strtod` makes of it
+  (hex, inf, nan, exponents); a stray sign ahead of a good packet costs
+  only the sign.
+- kern-ew-6200-2nm: a port that hangs up fails the capture, and 10 s
+  with no usable packet fails one that only `--samples` could end,
+  saying so if the scale answered `E01`; sigrok-cli waits for ever on
+  both. An O1 that finds no room in 5 s is no device with a warning at a
+  scan, and at a capture a refused start, "could not send O1: ..."; C
+  waits. A second capture on an open port (library clients) drops what
+  came since the first.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

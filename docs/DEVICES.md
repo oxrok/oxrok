@@ -2941,6 +2941,42 @@ model streams slowly on purpose, 110 to 300 ms per block: a faster
 stream, or a first block inside an open's own round of reads, loses the
 session to the vusb unlink race.
 
+## KERN scales (kern-ew-6200-2nm)
+
+KERN EW 6200-2NM (`kern-ew-6200-2nm`), with the EW and EG-N scales that
+share its protocol, on RS-232 at 1200/8n2 by default (the menu changes
+it: `serialcomm=`). Emulated and ported: model `kern-scale` on the
+CDC-ACM shell (test ids). 62 cases on 2026-11-06: 51 full, 6
+`--oracle-differs`, 4 `--oracle-bug`, 1 library. Not run on a real
+scale. Facts come from KERN's manual (`EW_EG-(N)-EWB-BA-e-1226`, chapter
+8) and sigrok-dumps' `uart/kern_ew_6200-2nm`, 13 captures of a real
+unit, which is zero filled, sends 14 bytes in most of them, and in the
+two long ones sends a stable packet about every 500 ms and an unstable
+or error one about every 128 ms, with 2018 ms of silence at a tare. None
+holds a host's command, so `A00` and `E01` are the manual's.
+
+What the model taught: C steps 15 bytes over any packet
+(`protocol.c:89-92`), so a 14-byte stream loses every second packet, and
+a last one waits for a 15th byte; on a capture's real bytes C gets 25
+readings of 50. oxrok reads each. C hands the digit field to `strtod`
+(`scale/kern.c:63`), which reads the manual's space-suppressed `+
+127.20` as 0 and makes a reading of anything else, 0 of `+-0026.90` and
+`+abcdefgh`, with exit 0. oxrok reads the number behind spaces, takes a
+field that is not digits, a point and spaces for no reading, with a
+warning the first time, and steps over it a byte at a time, so a stray
+sign ahead of a packet costs only the sign. `E` stays infinity whatever
+its digits.
+
+C never ends at a sample limit when the port hangs up (`protocol.c:121`)
+or no packet comes; oxrok fails on the first, and on the second after 10
+s with no usable packet. The 10 s is a choice, 5 times the longest
+silence captured. By the manual `O1` lasts until power off, so a scale
+power cycled into a print-key or on-stable mode goes quiet, and oxrok
+fails where C keeps waiting. If it saw `E01`, it says so. A read holding
+two packets sends both past the limit, as in C. A limit of the format:
+there is no checksum, so a point lost from a 15-byte packet can make a
+good 14-byte one, `+0012720`, which reads 12720.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in
