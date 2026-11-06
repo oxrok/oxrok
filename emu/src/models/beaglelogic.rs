@@ -219,6 +219,8 @@ pub struct BeagleLogic {
     line: Vec<u8>,
     connections: u32,
     run: Option<Run>,
+    /// A `get` came: with no buffers it starts nothing, and a `close` is still right.
+    asked: bool,
     /// Answers held back, with the ticks left. What comes behind a late one waits.
     later: VecDeque<(u32, Vec<u8>)>,
 }
@@ -235,6 +237,7 @@ impl BeagleLogic {
             line: Vec::new(),
             connections: 0,
             run: None,
+            asked: false,
             later: VecDeque::new(),
         }
     }
@@ -320,6 +323,7 @@ impl BeagleLogic {
             port.violation("get on a stream");
             return;
         }
+        self.asked = true;
         // The file's open fails, and the goroutine leaves in silence.
         if self.memalloc == 0 {
             if self.config.mark == Some(0) {
@@ -402,9 +406,10 @@ impl BeagleLogic {
     }
 
     fn end(&mut self, port: &mut Port) {
-        if self.run.take().is_none() {
+        if self.run.take().is_none() && !std::mem::take(&mut self.asked) {
             port.violation("close with no stream");
         }
+        self.asked = false;
         let tail = usize::try_from(self.config.tail).unwrap_or(0);
         if tail > 0 {
             port.send(&vec![0xa5; tail]);
@@ -455,6 +460,7 @@ impl Stream for BeagleLogic {
         self.connections = self.connections.saturating_sub(1);
         self.line.clear();
         self.later.clear();
+        self.asked = false;
         // Unlike the server's goroutine: see the module's comment.
         self.run = None;
     }
@@ -666,6 +672,10 @@ mod tests {
         let mut p = Port::default();
         m.tick(&mut p);
         assert_eq!(said(&p), b"");
+        let mut p = talk(&mut m, "close\n");
+        assert_eq!(flagged(&mut p), 0, "the client has no way to know");
+        let mut p = talk(&mut m, "close\n");
+        assert_eq!(flagged(&mut p), 1, "a second one has no get behind it");
     }
 
     #[test]
