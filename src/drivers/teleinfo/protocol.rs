@@ -23,6 +23,8 @@ pub const SCAN_BYTES: usize = 292;
 
 const LF: u8 = 0x0a;
 const CR: u8 = 0x0d;
+const HT: u8 = 0x09;
+const ETX: u8 = 0x03;
 /// What a meter sends ahead of an interruption.
 pub const EOT: u8 = 0x04;
 /// `%8s`.
@@ -86,15 +88,16 @@ fn control(label: &[u8], data: &[u8]) -> i32 {
     (sum & 0x3f) + 0x20
 }
 
-/// `teleinfo_parse_group`, on the bytes from a group's LF to the buffer's end: C's
+/// `teleinfo_parse_group`, on the bytes from a group's LF to its first CR: C's
 /// `sscanf(str, "\x0A%8s %13s %c%c", ...)`, which ends at a NUL, and its control
 /// check.
 ///
-/// As in C, a field may run across white space of any kind, and across a CR: it
-/// asks only for four fields whose last is a CR. One thing differs: a control of a
-/// space, which a sum's low six bits of 0 give one group in 64 and the
-/// specification allows (`PTEC HP..` always has it). In the format's ` %c` the
-/// space skips it, so C reads the CR for the control and drops the group.
+/// As in C, fields may be apart by white space of any kind. Two things differ. A
+/// control of a space, which a sum's low six bits of 0 give one group in 64 and the
+/// specification allows (`PTEC HP..` always has it): in the format's ` %c` the space
+/// skips it, so C reads the CR for the control and drops the group. And a group ends
+/// at its first CR, where C's `sscanf` reads on across it, into what follows and
+/// possibly into the buffer's stale tail.
 pub fn parse_group(text: &[u8]) -> Option<Group<'_>> {
     let end = text.iter().position(|b| *b == 0).unwrap_or(text.len());
     let mut scan = Scan { text: &text[..end], at: 0 };
@@ -120,7 +123,57 @@ pub fn parse_group(text: &[u8]) -> Option<Group<'_>> {
 pub fn next_group(buf: &[u8]) -> Option<(Option<Group<'_>>, usize)> {
     let start = buf.iter().position(|b| *b == LF)?;
     let end = start + buf[start..].iter().position(|b| *b == CR)?;
-    Some((parse_group(&buf[start..]), end + 1))
+    Some((parse_group(&buf[start..=end]), end + 1))
+}
+
+/// What the head of a buffer holds, to a capture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Item<'a> {
+    /// A group, if its control is right.
+    Group(Option<Group<'a>>),
+    /// The end of a frame.
+    Etx,
+    /// A frame cut by an interruption.
+    Eot,
+}
+
+/// The next [`Item`] of `buf` and how many bytes it used, or `None` while there is
+/// none yet. What comes ahead of an item goes with it.
+pub fn next_item(buf: &[u8]) -> Option<(Item<'_>, usize)> {
+    let at = buf.iter().position(|b| matches!(*b, LF | ETX | EOT))?;
+    match buf[at] {
+        ETX => Some((Item::Etx, at + 1)),
+        EOT => Some((Item::Eot, at + 1)),
+        _ => {
+            let (group, used) = next_group(&buf[at..])?;
+            Some((Item::Group(group), at + used))
+        }
+    }
+}
+
+/// Whether a buffer shows the output's standard form, which this driver does not
+/// read: an `ADSC` group, or a group that is right by mode 2, whose control also
+/// covers the separator ahead of it, with tabs for separators (Enedis-NOI-CPT_54E).
+pub fn is_standard(mut buf: &[u8]) -> bool {
+    while let Some(start) = buf.iter().position(|b| *b == LF) {
+        let Some(len) = buf[start..].iter().position(|b| *b == CR) else {
+            return false;
+        };
+        let line = &buf[start + 1..start + len];
+        if line.starts_with(b"ADSC\t") || line.starts_with(b"ADSC ") {
+            return true;
+        }
+        if let Some((control, summed)) = line.split_last()
+            && summed.last() == Some(&HT)
+        {
+            let sum = summed.iter().fold(0u32, |sum, b| sum + u32::from(*b));
+            if (sum & 0x3f) + 0x20 == u32::from(*control) {
+                return true;
+            }
+        }
+        buf = &buf[start + len..];
+    }
+    false
 }
 
 /// What a meter's contract is, by its `OPTARIF` group, which decides the channels.
@@ -174,7 +227,7 @@ pub fn optarif_of(mut buf: &[u8]) -> Option<Optarif> {
 /// What a group means to a capture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Meaning {
-    /// A frame's first group, what a sample limit counts.
+    /// A frame's first group, by which a sample limit counts frames.
     Sample,
     /// A reading for the channel of this name, if the device has it.
     Reading {
@@ -184,51 +237,59 @@ pub enum Meaning {
         mq: Mq,
         /// The unit.
         unit: Unit,
+        /// How many digits its data may have, by the specification's tables.
+        widths: &'static [usize],
     },
 }
 
 /// `teleinfo_handle_measurement`'s table.
 pub fn meaning(label: &[u8]) -> Option<Meaning> {
-    let energy = |channel| Meaning::Reading { channel, mq: Mq::Energy, unit: Unit::WattHour };
+    // Tables 2 and 3 have 9; table 1's concentrator has 8 for those with an 8 here.
+    let eight_or_nine = |channel| Meaning::Reading {
+        channel,
+        mq: Mq::Energy,
+        unit: Unit::WattHour,
+        widths: &[8, 9],
+    };
+    let energy =
+        |channel| Meaning::Reading { channel, mq: Mq::Energy, unit: Unit::WattHour, widths: &[9] };
     Some(match label {
         b"ADCO" => Meaning::Sample,
-        b"BASE" => energy("BASE"),
-        b"HCHP" => energy("HP"),
-        b"HCHC" => energy("HC"),
-        b"EJPHN" => energy("HN"),
-        b"EJPHPM" => energy("HPM"),
+        b"BASE" => eight_or_nine("BASE"),
+        b"HCHP" => eight_or_nine("HP"),
+        b"HCHC" => eight_or_nine("HC"),
+        b"EJPHN" => eight_or_nine("HN"),
+        b"EJPHPM" => eight_or_nine("HPM"),
         b"BBRHPJB" => energy("HPJB"),
         b"BBRHPJW" => energy("HPJW"),
         b"BBRHPJR" => energy("HPJR"),
         b"BBRHCJB" => energy("HCJB"),
         b"BBRHCJW" => energy("HCJW"),
         b"BBRHCJR" => energy("HCJR"),
-        b"IINST" => Meaning::Reading { channel: "IINST", mq: Mq::Current, unit: Unit::Ampere },
-        b"PAPP" => Meaning::Reading { channel: "PAPP", mq: Mq::Power, unit: Unit::VoltAmpere },
+        b"IINST" => {
+            Meaning::Reading { channel: "IINST", mq: Mq::Current, unit: Unit::Ampere, widths: &[3] }
+        }
+        b"PAPP" => Meaning::Reading {
+            channel: "PAPP",
+            mq: Mq::Power,
+            unit: Unit::VoltAmpere,
+            widths: &[5],
+        },
         _ => return None,
     })
 }
 
-/// C's `atoi` as glibc has it, `(int) strtol(s, NULL, 10)`: a sign, then the digits
-/// up to the first other byte, none being 0. Past 64 bits it sticks at the limit,
-/// and the cast then keeps the low 32 bits of whatever came.
-pub fn atoi(data: &[u8]) -> i32 {
-    let (negative, digits) = match data.first() {
-        Some(b'-') => (true, &data[1..]),
-        Some(b'+') => (false, &data[1..]),
-        _ => (false, data),
-    };
-    let mut value = 0i64;
-    for b in digits.iter().take_while(|b| b.is_ascii_digit()) {
-        let digit = i64::from(*b - b'0');
-        let next = value.checked_mul(10).and_then(|v| v.checked_add(digit));
-        value = next.unwrap_or(i64::MAX);
-        if next.is_none() {
-            break;
-        }
+/// A reading's value: all digits, at one of its `widths`.
+///
+/// The control covers only a sum's low six bits, and no parity is checked, so one
+/// flipped bit 6 passes it: `000012q00` for `000012100`. C's `atoi` reads that as 12,
+/// a false reading with nothing to tell. A digit that became another digit, or two
+/// swapped, keep their form and pass this as well: nothing can tell those.
+pub fn value(data: &[u8], widths: &[usize]) -> Option<u32> {
+    if !widths.contains(&data.len()) || !data.iter().all(u8::is_ascii_digit) {
+        return None;
     }
-    let value = if negative { value.wrapping_neg() } else { value };
-    value as i32
+    Some(data.iter().fold(0u32, |v, b| v.saturating_mul(10).saturating_add(u32::from(*b - b'0'))))
 }
 
 #[cfg(test)]
@@ -301,7 +362,7 @@ mod tests {
         assert_eq!(parsed(b"\n\n IINST  002 \t Y\r"), Some(fields("IINST", "002")));
         assert_eq!(parsed(b"\nIINST\t002\tY\r"), Some(fields("IINST", "002")));
         assert_eq!(parsed(b"\nIINST\x0b002\x0cY\r"), Some(fields("IINST", "002")));
-        assert_eq!(parsed(b"\nIINST\r\n002 Y\r"), Some(fields("IINST", "002")), "across a CR");
+        assert_eq!(next_group(b"\nIINST\r\n002 Y\r").unwrap().0, None, "not across a CR");
     }
 
     #[test]
@@ -336,8 +397,8 @@ mod tests {
 
     #[test]
     fn high_bytes_sum_as_signed_chars() {
-        // 0xe9 is -23, so "BASE 000000001" has 'L', 0x4c, and with it 0x35, '5'.
-        // tests/emu/teleinfo's "a high byte in data" shows C agrees.
+        // 0xe9 is -23, so "BASE 000000001" has 'L', 0x4c, and with it 0x35, '5'. A
+        // value of it is refused later; a group's form is C's.
         assert_eq!(parsed(b"\nBASE 000000001\xe9 5\r"), Some(fields("BASE", "000000001\u{fffd}")));
         assert_eq!(parsed(b"\nBASE 000000001\xe9 B\r"), None);
         assert_eq!(parsed(b"\nBASE 000000001 \xcc\r"), None, "a high control is never right");
@@ -356,7 +417,7 @@ mod tests {
         // A bad one uses its bytes as well, and a CR ends it where it stands.
         let text = b"\nIINST\r\n002 Y\r";
         let (group, used) = next_group(text).unwrap();
-        assert_eq!(group.unwrap().data, b"002", "the fields ran across");
+        assert_eq!(group, None, "no field runs across");
         assert_eq!(&text[used..], b"\n002 Y\r", "and the bytes go on from the CR");
         assert_eq!(next_group(b"\nnothing\r").unwrap(), (None, 9));
     }
@@ -399,7 +460,7 @@ mod tests {
     fn labels_mean_what_the_table_says() {
         assert_eq!(meaning(b"ADCO"), Some(Meaning::Sample));
         let reading = |label: &[u8]| match meaning(label) {
-            Some(Meaning::Reading { channel, mq, unit }) => (channel, mq, unit),
+            Some(Meaning::Reading { channel, mq, unit, .. }) => (channel, mq, unit),
             other => panic!("{other:?}"),
         };
         for (label, channel) in [
@@ -425,30 +486,165 @@ mod tests {
     }
 
     #[test]
-    fn atoi_is_glibc_s() {
-        for (text, value) in [
-            ("000012345", 12345),
-            ("0", 0),
-            ("", 0),
-            ("ABC", 0),
-            ("12A", 12),
-            ("1.5", 1),
-            ("0x10", 0),
-            ("....", 0),
-            ("+12", 12),
-            ("-12", -12),
-            ("--1", 0),
-            ("+", 0),
-            ("2147483647", 2_147_483_647),
-            ("2147483648", -2_147_483_648),
-            ("4294967296", 0),
-            ("9999999999", 1_410_065_407),
-            ("999999999999", -727_379_969),
-            // Stuck at LONG_MAX, whose low bits are all ones.
-            ("99999999999999999999", -1),
-            ("-99999999999999999999", 1),
-        ] {
-            assert_eq!(atoi(text.as_bytes()), value, "{text}");
+    fn a_value_is_digits_at_its_width() {
+        let widths = |label: &[u8]| match meaning(label) {
+            Some(Meaning::Reading { widths, .. }) => widths,
+            other => panic!("{other:?}"),
+        };
+        for label in [b"BASE".as_slice(), b"HCHP", b"HCHC", b"EJPHN", b"EJPHPM"] {
+            assert_eq!(widths(label), [8, 9]);
         }
+        for label in [b"BBRHPJB".as_slice(), b"BBRHPJW", b"BBRHPJR", b"BBRHCJB", b"BBRHCJW"] {
+            assert_eq!(widths(label), [9]);
+        }
+        assert_eq!(widths(b"BBRHCJR"), [9]);
+        assert_eq!(widths(b"IINST"), [3]);
+        assert_eq!(widths(b"PAPP"), [5]);
+        assert_eq!(value(b"000012345", &[9]), Some(12345));
+        assert_eq!(value(b"999999999", &[9]), Some(999_999_999));
+        assert_eq!(value(b"00012345", &[8, 9]), Some(12345));
+        assert_eq!(value(b"002", &[3]), Some(2));
+        for bad in [
+            b"".as_slice(),
+            b"12",
+            b"0000123456",
+            b"p00012000",
+            b"000012q00",
+            b"+00012345",
+            b"-00012345",
+            b"0x0012345",
+            b"00001.345",
+            b"00012345 ",
+        ] {
+            assert_eq!(value(bad, &[9]), None, "{}", String::from_utf8_lossy(bad));
+        }
+        assert_eq!(value(b"0q2", &[3]), None);
+        assert_eq!(value(b"12340", &[9]), None);
+        assert_eq!(value(b"00012345", &[9]), None, "8 where only 9 will do");
+    }
+
+    /// Every single bit flipped in a meter's frame, and every span taken out: what
+    /// the groups then say. A reading can only be the true one or none.
+    #[test]
+    fn no_flipped_bit_or_lost_span_gives_a_false_reading() {
+        let truth: Vec<(&[u8], &[u8])> = vec![
+            (b"HCHC", b"000012340"),
+            (b"HCHP", b"100000567"),
+            (b"IINST", b"012"),
+            (b"PAPP", b"02760"),
+        ];
+        let mut frame = vec![0x02];
+        for (label, data) in [
+            ("ADCO", "031428097115"),
+            ("OPTARIF", "HC.."),
+            ("ISOUSC", "30"),
+            ("HCHC", "000012340"),
+            ("HCHP", "100000567"),
+            ("PTEC", "HP.."),
+            ("IINST", "012"),
+            ("IMAX", "030"),
+            ("PAPP", "02760"),
+            ("HHPHC", "A"),
+            ("MOTDETAT", "000000"),
+        ] {
+            frame.extend(line(label, data));
+        }
+        frame.push(ETX);
+        let wrong = |stream: &[u8]| {
+            let mut buf = stream;
+            let mut wrong = 0;
+            while let Some((item, used)) = next_item(buf) {
+                if let Item::Group(Some(g)) = item
+                    && let Some(Meaning::Reading { widths, .. }) = meaning(g.label)
+                    && value(g.data, widths).is_some()
+                    && !truth.contains(&(g.label, g.data))
+                {
+                    wrong += 1;
+                }
+                buf = &buf[used..];
+            }
+            wrong
+        };
+        assert_eq!(wrong(&frame), 0);
+        let mut flips = 0;
+        for at in 0..frame.len() {
+            for bit in 0..7 {
+                let mut stream = frame.clone();
+                stream[at] ^= 1 << bit;
+                flips += 1;
+                assert_eq!(wrong(&stream), 0, "byte {at}, bit {bit}");
+            }
+        }
+        assert!(flips > 1000);
+        // A lost span can leave a well formed group with a right control, by a chance
+        // of one in 64 for each that keeps the form. Nothing can tell those.
+        let mut spans = Vec::new();
+        for len in 1..40 {
+            for at in 0..frame.len() - len {
+                let mut stream = frame.clone();
+                stream.drain(at..at + len);
+                if wrong(&stream) > 0 {
+                    spans.push((at, len));
+                }
+            }
+        }
+        assert_eq!(spans, [(63, 19), (65, 32)], "lost spans that give a false reading");
+    }
+
+    #[test]
+    fn a_digit_changed_for_a_digit_cannot_be_told() {
+        // Swapped digits have the same sum, so the group stands.
+        let swapped = line("BASE", "000012100");
+        let mut text = swapped.clone();
+        text[12] = swapped[13];
+        text[13] = swapped[12];
+        assert_ne!(text, swapped);
+        let group = parse_group(&text).unwrap();
+        assert_eq!(value(group.data, &[9]), Some(12_010));
+    }
+
+    #[test]
+    fn items_come_in_order_and_what_is_ahead_goes_with_them() {
+        let text = b"xx\x03yy\x04\nIINST 002 Y\rzz\nX\r\x03";
+        let mut buf = text.as_slice();
+        let mut got = Vec::new();
+        while let Some((item, used)) = next_item(buf) {
+            got.push(item);
+            buf = &buf[used..];
+        }
+        assert_eq!(
+            got,
+            [
+                Item::Etx,
+                Item::Eot,
+                Item::Group(Some(Group { label: b"IINST", data: b"002" })),
+                Item::Group(None),
+                Item::Etx,
+            ]
+        );
+        assert_eq!(next_item(b"junk"), None);
+        assert_eq!(next_item(b"\nIINST 0"), None, "no CR yet");
+    }
+
+    #[test]
+    fn standard_mode_shows_by_its_groups() {
+        // Mode 2: label, tab, data, tab, and a control over all of them.
+        let mode2 = |text: &str| {
+            let sum: u32 = text.bytes().map(u32::from).sum();
+            let mut out = vec![LF];
+            out.extend_from_slice(text.as_bytes());
+            out.push(u8::try_from((sum & 0x3f) + 0x20).unwrap());
+            out.push(CR);
+            out
+        };
+        assert!(is_standard(&mode2("VTIC\t02\t")));
+        assert!(is_standard(&mode2("DATE\tH230101120000\t\t")));
+        assert!(is_standard(b"\nADSC\t041876097115\tx\r"), "whatever its control");
+        assert!(is_standard(b"\nADSC 041876097115 x\r"));
+        // Mode 1 and all else is not. A tab with a wrong control is noise.
+        assert!(!is_standard(&line("ADCO", "031428097115")));
+        assert!(!is_standard(b"\nVTIC\t02\t!\r"));
+        assert!(!is_standard(b"000000"));
+        assert!(!is_standard(b"\nADSC"));
     }
 }

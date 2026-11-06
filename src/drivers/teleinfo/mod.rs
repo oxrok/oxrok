@@ -14,55 +14,65 @@
 //! `conn=` names the port and `serialcomm=` overrides the line. A meter sends for as
 //! long as it has power and takes nothing, so nothing here ever writes. A scan
 //! reads 292 bytes, and the `OPTARIF` group in them picks the channels. A capture
-//! ends at `limit_samples`, in frames (each `ADCO` group counts one), at `limit_time`,
-//! or at a stop.
+//! ends at `limit_samples`, in whole frames, at `limit_time`, or at a stop.
 //!
-//! **The stock C driver finds no device.** `api.c:79` asks `serial_stream_detect` for
-//! a packet of 292 bytes with a buffer of 292, and `serial.c:833` wants a buffer of
-//! two packets: it says "Small stream detect RX buffer, want 2x packet size." and
-//! every scan ends there. Until 0.5.1 that check was `maxlen < packet_size / 2`;
-//! d03815a0 (2019) made it `* 2`, and nothing has run this driver since 0.5.2. So it
-//! is compared with the C with that one check taken out in memory
-//! (`tools/emu/teleinfo-scan.c`), which reads 292 bytes and then looks, as 0.5.1 did,
-//! and C's behaviour below means that.
+//! **The C here means the oracle's, with a patch of its scan.** Stock libsigrok has
+//! found no such device since 0.5.2: `api.c:79` asks `serial_stream_detect` for a
+//! packet of 292 bytes with a buffer of 292, and `serial.c:833` wants a buffer of two
+//! packets since d03815a0 (2019, `maxlen < packet_size / 2` became `* 2`). The oracle
+//! carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`, a buffer of twice 292
+//! and a packet of half of that, and it looks at byte 292 as 0.5.1 did, so it can
+//! differ from what this does only on an option past that byte.
 //!
 //! Where this differs from that C, each with its cause:
 //!
+//! - A value must be all digits at the specification's width (an index 9, 8 on a
+//!   concentrator's table 1 also for those it lists, `IINST` 3, `PAPP` 5), or the group
+//!   is dropped with a warning. The control covers a sum's low six bits and no parity
+//!   is checked (`src/serial/mod.rs`), so a flipped bit 6 passes it, and C's `atoi`
+//!   (`protocol.c:91`) reads `p00012000` as 0 Wh and `000012q00` as 12 Wh between good
+//!   readings of 12 kWh. A digit changed for a digit, or two swapped, still can't be
+//!   told: nothing on the line shows it.
+//! - `--samples N` gives N whole frames. A sample counts at `ETX` or at the next `ADCO`,
+//!   and the capture ends there, within a read. C counts at `ADCO` (`protocol.c:99-100`), a
+//!   frame's first group, and looks after each read (`:222`), so by reading, at the
+//!   line's real pace, it ends with what that read held, which may be nothing. A frame
+//!   cut by `EOT` is no sample.
 //! - A group whose control is a space is taken. A sum's low six bits of 0 give one
 //!   group in 64 that control, which the specification allows (Enedis-NOI-CPT_02E,
-//!   1.5.2, a control of 0x20 to 0x7e; `PTEC HP..` always has it; `LibTeleinfo`'s parser
-//!   notes "checksum last one can be space separator"). In `sscanf`'s
-//!   format (`protocol.c:134`) the space ahead of `%c` steps over it, so C reads the
-//!   CR as the control and drops the group: `BASE` at 399 Wh gives no reading, and an
-//!   `ADCO` that has it counts no sample.
+//!   1.5.2, whose arithmetic gives 0x20 to 0x5f, though it says 0x7e; `PTEC HP..` always has it; `LibTeleinfo`'s
+//!   parser notes "checksum last one can be space separator"). In `sscanf`'s format
+//!   (`protocol.c:134`) the space ahead of `%c` steps over it, so C reads the CR as the
+//!   control and drops the group: `BASE` at 399 Wh gives no reading.
+//! - A group ends at its first CR. C's `sscanf` reads across it, into the next group or
+//!   the buffer's stale tail.
 //! - `-C OLD=NEW` keeps the channel's readings. C finds a channel by its name when a
 //!   reading comes (`protocol.c:53,68`), so a renamed one gets none.
 //! - A time limit ends a capture at its time. C returns from a read's timeout before
 //!   its limit check (`protocol.c:193`, `:222`), so a meter that went quiet holds it for
-//!   ever.
+//!   ever. If no group came, it warns and exits as usual.
 //! - A failed read ends the capture. A port that hung up gives C a `revents` of more
 //!   than `G_IO_IN`, which `protocol.c:193` takes as nothing to do, for ever.
-//! - A sample limit does not wait for ever: with nothing else to end the capture, 10 s
-//!   with no `ADCO` group fails it, and it says whether bytes came. C has no bound. A
-//!   frame takes at most about 4 s at 120 bytes a second. The specification warns of
-//!   interruptions of no stated length while a meter is read another way, which it
-//!   announces with EOT, so behind an EOT the wait is 5 minutes.
+//! - Silence has bounds, where C has none. A frame takes about 4 s at most. With a
+//!   sample limit alone, and no `ADCO` yet in this capture, 10 s fails it, saying whether
+//!   bytes came. After an `ADCO` it warns at 10 s and goes on, for 10 minutes: a long log
+//!   should not end over a spell. Behind an `EOT`, which the specification says a meter
+//!   sends ahead of an interruption of no stated length, it warns at 10 s and goes on for
+//!   5 minutes, which is a guess. With a time limit or none it warns and never fails.
 //! - Buffer full: 256 bytes with no whole group end the capture in both, but C
 //!   `return FALSE`s (`protocol.c:219`) with no `SR_DF_END` and exit 0. Here it is a
 //!   failed capture, saying so.
+//! - A scan that read its 292 bytes and found no known option warns, and names the
+//!   standard form if it saw one. C says nothing. That form has tabs, a mode 2 control
+//!   and other labels, 9600 bd by default, and this driver does not read it, as C doesn't.
 //! - A second capture on an open port drops what came since the first, as those would
 //!   be up to half a minute old. A group cut by the end of the first capture stays with
 //!   that capture, where C's `buf_len` keeps it.
-//! - A group is read within the bytes that have come: C's `sscanf` has no bound, and on
-//!   a group that crosses a CR it may read the buffer's stale tail.
 //!
 //! Kept from C, as nothing says otherwise:
 //!
-//! - A limit is looked at after a whole read, so a read holding two frames sends both.
 //! - 256 bytes with no group end a capture of any limit, rather than being dropped as
 //!   the C's comment says and its `return FALSE` does not.
-//! - `atoi`'s readings of what are not numbers: `ABC` is 0, and all above 2^24 is a
-//!   float's nearest. Nothing here rejects a group on its data.
 //! - A group of 13 bytes of data never counts. `protocol.c:132`'s `data[13]` has no
 //!   room for `%13s`'s NUL, which at the oracle's build clears the label. No group of
 //!   the specification has 13.
@@ -70,10 +80,14 @@
 //!   `optarif[5]` to say so (`protocol.c:95`), with no harm seen on the oracle's build.
 //! - A meter that says no known option is no device, and the scan needs 292 bytes in 3
 //!   s (2.43 s at the line's rate).
-//! - The `P` channel exists and never gets a reading: no group feeds it.
+//! - The `P` channel exists and never gets a reading: no group feeds it. A three-phase
+//!   meter's `IINST1` to `IINST3` give nothing either.
+//! - A reading is an `f32`, as in C. An index above 16.78 MWh rounds: 2 Wh steps, 4 above
+//!   33.55 MWh, 8 above 67.11 MWh, 16 above 134.2 MWh. A house's meter can reach that.
 //!
-//! A scan opens the port for reading and writing, where C opens it read-only, so a
-//! node a user may only read does not open.
+//! A scan opens the port for reading and writing, where C's scan opens it read-only,
+//! so on a node a user may only read, this finds nothing where C's scan would find it.
+//! C's own `dev_open` opens it for both, so a capture fails on it in both.
 
 #![forbid(unsafe_code)]
 
@@ -86,7 +100,7 @@ use crate::core::{
     MqFlags, OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::serial::{Params, Port};
-use protocol::{BUF_SIZE, EOT, Meaning, Optarif, SCAN_BYTES};
+use protocol::{BUF_SIZE, EOT, Item, Meaning, Optarif, SCAN_BYTES};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -110,10 +124,15 @@ const READ_TIME: Duration = Duration::from_millis(50);
 const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
 /// How long an `End` waits for room after a stop: a close joins the thread.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
-/// How long a sample limit alone waits for an `ADCO` group.
+/// How long a capture waits for bytes or an `ADCO` before it says so, and how long a
+/// sample limit waits when none has come in this capture.
 const NO_SAMPLE_BOUND: Duration = Duration::from_secs(10);
-/// The same behind an EOT. The specification gives no length of an interruption.
+/// How long a sample limit waits behind an EOT. The specification gives no length of
+/// an interruption, so this is a guess.
 const INTERRUPTED_BOUND: Duration = Duration::from_secs(300);
+/// How long a sample limit waits once a sample has come: a long log should not end
+/// over a spell.
+const AFTER_SAMPLE_BOUND: Duration = Duration::from_secs(600);
 
 /// The `teleinfo` driver.
 pub struct TeleinfoDriver;
@@ -165,8 +184,22 @@ impl Driver for TeleinfoDriver {
             }
         };
         log::info!("Probing serial port {conn}.");
-        let Some(optarif) = detect(port.as_mut(), &params, SCAN_TIME) else {
-            return Ok(Vec::new());
+        let optarif = match detect(port.as_mut(), &params, SCAN_TIME) {
+            Probed::Found(optarif) => optarif,
+            Probed::TooFew => return Ok(Vec::new()),
+            Probed::Standard => {
+                log::warn!(
+                    "The meter sends in standard mode, which is not supported: set it to historic."
+                );
+                return Ok(Vec::new());
+            }
+            Probed::Unknown => {
+                log::warn!(
+                    "{SCAN_BYTES} bytes came with no known OPTARIF group in them: is the line \
+                     {SERIALCOMM}, and the meter in historic mode?"
+                );
+                return Ok(Vec::new());
+            }
         };
         log::info!("Found device on port {conn}.");
         // `serial_close`; `dev_open` opens the port again.
@@ -175,10 +208,23 @@ impl Driver for TeleinfoDriver {
     }
 }
 
+/// What a scan heard.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Probed {
+    /// A known option.
+    Found(Optarif),
+    /// Not all its bytes, in its time.
+    TooFew,
+    /// All its bytes, and the output's standard form in them.
+    Standard,
+    /// All its bytes, and no known option.
+    Unknown,
+}
+
 /// `serial_stream_detect` as it was for this driver up to 0.5.1: reads until it has
 /// [`SCAN_BYTES`] or `timeout` passed, then looks at those bytes once. A read that
 /// fails is no data, and the time still runs.
-fn detect(port: &mut dyn Port, params: &Params, timeout: Duration) -> Option<Optarif> {
+fn detect(port: &mut dyn Port, params: &Params, timeout: Duration) -> Probed {
     let wait = crate::serial::serial_timeout(params, 1);
     let start = Instant::now();
     let mut buf = [0u8; SCAN_BYTES];
@@ -195,57 +241,139 @@ fn detect(port: &mut dyn Port, params: &Params, timeout: Duration) -> Option<Opt
             break;
         }
     }
-    let found = (filled == SCAN_BYTES).then(|| protocol::optarif_of(&buf)).flatten();
-    if found.is_none() {
+    if filled < SCAN_BYTES {
         log::info!("Didn't find a valid packet (read {filled} bytes).");
+        return Probed::TooFew;
     }
-    found
+    match protocol::optarif_of(&buf) {
+        Some(optarif) => Probed::Found(optarif),
+        None if protocol::is_standard(&buf) => Probed::Standard,
+        None => Probed::Unknown,
+    }
 }
 
-/// What a capture finds wrong in how long nothing came of a stream. A sample limit
-/// alone needs a bound, as it may never be met.
+/// What is wrong with a stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lack {
+    /// No byte.
+    NoBytes,
+    /// Bytes, but no `ADCO` group.
+    NoSample,
+    /// An EOT, and no byte since.
+    Interrupted,
+    /// EOTs, with bytes between them, and no `ADCO` group.
+    InterruptedNoSample,
+}
+
+/// What a capture does about it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Wait {
-    /// Nothing wrong yet.
+    /// Nothing wrong.
     Fine,
-    /// No byte since the bound.
-    NoBytes,
-    /// Bytes, but no `ADCO` group since the bound.
-    NoSample,
-    /// An EOT, and no byte since the long bound.
-    Interrupted,
+    /// Says so, once, and goes on: this lack, for so long.
+    Warn(Lack, Duration),
+    /// Ends the capture with an error.
+    Fail(Lack, Duration),
 }
+
+/// What a capture says of a lack, going on or not.
+fn said(lack: Lack, time: Duration, going_on: bool) -> String {
+    let s = time.as_secs();
+    match (lack, going_on) {
+        (Lack::NoBytes, true) => {
+            format!("no bytes from the meter for {s} s: is it on, and its cable in? Waiting on")
+        }
+        (Lack::NoBytes, false) => {
+            format!("no bytes from the meter for {s} s, with samples to go")
+        }
+        (Lack::NoSample, true) => format!(
+            "bytes come, but no ADCO group for {s} s: is the line {SERIALCOMM}, and the meter in \
+             historic mode? Waiting on"
+        ),
+        (Lack::NoSample, false) => format!(
+            "bytes come, but no ADCO group for {s} s, with samples to go: is the line \
+             {SERIALCOMM}, and the meter in historic mode?"
+        ),
+        (Lack::Interrupted | Lack::InterruptedNoSample, true) => {
+            format!(
+                "the meter announced an interruption (EOT), and no sample for {s} s. Waiting on"
+            )
+        }
+        (Lack::Interrupted, false) => {
+            format!("the meter announced an interruption (EOT) and sent nothing for {s} s")
+        }
+        (Lack::InterruptedNoSample, false) => {
+            format!("no ADCO group for {s} s, around the meter's interruptions (EOT)")
+        }
+    }
+}
+
+/// How long each wait is, which a test shortens.
+#[derive(Clone, Copy, Debug)]
+struct Bounds {
+    /// [`NO_SAMPLE_BOUND`].
+    first: Duration,
+    /// [`INTERRUPTED_BOUND`].
+    interrupted: Duration,
+    /// [`AFTER_SAMPLE_BOUND`].
+    after_sample: Duration,
+}
+
+const BOUNDS: Bounds = Bounds {
+    first: NO_SAMPLE_BOUND,
+    interrupted: INTERRUPTED_BOUND,
+    after_sample: AFTER_SAMPLE_BOUND,
+};
 
 /// How long since a stream last gave anything, as a pure state over times given to it.
 #[derive(Debug)]
 struct Watch {
-    bound: Duration,
-    interrupted_bound: Duration,
+    bounds: Bounds,
     /// When a byte last came.
     heard: Instant,
-    /// When an `ADCO` group last came, or the stream came back from an interruption.
+    /// When an `ADCO` group last came.
     counted: Instant,
+    /// When the stream last came back from an interruption.
+    back: Instant,
     /// The last byte that came was an EOT.
     interrupted: bool,
+    /// An `ADCO` has come in this capture.
+    sampled: bool,
+    /// Said already, until bytes or an `ADCO` come.
+    warned_bytes: bool,
+    /// Said already, until an `ADCO` comes.
+    warned_sample: bool,
 }
 
 impl Watch {
-    fn new(bound: Duration, interrupted_bound: Duration, now: Instant) -> Watch {
-        Watch { bound, interrupted_bound, heard: now, counted: now, interrupted: false }
+    fn new(bounds: Bounds, now: Instant) -> Watch {
+        Watch {
+            bounds,
+            heard: now,
+            counted: now,
+            back: now,
+            interrupted: false,
+            sampled: false,
+            warned_bytes: false,
+            warned_sample: false,
+        }
     }
 
     /// Bytes came, whatever they were. `last` is the last of them.
     fn heard(&mut self, last: u8, now: Instant) {
         if self.interrupted {
-            self.counted = now;
+            self.back = now;
         }
         self.heard = now;
         self.interrupted = last == EOT;
+        self.warned_bytes = false;
     }
 
     /// An `ADCO` group came.
     fn counted(&mut self, now: Instant) {
         self.counted = now;
+        self.sampled = true;
+        self.warned_sample = false;
     }
 
     /// The consumer held the capture for this long, in which it read nothing: a slow
@@ -253,25 +381,59 @@ impl Watch {
     fn excuse(&mut self, held: Duration) {
         self.heard += held;
         self.counted += held;
+        self.back += held;
     }
 
-    /// What it comes to, at `now`.
-    fn verdict(&self, now: Instant) -> Wait {
+    /// What it comes to, at `now`. `limited`: a sample limit is all that could end
+    /// the capture, so only then may this end it.
+    fn verdict(&mut self, limited: bool, now: Instant) -> Wait {
         let since = |at: Instant| now.saturating_duration_since(at);
+        let bounds = self.bounds;
         if self.interrupted {
-            return if since(self.heard) >= self.interrupted_bound {
-                Wait::Interrupted
+            // Each read that ends in an EOT brings `back` along, so this one looks at
+            // `counted` itself, or a stream of them would never end.
+            let lack = if since(self.counted) >= bounds.interrupted
+                && since(self.heard) < bounds.interrupted
+            {
+                Lack::InterruptedNoSample
             } else {
-                Wait::Fine
+                Lack::Interrupted
             };
+            let time = since(self.heard).max(since(self.counted).min(bounds.interrupted));
+            if limited && time >= bounds.interrupted {
+                return Wait::Fail(lack, bounds.interrupted);
+            }
+            if since(self.heard) >= bounds.first && !self.warned_bytes {
+                self.warned_bytes = true;
+                return Wait::Warn(Lack::Interrupted, bounds.first);
+            }
+            return Wait::Fine;
         }
-        if since(self.heard) >= self.bound {
-            Wait::NoBytes
-        } else if since(self.counted) >= self.bound {
-            Wait::NoSample
+        let sample_clock = self.counted.max(self.back);
+        let (lack, clock) = if since(self.heard) >= bounds.first {
+            (Lack::NoBytes, self.heard)
+        } else if since(sample_clock) >= bounds.first {
+            (Lack::NoSample, sample_clock)
         } else {
-            Wait::Fine
+            return Wait::Fine;
+        };
+        if limited {
+            if !self.sampled {
+                return Wait::Fail(lack, bounds.first);
+            }
+            if since(clock) >= bounds.after_sample {
+                return Wait::Fail(lack, bounds.after_sample);
+            }
         }
+        let warned = match lack {
+            Lack::NoBytes => &mut self.warned_bytes,
+            _ => &mut self.warned_sample,
+        };
+        if *warned {
+            return Wait::Fine;
+        }
+        *warned = true;
+        Wait::Warn(lack, bounds.first)
     }
 }
 
@@ -291,8 +453,10 @@ pub struct TeleinfoDevice {
     conn: String,
     params: Params,
     limits: Arc<Limits>,
-    /// [`NO_SAMPLE_BOUND`] and [`INTERRUPTED_BOUND`], which a test shortens.
-    bounds: (Duration, Duration),
+    /// [`BOUNDS`], which a test shortens.
+    bounds: Bounds,
+    /// [`EMPTY_READ_PAUSE`], which a test lengthens.
+    empty_pause: Duration,
     /// A port to use instead of opening `conn`, for tests.
     pending: Option<Box<dyn Port>>,
     /// The port, unless a capture holds it. It comes back before `End`.
@@ -329,7 +493,8 @@ impl TeleinfoDevice {
             conn,
             params,
             limits: Arc::new(Limits::default()),
-            bounds: (NO_SAMPLE_BOUND, INTERRUPTED_BOUND),
+            bounds: BOUNDS,
+            empty_pause: EMPTY_READ_PAUSE,
             pending: port,
             port: Arc::new(Mutex::new(None)),
             read_before: false,
@@ -462,6 +627,7 @@ impl Device for TeleinfoDevice {
             enabled: self.channels.iter().map(|c| c.enabled).collect(),
             limits: Arc::clone(&self.limits),
             bounds: self.bounds,
+            empty_pause: self.empty_pause,
         };
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
@@ -512,7 +678,8 @@ struct Capture {
     names: &'static [&'static str],
     enabled: Vec<bool>,
     limits: Arc<Limits>,
-    bounds: (Duration, Duration),
+    bounds: Bounds,
+    empty_pause: Duration,
 }
 
 impl Capture {
@@ -524,9 +691,16 @@ impl Capture {
         }
         let started = Instant::now();
         let mut samples = 0u64;
+        // An `ADCO` came and its frame has not ended.
+        let mut in_frame = false;
+        let mut any_group = false;
         let mut buf = [0u8; BUF_SIZE];
         let mut held = 0;
-        let mut watch = Watch::new(self.bounds.0, self.bounds.1, started);
+        let mut watch = Watch::new(self.bounds, started);
+        let met = |samples: u64| {
+            let limit = self.limits.samples.load(Ordering::SeqCst);
+            limit > 0 && samples >= limit
+        };
         while !stop.load(Ordering::SeqCst) {
             let read = port.read(&mut buf[held..], READ_TIME);
             // Taken once, right after the read: what a stall or a slow consumer does
@@ -537,21 +711,36 @@ impl Capture {
                     log::error!("Serial port read error: {e}.");
                     return Err(e);
                 }
-                Ok(0) => std::thread::sleep(EMPTY_READ_PAUSE),
+                Ok(0) => std::thread::sleep(self.empty_pause),
                 Ok(n) => {
                     watch.heard(buf[held + n - 1], seen);
                     held += n;
                     let mut sample = false;
                     let mut at = 0;
-                    while let Some((group, used)) = protocol::next_group(&buf[at..held]) {
-                        if let Some(group) = group {
-                            match self.group(group, &send) {
-                                Handled::Nothing => {}
-                                Handled::Sample => {
-                                    samples = samples.saturating_add(1);
-                                    sample = true;
+                    while let Some((item, used)) = protocol::next_item(&buf[at..held]) {
+                        let ended = match item {
+                            Item::Group(None) => false,
+                            Item::Group(Some(group)) => {
+                                any_group = true;
+                                match self.group(group, &send) {
+                                    Handled::Nothing => false,
+                                    Handled::SinkGone => return Ok(()),
+                                    Handled::Sample => {
+                                        sample = true;
+                                        std::mem::replace(&mut in_frame, true)
+                                    }
                                 }
-                                Handled::SinkGone => return Ok(()),
+                            }
+                            Item::Etx => std::mem::replace(&mut in_frame, false),
+                            Item::Eot => {
+                                in_frame = false;
+                                false
+                            }
+                        };
+                        if ended {
+                            samples = samples.saturating_add(1);
+                            if met(samples) {
+                                return Ok(());
                             }
                         }
                         at += used;
@@ -571,17 +760,22 @@ impl Capture {
                     }
                 }
             }
-            // Once all of a read is out, as a read may hold two frames.
-            let limit = self.limits.samples.load(Ordering::SeqCst);
-            if limit > 0 && samples >= limit {
-                return Ok(());
-            }
             let msec = self.limits.msec.load(Ordering::SeqCst);
             if msec > 0 && started.elapsed() > Duration::from_millis(msec) {
+                if !any_group {
+                    log::warn!("No group came in the capture's time.");
+                }
                 return Ok(());
             }
-            if limit > 0 && msec == 0 {
-                watch_verdict(&watch, self.bounds, seen)?;
+            let limited = self.limits.samples.load(Ordering::SeqCst) > 0 && msec == 0;
+            match watch.verdict(limited, seen) {
+                Wait::Fine => {}
+                Wait::Warn(lack, time) => log::warn!("{}", said(lack, time, true)),
+                Wait::Fail(lack, time) => {
+                    let said = said(lack, time, false);
+                    log::error!("{said}");
+                    return Err(Error::device(said));
+                }
             }
         }
         Ok(())
@@ -592,17 +786,25 @@ impl Capture {
         match protocol::meaning(group.label) {
             None => Handled::Nothing,
             Some(Meaning::Sample) => Handled::Sample,
-            Some(Meaning::Reading { channel, mq, unit }) => {
+            Some(Meaning::Reading { channel, mq, unit, widths }) => {
                 let Some(pos) = self.names.iter().position(|n| *n == channel) else {
                     return Handled::Nothing;
                 };
                 if !self.enabled.get(pos).copied().unwrap_or(false) {
                     return Handled::Nothing;
                 }
+                let Some(value) = protocol::value(group.data, widths) else {
+                    log::warn!(
+                        "Dropped a {} group with data {:?}: not a reading.",
+                        String::from_utf8_lossy(group.label),
+                        String::from_utf8_lossy(group.data)
+                    );
+                    return Handled::Nothing;
+                };
                 let data = AnalogData {
                     channels: vec![pos],
-                    // C's `int` into a `float` parameter: the nearest.
-                    samples: vec![protocol::atoi(group.data) as f32],
+                    // Into a `float`, as in C: the nearest.
+                    samples: vec![value as f32],
                     mq,
                     flags: MqFlags::empty(),
                     unit,
@@ -619,22 +821,4 @@ enum Handled {
     Nothing,
     Sample,
     SinkGone,
-}
-
-/// A wait that went on too long, as the error that ends a capture.
-fn watch_verdict(watch: &Watch, bounds: (Duration, Duration), now: Instant) -> Result<()> {
-    let (seconds, long) = (bounds.0.as_secs(), bounds.1.as_secs());
-    let said = match watch.verdict(now) {
-        Wait::Fine => return Ok(()),
-        Wait::NoBytes => format!("no bytes from the meter for {seconds} s, with samples to go"),
-        Wait::NoSample => format!(
-            "bytes come, but no ADCO group for {seconds} s, with samples to go: is the line \
-             1200/7e1, and the meter's output in its historic form?"
-        ),
-        Wait::Interrupted => {
-            format!("the meter announced an interruption and sent nothing for {long} s")
-        }
-    };
-    log::error!("{said}.");
-    Err(Error::device(said))
 }

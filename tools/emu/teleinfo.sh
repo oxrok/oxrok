@@ -9,31 +9,9 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
 # api.c:79 asks serial_stream_detect for a packet of 292 bytes with a buffer of
 # 292, and serial.c:833 has wanted a buffer of two packets since d03815a0 (2019,
-# `maxlen < packet_size / 2` became `* 2`, in 0.5.2): every scan fails, so stock
-# sigrok-cli finds no device. So a "full" case below means against a patched C,
-# and all cases but the "stock" ones at the end run the C driver with that one
-# check taken out in memory, by tools/emu/teleinfo-scan.c, which is set on the exec
-# of this model's tools only, through wrappers that SIGROK_CLI and
-# EMU_LIBSIGROK_RUN name for the length of emu_cases. Neither oxrok nor the harness
-# runs under it. This is how the scan ran up to 0.5.1: read 292 bytes, then look.
-teleinfo_scan_fixed() {
-    TI_STOCK_CLI=$SIGROK_CLI
-    TI_STOCK_RUN=$EMU_LIBSIGROK_RUN
-    [ "$no_oracle" = 1 ] && return
-    cc -shared -fPIC -o "$TMP/teleinfo-scan.so" "$TOOLS/emu/teleinfo-scan.c" -ldl 2>"$TMP/teleinfo-scan.err" \
-        || { emu_fail "$EMU_MODEL: could not build the preload (a C compiler?)"; return; }
-    # The runner's own check compares what sigrok-cli and it load, so it is
-    # built ahead of the wrapper.
-    emu_libsigrok_run || { emu_fail "$EMU_MODEL: $EMU_LIBSIGROK_ERR"; return; }
-    for w in cli:"$(command -v "$SIGROK_CLI")" run:"$EMU_LIBSIGROK_RUN"; do
-        printf '%s\n' '#!/bin/sh' \
-            "LD_PRELOAD=$TMP/teleinfo-scan.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec ${w#*:} \"\$@\"" \
-            >"$TMP/teleinfo-${w%%:*}"
-        chmod +x "$TMP/teleinfo-${w%%:*}"
-    done
-    SIGROK_CLI=$TMP/teleinfo-cli
-    EMU_LIBSIGROK_RUN=$TMP/teleinfo-run
-}
+# `maxlen < packet_size / 2` became `* 2`, in 0.5.2): stock sigrok-cli finds no
+# device. So the oracle carries tools/oracle-patches/libsigrok-teleinfo-scan.patch,
+# and every case here compares against that C. It looks at byte 292, as 0.5.1 did.
 
 emu_conns() {
     K=teleinfo:conn=$EMU_TTY
@@ -44,6 +22,10 @@ TI_BASE="ADCO:031428097115+OPTARIF:BASE+ISOUSC:30+BASE:000012000+PTEC:TH..+IINST
 # The group that ends a sample limit: it counts, and nothing follows it to be
 # lost by how reads fall.
 TI_END="ADCO:031428097115"
+
+# C counts a sample at ADCO and looks at its limit after each read; oxrok at the
+# frame's end, inside a read. So where both must agree, ADCO comes last here, with
+# ETX in the same transfer, and "a frame in two reads" shows what differs.
 
 # ti_sweep NAME SAMPLES FRAME...: a capture of these frames, in turn, behind the
 # scan's two; SAMPLES is how many ADCO groups they hold, the last at their end.
@@ -83,14 +65,16 @@ ti_scan() {
 }
 
 emu_cases() {
-    teleinfo_scan_fixed
     emu_conns
     TI_FLAGS=
     # What a time limit gets is the clock's: frames repeat here, and the filter
     # keeps the first of them, with the transfers' lengths folded.
     N='s/^bulk_in 82 [0-9]+ -> .*$/bulk_in 82 STREAM/'
-    NO_SCAN="api.c:79 asks for a packet of 292 bytes with a buffer of 292, and serial.c:833 wants a buffer of two packets, so the scan fails at serial.c:839 whatever comes; oxrok reads the 292 bytes, as C did to 0.5.1"
-    SPACE="protocol.c:134's sscanf has ' %c', whose space steps over a control that is a space, so the CR is read as the control and the group is dropped, where Enedis-NOI-CPT_02E 1.5.2 gives 0x20 and LibTeleinfo's parser takes it; oxrok takes the group"
+    NOT_A_READING="protocol.c:91's atoi makes a value of any data, and a flipped bit 6 passes the control, so C reports 0 Wh or the digits ahead of the first other byte; oxrok drops a group whose data is not all digits at its width, and warns"
+    CROSS="protocol.c:134's sscanf reads across the group's CR into what follows; oxrok ends a group at its first CR"
+    WHOLE="protocol.c:99-100 counts at ADCO, a frame's first group, and :222 looks after each read, so C ends with what that read held; oxrok counts a sample at ETX or the next ADCO, and gives whole frames"
+    STANDARD="sigrok-cli says nothing of a scan that heard bytes and no known option; oxrok warns, and names the standard form when it sees one"
+    SPACE="protocol.c:134's sscanf has ' %c', whose space steps over a control that is a space, so the CR is read as the control and the group is dropped, where Enedis-NOI-CPT_02E 1.5.2's arithmetic gives 0x20 and LibTeleinfo's parser takes it; oxrok takes the group"
     RENAME="protocol.c:53,68 finds a channel by name for each reading, so a channel with another name gets none; oxrok keeps its readings"
     HUP="a port that hung up gives revents beyond G_IO_IN, and protocol.c:193 takes that as nothing to do, for ever; oxrok's failed read ends the capture"
     TIME_HANG="protocol.c:193 returns at a read's timeout ahead of the limit's check at :222, so a time limit never ends a capture on a silent meter; oxrok ends it"
@@ -151,6 +135,12 @@ emu_cases() {
     ti_scan "scan option too long" "OPTARIF:BASEX+$Z"
     ti_scan "scan other case" "OPTARIF:base+$Z"
     TI_FLAGS=
+    # What each says of it. The standard form, whose groups have tabs and a control
+    # over the tab too, at its 9600 bd.
+    emu_options period=5 burst=1 frame=ADCO:031428097115+$Z
+    emu_case "scan no option warns" --oracle-differs "$STANDARD" --stderr --keep-header -- -d $K --scan
+    emu_options period=5 burst=1 uart=9600/7e1 frame=$(ti_raw '\nADSC\t041876097115\t>\r\nVTIC\t02\tJ\r\nLTARF\t      BASE      \tF\r\nEAST\t000012000\tR\r')+$Z
+    emu_case "scan of the standard form" --oracle-differs "$STANDARD" --stderr --keep-header -- -d $K:serialcomm=9600/7e1 --scan
     # 3 s of a scan that hears too little, and of one that hears nothing.
     emu_options period=5 burst=1 frame=OPTARIF:BASE
     emu_case "scan option and then silence" --keep-header --no-output -- -d $K --scan
@@ -158,13 +148,20 @@ emu_cases() {
     emu_case "scan nothing" --keep-header --no-output -- -d $K --scan
     emu_options
 
-    # A capture, plain. What follows a limit in another read is lost, so ADCO
-    # comes last here and the frame fits one transfer.
+    # A capture, plain.
     ti_sweep "samples 1" 1 "BASE:000012345+PTEC:TH..+IINST:002+PAPP:00460+$TI_END"
     ti_sweep "samples 2" 2 "BASE:000012345+$TI_END" "BASE:000012346+$TI_END"
     ti_sweep "a long frame, then the end" 2 "$TI_BASE" "$TI_END"
-    # Two in one read: the limit waits for the read's end.
+    # Two in one read: C's limit waits for the read's end, and oxrok's for the frame's.
+    TI_FLAGS=--oracle-differs
+    TI_WHY=$WHOLE
     ti_sweep "a read of two" 1 "$TI_END+BASE:000000001+$TI_END+BASE:000000002"
+    TI_WHY=
+    TI_FLAGS=
+    # A frame whose reads come 500 ms apart, ADCO alone in the first. Bytes at the
+    # line's real rate come so, and here C stops with nothing.
+    emu_options period=25 scan-burst=2 burst=2 packet=$(emu_hex '\002\nADCO 031428097115 @\r\nOPTARIF BASE 0\r\nISOUSC 30 9\r\nBASE 000012000 N\r\nPTEC TH.. $\r\nIINST 002 Y\r\nIMAX 030 B\r\nPAPP 00460 +\r\nHHPHC A ,\r\nMOTDETAT 000000 B\r\003'),$(emu_hex '\002\nADCO 031428097115 @\r\nOPTARIF BASE 0\r\nISOUSC 30 9\r\nBASE 000012000 N\r\nPTEC TH.. $\r\nIINST 002 Y\r\nIMAX 030 B\r\nPAPP 00460 +\r\nHHPHC A ,\r\nMOTDETAT 000000 B\r\003'),$(emu_hex '\002\nADCO 031428097115 @\r'),$(emu_hex '\nBASE 000000001 L\r\nIINST 002 Y\r\003')
+    emu_case "a frame in two reads" --oracle-differs "$WHOLE" -- -d $K --samples 1
     ti_sweep "IINST and PAPP alone" 1 "IINST:002+PAPP:00460+$TI_END"
     emu_case "channels IINST" -- -d $K -C IINST --samples 1
     emu_case "swapped names" --oracle-differs "$SWAP" -- -d $K -C IINST=PAPP,PAPP=IINST --samples 1
@@ -201,10 +198,20 @@ emu_cases() {
 
     # The values: what atoi makes, as a float.
     ti_sweep "values" 1 "BASE:000000000+BASE:000000001+BASE:016777216+BASE:016777217+$TI_END"
-    ti_sweep "values large" 1 "BASE:123456789+BASE:999999999+BASE:2147483647+BASE:2147483648+$TI_END"
-    ti_sweep "values wider" 1 "BASE:4294967296+BASE:9999999999+BASE:999999999999+$TI_END"
+    ti_sweep "values large" 1 "BASE:123456789+BASE:999999999+$TI_END"
+    ti_sweep "an index of 8" 1 "BASE:00012345+HCHC:00012345+$TI_END"
+    TI_FLAGS="--no-output --oracle-differs"
+    TI_WHY=$NOT_A_READING
+    ti_sweep "values wider" 1 "BASE:2147483647+BASE:4294967296+BASE:9999999999+BASE:999999999999+$TI_END"
     ti_lines "values signed" '\nBASE +12 )\r\nBASE -12 +\r\nIINST -1 %%\r\nPAPP --1 <\r'
     ti_sweep "values not numbers" 1 "BASE:ABC+BASE:12A+BASE:1.5+BASE:0x10+BASE:....+$TI_END"
+    ti_sweep "values of another width" 1 "BASE:1234567+IINST:12+IINST:0012+PAPP:0460+PAPP:000460+$TI_END"
+    # One flipped bit 6: the control still passes, and C reports 0 Wh, 1 Wh and 0 A.
+    ti_lines "a flipped bit in a value" '\nBASE p00012000 N\r\nBASE 000012q00 O\r\nIINST 0q2 Z\r'
+    TI_FLAGS="--stderr --oracle-differs"
+    ti_sweep "values not numbers warn" 1 "BASE:12A+$TI_END"
+    TI_WHY=
+    TI_FLAGS=
     ti_lines "a space inside a value" '\nBASE 12 34 >\r\nBASE 000000003 N\r'
 
     # What makes a group. Of no consequence: STX and ETX, and what comes before a
@@ -221,19 +228,27 @@ emu_cases() {
     ti_lines "other separators" '\nBASE\v000000001\fL\r\nBASE;000000001;L\r'
     ti_lines "junk around groups" '\002\003\004xx\nBASE 000000001 L\rxx\nBASE 000000002 M\r\003\rxx'
     ti_lines "a CR ahead of the group" '\r\r\nBASE 000000001 L\r\r\r'
+    TI_FLAGS=--oracle-differs
+    TI_WHY=$CROSS
     ti_lines "a group across a CR" '\nBASE\r\n000000001 L\r\nBASE 000000002 M\r'
+    TI_WHY=
+    TI_FLAGS=
     ti_lines "a LF inside a group" '\nBASE 0000\n00001 L\r\nBASE 000000002 M\r'
     ti_lines "a tail behind the control" '\nBASE 000000001 Lx\r\nBASE 000000001 L \r\nBASE 000000002 M\r'
     # Widths: %%8s and %%13s cut a field, and the rest is the next one.
     ti_lines "label of 8" '\nBBRHCJBX 000000001 6\r\nBASE 000000002 M\r'
     ti_lines "label of 9" '\nBBRHCJBXY 000000001 6\r\nBASE 000000002 M\r'
     ti_lines "label cut into data" '\nBASEBASEB 8\r\nBASE 000000002 M\r'
-    ti_sweep "data of 12" 1 "BASE:000000000012+$TI_END"
+    TI_FLAGS=--oracle-differs
+    TI_WHY=$NOT_A_READING
+    ti_sweep "data of 12" 1 "BASE:000000000012+BASE:000000001+$TI_END"
+    ti_lines "a high byte in data" '\nBASE 000000001\351 5\r\nBASE 000000001\351 B\r\nBASE 000000002 M\r'
+    TI_WHY=
+    TI_FLAGS=
     ti_sweep "data of 14" 1 "BASE:00000000000014+BASE:000000002+$TI_END"
     ti_sweep "empty data" 1 "BASE:+BASE:000000002+$TI_END"
     # A NUL ends a string, and bytes over 127 sum as signed chars.
     ti_lines "a NUL" '\nBASE 000\00000001 L\r\nBASE 000000002 M\r'
-    ti_lines "a high byte in data" '\nBASE 000000001\351 5\r\nBASE 000000001\351 B\r\nBASE 000000002 M\r'
     ti_lines "a high control" '\nBASE 000000001 \314\r\nBASE 000000002 M\r'
     TI_FLAGS=--no-output
     ti_sweep "wrong controls" 1 "BASE:000000001:21+BASE:000000002:7f+BASE:000000003:00+$TI_END"
@@ -275,20 +290,29 @@ emu_cases() {
     emu_options frame=$TI_BASE
     emu_case "free stream, samples" --filter '2,$d' --tx-filter "$N" --timeout 20 -- -d $K --samples 1
     emu_case "free stream, time" --filter '2,$d' --tx-filter "$N" --timeout 20 -- -d $K --time 3s
+    # A limit that runs out ahead of the first frame, held 150 offers, about 3 s, so
+    # no stall of oxrok's shows it a frame, and C waits for that frame.
+    emu_options period=5 scan-burst=2 late=150 frame=$TI_BASE
     emu_case "time" --oracle-differs "$LATE_LIMIT" --no-output --filter '2,$d' --tx-filter "$N" --timeout 20 -- -d $K --time 300ms
     emu_case "time and samples" --oracle-differs "$LATE_LIMIT" --no-output --filter '2,$d' --tx-filter "$N" --timeout 20 -- -d $K --time 300ms --samples 100
-    emu_case "free stream, time 1 ms" --oracle-differs "$LATE_LIMIT" --tx-filter "$N" --no-output --timeout 20 -- -d $K --time 1ms
+    emu_case "time 1 ms" --oracle-differs "$LATE_LIMIT" --tx-filter "$N" --no-output --timeout 20 -- -d $K --time 1ms
+    emu_case "time warns of no group" --oracle-differs "$LATE_LIMIT" --stderr --tx-filter "$N" --timeout 20 -- -d $K --time 300ms
     emu_options
 
     # Silence, where C has no end: protocol.c:193 returns before any limit.
     emu_options period=5 scan-burst=2 burst=1 frame=$TI_BASE,$TI_BASE,$TI_BASE
     emu_case "lib silence and samples" --libsigrok --hangs --timeout 3 -- -d $K --samples 100
     emu_case "lib silence and time" --libsigrok --hangs --timeout 3 -- -d $K --time 200ms
-    # 25 s, as the bound is 10 s and C is given longer: the one case that shows it.
-    emu_case "silence and samples" --oracle-bug "$NO_BOUND" --oracle-hangs --oxrok-fails "no bytes from the meter for 10 s" --timeout 15 -- -d $K --samples 100
     emu_case "silence and time" --oracle-bug "$TIME_HANG" --oracle-hangs --timeout 5 -- -d $K --time 1s
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP" --oracle-hangs --timeout 5 --unplug model -- -d $K --samples 100
     emu_case "interrupt a silent meter" --oracle-bug "$SIGINT_BUG" --timeout 5 --interrupt model -- -d $K --samples 100
+    emu_options
+
+    # A meter silent from the start: 15 s for C to show it hangs and 10 s for oxrok's
+    # bound, the one case that shows that bound. After a sample it warns and goes on,
+    # for minutes, which the unit tests hold.
+    emu_options period=5 scan-burst=2 burst=0 frame=$TI_BASE,$TI_BASE
+    emu_case "silence and samples" --oracle-bug "$NO_BOUND" --oracle-hangs --oxrok-fails "no bytes from the meter for 10 s" --timeout 15 --no-output -- -d $K --samples 100
     emu_options
 
     # The cable.
@@ -296,14 +320,5 @@ emu_cases() {
     emu_case "stall lines" --keep-header --no-output --stderr -- -d $K --scan
     emu_options period=5 scan-burst=2 stall=line
     emu_case "stall line" --keep-header --no-output -- -d $K --scan
-    emu_options
-
-    # Stock libsigrok: no scan finds it.
-    SIGROK_CLI=$TI_STOCK_CLI
-    EMU_LIBSIGROK_RUN=$TI_STOCK_RUN
-    emu_options period=5 scan-burst=2
-    emu_case "stock scan" --oracle-differs "$NO_SCAN" --keep-header -- -d $K --scan
-    emu_options period=5 scan-burst=2 burst=1 frame=$TI_BASE,$TI_BASE,$TI_END
-    emu_case "stock capture" --oracle-bug "$NO_SCAN" --no-output -- -d $K --samples 1
     emu_options
 }

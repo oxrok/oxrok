@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::teleinfo: The meter sends in standard mode, which is not supported: set it to historic.

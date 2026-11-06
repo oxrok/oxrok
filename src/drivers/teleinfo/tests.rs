@@ -44,7 +44,10 @@ struct Line {
     read_fails: bool,
     /// Reads that fail before they stop failing.
     failed_reads: usize,
-    writes: usize,
+    /// What was written, which no test should see.
+    writes: crate::serial::WriteLog,
+    /// Reads that give nothing, at once, before the queue flows.
+    empty_reads: usize,
     purges: usize,
     reads: usize,
 }
@@ -103,6 +106,10 @@ impl Port for FakePort {
             line.failed_reads -= 1;
             return Err(Error::Disconnected);
         }
+        if line.empty_reads > 0 {
+            line.empty_reads -= 1;
+            return Ok(0);
+        }
         let held = line.every > 0 && !line.reads.is_multiple_of(line.every);
         if line.queued.is_empty()
             && !held
@@ -136,8 +143,8 @@ impl Port for FakePort {
         std::thread::sleep(wait);
         Ok(n)
     }
-    fn write(&mut self, _: &[u8]) -> Result<()> {
-        self.0.line().writes += 1;
+    fn write(&mut self, data: &[u8]) -> Result<()> {
+        self.0.line().writes.push((Instant::now(), data.to_vec()));
         Ok(())
     }
     fn purge(&mut self) -> Result<()> {
@@ -260,6 +267,16 @@ fn bounded(test: impl FnOnce() + Send + 'static) {
     }
 }
 
+/// Bounds short enough for a test: this first, this behind an EOT, this after a
+/// sample.
+fn bounds(first: u64, interrupted: u64, after_sample: u64) -> Bounds {
+    Bounds {
+        first: Duration::from_millis(first),
+        interrupted: Duration::from_millis(interrupted),
+        after_sample: Duration::from_millis(after_sample),
+    }
+}
+
 fn params() -> Params {
     Params::parse(SERIALCOMM).unwrap()
 }
@@ -277,8 +294,6 @@ fn the_constants_are_c_s_and_the_specification_s() {
     assert_eq!(BUF_SIZE, 256);
     assert_eq!(SCAN_TIME, Duration::from_millis(3000));
     assert_eq!(READ_TIME, Duration::from_millis(50));
-    assert_eq!(NO_SAMPLE_BOUND, Duration::from_secs(10));
-    assert_eq!(INTERRUPTED_BOUND, Duration::from_secs(300));
     assert_eq!(SERIALCOMM, "1200/7e1");
 }
 
@@ -298,16 +313,16 @@ fn a_scan_reads_292_bytes_and_no_more_and_finds_the_option() {
     bytes.extend(b"more");
     line.queue(&bytes);
     let found = detect(line.port().as_mut(), &params(), BOUND);
-    assert_eq!(found, Some(Optarif::Hc));
+    assert_eq!(found, Probed::Found(Optarif::Hc));
     assert_eq!(line.line().queued.len(), 4, "what follows stays on the way");
-    assert_eq!(line.line().writes, 0);
+    assert_eq!(line.line().writes.len(), 0);
 }
 
 #[test]
 fn a_scan_takes_its_bytes_in_pieces() {
     let line = Shared::default().with(|l| l.per_read = 7);
     line.queue(&scan_bytes(&frame(&[("OPTARIF", "EJP.")])));
-    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Some(Optarif::Ejp));
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Found(Optarif::Ejp));
 }
 
 #[test]
@@ -316,7 +331,7 @@ fn a_scan_gives_up_at_its_time_with_too_few_bytes_even_with_an_option() {
     line.queue(&frame(&[("OPTARIF", "BASE")]));
     let before = Instant::now();
     let found = detect(line.port().as_mut(), &params(), Duration::from_millis(100));
-    assert_eq!(found, None);
+    assert_eq!(found, Probed::TooFew);
     assert!(before.elapsed() >= Duration::from_millis(100), "it waits out its time");
 }
 
@@ -324,10 +339,10 @@ fn a_scan_gives_up_at_its_time_with_too_few_bytes_even_with_an_option() {
 fn a_scan_with_its_bytes_and_no_known_option_finds_nothing() {
     let line = Shared::default();
     line.queue(&scan_bytes(&frame(&[("OPTARIF", "TEMP")])));
-    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), None);
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Unknown);
     let line = Shared::default();
     line.queue(&scan_bytes(b""));
-    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), None);
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Unknown);
     assert!(line.line().queued.is_empty(), "looked only when all was in");
 }
 
@@ -335,7 +350,7 @@ fn a_scan_with_its_bytes_and_no_known_option_finds_nothing() {
 fn a_failed_read_is_no_data_and_the_scan_goes_on() {
     let line = Shared::default().with(|l| l.failed_reads = 2);
     line.queue(&scan_bytes(&frame(&[("OPTARIF", "BASE")])));
-    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Some(Optarif::Base));
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Found(Optarif::Base));
     assert_eq!(line.line().reads, 3);
 }
 
@@ -343,7 +358,24 @@ fn a_failed_read_is_no_data_and_the_scan_goes_on() {
 fn a_scan_on_a_port_that_keeps_failing_ends_at_its_time() {
     let line = Shared::default().with(|l| l.read_fails = true);
     let found = detect(line.port().as_mut(), &params(), Duration::from_millis(100));
-    assert_eq!(found, None);
+    assert_eq!(found, Probed::TooFew);
+}
+
+#[test]
+fn a_scan_of_the_standard_form_says_so() {
+    let line = Shared::default();
+    line.queue(&scan_bytes(b"\x02\nADSC\t041876097115\tx\r"));
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Standard);
+    // A known option outranks it, and too few bytes say nothing of it.
+    let line = Shared::default();
+    let mut text = group("OPTARIF", "BASE");
+    text.extend(b"\nADSC\t041876097115\tx\r");
+    line.queue(&scan_bytes(&text));
+    assert_eq!(detect(line.port().as_mut(), &params(), BOUND), Probed::Found(Optarif::Base));
+    let line = Shared::default();
+    line.queue(b"\x02\nADSC\t041876097115\tx\r");
+    let found = detect(line.port().as_mut(), &params(), Duration::from_millis(50));
+    assert_eq!(found, Probed::TooFew);
 }
 
 /// A line's real rate, 120 bytes a second by the clock: a scan takes 2.43 s of C's
@@ -355,7 +387,7 @@ fn a_scan_at_the_lines_rate_fits_in_its_time() {
         l.paced = Some((Instant::now(), Duration::from_micros(8333)));
     });
     let before = Instant::now();
-    assert_eq!(detect(line.port().as_mut(), &params(), SCAN_TIME), Some(Optarif::Base));
+    assert_eq!(detect(line.port().as_mut(), &params(), SCAN_TIME), Probed::Found(Optarif::Base));
     assert!(before.elapsed() >= Duration::from_millis(2400), "the bytes took their time");
 }
 
@@ -422,7 +454,7 @@ fn a_capture_sends_each_reading_with_its_unit() {
         assert_eq!(analog[2].channels, [3]);
         assert_eq!(analog[2].samples, [460.0]);
         assert_eq!((analog[2].mq, analog[2].unit), (Mq::Power, Unit::VoltAmpere));
-        assert_eq!(line.line().writes, 0, "a meter takes nothing");
+        assert_eq!(line.line().writes.len(), 0, "a meter takes nothing");
     });
 }
 
@@ -430,11 +462,18 @@ fn a_capture_sends_each_reading_with_its_unit() {
 fn a_big_index_is_its_nearest_float() {
     bounded(|| {
         let line = Shared::default();
-        line.queue(&frame(&[("BASE", "123456789"), ("BASE", "16777217"), ADCO]));
+        line.queue(&frame(&[
+            ("BASE", "123456789"),
+            ("BASE", "016777217"),
+            ("BASE", "033554435"),
+            ("BASE", "067108869"),
+            ADCO,
+        ]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
-        assert_eq!(values(&got, 1), [123_456_792.0, 16_777_216.0]);
+        // 8 Wh steps, then 2, 4 and 8.
+        assert_eq!(values(&got, 1), [123_456_792.0, 16_777_216.0, 33_554_436.0, 67_108_872.0]);
     });
 }
 
@@ -442,17 +481,17 @@ fn a_big_index_is_its_nearest_float() {
 fn each_option_feeds_its_channels_and_no_others() {
     bounded(|| {
         let all = [
-            ("BASE", "1"),
-            ("HCHP", "2"),
-            ("HCHC", "3"),
-            ("EJPHN", "4"),
-            ("EJPHPM", "5"),
-            ("BBRHPJB", "6"),
-            ("BBRHPJW", "7"),
-            ("BBRHPJR", "8"),
-            ("BBRHCJB", "11"),
-            ("BBRHCJW", "12"),
-            ("BBRHCJR", "13"),
+            ("BASE", "000000001"),
+            ("HCHP", "000000002"),
+            ("HCHC", "000000003"),
+            ("EJPHN", "000000004"),
+            ("EJPHPM", "000000005"),
+            ("BBRHPJB", "000000006"),
+            ("BBRHPJW", "000000007"),
+            ("BBRHPJR", "000000008"),
+            ("BBRHCJB", "000000011"),
+            ("BBRHCJW", "000000012"),
+            ("BBRHCJR", "000000013"),
             ADCO,
         ];
         for (optarif, wanted) in [
@@ -497,15 +536,94 @@ fn a_channel_that_is_off_gets_nothing_and_a_renamed_one_keeps_its_readings() {
 }
 
 #[test]
-fn the_limit_counts_adco_and_waits_for_a_reads_end() {
+fn a_limit_ends_within_a_read_at_the_end_of_a_frame() {
     bounded(|| {
         let line = Shared::default();
-        line.queue(&frame(&[ADCO, ("BASE", "1"), ADCO, ("BASE", "2")]));
-        line.queue(&frame(&[ADCO, ("BASE", "3")]));
+        // By its next ADCO, with no ETX, then by its ETX.
+        line.queue(&frame(&[ADCO, ("BASE", "000000001"), ADCO, ("BASE", "000000002")]));
+        line.queue(&frame(&[ADCO, ("BASE", "000000003")]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
-        assert_eq!(values(&got, 1), [1.0, 2.0, 3.0], "all of a read");
+        assert_eq!(values(&got, 1), [1.0], "one frame, whatever else that read held");
+        let line = Shared::default();
+        line.queue(&frame(&[ADCO, ("BASE", "000000001")]));
+        line.queue(&frame(&[ADCO, ("BASE", "000000002")]));
+        line.queue(&frame(&[ADCO, ("BASE", "000000003")]));
+        let mut d = device(Optarif::Base, &line);
+        limit_samples(&mut d, 2);
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got, 1), [1.0, 2.0]);
+        assert_eq!(failure(&got), None);
+    });
+}
+
+#[test]
+fn an_etx_with_no_adco_and_a_frame_cut_by_an_eot_are_no_samples() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(b"\x03\x03");
+        line.queue(&frame(&[("BASE", "000000001")]));
+        line.queue(&group("ADCO", "031428097115"));
+        line.queue(&group("BASE", "000000002"));
+        line.queue(b"\x04");
+        line.queue(&frame(&[ADCO, ("BASE", "000000003")]));
+        let mut d = device(Optarif::Base, &line);
+        limit_samples(&mut d, 1);
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got, 1), [1.0, 2.0, 3.0]);
+        assert_eq!(failure(&got), None);
+    });
+}
+
+/// `--samples 1` at the real rate, from a frame's ADCO on: a read ends after each
+/// few bytes, and all of the frame must still come out. This is what C, which counts
+/// at ADCO and looks after each read, by reading would cut.
+#[test]
+fn samples_1_at_the_lines_rate_gives_the_whole_frame() {
+    bounded(|| {
+        let line = Shared::default().with(|l| {
+            l.paced = Some((Instant::now(), Duration::from_micros(8333)));
+        });
+        line.queue(&base_frame("000012345"));
+        line.queue(&base_frame("000012346"));
+        let mut d = device(Optarif::Base, &line);
+        limit_samples(&mut d, 1);
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got, 1), [12345.0]);
+        assert_eq!(values(&got, 2), [2.0]);
+        assert_eq!(values(&got, 3), [460.0]);
+        assert_eq!(failure(&got), None);
+    });
+}
+
+#[test]
+fn a_value_that_is_no_reading_is_dropped_between_good_ones() {
+    bounded(|| {
+        let line = Shared::default();
+        let mut bytes = vec![2];
+        bytes.extend(group("BASE", "000012000"));
+        // One flipped bit 6: the control stands.
+        let mut flipped = group("BASE", "000012100");
+        flipped[12] ^= 0x40;
+        assert_eq!(protocol::next_group(&flipped).unwrap().1, flipped.len());
+        assert!(protocol::next_group(&flipped).unwrap().0.is_some(), "the control passes");
+        bytes.extend(flipped);
+        for (label, data) in
+            [("BASE", "12"), ("BASE", "+00012345"), ("IINST", "0q2"), ("PAPP", "460")]
+        {
+            bytes.extend(group(label, data));
+        }
+        bytes.extend(group("BASE", "000012001"));
+        bytes.extend(group("ADCO", "031428097115"));
+        bytes.push(3);
+        line.queue(&bytes);
+        let mut d = device(Optarif::Base, &line);
+        limit_samples(&mut d, 1);
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got, 1), [12000.0, 12001.0]);
+        assert!(values(&got, 2).is_empty());
+        assert!(values(&got, 3).is_empty());
         assert_eq!(failure(&got), None);
     });
 }
@@ -516,7 +634,7 @@ fn the_limit_ends_the_capture_after_the_read_that_met_it() {
         let first = frame(&[ADCO]);
         let line = Shared::default().with(|l| l.per_read = first.len());
         line.queue(&first);
-        line.queue(&frame(&[("BASE", "1"), ADCO, ("BASE", "2")]));
+        line.queue(&frame(&[("BASE", "000000001"), ADCO, ("BASE", "000000002")]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
@@ -559,7 +677,7 @@ fn a_capture_at_the_lines_rate_gives_what_a_whole_read_does() {
         let line = Shared::default().with(|l| {
             l.paced = Some((Instant::now(), Duration::from_micros(8333)));
         });
-        line.queue(&frame(&[("BASE", "1"), ("IINST", "2"), ("PAPP", "3")]));
+        line.queue(&frame(&[("BASE", "000000001"), ("IINST", "002"), ("PAPP", "00003")]));
         line.queue(&frame(&[ADCO]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
@@ -567,9 +685,7 @@ fn a_capture_at_the_lines_rate_gives_what_a_whole_read_does() {
         assert_eq!(values(&got, 1), [1.0]);
         assert_eq!(values(&got, 2), [2.0]);
         assert_eq!(values(&got, 3), [3.0]);
-        // Bytes due by the clock come together under a load, so ADCO's ETX may too. That a
-        // read's end is exact is the next test's, on a fake that counts.
-        assert!(line.line().queued.len() <= 1, "nothing but ETX followed ADCO");
+        assert!(line.line().queued.is_empty(), "the frame's ETX ended it");
         assert_eq!(failure(&got), None);
     });
 }
@@ -601,7 +717,7 @@ fn bad_groups_are_stepped_over() {
         line.queue(b"\x02junk\r\nBASE 1 x\r");
         line.queue(&group("BASE", "000000002"));
         line.queue(b"\x03\x04\x02");
-        line.queue(&group("ADCO", "1"));
+        line.queue(&frame(&[("ADCO", "1")]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
@@ -621,6 +737,7 @@ fn a_control_of_a_space_counts_for_a_reading_and_a_sample() {
             .find(|d| group("ADCO", d).ends_with(b"  \r"))
             .unwrap();
         line.queue(&group("ADCO", &adco));
+        line.queue(b"\x03");
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
@@ -691,7 +808,7 @@ fn a_time_limit_above_the_bound_is_not_cut_by_it() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(50), Duration::from_millis(50));
+        d.bounds = bounds(50, 50, 50);
         limit_samples(&mut d, 1);
         limit_msec(&mut d, 250);
         let before = Instant::now();
@@ -706,10 +823,9 @@ fn no_limit_has_no_bound() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(20), Duration::from_millis(20));
+        d.bounds = bounds(20, 20, 20);
         let rx = start(&mut d);
-        let reads = 8;
-        line.wait_for_reads(reads);
+        line.wait_for_reads(8);
         d.stop().unwrap();
         let got = packets(&rx);
         assert_eq!(failure(&got), None, "only a stop ended it");
@@ -717,11 +833,11 @@ fn no_limit_has_no_bound() {
 }
 
 #[test]
-fn a_silent_meter_at_a_sample_limit_fails_the_capture() {
+fn a_silent_meter_with_no_sample_yet_fails_the_capture() {
     bounded(|| {
         let line = Shared::default();
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(200), Duration::from_millis(200));
+        d.bounds = bounds(200, 60_000, 60_000);
         limit_samples(&mut d, 1);
         let before = Instant::now();
         let got = packets(&start(&mut d));
@@ -734,17 +850,41 @@ fn a_silent_meter_at_a_sample_limit_fails_the_capture() {
 }
 
 #[test]
+fn a_silent_meter_after_a_sample_is_waited_for_up_to_its_bound() {
+    bounded(|| {
+        let line = Shared::default();
+        line.queue(&frame(&[ADCO, ("BASE", "000000001")]));
+        let mut d = device(Optarif::Base, &line);
+        d.bounds = bounds(20, 60_000, 400);
+        limit_samples(&mut d, 2);
+        let before = Instant::now();
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got, 1), [1.0]);
+        assert_eq!(
+            failure(&got),
+            Some("device error: no bytes from the meter for 0 s, with samples to go")
+        );
+        assert!(before.elapsed() >= Duration::from_millis(400), "not at the first bound");
+    });
+}
+
+#[test]
 fn a_stream_with_no_adco_at_a_sample_limit_fails_and_says_bytes_came() {
     bounded(|| {
         let line = Shared::default().with(|l| {
-            l.stream = Some(frame(&[("BASE", "1")]));
+            l.stream = Some(frame(&[("BASE", "000000001")]));
         });
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(200), Duration::from_millis(200));
+        d.bounds = bounds(200, 60_000, 60_000);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
-        let why = failure(&got).unwrap();
-        assert!(why.starts_with("device error: bytes come, but no ADCO group for 0 s"), "{why}");
+        assert_eq!(
+            failure(&got),
+            Some(
+                "device error: bytes come, but no ADCO group for 0 s, with samples to go: is the \
+                 line 1200/7e1, and the meter in historic mode?"
+            )
+        );
         assert!(!values(&got, 1).is_empty(), "its readings went out");
     });
 }
@@ -756,7 +896,7 @@ fn a_stream_of_wrong_frames_is_no_sample_either() {
             l.stream = Some(b"\nADCO 031428097115 x\r".to_vec());
         });
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(200), Duration::from_millis(200));
+        d.bounds = bounds(200, 60_000, 60_000);
         limit_samples(&mut d, 1);
         let got = packets(&start(&mut d));
         assert!(failure(&got).unwrap().contains("no ADCO group"), "{got:?}");
@@ -770,11 +910,15 @@ fn a_slow_consumer_does_not_fail_the_capture() {
     bounded(|| {
         let line = Shared::default().with(|l| {
             l.per_read = 16;
-            l.stream = Some(frame(&[("BASE", "1"), ("BASE", "2"), ("BASE", "3"), ADCO]));
+            l.stream = Some(frame(&[
+                ("BASE", "000000001"),
+                ("BASE", "000000002"),
+                ("BASE", "000000003"),
+                ADCO,
+            ]));
         });
         let mut d = device(Optarif::Base, &line);
-        let bound = Duration::from_millis(100);
-        d.bounds = (bound, bound);
+        d.bounds = bounds(100, 100, 100);
         limit_samples(&mut d, 3);
         let (tx, rx) = sync_channel(1);
         d.start(PacketSink::new(tx, 0)).unwrap();
@@ -786,51 +930,137 @@ fn a_slow_consumer_does_not_fail_the_capture() {
             if p == Packet::End {
                 break;
             }
-            std::thread::sleep(bound * 2);
+            std::thread::sleep(Duration::from_millis(200));
         }
     });
 }
 
+/// Bytes ready when a read comes win over a timer that would have run out in the
+/// gap before it: the first read gives nothing at once, the pause outlasts the
+/// bound, and the frame is there for the next.
 #[test]
-fn the_excuse_moves_both_clocks() {
-    let now = Instant::now();
-    let s = Duration::from_secs;
-    let mut w = Watch::new(s(10), s(300), now);
-    w.excuse(s(100));
-    assert_eq!(w.verdict(now + s(109)), Wait::Fine);
-    assert_eq!(w.verdict(now + s(110)), Wait::NoBytes);
-    w.heard(b'x', now + s(109));
-    assert_eq!(w.verdict(now + s(110)), Wait::NoSample);
+fn a_ready_frame_wins_over_the_timer() {
+    bounded(|| {
+        let line = Shared::default().with(|l| l.empty_reads = 1);
+        line.queue(&frame(&[ADCO, ("BASE", "000000001")]));
+        let mut d = device(Optarif::Base, &line);
+        d.bounds = bounds(100, 100, 100);
+        d.empty_pause = Duration::from_millis(300);
+        limit_samples(&mut d, 1);
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None);
+        assert_eq!(values(&got, 1), [1.0]);
+    });
+}
+
+const LIMITED: bool = true;
+const FREE: bool = false;
+
+#[test]
+fn the_constants_of_the_waits() {
+    assert_eq!(BOUNDS.first, Duration::from_secs(10));
+    assert_eq!(BOUNDS.interrupted, Duration::from_secs(300));
+    assert_eq!(BOUNDS.after_sample, Duration::from_secs(600));
 }
 
 #[test]
-fn one_stray_byte_does_not_lift_the_bound() {
-    let now = Instant::now();
-    let bound = Duration::from_secs(10);
-    let mut w = Watch::new(bound, Duration::from_secs(300), now);
-    w.heard(b'x', now + Duration::from_secs(9));
-    assert_eq!(w.verdict(now + Duration::from_secs(9)), Wait::Fine);
-    assert_eq!(w.verdict(now + Duration::from_secs(10)), Wait::NoSample);
+fn what_each_wait_says() {
+    let s = Duration::from_secs(10);
+    for (lack, on, text) in [
+        (
+            Lack::NoBytes,
+            true,
+            "no bytes from the meter for 10 s: is it on, and its cable in? Waiting on",
+        ),
+        (Lack::NoBytes, false, "no bytes from the meter for 10 s, with samples to go"),
+        (
+            Lack::NoSample,
+            true,
+            "bytes come, but no ADCO group for 10 s: is the line 1200/7e1, and the meter in \
+             historic mode? Waiting on",
+        ),
+        (
+            Lack::NoSample,
+            false,
+            "bytes come, but no ADCO group for 10 s, with samples to go: is the line 1200/7e1, \
+             and the meter in historic mode?",
+        ),
+        (
+            Lack::Interrupted,
+            true,
+            "the meter announced an interruption (EOT), and no sample for 10 s. Waiting on",
+        ),
+        (
+            Lack::Interrupted,
+            false,
+            "the meter announced an interruption (EOT) and sent nothing for 10 s",
+        ),
+        (
+            Lack::InterruptedNoSample,
+            false,
+            "no ADCO group for 10 s, around the meter's interruptions (EOT)",
+        ),
+    ] {
+        assert_eq!(said(lack, s, on), text);
+    }
 }
 
 #[test]
-fn the_watch_from_both_sides_of_its_bound() {
+fn no_sample_yet_fails_at_the_first_bound_from_both_sides() {
     let now = Instant::now();
     let s = Duration::from_secs;
-    let at = |secs| now + s(secs);
-    let mut w = Watch::new(s(10), s(300), now);
-    assert_eq!(w.verdict(at(9)), Wait::Fine);
-    assert_eq!(w.verdict(at(10)), Wait::NoBytes);
-    w.heard(b'x', at(8));
-    w.counted(at(8));
-    assert_eq!(w.verdict(at(17)), Wait::Fine);
-    assert_eq!(w.verdict(at(18)), Wait::NoBytes, "from the last byte");
-    w.heard(b'x', at(15));
-    assert_eq!(w.verdict(at(17)), Wait::Fine);
-    assert_eq!(w.verdict(at(18)), Wait::NoSample, "bytes, and no sample since 8");
-    w.counted(at(16));
-    assert_eq!(w.verdict(at(18)), Wait::Fine);
-    assert_eq!(w.verdict(Instant::now().checked_sub(s(1)).unwrap_or(now)), Wait::Fine, "no panic");
+    let mut w = Watch::new(BOUNDS, now);
+    assert_eq!(w.verdict(LIMITED, now + Duration::from_millis(9999)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, now + s(10)), Wait::Fail(Lack::NoBytes, s(10)));
+    let mut w = Watch::new(BOUNDS, now);
+    w.heard(b'x', now + s(9));
+    assert_eq!(w.verdict(LIMITED, now + s(9)), Wait::Fine, "one stray byte");
+    assert_eq!(w.verdict(LIMITED, now + s(10)), Wait::Fail(Lack::NoSample, s(10)));
+}
+
+#[test]
+fn after_a_sample_it_warns_once_and_fails_at_the_long_bound() {
+    let now = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = Watch::new(BOUNDS, now);
+    w.heard(b'x', now);
+    w.counted(now);
+    assert_eq!(w.verdict(LIMITED, now + s(9)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, now + s(10)), Wait::Warn(Lack::NoBytes, s(10)));
+    assert_eq!(w.verdict(LIMITED, now + s(11)), Wait::Fine, "once");
+    assert_eq!(w.verdict(LIMITED, now + s(599)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, now + s(600)), Wait::Fail(Lack::NoBytes, s(600)));
+    // Bytes that bring no ADCO: a warning of their own, and the long bound from it.
+    let mut w = Watch::new(BOUNDS, now);
+    w.counted(now);
+    w.heard(b'x', now + s(9));
+    assert_eq!(w.verdict(LIMITED, now + s(10)), Wait::Warn(Lack::NoSample, s(10)));
+    w.heard(b'x', now + s(599));
+    assert_eq!(w.verdict(LIMITED, now + s(599)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, now + s(600)), Wait::Fail(Lack::NoSample, s(600)));
+    // What comes back clears the warning for a next spell.
+    let mut w = Watch::new(BOUNDS, now);
+    w.counted(now);
+    assert_eq!(w.verdict(LIMITED, now + s(10)), Wait::Warn(Lack::NoBytes, s(10)));
+    w.heard(b'x', now + s(11));
+    w.counted(now + s(11));
+    assert_eq!(w.verdict(LIMITED, now + s(21)), Wait::Warn(Lack::NoBytes, s(10)));
+}
+
+#[test]
+fn with_no_sample_limit_alone_it_warns_and_never_fails() {
+    let now = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = Watch::new(BOUNDS, now);
+    assert_eq!(w.verdict(FREE, now + s(10)), Wait::Warn(Lack::NoBytes, s(10)));
+    assert_eq!(w.verdict(FREE, now + s(100_000)), Wait::Fine);
+    let mut w = Watch::new(BOUNDS, now);
+    w.heard(b'x', now + s(9));
+    assert_eq!(w.verdict(FREE, now + s(10)), Wait::Warn(Lack::NoSample, s(10)));
+    let mut w = Watch::new(BOUNDS, now);
+    w.heard(EOT, now);
+    assert_eq!(w.verdict(FREE, now + s(10)), Wait::Warn(Lack::Interrupted, s(10)));
+    assert_eq!(w.verdict(FREE, now + s(100_000)), Wait::Fine);
 }
 
 #[test]
@@ -838,22 +1068,60 @@ fn an_eot_lengthens_the_wait_and_what_follows_it_starts_over() {
     let now = Instant::now();
     let s = Duration::from_secs;
     let at = |secs| now + s(secs);
-    let mut w = Watch::new(s(10), s(300), now);
+    let mut w = Watch::new(BOUNDS, now);
+    w.counted(at(1));
     w.heard(EOT, at(1));
-    assert_eq!(w.verdict(at(11)), Wait::Fine);
-    assert_eq!(w.verdict(at(300)), Wait::Fine);
-    assert_eq!(w.verdict(at(301)), Wait::Interrupted);
+    assert_eq!(w.verdict(LIMITED, at(10)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, at(11)), Wait::Warn(Lack::Interrupted, s(10)));
+    assert_eq!(w.verdict(LIMITED, at(300)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, at(301)), Wait::Fail(Lack::Interrupted, s(300)));
     // It comes back after 2 minutes: the wait for a sample starts there.
+    let mut w = Watch::new(BOUNDS, now);
+    w.heard(EOT, at(1));
     w.heard(2, at(121));
-    assert_eq!(w.verdict(at(122)), Wait::Fine);
-    assert_eq!(w.verdict(at(130)), Wait::Fine);
-    assert_eq!(w.verdict(at(131)), Wait::NoBytes);
-    w.heard(b'x', at(130));
-    assert_eq!(w.verdict(at(131)), Wait::NoSample, "10 s from the return");
-    // An EOT inside a read that goes on is no interruption.
-    let mut w = Watch::new(s(10), s(300), now);
+    assert_eq!(w.verdict(LIMITED, at(122)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, at(130)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, at(131)), Wait::Fail(Lack::NoBytes, s(10)));
+    // An EOT that a read holds ahead of other bytes is no interruption.
+    let mut w = Watch::new(BOUNDS, now);
     w.heard(b'x', at(1));
-    assert_eq!(w.verdict(at(11)), Wait::NoBytes);
+    assert_eq!(w.verdict(LIMITED, at(11)), Wait::Fail(Lack::NoBytes, s(10)));
+}
+
+/// Groups with no `ADCO`, each read ending in an EOT: each brings the clock of a
+/// return along, so the cap goes by the `ADCO` itself.
+#[test]
+fn a_stream_of_eots_with_no_adco_has_a_bound() {
+    let now = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = Watch::new(BOUNDS, now);
+    let mut t = 0;
+    while t < 299 {
+        t += 1;
+        w.heard(EOT, now + s(t));
+        assert_eq!(w.verdict(LIMITED, now + s(t)), Wait::Fine, "{t}");
+    }
+    w.heard(EOT, now + s(300));
+    assert_eq!(w.verdict(LIMITED, now + s(300)), Wait::Fail(Lack::InterruptedNoSample, s(300)));
+    // An ADCO lifts it.
+    let mut w = Watch::new(BOUNDS, now);
+    w.counted(now + s(250));
+    w.heard(EOT, now + s(300));
+    assert_eq!(w.verdict(LIMITED, now + s(300)), Wait::Fine);
+}
+
+#[test]
+fn the_excuse_moves_all_the_clocks() {
+    let now = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = Watch::new(BOUNDS, now);
+    w.excuse(s(100));
+    assert_eq!(w.verdict(LIMITED, now + s(109)), Wait::Fine);
+    assert_eq!(w.verdict(LIMITED, now + s(110)), Wait::Fail(Lack::NoBytes, s(10)));
+    let mut w = Watch::new(BOUNDS, now);
+    w.excuse(s(100));
+    w.heard(b'x', now + s(109));
+    assert_eq!(w.verdict(LIMITED, now + s(110)), Wait::Fail(Lack::NoSample, s(10)));
 }
 
 #[test]
@@ -862,14 +1130,14 @@ fn an_interruption_says_so() {
         let line = Shared::default();
         line.queue(b"\x02\nBASE 0\x04");
         let mut d = device(Optarif::Base, &line);
-        d.bounds = (Duration::from_millis(50), Duration::from_millis(300));
+        d.bounds = bounds(50, 300, 60_000);
         limit_samples(&mut d, 1);
         let before = Instant::now();
         let got = packets(&start(&mut d));
         let why = failure(&got).unwrap();
         assert_eq!(
             why,
-            "device error: the meter announced an interruption and sent nothing for 0 s"
+            "device error: the meter announced an interruption (EOT) and sent nothing for 0 s"
         );
         assert!(before.elapsed() >= Duration::from_millis(300), "the long bound");
     });
@@ -900,7 +1168,7 @@ fn a_stop_ends_a_capture_that_is_offered_data() {
         let reads = line.line().reads;
         d.close().unwrap();
         assert_eq!(line.line().reads, reads, "nothing after the End");
-        assert_eq!(line.line().writes, 0);
+        assert_eq!(line.line().writes.len(), 0);
     });
 }
 
@@ -1002,7 +1270,7 @@ fn a_start_after_an_end_stuck_on_a_full_queue_does_not_hang_and_lets_the_old_sin
 fn a_second_capture_drops_what_came_between_and_keeps_no_head() {
     bounded(|| {
         let line = Shared::default();
-        line.queue(&frame(&[("BASE", "1"), ADCO]));
+        line.queue(&frame(&[("BASE", "000000001"), ADCO]));
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
         assert_eq!(values(&packets(&start(&mut d)), 1), [1.0]);
@@ -1015,7 +1283,7 @@ fn a_second_capture_drops_what_came_between_and_keeps_no_head() {
             rx
         };
         assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
-        line.queue(&frame(&[("BASE", "2"), ADCO]));
+        line.queue(&frame(&[("BASE", "000000002"), ADCO]));
         assert_eq!(values(&packets(&rx), 1), [2.0]);
         assert_eq!(line.line().purges, 2, "the second start's");
         // A reopen starts over.
@@ -1029,7 +1297,7 @@ fn a_first_capture_keeps_what_came_after_the_open() {
         let line = Shared::default();
         let mut d = device(Optarif::Base, &line);
         limit_samples(&mut d, 1);
-        line.queue(&frame(&[("BASE", "1"), ADCO]));
+        line.queue(&frame(&[("BASE", "000000001"), ADCO]));
         assert_eq!(values(&packets(&start(&mut d)), 1), [1.0]);
         assert_eq!(line.line().purges, 1, "only the open's");
     });
@@ -1049,7 +1317,7 @@ fn a_close_under_a_capture_waits_for_its_thread() {
         let reads = line.line().reads;
         std::thread::sleep(READ_TIME * 2);
         assert_eq!(line.line().reads, reads, "a read after the close");
-        assert_eq!(line.line().writes, 0);
+        assert_eq!(line.line().writes.len(), 0);
         drop(rx);
     });
 }
