@@ -1,0 +1,29 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+lecroy-xstream - LECROY WR8104 8.6.0 [S/N: LCRY0001N00001] with 4 channels: CH1 CH2 CH3 CH4
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    CH3: channel CH3
+    CH4: channel CH4
+Supported configuration options on channel group CH1:
+    num_vdiv
+    vdiv - supported values:
+      1 mV
+      2 mV
+      5 mV
+      10 mV
+      20 mV
+      50 mV
+      100 mV
+      200 mV
+      500 mV
+      1 V (current)
+      2 V
+      5 V
+      10 V
+      20 V
+      50 V
+    coupling: A1M, D50, D1M (current), GND, OVL
