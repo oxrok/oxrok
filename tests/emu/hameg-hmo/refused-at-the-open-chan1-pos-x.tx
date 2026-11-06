@@ -1,0 +1,12 @@
+tcp_connect
+tcp_out 2a49444e3f0a -> 6
+tcp_in 29 -> 48414d45472c484d4f333035342c454d55303030312c30352e3838360a
+tcp_close
+tcp_connect
+tcp_out 3a4348414e313a535441543f0a -> 13
+tcp_in 2 -> 310a
+tcp_out 3a4348414e313a5343414c3f0a -> 13
+tcp_in 10 -> 312e303030452b30300a
+tcp_out 3a4348414e313a504f533f0a -> 12
+tcp_in 2 -> 780a
+tcp_close

@@ -1,0 +1,56 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+hameg-hmo - HAMEG HMO722 05.886 [S/N: EMU0001] with 10 channels: CH1 D0 CH2 D1 D2 D3 D4 D5 D6 D7
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    POD1: channels D0 D1 D2 D3 D4 D5 D6 D7
+Supported configuration options across all channel groups:
+    (null): 
+    limit_samples: 
+    limit_frames: 0 (current)
+    samplerate
+    timebase - supported values:
+      2 ns
+      5 ns
+      10 ns
+      20 ns
+      50 ns
+      100 ns
+      200 ns
+      500 ns
+      1 us
+      2 us
+      5 us
+      10 us
+      20 us
+      50 us
+      100 us
+      200 us
+      500 us
+      1 ms
+      2 ms (current)
+      5 ms
+      10 ms
+      20 ms
+      50 ms
+      100 ms
+      200 ms
+      500 ms
+      1 s
+      2 s
+      5 s
+      10 s
+      20 s
+      50 s
+    num_hdiv
+    horiz_triggerpos: 0.500000 (current)
+    triggersource: CH1 (current), CH2, LINE, EXT, PATT, BUS1, BUS2, D0, D1, D2, D3, D4, D5, D6, D7
+    triggerslope: POS (current), NEG, EITH
+    triggerpattern: XXXX (current)
+    highresolution: on, off (current)
+    peakdetection: on, off (current)
