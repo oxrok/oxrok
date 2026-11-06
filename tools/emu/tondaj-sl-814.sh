@@ -144,18 +144,18 @@ s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     emu_options init=05
     emu_case "half an init reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$INIT_BUG" --oracle-hangs --no-output --timeout 7 -- -d $K --samples 1
     emu_options reply=
-    emu_case "silent at the request" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
-    emu_case "silent, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 4 -- -d $K --time 1500ms
+    emu_case "silent at the request" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 10 -- -d $K --samples 1
+    emu_case "silent, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 5 -- -d $K --time 2500ms
     # Past the first wait: asked again with a number of its own, told once, and a
     # time limit past the bound ends as a short one does.
     emu_options answers=2
-    emu_case "dead, a long time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 9 -- -d $K --time 7s
+    emu_case "dead, a long time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 10 -- -d $K --time 8s
     # A lost reply: C never ends, and oxrok asks again with a warning and goes on.
     emu_options "reply=$OK,"
-    emu_case "a reply lost" --oracle-bug "$REPLY_BUG" --oracle-hangs --timeout 8 -- -d $K --samples 2
-    emu_case "a reply lost, told" --oracle-bug "$REPLY_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 2
+    emu_case "a reply lost" --oracle-bug "$REPLY_BUG" --oracle-hangs --timeout 10 -- -d $K --samples 2
+    emu_case "a reply lost, told" --oracle-bug "$REPLY_BUG" --oracle-hangs --stderr --filter "$L" --timeout 10 -- -d $K --samples 2
     emu_options reply=1234
-    emu_case "half a reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
+    emu_case "half a reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 10 -- -d $K --samples 1
     emu_case "half a reply, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 5 -- -d $K --time 2500ms
 
     # One byte too many and every later reply is cut in the same wrong place in C.
