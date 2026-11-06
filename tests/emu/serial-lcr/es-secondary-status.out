@@ -1,0 +1,11 @@
+META output_frequency: 1000.000000
+META equiv_circuit_model: SERIES
+FRAME-BEGIN
+P2: 0.123 
+FRAME-END
+FRAME-BEGIN
+P2: inf 
+FRAME-END
+FRAME-BEGIN
+P2: inf 
+FRAME-END
