@@ -283,21 +283,6 @@ fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     });
 }
 
-/// What a time limit says when it ends a wait that no reply has ended.
-fn time_limit_message(heard: bool) -> &'static str {
-    if heard {
-        "No usable answer from the meter before the time limit."
-    } else {
-        "No answer from the meter before the time limit."
-    }
-}
-
-/// What a capture says at a long silence that it goes on from.
-fn silence_message(heard: bool, after: Duration) -> String {
-    let what = if heard { "No usable answer" } else { "No answer" };
-    format!("{what} from the meter for {} s; still asking.", after.as_secs_f32())
-}
-
 /// What C logs for a failed write.
 fn send_error_message(command: Command, e: &Error) -> String {
     match command {
@@ -316,12 +301,12 @@ fn read_error_message(command: Command, e: &Error) -> String {
 
 /// What a write that ran out of time says, which C doesn't: a silence that follows
 /// is then no silence of the meter's.
-fn short_write_message(command: Command, went: usize) -> String {
+fn short_write_message(command: Command, went: usize) -> Option<String> {
     let what = match command {
         Command::Init => "init command",
         Command::Request => "request",
     };
-    format!("Only {went} of 3 bytes of the {what} went out.")
+    (went < 3).then(|| format!("Only {went} of 3 bytes of the {what} went out."))
 }
 
 /// `serial_write_blocking` with its timeout: one that runs out is no error in C, and
@@ -330,8 +315,8 @@ fn send(port: &mut dyn Port, command: Command, bytes: &[u8; 3], timeout: Duratio
     log::trace!("Sending command: {bytes:02x?}.");
     match port.write_timeout(bytes, timeout) {
         Ok(went) => {
-            if went < bytes.len() {
-                log::warn!("{}", short_write_message(command, went));
+            if let Some(message) = short_write_message(command, went) {
+                log::warn!("{message}");
             }
             Ok(())
         }
@@ -403,10 +388,10 @@ impl Capture {
             if got == 0 {
                 match exchange.empty_read(looked) {
                     Next::Wait => {}
-                    Next::Warn => self.warn_of_silence(&exchange),
+                    Next::Warn => log::warn!("{}", exchange.silence_message()),
                     // C checks no limit here: a silent meter never ended one.
                     Next::TimeUp => {
-                        log::warn!("{}", time_limit_message(exchange.heard()));
+                        log::warn!("{}", exchange.time_limit_message());
                         return Ok(());
                     }
                     Next::Send(command) => {
@@ -461,16 +446,12 @@ impl Capture {
             }
             if !matches!(heard, Heard::InitOk | Heard::Reading(..)) {
                 match exchange.after_junk(now) {
-                    Next::Warn => self.warn_of_silence(&exchange),
+                    Next::Warn => log::warn!("{}", exchange.silence_message()),
                     Next::GiveUp(why, after) => return give_up(why, after),
                     _ => {}
                 }
             }
         }
-    }
-
-    fn warn_of_silence(&self, exchange: &Exchange) {
-        log::warn!("{}", silence_message(exchange.heard(), self.timing.no_answer));
     }
 }
 

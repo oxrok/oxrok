@@ -328,9 +328,9 @@ impl Exchange {
     }
 
     /// Whether a request of this capture may have had this number, other than the
-    /// one out. C's 0 only counts once something has been asked again.
+    /// one out, which is looked for first: with nothing asked again that is only 0.
     fn was_asked(&self, sequence: u8) -> bool {
-        self.last_again != 0 && (self.wrapped || sequence <= self.last_again)
+        self.wrapped || sequence <= self.last_again
     }
 
     fn answered(&mut self, next: Command, now: Instant) {
@@ -433,9 +433,22 @@ impl Exchange {
         now.saturating_duration_since(self.sent) >= self.timing.pace
     }
 
-    /// Whether bytes have come since the last usable thing.
-    pub fn heard(&self) -> bool {
-        self.heard
+    /// What a time limit says when it ends a wait that no reply has ended.
+    pub fn time_limit_message(&self) -> &'static str {
+        if self.heard {
+            "No usable answer from the meter before the time limit."
+        } else {
+            "No answer from the meter before the time limit."
+        }
+    }
+
+    /// What a capture says at a long silence that it goes on from.
+    pub fn silence_message(&self) -> String {
+        let what = if self.heard { "No usable answer" } else { "No answer" };
+        format!(
+            "{what} from the meter for {} s; still asking.",
+            self.timing.no_answer.as_secs_f32()
+        )
     }
 
     /// The bytes of the command to send now. A request out goes again with a new

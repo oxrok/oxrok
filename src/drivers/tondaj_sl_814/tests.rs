@@ -54,6 +54,8 @@ enum Spacing {
     None,
     /// A byte every this long: the line's rate.
     Line(Duration),
+    /// All at once, this long after the command.
+    After(Duration),
     /// So many bytes every 50 ms: a cable's latency timer.
     Burst(usize),
 }
@@ -67,6 +69,7 @@ impl State {
             self.input.push_back(byte);
             match self.spacing {
                 Spacing::None => {}
+                Spacing::After(wait) => self.arrives.push_back(now + wait),
                 Spacing::Line(per_byte) => {
                     last += per_byte;
                     self.arrives.push_back(last);
@@ -370,22 +373,36 @@ fn each_way_of_giving_up_has_its_own_words() {
     assert_eq!(GiveUp::NoInitReply.message(after), "no answer to init for 5 s");
     assert_eq!(GiveUp::NoReply.message(after), "no answer to a request for 5 s");
     assert_eq!(GiveUp::NoUsableAnswer.message(after), "no usable answer for 5 s");
-    assert_eq!(time_limit_message(false), "No answer from the meter before the time limit.");
-    assert_eq!(time_limit_message(true), "No usable answer from the meter before the time limit.");
     assert_eq!(GiveUp::NoUsableAnswer.message(GIVE_UP), "no usable answer for 600 s");
-    assert_eq!(silence_message(false, after), "No answer from the meter for 5 s; still asking.");
+}
+
+#[test]
+fn a_short_write_is_told_and_a_whole_one_is_not() {
     assert_eq!(
-        silence_message(true, after),
-        "No usable answer from the meter for 5 s; still asking."
+        short_write_message(Command::Init, 0).as_deref(),
+        Some("Only 0 of 3 bytes of the init command went out.")
     );
     assert_eq!(
-        short_write_message(Command::Init, 0),
-        "Only 0 of 3 bytes of the init command went out."
+        short_write_message(Command::Request, 2).as_deref(),
+        Some("Only 2 of 3 bytes of the request went out.")
     );
-    assert_eq!(
-        short_write_message(Command::Request, 2),
-        "Only 2 of 3 bytes of the request went out."
-    );
+    assert_eq!(short_write_message(Command::Request, 3), None);
+}
+
+/// What a wait is told, with nothing heard and with part of a reply.
+#[test]
+fn a_silence_says_whether_anything_was_heard() {
+    let t0 = Instant::now();
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
+    x.sent(Command::Init, t0);
+    assert_eq!(x.silence_message(), "No answer from the meter for 5 s; still asking.");
+    assert_eq!(x.time_limit_message(), "No answer from the meter before the time limit.");
+    assert_eq!(x.take(&GOOD_INIT[..1], t0), Heard::Part);
+    assert_eq!(x.silence_message(), "No usable answer from the meter for 5 s; still asking.");
+    assert_eq!(x.time_limit_message(), "No usable answer from the meter before the time limit.");
+    // What was usable takes that back.
+    assert_eq!(x.take(&GOOD_INIT[1..], t0), Heard::InitOk);
+    assert_eq!(x.silence_message(), "No answer from the meter for 5 s; still asking.");
 }
 
 fn ms(n: u64) -> Duration {
@@ -1139,12 +1156,28 @@ fn a_write_held_past_the_bound_is_no_silence() {
         let fake = Fake::new();
         fake.with(|s| {
             s.write_blocks = ms(60);
-            s.spacing = Spacing::Line(Duration::from_millis(1));
+            s.spacing = Spacing::After(ms(10));
         });
         let mut d = device_with(&fake, timing(ms(1), Duration::ZERO, ms(30)));
         limit(&mut d, 1);
         let rx = start(&mut d);
         assert_eq!(readings(&rx), [V_OK]);
+    });
+}
+
+/// A sample limit with a time limit is ended by the second, as a silence fails only
+/// where nothing else could end it.
+#[test]
+fn a_sample_limit_beside_a_time_limit_does_not_fail_a_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.otherwise = Vec::new());
+        fake.script([Reply::Now(GOOD_INIT.to_vec())]);
+        let mut d = device_with(&fake, timing(ms(1), Duration::ZERO, ms(5)));
+        limit(&mut d, 5);
+        d.set(&Key::LimitMsec, &Value::U64(60), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), Vec::<f32>::new());
     });
 }
 
