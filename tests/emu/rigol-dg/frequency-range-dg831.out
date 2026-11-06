@@ -1,0 +1,15 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+rigol-dg - Rigol Technologies DG831 00.03.07 [S/N: DG8000000000001] with 5 channels: CH1 FREQ1 PERIOD1 DUTY1 WIDTH1
+Channel groups:
+    1: channel CH1
+Supported configuration options on channel group 1:
+    enabled: on, off (current)
+    pattern: Sine (current), Square, Ramp, Pulse, Arb, Noise, DC
+    output_frequency: 0.000001, 35000000.000000, 0.000001
+    amplitude: 5.000000 (current)
+    offset: 0.000000 (current)
+    phase: 0.000000 (current), 360.000000, 0.001000
+    output_duty_cycle: 

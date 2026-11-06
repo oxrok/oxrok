@@ -1,0 +1,12 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+rigol-dg - Rigol Technologies DG1062Z 00.03.07 [S/N: DG1000Z0000000001] with 6 channels: CH1 CH2 FREQ1 PERIOD1 DUTY1 WIDTH1
+Channel groups:
+    1: channel CH1
+    2: channel CH2
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
