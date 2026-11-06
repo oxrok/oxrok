@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::logicport: Acquisition failed: device error: image 7 in 'intronix-logicport.ccf' is not a valid bitstream.
+capture failed: device error: image 7 in 'intronix-logicport.ccf' is not a valid bitstream

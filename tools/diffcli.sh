@@ -140,6 +140,10 @@
 # what the host can hold a transfer up for. oxrok runs as it is.
 
 set -u
+# Another oracle's environment and build tree, for a model whose driver is
+# not in the main oracle yet.
+[ -z "${EMU_ORACLE_ENV:-}" ] || . "$EMU_ORACLE_ENV"
+[ -z "${EMU_LIBSIGROK:-}" ] || export LIBSIGROK="$EMU_LIBSIGROK"
 SIGROK_CLI=${SIGROK_CLI:-sigrok-cli}
 OXROK=${OXROK:-$(dirname "$0")/../target/debug/oxrok}
 HIL=${HIL:-$(dirname "$0")/../target/debug/oxrok-hil}
@@ -1600,6 +1604,12 @@ EOF
     # --oracle-differs ones too: oxrok against the .out and .tx goldens.
     emu_no_oracle() {
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
+        # A --no-oracle-only case's goldens, which a bless does not reach:
+        # written once, to be read, and removed by hand to write them again.
+        if [ "${EMU_WRITE_MISSING:-0}" = 1 ] && [ $no_oracle_only = 1 ] && [ ! -f "$golden.out" ] && [ -z "$why" ]; then
+            mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
+            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"
+        fi
         if [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
             cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
             cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
