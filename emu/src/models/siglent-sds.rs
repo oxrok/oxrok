@@ -16,7 +16,7 @@
 //!   and two line feeds after a waveform. So 16 bytes ahead of digital data here, where
 //!   stock C skips 15: this model follows the report, for a query C has never been
 //!   shown to complete.
-//! - From the LeCroy descriptor C's two offsets belong to: `WAVEDESC` at the start,
+//! - From the `LeCroy` descriptor C's two offsets belong to: `WAVEDESC` at the start,
 //!   346 bytes in all, `COMM_ORDER` low first. C looks at none of it but the two fields.
 //! - From memory of Siglent's programming guide, unchecked as it couldn't be fetched
 //!   here: `CHDR` taking the header and the unit off answers, `C1:VDIV?` as `1.00E+00`,
@@ -55,7 +55,8 @@
 //! - `array=N`: a waveform's `WAVE_ARRAY_1` lies, and says N.
 //!
 //! The pedantic checks: only what the model has, by channel; a query of a `C3` on two
-//! channels; a `WF?` of a channel that is off; `D0:WF? DAT2` with the analyzer off.
+//! channels; a `WF?` of a channel that is off. `D0:WF? DAT2` with the analyzer off is
+//! answered: stock C never turns it on, and no source says what a scope does then.
 
 use crate::model::{DeviceModel, Speed, Violations};
 use crate::options::parse_number;
@@ -128,7 +129,7 @@ const KINDS: &[Kind] = &[
     kind("SDS2304X", Protocol::Spo, 4, false),
 ];
 
-/// The length of the descriptor, in the LeCroy layout.
+/// The length of the descriptor, in the `LeCroy` layout.
 const DESCRIPTOR: usize = 346;
 /// A waveform goes no longer than the driver's buffer, for what a test can ask.
 const LONGEST: usize = 1 << 24;
@@ -342,10 +343,6 @@ impl Scope {
                     v.report(format!("{}: asked for what the model doesn't have", m.text));
                     return Answer::Silent;
                 }
-                if !self.la {
-                    v.report(format!("{}: the analyzer is off", m.text));
-                    return Answer::Silent;
-                }
                 Answer::Bytes(self.digital(n))
             }
             _ => Answer::Unknown,
@@ -454,9 +451,8 @@ impl Instrument for Scope {
                 self.value(m, &value, "")
             }
             "FPAR?" => Answer::Bytes(self.frame_parameters()),
-            "FRAM" => Answer::Done,
             // As C sends them: nothing here says what a real one does with them.
-            "TIM:OFFS" | "TRIG:EDGE:LEV" => Answer::Done,
+            "FRAM" | "TIM:OFFS" | "TRIG:EDGE:LEV" => Answer::Done,
             _ => {
                 // A source's slope and level, of `EX`, `EX5` or `LINE`.
                 if let Some((source, name)) = header.split_once(':')
@@ -646,7 +642,6 @@ mod tests {
         assert_eq!(ask(&mut s, "C2:WF? ALL\n").1.len(), 1, "off");
         assert_eq!(ask(&mut s, "C1:WF? DAT2\n").1.len(), 1, "not asked of an analog one");
         let mut s = on_socket(&[]);
-        assert_eq!(ask(&mut s, "D0:WF? DAT2\n").1.len(), 1, "the analyzer is off");
         assert_eq!(ask(&mut s, "D0:WF? ALL\n").1.len(), 1, "not asked of a digital one");
         assert_eq!(ask(&mut s, "SANU? C9\n").1.len(), 1);
         let (_, flags) = ask(&mut s, "EX:NOPE\n");
