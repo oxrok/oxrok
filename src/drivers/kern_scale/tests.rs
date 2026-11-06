@@ -44,11 +44,10 @@ struct Line {
     failed_reads: usize,
     write_fails: bool,
     writes: Vec<Vec<u8>>,
-    /// Writes after the device was told to close; a test sets `closed`.
-    closed: bool,
-    writes_after_close: usize,
     purges: usize,
     reads: usize,
+    /// The port is gone.
+    dropped: bool,
     /// What goes in the queue at each write, once: an answer.
     on_write: VecDeque<Vec<u8>>,
 }
@@ -82,6 +81,12 @@ impl Shared {
 }
 
 struct FakePort(Shared);
+
+impl Drop for FakePort {
+    fn drop(&mut self) {
+        self.0.line().dropped = true;
+    }
+}
 
 impl Port for FakePort {
     fn name(&self) -> &'static str {
@@ -132,9 +137,6 @@ impl Port for FakePort {
     }
     fn write(&mut self, data: &[u8]) -> Result<()> {
         let mut line = self.0.line();
-        if line.closed {
-            line.writes_after_close += 1;
-        }
         if line.write_fails {
             return Err(Error::Disconnected);
         }
@@ -419,11 +421,11 @@ fn a_14_byte_stream_loses_no_packet() {
 }
 
 #[test]
-fn a_cut_packet_as_captured_costs_itself_and_no_more() {
+fn a_cut_packet_costs_itself_and_no_more() {
     bounded(|| {
-        // sigrok-dumps' "various values": 6 bytes, 0xf0, then whole packets.
+        // Made up: the head of one, then whole packets.
         let line = Shared::default().with(|l| {
-            l.queued.extend(b"+0000.\xf0");
+            l.queued.extend(b"+0000.");
             l.queued.extend(b"+0000.00 G S\r\n");
             l.queued.extend(b"+0026.98 G U\r\n");
         });
@@ -633,6 +635,95 @@ fn a_time_limit_keeps_silence_past_the_bound() {
 }
 
 #[test]
+fn digits_that_are_no_number_are_no_sample_and_do_not_hold_off_the_bound() {
+    bounded(|| {
+        let line = Shared::default().with(|l| {
+            l.stream = Some(b"+abcdefgh G S\r\n".to_vec());
+            l.byte_time = Duration::from_millis(1);
+        });
+        let mut d = device_with_bound(&line, Duration::from_millis(100));
+        d.set(&Key::LimitSamples, &Value::U64(3), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got), [0.0f32; 0]);
+        assert!(failure(&got).is_some(), "{got:?}");
+    });
+}
+
+#[test]
+fn a_lone_sign_ahead_of_a_packet_costs_the_sign() {
+    bounded(|| {
+        // 15 bytes that look like a packet, with 14 good ones in them.
+        let line = Shared::default().with(|l| {
+            l.queued.extend(b"+-0026.90 G S\r\n");
+            l.queued.extend(b"+abc.def G S\r\n");
+            l.queued.extend(b"+0000.01 G S\r\n");
+        });
+        let mut d = device(&line);
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert_eq!(values(&got), [-26.9, 0.01]);
+        assert_eq!(failure(&got), None);
+    });
+}
+
+#[test]
+fn an_error_packet_counts_as_a_sample() {
+    bounded(|| {
+        let line = Shared::default().with(|l| l.queued.extend(b"+0000.00 G E\r\n"));
+        let mut d = device(&line);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        assert_eq!(values(&packets(&start(&mut d))), [f32::INFINITY]);
+    });
+}
+
+#[test]
+fn a_silence_after_e01_says_so() {
+    bounded(|| {
+        let line = Shared::default().with(|l| l.queued.extend(b"E01\r\n"));
+        let mut d = device_with_bound(&line, Duration::from_millis(100));
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let got = packets(&start(&mut d));
+        let why = failure(&got).expect("a failure");
+        assert!(
+            why.contains("no usable packet from the scale for 0 s, and it answered E01"),
+            "{why}"
+        );
+    });
+}
+
+#[test]
+fn an_e01_in_two_reads_is_seen() {
+    bounded(|| {
+        let line = Shared::default().with(|l| {
+            l.per_read = 2;
+            l.queued.extend(b"E01\r\n");
+        });
+        let mut d = device_with_bound(&line, Duration::from_millis(100));
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert!(failure(&got).expect("a failure").contains("answered E01"), "{got:?}");
+    });
+}
+
+#[test]
+fn an_a00_is_no_e01() {
+    bounded(|| {
+        let line = Shared::default().with(|l| l.queued.extend(b"A00\r\n"));
+        let mut d = device_with_bound(&line, Duration::from_millis(100));
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert!(!failure(&got).expect("a failure").contains("E01"), "{got:?}");
+    });
+}
+
+#[test]
+fn the_words_of_a_failed_o1() {
+    let line = Shared::default().with(|l| l.write_fails = true);
+    let why = send_o1(&mut FakePort(line)).unwrap_err().to_string();
+    assert!(why.contains("could not send O1: "), "{why}");
+}
+
+#[test]
 fn a_port_that_hangs_up_ends_the_capture() {
     bounded(|| {
         let line = Shared::default().with(|l| l.read_fails = true);
@@ -650,12 +741,13 @@ fn a_port_that_hangs_up_ends_the_capture() {
 }
 
 #[test]
-fn a_write_that_fails_refuses_the_start_and_keeps_the_port() {
+fn a_write_that_fails_refuses_the_start_says_so_and_keeps_the_port() {
     bounded(|| {
         let line = Shared::default().with(|l| l.write_fails = true);
         let mut d = device(&line);
         let (tx, rx) = sync_channel(4);
-        assert!(d.start(PacketSink::new(tx, 0)).is_err());
+        let why = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
+        assert!(why.contains("could not send O1: "), "{why}");
         assert!(rx.try_recv().is_err(), "no header");
         line.line().write_fails = false;
         let (tx, _rx) = sync_channel(4);
@@ -697,22 +789,38 @@ fn a_stop_ends_a_capture_on_noise() {
 }
 
 #[test]
-fn a_stop_does_not_join_and_a_close_does() {
+fn a_stop_does_not_join() {
     bounded(|| {
         let line = Shared::default().with(|l| l.stream = Some(P127.to_vec()));
         let mut d = device(&line);
-        // A queue of one left unread: the thread blocks on its second packet.
         let (tx, rx) = sync_channel(1);
         d.start(PacketSink::new(tx, 0)).unwrap();
-        // Past the look at the flag, it has a packet to send and no room.
         line.wait_for_reads(1);
         d.stop().unwrap();
+        assert!(d.worker.is_some(), "a close joins");
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
         d.close().unwrap();
-        assert!(d.worker.is_none());
-        // All the thread's senders are gone with it.
-        while rx.recv_timeout(BOUND).is_ok() {}
-        line.line().closed = true;
-        assert_eq!(line.line().writes_after_close, 0);
+    });
+}
+
+#[test]
+fn a_close_ends_a_thread_stuck_in_a_send_and_joins_it() {
+    bounded(|| {
+        let line = Shared::default().with(|l| l.stream = Some(P127.to_vec()));
+        let mut d = device(&line);
+        // A queue of one left unread: the header fills it. Past the look at the flag,
+        // the thread has a packet to send and no room, which only a close can end.
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        line.wait_for_reads(1);
+        d.close().unwrap();
+        // Before anything is drained, and at once: the thread gave the port back, and
+        // the close dropped it.
+        assert!(line.line().dropped, "the close returned before the thread ended");
+        assert!(d.port.lock().unwrap().is_none());
+        assert!(matches!(rx.try_recv().unwrap().1, Packet::Header { .. }));
+        assert_eq!(rx.try_recv().err(), Some(std::sync::mpsc::TryRecvError::Disconnected));
+        assert_eq!(line.line().writes, [O1], "nothing goes out at a close");
     });
 }
 
@@ -797,14 +905,21 @@ fn a_second_capture_does_not_read_what_came_since_the_first() {
 }
 
 #[test]
-fn a_reopen_does_not_flush_twice() {
+fn the_first_capture_of_an_open_keeps_what_came_since_its_flush() {
     bounded(|| {
         let line = Shared::default().with(|l| l.queued.extend(P127));
         let mut d = device(&line);
         d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
-        // The first capture of an open keeps what comes after the open's flush.
         assert_eq!(values(&packets(&start(&mut d))), [127.2]);
         assert_eq!(line.line().purges, 1);
+        // The same after a capture, a close and another open.
+        d.close().unwrap();
+        d.pending = Some(line.port());
+        d.open().unwrap();
+        assert_eq!(line.line().purges, 2);
+        line.line().queued.extend(P127);
+        assert_eq!(values(&packets(&start(&mut d))), [127.2]);
+        assert_eq!(line.line().purges, 2);
     });
 }
 

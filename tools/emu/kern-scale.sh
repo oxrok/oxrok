@@ -49,7 +49,9 @@ emu_cases() {
     # oxrok's log prefix, on its side only.
     F='s/^oxrok: [a-z]+: oxrok::drivers::kern_scale(::protocol)?: /sr: kern-scale: /'
     HUP_BUG="kern_scale_receive_data reads only when revents is exactly G_IO_IN (protocol.c:121), so a port that hangs up is never read and only a limit could end the capture, which a sample limit never does; oxrok ends the capture"
-    SILENT_BUG="kern_scale_receive_data has no bound (protocol.c:121-129), so a scale that stops sending keeps a sample limit open for ever; oxrok ends such a capture after 10 s with no packet"
+    SILENT_BUG="kern_scale_receive_data has no bound (protocol.c:121-129), so a scale that stops sending keeps a sample limit open for ever; oxrok ends such a capture after 10 s with no usable packet"
+    SPACE_BUG="sr_kern_parse hands the field to g_ascii_strtod sign first (scale/kern.c:63), which takes no space behind a sign, so the manual's suppressed zeros (8.4.3) read 0 with exit 0; oxrok reads the number"
+    NUMBER_BUG="sr_kern_packet_valid looks at no digit and g_ascii_strtod (scale/kern.c:63) makes a reading of anything, 0 of what it cannot read; by the manual (8.4.3) a digit field holds digits, a point and spaces, and oxrok takes anything else for no reading"
     STEP_BUG="handle_new_data takes 15 bytes for any packet (protocol.c:89-92: offset += scale->packet_size), so at 14 bytes it eats the next packet's sign and loses that packet; oxrok takes a packet's own length and reads each"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
@@ -118,10 +120,19 @@ emu_cases() {
     # What a number can be: where the point is decides the digits.
     kern_sweep "points" 7 $(for _v in '+000000.1' '+00000.12' '+0000.123' '+1.234567' '+.1234567' '+1234567.' '+12345678'; do kp "$_v G S"; printf ' '; done)
     # The manual's leading zeros as spaces, which no capture shows. strtod takes
-    # no space behind a sign: C reads 0 there, with a point's digits.
-    kern_sweep "spaces for zeros" 4 $(kp '+  127.20 G S') $(kp '-  127.20 G S') $(kp '   127.20 G S') $(kp ' 00127.20 G S')
-    # strtod's other words, as the check looks at neither digit.
-    kern_sweep "numbers" 8 $(kp '+1.5e1    G S') $(kp '+0x1f     G S') $(kp '+inf      G S') $(kp '-inf      G S') $(kp '+nan      G S') $(kp '+1e99     G S') $(kp '+abcdefgh G S') $(kp '+12\0005.7   G S')
+    # no space behind a sign: C reads 0 for the first two, oxrok the number.
+    emu_options period=10 scan-burst=1 burst=1 group=4 packet=$KP15,$(kp '+  127.20 G S'),$(kp '-  127.20 G S'),$(kp '   127.20 G S'),$(kp ' 00127.20 G S')
+    emu_case "spaces for zeros" --oracle-differs "$SPACE_BUG" --keep-header -- -d $K --samples 4
+    # What is no number: strtod makes one of each. Only the last packet reads for
+    # oxrok, so a time limit ends the case, as a sample limit would never come.
+    NUMS=$KP15,$(kp '+1.5e1    G S'),$(kp '+0x1f     G S'),$(kp '+inf      G S'),$(kp '-inf      G S'),$(kp '+nan      G S'),$(kp '+1e99     G S'),$(kp '+abcdefgh G S'),$(kp '+12\0005.7   G S'),$(kp '+12.34.56 G S'),$(kp '+00001.00 G S')
+    emu_options period=10 scan-burst=1 burst=1 group=10 packet=$NUMS
+    emu_case "numbers" --oracle-differs "$NUMBER_BUG" --keep-header -- -d $K --time 800ms
+    emu_case "numbers said" --oracle-differs "$NUMBER_BUG" --stderr --filter "$F" -- -d $K --time 800ms
+    # A sign's byte ahead of a 14-byte packet makes a 15-byte one: C reads 0, and
+    # oxrok steps to the packet in it.
+    emu_options period=10 scan-burst=1 burst=1 group=2 packet=$KP15,$(kp '+-0026.90 G S'),$(kp '+00001.00 G S')
+    emu_case "a sign ahead of a packet" --oracle-differs "$NUMBER_BUG" --keep-header -- -d $K --time 800ms
     # A sign the check does not take: no packet there.
     kern_sweep "signs" 2 $(kp '*00127.20 G S') $(kp '-00127.20 G S') $(kp ' 00127.20 G S')
     # S1 and S2 the check does not take, at 15 bytes and 14: no packet there.
@@ -158,9 +169,9 @@ emu_cases() {
     emu_case "noise up to the search" --keep-header -- -d $K --scan
     emu_options period=10 scan-burst=1 ack=none noise=$(printf '3f%.0s' $(seq 1 114))
     emu_case "noise past the search" --keep-header --no-output -- -d $K --scan
-    # A cut packet as one capture has it, and the whole one after it.
-    emu_options period=10 scan-burst=1 burst=1 noise=2b303030302ef0
-    emu_case "a packet cut as captured" --keep-header -- -d $K --samples 1
+    # A cut packet, made up, and a whole one behind it.
+    emu_options period=10 scan-burst=1 burst=1 noise=2b303030302e
+    emu_case "a cut packet" --keep-header -- -d $K --samples 1
     # A packet with its head lost, then a whole one.
     emu_options period=10 scan-burst=1 burst=1 group=2 packet=$KP15,$(kp '0127.20 G S'),$(kp '+00127.20 G S')
     emu_case "a head lost" --keep-header -- -d $K --samples 1
@@ -190,5 +201,9 @@ emu_cases() {
     emu_options period=10 scan-burst=1 burst=1
     emu_case "lib silent at a sample limit" --libsigrok --hangs --timeout 3 -- -d $K --samples 5
     emu_case "silent ends at the bound" --oxrok-fails "no usable packet from the scale" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $K --samples 5
+    # The same when the scale refuses: a scan's O1 is taken and a capture's not, and
+    # oxrok says so. This costs the 10 s too, for its message.
+    emu_options period=10 scan-burst=1 ack=e01 ack-from=2
+    emu_case "e01 at the capture" --oxrok-fails "and it answered E01" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $K --samples 5
     emu_options
 }

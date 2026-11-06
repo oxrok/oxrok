@@ -19,9 +19,19 @@
 //! unit, has `+0026.90 G U`, `-0000.04 G S`, `+002014.8CT S` and over its range
 //! `+0000.00 G E`.
 //!
-//! The manual says leading zeros are suppressed with spaces, and the captures
-//! are all zero filled. `strtod` takes no space behind a sign, so `+  127.20` is
-//! 0 in C and here (`scale/kern.c:63`). `   127.20` reads as 127.2.
+//! The manual has leading zeros suppressed with spaces (8.4.3) and a space as a
+//! sign (8.4.2). The captures are all zero filled, but a number behind spaces is
+//! still that number: C's `strtod` takes no space behind a sign (`scale/kern.c:63`),
+//! so `+  127.20` is 0 there, and 127.2 here.
+//!
+//! A digit field holds digits, one point and spaces, by the same chapter. Anything
+//! else is no reading, where C's `strtod` makes 0 of `+-0026.90` and `+abcdefgh`, and
+//! hex, infinities, NaNs and exponents of what looks like those. Only `E` makes a
+//! reading of digits that say nothing, as the captures have `+0000.00 G E` over the
+//! range.
+//!
+//! A limit of the format: there is no checksum. A point lost from `+00127.20 G S`
+//! leaves `+0012720 G S`, a good 14-byte packet that reads 12720.
 
 use crate::core::util::g_ascii_strtod;
 use crate::core::{MqFlags, Unit};
@@ -100,8 +110,20 @@ pub struct Reading {
     pub flags: MqFlags,
 }
 
-/// `sr_kern_parse`, on a packet [`valid`] took.
-pub fn parse(packet: &[u8]) -> Reading {
+/// A digit field, with its sign's byte gone, as a number: digits and at most one
+/// point, with spaces around them.
+fn number(field: &[u8]) -> Option<f64> {
+    let start = field.iter().position(|&b| b != b' ')?;
+    let end = field.iter().rposition(|&b| b != b' ')? + 1;
+    let body = &field[start..end];
+    let is_point = |&b: &u8| b == b'.';
+    let fits = body.iter().all(|&b| b.is_ascii_digit() || b == b'.')
+        && body.iter().position(is_point) == body.iter().rposition(is_point);
+    if fits { g_ascii_strtod(body) } else { None }
+}
+
+/// `sr_kern_parse`, on a packet [`valid`] took: `None` when it holds no reading.
+pub fn parse(packet: &[u8]) -> Option<Reading> {
     let len = packet.len();
     let digits_end = len - 6;
     let s2 = packet[len - 3];
@@ -109,20 +131,19 @@ pub fn parse(packet: &[u8]) -> Reading {
         log::trace!("Over/under limit.");
         (f32::INFINITY, 0)
     } else {
-        // As a C string: a NUL ends it.
+        let magnitude = number(&packet[1..digits_end])?;
+        let value = if packet[0] == b'-' { -magnitude } else { magnitude };
         let text = &packet[..digits_end];
-        let text = &text[..text.iter().position(|&b| b == 0).unwrap_or(text.len())];
-        let value = g_ascii_strtod(text).unwrap_or(0.0);
         let digits = text.iter().position(|&b| b == b'.').map_or(0, |dot| digits_end - dot - 1);
         // In range: a position in 9 bytes.
         (value as f32, i32::try_from(digits).unwrap_or(0))
     };
-    Reading {
+    Some(Reading {
         value,
         digits,
         unit: unit([packet[digits_end], packet[digits_end + 1]]),
         flags: if s2 == b'U' { MqFlags::UNSTABLE } else { MqFlags::default() },
-    }
+    })
 }
 
 fn unit(bytes: [u8; 2]) -> Unit {
@@ -149,7 +170,7 @@ mod tests {
 
     fn read(packet: &[u8]) -> (f32, i32, Unit, bool) {
         assert_eq!(valid(packet), Some(packet.len()), "{}", packet.escape_ascii());
-        let r = parse(packet);
+        let r = parse(packet).expect("a reading");
         (r.value, r.digits, r.unit, r.flags == MqFlags::UNSTABLE)
     }
 
@@ -190,23 +211,98 @@ mod tests {
         assert_eq!(unit(*b"G "), Unit::Unitless);
     }
 
+    /// Every packet in sigrok-dumps' `uart/kern_ew_6200-2nm`, in all 13 files.
     #[test]
-    fn what_strtod_makes_of_the_digits() {
-        // No space behind a sign, as the manual's suppressed zeros would have.
-        assert_eq!(read(b"+  127.20 G S\r\n").0, 0.0);
-        assert_eq!(read(b"-  127.20 G S\r\n").0, 0.0);
-        assert_eq!(read(b"   127.20 G S\r\n").0, 127.2);
-        assert_eq!(read(b"+1.5e1    G S\r\n").0, 15.0);
-        assert_eq!(read(b"+0x1f     G S\r\n").0, 31.0);
-        assert_eq!(read(b"-inf      G S\r\n").0, f32::NEG_INFINITY);
-        assert!(read(b"+nan      G S\r\n").0.is_nan());
-        assert_eq!(read(b"+1e99     G S\r\n").0, f32::INFINITY);
-        assert_eq!(read(b"+abcdefgh G S\r\n").0, 0.0);
+    fn no_packet_of_the_captures_is_refused() {
+        for packet in [
+            &b"+0000.00 G E\r\n"[..],
+            b"+0000.00 G S\r\n",
+            b"+0000.07 G U\r\n",
+            b"+0000.09 G U\r\n",
+            b"+0000.14 G U\r\n",
+            b"+0000.75 G U\r\n",
+            b"+000000  % U\r\n",
+            b"+000000 PC S\r\n",
+            b"+000636.0CT S\r\n",
+            b"+0009.34 G U\r\n",
+            b"+00127.20 G S\r\n",
+            b"+002014.8CT S\r\n",
+            b"+0026.90 G S\r\n",
+            b"+0026.90 G U\r\n",
+            b"+0026.98 G U\r\n",
+            b"+00402.95 G U\r\n",
+            b"+00635.8CT S\r\n",
+            b"+0083.90 G U\r\n",
+            b"+0127.20 G S\r\n",
+            b"+0456.51 G U\r\n",
+            b"+0514.69 G U\r\n",
+            b"+1097.44 G U\r\n",
+            b"+1600.97 G U\r\n",
+            b"+1718.30 G U\r\n",
+            b"+1733.57 G U\r\n",
+            b"+1743.04 G U\r\n",
+            b"+1756.20 G U\r\n",
+            b"+1761.01 G U\r\n",
+            b"+1792.70 G U\r\n",
+            b"+1798.32 G U\r\n",
+            b"+1800.76 G U\r\n",
+            b"+1831.50 G U\r\n",
+            b"+1839.02 G U\r\n",
+            b"+1848.64 G U\r\n",
+            b"+2272.63 G U\r\n",
+            b"+3551.75 G U\r\n",
+            b"+4318.15 G U\r\n",
+            b"+5616.66 G U\r\n",
+            b"-0000.04 G S\r\n",
+        ] {
+            assert_eq!(valid(packet), Some(packet.len()), "{}", packet.escape_ascii());
+            assert!(parse(packet).is_some(), "{}", packet.escape_ascii());
+        }
     }
 
     #[test]
-    fn a_nul_ends_the_number_and_the_search_for_a_point() {
-        assert_eq!(read(b"+12\x005.7   G S\r\n"), (12.0, 0, Unit::Gram, false));
+    fn a_number_behind_spaces_is_that_number() {
+        // The manual's suppressed zeros. C's strtod gives 0 for the first two.
+        assert_eq!(read(b"+  127.20 G S\r\n"), (127.2, 2, Unit::Gram, false));
+        assert_eq!(read(b"-  127.20 G S\r\n"), (-127.2, 2, Unit::Gram, false));
+        assert_eq!(read(b"   127.20 G S\r\n").0, 127.2);
+        assert_eq!(read(b"-   12.7 G S\r\n").0, -12.7);
+        assert_eq!(read(b"+12.3     G S\r\n").0, 12.3);
+        assert_eq!(read(b"-1234567. G S\r\n").0, -1_234_567.0);
+    }
+
+    #[test]
+    fn a_field_that_is_no_number_is_no_reading() {
+        for packet in [
+            &b"+-0026.90 G S\r\n"[..],
+            b"++0026.90 G S\r\n",
+            b"+abcdefgh G S\r\n",
+            b"+1.5e1    G S\r\n",
+            b"+0x1f     G S\r\n",
+            b"+inf      G S\r\n",
+            b"-inf      G S\r\n",
+            b"+nan      G S\r\n",
+            b"+12\x005.7   G S\r\n",
+            b"+12.34.56 G S\r\n",
+            b"+12 34.56 G S\r\n",
+            b"+         G S\r\n",
+            b"+.        G S\r\n",
+            b"+abc.def G S\r\n",
+        ] {
+            assert_eq!(valid(packet), Some(packet.len()), "{}", packet.escape_ascii());
+            assert_eq!(parse(packet), None, "{}", packet.escape_ascii());
+        }
+    }
+
+    #[test]
+    fn an_error_is_a_reading_whatever_its_digits() {
+        assert_eq!(parse(b"+abcdefgh G E\r\n").map(|r| r.value), Some(f32::INFINITY));
+        assert_eq!(parse(b"+         G E\r\n").map(|r| r.value), Some(f32::INFINITY));
+    }
+
+    #[test]
+    fn a_lost_point_makes_a_good_packet_with_no_checksum_to_say_otherwise() {
+        assert_eq!(read(b"+0012720 G S\r\n").0, 12720.0);
     }
 
     #[test]
@@ -283,7 +379,7 @@ mod tests {
         loop {
             match head(&buf[at..]) {
                 Head::Packet(n) => {
-                    got.push(parse(&buf[at..at + n]).value);
+                    got.push(parse(&buf[at..at + n]).expect("a reading").value);
                     at += n;
                 }
                 Head::Skip => at += 1,

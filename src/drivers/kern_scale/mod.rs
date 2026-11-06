@@ -25,12 +25,20 @@
 //! - A port that hangs up ends the capture, and so does a read that fails. C reads
 //!   only when `revents` is exactly `G_IO_IN` (`protocol.c:121`), and logs a failed
 //!   read and goes on (`protocol.c:81-84`), for ever at a sample limit.
-//! - At a sample limit with no time limit, [`SILENCE_BOUND`] with no packet ends
-//!   the capture with an error: bytes that make no packet don't count. C waits for
-//!   ever. A scale told `O1` has no quiet state known; with a time limit, or none,
-//!   the capture waits as in C.
-//! - A write of `O1` that finds no room in 5 s fails: no device at a scan, a
-//!   refused start at a capture. C waits for ever (`api.c:84`, `api.c:142`).
+//! - At a sample limit with no time limit, [`SILENCE_BOUND`] with no usable packet
+//!   ends the capture with an error: bytes that make no packet don't count. C waits
+//!   for ever. The 10 s is a choice, and it can be wrong: by the manual (8.6) `O1`
+//!   lasts until power off, so a scale that was power cycled and is set to print on a
+//!   key or on a stable value goes quiet, and this gives up where C keeps waiting. A
+//!   scale that answered `E01` is said to have. With a time limit, or none, the
+//!   capture waits as in C.
+//! - A write of `O1` that finds no room in 5 s fails: no device at a scan, with a
+//!   warning, and a refused start at a capture. C waits for ever (`api.c:84`,
+//!   `api.c:142`).
+//! - A number behind spaces reads as that number, and a digit field that is no
+//!   number is no reading: see [`protocol`]. It is stepped over a byte at a time
+//!   like any other bytes, with a warning the first time, and so a lone sign ahead
+//!   of a good packet costs that sign. C reads 0 for both, with exit 0.
 //! - A second capture on an open port drops what came since the first and starts
 //!   with an empty buffer. C reads old packets as readings, and joins the tail of
 //!   its last read to the new bytes.
@@ -41,8 +49,6 @@
 //!   sends both. A client that falls behind by a packet may so get one too many.
 //! - An `E` packet is infinity whatever its digits and sign say, and a packet with
 //!   no unit it knows still counts.
-//! - `+   127.20`, as the manual's suppressed zeros would look, is 0: see
-//!   [`protocol`]. No capture has that form.
 
 #![forbid(unsafe_code)]
 
@@ -73,6 +79,8 @@ static DEV_OPTIONS: [OptionDesc; 3] = [
 
 /// Continuous output, stable and unstable values.
 const O1: &[u8] = b"O1\r\n";
+/// The scale's answer when it refuses a command (the manual's 8.6).
+const E01: &[u8] = b"E01\r\n";
 /// How long a scan looks for a packet (`api.c:91`).
 const DETECT_TIMEOUT: Duration = Duration::from_millis(3000);
 /// A scan's buffer (`api.c:52`).
@@ -85,8 +93,10 @@ const READ_TIMEOUT: Duration = Duration::from_millis(50);
 /// one reads. A close joins it. An output may have rows pending on the `End`, so
 /// this outlasts a reader's short stall.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
-/// How long no packet may come at a sample limit alone. At 1200 Bd a scale takes
-/// 128 ms for one.
+/// How long no usable packet may come at a sample limit alone. A choice. All the real
+/// evidence is two captures in sigrok-dumps, at 1200/8n2 with whatever output mode the
+/// unit had: a stable packet about every 500 ms, an unstable or error one about every
+/// 128 ms, and a longest silence of 2018 ms at a tare, so this is 5 times that.
 const SILENCE_BOUND: Duration = Duration::from_secs(10);
 
 /// The driver.
@@ -147,12 +157,17 @@ impl Driver for KernScaleDriver {
     }
 }
 
+/// Asks for continuous output, with what went wrong in words of its own.
+fn send_o1(port: &mut dyn Port) -> Result<()> {
+    log::trace!("Set O1 mode (continuous values, stable and unstable ones).");
+    port.write(O1).map_err(|e| Error::device(format!("could not send O1: {e}")))
+}
+
 /// What a scan does on the open port.
 fn probe(port: &mut dyn Port, params: &Params, conn: &str, timeout: Duration) -> bool {
     log::info!("Probing serial port {conn}.");
-    log::trace!("Set O1 mode (continuous values, stable and unstable ones).");
-    if let Err(e) = port.write(O1) {
-        log::debug!("O1 not sent: {e}.");
+    if let Err(e) = send_o1(port) {
+        log::warn!("{conn}: {e}.");
         return false;
     }
     if !detect(port, params, timeout) {
@@ -392,8 +407,7 @@ impl Device for KernScaleDevice {
         {
             log::debug!("Flush: {e}.");
         }
-        log::trace!("Set O1 mode (continuous values, stable and unstable ones).");
-        if let Err(e) = port.write(O1) {
+        if let Err(e) = send_o1(port.as_mut()) {
             *self.port.lock().expect("port lock") = Some(port);
             return Err(e);
         }
@@ -466,6 +480,8 @@ impl Capture {
         let started = Instant::now();
         let mut silence = Silence::new(self.silence_bound, started);
         let mut samples = 0u64;
+        let mut refused = false;
+        let mut warned = false;
         let mut buf: Vec<u8> = Vec::with_capacity(BUF_SIZE);
         let mut chunk = [0u8; BUF_SIZE];
         while !stop.load(Ordering::SeqCst) {
@@ -475,6 +491,10 @@ impl Capture {
                 e
             })?;
             buf.extend_from_slice(&chunk[..n]);
+            if !refused && buf.windows(E01.len()).any(|w| w == E01) {
+                refused = true;
+                log::warn!("The scale answered E01 to O1.");
+            }
             // handle_new_data: as many packets as there are.
             let before = samples;
             let mut at = 0;
@@ -483,7 +503,20 @@ impl Capture {
                     Head::Wait => break,
                     Head::Skip => at += 1,
                     Head::Packet(len) => {
-                        let reading = protocol::parse(&buf[at..at + len]);
+                        let packet = &buf[at..at + len];
+                        let Some(reading) = protocol::parse(packet) else {
+                            if warned {
+                                log::debug!("No reading in {}.", packet.escape_ascii());
+                            } else {
+                                warned = true;
+                                log::warn!(
+                                    "Dropped a packet whose digits are no number: {}.",
+                                    packet.escape_ascii()
+                                );
+                            }
+                            at += 1;
+                            continue;
+                        };
                         // A channel that is off gets nothing, and it still counts.
                         if self.enabled && !send(analog(reading)) {
                             return Ok(());
@@ -508,12 +541,16 @@ impl Capture {
             }
             if limit > 0 && msec == 0 && silence.over(Instant::now()) {
                 let seconds = self.silence_bound.as_secs();
-                log::error!(
-                    "No usable packet from the scale for {seconds} s. It was told to send \
-                     without being asked, so it is off, its cable is out, or its line differs."
-                );
+                let about = if refused {
+                    "It answered E01 to O1, which tells it to send without being asked."
+                } else {
+                    "It was told to send without being asked, so it is off, its cable is out, \
+                     its line differs, or a power cycle took it back to another output mode."
+                };
+                log::error!("No usable packet from the scale for {seconds} s. {about}");
+                let and = if refused { ", and it answered E01" } else { "" };
                 return Err(Error::device(format!(
-                    "no usable packet from the scale for {seconds} s"
+                    "no usable packet from the scale for {seconds} s{and}"
                 )));
             }
         }
