@@ -64,6 +64,7 @@ Emulator and replay only, never run on hardware:
 |---|---|---|
 | `asix-sigma` | 110 cases | 89.4% |
 | `agilent-dmm` | 383 | 97.4% |
+| `appa-55ii` | 72 | 96.6% |
 | `arachnid-labs-re-load-pro` | 131 | 91.8% |
 | `atten-pps3203` | 133 | 90.5% |
 | `chronovu-la` | 52 | 87.0% |

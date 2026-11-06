@@ -652,6 +652,13 @@ Deliberate, and kept small:
 - rohde-schwarz-sme-0x: with no `conn=` only USBTMC devices are probed;
   sigrok-cli also opens USB serial ports from `scpi_serial.c`'s table of
   ids, and sets their line, which oxrok does not with `conn=` either.
+- `appa-55ii`: a capture with a time limit on a silent device ends at
+  the limit, one whose port goes away ends with an error, and a Live
+  capture under `--samples` alone ends with an error after 10 s with no
+  byte; sigrok-cli waits for ever on all three. Warnings, on stderr
+  only, say when a log's records were dropped, when it ended short and
+  when it had no metadata. `--samples` in `data_source=Memory` can give
+  more than asked, as in sigrok-cli: a read's records all go out.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

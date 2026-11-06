@@ -2468,6 +2468,46 @@ for a `POW?`: `FREQ?` has no check, as with an offset any number is
 real. `Scpi::get_data` reads for as long as bytes come with no newline,
 so a device streaming that way hangs a query, as in C (shared code).
 
+## APPA 55II (appa-55ii)
+
+A two-probe logging thermometer (and the RS 55II clone) on a serial port
+at 9600/8n1. It only sends. Emulated by `appa-55ii` on the CDC-ACM
+shell, with options reading=, packet=, period=, burst=, mute=, records=,
+after=, gap=, piece=, claim=, bad=, sync=, drop=: 72 cases, 55 full, 6
+--oracle-bug, 10 --oracle-differs, 1 library, gcov 96.6%. Not emulated:
+the `default:` arms for unknown keys and the read error, which C's check
+of revents never reaches. Not on hardware. Protocol from the sigrok wiki
+and the driver; no firmware source found.
+
+`data_source=Memory` waits for a log a user starts on the device, ended
+by its end frame, a limit or a stop. Differences from C:
+- A time limit ends a capture on a silent device, and on time on a
+  stream, where C waits for ever or overruns to the next frame.
+- A hangup ends a capture with an error, where C waits for ever.
+- A Live capture under a sample limit alone ends with an error after 10
+  s with no byte, as the meter streams in menus and hold too. This is a
+  choice: C waits. Memory mode, a time limit and no limit keep waiting.
+- A wrong sum or bytes that start no frame, with records due, drop the
+  records left with a warning, where C shifts every later reading (0.3
+  degrees for 20.3).
+- A piece gone without a trace still reads shifted under both tools, as
+  nothing shows it; oxrok says at the end that the log ended N records
+  short. A count above what comes reads the padding as a record, -0.1
+  degrees, and gets the same warning.
+- Log bytes with no metadata or no record due are dropped, where C spins
+  for ever; oxrok warns once when there was no metadata.
+- A live frame too short is no sample, with a warning, where C reads at
+  fixed places and gets a value from the next frame's bytes (-32768).
+- A metadata frame under 2 bytes keeps the count and warns, where C
+  reads the sum and the next byte.
+- A later capture on an open port drops what waited. A first one reads
+  it, as C does: a client that starts long after its open gets up to
+  about 54 s of old frames as new.
+
+Kept from C: a size over 32 ends a capture, now with a warning; a limit
+is checked after a whole read, so a limit of 2 in a log gets 3 records.
+These log paths end normally with exit 0.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

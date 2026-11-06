@@ -298,6 +298,30 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- vusb offers held reads after every submission and unlink as well as on
+  its tick, so a CDC model's period is a count, not a time. A period of
+  2 or less free-runs, each frame's resubmit feeding the next, and hit
+  vusb's unlink race, which ended the session (`vhci_hcd: cannot find a
+  urb of seqnum`). Bound it with a burst or use 3 or more, and read "the
+  emulator exited" lines before calling a run noise.
+- A free stream during a scan can leave frames that arrive after the
+  next open's flush, which changes a capture's first reading. Keeping
+  the scan to one frame fixes it; a filter on the value only hides it.
+- A CDC model's first frame must land well inside a scan's timeout.
+  Measure with `-l 5`'s "Valid packet after": 25 offers came near 500
+  ms, 10 to 188 ms, 5 to 88 ms. A tool's close makes offers too: a frame
+  nobody reads can be in a .tx at a short lead.
+- A checksum skip is not the only way to lose a piece of a stream that
+  is joined up: a broken sync passes through resync, and a piece gone
+  whole leaves no trace but a short count at the end. Check each path,
+  and warn at the end.
+- A warning nothing compares can be removed by a mutant unnoticed: pin
+  it with a sibling `--oracle-differs --stderr` case. `$F`-style prefix
+  filters don't belong on lines only oxrok prints.
+- Test a setting read during a capture by changing it after frames have
+  come, or a value read once passes.
+- A mutant loop stopped by signal may run on past its subprocess: check
+  that it is gone, and never commit while one runs.
 - SCPI over serial with no `serialcomm` sets no line in C, while
   `scpi::open` defaults to 115200/8n1: use `scpi::open_keeping_line`. It
   keeps speed, frame and flow control, skips `scpi_serial.c`'s table of
