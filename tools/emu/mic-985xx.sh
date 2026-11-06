@@ -8,6 +8,7 @@
 EMU_MODEL=mic-985xx
 EMU_CDC=1
 EMU_DRIVER="mic-98583 mic-98581"
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=mic-985xx
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -25,6 +26,12 @@ mic_text() {
 
 emu_cases() {
     emu_conns
+    # oxrok's log prefix, on its side only.
+    F='s/^oxrok: [a-z]+: oxrok::drivers::mic_985xx: /sr: mic-985xx: /'
+    TENTHS="packet_parse divides the field by 10 in integers (protocol.c:83, :87) and throws away the third digit, under the 1 decimal digit its sr_analog_init reports (protocol.c:115); oxrok keeps it. That a logger's third digit is real is an inference: no recording"
+    HUP_BUG="receive_data takes a hung up port for a timeout (protocol.c:202-211: revents is not exactly G_IO_IN), so a sample limit is never met; oxrok ends the capture"
+    SILENT_BUG="receive_data has no bound (protocol.c:202-216), so a logger that says nothing keeps a sample limit open for ever; oxrok ends such a capture after 30 s with no reading"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # What a scan is: an open and a close, and no word to the logger.
     emu_options burst=0
@@ -89,9 +96,9 @@ emu_cases() {
     emu_options device=98581 burst=1 packet=$(mic_text 'v 000|v 010|v 500|v 990|')
     emu_case "98581 values" --driver mic-98581 --keep-header -- -d $T --samples 4
     emu_options burst=1 packet=$(mic_text 'v 235 612|v 009 999|v 999 001|')
-    emu_case "tenths" --keep-header -- -d $S --samples 3
+    emu_case "tenths" --oracle-differs "$TENTHS" --keep-header -- -d $S --samples 3
     emu_options device=98581 burst=1 packet=$(mic_text 'v 235|v 009|v 999|')
-    emu_case "98581 tenths" --driver mic-98581 --keep-header -- -d $T --samples 3
+    emu_case "98581 tenths" --oracle-differs "$TENTHS" --driver mic-98581 --keep-header -- -d $T --samples 3
 
     # What is no frame: each byte's check in turn, and a good one to end on.
     emu_options burst=2 period=10 packet=$(mic_text 'w 230 610|vx230 610|v x30 610|v 2x0 610|v 23x 610|'),$(mic_text 'v 230x610|v 230 x10|v 230 6x0|v 230 61x|v 230 610x|v 240 620|')
@@ -111,9 +118,9 @@ emu_cases() {
     emu_case "an answer to the command" --keep-header -- -d $S --samples 1
     # The other logger's frames are no frames.
     emu_options burst=1
-    emu_case "a 98583 to the 98581's driver" --driver mic-98581 --no-output -- -d $T --time 500ms
+    emu_case "a 98583 to the 98581's driver" --driver mic-98581 --no-output -- -d $T --time 800ms
     emu_options device=98581 burst=1 packet=$(mic_text 'v 230|v 240|v 250|v 260|')
-    emu_case "a 98581 to the 98583's driver" --no-output -- -d $S --time 500ms
+    emu_case "a 98581 to the 98583's driver" --no-output -- -d $S --time 800ms
 
     # A logger already sending, slower than the timer: its first silence gets the
     # command after all. (One faster than the timer gets none: no case here, as
@@ -138,13 +145,17 @@ emu_cases() {
     # An unplug with the tty open: C takes a hang up for a timeout, for as long as
     # a time limit lets it. The mark is a period after the reading.
     emu_options burst=1
-    emu_case "unplug at a time limit" --unplug model -- -d $S --time 3s
-    emu_case "unplug at a sample limit" --hangs --unplug model --timeout 3 -- -d $S --samples 5
+    emu_case "unplug at a time limit" --oxrok-fails "the port gone" --unplug model -- -d $S --time 3s
+    emu_case "unplug at a sample limit" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 5 -- -d $S --samples 5
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 -- -d $S --samples 5
     # The hang up comes before the first silence: its write fails, and goes on.
     emu_case "lib a command to a port gone" --libsigrok --unplug out=0:3 --stderr -- -d $S --time 400ms
     # A silent logger, and one whose bytes are no frames.
     emu_options burst=0
     emu_case "lib silent at a sample limit" --libsigrok --hangs --no-output --timeout 3 -- -d $S --samples 5
+    # This case costs the 30 s, and C's as many: a unit test has the times and the
+    # other message, this the end and the words on a real tty.
+    emu_case "silent ends at the bound" --oxrok-fails "no bytes from the logger" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 33 -- -d $S --samples 5
     emu_options period=10
     emu_case "lib no frames at a sample limit" --libsigrok --hangs --driver mic-98581 --no-output --timeout 3 -- -d $T --samples 5
     emu_options

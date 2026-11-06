@@ -120,6 +120,7 @@ pub mod drivers {
     pub mod manson_hcs_3xxx;
     pub mod mastech_ms6514;
     pub mod maynuo_m97;
+    pub mod mic_985xx;
     pub mod microchip_pickit2;
     pub mod motech_lps_30x;
     pub mod norma_dmm;
@@ -153,6 +154,7 @@ pub fn register_all(registry: &mut core::Registry) {
     drivers::serial_dmm::register_all(registry);
     registry.register(Box::new(drivers::uni_t_ut32x::Ut32xDriver));
     drivers::serial_lcr::register_all(registry);
+    drivers::mic_985xx::register_all(registry);
     registry.register(Box::new(drivers::juntek_jds6600::JdsDriver));
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
