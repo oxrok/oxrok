@@ -882,8 +882,8 @@ fn a_restart_after_a_stuck_end_does_not_hang() {
         }
         let (tx, rx) = sync_channel(1);
         device.start(PacketSink::new(tx, 0)).unwrap();
-        // The header fills it, and nothing reads: wait for the worker to be stuck.
-        rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        // The header out, and the reading fills it: the end has no room, and the worker
+        // waits with its sink.
         rx.recv_timeout(Duration::from_secs(30)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
         while device.worker.as_ref().unwrap().running.load(Ordering::SeqCst) {
@@ -893,13 +893,13 @@ fn a_restart_after_a_stuck_end_does_not_hang() {
         let (tx2, rx2) = sync_channel(64);
         device.start(PacketSink::new(tx2, 0)).unwrap();
         // The old worker is gone, and its sink with it.
-        let gone = loop {
-            match rx.recv_timeout(Duration::from_secs(30)) {
-                Ok(_) => {}
-                Err(e) => break e,
-            }
-        };
-        assert_eq!(gone, std::sync::mpsc::RecvTimeoutError::Disconnected);
+        // The reading that filled the queue is all it holds: the end was given up, and
+        // reading it can't have freed anything, as the join came first.
+        assert!(matches!(rx.recv_timeout(Duration::from_secs(30)).unwrap().1, Packet::Analog(_)));
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(30)).unwrap_err(),
+            std::sync::mpsc::RecvTimeoutError::Disconnected
+        );
         let packets = collect(&rx2);
         assert_eq!(readings(&packets).len(), 1);
         device.close().unwrap();
