@@ -61,6 +61,7 @@ impl Tcp {
     fn read_some(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
         let stream = self.stream()?;
         let began = Instant::now();
+        let mut last_look = false;
         loop {
             let left = timeout.saturating_sub(began.elapsed());
             stream.set_read_timeout(Some(left.max(Duration::from_millis(1)))).map_err(Error::Io)?;
@@ -71,11 +72,14 @@ impl Tcp {
                 }
                 Ok(n) => return Ok(n),
                 // A socket's timeout makes a stop and continue end the call with EINTR.
-                // It is neither an error nor silence, which would end a raw answer.
+                // It is neither an error nor silence, which would end a raw answer. With
+                // the time up it still looks once more, as what came during the stop is
+                // there to read: that one's EINTR is silence, or signals could hold it.
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
-                    if began.elapsed() >= timeout {
+                    if last_look {
                         return Ok(0);
                     }
+                    last_look = began.elapsed() >= timeout;
                 }
                 Err(e)
                     if matches!(
