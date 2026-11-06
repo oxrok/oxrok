@@ -2502,9 +2502,9 @@ by its end frame, a limit or a stop. Differences from C:
   it, as C does: a client that starts long after its open gets up to
   about 54 s of old frames as new.
 
-Kept from C: a size over 32 ends a capture, now with a warning; a limit
-is checked after a whole read, so a limit of 2 in a log gets 3 records.
-These log paths end normally with exit 0.
+Kept from C: a size over 32 ends a capture, now with a warning, and it
+failed (exit 1); a limit is checked after a whole read, so a limit of 2
+in a log gets 3 records. The end of a log is a normal end, exit 0.
 
 ## MASTECH MS6514 (mastech-ms6514)
 
@@ -2628,7 +2628,7 @@ device. Differences from C:
 - A time limit waits 2 s past its end for the record C would stop on.
 - A sample limit alone stops after 5 s with no record. This is a choice
   on an inference: no source says a unit never pauses, so a gap over 5 s
-  (a menu, say) ends a `--samples` capture with a warning and exit 0,
+  (a menu, say) fails a `--samples` capture with a warning (exit 1),
   where C waits.
 - A failed read ends the capture. A gone tty polls readable and reads 0,
   which C takes as no data (`protocol.c:238-239`), and it spins on a CPU
@@ -2702,8 +2702,7 @@ reading. An `ER` to a count or an info ends that wait at once. Each
 chunk asks for the recording selected, where C asks for the first after
 the first chunk (`protocol.c:2682`). A download ends on `ER`, an empty
 chunk or 5 s with nothing read, where C waits or asks for ever; such a
-capture exits 0 with its message on stderr, like every failed capture
-for now. A time limit is checked on each pass, not only at a packet, and
+capture fails (exit 1). A time limit is checked on each pass, not only at a packet, and
 a failed read ends a capture. A live capture with only a sample or frame
 limit ends after 10 s of silence. A capture takes only its own kind of
 packet, where C feeds any and a stray one can end it, and a record info

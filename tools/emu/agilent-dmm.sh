@@ -494,13 +494,13 @@ x
     emu_options answers=3
     # C's two error lines repeat in turn, as often as time allows, so this one
     # is quiet, and the next holds them. A unit test holds oxrok's.
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3 -l 0
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3 -l 0
     emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --stderr --filter '3,$d' --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3
     emu_options answers=4
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F -C P1 --samples 9
     # oxrok's bound on silence, and C's wait, of which "lib silent" has the wire.
     emu_options answers=0
-    emu_case "silent with only a sample limit" --oracle-bug "$SILENT_DIFFERS" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
+    emu_case "silent with only a sample limit" --oxrok-fails "nothing new from the meter" --oracle-bug "$SILENT_DIFFERS" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
     emu_options id=none
     emu_case "unplug in the scan" --unplug model --timeout 15 --keep-header --no-output --tx-filter '/^unplug$/q' -- -d $F --scan
 

@@ -236,16 +236,16 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
     emu_options mute-at=2
     emu_case "start status silent" --stderr --filter "$S2" --expect-fail -- -d $K --samples 1024
     emu_options status-at=3:ff
-    emu_case "poll status invalid" --stderr --filter "$L" -- -d $K --samples 1024
+    emu_case "poll status invalid" --oxrok-fails "invalid status byte" --stderr --filter "$L" -- -d $K --samples 1024
     emu_options late-at=4:5
     emu_case "poll status late" --digest --filter "$D" -- -d $K --samples 1024
     # Never ends, as what it waits for does not come.
     emu_options mute-at=3
-    emu_case "poll status silent" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
+    emu_case "poll status silent" --oxrok-fails "stopped answering" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options dump=100
-    emu_case "dump short" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
+    emu_case "dump short" --oxrok-fails "bytes came" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options raw=1
-    emu_case "dump with flow control bytes" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
+    emu_case "dump with flow control bytes" --oxrok-fails "bytes came" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 1024
     emu_options pre=0 wait=0 post=0
     emu_case "ready at the start" --oracle-bug "$READY_BUG" --oracle-hangs --digest --filter "$D" --timeout 3 -- -d $K --samples 1024
     # A trigger that never fires is no error: both wait, polling. The stop is on
@@ -257,9 +257,9 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
 
     # Unplugs.
     emu_options mute-at=3
-    emu_case "unplug waiting for a status" --no-output --unplug model --timeout 3 -- -d $K --samples 1024
+    emu_case "unplug waiting for a status" --oxrok-fails "the port gone" --no-output --unplug model --timeout 3 -- -d $K --samples 1024
     emu_options dump=100
-    emu_case "unplug in the dump" --no-output --unplug model --timeout 3 -- -d $K --samples 1024
+    emu_case "unplug in the dump" --oxrok-fails "the port gone" --no-output --unplug model --timeout 3 -- -d $K --samples 1024
     emu_options stall=line
     emu_case "line coding stalled" --digest --filter "$D" -- -d $K --samples 1024
     emu_options stall=lines

@@ -197,7 +197,7 @@ s/^sr: \[[0-9:.]+\] /sr: /
     emu_options $P scan=0 burst=0
     emu_case "unplug in the scan" --unplug model --timeout 14 --keep-header --stderr --filter "$L" -- -d $A --scan
     emu_options $P scan=1 burst=1
-    emu_case "unplug in a capture" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 7 --tx-filter '/^unplug$/q' -- -d $A --frames 5
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 7 --tx-filter '/^unplug$/q' -- -d $A --frames 5
     # oxrok's 30 s for a frame limit alone is for unit tests: the case would hold
     # the lock for it twice, to say what they say.
     emu_case "stops sending" --libsigrok --hangs --filter '2,$d' --timeout 6 -- -d $A --frames 5

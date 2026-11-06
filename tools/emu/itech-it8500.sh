@@ -356,7 +356,7 @@ emu_cases() {
 
     # oxrok ends them. The scan's four answers and the remote mode, then silence.
     emu_case "silent with a time limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A -c samplerate=1 --time 500
-    emu_case "silent with a sample limit says so" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 9 --stderr --filter "$N" -- -d $A --samples 2
+    emu_case "silent with a sample limit says so" --oxrok-fails "no reading from the load" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 9 --stderr --filter "$N" -- -d $A --samples 2
     # With no limit both wait. Three readings, then the signal on silence.
     emu_options answers=8
     emu_case "interrupt polls" --oracle-bug "$SIGINT_BUG" --tx-filter "$I" --interrupt model --timeout 15 -- -d $A --continuous
@@ -368,7 +368,7 @@ emu_cases() {
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $A --scan
     emu_options answers=5
     emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --no-output -- -d $A --continuous
-    emu_case "unplug in a capture" --oracle-bug "$HANG_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --samples 5
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HANG_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --samples 5
 
     # The ways out where oxrok sends local mode, with oxrok's own wording, which
     # \$F maps to sigrok-cli's in the cases above.

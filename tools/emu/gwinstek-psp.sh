@@ -326,18 +326,18 @@ $!d'
     # its samples takes those 2 s: oxrok's line is pinned alone, and C's repeats are in
     # "unplug in a capture says so", which takes no such wait.
     emu_options setters=0 output=1 answers=2
-    emu_case "silent from the capture on" --filter "$PAIRS" --tx-filter "$ASKS" --timeout 25 -- -d $K --samples 12
-    emu_case "silent from the capture on says so" --no-oracle-only --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 15 -- -d $K --samples 24
+    emu_case "silent from the capture on" --oxrok-fails "no status from the device" --filter "$PAIRS" --tx-filter "$ASKS" --timeout 25 -- -d $K --samples 12
+    emu_case "silent from the capture on says so" --oxrok-fails "no status from the device" --no-oracle-only --stderr --filter "$GONE" --tx-filter "$ASKS" --timeout 15 -- -d $K --samples 24
     emu_case "silent with a time limit" --filter "3,\$d" --tx-filter "$ASKS" --timeout 15 -- -d $K --time 1500ms
     # A device that never stops talking, which the drain waits out.
     emu_options setters=0 babble=1
     emu_case "scan a device that keeps talking" --oracle-bug "$HANG_BUG" --oracle-hangs --stderr --filter "$L" --timeout 6 --tx-filter '/^bulk_in /d' -- -d $K --scan
     # An unplug in a poll's wait.
     emu_options setters=0 output=1 answers=2
-    emu_case "unplug in a capture" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
-    emu_case "unplug in a capture says so" --oracle-differs "$UNPLUG_BUG" --stderr --filter "$GONE" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
+    emu_case "unplug in a capture says so" --oxrok-fails "the port gone" --oracle-differs "$UNPLUG_BUG" --stderr --filter "$GONE" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 24
     # Long enough for C's next L to meet the port gone, which is its write's error.
-    emu_case "unplug in a long capture" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 30
+    emu_case "unplug in a long capture" --oxrok-fails "the port gone" --filter "$PAIRS" --unplug model --timeout 15 --tx-filter '/^unplug$/q' -- -d $K --samples 30
     # A quiet point: the L goes unanswered, and the signal lands in its wait.
     emu_options setters=0 output=1 answers=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --filter "$PAIRS" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $K --continuous

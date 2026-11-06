@@ -726,8 +726,8 @@ Deliberate, and kept small:
   says what the meter took, auto after a mode.
 - uni-t-ut181a: a chunk after a recording's first comes from that
   recording, not recording 1. A download ends on `ER`, an empty chunk or
-  5 s of silence, where sigrok-cli waits or asks for ever; it exits 0
-  with the message on stderr.
+  5 s of silence, where sigrok-cli waits or asks for ever; it fails
+  (exit 1).
 - uni-t-ut181a: a time limit ends a silent meter, and a live `--time`
   does not wait for one more reading. A first reading may take 2 s,
   where sigrok-cli finds no device after 100 ms. A live capture with

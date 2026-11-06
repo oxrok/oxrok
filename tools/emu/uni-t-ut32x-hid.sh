@@ -78,7 +78,7 @@ emu_cases() {
     # run that wraps with bytes in the buffer and so loses count instead. How far the
     # reports get before oxrok's stop depends on the time, so the reads are left out.
     emu_options period=2 burst=60 bad-report=00
-    emu_case "a bad report" --oracle-bug "$WRAP_BUG" --timeout 15 --stderr --filter "$F" --tx-filter '/^int_in 82 /d' -- -d $H --samples 60
+    emu_case "a bad report" --oxrok-fails "bad report header" --oracle-bug "$WRAP_BUG" --timeout 15 --stderr --filter "$F" --tx-filter '/^int_in 82 /d' -- -d $H --samples 60
     # A stalled stop: it logs and the capture still ends.
     emu_options period=2 burst=2 stall-out=2
     emu_case "the stop stalled" --tx-filter "$TAIL" -- -d $H --samples 2
@@ -90,6 +90,6 @@ emu_cases() {
     # a hangup then loses what the tool has not read yet.
     emu_options period=10 burst=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $H --samples 5
-    emu_case "unplug" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $H --samples 5
+    emu_case "unplug" --oxrok-fails "the port gone" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $H --samples 5
     emu_options
 }
