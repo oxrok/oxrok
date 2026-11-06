@@ -16,8 +16,8 @@ emu_cases() {
     emu_conns
     # How oxrok's log line and sr_strerror's read.
     F='s/^oxrok: [a-z]+: oxrok::drivers::appa_55ii(::protocol)?: /sr: appa-55ii: /'
-    SHIFT_BUG="a frame with a wrong sum is skipped (protocol.c:245-247) and the pieces left are joined (:209-213), so each later record is read from the wrong bytes: 0.3 degrees where the log holds 20.3; oxrok warns and takes no more records from that log"
-    SHORT_BUG="appa_55ii_live_data reads at fixed places whatever the frame's size (protocol.c:79-81, :59, called from :251), so here it takes the next frame's sync as T1's value, -32768; oxrok warns and makes no sample"
+    SHIFT_BUG="a frame with a wrong sum (protocol.c:245-247) or a broken sync (:237-239) is passed over and the pieces left are joined (:209-213), so each later record is read from the wrong bytes: 0.3 degrees where the log holds 20.3; oxrok warns and the records left are dropped"
+    SHORT_BUG="appa_55ii_live_data reads at fixed places whatever the frame's size (protocol.c:79-81, :59, called from :251), so here T1 comes from the next frame's bytes 11-12, its 00 80 for no time shown, -32768, with its flags from that frame's content 9: the value goes by what the next frame holds; oxrok warns and makes no sample"
     SPIN_BUG="with no record due, appa_55ii_log_data_parse takes nothing (protocol.c:159) and at a full log_buf s is 0, so while (size > 0) in appa_55ii_log_data never ends (:208-216); oxrok drops those bytes and goes on to the log's end"
     NO_META_BUG="$SPIN_BUG, here as the metadata's frame was lost and the count stayed 0"
     SILENT_BUG="receive_data returns at a timeout, whose revents are 0, before it checks its limits (protocol.c:282-283, :311), so a time limit never fires on a device that is silent; oxrok's does"
@@ -87,14 +87,14 @@ emu_cases() {
     emu_case "every flag" -- -d $A --samples 12
 
     # A time limit, and a stream that runs on: the count is the time's, so the
-    # .tx leaves out what came, and the output says that some did, by its first line.
-    # Not which, as a free stream's first reading varied under sigrok-cli: 23.4, 23.5
-    # or 137.2 in 15 runs.
-    # C overruns to the next frame and oxrok does not, which only this count shows.
-    emu_options period=2
+    # .tx leaves out what came, and the output holds the first reading. C overruns
+    # to the next frame and oxrok does not, which only this count shows. A period of
+    # 2 free-runs and ends the session: see the model. The burst is more than a second
+    # brings, and keeps a scan to its one frame: frames of a scan's free stream that
+    # come after the next open's flush change the first reading.
+    emu_options period=3 burst=1000
     T='/^bulk_in /d'
-    emu_case "time on a stream" --filter 's/^T1: .*$/T1: a reading/
-2,$d' --timeout 10 --tx-filter "$T" -- -d $A --time 1s
+    emu_case "time on a stream" --filter '3,$d' --timeout 10 --tx-filter "$T" -- -d $A --time 1s
 
     # What a line can do to the frames.
     emu_options burst=2 period=2 packet=$(appa_noise 7)$G
@@ -141,15 +141,17 @@ s/^sr: \[[^]]*\] /sr: /
     emu_options burst=1 records=6 in-limit=143
     emu_case "log limit 2 gets 3" -- -d $A $M --samples 2
     # The metadata says more than come: the end still ends it.
+    # Its last piece's padding reads as a record, -0.1 degrees, under both tools.
     emu_options burst=1 records=2 claim=9
     emu_case "log says more than it holds" -- -d $A $M --samples 100
+    emu_case "log says more than it holds says so" --oracle-differs "C says nothing of a log that ends short; oxrok warns" --stderr -- -d $A $M --samples 100
     # The live frames between are nobody's in this mode, nor a log in the other.
     emu_options burst=2 after=2 records=3
     emu_case "live frames do not count in memory" -- -d $A $M --samples 100
     emu_options burst=3 after=1 records=3
     emu_case "a log does not count in live" -- -d $A --samples 3
     # Nothing starts a log: a time limit still reads the stream and ends it.
-    emu_options period=2
+    emu_options period=3 burst=1000
     emu_case "memory but no log" --no-output --timeout 10 --tx-filter "$T" -- -d $A $M --time 1s
 
     # A limit and the log's end in one read: C calls its stop twice (protocol.c:227
@@ -160,15 +162,25 @@ s/^sr: \[[^]]*\] /sr: /
     # (protocol.c:306-309). oxrok warns on stderr, which this case does not compare.
     emu_options burst=2 period=2 packet=$G,$(appa_size_over)$G$G
     emu_case "a size over 32 ends it" --timeout 4 -- -d $A --samples 5
-    emu_case "a size over 32 says so" --oracle-differs "protocol.c:306-309 ends the capture and says nothing; oxrok warns" --stderr --filter "$F" --timeout 4 -- -d $A --samples 5
+    emu_case "a size over 32 says so" --oracle-differs "protocol.c:306-309 ends the capture and says nothing; oxrok warns" --stderr --timeout 4 -- -d $A --samples 5
 
     # Where C is wrong.
     emu_options burst=2 packet=$G,$(appa_frame 00 0102)$G
     emu_case "a live frame too short" --oracle-differs "$SHORT_BUG" -- -d $A --samples 2
+    emu_case "a live frame too short says so" --oracle-differs "$SHORT_BUG" --stderr -- -d $A --samples 2
     emu_options burst=1 records=6 bad=3
     emu_case "log with a piece broken" --oracle-differs "$SHIFT_BUG" -- -d $A $M --samples 100
+    emu_case "log with a piece broken says so" --oracle-differs "$SHIFT_BUG" --stderr -- -d $A $M --samples 100
+    emu_options burst=1 records=6 sync=3
+    emu_case "log with a sync broken" --oracle-differs "$SHIFT_BUG" -- -d $A $M --samples 100
+    emu_case "log with a sync broken says so" --oracle-differs "$SHIFT_BUG" --stderr -- -d $A $M --samples 100
+    # A piece gone without a trace: nothing shows it before the end, so both tools
+    # give the same shifted readings, and oxrok says at the end that the log is short.
+    emu_options burst=1 records=6 drop=3
+    emu_case "log with a piece missing" -- -d $A $M --samples 100
+    emu_case "log with a piece missing says so" --oracle-differs "C says nothing of a log that ends short; oxrok warns" --stderr -- -d $A $M --samples 100
     emu_options burst=1 records=5 bad=1
-    emu_case "log with its metadata broken" --oracle-bug "$NO_META_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A $M --samples 100
+    emu_case "log with its metadata broken" --oracle-bug "$NO_META_BUG" --oracle-hangs --timeout 4 --stderr -- -d $A $M --samples 100
     emu_options burst=1 records=8 claim=1
     emu_case "log with more than it says" --oracle-bug "$SPIN_BUG" --oracle-hangs --timeout 4 -- -d $A $M --samples 100
     emu_options mute=1
@@ -176,8 +188,10 @@ s/^sr: \[[^]]*\] /sr: /
     emu_options burst=1
     emu_case "unplug" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $A --samples 5
 
-    # A device that falls silent, and a log no one starts, wait for the user: both
-    # tools do, and a stop ends oxrok's.
+    # A log no one starts waits for the user, under both tools, and a stop ends
+    # oxrok's. So does a device that falls silent in C; oxrok gives that 10 s under a
+    # sample limit in Live mode (SILENCE_BOUND, by choice, in its unit tests), and
+    # the signal lands well before.
     emu_options mute=1
     emu_case "lib silent with no time limit" --libsigrok --hangs --timeout 3 --no-output -- -d $A --samples 3
     emu_case "interrupt on a silent device" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 8 -- -d $A --samples 3

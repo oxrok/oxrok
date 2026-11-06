@@ -124,6 +124,10 @@ pub struct Parser {
     buf: Vec<u8>,
     log_buf: Vec<u8>,
     records_due: u32,
+    /// This log's metadata has come.
+    metadata_seen: bool,
+    /// The log's bytes with no metadata have been warned of.
+    told_no_metadata: bool,
 }
 
 impl Parser {
@@ -157,6 +161,7 @@ impl Parser {
             return None;
         }
         if buf[0] != 0x55 || buf[1] != 0x55 {
+            self.out_of_step(memory);
             return Some(at + 1);
         }
         let size = usize::from(buf[3]);
@@ -165,7 +170,7 @@ impl Parser {
         }
         let next = at + 4 + size + 1;
         if !checksum_ok(buf) {
-            self.broken_frame(memory);
+            self.out_of_step(memory);
             return Some(next);
         }
         let kind = buf[2];
@@ -178,9 +183,15 @@ impl Parser {
                     self.log_data(&content, out);
                 }
             }
-            LOG_START => {}
+            LOG_START => {
+                self.metadata_seen = false;
+                self.told_no_metadata = false;
+            }
             LOG_END => {
                 if memory {
+                    if self.records_due > 0 {
+                        log::warn!("The log ended {} records short.", self.records_due);
+                    }
                     out.push(Event::LogEnd);
                 }
             }
@@ -189,12 +200,14 @@ impl Parser {
         Some(next)
     }
 
-    /// A frame lost to the line while a log comes: what follows is out of step with
-    /// the records. C goes on, and every later record is read from the wrong bytes.
-    fn broken_frame(&mut self, memory: bool) {
+    /// A frame with a wrong sum, or bytes that start no frame, while a log comes:
+    /// what follows may be out of step with the records. C goes on, and every later
+    /// record is read from the wrong bytes. A piece that went without a trace shows
+    /// only at the end, as a log short of its count.
+    fn out_of_step(&mut self, memory: bool) {
         if memory && self.records_due > 0 {
             log::warn!(
-                "A log frame came broken: the {} records left can't be told apart.",
+                "A log frame came broken: the {} records left are dropped.",
                 self.records_due
             );
             self.records_due = 0;
@@ -221,7 +234,9 @@ impl Parser {
     fn metadata(&mut self, content: &[u8]) {
         if let [low, high, ..] = *content {
             self.records_due = u32::from(u16::from_le_bytes([low, high]));
+            self.metadata_seen = true;
         } else {
+            // C reads the sum and the next byte as the count.
             log::warn!("A log metadata packet of {} bytes has no count.", content.len());
         }
     }
@@ -232,6 +247,10 @@ impl Parser {
     fn log_data(&mut self, mut content: &[u8], out: &mut Vec<Event>) {
         while !content.is_empty() {
             if self.records_due == 0 {
+                if !self.metadata_seen && !self.told_no_metadata {
+                    log::warn!("A log with no metadata ahead of it is dropped.");
+                    self.told_no_metadata = true;
+                }
                 log::debug!("{} bytes of log with no record due.", content.len());
                 self.log_buf.clear();
                 return;
@@ -522,7 +541,74 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(feed(&mut p, &frame(0x14, &record(1, 2)), true), []);
         }
+        assert!(p.told_no_metadata);
         assert_eq!(feed(&mut p, &frame(0x19, &[]), true), [Event::LogEnd]);
+    }
+
+    #[test]
+    fn padding_behind_good_metadata_is_not_a_log_with_none() {
+        let frames = log_bytes(&[record(10, 20)], 32);
+        let mut p = Parser::default();
+        for f in &frames {
+            feed(&mut p, f, true);
+        }
+        assert!(!p.told_no_metadata);
+        assert_eq!(p.records_due, 0);
+    }
+
+    #[test]
+    fn a_new_log_asks_for_its_own_metadata() {
+        let frames = log_bytes(&[record(10, 20)], 32);
+        let mut p = Parser::default();
+        for f in &frames {
+            feed(&mut p, f, true);
+        }
+        feed(&mut p, &frame(0x18, &[0]), true);
+        feed(&mut p, &frame(0x14, &[0; 32]), true);
+        assert!(p.told_no_metadata);
+    }
+
+    #[test]
+    fn a_broken_sync_in_a_log_ends_the_records() {
+        let records: Vec<[u8; 20]> = (0..6).map(|i| record(100 + i, 200 + i)).collect();
+        let mut frames = log_bytes(&records, 32);
+        frames[3][0] = 0x54;
+        let mut p = Parser::default();
+        let mut got = Vec::new();
+        for f in &frames {
+            for chunk in f.chunks(37) {
+                got.extend(feed(&mut p, chunk, true));
+            }
+        }
+        assert_eq!(got.len(), 2, "the first piece's record and the end: {got:?}");
+        assert_eq!(got[1], Event::LogEnd);
+        assert_eq!(p.records_due, 0);
+        assert!(!p.told_no_metadata, "it had its metadata");
+    }
+
+    #[test]
+    fn a_piece_gone_without_a_trace_leaves_records_due_at_the_end() {
+        let records: Vec<[u8; 20]> = (0..6).map(|i| record(100 + i, 200 + i)).collect();
+        let mut frames = log_bytes(&records, 32);
+        frames.remove(3);
+        let mut p = Parser::default();
+        let mut got = Vec::new();
+        for f in &frames {
+            got.extend(feed(&mut p, f, true));
+        }
+        assert_eq!(got.last(), Some(&Event::LogEnd));
+        assert_eq!(got.len() - 1 + p.records_due as usize, 6);
+        assert!(p.records_due > 0, "the end is what shows it");
+    }
+
+    #[test]
+    fn noise_outside_a_log_or_in_live_mode_leaves_the_count() {
+        let mut live = Parser { records_due: 3, ..Parser::default() };
+        feed(&mut live, &[0x3f; 9], false);
+        assert_eq!(live.records_due, 3, "live mode");
+        let mut memory = Parser { records_due: 3, ..Parser::default() };
+        feed(&mut memory, &[0x3f; 9], true);
+        assert_eq!(memory.records_due, 0, "the same bytes in memory mode");
     }
 
     #[test]

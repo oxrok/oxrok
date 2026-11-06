@@ -25,21 +25,32 @@
 //!   no data, for ever (`protocol.c:282`).
 //! - Log bytes with no record due are dropped. In C they pile up, and at 64 the
 //!   loop in `appa_55ii_log_data` makes no progress, for ever (`protocol.c:208-216`).
-//! - A frame lost in the middle of a log ends its records, with a warning. C
-//!   joins the pieces that are left and reads every later record from the wrong
-//!   bytes (`protocol.c:245-247`).
+//! - A frame with a wrong sum or bytes that start no frame, with records due, end a
+//!   log's records with a warning. C joins the pieces that are left and reads every
+//!   later record from the wrong bytes (`protocol.c:237-239`, `:245-247`). A piece
+//!   gone without a trace reads as wrong here too, as nothing shows it before the
+//!   end, where a log short of its count gets a warning. So does log data with no
+//!   metadata ahead of it. All of these end at the log's End, as a good capture.
+//! - A live capture under a sample limit alone ends with an error after
+//!   [`SILENCE_BOUND`] with no byte at all, as the unit sends about three frames a
+//!   second in menus and hold too, so silence means off or the cable out. This is a
+//!   choice: C waits for ever.
+//! - A metadata frame under 2 bytes keeps the count and warns. C reads the sum and
+//!   the next byte as the count (`protocol.c:139`).
 //! - A live frame too short for its probes is no sample. C reads what its buffer
 //!   held and sends that (`protocol.c:79-81`).
 //! - Nothing is sent after the End. C parses on after a log's end (`protocol.c:227`,
 //!   `:298`), and calls its stop again if a limit came up in that read (`:311-312`).
 //! - A capture starts clean, and a later one on an open port drops what came
 //!   between. C keeps its buffers and its count of records, and reads what has
-//!   waited in the tty as though it were new.
+//!   waited in the tty as though it were new. A first capture does read that, as C
+//!   does: a client that starts long after its open gets up to about 54 s of old
+//!   frames as new, the tty's 4 KB, since a purge could take a log's start.
 //!
 //! As in C, a size over 32 ends a capture, as nothing can come of it and the buffer
-//! fills (`protocol.c:306-309`), with a warning here. A log that is never sent and
-//! a device that falls silent do not end one: a user may press the button at any
-//! time, so only a limit or a stop does.
+//! fills (`protocol.c:306-309`), with a warning here. A log that is never sent does
+//! not end one: a user may press the button at any time, so only a limit or a stop
+//! does. Nor does silence under a time limit, with no limit, or in memory mode.
 //!
 //! See [`protocol`].
 
@@ -81,6 +92,8 @@ const READ_WAIT: Duration = Duration::from_millis(50);
 /// How long a stopped capture tries to hand over its End on a full queue: a close
 /// joins this thread.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
+/// How long a live capture that only a sample limit can end goes with no byte.
+pub const SILENCE_BOUND: Duration = Duration::from_secs(10);
 
 /// The `appa-55ii` driver.
 pub struct Appa55iiDriver;
@@ -197,6 +210,7 @@ pub struct Appa55iiDevice {
     worker: Option<Worker>,
     /// A capture has run since the open.
     captured: bool,
+    silence_bound: Duration,
 }
 
 struct Worker {
@@ -230,6 +244,7 @@ impl Appa55iiDevice {
             port: Arc::new(Mutex::new(None)),
             worker: None,
             captured: false,
+            silence_bound: SILENCE_BOUND,
         }
     }
 
@@ -372,8 +387,9 @@ impl Device for Appa55iiDevice {
             return Err(Error::device("device is not open"));
         };
         // What came since the last capture is old, and C would read it as new. Not
-        // on a first capture: nothing old can be there behind the open's flush, and
-        // it could take a frame that a device sends only once.
+        // on a first capture, as C: right behind the open's flush nothing is old, and
+        // a purge could take the start of a log. A client that starts much later
+        // reads what has waited, up to about 54 s of frames, as new.
         if self.captured
             && let Err(e) = port.purge()
         {
@@ -385,10 +401,11 @@ impl Device for Appa55iiDevice {
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
+        let silence_bound = self.silence_bound;
         let handle = std::thread::Builder::new()
             .name("appa-55ii acquisition".to_owned())
             .spawn(move || {
-                let capture = Capture { settings, sink: &sink, stop: &stop2 };
+                let capture = Capture { settings, sink: &sink, stop: &stop2, silence_bound };
                 capture.run(port.as_mut());
                 *slot.lock().expect("port lock") = Some(port);
                 send_end(&sink, &stop2);
@@ -433,6 +450,7 @@ struct Capture<'a> {
     settings: Arc<Settings>,
     sink: &'a PacketSink,
     stop: &'a AtomicBool,
+    silence_bound: Duration,
 }
 
 impl Capture<'_> {
@@ -449,6 +467,7 @@ impl Capture<'_> {
             return;
         }
         let started = Instant::now();
+        let mut last_byte = started;
         let mut parser = Parser::default();
         let mut samples = 0u64;
         let mut events = Vec::new();
@@ -466,8 +485,13 @@ impl Capture<'_> {
                 }
             };
             if n == 0 {
+                if self.silence_is_final(last_byte) {
+                    log::error!("No byte from the device for {:?}.", self.silence_bound);
+                    return;
+                }
                 continue;
             }
+            last_byte = Instant::now();
             let memory = self.settings.memory.load(Ordering::SeqCst);
             let full = parser.feed(&chunk[..n], memory, &mut events);
             for event in events.drain(..) {
@@ -499,6 +523,16 @@ impl Capture<'_> {
                 return;
             }
         }
+    }
+
+    /// A capture in Live mode that only a sample limit can end. In memory mode the
+    /// device may be waiting for its user.
+    fn silence_is_final(&self, last_byte: Instant) -> bool {
+        let s = &self.settings;
+        s.limit_samples.load(Ordering::SeqCst) > 0
+            && s.limit_msec.load(Ordering::SeqCst) == 0
+            && !s.memory.load(Ordering::SeqCst)
+            && last_byte.elapsed() >= self.silence_bound
     }
 
     fn time_is_up(&self, started: Instant) -> bool {

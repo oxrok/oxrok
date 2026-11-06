@@ -673,11 +673,107 @@ fn a_source_set_in_a_capture_takes_effect() {
         let (fake, seen) = Fake::new(vec![]);
         let mut d = device(Box::new(fake));
         let rx = start(&mut d);
+        lock(&seen).more.extend(live(100, 200));
+        let deadline = Instant::now() + CAPTURE_BOUND;
+        let mut got = Vec::new();
+        while got.len() < 2 {
+            let (_, p) = rx.recv_timeout(deadline - Instant::now()).expect("the first reading");
+            if let Packet::Analog(a) = p {
+                got.push(a);
+            }
+        }
+        // After frames have come: a capture that read it once stays live, takes the
+        // next frame and passes over the end.
         d.set(&Key::DataSource, &Value::from("Memory"), None).unwrap();
-        lock(&seen).more.extend(live(1, 2));
+        lock(&seen).more.extend(live(999, 999));
         wait_for("the frame read", || lock(&seen).more.is_empty());
         lock(&seen).more.extend(frame(0x19, &[]));
-        assert_eq!(values(&until_end(&rx)), [], "the live frame was passed over");
+        got.extend(until_end(&rx));
+        assert_eq!(values(&got), [(0, 10.0), (1, 20.0)], "the second was passed over");
+    });
+}
+
+// A device that falls silent.
+
+#[test]
+fn the_silence_bound_is_ten_seconds() {
+    assert_eq!(SILENCE_BOUND, Duration::from_secs(10));
+    let (fake, _) = Fake::new(vec![]);
+    assert_eq!(Appa55iiDevice::from_port(Box::new(fake)).silence_bound, Duration::from_secs(10));
+}
+
+#[test]
+fn silence_ends_a_live_capture_that_only_a_sample_limit_can_end() {
+    in_time(|| {
+        let (fake, _) = Fake::new(vec![]);
+        let mut d = device(Box::new(fake));
+        d.silence_bound = Duration::from_millis(150);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let begun = Instant::now();
+        let rx = start(&mut d);
+        assert_eq!(values(&until_end(&rx)), []);
+        assert!(begun.elapsed() >= Duration::from_millis(150), "{:?}", begun.elapsed());
+    });
+}
+
+#[test]
+fn a_byte_of_any_kind_puts_the_silence_off() {
+    in_time(|| {
+        let (fake, seen) = Fake::new(vec![]);
+        let mut d = device(Box::new(fake));
+        d.silence_bound = Duration::from_secs(2);
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let begun = Instant::now();
+        let rx = start(&mut d);
+        // Noise, and no sample, for longer than the bound.
+        let mut last = begun;
+        while begun.elapsed() < Duration::from_millis(2500) {
+            lock(&seen).more.push_back(0x3f);
+            last = Instant::now();
+            std::thread::sleep(Duration::from_millis(10));
+            assert!(d.port.lock().unwrap().is_none(), "over at {:?}", begun.elapsed());
+        }
+        assert_eq!(values(&until_end(&rx)), []);
+        assert!(last.elapsed() >= Duration::from_secs(2), "{:?}", last.elapsed());
+    });
+}
+
+/// Starts a capture with a short bound and waits until it has gone far past it.
+fn still_runs_after_the_bound(set: impl FnOnce(&mut Appa55iiDevice)) {
+    let (fake, seen) = Fake::new(vec![]);
+    let mut d = device(Box::new(fake));
+    d.silence_bound = Duration::from_millis(20);
+    set(&mut d);
+    let rx = start(&mut d);
+    // Each empty read sleeps a millisecond at least.
+    wait_for("the reads", || lock(&seen).reads >= 200);
+    assert!(d.port.lock().unwrap().is_none(), "it ended");
+    d.stop().unwrap();
+    until_end(&rx);
+}
+
+#[test]
+fn silence_ends_nothing_with_no_limit() {
+    in_time(|| still_runs_after_the_bound(|_| {}));
+}
+
+#[test]
+fn silence_ends_nothing_under_a_time_limit() {
+    in_time(|| {
+        still_runs_after_the_bound(|d| {
+            d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+            d.set(&Key::LimitMsec, &Value::U64(3_600_000), None).unwrap();
+        });
+    });
+}
+
+#[test]
+fn silence_ends_nothing_in_memory_mode() {
+    in_time(|| {
+        still_runs_after_the_bound(|d| {
+            d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+            d.set(&Key::DataSource, &Value::from("Memory"), None).unwrap();
+        });
     });
 }
 
