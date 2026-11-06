@@ -33,6 +33,9 @@
 //!   - `mark-at=N`: the event point (`--unplug model`, `--unplug tcp-model`), once
 //!     the Nth query was answered;
 //!   - `idn=TEXT`; `eol=lf|crlf|none`, how text answers end;
+//!   - `line-gap=N`: the ticks between the lines of an [`Answer::Apart`], 3 by default;
+//!   - `early=discard`: a line that comes while an [`Answer::Apart`] is going out is
+//!     dropped, with an error;
 //!   - `framing=rigol`: on TCP, the length before each answer that `tcp-rigol`
 //!     reads;
 //!   - `uart=LINE`: on CDC-ACM, what the host must set before anything passes;
@@ -96,6 +99,10 @@ pub enum Answer {
     Text(String),
     /// These bytes and no others. [`block`] makes block data.
     Bytes(Vec<u8>),
+    /// Lines, each with the line end, `line-gap=` ticks apart, as a serial read must
+    /// see them to tell them apart: a Fluke 45's answer and its prompt. What the next
+    /// command says waits behind them, a gap on.
+    Apart(Vec<String>),
     /// Done, and nothing to say: a setting.
     Done,
     /// Heard, and no answer ever, with no error.
@@ -197,6 +204,8 @@ pub struct Config {
     mark_at: Option<u32>,
     idn: Option<String>,
     eol: Vec<u8>,
+    line_gap: u32,
+    early_discard: bool,
     rigol_tcp: bool,
     uart: Option<cdc::Line>,
     tmc: usbtmc::Faults,
@@ -217,6 +226,8 @@ impl Default for Config {
             mark_at: None,
             idn: None,
             eol: b"\n".to_vec(),
+            line_gap: 3,
+            early_discard: false,
             rigol_tcp: false,
             uart: None,
             tmc: usbtmc::Faults::default(),
@@ -269,6 +280,11 @@ impl Config {
                     _ => return Err(Error::Invalid(format!("eol={value}: lf, crlf or none"))),
                 };
             }
+            "line-gap" => self.line_gap = parse_number(key, value, 1..=1 << 16)?,
+            "early" => match value {
+                "discard" => self.early_discard = true,
+                _ => return Err(Error::Invalid(format!("early={value}: discard"))),
+            },
             "framing" => match value {
                 "rigol" => self.rigol_tcp = true,
                 _ => return Err(Error::Invalid(format!("framing={value}: rigol"))),
@@ -385,6 +401,10 @@ impl<I: Instrument> Engine<I> {
         if self.answers.len() < before {
             self.error(-410, "Query INTERRUPTED");
         }
+        if self.config.early_discard && !self.answers.is_empty() {
+            self.error(-410, "Command before the prompt");
+            return;
+        }
         let mut quoted = false;
         let mut from = 0;
         for (i, c) in text.char_indices() {
@@ -469,12 +489,21 @@ impl<I: Instrument> Engine<I> {
     }
 
     fn conclude(&mut self, m: &Message<'_>, answer: Answer, v: &mut Violations) {
+        let mut rest = Vec::new();
+        let apart = matches!(answer, Answer::Apart(_));
+        let with_eol = |text: String, eol: &[u8]| {
+            let mut bytes = text.into_bytes();
+            bytes.extend_from_slice(eol);
+            bytes
+        };
         let bytes = match answer {
-            Answer::Text(text) => {
-                let mut bytes = text.into_bytes();
-                bytes.extend_from_slice(&self.config.eol);
-                bytes
+            Answer::Apart(lines) => {
+                let mut lines = lines.into_iter().map(|l| with_eol(l, &self.config.eol));
+                let first = lines.next().unwrap_or_default();
+                rest = lines.collect();
+                first
             }
+            Answer::Text(text) => with_eol(text, &self.config.eol),
             Answer::Bytes(bytes) => bytes,
             Answer::Done | Answer::Silent => Vec::new(),
             Answer::Error(code, text) => {
@@ -504,6 +533,7 @@ impl<I: Instrument> Engine<I> {
         }
         let ticks = match self.config.late_at {
             Some((at, ticks)) if at == n => ticks,
+            _ if apart && !self.answers.is_empty() => self.config.line_gap,
             _ => self.config.pace,
         };
         if let Some((at, later)) = self.config.split_at
@@ -514,23 +544,24 @@ impl<I: Instrument> Engine<I> {
             let head = bytes[..bytes.len() / 2].to_vec();
             self.answers.push_back(Waiting { bytes: head, ticks });
             self.answers.push_back(Waiting { bytes: tail, ticks: later });
-            return;
-        }
-        if let Some((at, later)) = self.config.junk_at
+        } else if let Some((at, later)) = self.config.junk_at
             && at == n
         {
             let mut junk = b"abc".to_vec();
             junk.extend_from_slice(&self.config.eol);
             self.answers.push_back(Waiting { bytes: junk, ticks });
             self.answers.push_back(Waiting { bytes, ticks: later });
-            return;
+        } else {
+            let again = match self.config.double_at {
+                Some((at, later)) if at == n => Some(Waiting { bytes: bytes.clone(), ticks: later }),
+                _ => None,
+            };
+            self.answers.push_back(Waiting { bytes, ticks });
+            self.answers.extend(again);
         }
-        let again = match self.config.double_at {
-            Some((at, later)) if at == n => Some(Waiting { bytes: bytes.clone(), ticks: later }),
-            _ => None,
-        };
-        self.answers.push_back(Waiting { bytes, ticks });
-        self.answers.extend(again);
+        for bytes in rest {
+            self.answers.push_back(Waiting { bytes, ticks: self.config.line_gap });
+        }
     }
 
     /// The next answer that is due.
