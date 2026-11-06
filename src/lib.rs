@@ -85,6 +85,7 @@ pub mod drivers {
     pub mod asix_sigma;
     pub mod atorch;
     pub mod atten_pps3xxx;
+    pub mod bkprecision_1856d;
     pub mod cem_dt_885x;
     pub mod chronovu_la;
     pub mod conrad_digi_35_cpu;
@@ -163,6 +164,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));
     registry.register(Box::new(drivers::mastech_ms6514::MastechMs6514Driver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
+    registry.register(Box::new(drivers::bkprecision_1856d::Bkprecision1856dDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
     registry.register(Box::new(drivers::gwinstek_psp::PspDriver));
     registry.register(Box::new(drivers::appa_55ii::Appa55iiDriver));

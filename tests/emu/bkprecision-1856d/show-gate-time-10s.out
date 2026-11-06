@@ -1,0 +1,14 @@
+Driver functions:
+    Frequency counter
+Scan options:
+    conn
+bkprecision-1856d - BK Precision bk-1856d with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    gate_time - supported values:
+      10 ms (current)
+      100 ms
+      1 s
+      10 s
+    limit_samples: 
+    data_source: A, C (current)
