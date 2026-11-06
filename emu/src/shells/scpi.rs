@@ -22,6 +22,7 @@
 //!   - `late-at=N:T`: the Nth answer waits T ticks, and what comes on in the
 //!     meantime waits behind it, so a host that gave up reads it as the answer
 //!     to its next question;
+//!   - `pace=T`: every answer waits T ticks, for a device's own rate;
 //!   - `opc-late=N`: the first N `*OPC?` answer `0`;
 //!   - `mark-at=N`: the event point (`--unplug model`, `--unplug tcp-model`), once
 //!     the Nth query was answered;
@@ -182,6 +183,7 @@ pub struct Config {
     mute_at: Option<u32>,
     silent_at: Option<u32>,
     late_at: Option<(u32, u32)>,
+    pace: u32,
     opc_late: u32,
     mark_at: Option<u32>,
     idn: Option<String>,
@@ -198,6 +200,7 @@ impl Default for Config {
             mute_at: None,
             silent_at: None,
             late_at: None,
+            pace: 0,
             opc_late: 0,
             mark_at: None,
             idn: None,
@@ -236,6 +239,7 @@ impl Config {
                     .ok_or_else(|| Error::Invalid(format!("late-at={value}: as in 2:40")))?;
                 self.late_at = Some((count(nth)?, count(ticks)?));
             }
+            "pace" => self.pace = parse_number(key, value, 0..=1 << 24)?,
             "opc-late" => self.opc_late = parse_number(key, value, 0..=1 << 24)?,
             "mark-at" => self.mark_at = Some(count(value)?),
             "idn" => self.idn = Some(value.to_owned()),
@@ -482,7 +486,7 @@ impl<I: Instrument> Engine<I> {
         }
         let ticks = match self.config.late_at {
             Some((at, ticks)) if at == n => ticks,
-            _ => 0,
+            _ => self.config.pace,
         };
         self.answers.push_back(Waiting { bytes, ticks });
     }
@@ -866,10 +870,25 @@ mod tests {
     }
 
     #[test]
+    fn a_pace_holds_every_answer_and_a_late_one_goes_by_its_own() {
+        let mut r = Rig::new(&[("pace", "2"), ("late-at", "2:3")]);
+        for ticks in [2, 3, 2] {
+            assert!(r.ask("*OPC?\n").is_none());
+            for _ in 1..ticks {
+                r.e.pass_time();
+                assert!(r.e.take().is_none());
+            }
+            r.e.pass_time();
+            assert_eq!(r.e.take().unwrap(), b"1\n");
+        }
+    }
+
+    #[test]
     fn options_refuse_what_they_cannot_use() {
         let mut c = Config::default();
         assert!(c.option("mute-at", "0").is_err());
         assert!(c.option("late-at", "2").is_err());
+        assert!(c.option("pace", "x").is_err());
         assert!(c.option("eol", "cr").is_err());
         assert!(c.option("framing", "other").is_err());
         assert!(!c.option("no-such", "1").unwrap());

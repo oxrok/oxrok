@@ -1,0 +1,81 @@
+gcov siglent-sdl10x0 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        89.0%  227 of 255
+  protocol.c   95.4%  83 of 87
+  total        90.6%  310 of 342
+never reached, by function (line ranges hold no reached line):
+  api.c
+    config_get: 171, 187, 199, 205, 211, 217, 223, 229, 235, 245, 251, 261, 270-271
+    config_set: 292, 351-352
+    config_list: 384, 392-403
+  protocol.c
+    siglent_sdl10x0_receive_data: 145-146
+    siglent_sdl10x0_handle_events: 162, 166
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/scpi/scpi.c                 43.2%  219 of 507
+  src/scpi/scpi_tcp.c             55.0%  60 of 109
+  src/scpi/scpi_usbtmc_libusb.c   65.3%  196 of 300
+  src/tcp.c                       63.9%  78 of 122
+  total                           53.3%  553 of 1038
+never reached, by function (line ranges hold no reached line):
+  src/scpi/scpi.c
+    parse_strict_bool: 58
+    sr_scpi_scan_resource: 117
+    scpi_write_data: never called (205-207)
+    scpi_read_data: never called (219-221)
+    scpi_read_response: 252-257
+    scpi_get_data: 281, 297-299
+    sr_scpi_scan: 338-339
+    scpi_dev_inst_new: 385-386
+    sr_scpi_connection_id: never called (421-424)
+    sr_scpi_send_variadic: never called (495-504)
+    sr_scpi_read_data: never called (528-537)
+    sr_scpi_write_data: never called (552-561)
+    sr_scpi_free: 604
+    sr_scpi_read_response: never called (664-673)
+    sr_scpi_get_bool: 708
+    sr_scpi_get_int: never called (730-754)
+    sr_scpi_get_double: never called (799-818)
+    sr_scpi_get_opc: never called (829-842)
+    sr_scpi_get_floatv: never called (859-902)
+    sr_scpi_get_uint8v: never called (919-961)
+    sr_scpi_get_block: never called (978-1124)
+    sr_scpi_get_hw_id: 1176, 1186, 1190-1191
+    sr_scpi_unquote_string: never called (1231-1261)
+    sr_vendor_alias: never called (1264-1273)
+    sr_scpi_cmd_get: never called (1276-1293)
+    sr_scpi_cmd: never called (1296-1334)
+    sr_scpi_cmd_resp: never called (1337-1418)
+  src/scpi/scpi_tcp.c
+    scpi_tcp_dev_inst_new: 52-53, 58
+    scpi_tcp_connection_id: never called (75-88)
+    scpi_tcp_send: 119-120, 124
+    scpi_tcp_raw_write_data: never called (178-194)
+    scpi_tcp_rigol_read_data: never called (198-241)
+    scpi_tcp_close: 263
+  src/scpi/scpi_usbtmc_libusb.c
+    scpi_usbtmc_libusb_scan: 135-137, 144-147
+    scpi_usbtmc_libusb_dev_inst_new: 184-185, 191-193
+    check_usbtmc_blacklist: 208, 212
+    scpi_usbtmc_remote: 226-257
+    scpi_usbtmc_local: 271-289
+    scpi_usbtmc_libusb_open: 307, 310, 317-320, 327, 344-346, 357-358, 362-368, 373-376, 381-383
+    scpi_usbtmc_libusb_connection_id: never called (418-427)
+    scpi_usbtmc_libusb_source_remove: never called (439-443)
+    scpi_usbtmc_bulkout: 487-488, 508-510, 514-516
+    scpi_usbtmc_bulkin_start: 552-553
+    scpi_usbtmc_bulkin_continue: never called (573-591)
+    scpi_usbtmc_libusb_send: 600
+    scpi_usbtmc_libusb_read_begin: 615
+    scpi_usbtmc_libusb_read_data: 631-633, 636, 638
+    scpi_usbtmc_libusb_close: 666, 671, 675-680
+  src/tcp.c
+    sr_fd_is_readable: never called (78-95)
+    sr_tcp_dev_inst_new: 143
+    sr_tcp_dev_inst_free: 162
+    sr_tcp_get_port_path: never called (183-206)
+    sr_tcp_connect: 226, 228, 237-239, 247
+    sr_tcp_disconnect: 280
+    sr_tcp_write_bytes: 312, 314, 316, 319, 323
+    sr_tcp_read_bytes: 350, 352, 354, 357, 360
+    sr_tcp_source_add: 393
+    sr_tcp_source_remove: 414

@@ -1,0 +1,11 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+siglent-sdl10x0 - Siglent Technologies SDL1020X-E 1.01.01.25 [S/N: SDL2EMU0001] with 1 channel: 1
+Channel groups:
+    1: channel 1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
