@@ -284,36 +284,46 @@ mod tests {
     }
 
     /// No checksum, so what a flipped bit or a lost byte can do to a line. This
-    /// counts it, on the manual's own answer: the format can't catch a changed digit,
-    /// and a lost digit gives another number.
+    /// counts it, on the manual's own answer and on the other classes of value: the
+    /// format can't catch a changed digit, and a lost digit gives another number.
     #[test]
     fn what_damage_gives_a_wrong_value() {
-        const LINE: &[u8] = b"7.924678";
-        let truth = reading("7.924678");
-        let judge = |bytes: &[u8]| -> (bool, bool) {
-            match std::str::from_utf8(bytes).ok().and_then(reading) {
-                Some(v) => (Some(v) != truth, false),
-                None => (false, true),
+        // A line, then flips that give a wrong value, flips refused, lost bytes that
+        // give a wrong value, lost bytes refused.
+        let table: [(&str, u32, u32, u32, u32); 5] = [
+            ("7.924678", 19, 45, 8, 0),
+            ("0.000012", 27, 36, 7, 0),
+            ("149.999999", 20, 59, 10, 0),
+            ("-0.250000", 26, 46, 4, 0),
+            ("1.5e1", 11, 28, 4, 1),
+        ];
+        for (line, want_wrong, want_refused, want_lost_wrong, want_lost_refused) in table {
+            let truth = reading(line);
+            let judge = |bytes: &[u8]| -> (u32, u32) {
+                match std::str::from_utf8(bytes).ok().and_then(reading) {
+                    Some(v) => (u32::from(Some(v) != truth), 0),
+                    None => (0, 1),
+                }
+            };
+            let (mut wrong, mut refused) = (0, 0);
+            for at in 0..line.len() * 8 {
+                let mut flipped = line.as_bytes().to_vec();
+                flipped[at / 8] ^= 1 << (at % 8);
+                let (w, r) = judge(&flipped);
+                wrong += w;
+                refused += r;
             }
-        };
-        let (mut wrong, mut refused) = (0, 0);
-        for at in 0..LINE.len() * 8 {
-            let mut flipped = LINE.to_vec();
-            flipped[at / 8] ^= 1 << (at % 8);
-            let (w, r) = judge(&flipped);
-            wrong += u32::from(w);
-            refused += u32::from(r);
+            assert_eq!((wrong, refused), (want_wrong, want_refused), "flips of {line}");
+            let (mut wrong, mut refused) = (0, 0);
+            for at in 0..line.len() {
+                let mut lost = line.as_bytes().to_vec();
+                lost.remove(at);
+                let (w, r) = judge(&lost);
+                wrong += w;
+                refused += r;
+            }
+            assert_eq!((wrong, refused), (want_lost_wrong, want_lost_refused), "lost of {line}");
         }
-        assert_eq!((wrong, refused, LINE.len() * 8), (19, 45, 64), "single bit flips");
-        let (mut wrong, mut refused) = (0, 0);
-        for at in 0..LINE.len() {
-            let mut lost = LINE.to_vec();
-            lost.remove(at);
-            let (w, r) = judge(&lost);
-            wrong += u32::from(w);
-            refused += u32::from(r);
-        }
-        assert_eq!((wrong, refused, LINE.len()), (8, 0, 8), "lost bytes");
     }
 
     #[test]
