@@ -7,9 +7,12 @@
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
-use super::protocol::{INIT, NO_ANSWER, PACE, QUIET, REQUEST, parse_reading};
+use super::protocol::{
+    GIVE_UP, GiveUp, INIT, LONGEST_WAIT, NO_ANSWER, PACE, QUIET, REQUEST, parse_reading,
+};
 use super::*;
 use crate::core::{MqFlags, Packet};
+use crate::serial::WriteLog;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, sync_channel};
@@ -80,7 +83,7 @@ impl State {
 
 #[derive(Default)]
 struct State {
-    writes: Vec<Vec<u8>>,
+    writes: WriteLog,
     script: VecDeque<Reply>,
     /// What each request gets once the script is out.
     otherwise: Vec<u8>,
@@ -92,6 +95,8 @@ struct State {
     arrives: VecDeque<Instant>,
     spacing: Spacing,
     fail_writes_after: Option<usize>,
+    /// A write takes this long, as behind a line that holds it.
+    write_blocks: Duration,
     writes_time_out: bool,
     fail_reads: bool,
     /// Reads never run out of this.
@@ -124,7 +129,7 @@ impl Fake {
     }
 
     fn writes(&self) -> Vec<Vec<u8>> {
-        self.with(|s| s.writes.clone())
+        self.with(|s| s.writes.iter().map(|(_, w)| w.clone()).collect())
     }
 
     fn wait_for(&self, what: &str, done: impl Fn(&State) -> bool) {
@@ -184,11 +189,13 @@ impl Port for Fake {
         panic!("every write of this driver has a timeout");
     }
     fn write_timeout(&mut self, data: &[u8], _: Duration) -> Result<usize> {
+        let blocks = self.with(|s| s.write_blocks);
+        std::thread::sleep(blocks);
         let mut s = self.0.lock().unwrap();
         if s.fail_writes_after.is_some_and(|n| s.writes.len() >= n) {
             return Err(Error::device("Broken pipe"));
         }
-        s.writes.push(data.to_vec());
+        s.writes.push((Instant::now(), data.to_vec()));
         if s.writes_time_out {
             return Ok(0);
         }
@@ -200,8 +207,12 @@ impl Port for Fake {
             Some(Reply::Now(bytes)) => s.arrive(bytes),
             Some(Reply::Silent) => {}
             Some(Reply::OnRelease(bytes)) => s.held = bytes,
+            // The meter's sequence number: the request's plus one.
             None => {
-                let otherwise = s.otherwise.clone();
+                let mut otherwise = s.otherwise.clone();
+                if let [_, _, sequence, _] = &mut otherwise[..] {
+                    *sequence = data[1].wrapping_add(1);
+                }
                 s.arrive(otherwise);
             }
         }
@@ -215,8 +226,18 @@ impl Port for Fake {
 type Received = Receiver<(usize, Packet)>;
 
 /// The pace short, and nothing at a bound.
-const QUICK: Timing =
-    Timing { pace: Duration::from_millis(2), quiet: Duration::ZERO, no_answer: FAR };
+const QUICK: Timing = Timing {
+    pace: Duration::from_millis(2),
+    quiet: Duration::ZERO,
+    no_answer: FAR,
+    longest_wait: FAR,
+    give_up: FAR,
+};
+
+/// With these times, and the real ones for what they don't name.
+fn timing(pace: Duration, quiet: Duration, no_answer: Duration) -> Timing {
+    Timing { pace, quiet, no_answer, ..Timing::default() }
+}
 
 fn device_with(fake: &Fake, timing: Timing) -> TondajDevice {
     let mut d = TondajDevice::from_port(Box::new(fake.clone()));
@@ -329,6 +350,8 @@ fn the_commands_and_the_times_are_as_written() {
     assert_eq!(PACE, Duration::from_millis(500));
     assert_eq!(QUIET, Duration::from_millis(100));
     assert_eq!(NO_ANSWER, Duration::from_secs(5));
+    assert_eq!(LONGEST_WAIT, Duration::from_secs(30));
+    assert_eq!(GIVE_UP, Duration::from_secs(600));
 }
 
 #[test]
@@ -339,25 +362,71 @@ fn each_way_of_giving_up_has_its_own_words() {
     assert_eq!(GiveUp::NoUsableAnswer.message(after), "no usable answer for 5 s");
     assert_eq!(time_limit_message(false), "No answer from the meter before the time limit.");
     assert_eq!(time_limit_message(true), "No usable answer from the meter before the time limit.");
+    assert_eq!(GiveUp::NoUsableAnswer.message(GIVE_UP), "no usable answer for 600 s");
+    assert_eq!(silence_message(false, after), "No answer from the meter for 5 s; still asking.");
+    assert_eq!(
+        silence_message(true, after),
+        "No usable answer from the meter for 5 s; still asking."
+    );
+    assert_eq!(
+        short_write_message(Command::Init, 0),
+        "Only 0 of 3 bytes of the init command went out."
+    );
+    assert_eq!(
+        short_write_message(Command::Request, 2),
+        "Only 2 of 3 bytes of the request went out."
+    );
 }
 
 fn ms(n: u64) -> Duration {
     Duration::from_millis(n)
 }
 
-const REAL: Timing = Timing { pace: PACE, quiet: QUIET, no_answer: NO_ANSWER };
+const REAL: Timing = Timing {
+    pace: PACE,
+    quiet: QUIET,
+    no_answer: NO_ANSWER,
+    longest_wait: LONGEST_WAIT,
+    give_up: GIVE_UP,
+};
+const SAMPLES: Limits = Limits { samples_only: true, msec: 0 };
+const NO_LIMIT: Limits = Limits { samples_only: false, msec: 0 };
+
+fn secs(n: u64) -> Duration {
+    Duration::from_secs(n)
+}
+
+/// As far as a request out at `at`, with init done just then.
+fn out_at(limits: Limits, at: Instant) -> Exchange {
+    let mut x = Exchange::new(REAL, limits, at);
+    let bytes = x.bytes(Command::Init);
+    assert_eq!(bytes, INIT);
+    x.sent(Command::Init, at);
+    assert_eq!(x.take(&GOOD_INIT, at), Heard::InitOk);
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, at);
+    x
+}
+
+/// Answers the request out with its own sequence number, as a sample handed on.
+fn answer(x: &mut Exchange, sequence: u8, at: Instant) {
+    assert_eq!(x.take(&[1, 2, sequence.wrapping_add(1), 0x0d], at), Heard::Reading(1, 2));
+    x.delivered(at);
+}
 
 #[test]
 fn a_command_waits_its_pace_from_the_start_and_from_each_reply() {
     let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     assert_eq!(x.empty_read(t0 + ms(499)), Next::Wait);
     assert_eq!(x.empty_read(t0 + ms(500)), Next::Send(Command::Init));
+    assert_eq!(x.bytes(Command::Init), INIT);
     x.sent(Command::Init, t0 + ms(500));
     assert_eq!(x.want(64), 2);
     assert_eq!(x.take(&GOOD_INIT, t0 + ms(501)), Heard::InitOk);
     assert_eq!(x.empty_read(t0 + ms(1000)), Next::Wait);
     assert_eq!(x.empty_read(t0 + ms(1001)), Next::Send(Command::Request));
+    assert_eq!(x.bytes(Command::Request), REQUEST);
     x.sent(Command::Request, t0 + ms(1001));
     assert_eq!(x.want(64), 4);
     assert_eq!(x.take(&OK[..1], t0 + ms(1002)), Heard::Part);
@@ -369,9 +438,9 @@ fn a_command_waits_its_pace_from_the_start_and_from_each_reply() {
 }
 
 #[test]
-fn a_wrong_reply_is_told_and_its_command_goes_again_at_the_pace() {
+fn a_wrong_reply_is_told_and_its_command_goes_again_at_the_pace_with_cs_number() {
     let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     x.sent(Command::Init, t0);
     assert_eq!(x.take(&[0x06, 0x0d], t0), Heard::BadInit([0x06, 0x0d]));
     assert_eq!(x.empty_read(t0 + ms(499)), Next::Wait);
@@ -379,26 +448,229 @@ fn a_wrong_reply_is_told_and_its_command_goes_again_at_the_pace() {
     x.sent(Command::Init, t0 + ms(500));
     assert_eq!(x.take(&GOOD_INIT[..1], t0 + ms(500)), Heard::Part);
     assert_eq!(x.take(&GOOD_INIT[1..], t0 + ms(500)), Heard::InitOk);
-    x.sent(Command::Request, t0 + ms(1000));
     for (bad, what) in [([1, 2, 0x02, 0x0d], "sequence"), ([1, 2, 0x01, 0x0a], "end")] {
-        assert_eq!(x.take(&bad, t0 + ms(1000)), Heard::BadReply(bad), "{what}");
+        assert_eq!(x.bytes(Command::Request), REQUEST, "{what}");
         x.sent(Command::Request, t0 + ms(1000));
+        assert_eq!(x.take(&bad, t0 + ms(1000)), Heard::BadReply(bad), "{what}");
     }
 }
 
+/// On a sample limit with no sample yet, nothing asks again: the wire is as in C up
+/// to a failure in each wait's words.
 #[test]
-fn the_bound_on_a_reply_holds_from_both_sides_in_each_wait() {
+fn before_a_first_sample_a_sample_limit_fails_at_the_bound_from_both_sides() {
     let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     x.sent(Command::Init, t0 + ms(500));
     assert_eq!(x.empty_read(t0 + ms(5499)), Next::Wait);
-    assert_eq!(x.empty_read(t0 + ms(5500)), Next::GiveUp(GiveUp::NoInitReply));
-    x.take(&GOOD_INIT, t0 + ms(5000));
+    assert_eq!(x.empty_read(t0 + ms(5500)), Next::GiveUp(GiveUp::NoInitReply, NO_ANSWER));
+    assert_eq!(x.take(&GOOD_INIT, t0 + ms(5000)), Heard::InitOk);
     x.sent(Command::Request, t0 + ms(5500));
     assert_eq!(x.empty_read(t0 + ms(10_499)), Next::Wait);
-    assert_eq!(x.empty_read(t0 + ms(10_500)), Next::GiveUp(GiveUp::NoReply));
-    x.take(&OK[..1], t0 + ms(10_500));
-    assert_eq!(x.empty_read(t0 + ms(10_500)), Next::GiveUp(GiveUp::NoUsableAnswer));
+    assert_eq!(x.empty_read(t0 + ms(10_500)), Next::GiveUp(GiveUp::NoReply, NO_ANSWER));
+    assert_eq!(x.take(&OK[..1], t0 + ms(10_500)), Heard::Part);
+    assert_eq!(x.empty_read(t0 + ms(10_500)), Next::GiveUp(GiveUp::NoUsableAnswer, NO_ANSWER));
+}
+
+/// One out at a time, numbered 1, 2, ..., waiting 5, 10, 20, 30, 30 s.
+#[test]
+fn a_silence_asks_again_with_ever_longer_waits_and_new_numbers() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    assert_eq!(x.empty_read(t0 + ms(4999)), Next::Wait);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
+    let mut at = t0;
+    for (sequence, wait) in [(1u8, 5u64), (2, 10), (3, 20), (4, 30), (5, 30)] {
+        assert_eq!(x.empty_read(at + secs(wait) - ms(1)), Next::Wait, "{sequence}");
+        at += secs(wait);
+        assert_eq!(x.empty_read(at), Next::Send(Command::Request), "{sequence}");
+        assert_eq!(x.bytes(Command::Request), [0x30, sequence, 0x0d]);
+        x.sent(Command::Request, at);
+    }
+    assert_eq!(x.owed(), Some(Command::Request));
+}
+
+#[test]
+fn init_asks_again_in_the_same_words() {
+    let t0 = Instant::now();
+    let mut x = Exchange::new(REAL, NO_LIMIT, t0);
+    x.sent(Command::Init, t0);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Send(Command::Init));
+    assert_eq!(x.bytes(Command::Init), INIT);
+    x.sent(Command::Init, t0 + secs(5));
+    assert_eq!(x.take(&GOOD_INIT, t0 + secs(6)), Heard::InitOk);
+}
+
+#[test]
+fn a_reply_that_is_quick_sets_the_wait_back_and_a_slow_one_leaves_it() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
+    assert_eq!(x.bytes(Command::Request), [0x30, 1, 0x0d]);
+    x.sent(Command::Request, t0 + secs(5));
+    // 6 s after the one it answers: the wait stays at 10 s, so the next isn't asked twice.
+    answer(&mut x, 1, t0 + secs(11));
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, t0 + secs(12));
+    assert_eq!(x.empty_read(t0 + secs(21)), Next::Wait);
+    // 5 s after it: back to the first wait.
+    answer(&mut x, 0, t0 + secs(17));
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, t0 + secs(18));
+    assert_eq!(x.empty_read(t0 + ms(22_999)), Next::Wait);
+    assert_eq!(x.empty_read(t0 + secs(23)), Next::Send(Command::Request));
+}
+
+/// A number asked in this capture and no longer out is late; one never asked is wrong.
+#[test]
+fn a_late_reply_is_told_by_its_number_and_the_command_stays_out() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    let (warned, again) = (t0 + secs(5), t0 + secs(5));
+    assert_eq!(x.empty_read(warned), Next::Warn);
+    assert_eq!(x.empty_read(again), Next::Send(Command::Request));
+    assert_eq!(x.bytes(Command::Request), [0x30, 1, 0x0d]);
+    x.sent(Command::Request, again);
+    assert_eq!(x.take(&[9, 9, 1, 0x0d], t0 + secs(6)), Heard::Late(0));
+    assert_eq!(x.owed(), Some(Command::Request));
+    assert_eq!(x.want(64), 4);
+    assert_eq!(x.take(&[1, 2, 2, 0x0d], t0 + secs(7)), Heard::Reading(1, 2));
+    x.delivered(t0 + secs(7));
+    // The next is C's own again, and what is left of the last round is late.
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, t0 + secs(8));
+    assert_eq!(x.take(&[9, 9, 2, 0x0d], t0 + secs(8)), Heard::Late(1));
+    assert_eq!(x.take(&[9, 9, 3, 0x0d], t0 + secs(8)), Heard::BadReply([9, 9, 3, 0x0d]));
+}
+
+/// With nothing asked again, any other number is wrong, as in C.
+#[test]
+fn with_nothing_asked_again_another_number_is_a_wrong_reply() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    assert_eq!(x.take(&[9, 9, 0, 0x0d], t0), Heard::BadReply([9, 9, 0, 0x0d]));
+}
+
+#[test]
+fn the_numbers_skip_0_as_they_come_round_and_then_all_are_late() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    for sequence in 1..=255u8 {
+        assert_eq!(x.bytes(Command::Request), [0x30, sequence, 0x0d]);
+        x.sent(Command::Request, t0);
+    }
+    assert_eq!(x.bytes(Command::Request), [0x30, 1, 0x0d]);
+    x.sent(Command::Request, t0);
+    assert_eq!(x.take(&[9, 9, 0x77, 0x0d], t0), Heard::Late(0x76));
+}
+
+/// Past a first sample, on a sample limit: told once, asked again, and given up on
+/// after 10 minutes, from both sides.
+#[test]
+fn after_a_sample_a_sample_limit_warns_and_goes_on_for_ten_minutes() {
+    let t0 = Instant::now();
+    let mut x = out_at(SAMPLES, t0);
+    answer(&mut x, 0, t0);
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, t0);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
+    let (mut sends, mut warns, mut at) = (0, 0, t0 + secs(5));
+    while at < t0 + secs(600) - ms(1) {
+        match x.empty_read(at) {
+            Next::Wait => {}
+            Next::Warn => warns += 1,
+            Next::Send(command) => {
+                let _ = x.bytes(command);
+                x.sent(command, at);
+                sends += 1;
+            }
+            other => panic!("{other:?} at {:?}", at - t0),
+        }
+        at += ms(500);
+    }
+    assert_eq!(warns, 0, "once only");
+    // At 5, 15, 35, 65, then every 30 s up to 600.
+    assert_eq!(sends, 21);
+    assert_eq!(x.empty_read(t0 + secs(600) - ms(1)), Next::Wait);
+    assert_eq!(x.empty_read(t0 + secs(600)), Next::GiveUp(GiveUp::NoReply, GIVE_UP));
+}
+
+/// A reply heard in that time takes it all back, and no sample's limit moves it.
+#[test]
+fn a_reading_after_a_long_silence_starts_the_bound_again() {
+    let t0 = Instant::now();
+    let mut x = out_at(SAMPLES, t0);
+    answer(&mut x, 0, t0);
+    x.sent(Command::Request, t0);
+    assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
+    assert_eq!(x.bytes(Command::Request), [0x30, 1, 0x0d]);
+    x.sent(Command::Request, t0 + secs(5));
+    answer(&mut x, 1, t0 + secs(599));
+    assert_eq!(x.bytes(Command::Request), REQUEST);
+    x.sent(Command::Request, t0 + secs(600));
+    assert_eq!(x.empty_read(t0 + secs(1199)), Next::Send(Command::Request));
+}
+
+#[test]
+fn with_no_limit_a_silence_never_ends_and_warns_once() {
+    let t0 = Instant::now();
+    let mut x = out_at(NO_LIMIT, t0);
+    let mut warns = 0;
+    for n in 0..4000 {
+        let at = t0 + secs(n);
+        match x.empty_read(at) {
+            Next::Wait => {}
+            Next::Warn => warns += 1,
+            Next::Send(command) => {
+                let _ = x.bytes(command);
+                x.sent(command, at);
+            }
+            other => panic!("{other:?} at {n} s"),
+        }
+    }
+    assert_eq!(warns, 1);
+}
+
+/// A time limit past the bound runs to its end, in the same state as a short one, so
+/// the status doesn't depend on the length asked for.
+#[test]
+fn a_time_limit_ends_a_silence_at_its_limit_however_long() {
+    for limit in [1500u64, 7000, 700_000] {
+        let t0 = Instant::now();
+        let limits = Limits { samples_only: false, msec: limit };
+        let mut x = out_at(limits, t0);
+        let mut at = t0;
+        let end = loop {
+            at += ms(100);
+            match x.empty_read(at) {
+                Next::Wait | Next::Warn => {}
+                Next::Send(command) => {
+                    let _ = x.bytes(command);
+                    x.sent(command, at);
+                }
+                other => break other,
+            }
+            assert!(at < t0 + ms(limit + 1000), "no end");
+        };
+        assert_eq!(end, Next::TimeUp, "{limit}");
+        assert!(at > t0 + ms(limit), "{limit}");
+    }
+}
+
+/// C takes a reply that comes after the limit in the pass that reads it: the limit
+/// has no say until C's next pass, a pace after the command, would find nothing.
+#[test]
+fn a_reply_after_the_limit_within_the_pace_is_still_taken() {
+    let t0 = Instant::now();
+    let limits = Limits { samples_only: false, msec: 100 };
+    let mut x = out_at(limits, t0);
+    assert!(x.time_is_up(t0 + ms(101)));
+    assert!(!x.time_is_up(t0 + ms(100)));
+    assert_eq!(x.empty_read(t0 + ms(499)), Next::Wait, "time is up, and the pace is not");
+    assert!(matches!(x.take(&OK, t0 + ms(499)), Heard::Reading(..)));
+    let mut x = out_at(limits, t0);
+    assert_eq!(x.empty_read(t0 + ms(500)), Next::TimeUp);
 }
 
 /// Good replies for many bounds on a moved clock, with no real gaps anywhere: the
@@ -407,38 +679,39 @@ fn the_bound_on_a_reply_holds_from_both_sides_in_each_wait() {
 fn a_meter_that_answers_is_never_given_up_on() {
     let t0 = Instant::now();
     let mut now = t0;
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     now += ms(500);
     assert_eq!(x.empty_read(now), Next::Send(Command::Init));
     x.sent(Command::Init, now);
     x.take(&GOOD_INIT, now);
-    for _ in 0..1000 {
+    for _ in 0..3000 {
         now += ms(500);
         assert_eq!(x.empty_read(now), Next::Send(Command::Request));
+        assert_eq!(x.bytes(Command::Request), REQUEST);
         x.sent(Command::Request, now);
         now += ms(100);
         assert_eq!(x.empty_read(now), Next::Wait);
         assert!(matches!(x.take(&OK, now), Heard::Reading(..)));
         x.delivered(now);
     }
-    assert!(!x.junk_too_long(now));
+    assert_eq!(x.after_junk(now), Next::Wait);
 }
 
 /// A client that kept the send waiting: that is no silence of the meter's.
 #[test]
 fn time_in_a_blocked_send_counts_for_nothing() {
     let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
-    x.sent(Command::Request, t0);
+    let mut x = out_at(SAMPLES, t0);
     assert!(matches!(x.take(&OK, t0), Heard::Reading(..)));
-    let after = t0 + Duration::from_secs(60);
+    let after = t0 + secs(60);
     x.delivered(after);
     assert_eq!(x.empty_read(after + ms(499)), Next::Wait);
     assert_eq!(x.empty_read(after + ms(500)), Next::Send(Command::Request));
-    assert!(!x.junk_too_long(after + ms(500)));
+    assert_eq!(x.after_junk(after + ms(500)), Next::Wait);
     // And a whole bound lost ahead of a request's return: its reply has its full time.
-    x.sent(Command::Request, after + Duration::from_secs(60));
-    assert_eq!(x.empty_read(after + Duration::from_secs(61)), Next::Wait);
+    let _ = x.bytes(Command::Request);
+    x.sent(Command::Request, after + secs(60));
+    assert_eq!(x.empty_read(after + secs(61)), Next::Wait);
 }
 
 /// Wrong replies at the pace: each request is progress for nothing, and they end.
@@ -446,35 +719,69 @@ fn time_in_a_blocked_send_counts_for_nothing() {
 fn wrong_replies_run_out_their_bound_though_requests_go() {
     let t0 = Instant::now();
     let mut now = t0;
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     x.sent(Command::Init, now);
     x.take(&GOOD_INIT, now);
     let mut rounds = 0;
     loop {
         now += ms(500);
         assert_eq!(x.empty_read(now), Next::Send(Command::Request));
+        let _ = x.bytes(Command::Request);
         x.sent(Command::Request, now);
         assert!(matches!(x.take(&[1, 2, 3, 4], now), Heard::BadReply(_)));
         rounds += 1;
-        if x.junk_too_long(now) {
-            break;
+        match x.after_junk(now) {
+            Next::Wait => {}
+            Next::GiveUp(why, after) => {
+                assert_eq!((why, after), (GiveUp::NoUsableAnswer, NO_ANSWER));
+                break;
+            }
+            other => panic!("{other:?}"),
         }
         assert!(rounds < 100, "no end");
     }
     assert_eq!(rounds, 10, "5 s at 500 ms");
 }
 
+/// The same past a sample and with no limit: told once, and no failure short of the
+/// 10 minutes on a sample limit.
+#[test]
+fn wrong_replies_past_a_sample_warn_and_go_on() {
+    for limits in [SAMPLES, NO_LIMIT] {
+        let t0 = Instant::now();
+        let mut x = out_at(limits, t0);
+        answer(&mut x, 0, t0);
+        assert_eq!(x.after_junk(t0 + ms(4999)), Next::Wait);
+        assert_eq!(x.after_junk(t0 + secs(5)), Next::Warn);
+        assert_eq!(x.after_junk(t0 + secs(6)), Next::Wait, "once");
+        let end = x.after_junk(t0 + secs(600));
+        if limits.samples_only {
+            assert_eq!(end, Next::GiveUp(GiveUp::NoUsableAnswer, GIVE_UP));
+        } else {
+            assert_eq!(end, Next::Wait);
+        }
+    }
+}
+
 #[test]
 fn a_flood_with_nothing_out_holds_the_command_back_and_runs_out_its_bound() {
     let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, SAMPLES, t0);
     assert_eq!(x.want(64), 64);
     assert_eq!(x.take(&[0xaa], t0 + ms(450)), Heard::Dropped);
     // What came moves a command that was due, by the quiet.
     assert_eq!(x.empty_read(t0 + ms(549)), Next::Wait);
     assert_eq!(x.empty_read(t0 + ms(550)), Next::Send(Command::Init));
     let mut now = t0 + ms(450);
-    while !x.junk_too_long(now) {
+    loop {
+        match x.after_junk(now) {
+            Next::Wait => {}
+            Next::GiveUp(why, _) => {
+                assert_eq!(why, GiveUp::NoUsableAnswer);
+                break;
+            }
+            other => panic!("{other:?}"),
+        }
         now += ms(50);
         assert_eq!(x.take(&[0xaa], now), Heard::Dropped);
         assert_eq!(x.empty_read(now), Next::Wait, "still arriving");
@@ -487,65 +794,129 @@ fn a_flood_with_nothing_out_holds_the_command_back_and_runs_out_its_bound() {
 #[test]
 fn the_read_ahead_of_a_due_command_does_not_wait_but_does_happen() {
     let t0 = Instant::now();
-    let x = Exchange::new(REAL, t0);
+    let x = Exchange::new(REAL, SAMPLES, t0);
     assert_eq!(x.read_wait(ms(5), t0), ms(5));
     assert_eq!(x.read_wait(ms(5), t0 + ms(498)), ms(2));
     assert_eq!(x.read_wait(ms(5), t0 + ms(900)), Duration::ZERO);
 }
 
-#[test]
-fn a_time_limit_takes_a_wait_only_when_a_pass_of_c_would_have_found_nothing() {
-    let t0 = Instant::now();
-    let mut x = Exchange::new(REAL, t0);
-    assert!(!x.overdue(t0 + Duration::from_secs(60)), "nothing out");
-    x.sent(Command::Init, t0);
-    assert!(!x.overdue(t0 + ms(499)));
-    assert!(x.overdue(t0 + ms(500)));
+/// What a simulated meter on its own clock shows of a steady latency.
+#[derive(Debug, Default)]
+struct Steady {
+    most_owed: usize,
+    owed_at_end: usize,
+    samples: u32,
+    late: u32,
+    wrong: u32,
+    asked_again: u32,
+    /// How old a reading is when it is taken, from the command the meter answered.
+    oldest: Duration,
+    /// How much older that is than it looks, from the request out: a reply that
+    /// answers an earlier one than it seems to.
+    most_understated: Duration,
 }
 
-/// A meter on its own clock, 2.5 s behind every request, for a simulated minute. C
-/// and this have one out, as neither asks again on a silence.
-#[test]
-fn a_steady_latency_of_2500_ms_owes_one_reply_and_ages_a_reading_by_that() {
+/// A meter that answers each command `latency` after it, with the number in it, for a
+/// simulated minute. It reads the value when the command gets to it.
+fn steady(latency: Duration, length: Duration) -> Steady {
     let t0 = Instant::now();
-    let latency = ms(2500);
-    let mut x = Exchange::new(REAL, t0);
+    let mut x = Exchange::new(REAL, NO_LIMIT, t0);
     let mut now = t0;
-    let mut sent_at = VecDeque::new();
-    let (mut most_owed, mut samples, mut oldest) = (0, 0, Duration::ZERO);
-    let mut commands = 0;
-    while now < t0 + Duration::from_secs(60) {
+    let mut sent_at: VecDeque<(Instant, [u8; 3])> = VecDeque::new();
+    let mut line = VecDeque::new();
+    let mut answers = VecDeque::new();
+    let mut last_sent = t0;
+    let mut seen = Steady::default();
+    while now < t0 + length {
         now += ms(1);
-        if let Some(at) =
-            sent_at.pop_front_if(|at: &mut Instant| now.saturating_duration_since(*at) >= latency)
+        if let Some((at, command)) =
+            sent_at.pop_front_if(|(at, _)| now.saturating_duration_since(*at) >= latency)
         {
-            let reply: &[u8] = if commands == 1 { &GOOD_INIT } else { &OK };
-            match x.take(reply, now) {
-                Heard::InitOk => {}
+            if command[0] == INIT[0] {
+                line.extend(GOOD_INIT);
+            } else {
+                line.extend([1, 2, command[1].wrapping_add(1), 0x0d]);
+            }
+            answers.push_back(at);
+        }
+        if !line.is_empty() {
+            let bytes: Vec<u8> = (0..x.want(64).min(line.len()))
+                .map(|_| line.pop_front().expect("counted"))
+                .collect();
+            match x.take(&bytes, now) {
+                Heard::InitOk | Heard::Dropped | Heard::Part | Heard::BadInit(_) => {}
+                Heard::Late(_) => seen.late += 1,
+                Heard::BadReply(_) => seen.wrong += 1,
                 Heard::Reading(..) => {
                     x.delivered(now);
-                    samples += 1;
-                    oldest = oldest.max(now.saturating_duration_since(at));
+                    seen.samples += 1;
+                    // The answer that came last is what this holds, whatever it says.
+                    let at = answers.pop_back().unwrap_or(now);
+                    answers.clear();
+                    let age = now.saturating_duration_since(at);
+                    let seen_as = now.saturating_duration_since(last_sent);
+                    seen.oldest = seen.oldest.max(age);
+                    seen.most_understated = seen.most_understated.max(age.saturating_sub(seen_as));
                 }
-                other => panic!("{other:?}"),
             }
             continue;
         }
         match x.empty_read(now) {
-            Next::Wait => {}
+            Next::Wait | Next::Warn => {}
             Next::Send(command) => {
+                if x.owed().is_some() {
+                    seen.asked_again += 1;
+                }
+                let bytes = x.bytes(command);
                 x.sent(command, now);
-                sent_at.push_back(now);
-                commands += 1;
-                most_owed = most_owed.max(sent_at.len());
+                last_sent = now;
+                sent_at.push_back((now, bytes));
+                seen.most_owed = seen.most_owed.max(sent_at.len());
             }
-            Next::GiveUp(why) => panic!("{why:?}"),
+            other => panic!("{other:?}"),
         }
     }
-    assert_eq!(most_owed, 1);
+    seen.owed_at_end = sent_at.len();
+    seen
+}
+
+/// Below the first wait nothing is asked twice: one is out, and a reading is as old as
+/// the latency.
+#[test]
+fn a_steady_latency_of_2500_ms_owes_one_reply_and_ages_a_reading_by_that() {
+    let seen = steady(ms(2500), secs(60));
+    println!("2.5 s: {seen:?}");
+    assert_eq!(seen.most_owed, 1);
+    assert_eq!(seen.asked_again, 0);
     // 3 s a round after the init's.
-    assert!((18..=20).contains(&samples), "{samples}");
-    assert_eq!(oldest, latency);
+    assert!((18..=20).contains(&seen.samples), "{seen:?}");
+    assert_eq!(seen.oldest, ms(2500));
+}
+
+/// Above it, one is asked again and then the wait stays past the latency. The late
+/// reply is known by its number, and a reading is never older than the latency. With
+/// the same number each time, the late reply would answer the next request and one
+/// would be owed for good: a mutant shows that, with `--nocapture`.
+#[test]
+fn a_steady_latency_of_6_s_settles_with_nothing_owed_behind_the_one_out() {
+    let seen = steady(secs(6), secs(60));
+    println!("6 s: {seen:?}");
+    assert!(seen.asked_again <= 2, "{seen:?}");
+    assert!(seen.late <= 2, "{seen:?}");
+    assert!(seen.owed_at_end <= 1, "{seen:?}");
+    assert!(seen.samples >= 5, "{seen:?}");
+    assert_eq!(seen.oldest, secs(6));
+    assert_eq!(seen.most_understated, Duration::ZERO, "it answers the request out");
+}
+
+/// Past the longest wait a reply is always one asked again, so no reading comes, and
+/// what is owed has a bound of its own. On a sample limit that ends in its failure.
+#[test]
+fn a_meter_slower_than_the_longest_wait_has_no_reading_and_no_backlog() {
+    let seen = steady(secs(40), secs(600));
+    println!("40 s: {seen:?}");
+    assert_eq!(seen.samples, 0, "{seen:?}");
+    assert!(seen.most_owed <= 4, "{seen:?}");
 }
 
 // Whole captures on the fake.
@@ -595,8 +966,7 @@ fn a_packet_says_what_c_says() {
 }
 
 fn failure(fake: &Fake, limit_to: u64) -> Seen {
-    let timing =
-        Timing { pace: Duration::from_millis(1), quiet: Duration::ZERO, no_answer: ms(30) };
+    let timing = timing(Duration::from_millis(1), Duration::ZERO, ms(30));
     let mut d = device_with(fake, timing);
     limit(&mut d, limit_to);
     let rx = start(&mut d);
@@ -666,14 +1036,86 @@ fn a_flood_of_bytes_fails_a_samples_capture_and_a_stop_ends_one() {
 }
 
 #[test]
-fn a_time_limit_ends_a_silent_wait_with_no_failure() {
+fn a_time_limit_ends_a_silent_wait_with_no_failure_having_asked_again() {
     bounded(|| {
         let fake = Fake::new();
-        fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::Silent]);
-        let mut d = device(&fake);
-        d.set(&Key::LimitMsec, &Value::U64(20), None).unwrap();
+        fake.with(|s| s.otherwise = Vec::new());
+        fake.script([Reply::Now(GOOD_INIT.to_vec())]);
+        let mut d = device_with(&fake, timing(ms(2), Duration::ZERO, ms(20)));
+        d.set(&Key::LimitMsec, &Value::U64(80), None).unwrap();
         let rx = start(&mut d);
         assert_eq!(readings(&rx), Vec::<f32>::new());
+        d.close().unwrap();
+        let writes = fake.writes();
+        assert_eq!(writes[..2], [INIT.to_vec(), REQUEST.to_vec()]);
+        assert!(writes.len() >= 3, "{writes:02x?}");
+        assert_eq!(writes[2], [0x30, 1, 0x0d]);
+    });
+}
+
+/// The reviewer's: a meter that answers once and loses one reply. C never ends.
+#[test]
+fn a_lost_reply_is_asked_again_and_the_capture_goes_on() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::Now(OK.to_vec()), Reply::Silent]);
+        let mut d = device_with(&fake, timing(ms(2), Duration::ZERO, ms(30)));
+        limit(&mut d, 3);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_OK; 3]);
+        d.close().unwrap();
+        let (i, r) = (INIT.to_vec(), REQUEST.to_vec());
+        assert_eq!(fake.writes(), [i, r.clone(), r.clone(), vec![0x30, 1, 0x0d], r]);
+    });
+}
+
+#[test]
+fn with_no_limit_a_dead_meter_goes_on_until_a_stop() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.otherwise = Vec::new());
+        fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::Now(OK.to_vec())]);
+        let mut d = device_with(&fake, timing(ms(2), Duration::ZERO, ms(5)));
+        let rx = start(&mut d);
+        // Several waits past any bound a sample limit would have.
+        fake.wait_for_writes(6);
+        d.stop().unwrap();
+        assert_eq!(readings(&rx), [V_OK]);
+    });
+}
+
+#[test]
+fn past_a_sample_a_dead_meter_fails_a_sample_limit_at_the_long_bound() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.otherwise = Vec::new());
+        fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::Now(OK.to_vec())]);
+        let timing = Timing { give_up: ms(50), ..timing(ms(2), Duration::ZERO, ms(5)) };
+        let mut d = device_with(&fake, timing);
+        limit(&mut d, 2);
+        let rx = start(&mut d);
+        let got = seen(&rx);
+        assert_eq!(got.values, [V_OK]);
+        assert_eq!(got.failed.as_deref(), Some("device error: no answer to a request for 0.05 s"));
+        d.close().unwrap();
+        assert!(fake.writes().len() >= 4, "asked again ahead of it");
+    });
+}
+
+/// A write that a line holds past the bound: a bound counted from before it fails a
+/// meter that answers as soon as it hears.
+#[test]
+fn a_write_held_past_the_bound_is_no_silence() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| {
+            s.write_blocks = ms(60);
+            s.spacing = Spacing::Line(Duration::from_millis(1));
+        });
+        let mut d = device_with(&fake, timing(ms(1), Duration::ZERO, ms(30)));
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [V_OK]);
     });
 }
 
@@ -780,7 +1222,7 @@ fn a_stray_byte_ahead_of_a_reply_costs_that_reading_only() {
                 Reply::Now(OK.to_vec()),
                 Reply::Now(OK2.to_vec()),
             ]);
-            let timing = Timing { pace: ms(15), quiet: ms(15), no_answer: FAR };
+            let timing = timing(ms(15), ms(15), FAR);
             let mut d = device_with(&fake, timing);
             limit(&mut d, 2);
             let rx = start(&mut d);
@@ -803,7 +1245,7 @@ fn a_stray_byte_behind_a_reply_shifts_nothing() {
             Reply::Now(OK2.to_vec()),
             Reply::Now(OK.to_vec()),
         ]);
-        let timing = Timing { pace: ms(15), quiet: ms(15), no_answer: FAR };
+        let timing = timing(ms(15), ms(15), FAR);
         let mut d = device_with(&fake, timing);
         limit(&mut d, 3);
         let rx = start(&mut d);
@@ -865,7 +1307,7 @@ fn in_bursts_the_tail_of_a_bad_reply_is_read_away_before_the_next_request() {
         let mut stray = vec![0xaa, 0xbb];
         stray.extend(OK2);
         fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::Now(stray), Reply::Now(OK.to_vec())]);
-        let timing = Timing { pace: QUIET, quiet: QUIET, no_answer: FAR };
+        let timing = timing(QUIET, QUIET, FAR);
         let mut d = device_with(&fake, timing);
         limit(&mut d, 1);
         let rx = start(&mut d);
@@ -929,7 +1371,7 @@ fn a_close_with_a_queue_no_one_reads_does_not_hang() {
 fn a_slow_client_is_no_silence() {
     bounded(|| {
         let fake = Fake::new();
-        let timing = Timing { pace: ms(1), quiet: Duration::ZERO, no_answer: ms(30) };
+        let timing = Timing { give_up: ms(30), ..timing(ms(1), Duration::ZERO, ms(30)) };
         let mut d = device_with(&fake, timing);
         limit(&mut d, 3);
         let (tx, rx) = sync_channel(1);
@@ -958,7 +1400,7 @@ fn a_late_reply_of_the_last_capture_is_no_sample() {
         // In the wait ahead of init: read away.
         let fake = Fake::new();
         fake.script([Reply::Now(GOOD_INIT.to_vec()), Reply::OnRelease(OK2.to_vec())]);
-        let timing = Timing { pace: ms(50), quiet: ms(5), no_answer: FAR };
+        let timing = timing(ms(50), ms(5), FAR);
         let mut d = device_with(&fake, timing);
         let rx = start(&mut d);
         fake.wait_for_writes(2);
@@ -1100,4 +1542,7 @@ fn a_device_says_what_c_says() {
     assert!(d.set(&Key::Samplerate, &Value::U64(1), None).is_err());
     d.set(&Key::LimitMsec, &Value::U64(9), None).unwrap();
     assert_eq!(d.limit_msec, 9);
+    // What the scenario's filter `A` takes off the end of its line.
+    let zero = crate::core::config_set(&mut d, &Key::LimitSamples, &Value::U64(0), None);
+    assert_eq!(zero.unwrap_err().to_string(), "invalid argument: it cannot be 0");
 }

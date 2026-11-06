@@ -45,8 +45,9 @@
 //!
 //! The pedantic checks: a command that is not one of the two forms is flagged and
 //! gets no answer. The ones the wiki names and no C path sends are flagged and
-//! answered, as the meter would: a key press, a `ZZ` other than 0, and a measurement
-//! before init since power on. Part of a command at a tool's open is flagged. More
+//! answered, as the meter would: a key press, a measurement before init since power
+//! on, and a `ZZ` other than 0, unless it is a new one that asks again after a
+//! measurement that got no whole answer at once. Part of a command at a tool's open is flagged. More
 //! than [`MOST_HELD`] replies held is flagged, and the rest get none.
 
 use crate::model::DeviceModel;
@@ -154,6 +155,10 @@ struct Meter {
     measured: u32,
     /// An init came, or a key press that is one, since power on.
     initialised: bool,
+    /// A measurement has had no whole answer at once, so a tool may ask again.
+    went_unanswered: bool,
+    /// The last sequence number of a measurement asked again.
+    last_again: u8,
     /// Replies on their way, in order: the offers each still waits, and its bytes.
     held: VecDeque<(u32, Vec<u8>)>,
     /// Offers until the event point, once it has been set off.
@@ -172,6 +177,8 @@ impl Meter {
             answered: 0,
             measured: 0,
             initialised: false,
+            went_unanswered: false,
+            last_again: 0,
             held: VecDeque::new(),
             mark_in: None,
             marked: false,
@@ -184,6 +191,7 @@ impl Meter {
             return;
         }
         if self.config.answers.is_some_and(|n| self.answered >= n) {
+            self.went_unanswered |= first == MEASURE;
             if !self.marked && self.mark_in.is_none() {
                 self.mark_in = Some(self.config.mark);
             }
@@ -197,7 +205,9 @@ impl Meter {
             (self.key(value, port), None)
         } else {
             let reply = self.measure(value, port);
-            (reply, self.config.late.filter(|(nth, _)| *nth == self.measured).map(|(_, t)| t))
+            let late = self.config.late.filter(|(nth, _)| *nth == self.measured).map(|(_, t)| t);
+            self.went_unanswered |= late.is_some() || self.config.cut.is_some() || reply.len() < 4;
+            (reply, late)
         };
         self.answer(&reply, late, port);
     }
@@ -211,9 +221,10 @@ impl Meter {
     }
 
     fn measure(&mut self, zz: u8, port: &mut Port<'_>) -> Vec<u8> {
-        if zz != 0 {
-            port.violation(format!("sequence {zz:02x}: no C path sends it"));
+        if zz != 0 && !(self.went_unanswered && (zz > self.last_again || self.last_again == 255)) {
+            port.violation(format!("sequence {zz:02x}: not one asking again"));
         }
+        self.last_again = if zz == 0 { self.last_again } else { zz };
         if !self.initialised {
             port.violation("a measurement before init".to_owned());
         }
@@ -356,6 +367,32 @@ mod tests {
         h.write(&[0x30, 0xff, 0x0d]);
         assert_eq!(violations(&mut h), 1, "a sequence");
         assert_eq!(h.read(), [0x09, 0xaf, 0x00, 0x0d]);
+    }
+
+    #[test]
+    fn a_new_sequence_may_ask_again_after_a_silence() {
+        let mut h = meter(&[("reply", "1234010d,"), ("data", "7788")]);
+        h.write(INIT);
+        let _ = h.read();
+        h.write(ASK);
+        assert_eq!(h.read(), [0x12, 0x34, 0x01, 0x0d]);
+        h.write(&[0x30, 1, 0x0d]);
+        assert_eq!(violations(&mut h), 1, "nothing went unanswered yet");
+        let _ = h.read();
+        h.cdc.model.reset();
+        h.write(INIT);
+        let _ = h.read();
+        h.write(ASK);
+        assert_eq!(h.read(), [0x12, 0x34, 0x01, 0x0d]);
+        h.write(ASK);
+        assert_eq!(h.read(), b"", "lost");
+        for zz in [1, 2] {
+            h.write(&[0x30, zz, 0x0d]);
+            assert_eq!(h.read(), [0x77, 0x88, zz + 1, 0x0d]);
+            assert_eq!(violations(&mut h), 0, "{zz}");
+        }
+        h.write(&[0x30, 2, 0x0d]);
+        assert_eq!(violations(&mut h), 1, "the same one again");
     }
 
     #[test]

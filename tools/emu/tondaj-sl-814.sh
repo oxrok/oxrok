@@ -18,7 +18,8 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # TIOCEXCL no-ops, and the C driver itself is unmodified. It is set on the exec of
 # this model's sigrok-cli only, by a wrapper that SIGROK_CLI names for the length
 # of emu_cases, and neither oxrok nor the harness runs under it. It changes the
-# lock and nothing of the timing.
+# lock and nothing of the timing. On stock sigrok-cli only the scans and the stock
+# cases hold: each other label says it is under the preload.
 tondaj_openable() {
     TONDAJ_STOCK_CLI=$SIGROK_CLI
     [ "$no_oracle" = 1 ] && return
@@ -59,11 +60,15 @@ emu_cases() {
 /^oxrok: warn: oxrok::cli::pipeline: Device only sent /d
 s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     LOCK_BUG="api.c:85 opens the port and :96 returns with it open, so dev_open's second open is refused by the exclusive open of libserialport 0.1.2 and later (serialport.c:589, :599): every path but --scan fails on stock sigrok-cli there, and works on 0.1.1; oxrok closes the port after the scan and opens it again"
-    INIT_BUG="protocol.c:148 reads the init reply with serial_read_blocking and a timeout of 0, which is none (serial.c:481), in the session's callback: nothing ends that wait, not even a limit; oxrok gives up after 5 s"
-    REPLY_BUG="protocol.c:176-187 reads a reply and returns ahead of the limit's check at :207 for as long as it has not all come, and no request goes again: a capture never ends; oxrok gives up after 5 s"
-    TIME_BUG="protocol.c:187 returns ahead of the limit's check at :207, so a time limit does not end a wait for a reply; oxrok ends it there and warns"
-    STRAY_BUG="protocol.c:193-198 takes four bytes and asks again with the fifth unread, and :172 clears only the count, so every later reply is read cut in the same wrong place and fails :193: no reading ever again, and with a time limit an empty capture that exits 0 (the --time case at the model's commit showed it); oxrok reads away what comes with no command out, and goes on"
-    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    P="under the lock preload, C unmodified:"
+    INIT_BUG="$P protocol.c:148 reads the init reply with serial_read_blocking and a timeout of 0, which is none (serial.c:481), in the session's callback: nothing ends that wait, not even a limit; oxrok on a sample limit alone fails after 5 s"
+    REPLY_BUG="$P protocol.c:176-187 reads a reply and returns ahead of the limit's check at :207 for as long as it has not all come, and no request goes again: a capture never ends; oxrok on a sample limit fails after 5 s with no sample yet, and after one asks again"
+    TIME_BUG="$P protocol.c:187 returns ahead of the limit's check at :207, so a time limit does not end a wait for a reply; oxrok asks again after 5 s, ends at the limit and warns"
+    STRAY_BUG="$P protocol.c:193-198 takes four bytes and asks again with the fifth unread, and :172 clears only the count, so every later reply is read cut in the same wrong place and fails :193: no reading ever again; oxrok reads away what comes with no command out, and goes on"
+    STRAY_TIME_BUG="$STRAY_BUG; a time limit reaches :207 through the send, so C ends with exit 0 and no sample"
+    SIGINT_BUG="$P sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    # What the third request of a stray byte's capture gets, for a .tx cut there.
+    Q3='/^bulk_in 82 4 -> 09af010d/q'
 
     # The scan says nothing on the wire and takes no answer: a port that opens is
     # a meter.
@@ -105,10 +110,10 @@ s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     emu_options uart=2400/8e1
     emu_case "serialcomm reaches the line" -- -d $K:serialcomm=2400/8e1 --samples 1
 
-    # The wiki's readings, then each bit: weight, speed, the level that is dropped
-    # and the unknown bit, and the two ends of the value.
-    emu_options data=09af,89cb,8a6c,8299,9285,a393,b3f2,c000,47ff,7fff,ffff
-    emu_case "readings" -- -d $K --samples 11 -O analog
+    # The wiki's readings and the ends of the value, with all four weightings, the
+    # level that is dropped and the unknown bit; the rest is in the unit tests.
+    emu_options data=09af,47ff,9285,a393,ffff
+    emu_case "readings" -- -d $K --samples 5 -O analog
 
     # In pieces, and with the reply cut across the reads.
     emu_options chunk=1
@@ -140,17 +145,26 @@ s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     emu_case "half an init reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$INIT_BUG" --oracle-hangs --no-output --timeout 7 -- -d $K --samples 1
     emu_options reply=
     emu_case "silent at the request" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
-    # A time limit beyond the bound does not outlast it: nothing would ask again.
-    emu_case "silent, a long time limit" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --time 30s
     emu_case "silent, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 4 -- -d $K --time 1500ms
+    # Past the first wait: asked again with a number of its own, told once, and a
+    # time limit past the bound ends as a short one does.
+    emu_options answers=2
+    emu_case "dead, a long time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 9 -- -d $K --time 7s
+    # A lost reply: C never ends, and oxrok asks again with a warning and goes on.
+    emu_options "reply=$OK,"
+    emu_case "a reply lost" --oracle-bug "$REPLY_BUG" --oracle-hangs --timeout 8 -- -d $K --samples 2
+    emu_case "a reply lost, told" --oracle-bug "$REPLY_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $K --samples 2
     emu_options reply=1234
     emu_case "half a reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
+    emu_case "half a reply, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 5 -- -d $K --time 2500ms
 
     # One byte too many and every later reply is cut in the same wrong place in C.
     # Each list plays once, as a second stray byte can put C back in step.
     emu_options "reply=aa$OK"
     emu_case "a stray byte ahead of a reply" --oracle-bug "$STRAY_BUG" --oracle-hangs --timeout 5 -- -d $K --samples 2
     emu_case "a stray byte ahead of a reply, said" --oracle-bug "$STRAY_BUG" --oracle-hangs --stderr --filter "$L" --timeout 5 -- -d $K --samples 1
+    # Time decides how many oxrok has: kept up to the first, and C has none.
+    emu_case "a stray byte, a time limit" --oracle-differs "$STRAY_TIME_BUG" --filter '2,$d' --tx-filter "$Q3" -- -d $K --time 3s
     emu_options "reply=${OK}aa"
     emu_case "a stray byte behind a reply" --oracle-bug "$STRAY_BUG" --oracle-hangs --timeout 5 -- -d $K --samples 2
 
@@ -158,6 +172,10 @@ s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     emu_options quiet-mark=2:5
     emu_case "unplug between requests" --oxrok-fails "error" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
     emu_case "unplug between requests, said" --oxrok-fails "error" --stderr --filter "$W" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    # What that filter takes from oxrok's side, pinned: the OS error's text alone is
+    # masked here, which goes with the system.
+    emu_case "unplug between requests, oxrok's words" --no-oracle-only --oxrok-fails "error" --stderr --filter "$L
+s/^(sr: tondaj-sl-814: Error sending request command: ).*\$/\1OS error./" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
     # With a request out nothing tells a gone tty from a silent meter.
     emu_options answers=2
     emu_case "unplug with a request out" --oxrok-fails "no answer to a request" --oracle-bug "$REPLY_BUG" --oracle-hangs --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5

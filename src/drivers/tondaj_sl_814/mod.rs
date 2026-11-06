@@ -19,10 +19,14 @@
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
-//! - Waits for a reply are bounded. C's init reply blocks with no timeout, and a
-//!   request's reply is read for ever, ahead of the limit's check. A time limit ends
-//!   a capture there, with a warning, and otherwise 5 s with nothing usable is a
-//!   failed capture, in every mode, as nothing would ever ask again.
+//! - A silence ends, where C blocks with no timeout for init, reads for ever ahead of
+//!   the limit's check for a request, and never asks again. After 5 s a command goes
+//!   again, one out at a time, the wait going 5, 10, 20 and 30 s while nothing is
+//!   heard. A request that goes again has a sequence number of its own, so that its
+//!   late answer is known. How it ends: on a sample limit alone, a failure at 5 s
+//!   with no sample yet, and after one a warning and a failure at 10 minutes; under a
+//!   time limit at that limit, with a warning, and with neither when it is stopped,
+//!   with a warning once.
 //! - What comes with no command out is read away ahead of the next command. In C a
 //!   stray byte has every later reply cut in the same wrong place: no reading ever
 //!   again, and a `--samples` capture never ends.
@@ -44,7 +48,7 @@ use crate::core::{
     Mq, OptionDesc, Packet, PacketSink, Result, Unit, Value, ValueList,
 };
 use crate::serial::{Params, Port, read_blocking, serial_timeout};
-use protocol::{Command, Exchange, GiveUp, Heard, Next, Reading, SERIALCOMM, Timing};
+use protocol::{Command, Exchange, Heard, Limits, Next, Reading, SERIALCOMM, Timing};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -279,11 +283,6 @@ fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     });
 }
 
-/// Whether a capture begun at `started` has run its limit, in ms, 0 being none.
-fn time_is_up(limit_msec: u64, started: Instant, now: Instant) -> bool {
-    limit_msec > 0 && now.saturating_duration_since(started) > Duration::from_millis(limit_msec)
-}
-
 /// What a time limit says when it ends a wait that no reply has ended.
 fn time_limit_message(heard: bool) -> &'static str {
     if heard {
@@ -291,6 +290,12 @@ fn time_limit_message(heard: bool) -> &'static str {
     } else {
         "No answer from the meter before the time limit."
     }
+}
+
+/// What a capture says at a long silence that it goes on from.
+fn silence_message(heard: bool, after: Duration) -> String {
+    let what = if heard { "No usable answer" } else { "No answer" };
+    format!("{what} from the meter for {} s; still asking.", after.as_secs_f32())
 }
 
 /// What C logs for a failed write.
@@ -309,26 +314,31 @@ fn read_error_message(command: Command, e: &Error) -> String {
     }
 }
 
-/// `serial_write_blocking` with its timeout: one that runs out is no error, and the
-/// wait for its reply finds out.
-fn send(port: &mut dyn Port, command: Command, timeout: Duration) -> Result<()> {
-    let bytes = command.bytes();
-    log::trace!("Sending command: {bytes:02x?}.");
-    if let Err(e) = port.write_timeout(bytes, timeout) {
-        log::error!("{}", send_error_message(command, &e));
-        return Err(e);
-    }
-    Ok(())
+/// What a write that ran out of time says, which C doesn't: a silence that follows
+/// is then no silence of the meter's.
+fn short_write_message(command: Command, went: usize) -> String {
+    let what = match command {
+        Command::Init => "init command",
+        Command::Request => "request",
+    };
+    format!("Only {went} of 3 bytes of the {what} went out.")
 }
 
-/// What is there, waiting up to `wait` for it. `read_blocking` returns with no read
-/// at all when a stall took it past its time, so that nothing is ever concluded from
-/// that, a last look comes after an empty wait: a bound or a command that follows
-/// this has really looked at the line.
-fn read_some(port: &mut dyn Port, buf: &mut [u8], wait: Duration) -> Result<usize> {
-    match read_blocking(port, buf, wait)? {
-        0 => read_blocking(port, buf, Duration::ZERO),
-        got => Ok(got),
+/// `serial_write_blocking` with its timeout: one that runs out is no error in C, and
+/// the wait for its reply goes on, but it is told here.
+fn send(port: &mut dyn Port, command: Command, bytes: &[u8; 3], timeout: Duration) -> Result<()> {
+    log::trace!("Sending command: {bytes:02x?}.");
+    match port.write_timeout(bytes, timeout) {
+        Ok(went) => {
+            if went < bytes.len() {
+                log::warn!("{}", short_write_message(command, went));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("{}", send_error_message(command, &e));
+            Err(e)
+        }
     }
 }
 
@@ -359,18 +369,21 @@ impl Capture {
         if !sink.send_while(Packet::header(), go_on) {
             return Ok(());
         }
-        let started = Instant::now();
-        let mut exchange = Exchange::new(self.timing, started);
+        let limits = Limits {
+            samples_only: self.limit_samples > 0 && self.limit_msec == 0,
+            msec: self.limit_msec,
+        };
+        let mut exchange = Exchange::new(self.timing, limits, Instant::now());
         let mut samples = 0u64;
         let mut buf = [0u8; READ_AWAY];
-        let give_up = |why: GiveUp| Err(Error::device(why.message(self.timing.no_answer)));
+        let give_up = |why: protocol::GiveUp, after| Err(Error::device(why.message(after)));
         loop {
             if !go_on() {
                 return Ok(());
             }
             let wanted = exchange.want(buf.len());
             let wait = exchange.read_wait(STOP_CHECK, Instant::now());
-            let got = match (read_some(port, &mut buf[..wanted], wait), exchange.owed()) {
+            let got = match (read_blocking(port, &mut buf[..wanted], wait), exchange.owed()) {
                 (Ok(got), _) => got,
                 (Err(e), Some(command)) => {
                     log::error!("{}", read_error_message(command, &e));
@@ -385,30 +398,34 @@ impl Capture {
                 }
             };
             if got == 0 {
-                let now = Instant::now();
-                match exchange.empty_read(now) {
-                    Next::Wait => {
-                        // C checks no limit here: a silent meter never ended one.
-                        if time_is_up(self.limit_msec, started, now) && exchange.overdue(now) {
-                            log::warn!("{}", time_limit_message(exchange.heard()));
-                            return Ok(());
-                        }
+                match exchange.empty_read(Instant::now()) {
+                    Next::Wait => {}
+                    Next::Warn => self.warn_of_silence(&exchange),
+                    // C checks no limit here: a silent meter never ended one.
+                    Next::TimeUp => {
+                        log::warn!("{}", time_limit_message(exchange.heard()));
+                        return Ok(());
                     }
                     Next::Send(command) => {
-                        send(port, command, self.write_timeout)?;
+                        let bytes = exchange.bytes(command);
+                        send(port, command, &bytes, self.write_timeout)?;
                         let now = Instant::now();
                         exchange.sent(command, now);
-                        if time_is_up(self.limit_msec, started, now) {
+                        if exchange.time_is_up(now) {
                             return Ok(());
                         }
                     }
-                    Next::GiveUp(why) => return give_up(why),
+                    Next::GiveUp(why, after) => return give_up(why, after),
                 }
                 continue;
             }
             let heard = exchange.take(&buf[..got], Instant::now());
             match heard {
                 Heard::Part => continue,
+                Heard::Late(sequence) => {
+                    log::debug!("A late reply, to the request numbered {sequence}.");
+                    continue;
+                }
                 Heard::InitOk => log::trace!("Received init reply."),
                 Heard::Reading(a, b) => {
                     log::trace!("Received packet: {a:02x} {b:02x}.");
@@ -435,15 +452,22 @@ impl Capture {
             let now = Instant::now();
             // C has no limit check on a wrong reply, whose next command has one; a
             // flood may leave no next command.
-            if !matches!(heard, Heard::BadInit(_) | Heard::BadReply(_))
-                && time_is_up(self.limit_msec, started, now)
+            if !matches!(heard, Heard::BadInit(_) | Heard::BadReply(_)) && exchange.time_is_up(now)
             {
                 return Ok(());
             }
-            if !matches!(heard, Heard::InitOk | Heard::Reading(..)) && exchange.junk_too_long(now) {
-                return give_up(GiveUp::NoUsableAnswer);
+            if !matches!(heard, Heard::InitOk | Heard::Reading(..)) {
+                match exchange.after_junk(now) {
+                    Next::Warn => self.warn_of_silence(&exchange),
+                    Next::GiveUp(why, after) => return give_up(why, after),
+                    _ => {}
+                }
             }
         }
+    }
+
+    fn warn_of_silence(&self, exchange: &Exchange) {
+        log::warn!("{}", silence_message(exchange.heard(), self.timing.no_answer));
     }
 }
 
