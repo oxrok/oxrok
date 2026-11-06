@@ -45,7 +45,9 @@ emu_cases() {
     # A capture: the command at the first silence, then what comes.
     emu_options burst=1
     emu_case "samples 1" --keep-header -- -d $S --samples 1
-    emu_case "limit_samples" --keep-header -- -d $S -c limit_samples=1
+    # -c alone is no capture to sigrok-cli: the time limit asks for one, and is not
+    # what ends it.
+    emu_case "limit_samples" --keep-header -- -d $S -c limit_samples=1 --time 5s
     emu_case "csv" -- -d $S --samples 1 -O csv:header=false
     emu_case "Temperature alone" --keep-header -- -d $S -C Temperature --samples 1
     emu_case "Humidity alone" --keep-header -- -d $S -C Humidity --samples 1
