@@ -1,0 +1,8 @@
+tcp_connect
+tcp_out 454e4420414c574159530a49443f0a -> 15
+tcp_in 9 -> 485033343537410d0a
+tcp_out 5245563f0a -> 5
+tcp_in 9 -> 322e302c382e300d0a
+tcp_out 4f50543f0a -> 5
+tcp_in 15 -> 2b342e343439323030452b30340d0a
+tcp_close

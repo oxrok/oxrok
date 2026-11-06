@@ -1,0 +1,12 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+hp-3457a - Hewlett-Packard 3457A 2.8 with 1 channel: Front
+Channel groups:
+    Front: channel Front
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 
+    measured_quantity: 
+    nplc: 1.000000 (current)
