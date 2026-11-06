@@ -825,8 +825,7 @@ What the first model taught:
 - sigrok-cli leaves DTR and RTS up at close (libserialport clears
   `HUPCL`), and each open raises both, so RTS pulses even with `rts=0`.
 - serial-dmm closes the port after the scan, and its streaming-meter
-  scans took two packets to find one. `ut32x` and the Pico keep the
-  probed port, so check each driver's C.
+  scans took two packets to find one. The Pico keeps the probed port, so check each driver's C.
 - A driver that asks without a `req_timeout_ms` asks again every 50 ms
   while it waits: a silent device's write count is wall-clock, so filter
   it (`--tx-filter 's/^bulk_out 02 (44)+ -> [0-9]+$/.../'`), and keep

@@ -105,6 +105,7 @@ Emulator and replay only, never run on hardware:
 | `sysclk-sla5032` | 165 | 91.5% |
 | `testo` | 70 | 91.3% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
+| `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |
 | `zeroplus-logic-cube` | 134 | 87.6% |
 | `zketech-ebd-usb` | 109 | 86.6% |
 

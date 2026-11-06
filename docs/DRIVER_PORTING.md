@@ -204,8 +204,7 @@ syntax in `Params::parse`, and `Recorder`/`Replay` with a text fixture
 like the USB one. A driver takes `conn=` and an optional `serialcomm=`,
 and opens the port with `serial::open`, which records when
 `OXROK_SERIAL_RECORD` is set. Serial-dmm closes the port after the
-probe and opens it again, as sigrok does; `ut32x` and the Pico still
-keep the port they probed with. `serial_open` sets the parameters and
+probe and opens it again, as sigrok does; the Pico still keeps the port it probed with. `serial_open` sets the parameters and
 flushes both buffers on each open, and `Native` opens as `sp_open` does:
 `HUPCL` and `INPCK` off, so a close leaves DTR and RTS as they are and
 no parity is checked. The reopen matches sigrok and is safe by reading
@@ -298,6 +297,27 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A resync that drops a full fixed buffer can split the end marker, and
+  then each later record is cut at the same place for good. Try one
+  stray byte ahead of a record, on a model list that does not cycle: a
+  second stray byte in the cycle put C back in step and hid the bug.
+- `-k` in `tools/diffcli.sh` is a substring match, so an alternation
+  runs 0 cases and exits 0. Count what ran in any stability loop.
+- A signal or hangup at an event point one period behind the last record
+  loses what the tool has not read. Test with only the tool stopped: a
+  wrapper around `target/debug/oxrok` that sends SIGSTOP and SIGCONT
+  shows what hogs on a shared box do not.
+- A crash that depends on where an error lands must be repeated before
+  pinning. A fault per record gives it many chances: 3 records crashed
+  10 of 15 runs, 60 passed 30 of 30.
+- A read of 0 at EOF looks like no data to a C driver with `if (!len)
+  return 0`. A gone tty polls readable, so such a driver spins rather
+  than sleeps. Check a poll claim with a run before writing a cause
+  down.
+- `--tx-filter` masks only what is compared against C's `.tx`. An
+  `--oracle-bug` golden is oxrok alone, so leave it unmasked and it pins
+  oxrok's bytes.
+- Check every C line number against numbered source before committing.
 - `serial_open(ser, 0)` opens read only on libserialport and is ignored
   on TCP, so a driver tested over TCP can be dead on a tty. Check the
   flags of every `serial_open`.

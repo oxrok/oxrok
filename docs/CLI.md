@@ -703,6 +703,16 @@ Deliberate, and kept small:
   a drain succeeds, where C's `SR_ERR_NA` fails openbench-logic-sniffer
   and raspberrypi-pico; a connect has 5 s per address, and name lookup
   has no bound.
+- `uni-t-ut32x`: `-C` limits what is output, where sigrok-cli prints
+  every channel the meter sends. A sample limit still counts all
+  records, so with the meter on another channel there is no output, no
+  message and exit 0. With 1 of 3 records on the channel it says `Device
+  only sent 1 samples`, though the device sent 3.
+- `uni-t-ut32x`: `--time` and `--samples` end on a silent device, where
+  sigrok-cli waits for ever. `conn=hid/ch9325` and `conn=hid` open the
+  cable, where sigrok-cli cannot. `conn=1a86.e008` is an oxrok
+  extension, meaning the chip and taking the first cable the search
+  finds.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

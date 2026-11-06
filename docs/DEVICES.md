@@ -259,12 +259,9 @@ libsigrok's `uni-t-dmm` driver covers 27 meters whose UT-D04 cable is a
 CH9325 HID bridge (`uni-t-ut61e`, `voltcraft-vc820`, `tenma-72-7730`,
 `uni-t-ut372`, ...). oxrok registers the same ids as twins of the
 serial entries over `hid/ch9325`, so they scan without `conn=`. The UT372 tachometer parser came
-with them. The UNI-T UT32x thermometer (`uni-t-ut32x`) has its own
-driver: channels `T1`, `T2`, `T1-T2`, `data_source` `Live` or `Memory`,
-`conn=` required since the cable cannot be told from any other UT-D04.
-Both were exercised with the Pico emulator in CH9325 mode (a UT61E
-stream for the meters, a 23.5 C packet for the UT32x); sigrok-cli has
-no reference run for them on macOS, where libusb cannot claim a HID.
+with them. They were exercised with the Pico emulator in CH9325 mode (a
+UT61E stream); sigrok-cli has no reference run for them on macOS, where
+libusb cannot claim a HID.
 
 libsigrok's `uni-t-dmm` is ported as `src/drivers/uni_t_dmm`, 27 ids.
 `conn=VID.PID` and `conn=BUS.ADDRESS` use raw USB as the C does: on the
@@ -2617,6 +2614,52 @@ each request, where it shifts every later answer in C. `-g AIn --show`
 dies on a GLib critical in C (`api.c:279` gives a float key a uint32).
 Sources: the vendor's ETH008-B, ETH484-B and ETH8020-B documents and its
 Python module. No firmware source found.
+
+## UNI-T UT32x thermometers (uni-t-ut32x)
+
+libsigrok's `uni-t-ut32x` is ported as `src/drivers/uni_t_ut32x`:
+channels `T1`, `T2`, `T1-T2`, `data_source` `Live` or `Memory`, `conn=`
+required since the cable cannot be told from any other UT-D04. A scan
+opens the port and closes it, and a port that does not open is no
+device. Differences from C:
+- A channel that is off gets no packet, though its records still count.
+  With the meter on T1 and `-C T2` there is no output and exit 0.
+- A time limit waits 2 s past its end for the record C would stop on.
+- A sample limit alone stops after 5 s with no record. This is a choice
+  on an inference: no source says a unit never pauses, so a gap over 5 s
+  (a menu, say) ends a `--samples` capture with a warning and exit 0,
+  where C waits.
+- A failed read ends the capture. A gone tty polls readable and reads 0,
+  which C takes as no data (`protocol.c:238-239`), and it spins on a CPU
+  for ever.
+- A marker split over the receive buffer's end costs one record. In C
+  (`protocol.c:231-234`) one stray byte loses every record for good.
+- The first bad report on the cable ends the capture, a choice in the
+  shared `HidPort`. By reading, C goes on after a lone one with nothing
+  queued. When its error reaches the driver, C keeps `SR_ERR` in a
+  `size_t` (`protocol.c:236-241`) and sigrok-cli can segfault; a `00`
+  header per record does so in some runs. By reading, an `ff` header
+  makes `ch9325_read_bytes` over-read its 8 byte buffer.
+- 19 bytes with CR LF at the end and another inside are always cut at
+  the inner marker. C does that when reading them byte by byte, and
+  takes them as a record when it reads them in one go.
+- `conn=1a86.e008`, a form C has retired, is an oxrok extension. It
+  means `hid/ch9325`, so the chip and not those ids, and of two cables
+  the first the search finds.
+
+Emulated by models `uni-t-ut32x` (CDC-ACM; options live, stored, slots,
+period, burst, uart, and the shell's) and `uni-t-ut32x-hid` (CH9325
+descriptors from the wiki's UT325 lsusb, bcdDevice 12.00; also baud,
+bits, chunk, idle, stall-report, stall-out, bad-report). 84 cases (67
+full, 13 --oracle-bug, 2 --oracle-differs, 2 library). gcov 94.5% on the
+serial model and 87.7% on the cable. Unreached: option defaults
+sigrok-cli cannot ask, spew, a loop line a 19 byte buffer cannot reach,
+null guards, and the chip's bad report header, whose crashing runs write
+no counts. Not on hardware. The record layout is the wiki's. How the
+memory dump is paced and ends, the line rate, and the update rate
+(sources say 6 Hz, two or three a second, some 60 a second) are not
+known. C leaves 6 bytes of its stack in each output report on the cable
+(`serial_hid_ch9325.c:130,149-150`); oxrok sends zeros.
 
 ## Oracle
 
