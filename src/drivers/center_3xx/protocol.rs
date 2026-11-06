@@ -13,17 +13,21 @@
 //! it and as Conrad's description of the K204's interface gives it:
 //!
 //! - 0: `0x02`.
-//! - 1: REC (bit 0), the mode (bits 1 and 2: normal, MAX, MIN, MIN/MAX), T1-T2, REL,
-//!   HOLD, low battery, Celsius (bits 3 to 7).
+//! - 1: REC (bit 0), the mode (bits 1 and 2), T1-T2, REL, HOLD, low battery, Celsius
+//!   (bits 3 to 7). The document defines only mode `00`, normal. `01` as MAX, `10` as
+//!   MIN and `11` as MIN/MAX are C's alone.
 //! - 2: memory full (bit 0), auto power off (bit 7).
 //! - 7 to 14: T1 to T4, big endian and signed.
-//! - 15 to 38: the same in REL, MIN and MAX, which C does not read. In those modes
-//!   it still sends bytes 7 to 14, and takes MAX's and MIN's over limit bits.
+//! - 15 to 38: the same in REL, MIN and MAX, by the document, which C does not read.
+//!   In those modes it still sends bytes 7 to 14, from its first commit with its
+//!   `TODO`s on REL and MIN/MAX, and takes MAX's and MIN's over limit bits. Nothing
+//!   decides which is right, so this does the same, and warns: [`mode_warning`].
 //! - 39 to 42: over limit, one bit per channel, in normal mode, REL, MAX and MIN.
 //! - 43: one bit per channel: clear for tenths, set for whole degrees.
 //! - 44: `0x03`.
 //!
-//! Only bytes 0 and 44 check a packet. No checksum says anything else.
+//! Only bytes 0 and 44 check a packet. There is no checksum, so a flipped bit cannot
+//! be told at all.
 
 use crate::core::Unit;
 
@@ -64,6 +68,27 @@ pub fn valid(packet: &[u8]) -> bool {
     packet.first() == Some(&0x02) && packet.get(PACKET_SIZE - 1) == Some(&0x03)
 }
 
+/// What to say about byte 1, if the meter is in a mode where the document has the
+/// values in other bytes than those read here. C says nothing.
+#[must_use]
+pub fn mode_warning(status: u8) -> Option<String> {
+    let mode = match (status >> 1) & 0x3 {
+        0 => None,
+        1 => Some("MAX"),
+        2 => Some("MIN"),
+        _ => Some("MIN/MAX"),
+    };
+    let name = match (mode, status & (1 << 4) != 0) {
+        (None, false) => return None,
+        (None, true) => "REL".to_owned(),
+        (Some(mode), false) => mode.to_owned(),
+        (Some(mode), true) => format!("{mode} and REL"),
+    };
+    Some(format!(
+        "meter in {name} mode: reporting bytes 7-14, which may not be the displayed value"
+    ))
+}
+
 /// `packet_parse`, on a packet [`valid`] took. The MIN/MAX mode has no over limit
 /// byte (C's `TODO: Minmax?`), and REL's byte is left out, as "not available on all
 /// models", so neither makes a value infinite.
@@ -92,8 +117,13 @@ pub fn parse(packet: &[u8; PACKET_SIZE]) -> Reading {
     Reading { unit, temperatures }
 }
 
-/// `dev_context`'s buffer and the search of `handle_new_data`. It holds less than a
-/// packet between two reads.
+/// `dev_context`'s buffer and the search of `handle_new_data`, with one thing C lacks.
+///
+/// Bytes 0 and 44 are all that check a packet, so a stray `0x02` ahead of a reply makes
+/// a valid window one byte out wherever byte 43 is 3: T1 and T2 in whole degrees, T3 and
+/// T4 in tenths. So a window is taken only once it is clear that no later one overlaps
+/// it, and if one does the last is. A reply alone has nothing after it to overlap. This
+/// says nothing of a byte put inside a reply: see the burst warning in the capture.
 #[derive(Debug)]
 pub struct Buffer {
     bytes: [u8; BUFSIZE],
@@ -122,16 +152,31 @@ impl Buffer {
         self.len = (self.len + count).min(BUFSIZE);
     }
 
-    /// The next whole packet, passing over what cannot begin one.
-    pub fn next_packet(&mut self) -> Option<[u8; PACKET_SIZE]> {
+    /// The next whole packet, passing over what cannot begin one. Unless `settled`, one
+    /// that a byte still to come could overlap waits, at the front, for that byte or for
+    /// a call that says no more is coming.
+    pub fn next_packet(&mut self, settled: bool) -> Option<[u8; PACKET_SIZE]> {
         while self.len - self.at >= PACKET_SIZE {
-            let window = &self.bytes[self.at..self.at + PACKET_SIZE];
-            if valid(window) {
-                let packet = window.try_into().expect("the window is a packet long");
-                self.at += PACKET_SIZE;
-                return Some(packet);
+            if !valid(&self.bytes[self.at..self.at + PACKET_SIZE]) {
+                self.at += 1;
+                continue;
             }
-            self.at += 1;
+            // The last that could overlap starts at the end byte's place less one: a
+            // window has 3 there, and one starting there would need 2.
+            if !settled && self.len - self.at < 2 * PACKET_SIZE - 2 {
+                return None;
+            }
+            let later = (1..PACKET_SIZE).map(|step| self.at + step).find(|&at| {
+                at + PACKET_SIZE <= self.len && valid(&self.bytes[at..at + PACKET_SIZE])
+            });
+            if let Some(later) = later {
+                self.at = later;
+                continue;
+            }
+            let window = &self.bytes[self.at..self.at + PACKET_SIZE];
+            let packet = window.try_into().expect("the window is a packet long");
+            self.at += PACKET_SIZE;
+            return Some(packet);
         }
         None
     }
@@ -280,12 +325,12 @@ mod tests {
         fill(&mut b, &[0xff, 0x02, 0xff]);
         fill(&mut b, &DOCUMENT);
         fill(&mut b, &[0xee]);
-        assert_eq!(b.next_packet(), Some(DOCUMENT));
-        assert_eq!(b.next_packet(), None);
+        assert_eq!(b.next_packet(true), Some(DOCUMENT));
+        assert_eq!(b.next_packet(true), None);
         assert_eq!(b.waiting(), 1);
         fill(&mut b, &DOCUMENT);
-        assert_eq!(b.next_packet(), Some(DOCUMENT));
-        assert_eq!(b.next_packet(), None);
+        assert_eq!(b.next_packet(true), Some(DOCUMENT));
+        assert_eq!(b.next_packet(true), None);
         assert_eq!(b.waiting(), 0);
     }
 
@@ -293,10 +338,10 @@ mod tests {
     fn a_packet_cut_in_two_comes_whole() {
         let mut b = Buffer::default();
         fill(&mut b, &DOCUMENT[..20]);
-        assert_eq!(b.next_packet(), None);
+        assert_eq!(b.next_packet(true), None);
         assert_eq!(b.waiting(), 20);
         fill(&mut b, &DOCUMENT[20..]);
-        assert_eq!(b.next_packet(), Some(DOCUMENT));
+        assert_eq!(b.next_packet(true), Some(DOCUMENT));
     }
 
     #[test]
@@ -308,12 +353,104 @@ mod tests {
             let n = room.min(100);
             b.room()[..n].fill(0xaa);
             b.filled(n);
-            assert_eq!(b.next_packet(), None);
+            assert_eq!(b.next_packet(true), None);
             assert_eq!(b.waiting(), PACKET_SIZE - 1);
         }
         b.clear();
         assert_eq!(b.waiting(), 0);
         assert_eq!(b.room().len(), BUFSIZE);
+    }
+
+    /// A reply whose byte 43 is 3, as for T1 and T2 at 200 degrees and up.
+    fn whole_t1_t2() -> [u8; PACKET_SIZE] {
+        packet(0x80, [2910, 2800, 239, 256], [0; 4], 3)
+    }
+
+    #[test]
+    fn a_stray_start_byte_loses_to_the_reply_behind_it() {
+        let mut wire = vec![2];
+        wire.extend_from_slice(&whole_t1_t2());
+        // Without the rule, this window one byte out would pass.
+        assert!(valid(&wire[..PACKET_SIZE]));
+        let mut b = Buffer::default();
+        fill(&mut b, &wire);
+        assert_eq!(b.next_packet(true), Some(whole_t1_t2()));
+        assert_eq!(b.next_packet(true), None);
+        assert_eq!(values(&parse(&whole_t1_t2())), [2910.0, 2800.0, 23.9, 25.6]);
+    }
+
+    #[test]
+    fn a_window_waits_for_the_byte_that_could_overlap_it() {
+        let mut wire = vec![2];
+        wire.extend_from_slice(&whole_t1_t2());
+        let mut b = Buffer::default();
+        fill(&mut b, &wire[..45]);
+        assert_eq!(b.next_packet(false), None);
+        assert_eq!(b.waiting(), 45);
+        fill(&mut b, &wire[45..]);
+        assert_eq!(b.next_packet(false), None);
+        assert_eq!(b.next_packet(true), Some(whole_t1_t2()));
+    }
+
+    /// The furthest two valid windows can overlap by: one byte short of a packet on.
+    #[test]
+    fn a_window_waits_for_the_last_byte_that_could_overlap_it() {
+        let mut wire = [0u8; 88];
+        wire[0] = 2;
+        wire[43] = 2;
+        wire[44] = 3;
+        wire[87] = 3;
+        let mut b = Buffer::default();
+        fill(&mut b, &wire[..87]);
+        assert_eq!(b.next_packet(false), None);
+        assert_eq!(b.waiting(), 87);
+        fill(&mut b, &wire[87..]);
+        // The later one has won, and waits in its turn.
+        assert_eq!(b.next_packet(false), None);
+        assert_eq!(b.waiting(), PACKET_SIZE);
+        let want: [u8; PACKET_SIZE] = wire[43..88].try_into().unwrap();
+        assert_eq!(b.next_packet(true), Some(want));
+    }
+
+    #[test]
+    fn a_stream_needs_no_quiet_to_give_its_packets() {
+        let mut b = Buffer::default();
+        fill(&mut b, &DOCUMENT);
+        fill(&mut b, &DOCUMENT);
+        assert_eq!(b.next_packet(false), Some(DOCUMENT));
+        // All that could overlap the first had come; not so of the second.
+        assert_eq!(b.next_packet(false), None);
+        assert_eq!(b.waiting(), PACKET_SIZE);
+        assert_eq!(b.next_packet(true), Some(DOCUMENT));
+    }
+
+    #[test]
+    fn a_lone_reply_is_never_passed_over_whatever_it_holds() {
+        for fill_byte in [0u8, 2, 3, 0xff] {
+            let mut p = [fill_byte; PACKET_SIZE];
+            p[0] = 2;
+            p[44] = 3;
+            let mut b = Buffer::default();
+            fill(&mut b, &p);
+            assert_eq!(b.next_packet(true), Some(p));
+        }
+    }
+
+    #[test]
+    fn modes_with_other_bytes_get_their_words() {
+        let line = |name: &str| {
+            Some(format!(
+                "meter in {name} mode: reporting bytes 7-14, which may not be the displayed value"
+            ))
+        };
+        assert_eq!(mode_warning(0x80), None);
+        // REC, T1-T2, HOLD, low battery: the values stay where they are.
+        assert_eq!(mode_warning(0x80 | 1 | 1 << 3 | 1 << 5 | 1 << 6), None);
+        assert_eq!(mode_warning(0x82), line("MAX"));
+        assert_eq!(mode_warning(0x84), line("MIN"));
+        assert_eq!(mode_warning(0x86), line("MIN/MAX"));
+        assert_eq!(mode_warning(0x90), line("REL"));
+        assert_eq!(mode_warning(0x92), line("MAX and REL"));
     }
 
     /// A capture that stops in the middle of a read leaves packets behind.
@@ -323,14 +460,14 @@ mod tests {
         let full: Vec<u8> = DOCUMENT.iter().copied().cycle().take(BUFSIZE).collect();
         fill(&mut b, &full);
         assert_eq!(b.room().len(), 0);
-        assert_eq!(b.next_packet(), Some(DOCUMENT));
+        assert_eq!(b.next_packet(true), Some(DOCUMENT));
         assert_eq!(b.room().len(), PACKET_SIZE);
         let more = &DOCUMENT[(BUFSIZE % PACKET_SIZE)..];
         fill(&mut b, more);
         for _ in 0..5 {
-            assert_eq!(b.next_packet(), Some(DOCUMENT));
+            assert_eq!(b.next_packet(true), Some(DOCUMENT));
         }
-        assert_eq!(b.next_packet(), None);
+        assert_eq!(b.next_packet(true), None);
         assert_eq!(b.waiting(), 0);
     }
 
@@ -346,7 +483,7 @@ mod tests {
             room[..n].copy_from_slice(&stream[sent..sent + n]);
             b.filled(n);
             sent += n;
-            while b.next_packet().is_some() {
+            while b.next_packet(true).is_some() {
                 got += 1;
             }
         }

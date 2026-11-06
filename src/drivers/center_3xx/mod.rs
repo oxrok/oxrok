@@ -20,22 +20,34 @@
 //!
 //! A capture sends `A` 500 ms after the start, and again 500 ms after the last bytes
 //! once a whole packet has come. A packet holds all four channels, and counts as
-//! one sample. The limit is looked at once all of a read is out, so a read holding
-//! two packets sends both. `--get` has nothing to answer: C has no `config_get`.
+//! one sample. A sample goes out once the line has been quiet for 25 ms, and the
+//! limit is looked at after that, so a burst holding two packets sends both. `--get`
+//! has nothing to answer: C has no `config_get`.
 //!
-//! Where it goes its own way, see `docs/DEVICES.md`:
+//! Where it goes its own way, see `docs/DEVICES.md`. Jakob Unterwurzacher's pull
+//! requests 300 and 302 against libsigrok, from a K204 on his desk, report the first
+//! and the fifth, and are in no stock C:
 //!
 //! - C sends `A` once and waits for a whole packet, with no bound. So a reply lost,
 //!   part of one, or one stray byte between two replies, ends its polling for good,
-//!   and a `--samples` capture never ends. Here a request expires, see [`Requests`],
-//!   and 10 s with no whole packet fails a `--samples` capture, saying whether
-//!   anything came.
+//!   and a `--samples` capture never ends. Here a request expires after 2 s, see
+//!   [`Requests`].
+//! - A capture with no sample says so at 10 s, whatever ends it. A `--samples`
+//!   capture that has had no sample at all fails there, saying whether anything
+//!   came; one that has had a sample goes on, and fails only after 10 minutes, as the
+//!   rest of a long log is worth a warning. See [`Silence`].
 //! - C's flag for that lives in a `static` (`protocol.c:218`), one for all devices
 //!   and all captures of a process. So a capture that ends with `A` out leaves the
 //!   next with no request. Here each capture knows what is out on its own link.
 //! - What has come of a line is dropped ahead of a request, so bytes left by the
-//!   last reply are not read as the head of the next. C keeps them, and a stray
-//!   `0x02` then makes a packet one byte out when the next reply's byte 43 is 3.
+//!   last reply are not read as the head of the next. C keeps them.
+//! - Only bytes 0 and 44 check a packet, so a stray `0x02` ahead of a reply whose
+//!   byte 43 is 3 makes a window one byte out, with wrong temperatures. Where two
+//!   valid windows overlap the last is taken, see [`protocol::Buffer`]. A burst that
+//!   is no multiple of 45 bytes gets a warning: a byte put in the middle of a reply
+//!   can still pass, and bit flips cannot be told at all, as there is no checksum.
+//! - In MAX, MIN or REL mode the document moves the values to other bytes, and C
+//!   always reads 7 to 14. So does this, and it warns once per capture.
 //! - A reply a capture left on its way is no sample of the next one on an open
 //!   device. C takes it as a reading.
 //! - A port gone ends the capture, which C would go on calling back.
@@ -71,12 +83,21 @@ static DEV_OPTIONS: [OptionDesc; 3] = [
 
 /// The session source's timeout in `dev_acquisition_start`.
 const PASS: Duration = Duration::from_millis(500);
-/// How long a request stays out before the next, at first.
+/// How long a request stays out before the next.
 const REQUEST_WAIT: Duration = Duration::from_secs(2);
-/// The longest a request is left unanswered before the next.
-const MAX_WAIT: Duration = Duration::from_secs(8);
-/// How long a `--samples` capture goes with no whole packet.
+/// The longest a slow meter is left to answer what it has before the next request.
+const MAX_HOLD: Duration = Duration::from_secs(30);
+/// The most requests counted as out: a meter that is off has lost the rest.
+const MOST_OUT: u32 = 2;
+/// How long a capture goes with no sample before it says so; and with only a sample
+/// limit and no sample yet, before it fails.
 const SILENCE_BOUND: Duration = Duration::from_secs(10);
+/// How long a capture with only a sample limit goes on, once it has had a sample.
+const OUTAGE_BOUND: Duration = Duration::from_secs(600);
+/// The quiet that ends a burst: over the 16 ms an FTDI cable may hold its last bytes.
+const SETTLE: Duration = Duration::from_millis(25);
+/// How much longer than that a stream with no quiet can hold a sample up.
+const MOST_UNSETTLED: u32 = 4;
 /// How often a wait looks for a stop.
 const STOP_CHECK: Duration = Duration::from_millis(5);
 /// How long a stopped capture tries to hand over its End on a full queue.
@@ -179,6 +200,9 @@ pub struct CenterDevice {
     pass: Duration,
     request_wait: Duration,
     silence_bound: Duration,
+    outage_bound: Duration,
+    settle: Duration,
+    end_after_stop: Duration,
 }
 
 struct Worker {
@@ -214,6 +238,9 @@ impl CenterDevice {
             pass: PASS,
             request_wait: REQUEST_WAIT,
             silence_bound: SILENCE_BOUND,
+            outage_bound: OUTAGE_BOUND,
+            settle: SETTLE,
+            end_after_stop: END_AFTER_STOP,
         }
     }
 
@@ -332,7 +359,10 @@ impl Device for CenterDevice {
             pass: self.pass,
             request_wait: self.request_wait,
             silence_bound: self.silence_bound,
+            outage_bound: self.outage_bound,
+            settle: self.settle,
         };
+        let end_after_stop = self.end_after_stop;
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         let capturing = Arc::clone(&self.capturing);
@@ -342,7 +372,7 @@ impl Device for CenterDevice {
             .spawn(move || {
                 let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2, outcome);
+                send_end(&sink, &stop2, outcome, end_after_stop);
             });
         match spawned {
             Ok(handle) => {
@@ -367,8 +397,8 @@ impl Device for CenterDevice {
 }
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
-/// after a stop only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
+/// after a stop only for `after_stop`: a close joins this thread.
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>, after_stop: Duration) {
     let stopped_at = std::cell::Cell::new(None);
     sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
@@ -376,14 +406,14 @@ fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
         }
         let at = stopped_at.get().unwrap_or_else(Instant::now);
         stopped_at.set(Some(at));
-        at.elapsed() < END_AFTER_STOP
+        at.elapsed() < after_stop
     });
 }
 
 /// What is to be done about requests, in a pass with no bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Turn {
-    /// Nothing: a reply is due.
+    /// Nothing: a reply is due, or a slow meter still has replies to give.
     Wait,
     /// All were answered: ask.
     Ask,
@@ -394,20 +424,51 @@ enum Turn {
 /// C's `request_new_packet`, with a count, since no reply says what it answers.
 ///
 /// A packet leaves the next request to the next pass with no bytes, as in C. C has
-/// no expiry, and here a request has one: the reply may be lost, and the meter may
-/// have been off. It asks again, and the wait doubles up to [`MAX_WAIT`] for as long
-/// as nothing is heard; a reply within the first wait, with none out, sets it back.
-/// If a packet was heard since the last request when that expires, what is still
-/// counted was lost. So at a steady latency the wait grows past it after one or two
-/// expiries, and no more than two are out: see the simulation in the tests.
+/// no expiry, and here a request has one, of 2 s, for as long as nothing is heard: the
+/// reply may be lost, or the meter off for a moment, and the first request it hears
+/// should bring it back. The K204's owner reports that a unit ignores a repeated `A`,
+/// so this costs nothing there.
+///
+/// A meter that queued every request and took longer than that to answer would have
+/// them pile up. So a reply counted from the older of two requests out, or older than
+/// the wait, starts a hold: for half as long again as the meter seems to take, from the
+/// last packet, the next request waits. That is the gap since the last packet if no
+/// request went between them, or the reply's age if one did; with more, its age, or the
+/// gap at the second such reply in a row. Replies still queued then come with no more
+/// going in, each starting it again. A hold running out with nothing more says one was lost, and takes
+/// it off. A reply soon after a request may be one of those queued, so it ends a hold
+/// only if the next request's reply also comes soon, one pass on. On a unit that
+/// ignores repeats, a lost reply so costs a wait, one hold of about 3 s, and one pass.
+/// Silence halves a hold, so a meter that goes off is soon asked every 2 s again. A
+/// cable that flaps, a slow reply on each side of a gap, costs one hold of at most 30 s.
+/// See the simulation in the tests, over latencies and both kinds of meter.
+/// What the last reply said of the meter's pace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LastReply {
+    /// Nothing against it.
+    InTime,
+    /// It was a slow one.
+    Slow,
+    /// It came soon after its request, in a hold: the next request tries whether the
+    /// hold can end.
+    Unproven,
+}
+
 #[derive(Debug)]
 struct Requests {
     out: u32,
     sent_at: Option<Instant>,
+    /// The one before, while two are out.
+    sent_before: Option<Instant>,
     first_wait: Duration,
-    wait: Duration,
     /// A packet came after the last request.
     heard: bool,
+    /// How long after the last packet the next request waits, for a slow meter.
+    hold: Duration,
+    last_reply: LastReply,
+    /// Requests since the last packet.
+    asks: u32,
+    last_packet: Option<Instant>,
     /// Packets still to come that answer requests of the capture before.
     to_drop: u32,
     /// A request of this capture expired, so more replies may come than C asks for.
@@ -421,9 +482,13 @@ impl Requests {
         Requests {
             out: left,
             sent_at: (left > 0).then_some(now),
+            sent_before: None,
             first_wait,
-            wait: first_wait,
             heard: false,
+            hold: Duration::ZERO,
+            last_reply: LastReply::InTime,
+            asks: 0,
+            last_packet: None,
             to_drop: left,
             expired: false,
         }
@@ -431,13 +496,29 @@ impl Requests {
 
     /// A packet came: whether it is to be dropped.
     fn packet(&mut self, now: Instant) -> bool {
+        // In turn, if replies are: the oldest out.
+        let asked = self.sent_before.take().or(self.sent_at);
+        let age = asked.map_or(Duration::ZERO, |at| now.saturating_duration_since(at));
         self.out = self.out.saturating_sub(1);
         self.heard = true;
-        if self.out == 0
-            && self.sent_at.is_some_and(|at| now.saturating_duration_since(at) <= self.first_wait)
-        {
-            self.wait = self.first_wait;
+        let gap = self.last_packet.map_or(age, |at| now.saturating_duration_since(at));
+        if age > self.first_wait {
+            let takes = match self.asks {
+                0 => gap,
+                1 => age,
+                _ if self.last_reply == LastReply::Slow => gap,
+                _ => age.min(gap),
+            };
+            self.hold = (takes * 3 / 2).min(MAX_HOLD);
+            self.last_reply = LastReply::Slow;
+        } else if gap > self.first_wait && self.hold > Duration::ZERO {
+            self.last_reply = LastReply::Unproven;
+        } else {
+            self.hold = if gap <= self.first_wait { Duration::ZERO } else { self.hold };
+            self.last_reply = LastReply::InTime;
         }
+        self.asks = 0;
+        self.last_packet = Some(now);
         if self.to_drop > 0 {
             self.to_drop -= 1;
             return true;
@@ -446,35 +527,48 @@ impl Requests {
     }
 
     fn turn(&self, now: Instant) -> Turn {
+        let held = self.last_reply != LastReply::Unproven
+            && self.last_packet.is_some_and(|at| now.saturating_duration_since(at) < self.hold);
+        if held {
+            return Turn::Wait;
+        }
         if self.out == 0 {
             return Turn::Ask;
         }
-        if self.sent_at.is_some_and(|at| now.saturating_duration_since(at) >= self.wait) {
+        let wait = self.first_wait.max(self.hold);
+        if self.sent_at.is_some_and(|at| now.saturating_duration_since(at) >= wait) {
             return Turn::Expired;
         }
         Turn::Wait
     }
 
     /// The request out has expired. What is left of the last capture stops being
-    /// looked for, and a packet heard says the rest were lost.
+    /// looked for, and a packet heard since says one was lost.
     fn expire(&mut self) {
-        if self.to_drop > 0 || self.heard {
+        if self.to_drop > 0 {
             self.out = 0;
+        } else if self.heard {
+            self.out = self.out.saturating_sub(1);
         } else {
-            self.wait = (self.wait * 2).min(self.first_wait.max(MAX_WAIT));
+            self.hold /= 2;
         }
         self.to_drop = 0;
         self.expired = true;
     }
 
     fn asked(&mut self, now: Instant) {
-        self.out = self.out.saturating_add(1);
+        if self.last_reply == LastReply::Unproven {
+            self.last_reply = LastReply::InTime;
+        }
+        self.asks = self.asks.saturating_add(1);
+        self.sent_before = if self.out > 0 { self.sent_at } else { None };
+        self.out = (self.out + 1).min(MOST_OUT);
         self.sent_at = Some(now);
         self.heard = false;
     }
 }
 
-/// What a capture with only a sample limit has had since its last sample.
+/// What a capture has had since its last sample.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Silent {
     /// No bytes at all.
@@ -483,37 +577,119 @@ enum Silent {
     NoPacket,
 }
 
-/// The bound on a capture with no sample. It runs from the last sample, not from
-/// the last byte, so a stream of junk cannot keep a `--samples` capture going. The
-/// stamp is taken after the send, so a client that keeps a send waiting is no
-/// silence of the meter's.
+/// What [`Silence::check`] finds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outage {
+    /// Say so, and go on.
+    Warn(Silent),
+    /// End the capture, after this long with no sample.
+    Fail(Silent, Duration),
+}
+
+/// How long a capture has had no sample. It runs from the last sample, not from the
+/// last byte, so a stream of junk cannot keep a `--samples` capture going. The stamp
+/// is taken after the send, so a client that keeps a send waiting is no silence of the
+/// meter's.
+///
+/// At `bound` it warns, once per outage. Only a capture with a sample limit and no
+/// time limit can go on for ever: with no sample yet it fails at `bound`, as nothing
+/// says a meter is there, and after one only at `outage_bound`. A meter comes back
+/// from a loose cable or from its auto power off, and the rest of a long log is
+/// worth a warning.
 #[derive(Debug)]
 struct Silence {
     bound: Duration,
+    outage_bound: Duration,
     since: Instant,
     bytes: bool,
+    sampled: bool,
+    warned: bool,
 }
 
 impl Silence {
-    fn new(bound: Duration, now: Instant) -> Silence {
-        Silence { bound, since: now, bytes: false }
+    fn new(bound: Duration, outage_bound: Duration, now: Instant) -> Silence {
+        Silence { bound, outage_bound, since: now, bytes: false, sampled: false, warned: false }
     }
 
     fn bytes(&mut self) {
         self.bytes = true;
     }
 
-    fn sample(&mut self, now: Instant) {
+    /// A sample went out: how long it had been, if that was told.
+    fn sample(&mut self, now: Instant) -> Option<Duration> {
+        let told = self.warned.then(|| now.saturating_duration_since(self.since));
         self.since = now;
         self.bytes = false;
+        self.sampled = true;
+        self.warned = false;
+        told
     }
 
-    fn verdict(&self, now: Instant) -> Option<Silent> {
-        if now.saturating_duration_since(self.since) < self.bound {
+    fn check(&mut self, only_samples: bool, now: Instant) -> Option<Outage> {
+        let quiet = now.saturating_duration_since(self.since);
+        if quiet < self.bound {
             return None;
         }
-        Some(if self.bytes { Silent::NoPacket } else { Silent::NoBytes })
+        let what = if self.bytes { Silent::NoPacket } else { Silent::NoBytes };
+        if only_samples && !self.sampled {
+            return Some(Outage::Fail(what, self.bound));
+        }
+        if only_samples && quiet >= self.outage_bound {
+            return Some(Outage::Fail(what, self.outage_bound));
+        }
+        if self.warned {
+            return None;
+        }
+        self.warned = true;
+        Some(Outage::Warn(what))
     }
+}
+
+/// What the log says at the mark, going on.
+fn outage_warning(what: Silent, after: Duration) -> String {
+    let seconds = after.as_secs();
+    match what {
+        Silent::NoBytes => {
+            format!("No answer from the thermometer for {seconds} s; still asking.")
+        }
+        Silent::NoPacket => format!(
+            "No usable answer from the thermometer for {seconds} s: bytes came, but no whole \
+             packet; still asking."
+        ),
+    }
+}
+
+/// What the log says of a meter that came back.
+fn back_line(after: Duration) -> String {
+    format!("The thermometer answers again, after {} s with no sample.", after.as_secs())
+}
+
+/// What ends a capture on a silence, for the log and for `capture failed`.
+fn outage_failure(what: Silent, after: Duration) -> (String, String) {
+    let seconds = after.as_secs();
+    match what {
+        Silent::NoBytes => (
+            format!("No answer from the thermometer for {seconds} s."),
+            format!("no answer from the thermometer for {seconds} s"),
+        ),
+        Silent::NoPacket => (
+            format!(
+                "No usable answer from the thermometer for {seconds} s: bytes came, but no \
+                 whole packet."
+            ),
+            format!("no usable answer from the thermometer for {seconds} s"),
+        ),
+    }
+}
+
+/// What the log says of a burst that is no multiple of a packet.
+fn burst_warning(bytes: usize) -> String {
+    format!("A reply of {bytes} bytes, where 45 were due: this sample may be wrong.")
+}
+
+/// What the log says at the end, of more than one such burst.
+fn bursts_line(count: u32) -> String {
+    format!("{count} replies of this capture were of the wrong length.")
 }
 
 /// What the log says of a request that failed.
@@ -541,6 +717,21 @@ struct Capture {
     pass: Duration,
     request_wait: Duration,
     silence_bound: Duration,
+    outage_bound: Duration,
+    settle: Duration,
+}
+
+/// What a capture keeps count of, from one pass to the next.
+#[derive(Debug, Default)]
+struct Tally {
+    samples: u64,
+    /// Bytes since the last burst ended, or the last request.
+    burst: usize,
+    /// A packet came of them.
+    packet: bool,
+    /// Bursts holding a packet and no multiple of one.
+    wrong: u32,
+    told_mode: bool,
 }
 
 impl Capture {
@@ -551,7 +742,11 @@ impl Capture {
         }
         let left = std::mem::take(&mut self.link.lock().expect("link lock").out);
         let mut requests = Requests::new(left, self.request_wait, Instant::now());
-        let outcome = self.passes(sink, stop, started, &mut requests);
+        let mut tally = Tally::default();
+        let outcome = self.passes(sink, stop, started, &mut requests, &mut tally);
+        if tally.wrong > 1 {
+            log::warn!("{}", bursts_line(tally.wrong));
+        }
         self.link.lock().expect("link lock").out = requests.out;
         outcome
     }
@@ -568,9 +763,18 @@ impl Capture {
         Ok(got)
     }
 
-    /// The next whole packet that has come. The lock goes before anything is sent.
-    fn next_packet(&self) -> Option<[u8; PACKET_SIZE]> {
-        self.link.lock().expect("link lock").buffer.next_packet()
+    /// The next whole packet that has come, `settled` once no more is coming. The lock
+    /// goes before anything is sent.
+    fn next_packet(&self, settled: bool) -> Option<[u8; PACKET_SIZE]> {
+        self.link.lock().expect("link lock").buffer.next_packet(settled)
+    }
+
+    /// Whether what has come must see some quiet before the limits are looked at: a
+    /// packet is held for it, or one came of this burst and its length is still open.
+    fn settling(&self, tally: &Tally) -> bool {
+        tally.burst > 0
+            && (tally.packet
+                || self.link.lock().expect("link lock").buffer.waiting() >= PACKET_SIZE)
     }
 
     /// `center_send`, and what the wait for its reply starts from. A timeout is no
@@ -595,35 +799,69 @@ impl Capture {
         Ok(())
     }
 
-    /// Each packet of a read, as `handle_new_data`: false when the sink is gone.
+    /// Each packet that has come, as `handle_new_data`: false when the sink is gone.
     fn take_packets(
         &self,
         sink: &PacketSink,
         stop: &AtomicBool,
+        settled: bool,
         requests: &mut Requests,
         silence: &mut Silence,
-        samples: &mut u64,
+        tally: &mut Tally,
     ) -> bool {
-        while let Some(bytes) = self.next_packet() {
+        while let Some(bytes) = self.next_packet(settled) {
             if log::log_enabled!(log::Level::Trace) {
                 log::trace!("Packet: {bytes:02x?}");
             }
+            tally.packet = true;
             if requests.packet(Instant::now()) {
                 log::debug!("Dropping a reply from the capture before.");
                 continue;
             }
             // A read holding two packets sends both, past the limit, as C does. Not
             // where the second answers a request C would not have sent.
-            if requests.expired && self.limit_samples > 0 && *samples >= self.limit_samples {
+            if requests.expired && self.limit_samples > 0 && tally.samples >= self.limit_samples {
                 log::debug!("Dropping a reply past the limit, after an expiry.");
                 continue;
+            }
+            if !tally.told_mode
+                && let Some(line) = protocol::mode_warning(bytes[1])
+            {
+                tally.told_mode = true;
+                log::warn!("{line}");
             }
             if !self.send_reading(sink, stop, &protocol::parse(&bytes)) {
                 return false;
             }
-            *samples += 1;
-            silence.sample(Instant::now());
+            tally.samples += 1;
+            if let Some(after) = silence.sample(Instant::now()) {
+                log::warn!("{}", back_line(after));
+            }
         }
+        true
+    }
+
+    /// The line has gone quiet, or a stream gives it no chance to: what is held goes
+    /// out, and a burst holding a packet says if its length is wrong.
+    fn end_burst(
+        &self,
+        sink: &PacketSink,
+        stop: &AtomicBool,
+        requests: &mut Requests,
+        silence: &mut Silence,
+        tally: &mut Tally,
+    ) -> bool {
+        if !self.take_packets(sink, stop, true, requests, silence, tally) {
+            return false;
+        }
+        if tally.packet && !tally.burst.is_multiple_of(PACKET_SIZE) {
+            tally.wrong += 1;
+            if tally.wrong == 1 {
+                log::warn!("{}", burst_warning(tally.burst));
+            }
+        }
+        tally.burst = 0;
+        tally.packet = false;
         true
     }
 
@@ -654,10 +892,13 @@ impl Capture {
         stop: &AtomicBool,
         started: Instant,
         requests: &mut Requests,
+        tally: &mut Tally,
     ) -> Result<()> {
-        let mut silence = Silence::new(self.silence_bound, Instant::now());
-        let mut samples = 0u64;
+        let only_samples = self.limit_samples > 0 && self.limit_msec == 0;
+        let mut silence = Silence::new(self.silence_bound, self.outage_bound, Instant::now());
         let mut due = Instant::now() + self.pass;
+        let mut last_bytes = Instant::now();
+        let mut unsettled_since = None;
         loop {
             if stop.load(Ordering::SeqCst) {
                 return Ok(());
@@ -670,13 +911,37 @@ impl Capture {
                 log::error!("{}", read_error_line(&e));
                 Error::device("the port gone")
             })?;
+            let now = Instant::now();
             if got > 0 {
+                tally.burst += got;
                 silence.bytes();
-                if !self.take_packets(sink, stop, requests, &mut silence, &mut samples) {
+                last_bytes = now;
+                if !self.take_packets(sink, stop, false, requests, &mut silence, tally) {
                     return Ok(());
                 }
+                due = Instant::now() + self.pass;
+                if self.settling(tally) {
+                    let since = *unsettled_since.get_or_insert(now);
+                    if now.saturating_duration_since(since) < self.settle * MOST_UNSETTLED {
+                        continue;
+                    }
+                    if !self.end_burst(sink, stop, requests, &mut silence, tally) {
+                        return Ok(());
+                    }
+                    unsettled_since = None;
+                }
+            } else if self.settling(tally) {
+                // Quiet is an empty read past the time: a thread that was held up has
+                // looked at the line first.
+                if now.saturating_duration_since(last_bytes) < self.settle {
+                    continue;
+                }
+                if !self.end_burst(sink, stop, requests, &mut silence, tally) {
+                    return Ok(());
+                }
+                unsettled_since = None;
+                due = Instant::now() + self.pass;
             } else {
-                let now = Instant::now();
                 if now < due {
                     continue;
                 }
@@ -686,36 +951,27 @@ impl Capture {
                     requests.expire();
                 }
                 if turn != Turn::Wait {
+                    tally.burst = 0;
                     self.send_request(requests)?;
                 }
+                due = Instant::now() + self.pass;
             }
-            due = Instant::now() + self.pass;
             let now = Instant::now();
             if time_is_up(self.limit_msec, started, now)
-                || (self.limit_samples > 0 && samples >= self.limit_samples)
+                || (self.limit_samples > 0 && tally.samples >= self.limit_samples)
             {
                 return Ok(());
             }
-            if self.limit_samples > 0 && self.limit_msec == 0 {
-                self.check_silence(&silence, now)?;
-            }
-        }
-    }
-
-    fn check_silence(&self, silence: &Silence, now: Instant) -> Result<()> {
-        let seconds = self.silence_bound.as_secs();
-        match silence.verdict(now) {
-            None => Ok(()),
-            Some(Silent::NoBytes) => {
-                log::error!("No answer from the thermometer for {seconds} s.");
-                Err(Error::device(format!("no answer from the thermometer for {seconds} s")))
-            }
-            Some(Silent::NoPacket) => {
-                log::error!(
-                    "No usable answer from the thermometer for {seconds} s: bytes came, but no \
-                     whole packet."
-                );
-                Err(Error::device(format!("no usable answer from the thermometer for {seconds} s")))
+            match silence.check(only_samples, now) {
+                None => {}
+                Some(Outage::Warn(what)) => {
+                    log::warn!("{}", outage_warning(what, self.silence_bound));
+                }
+                Some(Outage::Fail(what, after)) => {
+                    let (line, why) = outage_failure(what, after);
+                    log::error!("{line}");
+                    return Err(Error::device(why));
+                }
             }
         }
     }

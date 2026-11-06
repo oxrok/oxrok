@@ -64,7 +64,12 @@ enum Reply {
 }
 
 struct State {
-    writes: Vec<(Instant, Vec<u8>)>,
+    writes: crate::serial::WriteLog,
+    /// The longest wait a read was given, and the last a write was.
+    longest_read: Duration,
+    write_timeout: Duration,
+    /// When a byte last went to the driver.
+    last_byte: Option<Instant>,
     script: VecDeque<Reply>,
     /// What every request gets once the script is out, if anything.
     otherwise: Option<Vec<u8>>,
@@ -79,6 +84,8 @@ struct State {
     fail_reads: bool,
     /// Reads never run out of this.
     endless: Option<u8>,
+    /// Nor of this, a packet to a read.
+    endless_packets: Option<Vec<u8>>,
     /// Set while the device must be closed: a read or write then is a finding.
     closed: Arc<AtomicBool>,
     used_after_close: bool,
@@ -92,7 +99,10 @@ struct Fake(Arc<Mutex<State>>);
 impl Fake {
     fn new() -> Fake {
         Fake(Arc::new(Mutex::new(State {
-            writes: Vec::new(),
+            writes: crate::serial::WriteLog::default(),
+            longest_read: Duration::ZERO,
+            write_timeout: Duration::ZERO,
+            last_byte: None,
             script: VecDeque::new(),
             otherwise: Some(pkt(239)),
             input: VecDeque::new(),
@@ -104,6 +114,7 @@ impl Fake {
             writes_time_out: false,
             fail_reads: false,
             endless: None,
+            endless_packets: None,
             closed: Arc::new(AtomicBool::new(false)),
             used_after_close: false,
         })))
@@ -195,6 +206,7 @@ impl Port for Fake {
             if s.closed.load(Ordering::SeqCst) {
                 s.used_after_close = true;
             }
+            s.longest_read = s.longest_read.max(timeout);
             if s.fail_reads {
                 return Err(Error::device("hung up"));
             }
@@ -203,6 +215,17 @@ impl Port for Fake {
                 return Ok(buf.len());
             }
             s.reads += 1;
+            if let Some(bytes) = s.endless_packets.clone() {
+                // A mutant that never ends gets an error: what it sent is kept by the test.
+                if s.reads > 20_000 {
+                    return Err(Error::device("too many reads"));
+                }
+                drop(s);
+                std::thread::sleep(Duration::from_micros(100));
+                let n = bytes.len().min(buf.len());
+                buf[..n].copy_from_slice(&bytes[..n]);
+                return Ok(n);
+            }
             let now = Instant::now();
             let room = match s.pace {
                 Pace::PerReads(n) => usize::from(s.reads.is_multiple_of(n)),
@@ -224,6 +247,9 @@ impl Port for Fake {
                     _ => break,
                 }
             }
+            if n > 0 {
+                s.last_byte = Some(now);
+            }
             n
         };
         if got == 0 {
@@ -234,8 +260,9 @@ impl Port for Fake {
     fn write(&mut self, _: &[u8]) -> Result<()> {
         panic!("every write of this driver has a timeout");
     }
-    fn write_timeout(&mut self, data: &[u8], _: Duration) -> Result<usize> {
+    fn write_timeout(&mut self, data: &[u8], timeout: Duration) -> Result<usize> {
         let mut s = self.0.lock().unwrap();
+        s.write_timeout = timeout;
         if s.closed.load(Ordering::SeqCst) {
             s.used_after_close = true;
         }
@@ -275,6 +302,8 @@ fn quick(fake: &Fake) -> CenterDevice {
     d.pass = Duration::from_millis(2);
     d.request_wait = FAR;
     d.silence_bound = FAR;
+    d.outage_bound = FAR;
+    d.settle = Duration::from_millis(1);
     d.open().unwrap();
     d
 }
@@ -320,6 +349,15 @@ fn failure(packets: &[Packet]) -> Option<&str> {
     })
 }
 
+/// Waits by the clock, a little at a time: a sleep of the whole time runs long under
+/// a slowed clock, past what a test needs to come first.
+fn wait_for_time(time: Duration) {
+    let began = Instant::now();
+    while began.elapsed() < time {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
 /// Runs a test that can hang on its own thread, within [`BOUND`] and a margin.
 fn bounded(test: impl FnOnce() + Send + 'static) {
     let (tx, rx) = sync_channel(1);
@@ -341,12 +379,37 @@ fn bounded(test: impl FnOnce() + Send + 'static) {
 fn the_literals_are_these() {
     assert_eq!(PASS, Duration::from_millis(500));
     assert_eq!(REQUEST_WAIT, Duration::from_secs(2));
-    assert_eq!(MAX_WAIT, Duration::from_secs(8));
+    assert_eq!(MAX_HOLD, Duration::from_secs(30));
+    assert_eq!(MOST_OUT, 2);
     assert_eq!(SILENCE_BOUND, Duration::from_secs(10));
+    assert_eq!(OUTAGE_BOUND, Duration::from_secs(600));
+    assert_eq!(SETTLE, Duration::from_millis(25));
+    assert_eq!(STOP_CHECK, Duration::from_millis(5));
+    assert_eq!(END_AFTER_STOP, Duration::from_millis(500));
     let d = CenterDevice::from_port(Box::new(Fake::new()));
     assert_eq!(d.pass, Duration::from_millis(500));
     assert_eq!(d.request_wait, Duration::from_secs(2));
     assert_eq!(d.silence_bound, Duration::from_secs(10));
+    assert_eq!(d.outage_bound, Duration::from_secs(600));
+    assert_eq!(d.settle, Duration::from_millis(25));
+    assert_eq!(d.end_after_stop, Duration::from_millis(500));
+}
+
+/// Each wait of a capture is short, so a stop is seen; a write has C's timeout.
+#[test]
+fn a_read_waits_5_ms_at_most_and_a_write_has_c_s_timeout() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut d = CenterDevice::from_port(Box::new(fake.clone()));
+        d.pass = Duration::from_millis(40);
+        d.open().unwrap();
+        limit(&mut d, 2);
+        let rx = start(&mut d);
+        packets(&rx);
+        assert!(fake.with(|s| s.longest_read) <= Duration::from_millis(5));
+        let params = Params::parse(SERIALCOMM).unwrap();
+        assert_eq!(fake.with(|s| s.write_timeout), serial_timeout(&params, 1));
+    });
 }
 
 #[test]
@@ -655,6 +718,7 @@ fn a_slow_client_does_not_end_a_capture_with_a_false_error() {
         let fake = Fake::new();
         let mut d = quick(&fake);
         d.silence_bound = Duration::from_millis(300);
+        d.outage_bound = Duration::from_millis(300);
         limit(&mut d, 3);
         // Room for little: each send waits for this thread.
         let (tx, rx) = sync_channel(1);
@@ -713,6 +777,42 @@ fn part_of_a_reply_is_dropped_ahead_of_the_next_request() {
     });
 }
 
+/// A part left, then a reply cut short: put together they would make a window with
+/// no later one to lose to. Only the drop ahead of a request stops that.
+#[test]
+fn what_is_left_and_a_cut_reply_make_no_false_packet() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut part = vec![2];
+        part.resize(9, 0x11);
+        let mut cut = pkt(5);
+        cut.truncate(40);
+        // 44 on from the part's start.
+        cut[35] = 3;
+        fake.script([Reply::Now(part), Reply::Now(cut), Reply::Now(pkt(77))]);
+        let mut d = quick(&fake);
+        d.request_wait = Duration::from_millis(20);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(firsts(&packets(&rx)), [tenths(77)]);
+    });
+}
+
+/// A meter that never goes quiet must still come to its limit.
+#[test]
+fn a_stream_of_packets_with_no_quiet_ends_at_its_limit() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.endless_packets = Some(pkt(5)));
+        let mut d = quick(&fake);
+        limit(&mut d, 3);
+        let rx = start(&mut d);
+        let got = packets(&rx);
+        assert_eq!(failure(&got), None);
+        assert!(firsts(&got).len() >= 3);
+    });
+}
+
 /// In C a pass with bytes and no packet clears `request_new_packet`, so this ends
 /// its polling for good.
 #[test]
@@ -751,30 +851,39 @@ fn bytes_left_ahead_of_a_request_make_no_false_packet() {
     });
 }
 
+/// A reply older than the wait says the meter is slow: the next request waits half as
+/// long again as that reply took. The least gap: a loaded box only stretches it. The
+/// test starts again if a stall let the pass run out ahead of the reply.
 #[test]
-fn a_late_reply_counts_and_asks_nothing_until_the_other_is_answered() {
+fn a_slow_reply_holds_the_next_request_back() {
     bounded(|| {
-        let fake = Fake::new();
-        fake.script([Reply::OnRelease(pkt(1)), Reply::OnRelease(pkt(2))]);
-        fake.with(|s| s.otherwise = None);
-        let mut d = quick(&fake);
-        // The second wait is 2 s, past any stall here.
-        d.request_wait = Duration::from_secs(1);
-        limit(&mut d, 2);
-        let rx = start(&mut d);
-        fake.wait_for_writes(1);
-        // The first expires and goes again; its reply is on its way.
-        let late = fake.with(|s| std::mem::take(&mut s.held));
-        fake.wait_for_writes(2);
-        fake.feed(&late);
-        fake.wait_for("the late reply read", |s| s.input.is_empty());
-        // The second reply still holds off the third request: many passes go by.
-        let reads = fake.with(|s| s.reads);
-        fake.wait_for("passes", |s| s.reads >= reads + 20);
-        assert_eq!(fake.writes(), 2);
-        fake.release();
-        assert_eq!(firsts(&packets(&rx)), [tenths(1), tenths(2)]);
-        assert_eq!(fake.writes(), 2);
+        for _ in 0..20 {
+            let fake = Fake::new();
+            fake.script([Reply::OnRelease(pkt(1))]);
+            let mut d = quick(&fake);
+            d.request_wait = Duration::from_millis(100);
+            // Past the pass, so the reply can get older than the wait.
+            d.pass = Duration::from_millis(400);
+            limit(&mut d, 2);
+            let rx = start(&mut d);
+            fake.wait_for_writes(1);
+            let late = fake.with(|s| std::mem::take(&mut s.held));
+            // Older than the wait of the request out, and ahead of the pass.
+            wait_for_time(Duration::from_millis(150));
+            let early = fake.writes() > 1;
+            let fed = Instant::now();
+            fake.feed(&late);
+            let got = firsts(&packets(&rx));
+            if early {
+                continue;
+            }
+            assert_eq!(got, [tenths(1), tenths(239)]);
+            let times = fake.write_times();
+            assert_eq!(times.len(), 2);
+            assert!(times[1] - fed >= Duration::from_millis(225), "{:?}", times[1] - fed);
+            return;
+        }
+        panic!("the pass came ahead of the reply each time");
     });
 }
 
@@ -965,7 +1074,11 @@ fn a_capture_that_asks_without_a_pause_is_stopped_by_the_fake() {
     bounded(|| {
         let fake = Fake::new();
         fake.silent();
-        fake.with(|s| s.writes.resize(MOST_WRITES, (Instant::now(), Vec::new())));
+        fake.with(|s| {
+            for _ in 0..MOST_WRITES {
+                s.writes.push((Instant::now(), Vec::new()));
+            }
+        });
         let mut d = quick(&fake);
         limit(&mut d, 1);
         let rx = start(&mut d);
@@ -1054,6 +1167,188 @@ fn a_stop_during_a_reply_at_the_lines_rate_leaves_the_next_capture_clean() {
         let rx = start(&mut d);
         let got = firsts(&packets(&rx));
         assert_eq!(got, [tenths(2), tenths(2)]);
+    });
+}
+
+/// The overlap rule in a capture, with the reply's last byte a read behind.
+#[test]
+fn a_stray_start_byte_does_not_shift_the_reading() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut reply = pkt(2910);
+        reply[9..11].copy_from_slice(&2800i16.to_be_bytes());
+        reply[43] = 3;
+        let mut wire = vec![2];
+        wire.extend_from_slice(&reply);
+        fake.with(|s| s.pace = Pace::PerReads(2));
+        fake.script([Reply::Now(wire)]);
+        let mut d = quick(&fake);
+        d.settle = Duration::from_millis(20);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(firsts(&packets(&rx)), [2910.0]);
+    });
+}
+
+/// A library client is left with no tty.
+#[test]
+fn a_close_gives_the_port_back() {
+    let fake = Fake::new();
+    let mut d = quick(&fake);
+    assert!(d.link.lock().unwrap().port.is_some());
+    d.close().unwrap();
+    assert!(d.link.lock().unwrap().port.is_none());
+}
+
+/// A byte puts the next request off by a pass, as the source's timer in C. The test
+/// starts again if a stall let the first request go ahead of the byte.
+#[test]
+fn bytes_put_the_next_request_off() {
+    bounded(|| {
+        let pass = Duration::from_millis(300);
+        for _ in 0..20 {
+            let fake = Fake::new();
+            fake.silent();
+            let mut d = quick(&fake);
+            d.pass = pass;
+            let rx = start(&mut d);
+            wait_for_time(Duration::from_millis(100));
+            fake.feed(&[0xee]);
+            fake.wait_for("the byte read", |s| s.input.is_empty());
+            let last_byte = fake.with(|s| s.last_byte).unwrap();
+            let early = fake.writes() > 0;
+            fake.wait_for_writes(1);
+            let asked = fake.write_times()[0];
+            d.stop().unwrap();
+            packets(&rx);
+            if early {
+                continue;
+            }
+            assert!(asked - last_byte >= pass, "{:?}", asked - last_byte);
+            return;
+        }
+        panic!("the first request came ahead of the byte each time");
+    });
+}
+
+/// A reply dropped as the capture before's is no sample: the bound does not move for
+/// it, and with none yet the capture fails rather than going on.
+#[test]
+fn a_dropped_reply_is_no_sample_to_the_bound() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::OnRelease(pkt(1))]);
+        fake.with(|s| s.otherwise = None);
+        let mut d = quick(&fake);
+        d.request_wait = Duration::from_secs(5);
+        let rx = start(&mut d);
+        fake.wait_for_writes(1);
+        d.stop().unwrap();
+        packets(&rx);
+        d.silence_bound = Duration::from_millis(200);
+        limit(&mut d, 1);
+        fake.release();
+        let rx = start(&mut d);
+        let got = packets(&rx);
+        assert_eq!(firsts(&got), [] as [f32; 0]);
+        assert_eq!(
+            failure(&got),
+            Some("device error: no usable answer from the thermometer for 0 s")
+        );
+    });
+}
+
+/// One that was never sent is not waited for by the next capture.
+#[test]
+fn a_failed_write_leaves_nothing_out() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.fail_writes_after = Some(0));
+        let mut d = quick(&fake);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(failure(&packets(&rx)), Some("device error: unable to send a request"));
+        fake.with(|s| s.fail_writes_after = None);
+        // With a wait that never ends, only a request with nothing out can go.
+        let rx = start(&mut d);
+        assert_eq!(firsts(&packets(&rx)), [tenths(239)]);
+    });
+}
+
+/// A queue left full at the start must not hold a stop up in the header's send.
+#[test]
+fn a_stop_ends_a_capture_stuck_on_its_header() {
+    bounded(|| {
+        let fake = Fake::new();
+        let mut d = quick(&fake);
+        let (tx, rx) = sync_channel(1);
+        let sink = PacketSink::new(tx, 0);
+        assert!(sink.send(Packet::FrameBegin));
+        d.start(sink).unwrap();
+        std::thread::sleep(Duration::from_millis(10));
+        d.stop().unwrap();
+        d.close().unwrap();
+        drop(rx);
+        assert_eq!(fake.writes(), 0);
+    });
+}
+
+/// After a stop an End still gets its time on a full queue. A far time, so no stall
+/// can pass for the giving up: what fails here is a thread that gives up at once.
+#[test]
+fn an_end_waits_its_time_after_a_stop() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.silent();
+        let mut d = quick(&fake);
+        d.end_after_stop = BOUND;
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        fake.wait_for_writes(1);
+        d.stop().unwrap();
+        // The Header holds the queue, so End waits. Give it time to see the stop.
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
+        assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::End));
+    });
+}
+
+/// An outage after a sample warns, and the meter's return ends it: no failure.
+#[test]
+fn an_outage_after_a_sample_goes_on() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::Now(pkt(1)), Reply::OnRelease(pkt(2))]);
+        fake.silent();
+        let mut d = quick(&fake);
+        d.silence_bound = Duration::from_millis(50);
+        limit(&mut d, 2);
+        let rx = start(&mut d);
+        fake.wait_for_writes(2);
+        // Well past the bound, by what the capture has seen.
+        std::thread::sleep(Duration::from_millis(200));
+        fake.release();
+        let got = packets(&rx);
+        assert_eq!(failure(&got), None);
+        assert_eq!(firsts(&got), [tenths(1), tenths(2)]);
+    });
+}
+
+#[test]
+fn an_outage_past_its_bound_fails_after_a_sample() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.script([Reply::Now(pkt(1))]);
+        fake.silent();
+        let mut d = quick(&fake);
+        d.request_wait = Duration::from_millis(20);
+        d.silence_bound = Duration::from_millis(20);
+        d.outage_bound = Duration::from_secs(1);
+        limit(&mut d, 2);
+        let rx = start(&mut d);
+        let got = packets(&rx);
+        assert_eq!(firsts(&got), [tenths(1)]);
+        assert_eq!(failure(&got), Some("device error: no answer from the thermometer for 1 s"));
     });
 }
 
@@ -1146,63 +1441,142 @@ fn at(base: Instant, ms: u64) -> Instant {
 }
 
 #[test]
-fn an_unanswered_thermometer_is_asked_after_2_4_8_8_s() {
+fn an_unanswered_thermometer_is_asked_every_2_s() {
     let base = Instant::now();
     let mut r = Requests::new(0, REQUEST_WAIT, base);
     assert_eq!(r.turn(base), Turn::Ask);
     r.asked(base);
     let mut t = 0;
-    for wait in [2000, 4000, 8000, 8000, 8000] {
-        assert_eq!(r.turn(at(base, t + wait - 1)), Turn::Wait, "{wait}");
-        t += wait;
-        assert_eq!(r.turn(at(base, t)), Turn::Expired, "{wait}");
+    for _ in 0..20 {
+        assert_eq!(r.turn(at(base, t + 1999)), Turn::Wait);
+        t += 2000;
+        assert_eq!(r.turn(at(base, t)), Turn::Expired);
         r.expire();
         r.asked(at(base, t));
     }
-    // Nothing else stops them, but they stay counted.
-    assert_eq!(r.out, 6);
+    // A meter that is off has lost the rest.
+    assert_eq!(r.out, 2);
+    assert!(r.expired);
 }
 
+/// With two out, a reply counts from the older, so it holds; the hold running out with
+/// nothing more says one was lost; and a reply with one out, in good time, ends it.
 #[test]
-fn a_reply_in_good_time_sets_the_wait_back() {
+fn a_reply_with_two_out_holds_and_the_hold_running_out_takes_one_off() {
     let base = Instant::now();
     let mut r = Requests::new(0, REQUEST_WAIT, base);
     r.asked(base);
     r.expire();
     r.asked(at(base, 2000));
-    assert_eq!(r.wait, Duration::from_secs(4));
     assert!(!r.packet(at(base, 2100)));
     assert_eq!(r.out, 1);
-    assert_eq!(r.wait, Duration::from_secs(4), "one is still out");
-    assert!(!r.packet(at(base, 2200)));
+    assert_eq!(r.hold, Duration::from_millis(3150));
+    assert_eq!(r.turn(at(base, 2100 + 3149)), Turn::Wait);
+    assert_eq!(r.turn(at(base, 2100 + 3150)), Turn::Expired);
+    r.expire();
     assert_eq!(r.out, 0);
-    assert_eq!(r.wait, Duration::from_secs(2));
-    assert_eq!(r.turn(at(base, 2200)), Turn::Ask);
+    r.asked(at(base, 5250));
+    assert_eq!(r.out, 1);
+    // Soon after its request, but it may be one that was queued: one more to try.
+    assert!(!r.packet(at(base, 5350)));
+    assert_eq!(r.out, 0);
+    assert_eq!(r.hold, Duration::from_millis(3150));
+    assert_eq!(r.turn(at(base, 5350)), Turn::Ask);
+    r.asked(at(base, 5850));
+    assert_eq!(r.turn(at(base, 5900)), Turn::Wait);
+    assert!(!r.packet(at(base, 5950)));
+    assert_eq!(r.hold, Duration::ZERO);
+    assert_eq!(r.turn(at(base, 5950)), Turn::Ask);
 }
 
+/// A meter gone quiet in a hold is soon asked every 2 s.
 #[test]
-fn a_reply_too_slow_keeps_the_wait() {
+fn silence_halves_a_hold() {
     let base = Instant::now();
     let mut r = Requests::new(0, REQUEST_WAIT, base);
     r.asked(base);
+    r.packet(at(base, 8000));
+    assert_eq!(r.hold, Duration::from_secs(12));
+    r.asked(at(base, 20_000));
     r.expire();
-    r.asked(at(base, 2000));
-    r.packet(at(base, 2500));
-    r.packet(at(base, 4500));
-    assert_eq!(r.out, 0);
-    assert_eq!(r.wait, Duration::from_secs(4));
+    assert_eq!(r.hold, Duration::from_secs(6));
+    r.asked(at(base, 26_000));
+    r.expire();
+    assert_eq!(r.hold, Duration::from_secs(3));
+    assert_eq!(r.turn(at(base, 26_000 + 2999)), Turn::Wait);
+    assert_eq!(r.turn(at(base, 26_000 + 3000)), Turn::Expired);
 }
 
+/// A request clears what was heard: an expiry with nothing since is silence, and
+/// takes nothing off.
 #[test]
-fn an_expiry_after_a_packet_counts_the_rest_as_lost_and_the_wait_stays() {
+fn a_request_clears_what_was_heard() {
     let base = Instant::now();
     let mut r = Requests::new(0, REQUEST_WAIT, base);
     r.asked(base);
     r.asked(base);
     r.packet(base);
+    assert!(r.heard);
+    r.asked(base);
+    assert!(!r.heard);
+    let out = r.out;
     r.expire();
+    assert_eq!(r.out, out);
+}
+
+/// The older of two out, then the gap between replies.
+#[test]
+fn a_hold_is_half_as_long_again_as_the_meter_seems_to_take() {
+    let base = Instant::now();
+    let mut r = Requests::new(0, REQUEST_WAIT, base);
+    r.asked(base);
+    r.asked(at(base, 2000));
+    assert!(!r.packet(at(base, 2500)));
+    assert_eq!(r.out, 1);
+    assert_eq!(r.hold, Duration::from_millis(3750));
+    // 1.5 s from its request and 1 s since the last packet: it is keeping up.
+    assert!(!r.packet(at(base, 3500)));
     assert_eq!(r.out, 0);
-    assert_eq!(r.wait, Duration::from_secs(2));
+    assert_eq!(r.hold, Duration::ZERO);
+    r.asked(at(base, 10_000));
+    r.asked(at(base, 12_000));
+    r.packet(at(base, 15_000));
+    assert_eq!(r.hold, Duration::from_millis(5000 * 3 / 2));
+    r.packet(at(base, 18_500));
+    assert_eq!(r.hold, Duration::from_millis(3500 * 3 / 2));
+    // A slow reply after a slow one, with two asked between, goes by the gap.
+    r.asked(at(base, 19_000));
+    r.asked(at(base, 27_000));
+    r.packet(at(base, 28_500));
+    assert_eq!(r.hold, Duration::from_secs(15));
+}
+
+#[test]
+fn a_hold_has_its_top() {
+    let base = Instant::now();
+    let mut r = Requests::new(0, REQUEST_WAIT, base);
+    r.asked(base);
+    r.packet(at(base, 1_000_000));
+    assert_eq!(r.hold, Duration::from_secs(30));
+}
+
+/// Back in good time after a hold, the rate is C's again.
+#[test]
+fn a_reply_in_good_time_ends_a_hold() {
+    let base = Instant::now();
+    let mut r = Requests::new(0, REQUEST_WAIT, base);
+    r.asked(base);
+    r.packet(at(base, 5000));
+    assert!(r.hold > Duration::ZERO);
+    assert_eq!(r.out, 0);
+    r.asked(at(base, 20_000));
+    r.packet(at(base, 20_100));
+    assert_eq!(r.hold, Duration::from_millis(7500), "one reply is not proof");
+    assert_eq!(r.turn(at(base, 20_100)), Turn::Ask);
+    r.asked(at(base, 20_600));
+    r.packet(at(base, 20_700));
+    assert_eq!(r.hold, Duration::ZERO);
+    assert_eq!(r.turn(at(base, 20_700)), Turn::Ask);
 }
 
 #[test]
@@ -1216,7 +1590,7 @@ fn all_that_a_capture_left_are_dropped() {
     assert_eq!(r.turn(base), Turn::Ask);
 }
 
-/// They were lost, not late: nothing counts them from here, and no wait grows.
+/// They were lost, not late: nothing counts them from here.
 #[test]
 fn an_expiry_gives_up_on_all_that_a_capture_left() {
     let base = Instant::now();
@@ -1224,41 +1598,63 @@ fn an_expiry_gives_up_on_all_that_a_capture_left() {
     r.expire();
     assert_eq!(r.out, 0);
     assert_eq!(r.to_drop, 0);
-    assert_eq!(r.wait, Duration::from_secs(2));
     assert!(!r.packet(base));
 }
 
-/// What a simulated meter did.
-#[derive(Debug)]
-struct Simulated {
-    /// The most replies owed at any time.
-    most_owed: usize,
-    /// What is owed at the end.
-    owed: usize,
-    /// Requests sent.
-    sent: u32,
-    /// Replies read.
-    read: u32,
-    /// The oldest sample, by how long it took from its own request, in ms.
-    oldest: u64,
+/// A meter on our own clock: it either queues each request or, as the K204's owner
+/// reports of his, ignores one that comes while it has a reply to give.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Meter {
+    Queues,
+    Ignores,
 }
 
-/// A meter at `latency` of the time in ms, in order, on a clock of our own, so no
-/// machine can stretch it. Requests numbered in `lost` are lost. Passes as in the
-/// capture: a request only with no bytes for 500 ms, read before the timer.
-fn simulate(latency: impl Fn(u64) -> u64, lost: &[u32], limit_ms: u64) -> Simulated {
+/// What a simulated meter did.
+#[derive(Debug, Default)]
+struct Simulated {
+    most_owed: usize,
+    owed: usize,
+    sent: u32,
+    read: u32,
+    /// The oldest sample, from its own request, in ms: over all, and in the last fifth.
+    oldest: u64,
+    oldest_late: u64,
+    /// The longest with no sample, in ms, and from the end of the outage to a sample.
+    biggest_gap: u64,
+    back_after: Option<u64>,
+}
+
+/// `latency` of the time in ms, no machine stretching it. Requests numbered in `lost`
+/// are lost, and all between the times of `off`. Passes as in the capture: a request
+/// only with no bytes for 500 ms, read before the timer.
+fn simulate(
+    meter: Meter,
+    latency: impl Fn(u64) -> u64,
+    lost: &[u32],
+    off: (u64, u64),
+    limit_ms: u64,
+) -> Simulated {
     let base = Instant::now();
     let mut r = Requests::new(0, REQUEST_WAIT, base);
     let mut due: VecDeque<(u64, u64)> = VecDeque::new();
     let mut free = 0;
     let mut timer = 500;
-    let mut sim = Simulated { most_owed: 0, owed: 0, sent: 0, read: 0, oldest: 0 };
+    let mut last_sample = 0;
+    let mut sim = Simulated::default();
     for t in (0..limit_ms).step_by(10) {
         let now = at(base, t);
         if due.front().is_some_and(|(d, _)| *d <= t) {
             let (_, asked) = due.pop_front().expect("looked");
             sim.read += 1;
             sim.oldest = sim.oldest.max(t - asked);
+            if t >= limit_ms / 5 * 4 {
+                sim.oldest_late = sim.oldest_late.max(t - asked);
+            }
+            sim.biggest_gap = sim.biggest_gap.max(t - last_sample);
+            last_sample = t;
+            if off.1 > 0 && t >= off.1 && sim.back_after.is_none() {
+                sim.back_after = Some(t - off.1);
+            }
             r.packet(now);
             timer = t + 500;
         } else if t >= timer {
@@ -1269,7 +1665,8 @@ fn simulate(latency: impl Fn(u64) -> u64, lost: &[u32], limit_ms: u64) -> Simula
             if turn != Turn::Wait {
                 sim.sent += 1;
                 r.asked(now);
-                if !lost.contains(&sim.sent) {
+                let heard = !(lost.contains(&sim.sent) || (t >= off.0 && t < off.1));
+                if heard && (meter == Meter::Queues || due.is_empty()) {
                     // 47 ms for the bytes.
                     free = free.max(t) + latency(t) + 47;
                     due.push_back((free, t));
@@ -1283,74 +1680,339 @@ fn simulate(latency: impl Fn(u64) -> u64, lost: &[u32], limit_ms: u64) -> Simula
     sim
 }
 
-/// At a steady 2.5 s, for a simulated minute: 2 replies owed at the most and one
-/// at the end, the oldest sample 3.1 s from its request (the one behind the first
-/// expiry) and the rest 2.55 s, and a reply about every 3 s.
+const LATENCIES: [u64; 12] =
+    [100, 1000, 1900, 2100, 2500, 3500, 4100, 5000, 8000, 9000, 12_000, 20_000];
+
+/// Ten simulated minutes at each latency, of both meters. A meter that queues takes
+/// what went out in the first silence, one per 2 s up to its first reply, and drains it
+/// with no more going in: by the last fifth no sample is older than the latency.
+/// `-- --nocapture` prints the table.
 #[test]
-fn a_steady_latency_past_the_expiry_does_not_pile_up() {
-    let sim = simulate(|_| 2500, &[], 60_000);
+fn no_latency_piles_up_on_either_meter() {
+    println!("meter latency | samples/min | most owed | owed at end | oldest | oldest late | sent");
+    for meter in [Meter::Queues, Meter::Ignores] {
+        for latency in LATENCIES {
+            let sim = simulate(meter, |_| latency, &[], (0, 0), 600_000);
+            let per_min = f64::from(sim.read) / 10.0;
+            println!(
+                "{meter:?} {latency} | {per_min:.1} | {} | {} | {} | {} | {}",
+                sim.most_owed, sim.owed, sim.oldest, sim.oldest_late, sim.sent
+            );
+            let most = (latency / 1000 + 3) as usize;
+            assert!(sim.most_owed <= most, "{meter:?} {latency}: {sim:?}");
+            assert!(sim.owed <= 2, "{meter:?} {latency}: {sim:?}");
+            // What queued in the first silence has gone by the last fifth.
+            assert!(sim.oldest_late <= latency + 100, "{meter:?} {latency}: {sim:?}");
+            if meter == Meter::Ignores {
+                assert_eq!(sim.most_owed, 1, "{latency}: {sim:?}");
+            }
+            // It keeps reading: at least one sample per three of its latencies.
+            let least = 600_000 / (3 * latency + 3000);
+            assert!(u64::from(sim.read) >= least, "{meter:?} {latency}: {sim:?}");
+        }
+    }
+}
+
+/// A meter back from an outage of any length answers the next request, and with the
+/// wait at 2 s that is at most 2.1 s and a pass off.
+#[test]
+fn a_meter_back_from_an_outage_is_found_within_2_s() {
+    for meter in [Meter::Queues, Meter::Ignores] {
+        for off_ms in [1000, 3000, 5500, 6500, 7000, 8000, 9500, 15_000, 60_000, 300_000] {
+            for phase in (0..650).step_by(50) {
+                let start = 30_000 + phase;
+                let sim =
+                    simulate(meter, |_| 100, &[], (start, start + off_ms), start + off_ms + 30_000);
+                let back = sim.back_after.expect("it came back");
+                assert!(back <= 2750, "{meter:?} off {off_ms} phase {phase}: {sim:?}");
+                assert!(
+                    sim.biggest_gap <= off_ms + 3400,
+                    "{meter:?} off {off_ms} phase {phase}: {sim:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The rate comes back: a count that stayed up by one would ask once per wait.
+#[test]
+fn a_lost_reply_costs_one_wait_and_one_hold_and_not_the_rate() {
+    for meter in [Meter::Queues, Meter::Ignores] {
+        let sim = simulate(meter, |_| 100, &[3], (0, 0), 30_000);
+        assert!(sim.owed <= 1, "{sim:?}");
+        // 24 s at 650 ms a reply.
+        assert!(sim.read >= 36, "{sim:?}");
+    }
+}
+
+#[test]
+fn what_piled_up_drains_when_the_meter_is_back_to_speed() {
+    let sim = simulate(Meter::Queues, |t| if t < 20_000 { 2500 } else { 200 }, &[], (0, 0), 60_000);
     assert!(sim.most_owed <= 2, "{sim:?}");
     assert!(sim.owed <= 1, "{sim:?}");
-    assert!(sim.oldest <= 3100, "{sim:?}");
-    assert!(sim.read >= 18, "{sim:?}");
-    assert!(sim.sent <= sim.read + 2, "{sim:?}");
+    assert!(sim.oldest_late <= 300, "{sim:?}");
+    // Over the last 30 s at 750 ms a reply.
+    assert!(sim.read >= 40, "{sim:?}");
 }
 
 #[test]
-fn what_piled_up_drains_when_the_meter_is_back() {
-    let sim = simulate(|t| if t < 20_000 { 2500 } else { 200 }, &[], 45_000);
-    assert!(sim.most_owed <= 2, "{sim:?}");
-    assert!(sim.owed <= 1, "{sim:?}");
-    // Over 25 s at 750 ms a reply, once the wait has come back.
-    assert!(sim.read >= 30, "{sim:?}");
-}
-
-/// The rate comes back: a count that stayed up by one would ask once per wait. The
-/// 2 s until it asks again, and 4 s until the count is let go, cost 6 s of 30.
-#[test]
-fn a_lost_reply_costs_6_s_and_not_the_rate() {
-    let sim = simulate(|_| 100, &[3], 30_000);
-    assert!(sim.owed <= 1, "{sim:?}");
-    // 24 s at 650 ms a reply.
-    assert!(sim.read >= 35, "{sim:?}");
-}
-
-#[test]
-fn a_meter_faster_than_a_pass_is_asked_at_c_s_rate() {
-    let sim = simulate(|_| 0, &[], 10_000);
+fn a_meter_faster_than_the_wait_is_asked_at_c_s_rate() {
+    let sim = simulate(Meter::Queues, |_| 0, &[], (0, 0), 10_000);
     // One per 500 ms of quiet and 47 ms of bytes, and no expiry.
     assert!(sim.sent >= 17, "{sim:?}");
     assert!(sim.most_owed <= 1, "{sim:?}");
 }
 
+fn silence(base: Instant) -> Silence {
+    Silence::new(Duration::from_secs(10), Duration::from_secs(600), base)
+}
+
+/// With no sample yet, a `--samples` capture has nothing that says a meter is there.
 #[test]
-fn the_silence_bound_runs_from_the_last_sample() {
+fn with_no_sample_yet_only_samples_fails_at_10_s() {
     let base = Instant::now();
-    let bound = Duration::from_secs(10);
-    let mut s = Silence::new(bound, base);
-    // Many bounds on a moved clock, with samples between.
+    let ten = Duration::from_secs(10);
+    let mut s = silence(base);
+    assert_eq!(s.check(true, at(base, 9_999)), None);
+    assert_eq!(s.check(true, at(base, 10_000)), Some(Outage::Fail(Silent::NoBytes, ten)));
+    let mut s = silence(base);
+    s.bytes();
+    assert_eq!(s.check(true, at(base, 10_000)), Some(Outage::Fail(Silent::NoPacket, ten)));
+}
+
+/// Many bounds on a moved clock, with samples between.
+#[test]
+fn a_sample_starts_the_silence_again() {
+    let base = Instant::now();
+    let mut s = silence(base);
     for i in 0..10u64 {
         let t = i * 9_000;
-        s.sample(at(base, t));
-        assert_eq!(s.verdict(at(base, t + 9_000)), None);
+        assert_eq!(s.sample(at(base, t)), None);
+        assert_eq!(s.check(true, at(base, t + 9_000)), None);
     }
     let last = 9 * 9_000;
-    assert_eq!(s.verdict(at(base, last + 9_999)), None);
-    assert_eq!(s.verdict(at(base, last + 10_000)), Some(Silent::NoBytes));
+    assert_eq!(s.check(true, at(base, last + 9_999)), None);
+    assert_eq!(s.check(true, at(base, last + 10_000)), Some(Outage::Warn(Silent::NoBytes)));
 }
 
 #[test]
-fn bytes_do_not_reset_the_bound_and_change_the_verdict() {
+fn after_a_sample_only_samples_warns_once_and_fails_at_10_minutes() {
     let base = Instant::now();
-    let mut s = Silence::new(Duration::from_secs(10), base);
-    for t in 0..100 {
-        s.bytes();
-        assert_eq!(s.verdict(at(base, t * 99)), None);
+    let mut s = silence(base);
+    s.sample(base);
+    assert_eq!(s.check(true, at(base, 9_999)), None);
+    assert_eq!(s.check(true, at(base, 10_000)), Some(Outage::Warn(Silent::NoBytes)));
+    assert_eq!(s.check(true, at(base, 10_500)), None);
+    assert_eq!(s.check(true, at(base, 599_999)), None);
+    assert_eq!(
+        s.check(true, at(base, 600_000)),
+        Some(Outage::Fail(Silent::NoBytes, Duration::from_secs(600)))
+    );
+}
+
+/// `--continuous` and `--time` get the same mark, and no end.
+#[test]
+fn with_another_way_to_end_it_only_warns() {
+    let base = Instant::now();
+    let mut s = silence(base);
+    assert_eq!(s.check(false, at(base, 9_999)), None);
+    assert_eq!(s.check(false, at(base, 10_000)), Some(Outage::Warn(Silent::NoBytes)));
+    assert_eq!(s.check(false, at(base, 10_500)), None);
+    assert_eq!(s.check(false, at(base, 100_000_000)), None);
+}
+
+#[test]
+fn a_sample_after_the_warning_says_how_long_and_arms_the_next() {
+    let base = Instant::now();
+    let mut s = silence(base);
+    s.sample(base);
+    s.bytes();
+    assert_eq!(s.check(false, at(base, 10_000)), Some(Outage::Warn(Silent::NoPacket)));
+    assert_eq!(s.sample(at(base, 15_000)), Some(Duration::from_secs(15)));
+    assert_eq!(s.sample(at(base, 16_000)), None);
+    assert_eq!(s.check(false, at(base, 26_000)), Some(Outage::Warn(Silent::NoBytes)));
+}
+
+#[test]
+fn the_words_of_an_outage_are_these() {
+    let ten = Duration::from_secs(10);
+    assert_eq!(
+        outage_warning(Silent::NoBytes, ten),
+        "No answer from the thermometer for 10 s; still asking."
+    );
+    assert_eq!(
+        outage_warning(Silent::NoPacket, ten),
+        "No usable answer from the thermometer for 10 s: bytes came, but no whole packet; still \
+         asking."
+    );
+    assert_eq!(back_line(ten), "The thermometer answers again, after 10 s with no sample.");
+    assert_eq!(
+        outage_failure(Silent::NoBytes, ten),
+        (
+            "No answer from the thermometer for 10 s.".to_owned(),
+            "no answer from the thermometer for 10 s".to_owned()
+        )
+    );
+    assert_eq!(
+        outage_failure(Silent::NoPacket, ten),
+        (
+            "No usable answer from the thermometer for 10 s: bytes came, but no whole packet."
+                .to_owned(),
+            "no usable answer from the thermometer for 10 s".to_owned()
+        )
+    );
+    assert_eq!(
+        burst_warning(46),
+        "A reply of 46 bytes, where 45 were due: this sample may be wrong."
+    );
+    assert_eq!(bursts_line(3), "3 replies of this capture were of the wrong length.");
+}
+
+/// The review's replay of damaged replies: what a burst alone gives, on the buffer as a
+/// capture settles it. `--nocapture` prints the rates.
+mod replay {
+    use super::protocol::{Reading, parse};
+    use super::*;
+
+    /// Replies per class and kind of damage, each second one damaged.
+    const REPLIES: u32 = 4000;
+
+    struct Rng(u64);
+    impl Rng {
+        fn below(&mut self, m: u64) -> u64 {
+            let mut x = self.0;
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            self.0 = x;
+            x % m
+        }
     }
-    assert_eq!(s.verdict(at(base, 10_000)), Some(Silent::NoPacket));
-    // A sample starts it again, and says nothing has come since.
-    s.sample(at(base, 10_000));
-    assert_eq!(s.verdict(at(base, 20_000)), Some(Silent::NoBytes));
+
+    #[derive(Clone, Copy, Debug)]
+    enum Class {
+        Room,
+        Hot,
+        Mixed,
+        Document,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Damage {
+        LostByte,
+        LostRun,
+        Inserted,
+        Inserted02,
+        Ahead,
+        Ahead02,
+        Flip,
+        Cut,
+    }
+
+    fn reply(r: &mut Rng, class: Class) -> [u8; PACKET_SIZE] {
+        let mut p = [0u8; PACKET_SIZE];
+        p[..7].copy_from_slice(&[2, 0x80, 0x80, 1, 2, 2, 2]);
+        p[44] = 3;
+        let v;
+        let mut pick = |from: u64, span: u64| i16::try_from(from + r.below(span)).unwrap();
+        match class {
+            Class::Room => v = [pick(150, 200), pick(150, 200), pick(150, 200), pick(150, 200)],
+            Class::Hot => {
+                v = [pick(200, 1000), pick(200, 1000), pick(200, 1000), pick(200, 1000)];
+                p[43] = 0x0f;
+            }
+            Class::Mixed => {
+                v = [pick(200, 800), pick(200, 800), pick(150, 800), pick(150, 800)];
+                p[43] = 3;
+            }
+            Class::Document => {
+                v = [pick(150, 200), 0x7fff, 0x7fff, 0x7fff];
+                p[39] = 0x0e;
+                p[43] = 0x0e;
+            }
+        }
+        for (i, value) in v.iter().enumerate() {
+            p[7 + 2 * i..9 + 2 * i].copy_from_slice(&value.to_be_bytes());
+        }
+        p
+    }
+
+    fn damage(r: &mut Rng, kind: Damage, p: &[u8]) -> Vec<u8> {
+        let mut b = p.to_vec();
+        match kind {
+            Damage::LostByte => {
+                b.remove(r.below(45) as usize);
+            }
+            Damage::LostRun => {
+                let at = r.below(40) as usize;
+                let end = (at + 1 + r.below(20) as usize).min(b.len());
+                b.drain(at..end);
+            }
+            Damage::Inserted => b.insert(r.below(46) as usize, r.below(256) as u8),
+            Damage::Inserted02 => b.insert(r.below(46) as usize, 2),
+            Damage::Ahead => {
+                for _ in 0..=r.below(3) {
+                    b.insert(0, r.below(256) as u8);
+                }
+            }
+            Damage::Ahead02 => b.insert(0, 2),
+            Damage::Flip => b[r.below(45) as usize] ^= 1 << r.below(8),
+            Damage::Cut => b = b[r.below(44) as usize + 1..].to_vec(),
+        }
+        b
+    }
+
+    fn key(reading: &Reading) -> ([u32; 4], bool) {
+        (reading.temperatures.map(|t| t.value.to_bits()), reading.unit == Unit::Celsius)
+    }
+
+    #[test]
+    fn framing_damage_is_put_right_or_warned_of() {
+        println!("class damage | damaged | wrong samples | of them warned of | good lost");
+        for class in [Class::Room, Class::Hot, Class::Mixed, Class::Document] {
+            for kind in [
+                Damage::LostByte,
+                Damage::LostRun,
+                Damage::Inserted,
+                Damage::Inserted02,
+                Damage::Ahead,
+                Damage::Ahead02,
+                Damage::Flip,
+                Damage::Cut,
+            ] {
+                let mut r = Rng(0x1234_5678_9abc_def1 ^ (class as u64) << 8 ^ (kind as u64) << 16);
+                let (mut wrong, mut warned, mut lost) = (0u32, 0u32, 0u32);
+                for i in 0..REPLIES {
+                    let good = reply(&mut r, class);
+                    let want = key(&parse(&good));
+                    let damaged = i % 2 == 0;
+                    let wire = if damaged { damage(&mut r, kind, &good) } else { good.to_vec() };
+                    let mut b = Buffer::default();
+                    b.room()[..wire.len()].copy_from_slice(&wire);
+                    b.filled(wire.len());
+                    let mut got_good = false;
+                    while let Some(p) = b.next_packet(true) {
+                        if key(&parse(&p)) == want {
+                            got_good = true;
+                        } else {
+                            wrong += 1;
+                            warned += u32::from(wire.len() % PACKET_SIZE != 0);
+                        }
+                    }
+                    lost += u32::from(!damaged && !got_good);
+                }
+                println!("{class:?} {kind:?} | {} | {wrong} | {warned} | {lost}", REPLIES / 2);
+                assert_eq!(lost, 0, "{class:?} {kind:?}");
+                if kind == Damage::Ahead02 || kind == Damage::Ahead && wrong > 0 {
+                    assert_eq!(wrong, 0, "{class:?} {kind:?}");
+                }
+                // A flip keeps its length, and nothing can tell it.
+                if kind != Damage::Flip {
+                    assert_eq!(warned, wrong, "{class:?} {kind:?}");
+                }
+            }
+        }
+    }
 }
 
 #[test]
