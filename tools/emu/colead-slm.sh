@@ -4,6 +4,7 @@
 EMU_MODEL=colead-slm
 EMU_CDC=1
 EMU_DRIVER=colead-slm
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=colead-slm
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -26,13 +27,22 @@ slm_sweep() {
     done
     emu_options period=5 burst=$# packet=$_list
     # shellcheck disable=SC2086
-    emu_case "$_name" $SLM_FLAGS --filter "$SLM_FILTER" -- -d $C $SLM_ARGS --samples $_samples
+    emu_case "$_name" $SLM_FLAGS ${SLM_WHY:+--oracle-differs "$SLM_WHY"} --filter "$SLM_FILTER" -- -d $C $SLM_ARGS --samples $_samples
 }
 
 emu_cases() {
     emu_conns
     # The driver's own lines at any level, without the time.
-    D='s/^sr: \[[^]]*\] /sr: /; /^sr: colead-slm: /!d; s/^sr: //'
+    D='s/^oxrok: [a-z]+: oxrok::drivers::colead_slm[a-z_:]*: /sr: colead-slm: /; s/^sr: \[[^]]*\] /sr: /; /^sr: colead-slm: /!d; s/^sr: //'
+    NO_END="protocol.c:177-180 looks at the limits behind a level alone, so a meter that sends none keeps a capture open for ever; oxrok ends a time limit on time"
+    NO_BOUND="protocol.c:177-180 looks at the limits behind a level alone, so a sample limit on a meter that sends none is open for ever; oxrok ends it after 15 s, with an error"
+    HUP_BUG="protocol.c:199-201 takes a hung up port for a timeout, as revents is not exactly G_IO_IN, and so never ends; oxrok ends the capture with an error"
+    SLM_WHY=
+    # What oxrok adds to the error sigrok-cli names, exactly those words.
+    A='s/^(Failed to set device option .limit_samples.: invalid argument): it cannot be 0\.$/\1./'
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    CHAR_DIGIT="protocol.c:70-73 reads the digit as char, signed on this platform, so 0xff is -1 and the level is -1024.7; where char is unsigned it is passed over, as oxrok does. No meter sends one"
+    CHAR_SUM="protocol.c:63 compares a masked sum with a char, signed on this platform, so a sum of 0x80 or more never matches and the record is refused; where char is unsigned it matches, as in oxrok. No meter's sum comes to that"
     SLM_FLAGS=
     SLM_ARGS=
     SLM_FILTER=
@@ -56,7 +66,7 @@ emu_cases() {
     emu_case "set limit_samples" --no-output -- -d $C -c limit_samples=3 --set
     emu_case "set limit_time" --no-output -- -d $C -c limit_time=300 --set
     emu_case "frames has no key" --expect-fail --stderr -- -d $C --frames 1
-    emu_case "samples 0 refused" --expect-fail --stderr -- -d $C -c limit_samples=0 --set
+    emu_case "samples 0 refused" --expect-fail --stderr --filter "$A" -- -d $C -c limit_samples=0 --set
 
     # Captures. One announcement each, then silence, so that no count here
     # depends on how long a tool listens.
@@ -65,6 +75,7 @@ emu_cases() {
     emu_options period=5 burst=3
     emu_case "three samples" -- -d $C --samples 3
     emu_case "three samples csv" -- -d $C --samples 3 -O csv:header=false:time=false
+    emu_options period=5 burst=2
     emu_case "samples from limit_samples" -- -d $C -c limit_samples=2 --time 10s
     emu_case "samples before a long time limit" -- -d $C --samples 2 --time 10s
     # C looks at the time only behind a sample, so the first ends this.
@@ -99,8 +110,13 @@ emu_cases() {
     slm_sweep "bytes above nine are passed over" 2 "$(slm 0x10 11 12 7 15 5 1)" "$(slm 0x10 16 32 7 5 3 1)"
     # C reads its buffer as char, signed here. A digit with the top bit goes in
     # as a negative one, and a sum with the top bit never matches.
+    SLM_WHY=$CHAR_DIGIT
     slm_sweep "a digit with the top bit" 1 "$(slm 0x10 255 255 7 5 3 1)"
-    slm_sweep "a sum with the top bit" 1 "$(slm 0x10 96 10 7 5 3 1)" "$(slm 0x10 10 10 8 0 0 1)"
+    SLM_WHY=
+    # C needs the second announcement and oxrok doesn't, so it comes behind
+    # oxrok's record or not, as the time to its close has it.
+    emu_options period=5 burst=2 "packet=$(slm 0x10 96 10 7 5 3 1),$(slm 0x10 10 10 8 0 0 1)"
+    emu_case "a sum with the top bit" --oracle-differs "$CHAR_SUM" --tx-filter 's/^bulk_in 82 11 -> (.*)10$/bulk_in 82 10 -> \1/' -- -d $C --samples 1
 
     # What is dropped does not count, and the state goes back to waiting.
     SLM_FLAGS="--stderr"
@@ -152,18 +168,27 @@ emu_cases() {
     emu_options period=20 burst=3 late=1:30
     emu_case "a late reply after an announcement is lost" -- -d $C --samples 1
 
-    # What C has no end for: its limits are looked at behind a sample alone
+    # What C has no end for: its limits are looked at behind a level alone
     # (protocol.c:177-180), and a read of the hung up port is a timeout
-    # (protocol.c:199-201).
+    # (protocol.c:199-201). 15 s is the bound's own time, so this case takes it,
+    # and C the timeout's 18 s.
     emu_options burst=0
-    emu_case "silent with samples" --hangs --timeout 2 --no-output -- -d $C --samples 1
-    emu_case "silent with time" --hangs --timeout 2 --no-output -- -d $C --time 300ms
+    emu_case "silent with samples" --oracle-bug "$NO_BOUND" --oracle-hangs --oxrok-fails "no bytes from the meter for 15 s" --timeout 18 --no-output -- -d $C --samples 1
+    emu_case "silent with time" --oracle-bug "$NO_END" --oracle-hangs --timeout 2 --no-output -- -d $C --time 300ms
     emu_options period=5 burst=1 packet=-
-    emu_case "no reply with time" --hangs --timeout 2 --no-output -- -d $C --time 300ms
+    emu_case "no reply with time" --oracle-bug "$NO_END" --oracle-hangs --timeout 2 --no-output -- -d $C --time 300ms
     emu_options period=5 burst=2
-    emu_case "wrong rate with time" --hangs --timeout 2 --no-output -- -d $C:serialcomm=9600/8n1 --time 300ms
-    emu_options period=5 burst=0
-    emu_case "unplug in a capture" --hangs --unplug model --timeout 2 --no-output -- -d $C --samples 2
+    emu_case "wrong rate with time" --oracle-bug "$NO_END" --oracle-hangs --timeout 2 --no-output -- -d $C:serialcomm=9600/8n1 --time 300ms
+    # No read comes back empty while these flow, so only the grace ends it. A free
+    # stream, with its count of bytes taken out.
+    emu_options period=5 announce=ff
+    emu_case "time on a flood of no level" --oracle-bug "$NO_END" --oracle-hangs --timeout 3 --no-output --tx-filter 's/^bulk_in 82 [0-9]+ -> (ff)*$/bulk_in 82, some ff/' -- -d $C --time 300ms
+    # The mark is a period after the last, and 1 s outlasts a stall that would
+    # leave the record unread at the hangup.
+    emu_options period=50 burst=1
+    emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 8 -- -d $C --samples 2
+    emu_case "interrupt with samples" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $C --samples 2
+    emu_case "interrupt continuous" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $C --continuous
 
     # The port's own requests failing: both tools run on. With no line coding
     # the tty stays at 9600.
