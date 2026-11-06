@@ -1,0 +1,23 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Rigol DP831A 01.02.03 [S/N: EMU0001] with 9 channels: V1 I1 P1 V2 I2 P2 V3 I3 P3
+Channel groups:
+    1: channels V1 I1 P1
+    2: channels V2 I2 P2
+    3: channels V3 I3 P3
+Supported configuration options on channel group 3:
+    regulation: UR (current)
+    ovp_enabled: on, off (current)
+    ovp_active: on, off (current)
+    ovp_threshold: 0.000000 (current)
+    ocp_enabled: on, off (current)
+    ocp_active: on, off (current)
+    ocp_threshold: 2.000000 (current)
+    voltage: 0.001000 (current)
+    voltage_target: 0.000000, -30.000000, 0.001000
+    current: 0.002000 (current)
+    current_limit: 0.000000, 2.000000 (current), 0.000100
+    enabled: on, off (current)

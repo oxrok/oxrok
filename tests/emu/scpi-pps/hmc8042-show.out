@@ -1,0 +1,13 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Rohde&Schwarz HMC8042 01.02.03 [S/N: EMU0001] with 4 channels: V1 I1 V2 I2
+Channel groups:
+    1: channels V1 I1
+    2: channels V2 I2
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

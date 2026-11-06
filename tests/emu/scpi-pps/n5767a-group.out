@@ -1,0 +1,16 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Agilent N5767A 01.02.03 [S/N: EMU0001] with 2 channels: V1 I1
+Channel groups:
+    1: channels V1 I1
+Supported configuration options on channel group 1:
+    ovp_threshold: 60.000000 (current)
+    ocp_enabled: on, off (current)
+    ocp_threshold: 1.500000 (current)
+    voltage: 12.001000 (current)
+    voltage_target: 0.000000, 60.000000, 0.007200
+    current: 1.502000 (current)
+    enabled: on (current), off

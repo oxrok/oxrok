@@ -1,0 +1,20 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - HP HP6634A B01.B01 with 2 channels: V1 I1
+Channel groups:
+    1: channels V1 I1
+Supported configuration options on channel group 1:
+    enabled: on, off
+    voltage: 0.001000 (current)
+    current: 0.002000 (current)
+    voltage_target: 0.000000, 102.380000, 0.025000
+    current_limit: 0.000000, 1.023800, 0.000250
+    ovp_active: on, off (current)
+    ovp_threshold: 0.000000, 110.000000, 0.500000
+    ocp_enabled: on, off
+    ocp_active: on, off (current)
+    otp_active: on, off (current)
+    regulation:  (current)
