@@ -229,3 +229,23 @@ fn another_driver_scans_over_tcp() {
     );
     assert_eq!(seen(&log)[0], b"*IDN?");
 }
+
+/// A SCPI resource that won't open finds nothing, and says why.
+#[test]
+fn a_scpi_resource_that_will_not_open_says_why() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+    let port = listener.local_addr().expect("an address").port();
+    drop(listener);
+    let conn = format!("tcp-raw/127.0.0.1/{port}");
+    for (conn, says) in [
+        (conn.as_str(), format!("Couldn't open SCPI device {conn}: ")),
+        ("usbtmc/9.9", "Couldn't open SCPI device usbtmc/9.9: ".to_owned()),
+        ("/dev/no-such-tty", "Couldn't open SCPI device /dev/no-such-tty: ".to_owned()),
+    ] {
+        let spec = format!("rigol-ds:conn={conn}");
+        let out = oxrok(&["-d", &spec, "--scan"]);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{conn}: {err}");
+        assert!(err.contains(&says), "{conn}: {err}");
+    }
+}

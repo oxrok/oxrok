@@ -106,7 +106,11 @@ impl ScpiTransport for Serial {
         Ok(())
     }
 
+    /// Nothing when it is open: a second open of a tty is refused.
     fn reopen(&mut self) -> Result<()> {
+        if self.port.is_some() {
+            return Ok(());
+        }
         match &self.open {
             How::Params(params) => {
                 self.port = Some(crate::serial::open(&self.resource, *params)?);

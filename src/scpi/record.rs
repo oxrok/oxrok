@@ -280,6 +280,10 @@ impl ScpiTransport for Recorder {
         self.inner.read_complete()
     }
 
+    fn tags_answers(&self) -> bool {
+        self.inner.tags_answers()
+    }
+
     fn close(&mut self) -> Result<()> {
         self.inner.close()
     }

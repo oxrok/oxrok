@@ -89,8 +89,14 @@ pub(crate) fn open(info: &UsbDeviceInfo) -> Result<Box<dyn Transport>> {
         .find(|d| d.bus_number() == bus && d.address() == address)
         .ok_or_else(|| Error::device("device is gone"))?;
     let handle = device.open().map_err(map)?;
-    let _ = handle.set_auto_detach_kernel_driver(true);
-    Ok(Box::new(Rusb { info: info.clone(), device, handle: Arc::new(handle), claimed: Vec::new() }))
+    Ok(Box::new(Rusb {
+        info: info.clone(),
+        device,
+        handle: Arc::new(handle),
+        claimed: Vec::new(),
+        detached: Vec::new(),
+        leave_detached: false,
+    }))
 }
 
 struct Rusb {
@@ -98,6 +104,13 @@ struct Rusb {
     device: rusb::Device<rusb::GlobalContext>,
     handle: Arc<rusb::DeviceHandle<rusb::GlobalContext>>,
     claimed: Vec<u8>,
+    /// What a claim detached, which its release gives back. By hand and not libusb's
+    /// auto-detach: that attaches a driver at each release, detached or not
+    /// (`op_release_interface`), which binds one that wasn't there, and its probe
+    /// lands among the transactions.
+    detached: Vec<u8>,
+    /// [`Transport::detach_kernel_driver`] was asked: it stays as it is left.
+    leave_detached: bool,
 }
 
 impl Transport for Rusb {
@@ -128,9 +141,7 @@ impl Transport for Rusb {
     }
 
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
-        // libusb's op_release_interface attaches a driver on release
-        // whenever the handle auto-detaches, detached or not.
-        let _ = self.handle.set_auto_detach_kernel_driver(false);
+        self.leave_detached = true;
         // Only an answer of "yes" detaches, as the C's `== 1`: usbfs
         // (another program) counts as none, and an error as none too.
         if self.handle.kernel_driver_active(interface).unwrap_or(false) {
@@ -147,6 +158,10 @@ impl Transport for Rusb {
         if self.claimed.contains(&interface) {
             return Ok(());
         }
+        if !self.leave_detached && self.handle.kernel_driver_active(interface).unwrap_or(false) {
+            self.handle.detach_kernel_driver(interface).map_err(map)?;
+            self.detached.push(interface);
+        }
         self.handle.claim_interface(interface).map_err(map)?;
         self.claimed.push(interface);
         Ok(())
@@ -156,6 +171,11 @@ impl Transport for Rusb {
         if let Some(pos) = self.claimed.iter().position(|&i| i == interface) {
             self.claimed.remove(pos);
             self.handle.release_interface(interface).map_err(map)?;
+        }
+        if let Some(pos) = self.detached.iter().position(|&i| i == interface) {
+            self.detached.remove(pos);
+            // As libusb's own: the driver may well not want it back.
+            let _ = self.handle.attach_kernel_driver(interface);
         }
         Ok(())
     }

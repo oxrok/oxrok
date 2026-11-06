@@ -70,6 +70,8 @@ pub fn list() -> Result<Vec<UsbDeviceInfo>> {
 /// An open USBTMC device.
 pub struct Usbtmc {
     usb: Option<Box<dyn Transport>>,
+    /// The interface is ours: an open that has not been closed.
+    claimed: bool,
     /// Where it opens again; a replay's transport has no such place.
     info: Option<UsbDeviceInfo>,
     resource: String,
@@ -104,6 +106,7 @@ impl Usbtmc {
     pub fn from_transport(usb: Box<dyn Transport>, resource: String) -> Result<Usbtmc> {
         let mut dev = Usbtmc {
             usb: Some(usb),
+            claimed: false,
             info: None,
             resource,
             interface: 0,
@@ -169,6 +172,7 @@ impl Usbtmc {
                 caps[15]
             );
         }
+        self.claimed = true;
         self.interface = interface;
         self.bulk_in = bulk_in;
         self.bulk_out = bulk_out;
@@ -314,9 +318,13 @@ impl ScpiTransport for Usbtmc {
             && self.attributes & EOM != 0
     }
 
+    fn tags_answers(&self) -> bool {
+        true
+    }
+
     /// `bTag` goes on from where it was, as an instance's does in libsigrok.
     fn close(&mut self) -> Result<()> {
-        if self.usb.is_none() {
+        if !std::mem::take(&mut self.claimed) {
             return Ok(());
         }
         if self.remote {
@@ -331,7 +339,11 @@ impl ScpiTransport for Usbtmc {
         released
     }
 
+    /// Nothing when it is open.
     fn reopen(&mut self) -> Result<()> {
+        if self.claimed {
+            return Ok(());
+        }
         if self.usb.is_none()
             && let Some(info) = &self.info
         {

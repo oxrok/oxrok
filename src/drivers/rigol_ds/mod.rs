@@ -67,6 +67,9 @@ static ANALOG_OPTIONS: [OptionDesc; 4] = [
 const READ_CHUNK: usize = 32 * 1024;
 /// Samples per `:WAV:START`/`:WAV:STOP` window on the V4 protocol.
 const BLOCK_SAMPLES: usize = 30_000;
+/// The pause after a short block, and how long those go on before a word.
+const SHORT_PAUSE: Duration = Duration::from_millis(10);
+const SHORT_WARN: Duration = Duration::from_secs(5);
 /// Digital inputs on the models that have them.
 const DIGITAL_CHANNELS: usize = 16;
 
@@ -123,8 +126,9 @@ impl Driver for RigolDsDriver {
                 Ok(id) => id,
                 Err(e) => {
                     log::info!("Couldn't get IDN response, retrying: {e}");
-                    scpi.close()?;
-                    scpi.reopen()?;
+                    // As C, whose results of these two go unread: the question says.
+                    let _ = scpi.close();
+                    let _ = scpi.reopen();
                     match scpi.hw_id() {
                         Ok(id) => id,
                         Err(e) => {
@@ -138,8 +142,9 @@ impl Driver for RigolDsDriver {
                 log::info!("{} {} is not a supported scope.", id.manufacturer, id.model);
                 return Ok(None);
             };
-            // The probe's connection ends with it; the device's open makes one.
-            scpi.close()?;
+            // The probe's connection ends with it; the device's open makes one. A
+            // close that fails loses no device, as in C.
+            let _ = scpi.close();
             Ok(Some(RigolDevice::new(model, &id, scpi)))
         })?;
         Ok(found.into_iter().map(|d| Box::new(d) as Box<dyn Device>).collect())
@@ -269,7 +274,7 @@ impl RigolDevice {
 
     fn config_set(&self, command: &str) -> Result<()> {
         let protocol = self.protocol();
-        self.with_scpi(|s| config_set(s, protocol, command))
+        self.with_scpi(|s| config_set(s, protocol, command, || true))
     }
 
     /// The analog channel of a group name, `CH1` to `CH4`.
@@ -352,13 +357,18 @@ impl RigolDevice {
 }
 
 /// Sends a setting; the DS1000 needs a pause instead of `*OPC?`.
-fn config_set(scpi: &mut Scpi, protocol: Protocol, command: &str) -> Result<()> {
+fn config_set(
+    scpi: &mut Scpi,
+    protocol: Protocol,
+    command: &str,
+    go_on: impl Fn() -> bool,
+) -> Result<()> {
     scpi.send(command)?;
     if protocol == Protocol::V2 {
         std::thread::sleep(Duration::from_millis(100));
         Ok(())
     } else {
-        scpi.get_opc()
+        scpi.get_opc_while(go_on)
     }
 }
 
@@ -658,14 +668,15 @@ impl Device for RigolDevice {
         }
         self.state.sample_rate = 0.0;
         let shared = Arc::new(Mutex::new(self.state.clone()));
+        let stop = Arc::new(AtomicBool::new(false));
         let acq = Acquisition {
             model: self.model,
             format: self.format,
             channels: enabled,
             state: Arc::clone(&shared),
+            stop: Arc::clone(&stop),
         };
         let slot = Arc::clone(&self.scpi);
-        let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name("rigol-ds acquisition".to_owned())
@@ -705,6 +716,7 @@ struct Acquisition {
     format: Format,
     channels: Vec<Channel>,
     state: Arc<Mutex<State>>,
+    stop: Arc<AtomicBool>,
 }
 
 /// What a frame waits for after it is started.
@@ -729,7 +741,7 @@ impl Acquisition {
     }
 
     fn set(&self, scpi: &mut Scpi, command: &str) -> Result<()> {
-        config_set(scpi, self.protocol(), command)
+        config_set(scpi, self.protocol(), command, || !self.stop.load(Ordering::SeqCst))
     }
 
     fn enabled_list(&self) -> Vec<Channel> {
@@ -875,6 +887,8 @@ impl Acquisition {
 
         let mut vertical = vec![Vertical::default(); self.model.analog_channels];
         let mut num_frames = 0u64;
+        let mut short_since = None;
+        let mut warned_short = false;
         let mut limit_frames = st.limit_frames;
         if num_frames_segmented != 0 && num_frames_segmented < limit_frames {
             limit_frames = num_frames_segmented;
@@ -1020,8 +1034,17 @@ impl Acquisition {
                             log::debug!("Discarding a short block of {len} bytes.");
                             let mut junk = vec![0u8; len + 1];
                             read_exact(scpi, &mut junk)?;
+                            // As C, this goes on until a whole one comes or a stop, but
+                            // not flat out, and it says so.
+                            let since = *short_since.get_or_insert_with(Instant::now);
+                            if !warned_short && since.elapsed() >= SHORT_WARN {
+                                warned_short = true;
+                                log::warn!("The scope sends only short blocks; still asking.");
+                            }
+                            std::thread::sleep(SHORT_PAUSE);
                             continue;
                         }
+                        short_since = None;
                         len
                     } else {
                         expected
