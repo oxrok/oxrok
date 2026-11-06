@@ -2588,6 +2588,36 @@ block less than it reads, and which is right is unknown. History:
 libsigrok ae87e02f added the memory read, and a4be2b32 fixed
 `send_command` with a user's `Tested-By`.
 
+## Devantech relay boards (devantech-eth008)
+
+ETH002, ETH008, ETH484 and ETH8020, plus the ETH1610, WIFI002, WIFI008,
+WIFI484 and WIFI8020 on the word of libsigrok's table alone
+(`devantech-eth008`): ported and emulated on the CDC-ACM shell, model
+`devantech-eth008`, 117 cases: 108 full, 5 `--oracle-bug`, 3
+`--oracle-differs`, 1 library. gcov 88.2% of the driver. Never on
+hardware. These are full under a preload, on a tty; TCP was compared by
+hand only. The boards are reached over TCP, `conn=tcp-raw/HOST/17494`,
+which the emulator can't carry, and no board with this command set on a
+serial port is known, so the model is the same bytes on a tty with a
+test id. The 108 compare requests, parsing, tables and messages on a
+path no stock C reaches: `api.c:105` opens with no flags (since the
+driver's first commit, 8712c783, 2023-09-24), which is read only, and
+the first write fails with EBADF, on any libserialport. Every case but
+the three named `stock` runs sigrok-cli under a preload that makes that
+mode read/write, disables the exclusive open that would refuse
+`dev_open`'s second open, and puts a 250 ms floor under the 20 ms read;
+the C driver is unmodified. The silent and short cases show C failing
+with `data is invalid`, where on TCP its `recv` (`tcp.c:362`) hangs: a
+silent scan was still running at 40 s. oxrok's side of TCP is held by
+`tests/tcp_raw_cli.rs` and unit tests on sockets. After a request with
+no whole answer, oxrok connects again on TCP, as a new connection can't
+receive an old answer (C's own remedy, `protocol.c:61`), and waits for
+300 ms of quiet on a tty. A byte too many is dropped by a purge before
+each request, where it shifts every later answer in C. `-g AIn --show`
+dies on a GLib critical in C (`api.c:279` gives a float key a uint32).
+Sources: the vendor's ETH008-B, ETH484-B and ETH8020-B documents and its
+Python module. No firmware source found.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

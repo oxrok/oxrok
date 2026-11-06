@@ -298,6 +298,26 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- `serial_open(ser, 0)` opens read only on libserialport and is ignored
+  on TCP, so a driver tested over TCP can be dead on a tty. Check the
+  flags of every `serial_open`.
+- `sr_tcp_read_bytes` is a blocking `recv`, so a read's timeout does
+  nothing over TCP while the peer stays connected. A bound added in a
+  port brings in late answers C can't have: over TCP, connect again
+  instead of settling, as a new connection can't receive an old answer.
+  A held answer on a socket tests this with no clock.
+- A set whose answer didn't come may have taken effect. Say so, and let
+  the next get find out.
+- A stop-and-continue signal ends a socket call, and `SO_SNDTIMEO`
+  starts again at the next one, so a bound counted per call never fires
+  under repeated stalls. Count from the last progress. Run stalls as
+  well as a sleep shim: only they showed this.
+- `sp_blocking_read` can be floored by a preload, for a C driver with a
+  very short serial read. A `libsigrok-run` case finds its library
+  through `SIGROK_CLI`, so a wrapper breaks it: put the real binary back
+  for that case and pass the preload with `--oracle-env`.
+- An emulated "full" case on a path no stock C reaches compares requests
+  and messages, not what C does on its real transport. Say so.
 - A bound on silence is set after the send returns, not before: a send a
   client keeps waiting is no silence of the device's, and a paused pager
   fills a queue of 64 in milliseconds. A test of a bound should span

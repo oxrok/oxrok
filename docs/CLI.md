@@ -682,6 +682,27 @@ Deliberate, and kept small:
   requests on the wire. A status ending in 0x10 is read, with a warning.
   A silent meter ends a `--samples` or memory capture after 5 s, and a
   port that is gone ends a capture at once.
+- `devantech-eth008` works on a tty, where sigrok-cli opens read only
+  (`api.c:105`) and finds nothing. oxrok sets 9600/8n1 there and takes
+  no `serialcomm`, so a user can't change the line; sigrok-cli leaves it
+  as it finds it.
+- `devantech-eth008` ends a request after 5 s on TCP and 1 s on a tty.
+  Over TCP sigrok-cli's `recv` never gives up, so a slow board works
+  there at any latency and a silent one hangs it.
+- `devantech-eth008`: `-g AIn --show` prints the value; sigrok-cli exits
+  on a GLib critical. `--get voltage` is the same on both.
+- `devantech-eth008` drops a byte too many before the next request;
+  sigrok-cli reads every later answer one byte along.
+- `devantech-eth008` refuses `enabled=perhaps`, and `serialcomm=` by
+  name with exit 1; sigrok-cli turns all relays off, and logs the option
+  and finds nothing with exit 0.
+- `conn=tcp-raw/HOST/PORT` works for any serial driver, numeric port
+  only. A read keeps to its timeout, so `korad-kaxxxxp`'s scan finishes
+  where sigrok-cli was still running at 40 s; a peer that closes or
+  resets reports "device disconnected"; a write has a 5 s bound on room;
+  a drain succeeds, where C's `SR_ERR_NA` fails openbench-logic-sniffer
+  and raspberrypi-pico; a connect has 5 s per address, and name lookup
+  has no bound.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

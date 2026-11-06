@@ -68,6 +68,7 @@ Emulator and replay only, never run on hardware:
 | `arachnid-labs-re-load-pro` | 131 | 91.8% |
 | `atten-pps3203` | 133 | 90.5% |
 | `chronovu-la` | 52 | 87.0% |
+| `devantech-eth008` | 117 | 88.2% |
 | `dreamsourcelab-dslogic` | 94 | 90.2% |
 | `fluke-dmm` | 159 | 98.6% |
 | `ftdi-la` | 46 | 86.4% |
