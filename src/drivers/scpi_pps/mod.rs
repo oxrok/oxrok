@@ -58,7 +58,7 @@
 //!   is an error, where C goes on with a variable it never set (`api.c:526` and on).
 //! - **NaN and infinities** are refused before the wire. C sends `:SOUR:VOLT nan`.
 //! - **A regulation query that fails** is an error. C reads the variant it never got
-//!   (`api.c:514` and on).
+//!   (`api.c:583`), and sigrok-cli dies of SIGSEGV.
 //! - **A capture that hears nothing** is bounded: see [`protocol::Watch`]. C asks for
 //!   ever, or blocks for ever over TCP, and with a failed read returns ahead of its
 //!   limit check (`protocol.c:97-98`), so even a time limit doesn't end it. A time

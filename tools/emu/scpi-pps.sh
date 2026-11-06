@@ -23,8 +23,9 @@ emu_cases() {
     EMPTY="sr_atod_ascii takes an empty answer for 0 (strutil.c:317-319, endptr at the NUL): C reads 0 V where the instrument said nothing; oxrok has no reading"
     HEX="g_ascii_strtod reads 0x10 as 16 and nan as a number, so C takes them for readings; a SCPI number has neither form and oxrok has no reading"
     STATUS_EMPTY="sr_atoi takes an empty answer for 0 (strutil.c), so C says UR, unregulated, of an answer with nothing in it; oxrok says it's no status"
-    STATUS_JUNK="sr_atoi's failure is dropped, and api.c:526 goes on with reg never set, so C answers from the stack, and sigrok-cli may die; oxrok says it's no status"
-    NO_VALUE="sr_scpi_cmd_resp's failure is dropped and api.c:514 and on read the variant it never set, so sigrok-cli dies or says what the stack holds; oxrok fails the get"
+    STATUS_JUNK="sr_atoi's failure is dropped, and api.c:542 goes on with reg never set, so C exits 0 with a regulation from the stack, which the filter masks; oxrok says it's no status"
+    STACK="s/^'(CV|CC|CC-|UR)'\$/'from the stack'/"
+    NO_VALUE="sr_scpi_cmd_resp's failure is dropped and api.c:583 reads the variant it never set: sigrok-cli dies of SIGSEGV; oxrok fails the get"
     NAN_SENT="config_set has no check and %.6f of a NaN makes :SOUR:VOLT nan, which goes to a live output; oxrok refuses it"
     OUT_OF_RANGE="config_set has no check, and neither tool can see a refusal, as a SCPI setting has no answer: both send it and exit 0, and oxrok warns of a value outside what the output lists"
 
@@ -305,7 +306,7 @@ emu_cases() {
     emu_options mute-at=3
     emu_case "get silent" --no-output --expect-fail -- -d $U -g 1 --get voltage_target
     emu_case "get silent tcp" --no-output --expect-fail --oracle-bug "$TCP_BLOCKS" --oracle-hangs --timeout 12 -- -d $T -g 1 --get voltage_target
-    emu_case "regulation silent" --no-output --expect-fail --no-oracle-only -- -d $U -g 1 --get regulation
+    emu_case "regulation silent" --no-output --oracle-bug "$NO_VALUE" --expect-fail -- -d $U -g 1 --get regulation
     emu_case "a capture hears nothing" --stderr --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 4 -- -d $U --time 500ms
     emu_case "a capture hears nothing tcp" --stderr --oracle-bug "$TCP_BLOCKS" --oracle-hangs --timeout 9 -- -d $T --time 500ms
     emu_options mute-at=5 on=1
@@ -343,7 +344,7 @@ emu_cases() {
     emu_options model=6632B status=
     emu_case "6632b empty status" --oracle-differs "$STATUS_EMPTY" --expect-fail --stderr -- -d $T -g 1 --get regulation
     emu_options model=6632B status=junk
-    emu_case "6632b junk status" --no-output --expect-fail --no-oracle-only -- -d $T -g 1 --get regulation
+    emu_case "6632b junk status" --oracle-differs "$STATUS_JUNK" --expect-fail --stderr --filter "$STACK" -- -d $T -g 1 --get regulation
     emu_options model=6632B status=junk on=1
     emu_case "6632b junk in a capture" -- -d $T -C V1 --samples 1
     # What a probe finds: C has an EA's nominal values all as 0.
@@ -372,7 +373,7 @@ emu_cases() {
 
     # A key on the list with no command in the table.
     emu_options model=PSU_1.02
-    emu_case "eez ovp active has no command" --no-output --expect-fail --no-oracle-only -- -d $T -g 1 --get ovp_active
+    emu_case "eez ovp active has no command" --no-output --expect-fail -- -d $T -g 1 --get ovp_active
 
     # An interrupt, on a line kept quiet after the mark so that the count holds.
     emu_options on=1 mark-at=4 mute-at=5
