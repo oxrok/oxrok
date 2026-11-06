@@ -16,8 +16,10 @@
 //! - The order of the stream: the `dt8852` Python package (1.1.0, written for a
 //!   Trotec SL400 of the same family), in a comment: eight short blocks of range,
 //!   hold, threshold, level, display, frequency weighting and time; then one long
-//!   block whose first part is store, time weighting, battery and recording. Here a
-//!   long block is one in four: see [`CYCLE`].
+//!   block whose first part is store, time weighting, battery and recording. Here each
+//!   block has both parts: at this model's [`PERIOD`] the package's order would miss a
+//!   driver's 510 ms for the recording token. The driver's unit tests have a meter on
+//!   the clock in the package's order.
 //! - The stored log: the wiki. `bb`, a big-endian length plus 100, then for each
 //!   record `aa` or `cc`, six BCD fields of date and time and an interval, then
 //!   `ac` and the levels, and last `dd`. Its two firmware bugs are here: an empty
@@ -34,10 +36,12 @@
 //! - The order in which `88` steps the ranges: 30-130, 30-80, 50-100, 80-130. The
 //!   wiki only calls it a toggle. Same for `11`, as none, max, min; the wiki names
 //!   them "Max/Min/normal".
-//! - That the meter sends a stream of `ff` in hold, and nothing else: only a driver's
-//!   comment says so, and no other source mentions it.
+//! - That the meter sends a stream of `ff` in hold, and nothing else: a driver's
+//!   comment and its commit `14cf708f` say so, and no other source mentions it.
 //! - That `33` silences it at once, and that a meter off hears nothing.
 //! - How often the display's reading comes among the bar graph's. `bar=` sets it.
+//! - How often a meter in max or min hold leaves out its recording token: commit
+//!   `0cd9107d` says it "randomly decides". `no-recording-in-hold=1` always does.
 //!
 //! Emulation artifacts:
 //!
@@ -50,8 +54,7 @@
 //!   next N commands, and the token that follows shows the old state.
 //! - After each open, `startup=` blocks hold no level: an open's flush may or may
 //!   not drop the first of them, and no sample may depend on that. So a level
-//!   comes a few blocks later than on a real one. The last of them is a long block,
-//!   so the first sample has every flag.
+//!   comes a few blocks later than on a real one, and has every flag.
 //! - The log goes out as one whole, once per open, and the stream stops meanwhile.
 //!   A tool keeps asking until it has read `bb`: what comes while the log is being
 //!   sent, or later, is not asked again. The wiki says only that it is inserted into
@@ -64,7 +67,7 @@
 //! Options, besides the shell's ([`Faults`]):
 //!
 //! - `freq=A|C`, `time=F|S`, `hold-mode=none|max|min`, `range=30-130|30-80|50-100|80-130`,
-//!   `recording=0|1`, `battery=ok|low`, `store=ok|full`, `threshold=ok|over|under`, the
+//!   `recording=0|1`, `no-recording-in-hold=1`, `battery=ok|low`, `store=ok|full`, `threshold=ok|over|under`, the
 //!   state at power on;
 //! - `levels=HEX[,HEX...]`, two BCD bytes per level, played in turn and over;
 //! - `bar=N`, bar graph blocks per reading on the display;
@@ -109,7 +112,7 @@ use crate::{Error, Result};
 pub const NAME: &str = "cem-dt-885x";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A CEM DT-8852 sound level meter on CDC-ACM; freq=, time=, hold-mode=, \
-                         range=, recording=, battery=, store=, threshold=, levels=, bar=, extra=, \
+                         range=, recording=, no-recording-in-hold=, battery=, store=, threshold=, levels=, bar=, extra=, \
                          period=, first-block=, startup=, blocks=, time-only=, mark=, hold-after=, \
                          hold-blocks=, hold-for=, log=, dump=, announce=, mute=, no-level=, deaf=, setters=, uart=, and the shell's stall=, \
                          chunk=, in-limit=, in-stall=, out-hold=";
@@ -123,9 +126,6 @@ const RECORD_LEVELS: u8 = 0xac;
 const LOG_END: u8 = 0xdd;
 /// The wiki's offset on the log's length.
 const LENGTH_OFFSET: usize = 100;
-/// Blocks per long one, where the package has 9: at this model's [`PERIOD`] that
-/// would miss a driver's 510 ms for the recording token.
-const CYCLE: u32 = 4;
 /// The time of day: BCD, with the wiki's "first nibble unknown" as the package's PM.
 const TIME_OF_DAY: [u8; 3] = [0x32, 0x34, 0x56];
 /// The date and time of each record.
@@ -140,12 +140,12 @@ const LONGEST_RECORD: u32 = 2000;
 /// Blocks with no level after an open.
 const STARTUP: u32 = 2;
 /// Offers of a read per block. Offers came at some 7 to 12 ms each on the testers:
-/// about 60 to 100 ms per block, against the wiki's 50. A shorter one loses
-/// the session: with reads completing all the time, a tool's close hits the kernel's
+/// about 110 to 190 ms per block, against the wiki's 50. A shorter one loses the
+/// session: with reads completing all the time, a tool's close hits the kernel's
 /// `CMD_UNLINK` ahead of `CMD_SUBMIT` (`docs/ROADMAP.md`). Seen with `vhci_hcd`'s
 /// "cannot find a urb of seqnum": at 1 within some 20 closes, at 2 within some 30, at
-/// 4 about once per 500, and with `chunk=` within 60.
-const PERIOD: u32 = 8;
+/// 4 about once per 500, at 8 once in 74 event cases, and with `chunk=` within 60.
+const PERIOD: u32 = 16;
 const DEFAULT_LOG: &str = "a01:3,c10:2";
 
 const TOGGLE_POWER: u8 = 0x33;
@@ -187,6 +187,9 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             }
             "range" => config.range = choice(k, v, &RANGES.map(|r| r.0))?,
             "recording" => config.recording = parse_number(k, v, 0..=1)? == 1,
+            "no-recording-in-hold" => {
+                config.no_recording_in_hold = parse_number(k, v, 0..=1)? == 1;
+            }
             "battery" => config.battery_low = choice(k, v, &["ok", "low"])? == 1,
             "store" => config.store_full = choice(k, v, &["ok", "full"])? == 1,
             "threshold" => {
@@ -291,6 +294,7 @@ struct Config {
     hold_mode: usize,
     range: usize,
     recording: bool,
+    no_recording_in_hold: bool,
     battery_low: bool,
     store_full: bool,
     threshold: u8,
@@ -322,6 +326,7 @@ impl Config {
             hold_mode: 0,
             range: 0,
             recording: false,
+            no_recording_in_hold: false,
             battery_low: false,
             store_full: false,
             threshold: 0x11,
@@ -426,12 +431,6 @@ impl Meter {
         [SYNC, HOLD_MODES[self.hold_mode].1]
     }
 
-    /// Whether this block is the long one, placed so the last of the startup
-    /// blocks is one.
-    fn long_block(&self) -> bool {
-        (self.blocks + CYCLE - (self.config.startup + CYCLE - 1) % CYCLE).is_multiple_of(CYCLE)
-    }
-
     /// The level, the display's token and, for a level, the noise ahead of them.
     fn level_part(&mut self, out: &mut Vec<u8>) {
         if self.config.extra.len() > self.extra {
@@ -459,15 +458,14 @@ impl Meter {
             out.extend_from_slice(&TIME_OF_DAY);
             return out;
         }
-        if self.long_block() {
-            out.extend_from_slice(&[SYNC, if self.config.store_full { 0x09 } else { 0x19 }]);
-            out.extend_from_slice(&self.time_packet());
-            out.extend_from_slice(&[SYNC, if self.config.battery_low { 0x0f } else { 0x1f }]);
+        out.extend_from_slice(&self.range_packet());
+        out.extend_from_slice(&self.hold_packet());
+        out.extend_from_slice(&[SYNC, self.config.threshold]);
+        out.extend_from_slice(&[SYNC, if self.config.store_full { 0x09 } else { 0x19 }]);
+        out.extend_from_slice(&self.time_packet());
+        out.extend_from_slice(&[SYNC, if self.config.battery_low { 0x0f } else { 0x1f }]);
+        if self.hold_mode == 0 || !self.config.no_recording_in_hold {
             out.extend_from_slice(&self.recording_packet());
-        } else {
-            out.extend_from_slice(&self.range_packet());
-            out.extend_from_slice(&self.hold_packet());
-            out.extend_from_slice(&[SYNC, self.config.threshold]);
         }
         if self.blocks >= self.config.startup && !self.config.no_level {
             self.levels += 1;
@@ -684,17 +682,17 @@ mod tests {
         out
     }
 
+    /// A block's tokens, ahead of a level's.
+    const STATE: [u8; 7] = [0x40, 0x0e, 0x11, 0x19, 0x02, 0x1f, 0x1a];
+
     #[test]
-    fn the_stream_is_the_packages_order_and_startup_has_no_level() {
-        let mut h = meter(&[("startup", "3")]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x1b, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x1b, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x19, 0x02, 0x1f, 0x1a, 0x1b, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x0d, 0x0c, 0x1b, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x0d, 0x0b, 0x1b, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x0d, 0x0c, 0x1b, 0x06]);
-        // Four blocks on from the last long one.
-        assert_eq!(tokens(&block(&mut h)), [0x19, 0x02, 0x1f, 0x1a, 0x0d, 0x0b, 0x1b, 0x06]);
+    fn each_block_says_the_state_and_startup_has_no_level() {
+        let mut h = meter(&[("startup", "2")]);
+        let startup = [&STATE[..], &[0x1b, 0x06]].concat();
+        assert_eq!(tokens(&block(&mut h)), startup);
+        assert_eq!(tokens(&block(&mut h)), startup);
+        assert_eq!(tokens(&block(&mut h)), [&STATE[..], &[0x0d, 0x0c, 0x1b, 0x06]].concat());
+        assert_eq!(tokens(&block(&mut h)), [&STATE[..], &[0x0d, 0x0b, 0x1b, 0x06]].concat());
         assert_eq!(violations(&mut h), Vec::<String>::new());
     }
 
@@ -711,8 +709,17 @@ mod tests {
             ("threshold", "over"),
             ("startup", "1"),
         ]);
-        assert_eq!(tokens(&block(&mut h)), [0x09, 0x03, 0x0f, 0x0a, 0x1c, 0x06]);
-        assert_eq!(tokens(&block(&mut h)), [0x4b, 0x04, 0x07, 0x0d, 0x0c, 0x1c, 0x06]);
+        let state = [0x4b, 0x04, 0x07, 0x09, 0x03, 0x0f, 0x0a];
+        assert_eq!(tokens(&block(&mut h)), [&state[..], &[0x1c, 0x06]].concat());
+        assert_eq!(tokens(&block(&mut h)), [&state[..], &[0x0d, 0x0c, 0x1c, 0x06]].concat());
+    }
+
+    #[test]
+    fn a_meter_in_hold_may_leave_out_its_recording_token() {
+        let mut h = meter(&[("no-recording-in-hold", "1"), ("hold-mode", "max")]);
+        assert!(!tokens(&block(&mut h)).contains(&0x1a));
+        let mut h = meter(&[("no-recording-in-hold", "1")]);
+        assert!(tokens(&block(&mut h)).contains(&0x1a), "not out of hold");
     }
 
     #[test]
@@ -758,7 +765,7 @@ mod tests {
     #[test]
     fn no_level_has_none_and_mute_ends_all_at_the_first_command() {
         let mut h = meter(&[("no-level", "1"), ("startup", "0")]);
-        assert_eq!(tokens(&block(&mut h)), [0x40, 0x0e, 0x11, 0x1b, 0x06]);
+        assert_eq!(tokens(&block(&mut h)), [&STATE[..], &[0x1b, 0x06]].concat());
         let mut h = meter(&[("mute", "1")]);
         assert_eq!(block(&mut h)[0], SYNC);
         h.write(&[TOGGLE_FREQ]);
