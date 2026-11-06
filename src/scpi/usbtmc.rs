@@ -255,6 +255,10 @@ impl Usbtmc {
             }
             break;
         }
+        // Both transfers ran out: silence, which a caller may wait out, and no fault.
+        if data.is_empty() {
+            return Err(Error::Timeout);
+        }
         if data.len() < HEADER {
             return Err(Error::device(format!(
                 "USBTMC bulk in returned too little data: {} bytes",

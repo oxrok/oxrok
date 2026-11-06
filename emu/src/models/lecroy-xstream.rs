@@ -1,12 +1,12 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 // SPDX-License-Identifier: GPL-3.0-or-later OR Apache-2.0
 
-//! LeCroy X-Stream oscilloscopes, on USBTMC and on TCP.
+//! `LeCroy` X-Stream oscilloscopes, on USBTMC and on TCP.
 //!
 //! The device, and how sure this is:
 //!
 //! - The commands are what libsigrok's `lecroy-xstream` sends. The forms of the
-//!   answers are from LeCroy's "Remote Control Manual" for the LT and WaveRunner
+//!   answers are from the maker's "Remote Control Manual" for its LT and `WaveRunner`
 //!   series (LTXXX-RCM-E Rev B, January 2002), the one found: `*IDN LECROY,...` with
 //!   its header, `ON`, `A1M`, a `WAVEFORM?` of `#9` and a line end after the block,
 //!   and a `WAIT` that waits for ever. That manual is of an older series than
@@ -21,7 +21,7 @@
 //!   may refuse it. It is what the driver sends, so it is taken: a model that flagged
 //!   it would leave the path with no case.
 //!
-//! Guesses, which no test should lean on: the USB ids (LeCroy's 05ff, and a product id
+//! Guesses, which no test should lean on: the USB ids (05ff as the maker's, and a product id
 //! from no source), the bus speed, the model name and the serial number.
 //!
 //! Emulation artifacts:
@@ -574,10 +574,11 @@ mod tests {
     fn the_faults_of_the_blocks() {
         let mut s = on_socket(&[("cut", "1"), ("points", "10")]);
         ready(&mut s);
+        let whole = DESCRIPTOR + 20;
         let block = ask(&mut s, "C1:WAVEFORM?\n").0;
-        assert_eq!(&block[..11], format!("#9{:09}", DESCRIPTOR + 20).as_bytes());
-        assert_eq!(block.len(), 11 + (DESCRIPTOR + 20) / 2, "half of it");
-        assert_eq!(ask(&mut s, "C1:WAVEFORM?\n").0.len(), 11 + DESCRIPTOR + 20 + 1);
+        assert_eq!(&block[..11], format!("#9{whole:09}").as_bytes());
+        assert_eq!(block.len(), 11 + whole / 2, "half of it");
+        assert_eq!(ask(&mut s, "C1:WAVEFORM?\n").0.len(), 11 + whole + 1);
         let mut s = on_socket(&[("head", "#0"), ("head-at", "2")]);
         ready(&mut s);
         assert!(ask(&mut s, "C1:WAVEFORM?\n").0.len() > 100);
