@@ -2519,15 +2519,14 @@ packet of 36 bytes with a 36 byte buffer, and `serial.c:833` wants two
 packets' room, so every scan ends at `:839`. The check is from 2012
 (`2546b05c`, moved by `766456be`; `maxlen < packet_size * 2` at
 `23669c3d^`), and the driver had the same 36 and 36 from its pull
-request (`13b72fa9`) on. **So every "full" case here is against a
-patched C:** the unmodified driver with that one argument changed to 18
-in memory (`tools/emu/mastech-ms6514-scan.c`, through wrappers for this
-model's tools only). `gcov.txt` doesn't say so, and its figures are that
-patched C's. Two stock cases pin the failure.
+request (`13b72fa9`) on. **So every case here is against a patched C:**
+the oracle's `api.c:85` asks for 18 bytes, one frame
+(`tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch`). `gcov.txt`
+doesn't say so, and its figures are that patched C's.
 
 Emulated: model `mastech-ms6514` on the CDC-ACM shell (options `frame=`,
-`stored=`, `period=`, `first=`, `burst=`, `bunch=`, `still=`), 72 cases
-(49 full against the patched C, 5 `--oracle-bug`, 11 `--oracle-differs`,
+`stored=`, `period=`, `first=`, `burst=`, `bunch=`, `still=`), 70 cases
+(49 full against the patched C, 4 `--oracle-bug`, 10 `--oracle-differs`,
 5 library, 2 oxrok alone), 2026-11-06. gcov 94.9% of the driver. Not
 emulated: `protocol.c:223-224` (a read of 0 with exactly `G_IO_IN`),
 `:240-241` (dead: the parse always leaves under 18 bytes), and the
@@ -2855,12 +2854,17 @@ setup mode, macOS and Windows.
 
 ## Oracle
 
-The oracle is libsigrok 0bc24877 with one patch,
-`tools/oracle-patches/libsigrok-testo-sdi-driver.patch`. It restores the
-`sdi->driver = di;` that `b258c09f` (2017) removed from testo's scan:
-without it, `testo_probe_channels()` calls `sr_dev_open()` on an instance
-with no driver, which fails (`device.c:730`), so stock libsigrok finds no
-Testo and no capture is reachable. Apply it when building the oracle.
+The oracle is libsigrok 0bc24877 with two patches, in
+`tools/oracle-patches/`. Apply both when building the oracle.
+
+- `libsigrok-testo-sdi-driver.patch` restores the `sdi->driver = di;`
+  that `b258c09f` (2017) removed from testo's scan: without it,
+  `testo_probe_channels()` calls `sr_dev_open()` on an instance with no
+  driver, which fails (`device.c:730`), so stock libsigrok finds no Testo
+  and no capture is reachable.
+- `libsigrok-mastech-ms6514-scan.patch` makes the MS6514's scan ask for
+  one frame: asking for two with a buffer of two refuses every scan, so
+  stock libsigrok finds no MS6514.
 
 The sigrok build that `tools/diffcli.sh` and the emulation work of
 phase 9 compare against, built from source under `~/work/sigrok` with

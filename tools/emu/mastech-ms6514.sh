@@ -12,29 +12,8 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # stock sigrok-cli finds no device and nothing behind the scan has ever run. The
 # check is from 2012 (2546b05c; maxlen < packet_size * 2 at 23669c3d^), and the
 # driver has had the same 36 and 36 from its pull request on (13b72fa9, 23669c3d,
-# 2019). So a "full" case below means against a patched C, and all cases but the "stock" ones at the end run the C driver with that
-# one argument changed to a frame in memory, by tools/emu/mastech-ms6514-scan.c,
-# which is set on the exec of this model's tools only, through wrappers that
-# SIGROK_CLI and EMU_LIBSIGROK_RUN name for the length of emu_cases. Neither oxrok
-# nor the harness runs under it.
-ms6514_scan_fixed() {
-    MS_STOCK_CLI=$SIGROK_CLI
-    MS_STOCK_RUN=$EMU_LIBSIGROK_RUN
-    [ "$no_oracle" = 1 ] && return
-    cc -shared -fPIC -o "$TMP/ms6514-scan.so" "$TOOLS/emu/mastech-ms6514-scan.c" -ldl 2>"$TMP/ms6514-scan.err" \
-        || { emu_fail "$EMU_MODEL: could not build the preload (a C compiler?)"; return; }
-    # The runner's own check compares what sigrok-cli and it load, so it is
-    # built ahead of the wrapper.
-    emu_libsigrok_run || { emu_fail "$EMU_MODEL: $EMU_LIBSIGROK_ERR"; return; }
-    for w in cli:"$(command -v "$SIGROK_CLI")" run:"$EMU_LIBSIGROK_RUN"; do
-        printf '%s\n' '#!/bin/sh' \
-            "LD_PRELOAD=$TMP/ms6514-scan.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec ${w#*:} \"\$@\"" \
-            >"$TMP/ms6514-${w%%:*}"
-        chmod +x "$TMP/ms6514-${w%%:*}"
-    done
-    SIGROK_CLI=$TMP/ms6514-cli
-    EMU_LIBSIGROK_RUN=$TMP/ms6514-run
-}
+# 2019). So the oracle carries a one-line patch of api.c:85, which asks for one
+# frame (tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch).
 
 # A frame: main, aux (16 bit hex), then the bytes 10, 11, 12.
 ms_f() {
@@ -46,7 +25,6 @@ ms_s() {
 }
 
 emu_cases() {
-    ms6514_scan_fixed
     emu_conns
     T1=00eb
     T2=00f1
@@ -60,7 +38,6 @@ emu_cases() {
     # A case's length of a stream isn't a fact, so a limit comes with a burst of
     # as many frames, and a time limit folds what came.
     N='/^bulk_in /d'
-    NO_SCAN="api.c:85 asks for a packet of 36 bytes with a buffer of 36, and serial.c:833 wants a buffer of two packets, so the scan fails at serial.c:839 whatever comes; oxrok looks for one frame"
     CSV_LABEL="csv.c:187's g_malloc leaves the labels unset and :361 sets one only for a channel that came, so T1-T2, which no frame of this function names, is printed from what the heap holds at :437; oxrok's is empty, and its rows mix frames (a known limit, it warns)"
     CSV_COUNT="csv.c:191 counts every channel where :181 keeps the enabled ones, and :713 dumps at that count, so with T1-T2 off a row comes at every third reading, with one frame's T2 and the next frame's T1; oxrok writes each frame's row on frames showing T1 and T2 alone"
     PARSE_FIRST="sigrok-cli opens the port before it reads the parameters and exits with it open, so the open's lines and what the unit sent are in its .tx; oxrok refuses them first and opens nothing"
@@ -242,13 +219,6 @@ emu_cases() {
     emu_case "lib memory, a stored frame after the live one" --libsigrok -- -d $K -c data_source=Memory --continuous
     emu_options still=2 burst=1 stored=$S0,$OK bunch=2
     emu_case "memory limit and the live frame in one read" -- -d $K -c data_source=Memory --samples 1
-
-    # Stock libsigrok: no scan finds it.
-    SIGROK_CLI=$MS_STOCK_CLI
-    EMU_LIBSIGROK_RUN=$MS_STOCK_RUN
-    emu_options burst=1
-    emu_case "stock scan" --oracle-differs "$NO_SCAN" --keep-header -- -d $K --scan
-    emu_case "stock capture" --oracle-bug "$NO_SCAN" -- -d $K --samples 1
 }
 
 emu_conns() {
