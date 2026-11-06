@@ -6,11 +6,15 @@
 //!
 //! The device, and how sure this is:
 //!
-//! - Everything here comes from what libsigrok's driver sends and what its
-//!   comments say of answers. No recording of any of these scopes was found (none in
-//!   `sigrok-dumps` or the oracle's tree), and no answer was compared with a real
-//!   one. `tests/emu/hameg-hmo/` shows the C driver and the port agree about this
-//!   model, not that either agrees with a scope.
+//! - What the driver sends and what its comments say of answers, checked against R&S's
+//!   "HMO72x...202x SCPI Programmers Manual" (version 02, 2016) where it speaks: 12
+//!   divisions (`TIM:DIV?`), `AUTO | OFF` for `ACQ:HRES` and `ACQ:PEAK`, thresholds
+//!   `TTL | ECL | CMOS | USER1 | USER2`, levels from -2 to 8 V, `REAL,32` and `UINT,8`
+//!   blocks, and `MSBF` until told otherwise, which is why a read needs its `:FORM`. That
+//!   manual lists `:CHANn:DATA?` and no `:PODn:DATA?`, so the pods' data is the driver's
+//!   word alone. No recording of any of these scopes was found (the oracle's tree has
+//!   none), and no answer was compared with a real one. `tests/emu/hameg-hmo/` shows the C
+//!   driver and the port agree about this model, not that either agrees with a scope.
 //! - The commit that added these models calls the RTB2000, RTM3000 and RTA4000
 //!   "untested" (aac3063, b720f16), so the C's second dialect, `:LOG%d:STAT` for a
 //!   channel and for a pod, `:DIG%d:TECH`, is itself a reading of a manual. A real
@@ -83,6 +87,7 @@ const SBUS: &[&str] = &["LINE", "EXT", "PATT", "SBUS1", "SBUS2"];
 const NO_BUS: &[&str] = &[];
 
 /// A series, as far as it shows on the wire.
+#[allow(clippy::struct_excessive_bools)]
 struct Kind {
     names: &'static [&'static str],
     analog: u8,
@@ -144,6 +149,7 @@ fn sci(value: f64) -> String {
 
 /// What goes wrong at a data read, by count.
 #[derive(Clone, Copy, Default)]
+#[allow(clippy::struct_field_names)]
 struct DataFaults {
     cut_at: Option<u32>,
     zero_at: Option<u32>,
@@ -231,6 +237,7 @@ impl Scope {
     }
 
     /// `:CHANn:DATA?`: a triangle over the screen, as floats.
+    #[allow(clippy::many_single_char_names)]
     fn analog_data(&mut self, m: &Message<'_>, n: u8, s: &Settings, v: &mut Violations) -> Answer {
         if s.get(&format!("CHAN{n}:STAT")) != Some("1") {
             v.report(format!("{}: the channel is off", m.text));
@@ -271,7 +278,7 @@ impl Scope {
         let count = if pod == 2 { self.points2 } else { self.points };
         let from = self.reads as usize * 5;
         let data: Vec<u8> =
-            (0..count).map(|i| ((from + i) * usize::from(pod * 2 - 1) & 0xff) as u8).collect();
+            (0..count).map(|i| (((from + i) * usize::from(pod * 2 - 1)) & 0xff) as u8).collect();
         self.framed(&data)
     }
 

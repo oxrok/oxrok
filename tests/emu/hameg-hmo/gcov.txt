@@ -1,7 +1,7 @@
 gcov hameg-hmo (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
-  api.c        83.7%  502 of 600
-  protocol.c   92.7%  358 of 386
-  total        87.2%  860 of 986
+  api.c        84.3%  506 of 600
+  protocol.c   94.0%  363 of 386
+  total        88.1%  869 of 986
 never reached, by function (line ranges hold no reached line):
   api.c
     dev_open: 117
@@ -11,30 +11,28 @@ never reached, by function (line ranges hold no reached line):
     config_list: 557, 577, 582, 584, 589, 594, 599, 604, 606, 611, 613, 616-617
     hmo_request_data: 651-653
     hmo_check_channels: 690-691
-    hmo_setup_channels: 742-743, 763-764, 770-772, 784-785, 792, 795
-    dev_acquisition_start: 844, 863-865
+    hmo_setup_channels: 742-743, 763-764, 770-772, 784-785, 792
+    dev_acquisition_start: 844
   protocol.c
     scope_state_get_array_option: 917
     get_channel_by_index_and_type: 973
     analog_channel_state_get: 1037
-    hmo_update_sample_rate: 1164
     hmo_scope_state_get: 1195, 1237, 1246, 1256, 1264
     hmo_init_device: 1333-1335, 1353-1354, 1359, 1376
     hmo_queue_logic_data: 1412
-    hmo_receive_data: 1485, 1488, 1514-1516, 1547-1549, 1584-1586
+    hmo_receive_data: 1485, 1488, 1515, 1548, 1584-1586
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/scpi/scpi.c                 56.6%  287 of 507
+  src/scpi/scpi.c                 61.7%  313 of 507
   src/scpi/scpi_tcp.c             53.2%  58 of 109
-  src/scpi/scpi_usbtmc_libusb.c   75.3%  226 of 300
+  src/scpi/scpi_usbtmc_libusb.c   78.3%  235 of 300
   src/tcp.c                       63.1%  77 of 122
-  total                           62.4%  648 of 1038
+  total                           65.8%  683 of 1038
 never reached, by function (line ranges hold no reached line):
   src/scpi/scpi.c
     parse_strict_bool: 58
     sr_scpi_scan_resource: 117
     scpi_write_data: never called (205-207)
     scpi_read_data: never called (219-221)
-    scpi_read_response: 243-244, 252-257
     scpi_get_data: 281, 297-299, 306
     sr_scpi_scan: 338-339
     scpi_dev_inst_new: 385-386
@@ -46,12 +44,11 @@ never reached, by function (line ranges hold no reached line):
     sr_scpi_read_response: never called (664-673)
     sr_scpi_get_bool: 708
     sr_scpi_get_int: 741
-    sr_scpi_get_float: 777
     sr_scpi_get_double: never called (799-818)
     sr_scpi_get_opc: 842
     sr_scpi_get_floatv: never called (859-902)
     sr_scpi_get_uint8v: never called (919-961)
-    sr_scpi_get_block: 994-996, 1000-1001, 1016-1018, 1034-1036, 1060-1061, 1064-1066, 1070-1074, 1082-1084, 1105-1106, 1109-1111
+    sr_scpi_get_block: 994-996, 1070-1074, 1105-1106
     sr_scpi_get_hw_id: 1186
     sr_scpi_unquote_string: 1239, 1242, 1248, 1257-1258
     sr_vendor_alias: never called (1264-1273)
@@ -74,13 +71,10 @@ never reached, by function (line ranges hold no reached line):
     scpi_usbtmc_local: 274, 281-285
     scpi_usbtmc_libusb_open: 307, 310, 317-320, 327, 344-346, 357-358, 364-366, 373-376, 381-383, 390
     scpi_usbtmc_libusb_connection_id: never called (418-427)
-    usbtmc_bulk_in_header_read: 470
-    scpi_usbtmc_bulkout: 487-488, 508-510, 514-516
-    scpi_usbtmc_bulkin_start: 547-548, 552-553, 561-562
+    scpi_usbtmc_bulkout: 487-488, 514-516
+    scpi_usbtmc_bulkin_start: 547-548, 552-553
     scpi_usbtmc_bulkin_continue: 582-584
-    scpi_usbtmc_libusb_send: 600
-    scpi_usbtmc_libusb_read_begin: 615
-    scpi_usbtmc_libusb_read_data: 633-638
+    scpi_usbtmc_libusb_read_data: 633, 637-638
     scpi_usbtmc_libusb_close: 666, 671, 677
   src/tcp.c
     sr_fd_is_readable: never called (78-95)

@@ -10,7 +10,6 @@ Channel groups:
     CH2: channel CH2
     POD1: channels D0 D1 D2 D3 D4 D5 D6 D7
 Supported configuration options across all channel groups:
-    (null): 
     limit_samples: 
     limit_frames: 0 (current)
     samplerate
@@ -32,8 +31,8 @@ Supported configuration options across all channel groups:
       100 us
       200 us
       500 us
-      1 ms
-      2 ms (current)
+      1 ms (current)
+      2 ms
       5 ms
       10 ms
       20 ms
