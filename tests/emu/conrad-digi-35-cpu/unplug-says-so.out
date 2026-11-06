@@ -1,0 +1,2 @@
+oxrok: warn: oxrok::drivers::conrad_digi_35_cpu::protocol: The supply's state is unknown: check its front panel.
+Failed to set device option 'voltage_target': device error: the port failed sending V0[56]0

@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::conrad_digi_35_cpu: Voltage out of range (0 - 35.0)!
+Failed to set device option 'voltage_target': invalid argument: voltage_target out of range.

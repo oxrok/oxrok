@@ -1,3 +1,0 @@
-sr: serial-libsp: Write error (5): Input/output error.
-sr: conrad-digi-35-cpu: Write error for cmd=C
-Failed to set device option 'current_limit': generic/unspecified error.
