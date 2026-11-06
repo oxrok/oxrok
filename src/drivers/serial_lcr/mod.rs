@@ -594,9 +594,9 @@ impl Device for LcrDevice {
         let handle = std::thread::Builder::new()
             .name(format!("{} acquisition", self.model.id))
             .spawn(move || {
-                capture.run(port.as_mut(), &sink, &stop2);
+                let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("port lock") = Some(port);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -621,9 +621,9 @@ impl Drop for LcrDevice {
 
 /// `End`, waiting for room for as long as nobody asked to stop, and after a stop
 /// only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -645,10 +645,10 @@ struct Capture {
 
 impl Capture {
     /// Runs until a limit, a stop, a port that fails or a consumer that left.
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) {
+    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let send = |p: Packet| sink.send_while(p, || !stop.load(Ordering::SeqCst));
         if !send(Packet::header()) {
-            return;
+            return Ok(());
         }
         let started = Instant::now();
         let mut frames = 0u64;
@@ -661,7 +661,7 @@ impl Capture {
             match port.read(&mut chunk[..room], READ_TIMEOUT) {
                 Err(e) => {
                     log::error!("Acquisition failed: {e}.");
-                    return;
+                    return Err(e);
                 }
                 Ok(0) => {
                     // handle_timeout: at the first silence, and then once the
@@ -689,7 +689,7 @@ impl Capture {
                             continue;
                         }
                         match self.packet(pkt, &mut known, &send) {
-                            None => return,
+                            None => return Ok(()),
                             Some(true) => frames += 1,
                             Some(false) => {}
                         }
@@ -702,11 +702,11 @@ impl Capture {
             // holding two packets sends both.
             let limit = self.limits.frames.load(Ordering::SeqCst);
             if limit > 0 && frames >= limit {
-                return;
+                return Ok(());
             }
             let msec = self.limits.msec.load(Ordering::SeqCst);
             if msec > 0 && started.elapsed() > Duration::from_millis(msec) {
-                return;
+                return Ok(());
             }
             let seconds = self.silence_bound.as_secs();
             match silence.verdict(self.chip, limit > 0 && msec == 0, Instant::now()) {
@@ -720,10 +720,11 @@ impl Capture {
                         "No bytes from the meter for {seconds} s. It sends without being asked, \
                          so it is off or its cable is out."
                     );
-                    return;
+                    return Err(Error::device(format!("no bytes from the meter for {seconds} s")));
                 }
             }
         }
+        Ok(())
     }
 
     /// `handle_packet`: whether a frame went out, `None` when the sink would

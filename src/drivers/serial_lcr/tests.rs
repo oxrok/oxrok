@@ -920,7 +920,8 @@ fn a_silent_es51919_at_a_frame_limit_ends() {
         d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
         let at = Instant::now();
         let rx = start(&mut d);
-        assert_eq!(packets(&rx).len(), 1, "the header");
+        let got = packets(&rx);
+        assert!(matches!(got[1..], [Packet::Failed(_)]), "the header and the failure: {got:?}");
         assert!(at.elapsed() >= Duration::from_millis(100));
     });
 }
@@ -1218,7 +1219,8 @@ fn a_port_that_hangs_up_ends_the_capture() {
         let mut d = device_with_bound(es_model(), &line, BOUND * 10);
         d.set(&Key::LimitFrames, &Value::U64(5), None).unwrap();
         let rx = start(&mut d);
-        assert_eq!(packets(&rx).len(), 1, "the header");
+        let got = packets(&rx);
+        assert!(matches!(got[1..], [Packet::Failed(_)]), "the header and the failure: {got:?}");
     });
 }
 

@@ -792,10 +792,10 @@ Deliberate, and kept small:
   ended by CR alone warn once.
 - Under `flow=1`, `rts=` is not applied by any driver, as in libsigrok's
   use of libserialport.
-- serial-lcr: a port that hangs up ends a capture, where sigrok-cli
+- serial-lcr: a port that hangs up fails a capture (exit 1), where sigrok-cli
   keeps running at a frame limit (`protocol.c:193-196`).
-- serial-lcr: an ES51919 sending no bytes for 10 s ends a capture that
-  only a frame limit could end, with an error and C's exit status.
+- serial-lcr: an ES51919 sending no bytes for 10 s fails a capture that
+  only a frame limit could end (exit 1).
   sigrok-cli waits for ever (`protocol.c:193-200`). A time limit or
   `--continuous` is left alone.
 - serial-lcr: a VC4080 silent for 10 s gets one warning naming setup
