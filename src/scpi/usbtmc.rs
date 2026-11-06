@@ -158,6 +158,9 @@ impl Usbtmc {
         let (vid, pid) = (usb.info().vendor_id, usb.info().product_id);
         if listed(&RESET_ON_OPEN, vid, pid) {
             usb.reset()?;
+            // libusb_reset_device claims again what was claimed; nusb's reset doesn't,
+            // and the backends' `reset` both forget it.
+            usb.claim_interface(interface)?;
         }
         let mut usb488_caps = 0;
         if let Ok(caps) =

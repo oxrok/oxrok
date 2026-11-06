@@ -28,8 +28,9 @@
 //! What's a guess, which no test should lean on:
 //!
 //! - f4ec:1621 is from memory: Siglent's vendor id, and a product id nothing here
-//!   checks. It keeps off `scpi_usbtmc_libusb.c`'s tables, as no entry there names an
-//!   SDL. The high speed, the serial number and the firmware of the other models.
+//!   checks. The vendor id puts it on both of `scpi_usbtmc_libusb.c`'s tables, whose
+//!   comments say "all Siglent SDS": no remote control, and a USB reset at each open.
+//!   The high speed, the serial number and the firmware of the other models.
 //! - That a load refuses an out of range number with an error in its queue and keeps
 //!   the old value, which the manual doesn't describe; no driver reads the queue.
 //! - That it answers `CURR:PROT:STAT?`, which only the wrong page stands for.

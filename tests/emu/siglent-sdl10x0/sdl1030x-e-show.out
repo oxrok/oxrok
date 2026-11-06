@@ -21,4 +21,3 @@ Supported configuration options on channel group 1:
     opp_threshold: 200.000000 (current)
     ocp_enabled: on (current), off
     ocp_active: on, off (current)
-    ocp_threshold: 

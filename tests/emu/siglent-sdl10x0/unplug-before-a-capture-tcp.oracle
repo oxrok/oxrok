@@ -1,0 +1,2 @@
+sr: scpi_tcp: Receive error: Connection reset by peer
+sr: scpi: Incompletely read SCPI response.

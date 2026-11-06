@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::siglent_sdl10x0: voltage_target 200 is outside 0 to 150. It goes out, and a load that refuses it keeps what it had, with no word.

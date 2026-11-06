@@ -21,7 +21,7 @@ use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
-const RECORDED: [&str; 30] = [
+const RECORDED: [&str; 31] = [
     "asix-sigma",
     "chronovu-la",
     "fx2lafw",
@@ -52,6 +52,7 @@ const RECORDED: [&str; 30] = [
     "kecheng-kc-330b",
     "uni-t-ut32x",
     "rigol-ds",
+    "siglent-sdl10x0",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a

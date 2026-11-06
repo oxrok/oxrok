@@ -221,6 +221,29 @@ impl Scpi {
         self.transport.read_complete()
     }
 
+    /// One look for the answer to a question already sent, for a driver that keeps
+    /// its own count of what is out: `None` when nothing came in a read's timeout, and
+    /// either way nothing counts as stale, as the question is still the only one out.
+    pub fn poll_answer(&mut self) -> Result<Option<Vec<u8>>> {
+        match self.get_data(None) {
+            Ok(data) => {
+                self.stale = false;
+                Ok(Some(data))
+            }
+            Err(Error::Timeout) => {
+                self.stale = false;
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// A question went out and nobody will read its answer: the next [`Scpi::send`]
+    /// waits for the line to go quiet first, as after a timeout.
+    pub fn forget_question(&mut self) {
+        self.stale = true;
+    }
+
     /// Sends `command` if given and collects the whole response.
     pub fn get_data(&mut self, command: Option<&str>) -> Result<Vec<u8>> {
         if let Some(c) = command {
@@ -757,6 +780,21 @@ mod tests {
     use record::Replay;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn a_poll_leaves_nothing_stale_and_a_forgotten_question_settles() {
+        let (mut scpi, line) =
+            paced(|q| if q.ends_with('?') { vec![(T + 1, b"1\n".to_vec())] } else { Vec::new() });
+        scpi.send("Q?").unwrap();
+        assert_eq!(scpi.poll_answer().unwrap(), None);
+        scpi.send("SET 1").unwrap();
+        assert_eq!(line.lock().unwrap().discards, 0, "the answer stays for the question");
+        assert_eq!(scpi.poll_answer().unwrap().as_deref(), Some(&b"1\n"[..]));
+        scpi.send("Q?").unwrap();
+        scpi.forget_question();
+        scpi.send("SET 2").unwrap();
+        assert!(line.lock().unwrap().discards > 0, "the line goes quiet first");
+    }
 
     /// One read's timeout on the [`Paced`] line's own clock, in its ticks.
     const T: u64 = 5;
