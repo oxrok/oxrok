@@ -96,8 +96,9 @@ struct Meter {
 impl Meter {
     /// An answer and what follows it.
     fn answer(&self, text: String) -> Answer {
+        // Apart too: it may follow an earlier answer's prompt.
         if matches!(text.as_str(), "!>" | "?>" | "=>") {
-            return Answer::Text(text);
+            return Answer::Apart(vec![text]);
         }
         match self.prompts {
             Prompts::Apart => Answer::Apart(vec![text, "=>".to_owned()]),
@@ -291,7 +292,15 @@ mod tests {
         }
         r.write("*IDN?\n");
         assert_eq!(r.offers(10)[0], format!("{IDN}\r\n"));
-        assert!(r.1.drain().is_empty());
+        assert_eq!(r.1.drain().len(), 0);
+    }
+
+    #[test]
+    fn a_refusal_behind_a_prompt_is_a_line_of_its_own() {
+        let mut r = Rig::new(&[]);
+        r.write("AUTO?\n");
+        r.write("FUNC2?\n");
+        assert_eq!(r.offers(40), ["1\r\n", "=>\r\n", "!>\r\n"]);
     }
 
     #[test]
@@ -339,7 +348,7 @@ mod tests {
         r.write("AUTO?\n");
         assert_eq!(r.offers(10), ["1\r\n", "=>\r\n"]);
         r.write("AUTO?\n");
-        assert!(r.offers(10).is_empty());
+        assert_eq!(r.offers(10).len(), 0);
     }
 
     #[test]
