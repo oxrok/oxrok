@@ -508,7 +508,7 @@ fn a_silence_asks_again_with_ever_longer_waits_and_new_numbers() {
     assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
     let mut at = t0;
     for (sequence, wait) in [(1u8, 5u64), (2, 10), (3, 20), (4, 30), (5, 30)] {
-        assert_eq!(x.empty_read(at + secs(wait) - ms(1)), Next::Wait, "{sequence}");
+        assert_eq!(x.empty_read(at + ms(wait * 1000 - 1)), Next::Wait, "{sequence}");
         at += secs(wait);
         assert_eq!(x.empty_read(at), Next::Send(Command::Request), "{sequence}");
         assert_eq!(x.bytes(Command::Request), [0x30, sequence, 0x0d]);
@@ -603,7 +603,7 @@ fn after_a_sample_a_sample_limit_warns_and_goes_on_for_ten_minutes() {
     x.sent(Command::Request, t0);
     assert_eq!(x.empty_read(t0 + secs(5)), Next::Warn);
     let (mut sends, mut warns, mut at) = (0, 0, t0 + secs(5));
-    while at < t0 + secs(600) - ms(1) {
+    while at < t0 + ms(599_999) {
         match x.empty_read(at) {
             Next::Wait => {}
             Next::Warn => warns += 1,
@@ -619,7 +619,7 @@ fn after_a_sample_a_sample_limit_warns_and_goes_on_for_ten_minutes() {
     assert_eq!(warns, 0, "once only");
     // At 5, 15, 35, 65, then every 30 s up to 600.
     assert_eq!(sends, 21);
-    assert_eq!(x.empty_read(t0 + secs(600) - ms(1)), Next::Wait);
+    assert_eq!(x.empty_read(t0 + ms(599_999)), Next::Wait);
     assert_eq!(x.empty_read(t0 + secs(600)), Next::GiveUp(GiveUp::NoReply, GIVE_UP));
 }
 

@@ -223,10 +223,9 @@ pub struct Exchange {
     wait: Duration,
     /// The sequence number of the request out or last out.
     sequence: u8,
-    /// The last number used to ask again, 0 being none.
-    last_again: u8,
-    /// The numbers have come round, so all of them have been used.
-    wrapped: bool,
+    /// How many times a request has been asked again in this capture. The numbers
+    /// run 1 to 255 and round again.
+    asked_again: u32,
     /// A sample has been handed on.
     sampled: bool,
     warned: bool,
@@ -249,8 +248,7 @@ impl Exchange {
             heard: false,
             wait: timing.no_answer,
             sequence: 0,
-            last_again: 0,
-            wrapped: false,
+            asked_again: 0,
             sampled: false,
             warned: false,
         }
@@ -330,7 +328,7 @@ impl Exchange {
     /// Whether a request of this capture may have had this number, other than the
     /// one out, which is looked for first: with nothing asked again that is only 0.
     fn was_asked(&self, sequence: u8) -> bool {
-        self.wrapped || sequence <= self.last_again
+        self.asked_again >= 255 || u32::from(sequence) <= self.asked_again
     }
 
     fn answered(&mut self, next: Command, now: Instant) {
@@ -457,12 +455,8 @@ impl Exchange {
         match (command, self.phase) {
             (Command::Init, _) => INIT,
             (Command::Request, Phase::Await(_)) => {
-                let (next, wrapped) = match self.last_again.checked_add(1) {
-                    Some(next) => (next, self.wrapped),
-                    None => (1, true),
-                };
-                self.last_again = next;
-                self.wrapped = wrapped;
+                let next = u8::try_from(self.asked_again % 255 + 1).expect("1 to 255");
+                self.asked_again += 1;
                 self.sequence = next;
                 [REQUEST[0], next, REQUEST[2]]
             }

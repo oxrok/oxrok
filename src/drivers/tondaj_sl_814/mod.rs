@@ -311,9 +311,9 @@ fn short_write_message(command: Command, went: usize) -> Option<String> {
 
 /// `serial_write_blocking` with its timeout: one that runs out is no error in C, and
 /// the wait for its reply goes on, but it is told here.
-fn send(port: &mut dyn Port, command: Command, bytes: &[u8; 3], timeout: Duration) -> Result<()> {
+fn send(port: &mut dyn Port, command: Command, bytes: [u8; 3], timeout: Duration) -> Result<()> {
     log::trace!("Sending command: {bytes:02x?}.");
-    match port.write_timeout(bytes, timeout) {
+    match port.write_timeout(&bytes, timeout) {
         Ok(went) => {
             if let Some(message) = short_write_message(command, went) {
                 log::warn!("{message}");
@@ -396,7 +396,7 @@ impl Capture {
                     }
                     Next::Send(command) => {
                         let bytes = exchange.bytes(command);
-                        send(port, command, &bytes, self.write_timeout)?;
+                        send(port, command, bytes, self.write_timeout)?;
                         let now = Instant::now();
                         exchange.sent(command, now);
                         if exchange.time_is_up(now) {

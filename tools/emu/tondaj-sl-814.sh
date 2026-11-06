@@ -150,7 +150,7 @@ s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
     # time limit past the bound ends as a short one does. The clock decides whether
     # a stalled tool got to ask again by then: the next case holds that it does.
     emu_options answers=2
-    emu_case "dead, a long time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 10 --tx-filter 's/^bulk_out 02 30000d(30010d)? -> [36]$/bulk_out 02 30000d/' -- -d $K --time 8s
+    emu_case "dead, a long time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 11 --tx-filter 's/^bulk_out 02 30000d(30010d)? -> [36]$/bulk_out 02 30000d/' -- -d $K --time 9s
     # A lost reply: C never ends, and oxrok asks again with a warning and goes on.
     emu_options "reply=$OK,"
     emu_case "a reply lost" --oracle-bug "$REPLY_BUG" --oracle-hangs --timeout 10 -- -d $K --samples 2
