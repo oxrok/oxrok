@@ -86,6 +86,7 @@ pub mod drivers {
     pub mod atorch;
     pub mod atten_pps3xxx;
     pub mod chronovu_la;
+    pub mod conrad_digi_35_cpu;
     pub mod dcttech_usbrelay;
     pub mod demo;
     pub mod devantech_eth008;
@@ -188,6 +189,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::asix_sigma::AsixSigmaDriver));
     registry.register(Box::new(drivers::chronovu_la::ChronovuLaDriver));
     registry.register(Box::new(drivers::kecheng_kc_330b::Kc330bDriver));
+    registry.register(Box::new(drivers::conrad_digi_35_cpu::ConradDigi35CpuDriver));
     registry.register(Box::new(drivers::kingst_la2016::La2016Driver));
     registry.register(Box::new(drivers::pipistrello_ols::PipistrelloOlsDriver));
     registry.register(Box::new(drivers::dreamsourcelab_dslogic::DslogicDriver));

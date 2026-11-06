@@ -1,0 +1,2 @@
+sr: conrad-digi-35-cpu: Current out of range (0 - 2.55)!
+Failed to set device option 'current_limit': invalid argument.

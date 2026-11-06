@@ -1,0 +1,2 @@
+sr: conrad-digi-35-cpu: Voltage out of range (0 - 35.0)!
+Failed to set device option 'voltage_target': invalid argument.
