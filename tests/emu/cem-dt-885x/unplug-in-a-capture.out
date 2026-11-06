@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::cem_dt_885x: Acquisition failed: Broken pipe.
+oxrok: warn: oxrok::cli::pipeline: Device only sent N samples.

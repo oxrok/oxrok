@@ -85,6 +85,7 @@ pub mod drivers {
     pub mod asix_sigma;
     pub mod atorch;
     pub mod atten_pps3xxx;
+    pub mod cem_dt_885x;
     pub mod chronovu_la;
     pub mod conrad_digi_35_cpu;
     pub mod dcttech_usbrelay;
@@ -167,6 +168,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::devantech_eth008::DevantechEth008Driver));
     registry.register(Box::new(drivers::uni_t_ut181a::UniTUt181aDriver));
     registry.register(Box::new(drivers::link_mso19::LinkMso19Driver));
+    registry.register(Box::new(drivers::cem_dt_885x::CemDt885xDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
