@@ -435,8 +435,17 @@ each with where it belongs:
   batch. Check the csv goldens, as mid-round dumps affect row alignment.
   Not measured on a release build or on real mixed-signal drivers; `-O
   vcd` not measured.
-- About 15 test fakes still have an uncapped write log besides those
-  moved to `WriteLog`: move them as they're touched.
+- Test fakes not yet on `WriteLog`, as they're touched: the `Seen`
+  aliases in `gwinstek_gpd`, `gwinstek_psp`, `motech_lps_30x`;
+  `written`, `writes`, `log` or `commands` fields in `devantech_eth008`,
+  `icstation_usbrelay`, `link_mso19`, `pce_322a`, `uni_t_ut181a`,
+  `uni_t_ut32x`, `serial_lcr`, `mastech_ms6514`, `zketech_ebd_usb`,
+  `ikalogic_scanalogic2`, `manson_hcs_3xxx/protocol.rs`,
+  `juntek_jds6600`, `rohde_schwarz_sme_0x`, `pipistrello_ols`,
+  `ols/protocol.rs`, `modbus`. A panic in a fake can poison a lock and
+  abort the test binary through a `Drop`, as `rdtech_dps`'s `link` and
+  `seen` do; and a worker that spins after a stop without writing hangs
+  `close()`, which only a timeout catches.
 - f32 narrowing, `conrad-digi-35-cpu`: it is in the driver, where only
   sigrok-cli's `session.c:570` narrows and C's driver keeps the double.
   140 of 35001 voltages on a 1 mV grid and 101 of 25501 currents on a
