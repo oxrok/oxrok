@@ -713,6 +713,30 @@ Deliberate, and kept small:
   cable, where sigrok-cli cannot. `conn=1a86.e008` is an oxrok
   extension, meaning the chip and taking the first cable the search
   finds.
+- uni-t-ut181a: `range=auto` sends a range of 0, where sigrok-cli sends
+  a mode of 0, which the meter is not known to take.
+  `measured_quantity=` works, where sigrok-cli crashes. A range or mode
+  set that gets `ER` or no answer fails, and `--get range` after a set
+  says what the meter took, auto after a mode.
+- uni-t-ut181a: a chunk after a recording's first comes from that
+  recording, not recording 1. A download ends on `ER`, an empty chunk or
+  5 s of silence, where sigrok-cli waits or asks for ever; it exits 0
+  with the message on stderr.
+- uni-t-ut181a: a time limit ends a silent meter, and a live `--time`
+  does not wait for one more reading. A first reading may take 2 s,
+  where sigrok-cli finds no device after 100 ms. A live capture with
+  only a sample or frame limit ends after 10 s with nothing read. An
+  unplug ends a capture.
+- uni-t-ut181a: a recording's name that is not UTF-8 shows U+FFFD, where
+  sigrok-cli exits. A recording's sample interval comes as a META line
+  after the header, which sigrok-cli drops. A start's failure says
+  "timeout" or "the meter refused the request", where sigrok-cli says it
+  could not start.
+- uni-t-ut181a: `-O csv` warns: channels with no data print 0,
+  indistinguishable from a reading (docs/ROADMAP.md), and with `-C
+  P1,P2` the frame separator falls between rows, where sigrok-cli has it
+  ahead of the header and reads past the packet for channels with no
+  data.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

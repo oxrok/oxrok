@@ -2661,6 +2661,61 @@ memory dump is paced and ends, the line rate, and the update rate
 known. C leaves 6 bytes of its stack in each output report on the cable
 (`serial_hid_ch9325.c:130,149-150`); oxrok sends zeros.
 
+## UNI-T UT181A (uni-t-ut181a)
+
+UNI-T UT181A multimeter (`uni-t-ut181a`): ported and emulated on the
+CDC-ACM shell, model `uni-t-ut181a` (`readings=`, `saved=`, `rec=`,
+`recs=`, `first=`, `frames=`, `period=`, `per=`, `over=`, `have=`,
+`fail=`, `pad=`, `off-reading=`, `uart=`, `setters=`, and the shell's
+faults), 195 cases, 2026-11-06: 168 full, 10 `--oracle-bug`, 8
+`--oracle-differs`, 9 library. gcov 90.1% of the driver. Behind its real
+cable as model `uni-t-ut181a-cp2110` (the `cp2110` model's chip with
+this meter on its UART), 6 full cases; gcov of `serial_hid_cp2110.c`
+48.9%. BLE is not emulated. `conn=` is required, as nothing identifies
+the meter. Frames, packets, modes and commands are from `antage/ut181a`
+(commit 21c5b07, Protocol.md and its Rust code) and the C driver; OK
+ahead of the first reading, the chunk size and ER for what is not there
+are guesses, so "ER ends a download" rests on the model's guess too. The
+checksum is C's, the sum of the bytes of the length and the payload:
+`antage` sums 2 and the bytes of the payload's length, which differs
+when that length's low byte is 0xfe or 0xff (a chunk of 28 or 85
+samples), and no recording settles it. Never on hardware.
+
+The oracle's `-O0` build fails on anything behind a unit: `consume_str`
+writes past its 8 byte buffer (`protocol.c:1720`) onto the low byte of
+the count of bytes left, so aux values are lost and a meter with any
+recording is no device. Two `-O2` compiles have other bytes there, by
+their debug info and not by a run. The model's `pad=` gets C's parser
+past it; pad-less cases pin the failure, with oxrok held to frames as a
+meter sends them. A field cut behind the first unit cannot be shown in
+C: it fails at that first field whatever is cut. `cp2110_write_bytes`
+sends uninitialised stack behind a report's bytes
+(`serial_hid_cp2110.c:246,263-265`).
+
+oxrok waits 2 s for the first reading where C gives up at 100 ms, and
+500 ms for a reply. A range or mode set waits for its reply code, and
+`ER` or nothing fails it; C crashes at the mode (`api.c:412`) and has no
+wait at the range. `range=auto` sends a range of 0, where C sends a mode
+of 0 (`protocol.c:684`). A mode set reads back as auto until the next
+reading. An `ER` to a count or an info ends that wait at once. Each
+chunk asks for the recording selected, where C asks for the first after
+the first chunk (`protocol.c:2682`). A download ends on `ER`, an empty
+chunk or 5 s with nothing read, where C waits or asks for ever; such a
+capture exits 0 with its message on stderr, like every failed capture
+for now. A time limit is checked on each pass, not only at a packet, and
+a failed read ends a capture. A live capture with only a sample or frame
+limit ends after 10 s of silence. A capture takes only its own kind of
+packet, where C feeds any and a stray one can end it, and a record info
+of another name refuses the start, as its unit scales every sample; so
+does a recording renamed since the list. After a wait that expired or a
+capture that may have left an answer, nothing goes out until that answer
+has come or 500 ms have passed, and the line has been quiet for 100 ms,
+at most 3 s more; a reply code carries no id, so an answer later than
+that can still answer the next request. Kept as in C: only a frame's
+first value counts as a sample and a limit drops the rest of that frame,
+a failed frame stays open until the next closes it, and in a live
+capture what comes behind garbage waits for the next bytes.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,

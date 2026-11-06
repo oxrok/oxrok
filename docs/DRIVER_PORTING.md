@@ -297,6 +297,47 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A coverage build shows what an optimised one hides. A one-byte write
+  past a buffer zeroed the count of bytes left only at -O0: read the
+  frame's layout from DWARF (`objdump --dwarf=info`, DW_OP_fbreg) before
+  calling it a protocol quirk, and compile at -O2 to say which builds
+  have it. A model option that pads frames past it still gives the
+  parser an oracle, but no field cut behind it can be shown in C.
+- gcov tells you which return was taken: a line reached and the next not
+  showed the cut was at the fields behind a unit.
+- `serial_source_add` with a timeout calls back with no G_IO_IN, so a C
+  driver that reads only on G_IO_IN never re-runs its buffer without
+  bytes. A search that takes one step per call then holds a whole frame
+  until the next bytes. Port that for a live stream to keep the `.tx`,
+  and pace the model so two frames cannot share a read.
+- A model's event mark in a stream's first session fires in a tool's
+  scan, ahead of the capture it is for and of the signal handler. A case
+  looks fine until a CPU quota on the tool alone. Read where `interrupt`
+  and `unplug` fall in the `.tx`, and check that the `.out` shows a
+  capture.
+- A settle on silence alone fails when the answer is later than the
+  quiet: a refused setting then reads the last request's OK. Keep what
+  is owed, wait for that first, then the quiet. Test at a latency above
+  the quiet.
+- A purge is a report on the wire on a HID cable. A driver's extra flush
+  is invisible on CDC, so run a serial meter's model behind its real
+  cable if it can talk: read away what has arrived instead where C has
+  no flush.
+- A label from a late answer is worse than a late sample: a record info
+  gives every sample's scale, and One's unit made 201 mV read as 201 V.
+  Check what an answer can be checked against. A capture should take
+  only its own kind of packet.
+- sigrok-cli never sets a locale, so GOption refuses non-ASCII in `-c`.
+  `--oracle-env CHARSET=UTF-8` lets GLib take it, and LC_ALL does not. A
+  C string may be U+2126, not U+03A9: they print alike.
+- A fake that delivers two answers in one read lets the last win, so a
+  stale reply goes unnoticed. To test a purge, make the real answer come
+  later than the stale one.
+- A silence bound test that passes with an ER ignored proves nothing:
+  raise the bound past the test's own, or the bound hides the ER.
+- A filter can pin oxrok's wording rather than hide it: rewrite
+  sigrok-cli's line into oxrok's, one-sided, and the golden holds
+  oxrok's exact text.
 - A resync that drops a full fixed buffer can split the end marker, and
   then each later record is cut at the same place for good. Try one
   stray byte ahead of a record, on a model list that does not cycle: a
