@@ -812,6 +812,7 @@ mod tests {
     #[test]
     fn answers_that_are_no_reading_are_no_silence() {
         let mut w = Watch::with_bounds(false, [S * 2, S * 100, S * 100, S * 100]);
+        assert_eq!(w.nothing(S, S), Verdict::Go);
         for _ in 0..10 {
             assert_eq!(w.no_reading(S, S), Verdict::Go);
         }

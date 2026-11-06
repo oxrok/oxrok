@@ -39,6 +39,9 @@ struct State {
     failing_after: Option<u32>,
     gone: bool,
     closes: u32,
+    discards: u32,
+    /// Reads to come that fail with a device's error, as a bad USBTMC header does.
+    bad_reads: u32,
     reopens: u32,
     reads: u32,
 }
@@ -94,6 +97,10 @@ impl ScpiTransport for Fake {
         if s.gone {
             return Err(Error::Disconnected);
         }
+        if s.bad_reads > 0 {
+            s.bad_reads -= 1;
+            return Err(Error::device("USBTMC invalid bulk in header."));
+        }
         // A read that finds nothing takes its time.
         let nothing = match s.coming.front_mut() {
             None => true,
@@ -143,6 +150,7 @@ impl ScpiTransport for Fake {
             return Ok(None);
         }
         let mut s = self.state.lock().unwrap();
+        s.discards += 1;
         // What has come by now. An answer still far off stays on its way.
         let mut n = 0;
         while let Some(front) = s.coming.front_mut() {
@@ -833,7 +841,8 @@ fn a_device_gone_ends_a_capture_with_an_error() {
         packets
     });
     assert_eq!(readings(&packets), []);
-    assert!(failure(&packets).is_some());
+    let text = failure(&packets).unwrap();
+    assert!(!text.contains("No usable"), "gone is no bad answer: {text}");
 }
 
 /// A stop in the middle of a question out, and of a full queue: the close comes back.
@@ -883,6 +892,14 @@ fn a_restart_after_a_stuck_end_does_not_hang() {
         }
         let (tx2, rx2) = sync_channel(64);
         device.start(PacketSink::new(tx2, 0)).unwrap();
+        // The old worker is gone, and its sink with it.
+        let gone = loop {
+            match rx.recv_timeout(Duration::from_secs(30)) {
+                Ok(_) => {}
+                Err(e) => break e,
+            }
+        };
+        assert_eq!(gone, std::sync::mpsc::RecvTimeoutError::Disconnected);
         let packets = collect(&rx2);
         assert_eq!(readings(&packets).len(), 1);
         device.close().unwrap();
@@ -1234,4 +1251,158 @@ fn one_group_selects_nothing_in_a_capture_and_does_in_a_get() {
     });
     let w = written(&probe);
     assert!(!w.iter().any(|l| l.starts_with(":INST")), "{w:?}");
+}
+
+/// A close joins: a thread in a read only the close can end must be gone when it comes
+/// back, holding nothing. Looks before anything is drained.
+#[test]
+fn a_stop_joins_the_thread_in_its_read() {
+    bounded(|| {
+        let (scpi, _) = line(Box::new(silent_after_idn), false);
+        let mut device = PpsDevice::from_scpi(scpi, false).unwrap();
+        device.open().unwrap();
+        device.closed = None;
+        device.link().scpi.as_mut().unwrap().read_timeout = Duration::from_millis(300);
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        device.stop().unwrap();
+        assert_eq!(Arc::strong_count(&device.link), 1);
+    });
+}
+
+/// A full queue at a reading, past the header: a stop must end it there as well.
+#[test]
+fn a_stop_ends_a_capture_blocked_on_a_reading() {
+    let (mut device, state) = device();
+    for pos in 1..9 {
+        device.enable_channel(pos, false).unwrap();
+    }
+    bounded(move || {
+        // The header and one reading fit, and nothing reads them.
+        let (tx, rx) = sync_channel(2);
+        clear(&state);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while written(&state).iter().filter(|l| *l == ":MEAS:VOLT?").count() < 2 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        device.stop().unwrap();
+        device.close().unwrap();
+        drop(rx);
+    });
+}
+
+/// The start of a round asks for a status once, not again for each read of the same
+/// question still out.
+#[test]
+fn a_question_out_asks_no_status() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        ":MEAS:VOLT?" if first => {
+            first = false;
+            vec![(5, "+1.000000E+00\n".to_owned())]
+        }
+        other => hp66b(other, "0\n", ("0\n", "0\n"), ("0\n", "0\n")),
+    };
+    let (mut device, state) = device_with(Box::new(respond), false, false);
+    with_limit(&mut device, 1);
+    device.enable_channel(1, false).unwrap();
+    clear(&state);
+    let probe = Arc::clone(&state);
+    bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        assert_eq!(readings(&collect(&rx)).len(), 1);
+        device.close().unwrap();
+    });
+    let asked = written(&probe);
+    assert_eq!(asked.iter().filter(|l| *l == "*STB?").count(), 1, "{asked:?}");
+}
+
+/// A question no answer ever comes to is asked again in the end, on a line with no tags.
+#[test]
+fn a_question_lost_on_a_line_with_no_tags_is_asked_again() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        ":MEAS:VOLT?" if first => {
+            first = false;
+            Vec::new()
+        }
+        other => dp832(other),
+    };
+    let (mut device, state) = device_with(Box::new(respond), false, false);
+    with_limit(&mut device, 1);
+    for pos in 1..9 {
+        device.enable_channel(pos, false).unwrap();
+    }
+    clear(&state);
+    let probe = Arc::clone(&state);
+    bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        assert_eq!(readings(&collect(&rx)), [(0, 12.5)]);
+        device.close().unwrap();
+    });
+    let asked = written(&probe);
+    assert_eq!(asked.iter().filter(|l| *l == ":MEAS:VOLT?").count(), 2, "{asked:?}");
+}
+
+/// A setting gives up what was owed: the send drains it, so nothing is left to wait for.
+#[test]
+fn a_setting_gives_up_the_question_out() {
+    let (device, _) = device_with(Box::new(silent_after_idn), false, false);
+    let mut link = device.link();
+    assert_eq!(link.measure(None, Cmd::GetMeasVoltage).unwrap(), Reading::Silent);
+    assert!(link.owed());
+    link.cmd(None, Cmd::SetOutputEnable, &[]).unwrap();
+    assert!(!link.owed());
+}
+
+/// A read that fails with what a device sent is no reading, and not the end.
+#[test]
+fn a_bad_answer_is_asked_again() {
+    let (mut device, state) = device();
+    with_limit(&mut device, 1);
+    for pos in 1..9 {
+        device.enable_channel(pos, false).unwrap();
+    }
+    state.lock().unwrap().bad_reads = 2;
+    let packets = bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let packets = collect(&rx);
+        device.close().unwrap();
+        packets
+    });
+    assert_eq!(readings(&packets), [(0, 12.5)]);
+    assert_eq!(failure(&packets), None);
+}
+
+/// A late answer that came clears the line's doubt: the next send has nothing to drain.
+#[test]
+fn a_late_answer_leaves_no_drain() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        ":MEAS:VOLT?" if first => {
+            first = false;
+            vec![(3, "12.5\n".to_owned())]
+        }
+        other => dp832(other),
+    };
+    let (mut device, state) = device_with(Box::new(respond), false, false);
+    with_limit(&mut device, 2);
+    for pos in 1..9 {
+        device.enable_channel(pos, false).unwrap();
+    }
+    let probe = Arc::clone(&state);
+    bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        assert_eq!(readings(&collect(&rx)).len(), 2);
+        device.close().unwrap();
+    });
+    assert_eq!(probe.lock().unwrap().discards, 0);
 }
