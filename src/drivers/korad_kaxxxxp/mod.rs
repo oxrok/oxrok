@@ -595,7 +595,7 @@ mod tests {
     /// What the fake saw.
     #[derive(Default)]
     struct Seen {
-        writes: Vec<(Instant, Vec<u8>)>,
+        writes: crate::serial::WriteLog,
         purges: usize,
     }
 

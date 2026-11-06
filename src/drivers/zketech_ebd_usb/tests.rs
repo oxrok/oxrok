@@ -23,7 +23,7 @@ const BYTE_TIMEOUT: Duration = Duration::from_millis(1);
 #[derive(Default)]
 struct Seen {
     /// Each write, a byte as a rule, with its time.
-    writes: Vec<(Instant, Vec<u8>)>,
+    writes: crate::serial::WriteLog,
     /// The commands whole, when they end in `f8`.
     commands: Vec<Vec<u8>>,
     partial: Vec<u8>,

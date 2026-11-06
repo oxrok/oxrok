@@ -48,7 +48,7 @@ enum Mode {
 
 /// A load, as its frames show it.
 struct State {
-    writes: Vec<(Instant, Vec<u8>)>,
+    writes: crate::serial::WriteLog,
     registers: HashMap<u16, u16>,
     /// What a coil read gives, by address.
     coils: HashMap<u16, u8>,
@@ -69,7 +69,7 @@ struct Fake {
 impl Fake {
     fn new() -> (Fake, Shared) {
         let state = Arc::new(Mutex::new(State {
-            writes: Vec::new(),
+            writes: crate::serial::WriteLog::default(),
             registers: HashMap::new(),
             coils: HashMap::new(),
             mode: Mode::Good,

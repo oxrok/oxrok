@@ -37,7 +37,7 @@ enum Reply {
 
 #[derive(Default)]
 struct State {
-    writes: Vec<(Instant, Vec<u8>)>,
+    writes: crate::serial::WriteLog,
     script: VecDeque<Reply>,
     /// What every request gets once the script is out, if anything.
     otherwise: Option<Vec<u8>>,

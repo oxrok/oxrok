@@ -1554,10 +1554,7 @@ mod tests {
         assert_eq!(poll(&mut dev, &mut v).0, 1);
         assert_eq!(poll(&mut dev, &mut v), (2, 0));
         bulk(&mut dev, &[5, 0], &mut v);
-        let mut frame = Vec::new();
-        while let Reply::Data(d) = dev.transfer_in(6, 512, &mut v) {
-            frame.extend(d);
-        }
+        let frame = crate::shells::cdc::host::drain_offers(|| dev.transfer_in(6, 512, &mut v)).concat();
         let ch1: Vec<u8> = frame.chunks(2).map(|s| s[1]).collect();
         assert!(ch1[5119] < 0x7f && ch1[5120] >= 0x7f, "{:?}", &ch1[5115..5125]);
         assert!(v.is_empty(), "{v:?}");
