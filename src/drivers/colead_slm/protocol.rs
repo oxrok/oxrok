@@ -35,6 +35,8 @@ pub struct Level {
     pub value: f32,
     /// What the record's configuration says of it.
     pub flags: MqFlags,
+    /// All five digits were passed over, so the value is C's 0.0 and says nothing.
+    pub no_digits: bool,
 }
 
 /// Why a record gives no level. The texts are C's own debug lines.
@@ -84,10 +86,12 @@ pub fn decode(record: &[u8; RECORD_LEN]) -> Result<Level, Refused> {
         return Err(Refused::Checksum);
     }
     let mut value = 0.0f32;
+    let mut no_digits = true;
     for &digit in &record[3..8] {
         if digit > 0x09 {
             continue;
         }
+        no_digits = false;
         value *= 10.0;
         value += f32::from(digit);
     }
@@ -99,7 +103,16 @@ pub fn decode(record: &[u8; RECORD_LEN]) -> Result<Level, Refused> {
     };
     let low = record[2] & 0x0f;
     let flags = configuration(low).ok_or(Refused::Configuration(low))?;
-    Ok(Level { value, flags: hold | flags })
+    Ok(Level { value, flags: hold | flags, no_digits })
+}
+
+/// Whether this is a well-formed record whose status says "not valid": the one
+/// thing with no level in it that shows the meter is there and working.
+pub fn says_not_valid(record: &[u8; RECORD_LEN]) -> bool {
+    record[0] == 0x08
+        && record[1] == 0x04
+        && record[8] == 0x00
+        && record[..9].iter().fold(0u8, |sum, &b| sum.wrapping_add(b)) == record[9]
 }
 
 /// The low nibble's table. Over 0xb the driver says less than the meter does: a
@@ -189,6 +202,9 @@ pub enum Silence {
     NoBytes,
     /// Bytes, and no level in them.
     NoLevel,
+    /// Well-formed records that say their readings are not valid. This one has
+    /// started a new bound of its own.
+    NotValid,
 }
 
 /// How long it has been since a level. The times come in as arguments, so that
@@ -196,23 +212,39 @@ pub enum Silence {
 ///
 /// Time this thread did not run counts for nothing, as a stopped process or a
 /// consumer that held a send heard nothing either: a capture is not ended by what
-/// came while it could not look, and the look after it may read a level yet.
+/// came while it could not look, and the look after it may read a level yet. That
+/// credit has a limit, [`NoLevel::MOST_CREDIT`], so a process that is stopped for
+/// more than a second again and again still comes to its end.
 #[derive(Clone, Debug)]
 pub struct NoLevel {
     bound: Duration,
     since: Instant,
     looked: Instant,
     heard: bool,
+    not_valid: bool,
+    /// Said once, for the whole capture.
+    said_not_valid: bool,
+    credit: Duration,
 }
 
 impl NoLevel {
     /// The longest a turn of the capture's loop takes when it runs at all: a
     /// read's wait, a request's write, and room for a loaded box.
     const STALL: Duration = Duration::from_secs(1);
+    /// The most time that counts for nothing, between two levels.
+    const MOST_CREDIT: Duration = Duration::from_secs(60);
 
     /// None heard so far, from `now`.
     pub fn new(bound: Duration, now: Instant) -> NoLevel {
-        NoLevel { bound, since: now, looked: now, heard: false }
+        NoLevel {
+            bound,
+            since: now,
+            looked: now,
+            heard: false,
+            not_valid: false,
+            said_not_valid: false,
+            credit: Duration::ZERO,
+        }
     }
 
     /// Bytes came.
@@ -220,25 +252,55 @@ impl NoLevel {
         self.heard = true;
     }
 
+    /// A well-formed record said "not valid".
+    pub fn not_valid(&mut self) {
+        self.not_valid = true;
+    }
+
     /// A level went out; `now` is taken after its send.
     pub fn level(&mut self, now: Instant) {
-        self.since = now;
-        self.looked = now;
-        self.heard = false;
+        self.restart(now);
+    }
+
+    /// A new bound from `now`, with nothing heard.
+    pub fn restart(&mut self, now: Instant) {
+        *self = NoLevel { said_not_valid: self.said_not_valid, ..NoLevel::new(self.bound, now) };
+    }
+
+    /// What the bound has heard so far.
+    pub fn silence(&self) -> Silence {
+        match (self.not_valid, self.heard) {
+            (true, _) => Silence::NotValid,
+            (false, true) => Silence::NoLevel,
+            (false, false) => Silence::NoBytes,
+        }
     }
 
     /// Asked once per turn of the loop, after its read.
     pub fn look(&mut self, now: Instant) -> Option<Silence> {
         let gap = now.saturating_duration_since(self.looked);
         self.looked = now;
-        if gap > Self::STALL {
-            self.since += gap;
+        let left = Self::MOST_CREDIT.saturating_sub(self.credit);
+        if gap > Self::STALL && !left.is_zero() {
+            let credit = gap.min(left);
+            self.since += credit;
+            self.credit += credit;
             return None;
         }
         if now.saturating_duration_since(self.since) < self.bound {
             return None;
         }
-        Some(if self.heard { Silence::NoLevel } else { Silence::NoBytes })
+        let silence = self.silence();
+        if silence == Silence::NotValid {
+            // The meter is there. Whether it stays is for the next bound to say.
+            let credit = self.credit;
+            let said = self.said_not_valid;
+            self.restart(now);
+            self.credit = credit;
+            self.said_not_valid = true;
+            return (!said).then_some(silence);
+        }
+        Some(silence)
     }
 }
 
@@ -464,6 +526,84 @@ mod tests {
         n.level(t1);
         assert_eq!(fires_at(&mut n, t1, 14), None);
         assert_eq!(n.look(t1 + secs(15)), Some(Silence::NoBytes));
+    }
+
+    #[test]
+    fn credit_comes_to_an_end() {
+        // Stopped for 1.2 s, run for 0.05 s, for ever: 60 s of credit, then the bound.
+        let t0 = Instant::now();
+        let mut n = NoLevel::new(secs(15), t0);
+        let step = Duration::from_millis(1250);
+        let mut at = t0;
+        let fired = (1..200).find_map(|i| {
+            at += step;
+            n.look(at).map(|s| (i, s))
+        });
+        let (i, silence) = fired.expect("it never ended");
+        assert_eq!(silence, Silence::NoBytes);
+        let took = step * i;
+        assert!(took >= secs(74) && took <= secs(76), "{took:?}");
+    }
+
+    #[test]
+    fn a_level_gives_the_credit_back() {
+        let t0 = Instant::now();
+        let mut n = NoLevel::new(secs(15), t0);
+        assert_eq!(n.look(t0 + secs(100)), None);
+        let t1 = t0 + secs(100);
+        n.level(t1);
+        assert_eq!(n.look(t1 + secs(50)), None, "credit for a stop after a level");
+    }
+
+    #[test]
+    fn not_valid_is_said_at_the_bound_and_starts_another() {
+        let t0 = Instant::now();
+        let mut n = NoLevel::new(secs(15), t0);
+        n.heard();
+        n.not_valid();
+        assert_eq!(fires_at(&mut n, t0, 16), Some((30, Silence::NotValid)));
+        // A second bound of the same goes by without a word, levels or no levels.
+        let t1 = t0 + secs(15);
+        n.heard();
+        n.not_valid();
+        assert_eq!(fires_at(&mut n, t1, 16), None);
+        let t1 = t1 + secs(16);
+        n.level(t1);
+        n.heard();
+        n.not_valid();
+        assert_eq!(fires_at(&mut n, t1, 16), None);
+        let t1 = t1 + secs(15);
+        // Nothing since then, not a byte: that is the end.
+        assert_eq!(fires_at(&mut n, t1, 14), None);
+        assert_eq!(n.look(t1 + secs(15)), Some(Silence::NoBytes));
+    }
+
+    #[test]
+    fn says_not_valid_needs_a_good_header_status_0_and_a_good_sum() {
+        assert!(says_not_valid(&record(0x10, [10, 10, 7, 5, 3], 0)));
+        assert!(!says_not_valid(&record(0x10, [10, 10, 7, 5, 3], 1)));
+        assert!(!says_not_valid(&record(0x10, [10, 10, 7, 5, 3], 2)));
+        let mut r = record(0x10, [10, 10, 7, 5, 3], 0);
+        r[9] ^= 1;
+        assert!(!says_not_valid(&r));
+        let mut r = record(0x10, [10, 10, 7, 5, 3], 0);
+        r[0] ^= 1;
+        r[9] ^= 1;
+        assert!(!says_not_valid(&r));
+        let mut r = record(0x10, [10, 10, 7, 5, 3], 0);
+        r[1] ^= 1;
+        r[9] = r[..9].iter().fold(0u8, |s, &b| s.wrapping_add(b));
+        assert!(!says_not_valid(&r));
+    }
+
+    #[test]
+    fn a_record_with_no_digits_says_so() {
+        let blank = decode(&record(0x10, [10, 10, 10, 10, 10], 1)).unwrap();
+        assert_eq!(blank.value, 0.0);
+        assert!(blank.no_digits);
+        assert!(decode(&record(0x10, [11, 0x7f, 16, 12, 13], 1)).unwrap().no_digits);
+        assert!(!decode(&record(0x10, [10, 10, 10, 10, 0], 1)).unwrap().no_digits);
+        assert!(!decode(&record(0x10, [0, 10, 10, 10, 10], 1)).unwrap().no_digits);
     }
 
     #[test]

@@ -23,10 +23,12 @@ use std::sync::mpsc::{Receiver, sync_channel};
 const GOOD: [u8; RECORD_LEN] = [0x08, 0x04, 0x10, 0x0a, 0x0a, 0x07, 0x05, 0x03, 0x01, 0x40];
 /// 80.0 dB, A weighted, slow, max hold.
 const OTHER: [u8; RECORD_LEN] = [0x08, 0x04, 0x21, 0x0a, 0x0a, 0x08, 0x00, 0x00, 0x01, 0x4a];
+/// A bad status and a sum that doesn't fit it: not a well-formed record.
+const BAD_SUM: [u8; RECORD_LEN] = [0x08, 0x04, 0x10, 0x0a, 0x0a, 0x07, 0x05, 0x03, 0x00, 0x40];
 /// A bad status.
 const INVALID: [u8; RECORD_LEN] = [0x08, 0x04, 0x10, 0x0a, 0x0a, 0x07, 0x05, 0x03, 0x00, 0x3f];
 
-/// The most a fake or a helper keeps: a mutant that ignores a stop or a limit must
+/// The most packets a helper keeps: a mutant that ignores a stop or a limit must
 /// fail a test, not fill the memory.
 const MAX_LOG: usize = 4096;
 
@@ -52,7 +54,7 @@ enum Read {
 /// What the test can see of a port the device owns.
 #[derive(Default)]
 struct Shared {
-    writes: Vec<u8>,
+    writes: crate::serial::WriteLog,
     /// Write attempts, whatever came of them.
     attempts: usize,
     reads: usize,
@@ -142,10 +144,8 @@ impl Port for Script {
             Some(Ok(0)) => Ok(0),
             Some(Err(e)) => Err(e),
             _ => {
-                if let Ok(mut s) = self.shared.lock()
-                    && s.writes.len() < MAX_LOG
-                {
-                    s.writes.extend_from_slice(data);
+                if let Ok(mut s) = self.shared.lock() {
+                    s.writes.push((Instant::now(), data.to_vec()));
                 }
                 if !self.held_until_write.is_empty() {
                     let bytes = self.held_until_write.remove(0);
@@ -257,11 +257,7 @@ impl Port for Line {
         self.write_timeout(data, Duration::ZERO).map(|_| ())
     }
     fn write_timeout(&mut self, data: &[u8], _: Duration) -> Result<usize> {
-        let mut shared = self.shared.lock().expect("shared");
-        if shared.writes.len() < MAX_LOG {
-            shared.writes.extend_from_slice(data);
-        }
-        drop(shared);
+        self.shared.lock().expect("shared").writes.push((Instant::now(), data.to_vec()));
         let now = self.start.elapsed();
         self.announce(now);
         let record = self.records[self.asked % self.records.len()];
@@ -278,6 +274,11 @@ impl Port for Line {
     fn purge(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+/// All that was written.
+fn written(shared: &Mutex<Shared>) -> Vec<u8> {
+    shared.lock().unwrap().writes.iter().flat_map(|(_, w)| w.clone()).collect()
 }
 
 /// An opened device on `port` with these limits.
@@ -388,7 +389,7 @@ fn a_level_goes_out_with_its_flags() {
         assert_eq!(a.digits, 1);
         let want = MqFlags::HOLD | MqFlags::SPL_FREQ_WEIGHT_A | MqFlags::SPL_TIME_WEIGHT_S;
         assert_eq!(a.flags, want);
-        assert_eq!(shared.lock().unwrap().writes, [SEND]);
+        assert_eq!(written(&shared), [SEND]);
     });
 }
 
@@ -402,8 +403,8 @@ fn the_limit_counts_levels_and_nothing_else_and_ends_there() {
         assert_eq!(values(&packets), [75.3, 80.0]);
         assert!(failure(&packets).is_none());
         // A request per announcement, and the fourth announcement left unread.
+        assert_eq!(written(&shared), [SEND, SEND, SEND]);
         let shared = shared.lock().unwrap();
-        assert_eq!(shared.writes, [SEND, SEND, SEND]);
         assert_eq!(shared.reads, 6);
     });
 }
@@ -422,7 +423,7 @@ fn no_request_without_a_read_of_the_one_byte() {
         let mut d = device(script, 1, 0);
         let packets = capture(&mut d);
         assert_eq!(values(&packets), [75.3]);
-        assert_eq!(shared.lock().unwrap().writes, [SEND]);
+        assert_eq!(written(&shared), [SEND]);
     });
 }
 
@@ -434,7 +435,7 @@ fn a_record_read_in_pieces_is_one_record() {
         let (script, shared) = Script::new(&reads);
         let mut d = device(script, 1, 0);
         assert_eq!(values(&capture(&mut d)), [75.3]);
-        assert_eq!(shared.lock().unwrap().writes, [SEND]);
+        assert_eq!(written(&shared), [SEND]);
     });
 }
 
@@ -446,7 +447,7 @@ fn a_reply_with_bytes_too_many_stays_out_of_the_record() {
         let (script, shared) = Script::new(&[&[READY], &long, &[READY], &OTHER]);
         let mut d = device(script, 2, 0);
         assert_eq!(values(&capture(&mut d)), [75.3, 80.0]);
-        assert_eq!(shared.lock().unwrap().writes, [SEND, SEND]);
+        assert_eq!(written(&shared), [SEND, SEND]);
     });
 }
 
@@ -458,7 +459,7 @@ fn a_late_record_after_an_announcement_loses_a_level_and_shifts_nothing() {
         // The record starts a byte late, so it is refused; what is over is
         // read alone and dropped.
         assert_eq!(values(&capture(&mut d)), [80.0]);
-        assert_eq!(shared.lock().unwrap().writes, [SEND, SEND]);
+        assert_eq!(written(&shared), [SEND, SEND]);
     });
 }
 
@@ -469,10 +470,92 @@ fn a_time_limit_ends_silence_at_its_time_from_both_sides() {
         let mut d = device(script, 0, 300);
         let began = Instant::now();
         let packets = capture(&mut d);
-        assert!(began.elapsed() >= Duration::from_millis(300), "{:?}", began.elapsed());
+        // The limit and its grace.
+        assert!(began.elapsed() >= Duration::from_millis(1300), "{:?}", began.elapsed());
         assert!(failure(&packets).is_none(), "{packets:?}");
         assert!(values(&packets).is_empty());
     });
+}
+
+#[test]
+fn a_time_limit_shorter_than_a_meters_gap_gets_cs_level() {
+    within(30, || {
+        for msec in [100, 300] {
+            let (mut line, shared) = Line::new(&[GOOD], None);
+            line.period = Duration::from_millis(500);
+            let mut d = device(line, 0, msec);
+            let packets = capture(&mut d);
+            assert_eq!(values(&packets), [75.3], "--time {msec}");
+            assert!(failure(&packets).is_none());
+            assert_eq!(written(&shared), [SEND]);
+        }
+    });
+}
+
+#[test]
+fn a_time_limit_past_some_levels_ends_behind_a_level() {
+    within(30, || {
+        let (mut line, _) = Line::new(&[GOOD], None);
+        line.period = Duration::from_millis(500);
+        let mut d = device(line, 0, 1200);
+        let packets = capture(&mut d);
+        assert!(values(&packets).len() >= 2, "{packets:?}");
+    });
+}
+
+#[test]
+fn a_request_no_one_answers_does_not_hold_a_time_limit_off() {
+    within(30, || {
+        let (script, shared) = Script::new(&[&[READY]]);
+        let mut d = device(script, 0, 100);
+        let began = Instant::now();
+        let packets = capture(&mut d);
+        assert!(began.elapsed() >= Duration::from_millis(1100), "{:?}", began.elapsed());
+        assert!(failure(&packets).is_none(), "{packets:?}");
+        assert!(values(&packets).is_empty());
+        assert_eq!(written(&shared), [SEND]);
+    });
+}
+
+#[test]
+fn a_record_on_its_way_past_the_grace_still_comes() {
+    within(30, || {
+        // The first read takes the limit and its grace, and every byte of the
+        // record comes in a read of its own after that.
+        let mut reads: Vec<&[u8]> = vec![&[READY]];
+        reads.extend(GOOD.chunks(1));
+        let (mut script, _) = Script::new(&reads);
+        script.first_read_delay = Duration::from_millis(1100);
+        let mut d = device(script, 0, 1);
+        assert_eq!(values(&capture(&mut d)), [75.3]);
+    });
+}
+
+#[test]
+fn time_up_with_no_level_says_whether_bytes_came() {
+    assert_eq!(
+        time_up_with_no_level(false),
+        "No bytes from the meter in the time limit: it is off, on another line setting, or its \
+         cable is out."
+    );
+    assert_eq!(
+        time_up_with_no_level(true),
+        "No usable level from the meter in the time limit, though bytes came."
+    );
+}
+
+#[test]
+fn the_other_warnings_words() {
+    assert_eq!(
+        not_valid_warning(Duration::from_secs(15)),
+        "The meter has sent no valid level for 15 s, and says its readings are not valid. Waiting \
+         on, as a mean can take up to 24 h: --time bounds a capture."
+    );
+    assert_eq!(
+        NO_DIGITS,
+        "A record with no digits reads 0.0 dB, below the meter's range of 30 to 130 dB: it is no \
+         measurement."
+    );
 }
 
 #[test]
@@ -486,7 +569,7 @@ fn what_a_read_gives_comes_before_the_timer_and_a_level_before_the_end() {
         let packets = capture(&mut d);
         assert_eq!(values(&packets), [75.3]);
         assert!(failure(&packets).is_none());
-        assert_eq!(shared.lock().unwrap().writes, [SEND]);
+        assert_eq!(written(&shared), [SEND]);
     });
 }
 
@@ -552,12 +635,12 @@ fn a_sample_limit_on_bytes_with_no_level_fails_and_says_so() {
 }
 
 #[test]
-fn a_sample_limit_ends_for_ever_refused_records() {
+fn a_sample_limit_ends_for_ever_bad_records() {
     within(20, || {
         let (mut script, shared) = Script::new(&[]);
         // More rounds than the bound's time reads, then a flood.
         script.reads = (0..5000)
-            .flat_map(|_| [Read::Bytes(vec![READY]), Read::Bytes(INVALID.to_vec())])
+            .flat_map(|_| [Read::Bytes(vec![READY]), Read::Bytes(BAD_SUM.to_vec())])
             .collect();
         script.repeat = Some(vec![0xff]);
         let mut d = with_bound(device(script, 1, 0), Duration::from_millis(1000));
@@ -566,7 +649,139 @@ fn a_sample_limit_ends_for_ever_refused_records() {
             failure(&packets),
             Some("device error: no usable level from the meter for 1 s, though bytes came")
         );
-        assert!(!shared.lock().unwrap().writes.is_empty());
+        assert!(!written(&shared).is_empty());
+    });
+}
+
+#[test]
+fn a_sample_limit_goes_on_while_the_meter_says_not_valid() {
+    within(30, || {
+        // Longer than the bound, then a level: a mean that came through.
+        let mut records = [INVALID; 21];
+        records[20] = GOOD;
+        let (line, _) = Line::new(&records, None);
+        let mut d = with_bound(device(line, 1, 0), Duration::from_secs(1));
+        let packets = capture(&mut d);
+        assert!(failure(&packets).is_none(), "{packets:?}");
+        assert_eq!(values(&packets), [75.3]);
+    });
+}
+
+#[test]
+fn a_read_key_dump_of_not_valid_records_takes_that_path() {
+    within(30, || {
+        // At the line's whole rate, 42 ms a record, past the bound: no announcement
+        // is lost among them, and none of it is a failure.
+        let mut records = [INVALID; 40];
+        records[39] = GOOD;
+        let (mut line, _) = Line::new(&records, None);
+        line.period = Duration::from_millis(50);
+        let mut d = with_bound(device(line, 1, 0), Duration::from_secs(1));
+        let packets = capture(&mut d);
+        assert!(failure(&packets).is_none(), "{packets:?}");
+        assert_eq!(values(&packets), [75.3]);
+    });
+}
+
+#[test]
+fn a_dump_of_records_the_driver_refuses_for_their_mode_is_no_such_thing() {
+    within(30, || {
+        // The wiki's marker, status 1: well-formed, but not the signal.
+        let marker = [0x08, 0x04, 0x09, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x01, 0x48];
+        let (line, _) = Line::new(&[marker], None);
+        let mut d = with_bound(device(line, 1, 0), Duration::from_secs(1));
+        assert_eq!(
+            failure(&capture(&mut d)),
+            Some("device error: no usable level from the meter for 1 s, though bytes came")
+        );
+    });
+}
+
+#[test]
+fn a_meter_that_said_not_valid_and_goes_quiet_still_fails() {
+    within(30, || {
+        let (script, _) = Script::new(&[&[READY], &INVALID]);
+        let mut d = with_bound(device(script, 1, 0), Duration::from_secs(1));
+        let began = Instant::now();
+        let packets = capture(&mut d);
+        assert!(began.elapsed() >= Duration::from_secs(2), "{:?}", began.elapsed());
+        assert!(
+            failure(&packets).is_some_and(|f| f.contains("no bytes from the meter for 1 s")),
+            "{packets:?}"
+        );
+    });
+}
+
+#[test]
+fn a_limit_set_on_a_silent_running_capture_gets_the_whole_bound() {
+    within(30, || {
+        let (script, _) = Script::new(&[]);
+        let mut d = with_bound(device(script, 0, 0), Duration::from_secs(1));
+        let (tx, rx) = sync_channel(16);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        // By the clock, past the bound with no limit on.
+        let began = Instant::now();
+        while began.elapsed() < Duration::from_millis(1300) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let set = Instant::now();
+        let packets = drain(&rx, Duration::from_secs(10));
+        assert!(set.elapsed() >= Duration::from_millis(900), "{:?}", set.elapsed());
+        assert!(failure(&packets).is_some_and(|f| f.contains("no bytes")), "{packets:?}");
+    });
+}
+
+/// A capture whose `End` waits on a queue no one reads: its header and its level
+/// fill the queue, and `End` has no room. Returns the receiver.
+fn stuck_at_end(d: &mut SlmDevice) -> Receiver<(usize, Packet)> {
+    let (tx, rx) = sync_channel(2);
+    d.start(PacketSink::new(tx, 0)).unwrap();
+    rx
+}
+
+/// Waits, with a bound, until the capture has given the port back.
+fn wait_for_port(d: &SlmDevice) {
+    let until = Instant::now() + Duration::from_secs(10);
+    while d.port.lock().unwrap().is_none() {
+        assert!(Instant::now() < until, "the port did not come back");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn the_port_comes_back_before_end() {
+    within(30, || {
+        let (script, _) = Script::new(&[&[READY], &GOOD]);
+        let mut d = device(script, 1, 0);
+        let rx = stuck_at_end(&mut d);
+        // `End` can't have gone, as nothing has read a thing.
+        wait_for_port(&d);
+        assert!(matches!(rx.recv(), Ok((_, Packet::Header { .. }))));
+        assert!(matches!(rx.recv(), Ok((_, Packet::Analog(_)))));
+        assert!(matches!(rx.recv_timeout(Duration::from_secs(10)), Ok((_, Packet::End))));
+    });
+}
+
+#[test]
+fn a_restart_stops_and_joins_the_last_captures_thread() {
+    within(30, || {
+        let (script, _) = Script::new(&[&[READY], &GOOD]);
+        let mut d = device(script, 1, 0);
+        let rx = stuck_at_end(&mut d);
+        wait_for_port(&d);
+        let (tx2, rx2) = sync_channel(16);
+        d.start(PacketSink::new(tx2, 0)).unwrap();
+        // That thread was told to stop, and gave its End up: reading its queue now
+        // lets nothing more in, and its sink is gone by the time start returned.
+        let mut old = Vec::new();
+        while let Ok((_, p)) = rx.try_recv() {
+            old.push(p);
+        }
+        assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Disconnected)));
+        assert!(!old.iter().any(|p| matches!(p, Packet::End)), "{old:?}");
+        d.stop().unwrap();
+        assert!(failure(&drain(&rx2, Duration::from_secs(5))).is_none());
     });
 }
 
@@ -661,9 +876,8 @@ fn a_write_with_no_room_waits_for_the_next_announcement() {
         let packets = capture(&mut d);
         assert_eq!(values(&packets), [80.0]);
         assert!(failure(&packets).is_none());
-        let shared = shared.lock().unwrap();
-        assert_eq!(shared.attempts, 2);
-        assert_eq!(shared.writes, [SEND]);
+        assert_eq!(written(&shared), [SEND]);
+        assert_eq!(shared.lock().unwrap().attempts, 2);
     });
 }
 
@@ -788,7 +1002,7 @@ fn three_levels(line: Line, shared: &Mutex<Shared>) {
     let got = values(&packets);
     assert_eq!(got.len(), 3, "{got:?}");
     assert!(got.iter().all(|v| *v == 75.3 || *v == 80.0), "{got:?}");
-    let writes = shared.lock().unwrap().writes.clone();
+    let writes = written(shared);
     assert!(writes.len() >= 3 && writes.iter().all(|b| *b == SEND), "{writes:02x?}");
 }
 

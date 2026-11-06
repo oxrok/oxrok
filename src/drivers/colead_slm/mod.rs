@@ -25,11 +25,18 @@
 //! (protocol.c:177-180) and takes a port that hangs up for a timeout (:199-201):
 //!
 //! - A port that fails ends the capture with an error.
-//! - A time limit ends the capture at the first read that gives nothing after
-//!   it, or [`TIME_GRACE`] after it while bytes keep coming and none makes a level.
-//!   While levels flow, it ends behind a level, as in C.
+//! - A time limit ends a capture behind the first level past it, as in C, or
+//!   [`TIME_GRACE`] past it when none came, as a meter announces only twice a
+//!   second. A capture that got no level then says so and still exits 0: the limit
+//!   was met.
 //! - When only a sample limit can end a capture, [`NO_LEVEL_BOUND`] with no level
-//!   ends it with an error, which says whether any byte came.
+//!   ends it with an error, which says whether any byte came. A meter that sends
+//!   well-formed records saying "not valid" is the exception: it isn't silent, and
+//!   C's comment has a mean run from 11 s to 24 h, so that is warned about once and
+//!   waited for, as C waits. `--time` bounds a script.
+//!
+//! A record with no digits reads 0.0 dB, below the meter's range of 30 to 130 dB.
+//! It goes out as in C, and is warned about once per capture.
 //!
 //! Nor C's `char` arithmetic, which depends on the platform; see
 //! [`protocol::decode`]. Nor its state across captures: a capture here starts
@@ -71,8 +78,9 @@ const END_AFTER_STOP: Duration = Duration::from_millis(500);
 /// The meter sends two a second. A 10-second mean is the longest thing the wiki
 /// names that could hold a meter's first level back, though nothing says it does.
 const NO_LEVEL_BOUND: Duration = Duration::from_secs(15);
-/// How long past a time limit a capture goes on while reads never come back
-/// empty. A record in flight takes 42 ms at 2400 Bd.
+/// How long past a time limit a capture with no level past it goes on: longer
+/// than the 500 ms between a meter's announcements, so that C's level behind the
+/// limit comes here too.
 const TIME_GRACE: Duration = Duration::from_secs(1);
 
 /// The driver.
@@ -349,6 +357,9 @@ impl Capture {
         let mut samples = 0u64;
         let mut machine = Machine::default();
         let mut no_level = NoLevel::new(self.no_level_bound, started);
+        let mut only_samples = self.only_samples();
+        let mut any_bytes = false;
+        let mut said_no_digits = false;
         let mut chunk = [0u8; IDLE_READ];
         while !stop.load(Ordering::SeqCst) {
             // The read comes first, so a reply that is ready wins over any timer.
@@ -358,12 +369,10 @@ impl Capture {
                 msec > 0 && started.elapsed() > Duration::from_millis(msec) + grace
             };
             if n == 0 {
-                if over(Duration::ZERO) {
-                    return Ok(());
-                }
                 // A hung up tty may give this at once: never spin on it.
                 std::thread::sleep(Duration::from_millis(1));
             } else {
+                any_bytes = true;
                 no_level.heard();
                 match machine.got(&chunk[..n]) {
                     Step::Wait => {}
@@ -371,8 +380,17 @@ impl Capture {
                     Step::Record(record) => {
                         log::trace!("received packet:{}", spew(&record));
                         match protocol::decode(&record) {
-                            Err(why) => log::debug!("{why}"),
+                            Err(why) => {
+                                log::debug!("{why}");
+                                if protocol::says_not_valid(&record) {
+                                    no_level.not_valid();
+                                }
+                            }
                             Ok(level) => {
+                                if level.no_digits && !said_no_digits {
+                                    said_no_digits = true;
+                                    log::warn!("{NO_DIGITS}");
+                                }
                                 if !send(Packet::Analog(AnalogData {
                                     channels: vec![0],
                                     samples: vec![level.value],
@@ -394,18 +412,39 @@ impl Capture {
                         }
                     }
                 }
-                if over(TIME_GRACE) {
-                    return Ok(());
-                }
             }
-            let only_samples = msec == 0 && self.limits.samples.load(Ordering::SeqCst) > 0;
-            if let Some(silence) = no_level.look(Instant::now())
-                && only_samples
-            {
-                return Err(no_level_error(silence, self.no_level_bound));
+            // A record on its way may finish: it takes at most ten more reads with
+            // bytes in them, so bytes that flow can't hold this off.
+            if !(n > 0 && machine.waiting()) && over(TIME_GRACE) {
+                if samples == 0 {
+                    log::warn!("{}", time_up_with_no_level(any_bytes));
+                }
+                return Ok(());
+            }
+            // A client that sets the limit now gets the whole bound from now.
+            let now_only_samples = self.only_samples();
+            if now_only_samples && !only_samples {
+                no_level.restart(Instant::now());
+            }
+            only_samples = now_only_samples;
+            match no_level.look(Instant::now()) {
+                Some(Silence::NotValid) if only_samples => {
+                    log::warn!("{}", not_valid_warning(self.no_level_bound));
+                }
+                Some(Silence::NoBytes | Silence::NoLevel) if only_samples => {
+                    let silence = no_level.silence();
+                    return Err(no_level_error(silence, self.no_level_bound));
+                }
+                _ => {}
             }
         }
         Ok(())
+    }
+
+    /// Whether a sample limit is all that can end this capture.
+    fn only_samples(&self) -> bool {
+        self.limits.msec.load(Ordering::SeqCst) == 0
+            && self.limits.samples.load(Ordering::SeqCst) > 0
     }
 
     /// The request. A write that finds no room is a request not sent, and the
@@ -432,6 +471,29 @@ fn spew(record: &[u8]) -> String {
     })
 }
 
+/// What a record with no digits gets, once per capture.
+const NO_DIGITS: &str = "A record with no digits reads 0.0 dB, below the meter's range of 30 to \
+                         130 dB: it is no measurement.";
+
+/// What a time limit says when it ended a capture that got no level.
+fn time_up_with_no_level(any_bytes: bool) -> &'static str {
+    if any_bytes {
+        "No usable level from the meter in the time limit, though bytes came."
+    } else {
+        "No bytes from the meter in the time limit: it is off, on another line setting, or its \
+         cable is out."
+    }
+}
+
+/// What a meter gets that has said "not valid" for a whole bound, once per capture.
+fn not_valid_warning(bound: Duration) -> String {
+    format!(
+        "The meter has sent no valid level for {} s, and says its readings are not valid. Waiting \
+         on, as a mean can take up to 24 h: --time bounds a capture.",
+        bound.as_secs()
+    )
+}
+
 /// A capture's end for lack of a level.
 fn no_level_error(silence: Silence, bound: Duration) -> Error {
     let seconds = bound.as_secs();
@@ -440,7 +502,7 @@ fn no_level_error(silence: Silence, bound: Duration) -> Error {
             "no bytes from the meter for {seconds} s: it announces two measurements a second, \
              so it is off, on another line setting, or its cable is out"
         ),
-        Silence::NoLevel => {
+        Silence::NoLevel | Silence::NotValid => {
             format!("no usable level from the meter for {seconds} s, though bytes came")
         }
     })
