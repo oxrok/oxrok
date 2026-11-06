@@ -38,6 +38,13 @@
 //! - `burst=` is a silence no meter is known to have: it makes a capture's count
 //!   of records independent of how long a tool listens.
 //! - `-` in a list (no bytes) is a line losing bytes, not a known habit.
+//! - It takes nothing from `announce=` or `packet=` while the line is misset: the
+//!   harness's tty restore gets read offers too, and a list's first entry then went
+//!   to nobody. A meter's clock doesn't care.
+//! - `after-ask=` and `last-gap=` are paces no meter is known to have. A tool held
+//!   up for a moment finds two announcements in one read, and rightly drops them,
+//!   which a finite burst has no spare for. So a case that isn't about that waits
+//!   for the host.
 //!
 //! Options, besides the shell's ([`Faults`]):
 //!
@@ -48,6 +55,10 @@
 //! - `period=N`, offers of a read per announcement (4 to 100000, default 25);
 //! - `burst=N`, announcements per open, then silence and a mark a period later;
 //!   0 never announces;
+//! - `after-ask=1`, each announcement waits until the last was asked for, and
+//!   `period=` counts from there;
+//! - `last-gap=N`, offers ahead of a burst's last announcement, in place of
+//!   `period=` (1 to 100000);
 //! - `late=N:T`, the Nth `0x20` answered after T offers, with the announcements
 //!   going on meanwhile;
 //! - `uart=LINE`, the line settings, instead of 2400/8n1.
@@ -65,7 +76,8 @@ use crate::{Error, Result};
 pub const NAME: &str = "colead-slm";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A Colead SL-5868P sound level meter on CDC-ACM; packet=HEX|-[,...], \
-                         announce=HEX|-[,...], period=N, burst=N, late=N:T, uart=LINE, and the \
+                         announce=HEX|-[,...], period=N, burst=N, after-ask=1, last-gap=N, late=N:T, \
+                         uart=LINE, and the \
                          shell's stall=, chunk=, in-limit=, in-stall=, out-hold=";
 
 /// "Measurement ready".
@@ -105,8 +117,11 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
     let mut config = Config {
         packets: vec![RECORD.to_vec()],
         announces: vec![vec![READY]],
+        uart,
         period: 25,
         burst: None,
+        after_ask: false,
+        last_gap: None,
         late: None,
     };
     for (k, v) in options {
@@ -118,6 +133,8 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
             "announce" => config.announces = parse_list(v)?,
             "period" => config.period = cable::parse_number(k, v, 4..=100_000)?,
             "burst" => config.burst = cable::parse_burst(v)?,
+            "after-ask" => config.after_ask = cable::parse_number(k, v, 0..=1)? == 1,
+            "last-gap" => config.last_gap = Some(cable::parse_number(k, v, 1..=100_000)?),
             "late" => {
                 let (nth, offers) = v
                     .split_once(':')
@@ -132,6 +149,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
         }
     }
     let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "Colead SL-5868P");
+    config.uart = uart;
     Ok(Cdc::new(NAME, &id, faults, Meter::new(config)).behind_uart(uart))
 }
 
@@ -139,8 +157,11 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
 struct Config {
     packets: Vec<Vec<u8>>,
     announces: Vec<Vec<u8>>,
+    uart: Line,
     period: u32,
     burst: Option<u32>,
+    after_ask: bool,
+    last_gap: Option<u32>,
     /// Which `0x20`, from 1, and for how many offers of a read.
     late: Option<(u32, u32)>,
 }
@@ -151,8 +172,12 @@ struct Meter {
     stream: Stream,
     /// Announcements left of a burst, until the mark.
     left: Option<u32>,
-    /// Offers since the burst's last announcement.
+    /// Offers since the burst's last announcement, or ahead of it.
     quiet: u32,
+    /// An announcement went, and no `0x20` since.
+    owed: bool,
+    /// The burst's event point has been marked.
+    marked: bool,
     asked: u32,
     /// A record held back: the offers it still waits, and its bytes.
     held: Option<(u32, Vec<u8>)>,
@@ -169,6 +194,8 @@ impl Meter {
             stream: Stream::new(config.period, true).with_burst(config.burst),
             left: config.burst,
             quiet: 0,
+            owed: false,
+            marked: false,
             asked: 0,
             held: None,
             config,
@@ -179,6 +206,24 @@ impl Meter {
         self.left = self.config.burst;
         self.stream = Stream::new(self.config.period, true).with_burst(self.config.burst);
         self.quiet = 0;
+        self.owed = false;
+        self.marked = false;
+    }
+
+    /// One offer: whether an announcement is due.
+    fn due(&mut self) -> bool {
+        if self.left == Some(0) || (self.config.after_ask && self.owed) {
+            return false;
+        }
+        let Some(gap) = self.config.last_gap.filter(|_| self.left == Some(1)) else {
+            return self.stream.poll();
+        };
+        self.quiet += 1;
+        if self.quiet < gap {
+            return false;
+        }
+        self.quiet = 0;
+        true
     }
 }
 
@@ -189,6 +234,7 @@ impl Serial for Meter {
                 port.violation(format!("{byte:#04x} written; a record is asked for with 0x20"));
                 continue;
             }
+            self.owed = false;
             self.asked = self.asked.saturating_add(1);
             let record = self.packets.take();
             match self.config.late {
@@ -205,6 +251,14 @@ impl Serial for Meter {
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
+        // What the shell's UART takes as the same line.
+        let (line, uart) = (port.line(), self.config.uart);
+        let on_line = line.baud == uart.baud
+            && line.data_bits == uart.data_bits
+            && (line.parity == 0) == (uart.parity == 0);
+        if !on_line {
+            return;
+        }
         if let Some((offers, record)) = &mut self.held {
             *offers -= 1;
             if *offers == 0 {
@@ -212,19 +266,20 @@ impl Serial for Meter {
                 self.held = None;
             }
         }
-        if self.stream.poll() {
+        if self.due() {
+            self.owed = true;
             port.send(&self.announces.take());
             if let Some(left) = &mut self.left {
                 *left = left.saturating_sub(1);
             }
-        } else if self.left == Some(0) {
+        } else if self.left == Some(0) && !self.marked {
             // A period after the last, so that the tool has read it before an
             // event lands: bytes just delivered are lost to an unplug's hangup,
             // or not, as the pace has it.
             self.quiet += 1;
             if self.quiet >= self.config.period {
                 port.mark();
-                self.left = None;
+                self.marked = true;
             }
         }
     }
@@ -315,6 +370,34 @@ mod tests {
     }
 
     #[test]
+    fn after_ask_each_announcement_waits_for_the_last_to_be_asked_for() {
+        let mut h = meter(&[("period", "4"), ("after-ask", "1")]);
+        assert_eq!(offers(&mut h, 4), [READY]);
+        assert_eq!(offers(&mut h, 40), b"");
+        h.write(&[SEND]);
+        assert_eq!(h.read(), RECORD);
+        // The offers of that read count, and four are the most it takes.
+        assert_eq!(offers(&mut h, 4), [READY]);
+        // Off, as without the option.
+        let mut h = meter(&[("period", "4"), ("after-ask", "0")]);
+        assert_eq!(offers(&mut h, 8), [READY, READY]);
+    }
+
+    #[test]
+    fn last_gap_holds_a_bursts_last_announcement() {
+        let mut h = meter(&[("period", "4"), ("burst", "2"), ("last-gap", "10")]);
+        assert_eq!(offers(&mut h, 4), [READY]);
+        assert_eq!(offers(&mut h, 9), b"");
+        assert_eq!(offers(&mut h, 1), [READY]);
+        assert_eq!(offers(&mut h, 3), b"");
+        assert!(!h.cdc.mark());
+        assert_eq!(offers(&mut h, 1), b"");
+        assert!(h.cdc.mark());
+        // And that is the burst, mark or no mark.
+        assert_eq!(offers(&mut h, 200), b"");
+    }
+
+    #[test]
     fn a_late_answer_waits_for_its_offers_as_announcements_go_on() {
         let mut h = meter(&[("period", "4"), ("late", "1:6"), ("packet", "aa")]);
         h.write(&[SEND]);
@@ -336,6 +419,20 @@ mod tests {
     }
 
     #[test]
+    fn a_misset_line_takes_nothing_from_the_lists() {
+        let o: Vec<(String, String)> = [("period", "4"), ("announce", "aa,bb")]
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect();
+        let mut h = Host::open(function(&o).unwrap(), Line::parse("9600/8n1").unwrap(), true, true);
+        assert_eq!(offers(&mut h, 40), b"");
+        h.set_line(Line::parse("2400/8n1").unwrap());
+        h.set_lines(true, true);
+        assert_eq!(offers(&mut h, 4), [0xaa]);
+        assert_eq!(offers(&mut h, 4), [0xbb]);
+    }
+
+    #[test]
     fn a_reset_goes_back_to_power_on() {
         let mut h = meter(&[("period", "100000"), ("packet", "aa,bb"), ("late", "2:1")]);
         h.write(&[SEND]);
@@ -353,6 +450,8 @@ mod tests {
             ("period", "3"),
             ("burst", "x"),
             ("late", "2"),
+            ("after-ask", "2"),
+            ("last-gap", "0"),
             ("late", "0:1"),
             ("late", "1:0"),
             ("packet", "zz"),
@@ -367,6 +466,8 @@ mod tests {
             ("period", "4"),
             ("burst", "0"),
             ("late", "1:1"),
+            ("after-ask", "1"),
+            ("last-gap", "1"),
             ("packet", "-"),
             ("announce", "10,-"),
             ("uart", "9600/8n1"),
