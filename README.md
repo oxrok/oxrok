@@ -93,7 +93,7 @@ Emulator and replay only, never run on hardware:
 | `mastech-ms6514` | 70 | 94.9% |
 | `cem-dt-885x` | 107 | 94.0% |
 | `conrad-digi-35-cpu` | 58 | 93.3% |
-| `kern-ew-6200-2nm` | 62 | 96.9% |
+| `kern-ew-6200-2nm` | 62 | 93.5% |
 | `link-mso19` | 162 | 92.0% |
 | `maynuo-m97` | 210 | 95.8% |
 | `motech-lps-301` | 149 | 79.3% |
