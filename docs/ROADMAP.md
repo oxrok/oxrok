@@ -426,6 +426,17 @@ each with where it belongs:
   `: device error: ...` after "Failed to open device", and the same
   patterns are used by motech, rdtech and others. Sweep them, and pin
   the real wordings with `--oracle-differs` or `--no-oracle-only` cases.
+- `-O csv` holds rows in memory when it falls behind: all 13 of `demo`'s
+  channels at the default 200 kHz reach 171 MB in 30 s and 624 MB in 100
+  s on a debug build, flat at 100 kHz and below, and stopping takes long
+  too. By reading, it also grows without limit if logic flows while an
+  enabled analog channel never sends. Dump pending rows past a row
+  bound, don't hold `Vec<bool>` per row, and cap `demo`'s catch-up
+  batch. Check the csv goldens, as mid-round dumps affect row alignment.
+  Not measured on a release build or on real mixed-signal drivers; `-O
+  vcd` not measured.
+- About 15 test fakes still have an uncapped write log besides those
+  moved to `WriteLog`: move them as they're touched.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).
