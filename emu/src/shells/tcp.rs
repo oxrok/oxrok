@@ -114,6 +114,11 @@ impl Port {
     pub fn sent(&self) -> &[Vec<u8>] {
         &self.sent
     }
+
+    /// Whether [`Port::mark`] was called, for a model's unit test.
+    pub fn marked(&self) -> bool {
+        self.mark
+    }
 }
 
 /// Where the carrier's lines go.

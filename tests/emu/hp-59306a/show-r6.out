@@ -1,0 +1,14 @@
+Driver functions:
+    Multiplexer
+Scan options:
+    conn
+hp-59306a:conn=tcp-raw/127.0.0.1/PORT - Hewlett-Packard 59306A 
+Channel groups:
+    R1: No channels
+    R2: No channels
+    R3: No channels
+    R4: No channels
+    R5: No channels
+    R6: No channels
+Supported configuration options on channel group R6:
+    enabled: on, off

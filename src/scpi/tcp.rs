@@ -20,7 +20,7 @@ use crate::core::{Error, Result};
 use crate::scpi::ScpiTransport;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A TCP connection carrying SCPI.
 pub struct Tcp {
@@ -60,22 +60,33 @@ impl Tcp {
 
     fn read_some(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
         let stream = self.stream()?;
-        stream.set_read_timeout(Some(timeout.max(Duration::from_millis(1)))).map_err(Error::Io)?;
-        match stream.read(buf) {
-            // Not silence, which a caller would wait out at full speed.
-            Ok(0) if !buf.is_empty() => {
-                Err(Error::device("the instrument closed the TCP connection"))
+        let began = Instant::now();
+        loop {
+            let left = timeout.saturating_sub(began.elapsed());
+            stream.set_read_timeout(Some(left.max(Duration::from_millis(1)))).map_err(Error::Io)?;
+            match stream.read(buf) {
+                // Not silence, which a caller would wait out at full speed.
+                Ok(0) if !buf.is_empty() => {
+                    return Err(Error::device("the instrument closed the TCP connection"));
+                }
+                Ok(n) => return Ok(n),
+                // A socket's timeout makes a stop and continue end the call with EINTR.
+                // It is neither an error nor silence, which would end a raw answer.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                    if began.elapsed() >= timeout {
+                        return Ok(0);
+                    }
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(0);
+                }
+                Err(e) => return Err(Error::Io(e)),
             }
-            Ok(n) => Ok(n),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                Ok(0)
-            }
-            Err(e) => Err(Error::Io(e)),
         }
     }
 }

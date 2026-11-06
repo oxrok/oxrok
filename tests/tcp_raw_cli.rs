@@ -249,3 +249,134 @@ fn a_scpi_resource_that_will_not_open_says_why() {
         assert!(err.contains(&says), "{conn}: {err}");
     }
 }
+
+/// A stop and continue ends a read on a socket with a timeout with EINTR, which is
+/// neither a failure nor silence: a shell's Ctrl-Z, or a machine that checkpoints. A
+/// stop can miss under load, and that passes, so each goes round a few times.
+#[cfg(unix)]
+mod stops {
+    use super::*;
+
+    /// What `Scpi` asks of a read, `src/scpi/mod.rs`'s `CHUNK`.
+    const READ_SIZE: usize = 4096;
+
+    fn signal(name: &str, pid: u32) {
+        let done = Command::new("kill").arg(name).arg(pid.to_string()).status();
+        assert!(done.expect("kill").success(), "kill {name}");
+    }
+
+    /// One stop of `child` that lasts 20 ms.
+    fn stall(child: &std::process::Child) {
+        signal("-STOP", child.id());
+        std::thread::sleep(Duration::from_millis(20));
+        signal("-CONT", child.id());
+    }
+
+    fn accept(listener: &TcpListener) -> TcpStream {
+        let began = Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).expect("blocking");
+                    stream.set_read_timeout(Some(BOUND)).expect("a timeout");
+                    return stream;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(began.elapsed() < BOUND, "no connection came");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    }
+
+    /// oxrok on a new listener, as `-d DRIVER:conn=...` with `args`.
+    fn start(driver: &str, args: &[&str]) -> (std::process::Child, TcpListener) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a listener");
+        listener.set_nonblocking(true).expect("not blocking");
+        let port = listener.local_addr().expect("an address").port();
+        let spec = format!("{driver}:conn=tcp-raw/127.0.0.1/{port}");
+        let child = Command::new(env!("CARGO_BIN_EXE_oxrok"))
+            .args(["-d", &spec])
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run oxrok");
+        (child, listener)
+    }
+
+    fn finish(mut child: std::process::Child) -> Output {
+        let began = Instant::now();
+        while child.try_wait().expect("a wait").is_none() {
+            assert!(began.elapsed() < BOUND, "oxrok still running");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        child.wait_with_output().expect("its output")
+    }
+
+    /// `hp-59306a` reads for 100 ms after a command, to see the line close.
+    fn set_up_to_the_command() -> (std::process::Child, TcpStream, TcpStream) {
+        let (child, listener) = start("hp-59306a", &["--config", "enabled=on", "--set"]);
+        let scan = accept(&listener);
+        let mut open = accept(&listener);
+        let mut command = [0u8; 8];
+        open.read_exact(&mut command).expect("the command");
+        assert_eq!(&command, b"A123456\n");
+        (child, scan, open)
+    }
+
+    #[test]
+    fn a_stop_in_a_read_is_no_failure() {
+        for _ in 0..5 {
+            let (child, _scan, _open) = set_up_to_the_command();
+            stall(&child);
+            let out = finish(child);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{err}");
+            assert_eq!(err, "");
+        }
+    }
+
+    /// Stops closer together than the wait must not start it again each time, or it
+    /// never ends. Far past the wait's 100 ms, with the stops going on.
+    #[test]
+    fn stops_again_and_again_do_not_hold_a_read_for_ever() {
+        let (mut child, _scan, _open) = set_up_to_the_command();
+        let began = Instant::now();
+        while child.try_wait().expect("a wait").is_none() {
+            if began.elapsed() > Duration::from_secs(10) {
+                let _ = child.kill();
+                panic!("each stop started the wait again");
+            }
+            stall(&child);
+        }
+        assert!(child.wait_with_output().expect("its output").status.success());
+    }
+
+    /// A raw answer of more than a read holds a read's worth and then waits. A stop
+    /// there is no silence, which would end the answer at the read's size.
+    #[test]
+    fn a_stop_in_a_long_answer_does_not_end_it() {
+        for _ in 0..5 {
+            let (child, listener) = start("rigol-ds", &["--scan"]);
+            let mut stream = accept(&listener);
+            let mut query = [0u8; 6];
+            stream.read_exact(&mut query).expect("the query");
+            assert_eq!(&query, b"*IDN?\n");
+            let head = format!("Rigol Technologies,DS1102E,{:-<1$}", "", READ_SIZE - 27);
+            assert_eq!(head.len(), READ_SIZE);
+            stream.write_all(head.as_bytes()).expect("the head");
+            std::thread::sleep(Duration::from_millis(10));
+            stall(&child);
+            stream.write_all(b",00.02.06.00.01\n").expect("the tail");
+            let out = finish(child);
+            let said = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                said.contains("00.02.06.00.01"),
+                "{said} {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
