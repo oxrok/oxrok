@@ -17,8 +17,9 @@
 //!   HDL source was found.
 //! - The serial number holds the calibration: 5 digits of volts per bit, 3 of
 //!   the DAC's centre, 3 of its scale, model and revision digits, 6 of the unit's
-//!   number. mso19fcgi reads 11 more digits after those, for the 200 mV range,
-//!   and takes a 30 digit number, so that is what this has.
+//!   number. mso19fcgi reads 11 more digits after those, the same three values
+//!   for 200 MSa/s (`GetVbit` under 10 ns a sample), and takes a 30 digit number,
+//!   so that is what this has. libsigrok reads only the first 19.
 //! - A status read answers one byte. mso19fcgi masks it with 0x1f and takes 22,
 //!   0x16, as "waiting for readback"; libsigrok's names are action 6 and the
 //!   armed bit, with 0x20 as "OK". What bit 5 does here (always set) is a guess.
@@ -31,9 +32,10 @@
 //! What the two high bits of a dump's byte hold is a guess, which matters:
 //! libsigrok opens the line with XON/XOFF, and the tty takes those bytes out of
 //! the input, so a dump holding one comes up short. mso19fcgi clears `IXON` and
-//! takes "at least 3070 bytes"; libsigrok has XON/XOFF, and its 2022 commits say a
-//! real capture works there. So a byte here has bit 6 the inverse of its bit 5, as in a word, which
-//! holds neither. `raw=1` leaves them 0, and the dump then holds both.
+//! takes "at least 3070 bytes". libsigrok has had `flow=2` since 2013, and its
+//! 2020 commit 6e183da9 says it gets "basic analog and digital data working", which
+//! suggests it holds on a unit, though no message mentions XON/XOFF. So a byte here
+//! has bit 6 the inverse of its bit 5, as in a word, which holds neither. `raw=1` leaves them 0, and the dump then holds both.
 //!
 //! Emulation artifacts:
 //!
@@ -41,6 +43,7 @@
 //!   count of status reads: `pre=`, `wait=` and `post=` say how many reads each
 //!   stage answers. The samples are a stand-in, each analog value and each logic
 //!   value once or more, the same every run.
+//! - The strings "Link Instruments" and "MSO-19" are guesses, from the ids.
 //! - The USB side is the shell's CDC-ACM. It takes the line settings and does
 //!   nothing with them, as a native USB port would; whether the real unit does is
 //!   not known.
