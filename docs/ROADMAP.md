@@ -454,6 +454,9 @@ each with where it belongs:
 - `Native::drain` has run only on Linux: on macOS or Windows a failing
   `bytes_to_write` would fail a healthy set on `conrad-digi-35-cpu`
   after its frame went out.
+- Three scenarios carry a copy of the lock preload (`gwinstek-gpd`,
+  `tondaj-sl-814`, and a larger one in `devantech-eth008`): make one
+  shared file and helper.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).

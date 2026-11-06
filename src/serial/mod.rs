@@ -256,15 +256,20 @@ pub fn read_blocking(port: &mut dyn Port, buf: &mut [u8], timeout: Duration) -> 
     const EMPTY_READ_PAUSE: Duration = Duration::from_millis(1);
     let deadline = std::time::Instant::now() + timeout;
     let mut got = 0;
+    // A stall can pass the deadline before the first read, and what has come must
+    // still be seen, or a bound that follows an empty result has not looked at the
+    // line. libserialport looks once too (timing.c:134-137, sp_blocking_read).
+    let mut looked = false;
     loop {
         if got == buf.len() {
             return Ok(got);
         }
         let left = deadline.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() && !timeout.is_zero() {
+        if looked && left.is_zero() {
             return Ok(got);
         }
         let n = port.read(&mut buf[got..], whole_millis(left))?;
+        looked = true;
         got += n;
         if timeout.is_zero() {
             return Ok(got);
@@ -812,6 +817,16 @@ mod tests {
         }
         let p = Params::parse("1200/7e2").unwrap();
         assert_eq!(serial_timeout(&p, 1), Duration::from_millis(19));
+    }
+
+    #[test]
+    fn a_blocking_read_past_its_deadline_still_looks_once() {
+        // A stall ahead of the first read, as a nanosecond's timeout has it.
+        let mut port = Script::new(&[3, 2], false);
+        let mut buf = [0; 5];
+        let n = read_blocking(&mut port, &mut buf, Duration::from_nanos(1)).unwrap();
+        assert_eq!(n, 3, "what had come is seen");
+        assert_eq!(port.next, 1, "and only one look, with the time gone");
     }
 
     #[test]
