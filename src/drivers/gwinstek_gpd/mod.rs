@@ -548,12 +548,12 @@ impl Capture {
             if stop.load(Ordering::SeqCst) {
                 return Ok(Wait::End);
             }
+            // The read comes first, also at the time: what a stall let arrive is no
+            // reply to the next round, as C's `revents` come before its timer.
             let left = due.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Ok(Wait::Go(None));
-            }
             let mut link = self.link.lock().expect("link lock");
             match link.read_byte(left.min(STOP_CHECK))? {
+                None | Some(b'\r' | b'\n') if left.is_zero() => return Ok(Wait::Go(None)),
                 None | Some(b'\r' | b'\n') => {}
                 Some(byte) => {
                     log::error!("No reply pending.");
@@ -825,6 +825,38 @@ mod tests {
         }
     }
 
+    /// Stops for a while after the read that first finds nothing once the round
+    /// is in: a host's stall just where the wait between rounds runs out.
+    struct StallsInTheWait {
+        fake: Fake,
+        stalled: bool,
+    }
+    impl Port for StallsInTheWait {
+        fn name(&self) -> &'static str {
+            "/dev/ttyFAKE"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            let n = self.fake.read(buf, timeout)?;
+            if n == 0 && !self.stalled && self.fake.seen.lock().unwrap().len() >= 2 {
+                self.stalled = true;
+                std::thread::sleep(POLL_INTERVAL * 2);
+            }
+            Ok(n)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.fake.write(data)
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.fake.purge()
+        }
+    }
+
     fn device(fake: Fake) -> GpdDevice {
         let mut d = GpdDevice::from_port(&protocol::MODELS[1], Box::new(fake));
         d.open().unwrap();
@@ -1052,6 +1084,21 @@ mod tests {
         let seen = seen.lock().unwrap();
         let gap = seen[2].0 - seen[0].0;
         assert!(gap >= Duration::from_millis(155), "{gap:?}");
+        assert!(logged_about_stray_data(), "{:?}", logged());
+    }
+
+    #[test]
+    fn data_that_a_stall_let_arrive_at_the_time_of_a_round_is_no_reply_to_it() {
+        let _gate = recording();
+        let (mut fake, _) = Fake::new(b"\r\n");
+        fake.chatter = Some(b"hello");
+        fake.chatter_pause = POLL_INTERVAL;
+        let port = StallsInTheWait { fake, stalled: false };
+        let mut d = GpdDevice::from_port(&protocol::MODELS[1], Box::new(port));
+        d.open().unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(readings(&rx), [ROUND, ROUND].concat());
         assert!(logged_about_stray_data(), "{:?}", logged());
     }
 
