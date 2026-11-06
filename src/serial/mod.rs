@@ -564,6 +564,7 @@ fn read_result(read: std::io::Result<usize>) -> Result<usize> {
 /// `OXROK_SERIAL_RECORD=FILE` in the environment the session is
 /// recorded to that file.
 pub fn open(name: &str, params: Params) -> Result<Box<dyn Port>> {
+    refuse_bluetooth(name)?;
     let native: Box<dyn Port> = if hid::is_hid_name(name) {
         hid::open(name, params)?
     } else {
@@ -611,6 +612,18 @@ pub fn list_ports() -> Vec<String> {
     serialport::available_ports()
         .map(|ports| ports.into_iter().map(|p| p.port_name).collect())
         .unwrap_or_default()
+}
+
+/// libsigrok's `bt/TYPE/MAC` names have no transport here, and as a path they fail
+/// with "No such file or directory", which says nothing of that.
+fn refuse_bluetooth(name: &str) -> Result<()> {
+    if name.starts_with("bt/") {
+        return Err(Error::device(format!(
+            "{name}: Bluetooth ports (bt/...) are not supported: bind the device to an RFCOMM \
+             tty and name that, /dev/rfcommN"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -729,6 +742,19 @@ mod tests {
         let mut buf = [0; 3];
         assert_eq!(read_blocking(&mut port, &mut buf, Duration::ZERO).unwrap(), 1);
         assert_eq!(port.asked.len(), 1);
+    }
+
+    #[test]
+    fn a_bluetooth_port_is_refused_by_name() {
+        let params = Params::parse("9600/8n1").unwrap();
+        for name in ["bt/rfcomm/00-11-22-33-44-55", "bt/ble122/00-11-22-33-44-55"] {
+            let e = open(name, params).err().expect("refused").to_string();
+            assert!(e.contains("/dev/rfcommN"), "{e}");
+            assert!(e.contains(name), "{e}");
+        }
+        // Only that form: a path that merely starts so goes to the port's open.
+        assert!(refuse_bluetooth("/dev/bt/rfcomm0").is_ok());
+        assert!(refuse_bluetooth("bt").is_ok());
     }
 
     #[test]
