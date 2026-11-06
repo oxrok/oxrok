@@ -1,0 +1,8 @@
+ctl_out 21 20 0000 0000 80250000000208 -> ok
+ctl_out 21 22 0003 0000 - -> ok
+bulk_out 02 10040d -> 3
+bulk_in 82 2 -> 050d
+bulk_out 02 30000d -> 3
+bulk_in 82 5 -> 1234010daa
+bulk_out 02 30000d -> 3
+bulk_in 82 4 -> 09af010d
