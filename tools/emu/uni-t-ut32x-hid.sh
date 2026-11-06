@@ -72,10 +72,13 @@ emu_cases() {
     # Faults. A chip that takes no setting: the open fails, and that is no device.
     emu_options stall-report=1
     emu_case "the setting stalled" --keep-header --no-output -- -d $H --scan
-    # A report with no f0 in its header, behind the first of each record. How far the
+    # A report with no f0 in its header, behind the first of each record. C crashes only
+    # if one lands in ser_hid_read's own loop, where its error reaches the driver, and
+    # with 3 records 5 of 15 runs got none to land there. Hence 60, and a timeout for a
+    # run that wraps with bytes in the buffer and so loses count instead. How far the
     # reports get before oxrok's stop depends on the time, so the reads are left out.
-    emu_options period=2 burst=3 bad-report=00
-    emu_case "a bad report" --oracle-bug "$WRAP_BUG" --stderr --filter "$F" --tx-filter '/^int_in 82 /d' -- -d $H --samples 3
+    emu_options period=2 burst=60 bad-report=00
+    emu_case "a bad report" --oracle-bug "$WRAP_BUG" --timeout 15 --stderr --filter "$F" --tx-filter '/^int_in 82 /d' -- -d $H --samples 60
     # A stalled stop: it logs and the capture still ends.
     emu_options period=2 burst=2 stall-out=2
     emu_case "the stop stalled" --tx-filter "$TAIL" -- -d $H --samples 2
