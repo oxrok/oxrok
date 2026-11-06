@@ -6,16 +6,3 @@ bulk_out 02 30000d -> 3
 bulk_in 82 5 -> 1234010daa
 bulk_out 02 30000d -> 3
 bulk_in 82 4 -> 09af010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> 89cb010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> 8a6c010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> 8299010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> 9285010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> a393010d
-bulk_out 02 30000d -> 3
-bulk_in 82 4 -> b3f2010d
-~ the last 14 lines repeat to the end (3 or more times)

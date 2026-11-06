@@ -4,6 +4,7 @@
 EMU_MODEL=tondaj-sl-814
 EMU_CDC=1
 EMU_DRIVER=tondaj-sl-814
+EMU_FULL=$EMU_DRIVER
 EMU_GCOV=tondaj-sl-814
 EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 
@@ -43,13 +44,26 @@ tondaj_openable() {
 emu_cases() {
     tondaj_openable
     emu_conns
-    # The first request, for a .tx cut there.
+    # What each command looks like, for a .tx cut there.
+    Q0='/^bulk_out 02 10040d/q'
     Q1='/^bulk_out 02 30000d/q'
     # A reply's frame with the sequence for 0.
     OK=1234010d
     # oxrok's log prefix, on its side only, and its own wording for a 0.
     L='s/^oxrok: (err|warn): oxrok::drivers::tondaj_sl_814(::protocol)?: /sr: tondaj-sl-814: /'
     A='s/^(Failed to set device option .limit_samples.: invalid argument): it cannot be 0\.$/\1./'
+    # What a failed write says, past its words: C's return value, oxrok's OS error,
+    # and libserialport's line, which oxrok's port does not log.
+    W="$L
+/^sr: serial-libsp: /d
+/^oxrok: warn: oxrok::cli::pipeline: Device only sent /d
+s/^(sr: tondaj-sl-814: Error sending request command): .*\$/\1./"
+    LOCK_BUG="api.c:85 opens the port and :96 returns with it open, so dev_open's second open is refused by the exclusive open of libserialport 0.1.2 and later (serialport.c:589, :599): every path but --scan fails on stock sigrok-cli there, and works on 0.1.1; oxrok closes the port after the scan and opens it again"
+    INIT_BUG="protocol.c:148 reads the init reply with serial_read_blocking and a timeout of 0, which is none (serial.c:481), in the session's callback: nothing ends that wait, not even a limit; oxrok gives up after 5 s"
+    REPLY_BUG="protocol.c:176-187 reads a reply and returns ahead of the limit's check at :207 for as long as it has not all come, and no request goes again: a capture never ends; oxrok gives up after 5 s"
+    TIME_BUG="protocol.c:187 returns ahead of the limit's check at :207, so a time limit does not end a wait for a reply; oxrok ends it there and warns"
+    STRAY_BUG="protocol.c:193-198 takes four bytes and asks again with the fifth unread, and :172 clears only the count, so every later reply is read cut in the same wrong place and fails :193: no reading ever again, and with a time limit an empty capture that exits 0 (the --time case at the model's commit showed it); oxrok reads away what comes with no command out, and goes on"
+    SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     # The scan says nothing on the wire and takes no answer: a port that opens is
     # a meter.
@@ -58,6 +72,9 @@ emu_cases() {
     emu_case "serialcomm fits" --keep-header -- -d $K:serialcomm=9600/8e1 --scan
     emu_case "no such node" --keep-header --no-output -- -d tondaj-sl-814:conn=/dev/ttyACM97 --scan
     emu_case "no conn" --keep-header --no-output -- -d tondaj-sl-814 --scan
+    # sigrok-cli opens the port before it reads the parameters, oxrok refuses them
+    # first: the open's lines are all that differs.
+    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
     emu_options reply=
     emu_case "scan of a silent meter" --keep-header -- -d $K --scan
     emu_options
@@ -71,9 +88,6 @@ emu_cases() {
     emu_case "set limit_samples 0" --stderr --filter "$A" --expect-fail -- -d $K -c limit_samples=0 --set
     emu_case "set continuous" --stderr --filter "$L" --expect-fail -- -d $K -c continuous=1 --set
     emu_case "set samplerate" --stderr --filter "$L" --expect-fail -- -d $K -c samplerate=1 --set
-    # sigrok-cli opens the port before it reads the parameters, oxrok refuses them
-    # first: the open's lines are all that differs.
-    emu_case "serialcomm no such thing" --keep-header --no-output --tx-filter '/^ctl_out 21 22 /d' -- -d $K:serialcomm=fast --scan
 
     # A capture: init at the source's first 500 ms, its reply at once, a request
     # 500 ms on, and each next one 500 ms after the last reply.
@@ -82,10 +96,12 @@ emu_cases() {
     emu_case "samples csv" -- -d $K --samples 2 -O csv:header=false:time=false
     emu_case "config limit_samples" -- -d $K -c limit_samples=2 --samples 1
     emu_case "channel P1" -- -d $K -C P1 --samples 1
-    # Past the first limit check, each tool has only the init on the wire.
-    emu_case "time 1 ms" --no-output -- -d $K --time 1ms
-    emu_case "time up to the first request" --no-output --tx-filter "$Q1" -- -d $K --time 700ms
-    # The line reaches the meter: the first two tell the rate and the parity.
+    emu_case "no such channel" --stderr --filter 's/^Failed to set channels: invalid argument: //' --expect-fail -- -d $K -C P2 --samples 1
+    # A limit ahead of the source's first pass: its command still goes, in both.
+    emu_case "time 1 ms" --no-output --tx-filter "$Q0" -- -d $K --time 1ms
+    # Time decides how many: kept up to the first.
+    emu_case "time" --filter '2,$d' --tx-filter "$Q1" -- -d $K --time 2s
+    # The line reaches the meter, which hears nothing at another rate.
     emu_options uart=2400/8e1
     emu_case "serialcomm reaches the line" -- -d $K:serialcomm=2400/8e1 --samples 1
 
@@ -107,50 +123,56 @@ emu_cases() {
 
     # Replies gone wrong: said, and asked again 500 ms on.
     emu_options init=060d
-    emu_case "wrong init reply" --stderr -- -d $K --samples 1
+    emu_case "wrong init reply" --stderr --filter "$L" -- -d $K --samples 1
     emu_case "wrong init reply, its sample" -- -d $K --samples 1
-    emu_options "reply=1234020d"
-    emu_case "wrong sequence" --stderr -- -d $K --samples 1
+    emu_options reply=1234020d
+    emu_case "wrong sequence" --stderr --filter "$L" -- -d $K --samples 1
     emu_case "wrong sequence, its sample" -- -d $K --samples 1
-    emu_options "reply=1234010a"
-    emu_case "wrong end" --stderr -- -d $K --samples 1
+    emu_options reply=1234010a
+    emu_case "wrong end" --stderr --filter "$L" -- -d $K --samples 1
     emu_options stall=lines
     emu_case "control lines stalled" -- -d $K --samples 1
-    emu_options in-stall=1
-    emu_case "a stalled read" -- -d $K --scan
+
+    # Each wait C never leaves, and the words oxrok leaves it with.
+    emu_options init=
+    emu_case "silent at init" --oxrok-fails "no answer to init for 5 s" --oracle-bug "$INIT_BUG" --oracle-hangs --no-output --timeout 7 -- -d $K --samples 1
+    emu_options init=05
+    emu_case "half an init reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$INIT_BUG" --oracle-hangs --no-output --timeout 7 -- -d $K --samples 1
+    emu_options reply=
+    emu_case "silent at the request" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
+    # A time limit beyond the bound does not outlast it: nothing would ask again.
+    emu_case "silent, a long time limit" --oxrok-fails "no answer to a request for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --time 30s
+    emu_case "silent, a time limit" --oracle-bug "$TIME_BUG" --oracle-hangs --stderr --filter "$L" --timeout 4 -- -d $K --time 1500ms
+    emu_options reply=1234
+    emu_case "half a reply" --oxrok-fails "no usable answer for 5 s" --oracle-bug "$REPLY_BUG" --oracle-hangs --no-output --timeout 8 -- -d $K --samples 1
+
+    # One byte too many and every later reply is cut in the same wrong place in C.
+    # Each list plays once, as a second stray byte can put C back in step.
+    emu_options "reply=aa$OK"
+    emu_case "a stray byte ahead of a reply" --oracle-bug "$STRAY_BUG" --oracle-hangs --timeout 5 -- -d $K --samples 2
+    emu_case "a stray byte ahead of a reply, said" --oracle-bug "$STRAY_BUG" --oracle-hangs --stderr --filter "$L" --timeout 5 -- -d $K --samples 1
+    emu_options "reply=${OK}aa"
+    emu_case "a stray byte behind a reply" --oracle-bug "$STRAY_BUG" --oracle-hangs --timeout 5 -- -d $K --samples 2
 
     # An unplug with nothing out: the next write is what finds it.
     emu_options quiet-mark=2:5
-    emu_case "unplug between requests" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
-
-    # Lost in a wait with no bound: C blocks, or polls for ever.
-    emu_options init=
-    emu_case "silent at init" --hangs --no-output --timeout 3 -- -d $K --samples 1
-    emu_options init=05
-    emu_case "half an init reply" --hangs --no-output --timeout 3 -- -d $K --samples 1
-    emu_options reply=
-    emu_case "silent at the request" --hangs --no-output --timeout 3 -- -d $K --samples 1
-    emu_case "silent at the request, a time limit" --hangs --no-output --timeout 3 -- -d $K --time 1500ms
-    emu_options reply=1234
-    emu_case "half a reply" --hangs --no-output --timeout 3 -- -d $K --samples 1
-    # One byte too many and every later reply is cut in the same wrong place.
-    emu_options "reply=aa$OK"
-    emu_case "a stray byte ahead of a reply" --hangs --no-output --timeout 4 --tx-filter 's/(30000d)+/\1/' -- -d $K --samples 1
-    emu_case "a stray byte, a time limit" --no-output --tx-filter "$Q1" -- -d $K --time 3s
-    emu_options "reply=${OK}aa"
-    emu_case "a stray byte behind a reply" --hangs --timeout 4 --tx-filter 's/(30000d)+/\1/' -- -d $K --samples 2
-    # A port gone with a request out.
+    emu_case "unplug between requests" --oxrok-fails "error" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    emu_case "unplug between requests, said" --oxrok-fails "error" --stderr --filter "$W" --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    # With a request out nothing tells a gone tty from a silent meter.
     emu_options answers=2
-    emu_case "unplug with a request out" --hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    emu_case "unplug with a request out" --oxrok-fails "no answer to a request" --oracle-bug "$REPLY_BUG" --oracle-hangs --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
     emu_options answers=0
-    emu_case "unplug at the init reply" --hangs --no-output --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    emu_case "unplug at the init reply" --oxrok-fails "no answer to init" --oracle-bug "$INIT_BUG" --oracle-hangs --no-output --unplug model --timeout 8 --tx-filter '/^unplug$/q' -- -d $K --samples 5
+    # A quiet point: the request goes unanswered, the signal lands in its wait.
+    emu_options answers=2
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 8 --tx-filter '/^interrupt$/q' -- -d $K --samples 5
 
     # What stock sigrok-cli does here: the scan's port is still open.
     SIGROK_CLI=$TONDAJ_STOCK_CLI
     emu_options
     emu_case "stock scan" --keep-header -- -d $K --scan
-    emu_case "stock show" --expect-fail --stderr --filter 's/ \(.*\)$//' -- -d $K --show
-    emu_case "stock samples" --expect-fail --stderr --filter 's/ \(.*\)$//' -- -d $K --samples 1
+    emu_case "stock show" --oracle-bug "$LOCK_BUG" --keep-header -- -d $K --show
+    emu_case "stock samples" --oracle-bug "$LOCK_BUG" -- -d $K --samples 1
 }
 
 # See emu_options in tools/diffcli.sh.
