@@ -760,6 +760,22 @@ Deliberate, and kept small:
   client would see.
 - atorch: "Unrecognized device type" names the report's type; sigrok-cli
   names the fourth byte of its buffer, another byte with noise ahead.
+- `-P` maps a channel name to the logic channel's bit, whatever the
+  device's list order. An analog channel's name is refused ("Channel
+  'DSO' is analog: decoder 'uart' needs a logic channel for 'rx'."),
+  where sigrok-cli reads the logic channel of the same index.
+- `link-mso19`: a setting during a capture is refused as busy, where C
+  takes it. `-t DSO=1` fails with exit 1, where sigrok-cli logs the
+  refusal and exits 0 having captured nothing; this holds for a level on
+  any analog channel. `-c triggerlevel=x` and a NaN position are
+  refused, where sigrok-cli takes them. `-c probe_factor=` above 65535
+  and `samplerate=4294967396` are refused. Mixed csv has the right
+  channel in each column.
+- `link-mso19`: floats stay double: `offset=0.6` sends DAC word 333
+  where sigrok-cli's single precision sends 332, 60 mV off at a 10x
+  probe, and `--get offset` after 3.3 reads 3.2999999999999998 where
+  sigrok-cli reads 3.2999999523162842. It costs a step at 52 of 399
+  tenths from 0.1 to 39.9 V.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

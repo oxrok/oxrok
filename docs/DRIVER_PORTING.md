@@ -297,6 +297,31 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A channel's index can be shared: the MSO-19's analog channel has logic
+  4's, from a loop counter C reused. Anything going by index alone
+  confuses them, and anything going by list position is off where analog
+  comes first: decoders read the wrong channel with exit 0.
+- A start that reads a status and then polls: read what happens if the
+  first read already says done. C kept it and never asked for the data.
+- `git log -S` on a suspicious expression found the "comments and
+  macros" commit that turned a voltage division into integer division.
+- Mixed logic and analog through csv is wrong in C at `csv.c:500` and
+  reads past a buffer on the last line: cut that line, and check trigger
+  positions with logic channels only.
+- `flow=2` is real on a tty: XON and XOFF leave the input, so a dump
+  holding them comes up short. A model's stand-in samples must say what
+  they do about it.
+- A settle's quiet must be as long as the longest reply the driver
+  accepts, or a reply a stop left out is read as the next status, stays
+  one ahead, and shifts a dump. A fake releasing bytes by reads cannot
+  show it: keep one on a clock too, holding what the data must be, not
+  how long it took.
+- A settle bound in wall time fails a fake paced by sleeps under the x12
+  shim. "Quiet" by time alone is found by a stalled host that never
+  looked: count empty reads too. A fake's per-byte wait multiplies under
+  the shim.
+- A filter narrowed to oxrok's exact words shows what it was hiding: pin
+  the text in a unit test as well.
 - `chunk=N` cuts transfers, not reads: a tool that sleeps or polls may
   read them all at once. Check with `-l 5`'s "Read N/M bytes" before
   calling a case "cut across reads". A real cut is `packet=` pieces a

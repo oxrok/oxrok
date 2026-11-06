@@ -2744,6 +2744,39 @@ a message's end is not checked, as in C: esphome-atorch-dl24's README
 says the J7-C, DL24M and DT24PW fail it, and the DL24M log in its issue
 59 is cited for last bytes that look random.
 
+## Link Instruments MSO-19 (link-mso19)
+
+Emulated: model `link-mso19` on CDC-ACM, 3195:f190, options `vid= pid=
+manufacturer= product= serial= pre= wait= post= status-at= mute-at=
+late-at= mark-at= dump= extra= pause= raw=`. 162 cases on 2026-11-06:
+134 full, 7 `--oracle-bug`, 19 `--oracle-differs`, 2 library. gcov 92.0%
+of the driver; not emulated: write and open failures, null and group
+checks the CLI makes first, the unused forced capture and the dead
+default of the first serial field. Not checked on a unit.
+
+The calibration comes from the USB serial number, so a device with none
+is refused, and `conn=` must be a USB port with those ids; no scan opens
+anything. A capture is always one dump of 1024 samples. C and oxrok read
+19 digits of the serial number; mso19fcgi uses 11 more at 200 MSa/s, so
+200 MHz readings use the other rates' calibration. C's dividers are kept
+where mso19fcgi's differ (0x0362 is 1 MHz here, 2 MHz there, whose own
+comments agree with C). mso19fcgi takes 3070 bytes as a dump, so a unit
+sending a little short is possible: oxrok then loses that capture and
+says how many bytes came.
+
+What the model taught: C hangs when the status read at the start already
+says READY; C has truncated the trigger level to whole volts over the
+probe factor since 932a3452; a probe factor of 65536 kills C with SIGFPE
+and 65537 wraps to 1; a silent device holds C for ever (oxrok ends after
+5 s); C's csv shifts logic columns by one beside an analog channel
+(`csv.c:500`). The dump's two high bits and the strings are guesses: on
+C's XON/XOFF line a dump holding those bytes comes up short.
+
+macOS and Windows are from reading serialport 4.10.1, unrun: macOS lists
+callout ports alone here, and the serial number may not reach us there;
+on Windows a unit with no serial gives an instance id, which is refused,
+and the strings are friendly names.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with one patch,
