@@ -106,6 +106,7 @@
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{Descriptors, DeviceModel, Reply, Setup, Speed, Violations};
 use crate::shells::hid::{self, HidInterface, HidReports};
+use crate::models::uni_t_ut181a::{Meter, Uart};
 use crate::shells::hidcable::Stream;
 use crate::{Error, Result};
 use std::collections::VecDeque;
@@ -327,6 +328,34 @@ pub struct Chip {
     period: u32,
     /// Packets per Set UART Enable; `None` for no limit.
     burst: Option<u32>,
+    /// A meter that talks both ways on the UART in place of the UT61E, at 9600
+    /// 8n1 (`uni-t-ut181a-cp2110`).
+    meter: Option<Box<Meter>>,
+    /// What that meter has flagged, for the next call with a place to report it.
+    notes: Vec<String>,
+}
+
+/// The RX side of the UART, as a two way meter sees it.
+struct ChipUart<'a> {
+    fifo: &'a mut VecDeque<u8>,
+    errors: &'a mut u8,
+    notes: &'a mut Vec<String>,
+}
+
+impl Uart for ChipUart<'_> {
+    fn send(&mut self, data: &[u8]) {
+        for &b in data {
+            if self.fifo.len() < FIFO_BYTES {
+                self.fifo.push_back(b);
+            } else {
+                *self.errors |= ERROR_OVERRUN;
+            }
+        }
+    }
+    fn violation(&mut self, message: impl Into<String>) {
+        self.notes.push(message.into());
+    }
+    fn mark(&mut self) {}
 }
 
 impl Chip {
@@ -342,13 +371,34 @@ impl Chip {
             rest_in: 0,
             period,
             burst,
+            meter: None,
+            notes: Vec::new(),
         }
+    }
+
+    /// The UART is as a two way meter's line: nothing passes otherwise.
+    fn at_9600_8n1(&self) -> bool {
+        (self.config.baud, self.config.parity, self.config.data_bits, self.config.stop_bits)
+            == (9600, 0, 3, 0)
     }
 
     /// One offer of the interrupt IN transfer: the meter's bytes that
     /// are due go into the FIFO.
     fn tick(&mut self) {
         if !self.enabled {
+            return;
+        }
+        if self.meter.is_some() {
+            if self.at_9600_8n1()
+                && let Some(meter) = &mut self.meter
+            {
+                let mut uart = ChipUart {
+                    fifo: &mut self.fifo,
+                    errors: &mut self.errors,
+                    notes: &mut self.notes,
+                };
+                meter.offer(&mut uart);
+            }
             return;
         }
         if self.rest_in > 0 {
@@ -466,6 +516,23 @@ impl Chip {
         }
         if !self.enabled {
             v.report("UART data before the UART is enabled");
+        }
+        if self.meter.is_some() {
+            let bytes = &data[1..data.len().min(count + 1)];
+            if self.at_9600_8n1()
+                && let Some(meter) = &mut self.meter
+            {
+                let mut uart = ChipUart {
+                    fifo: &mut self.fifo,
+                    errors: &mut self.errors,
+                    notes: &mut self.notes,
+                };
+                meter.take(bytes, &mut uart);
+            }
+            for note in self.notes.drain(..) {
+                v.report(note);
+            }
+            return;
         }
         v.report(format!(
             "{count} bytes sent to the meter, whose cable has no receive line (the UT61E only talks)"
@@ -592,6 +659,7 @@ impl HidReports for Chip {
 
 /// The emulated cable.
 pub struct Cp2110 {
+    name: &'static str,
     descriptors: Descriptors,
     hid: HidInterface,
     chip: Chip,
@@ -619,6 +687,7 @@ impl Cp2110 {
             configurations: 1,
         };
         Cp2110 {
+            name: NAME,
             descriptors: Descriptors {
                 speed: Speed::Full,
                 device: device.bytes(),
@@ -634,6 +703,14 @@ impl Cp2110 {
         }
     }
 
+    /// A cable with a two way meter on its UART in place of the UT61E.
+    pub fn with_meter(name: &'static str, meter: Meter) -> Cp2110 {
+        let mut cable = Cp2110::new(25, DEFAULT_SERIAL);
+        cable.name = name;
+        cable.chip.meter = Some(Box::new(meter));
+        cable
+    }
+
     /// The chip state.
     pub fn chip(&self) -> &Chip {
         &self.chip
@@ -642,7 +719,7 @@ impl Cp2110 {
 
 impl DeviceModel for Cp2110 {
     fn name(&self) -> &'static str {
-        NAME
+        self.name
     }
 
     fn descriptors(&self) -> &Descriptors {
@@ -680,7 +757,9 @@ impl DeviceModel for Cp2110 {
     fn reset(&mut self) {
         // A bus reset restarts the chip with its power-on settings, and
         // the meter with its first packet.
+        let meter = self.chip.meter.as_ref().map(|m| Box::new(m.power_on()));
         self.chip = Chip::new(self.chip.period, self.chip.burst);
+        self.chip.meter = meter;
         self.hid.reset();
     }
 }

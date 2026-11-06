@@ -49,7 +49,8 @@
 //!     `l` lead error, `c` COMP;
 //!   - `~CUT`: that many bytes off the end, in a frame still good, for a device
 //!     gone wrong; `+PAD`: as `pad=` below, for this reading alone, ahead of the
-//!     cut; `MODE` is in hex, as is a `PREC` below;
+//!     cut, so with both it only moves what is cut; `MODE` is in hex, as is a
+//!     `PREC` below;
 //!   - `n` and `r` have `m=VALUE/PREC/UNIT`, `1=` and `2=` alike for aux1 and
 //!     aux2, `b=VALUE/UNIT` for the bar, and `n` has
 //!     `c=MODE/FAIL/DIGITS/HIGH[/LOW]`; a field there sets its flag;
@@ -73,14 +74,23 @@
 //!   each of them, is answered as `silent` (nothing, and the event point),
 //!   `er`, `bad` (a wrong checksum) or `late` (after that many offers of a read);
 //! - `uart=LINE`; `setters=0`, which flags any setting;
+//! - `off-reading=1`, a reading ahead of a monitor off's `OK`, which
+//!   `antage/ut181a`'s `wait_success_or_measurement` allows for;
 //! - `pad=N`, N zero bytes more at the end of a measurement and of a record
 //!   info, which is no device. libsigrok's `consume_str` writes one byte past the
 //!   caller's 8 byte buffer (`protocol.c:1720`). In the oracle's `-O0` build that
 //!   byte is the low byte of the count of bytes left (`unit_buff` at -144 and
 //!   `pl_dlen` at -136 in `process_packet`'s frame), so anything behind a unit
 //!   fails; a count above 256 survives it, and so C's parser can be shown every
-//!   field. An `-O2` build has other bytes there, read from its debug info, and
-//!   needs no padding.
+//!   field. Two `-O2` compiles have other bytes there, read from their debug
+//!   info: no `-O2` build was run. A field cut behind the first unit can't be
+//!   shown in C here: without padding it fails at the first field behind the unit
+//!   whatever is cut, and with padding the bytes are there.
+//!
+//! The checksum is C's, the sum of the bytes of the length and of the payload.
+//! `antage/ut181a` sums 2 and the bytes of the payload's length: they differ when
+//! that length's low byte is 0xfe or 0xff (a chunk of 28 or 85 samples). Unsettled:
+//! no recording has either.
 //!
 //! The pedantic checks: the envelope, a checksum and a length of each command,
 //! only commands that libsigrok's driver has, an index of at least 1, a range
@@ -109,7 +119,8 @@ use crate::{Error, Result};
 pub const NAME: &str = "uni-t-ut181a";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A UNI-T UT181A meter on CDC-ACM; readings=, saved=, first=, frames=, \
-                         period=, rec=, recs=, per=, over=, have=, fail=, uart=, setters=, pad=, and the \
+                         period=, rec=, recs=, per=, over=, have=, fail=, uart=, setters=, pad=, \
+                         off-reading=, and the \
                          shell's stall=, chunk=, in-limit=, in-stall=, out-hold=";
 
 const MAGIC: [u8; 2] = [0xab, 0xcd];
@@ -157,48 +168,63 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Meter>> {
         if faults.option(k, v)? {
             continue;
         }
-        match k.as_str() {
-            "readings" => config.readings = parse_list(k, v)?,
-            "saved" => config.saved = parse_list(k, v)?,
-            "first" => config.first = parse_number(k, v, 0..=100_000)?,
-            "frames" => config.frames = Some(parse_number(k, v, 0..=100_000)?),
-            "period" => config.period = parse_number(k, v, 1..=100_000)?,
+        if k == "uart" {
+            uart = Line::parse(v)?;
+        } else {
+            config.option(k, v)?;
+        }
+    }
+    config.check()?;
+    let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "UT181A multimeter");
+    Ok(Cdc::new(NAME, &id, faults, Meter::new(config)).behind_uart(uart))
+}
+
+impl Config {
+    fn option(&mut self, k: &str, v: &str) -> Result<()> {
+        match k {
+            "readings" => self.readings = parse_list(k, v)?,
+            "saved" => self.saved = parse_list(k, v)?,
+            "first" => self.first = parse_number(k, v, 0..=100_000)?,
+            "frames" => self.frames = Some(parse_number(k, v, 0..=100_000)?),
+            "period" => self.period = parse_number(k, v, 1..=100_000)?,
             "rec" => {
                 for one in v.split(',') {
-                    config.recordings.push(parse_recording(k, one)?);
+                    self.recordings.push(parse_recording(k, one)?);
                 }
             }
             "recs" => {
                 for i in 1..=parse_number(k, v, 0..=RECORDINGS_MAX)? {
-                    config.recordings.push(parse_recording(k, &format!("REC{i}/VDC/1/3"))?);
+                    self.recordings.push(parse_recording(k, &format!("REC{i}/VDC/1/3"))?);
                 }
             }
-            "per" => config.per = parse_number(k, v, 1..=255)?,
-            "have" => config.have = Some(parse_number(k, v, 0..=SAMPLES_MAX)?),
+            "per" => self.per = parse_number(k, v, 1..=255)?,
+            "have" => self.have = Some(parse_number(k, v, 0..=SAMPLES_MAX)?),
             "over" => {
-                let (index, prec) =
-                    v.split_once(':').ok_or_else(|| bad(k, v, "as in 2:11"))?;
-                config.over = Some((
+                let (index, prec) = v.split_once(':').ok_or_else(|| bad(k, v, "as in 2:11"))?;
+                self.over = Some((
                     parse_number(k, index, 1..=SAMPLES_MAX)?,
                     u8::from_str_radix(prec, 16).map_err(|_| bad(k, v, "a hex byte"))?,
                 ));
             }
             "fail" => {
                 for one in v.split(',') {
-                    config.fails.push(parse_fail(k, one)?);
+                    self.fails.push(parse_fail(k, one)?);
                 }
             }
-            "uart" => uart = Line::parse(v)?,
-            "setters" => config.setters = parse_number(k, v, 0..=1)? == 1,
-            "pad" => config.pad = parse_number(k, v, 0..=PAD_MAX)? as usize,
+            "setters" => self.setters = parse_number(k, v, 0..=1)? == 1,
+            "pad" => self.pad = parse_number(k, v, 0..=PAD_MAX)? as usize,
+            "off-reading" => self.off_reading = parse_number(k, v, 0..=1)? == 1,
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
+        Ok(())
     }
-    if config.readings.is_empty() {
-        return Err(Error::Invalid("readings=: at least one".to_owned()));
+
+    fn check(&self) -> Result<()> {
+        if self.readings.is_empty() {
+            return Err(Error::Invalid("readings=: at least one".to_owned()));
+        }
+        Ok(())
     }
-    let id = Identity::new(0x1209, 0x0001, "oxrok-emu", "UT181A multimeter");
-    Ok(Cdc::new(NAME, &id, faults, Meter::new(config)).behind_uart(uart))
 }
 
 /// What a list holds.
@@ -477,6 +503,7 @@ struct Config {
     fails: Vec<Fail>,
     setters: bool,
     pad: usize,
+    off_reading: bool,
 }
 
 impl Default for Config {
@@ -496,6 +523,7 @@ impl Default for Config {
             fails: Vec::new(),
             setters: true,
             pad: 0,
+            off_reading: false,
         }
     }
 }
@@ -516,7 +544,9 @@ fn frame(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-struct Meter {
+/// The meter behind its UART, on the CDC shell or on a HID bridge.
+#[derive(Clone, Debug)]
+pub struct Meter {
     config: Config,
     /// What has come of a frame so far.
     pending: Vec<u8>,
@@ -638,8 +668,41 @@ impl Meter {
         frame(&payload)
     }
 
+    /// Monitor on or off: its reply code, and what comes along with it.
+    fn monitor_command(&mut self, arg: u8, port: &mut impl Uart) -> Vec<u8> {
+        let on = match arg {
+            0 => false,
+            1 => true,
+            other => {
+                port.violation(format!("monitor {other}: neither on nor off"));
+                return Self::reply_code(false);
+            }
+        };
+        self.monitor = on;
+        self.since_frame = 0;
+        let mut out = Self::reply_code(true);
+        if !on && self.config.off_reading {
+            let mut reading = self.live_frame();
+            reading.append(&mut out);
+            out = reading;
+        }
+        if on {
+            self.monitor_sessions += 1;
+            self.budget = if self.monitor_sessions == 1 {
+                Some(self.config.first)
+            } else {
+                self.config.frames
+            };
+            if self.budget != Some(0) {
+                self.budget = self.budget.map(|n| n - 1);
+                out.extend_from_slice(&self.live_frame());
+            }
+        }
+        out
+    }
+
     /// The answer to a good frame's payload, and what it changes.
-    fn answer(&mut self, command: &[u8], port: &mut Port<'_>) -> Vec<u8> {
+    fn answer(&mut self, command: &[u8], port: &mut impl Uart) -> Vec<u8> {
         let code = command[0];
         let args = &command[1..];
         let index = (args.len() >= 2).then(|| u16::from_le_bytes([args[0], args[1]]));
@@ -667,32 +730,7 @@ impl Meter {
                 self.range = Some(args[0]);
                 Self::reply_code(true)
             }
-            (0x05, 1) => {
-                let on = match args[0] {
-                    0 => false,
-                    1 => true,
-                    other => {
-                        port.violation(format!("monitor {other}: neither on nor off"));
-                        return Self::reply_code(false);
-                    }
-                };
-                self.monitor = on;
-                self.since_frame = 0;
-                let mut out = Self::reply_code(true);
-                if on {
-                    self.monitor_sessions += 1;
-                    self.budget = if self.monitor_sessions == 1 {
-                        Some(self.config.first)
-                    } else {
-                        self.config.frames
-                    };
-                    if self.budget != Some(0) {
-                        self.budget = self.budget.map(|n| n - 1);
-                        out.extend_from_slice(&self.live_frame());
-                    }
-                }
-                out
-            }
+            (0x05, 1) => self.monitor_command(args[0], port),
             (0x07, 2) => {
                 let n = usize::from(index.unwrap_or(0));
                 if n == 0 {
@@ -740,13 +778,13 @@ impl Meter {
         }
     }
 
-    fn setting(&self, code: u8, port: &mut Port<'_>) {
+    fn setting(&self, code: u8, port: &mut impl Uart) {
         if !self.config.setters {
             port.violation(format!("command {code:#04x}: a setting no one asked for"));
         }
     }
 
-    fn recording(&self, index: u16, code: u8, port: &mut Port<'_>) -> Option<Recording> {
+    fn recording(&self, index: u16, code: u8, port: &mut impl Uart) -> Option<Recording> {
         if index == 0 {
             port.violation(format!("command {code:#04x} for recording 0: they count from 1"));
             return None;
@@ -755,7 +793,7 @@ impl Meter {
     }
 
     /// One good frame's payload.
-    fn command(&mut self, command: &[u8], port: &mut Port<'_>) {
+    fn command(&mut self, command: &[u8], port: &mut impl Uart) {
         if command.is_empty() {
             port.violation("a frame with no command");
             return;
@@ -792,7 +830,7 @@ impl Meter {
     }
 
     /// Takes the frames that have come whole.
-    fn frames(&mut self, port: &mut Port<'_>) {
+    fn frames(&mut self, port: &mut impl Uart) {
         loop {
             if self.pending.first().is_some_and(|b| *b != MAGIC[0])
                 || self.pending.get(1).is_some_and(|b| *b != MAGIC[1])
@@ -824,10 +862,31 @@ impl Meter {
     }
 }
 
+/// What a meter's UART needs of what is behind it, here or on a HID bridge.
+pub trait Uart {
+    /// Bytes to the host.
+    fn send(&mut self, data: &[u8]);
+    /// What the driver should not have sent.
+    fn violation(&mut self, message: impl Into<String>);
+    /// The event point.
+    fn mark(&mut self);
+}
+
+impl Uart for Port<'_> {
+    fn send(&mut self, data: &[u8]) {
+        Port::send(self, data);
+    }
+    fn violation(&mut self, message: impl Into<String>) {
+        Port::violation(self, message);
+    }
+    fn mark(&mut self) {
+        Port::mark(self);
+    }
+}
+
 impl Serial for Meter {
     fn received(&mut self, data: &[u8], port: &mut Port<'_>) {
-        self.pending.extend_from_slice(data);
-        self.frames(port);
+        self.take(data, port);
     }
 
     fn changed(&mut self, event: LineEvent, port: &mut Port<'_>) {
@@ -838,6 +897,43 @@ impl Serial for Meter {
     }
 
     fn tick(&mut self, port: &mut Port<'_>) {
+        self.offer(port);
+    }
+
+    fn reset(&mut self) {
+        *self = Meter::new(self.config.clone());
+    }
+}
+
+impl Meter {
+    /// A meter from the options this module takes, the rest being the caller's.
+    ///
+    /// # Errors
+    ///
+    /// On an unknown option or a value out of range.
+    pub fn from_options(options: &[(String, String)]) -> Result<Meter> {
+        let mut config = Config::default();
+        for (k, v) in options {
+            config.option(k, v)?;
+        }
+        config.check()?;
+        Ok(Meter::new(config))
+    }
+
+    /// Power on again.
+    #[must_use]
+    pub fn power_on(&self) -> Meter {
+        Meter::new(self.config.clone())
+    }
+
+    /// Bytes from the host.
+    pub fn take(&mut self, data: &[u8], port: &mut impl Uart) {
+        self.pending.extend_from_slice(data);
+        self.frames(port);
+    }
+
+    /// One offer of a read with nothing queued.
+    pub fn offer(&mut self, port: &mut impl Uart) {
         if self.mark_due {
             self.mark_due = false;
             port.mark();
@@ -862,10 +958,14 @@ impl Serial for Meter {
         self.since_frame = 0;
         match self.budget {
             Some(0) => {
-                // Marked once, a period after the last reading.
+                // Marked once, a period after the last reading, and never in the
+                // first session, a tool's scan: an event there comes before the
+                // capture it is for, and before a signal handler is in place.
                 self.budget = None;
                 self.monitor = false;
-                port.mark();
+                if self.monitor_sessions >= 2 {
+                    port.mark();
+                }
             }
             Some(n) => {
                 self.budget = Some(n - 1);
@@ -877,10 +977,6 @@ impl Serial for Meter {
                 port.send(&bytes);
             }
         }
-    }
-
-    fn reset(&mut self) {
-        *self = Meter::new(self.config.clone());
     }
 }
 
@@ -1209,6 +1305,33 @@ mod tests {
         assert_eq!(h.read().len(), 55 + 300);
         h.write(&cmd(&[0x0d, 1, 0, 1, 0, 0, 0]));
         assert_eq!(h.read().len(), 6 + 2 + 9);
+    }
+
+    #[test]
+    fn off_reading_comes_ahead_of_the_ok() {
+        let mut h = meter(&[("off-reading", "1")]);
+        h.write(&cmd(&[0x05, 0x00]));
+        let got = h.read();
+        assert_eq!(got[4], 0x02);
+        assert_eq!(got[got.len() - 9..], frame(b"\x01OK"));
+        assert_eq!(violations(&mut h), 0);
+    }
+
+    #[test]
+    fn the_first_session_marks_no_event_and_the_next_does() {
+        let mut h = meter(&[("period", "2"), ("frames", "1")]);
+        h.write(&cmd(&[0x05, 0x01]));
+        for _ in 0..6 {
+            h.read();
+        }
+        assert!(!h.cdc.mark(), "the scan's");
+        h.write(&cmd(&[0x05, 0x00]));
+        h.read();
+        h.write(&cmd(&[0x05, 0x01]));
+        for _ in 0..6 {
+            h.read();
+        }
+        assert!(h.cdc.mark(), "the capture's");
     }
 
     #[test]
