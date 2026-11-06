@@ -890,6 +890,30 @@ Deliberate, and kept small:
   warns once per capture, as the meter's range starts at 30 dB. A
   capture starts with no record owed, where C goes on filling the one a
   stop cut.
+- With libserialport 0.1.2 or later, sigrok-cli fails everything but
+  `--scan` on `gmc-mh-1x-2x-rs232` and `gmc-mh-2x-bd232` with "Failed to
+  open device", as their scans leave the port locked. oxrok runs them on
+  any version.
+- `gmc-mh-*` negative readings are negative. Since a 2016 regression
+  (`f4bd8a17`) libsigrok shows them positive, and on a 2x takes the sign
+  to the exponent, so a positive capacitance, power, continuity voltage
+  or command 8 current differs from oxrok's by 10^2 to 10^12.
+- `gmc-mh-2x-bd232` reads a broken fuse as `nan`, and
+  `gmc-mh-1x-2x-rs232` reads 1010 in an 18S's 10-byte block as `nan`;
+  libsigrok adds them in as digits.
+- `gmc-mh-2x-bd232 --scan` lists each meter that answers; libsigrok
+  lists the first.
+- `gmc-mh-2x-bd232` lets an answer go unused when another is owed behind
+  it, so samples differ from libsigrok's once a request expires. After a
+  lost answer it asks again after 1 s and once more 2 s later. It
+  refuses a digit above 0x0f, which libsigrok masks.
+- `gmc-mh-2x-bd232` recovers from lost bytes, and a `--samples` capture
+  fails with exit 1 after 10 s with no usable answer; libsigrok never
+  ends it.
+- `gmc-mh-1x-2x-rs232` warns after 30 s with no data and goes on. On an
+  unplug it fails with exit 1; libsigrok does not notice.
+- `power_off=off` on `gmc-mh-2x-bd232` is refused in both, in oxrok with
+  its own message.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

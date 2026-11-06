@@ -355,6 +355,38 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- When a driver's sign handling looks wrong, read its history before
+  reasoning from a document: `git log -p` on the line found a 2016
+  commit that turned a factor into an exponent, and the C before it is a
+  witness that doesn't share your reading. Model and port do share it.
+- A refactor from a factor to an exponent leaves `x *= -1` as `x = -x`,
+  which is dead at 0 and inverts an exponent elsewhere. Look at every
+  sibling decoder: fixing two of three tables kept the bug on the third,
+  pinned by a test that called it neutral.
+- An answer's bytes sum to 0 by design, so a tail plus a head can too,
+  and "good checksum" does not prove a block is in step: a lost digit
+  equal to the address gave a wrong number in 4.3% of errored streams. A
+  range check on the fields tightens it, and it is an assumption: say
+  so.
+- `Requests` over `Instant`, simulated: a test of owed and age over a
+  simulated minute found what real-time fakes didn't. A prompt answer
+  can be an older one's, so set the wait back only on two in a row. Grow
+  the wait on every expiry, or an answer heard before each expiry keeps
+  adding to a queueing meter.
+- Answers taken for lost may only be slow. Keep them as doubtful for the
+  next capture's drop, or a stall lets one through. Only stalls of 150
+  ms showed this.
+- A device field with a default can hide an injected timeout: a test's
+  40 ms expiry was really 1 s, through a `max` with a kept wait, and a
+  mutant survived because of it.
+- A mutant loop killed from outside leaves its mutation in the source.
+  Keep a copy and diff it before anything else.
+- A test that a bound isn't hit by garbage needs garbage of each kind: a
+  stream out of step never reached the branch the mutant changed; a
+  block in step with a bad checksum did.
+- A test that needs a stop inside an answer must make it deterministic:
+  cut the answer short and wait for the bytes to be read, or the stop
+  lands between answers and a mutant survives at random.
 - A device that starts each exchange has no request timer to get wrong:
   framing lives in the size of each read, so port those sizes. A
   record's own form brings it back in step, so a late reply loses

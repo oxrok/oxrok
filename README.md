@@ -94,6 +94,7 @@ Emulator and replay only, never run on hardware:
 | `bkprecision-1856d` | 125 | 89.4% |
 | `cem-dt-885x` | 107 | 94.0% |
 | `colead-slm` | 63 | 95.6% |
+| `gmc-mh-1x-2x-rs232`, `gmc-mh-2x-bd232` | 127 | 96.4% |
 | `conrad-digi-35-cpu` | 58 | 93.3% |
 | `kern-ew-6200-2nm` | 62 | 93.5% |
 | `link-mso19` | 162 | 92.0% |

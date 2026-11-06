@@ -3064,6 +3064,48 @@ fail such a capture: what stored records look like is not known. A
 record with no digits keeps C's 0.0 dB and is warned about once per
 capture. A capture starts with no record owed.
 
+## Gossen Metrawatt METRAHit (gmc-mh-1x-2x-rs232, gmc-mh-2x-bd232)
+
+METRAHit 12S to 29S in send mode, and 22S to 29S bidirectional: ported
+and emulated on the CDC-ACM shell, model `gmc-mh-1x-2x`, 127 cases on
+2026-11-06: 108 full, 12 `--oracle-differs`, 7 `--oracle-bug`. gcov
+96.4% of the driver. Never on hardware. From libserialport 0.1.2, stock
+sigrok-cli can only `--scan` these drivers, as both scans leave the port
+open (`api.c:209`, `:304`); 123 cases run it with locking disabled, as
+for gwinstek-gpd, and four `stock` cases pin the refusal. oxrok closes
+the port after the scan and opens it again. A `gmc-mh-2x-bd232` scan
+takes 5 s whatever the device does.
+
+libsigrok's sign handling has been wrong since `f4bd8a17` (2016), which
+made `scale` an exponent and turned `scale *= -1.0` into `scale =
+-scale`. So every negative reading shows as positive, and on a 2x a
+positive capacitance, power or continuity voltage, and any positive
+current by command 8, reads far off (300 uA reads 300 MA). oxrok negates
+the value and leaves the exponent, as C did before that commit and as
+Gossen-Metrawatt's protocol document for the 22-29S has it. The document
+was read from a saved text extract, with its first figure and Ohm
+symbols unread. Power ignores its range and `TRMS V on mains` at range 0
+reads 0.3 V where the table says 300 V: kept as C, unverified.
+
+oxrok also reads a broken fuse as no number, and 1010 as OL in an
+18S-coded 10-byte block; lists every meter that answers a scan; recovers
+from lost bytes; refuses a digit above 0x0f, which stops a lost byte
+from giving a wrong number (4.3% of errored streams in C's framing, 0 of
+84,000 here), on the assumption, with no recording, that meters send
+those bits clear: one that sets them gives no readings, and says so.
+Requests are counted: at a steady 2.5 s latency at most 2 answers are
+owed and a sample is one or two latencies old, where C reached 47 owed
+and answers 25 s old, and a capture drops what the last one left. That
+makes a lost answer cost 3 s rather than 1 s. A capture only a sample
+limit can end fails after 10 s with no usable answer, so a steady
+latency over 10 s fails one. A queueing meter slower than 8 s still
+builds a backlog under a time limit. In send mode nothing bounds the
+wait, as a meter's rate can be 10 minutes: oxrok warns once after 30 s.
+
+Not emulated: a write failing in the scan or at `power_off`. The model's
+next block waits for an open after a scan's, an artifact, and its
+wake-up behaviour is a guess.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in
