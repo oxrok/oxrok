@@ -1,0 +1,52 @@
+name: Hardware report
+description: You ran oxrok on a real device. Tell us what happened.
+title: "Hardware: $driver"
+labels: [hardware]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A report from a real unit is worth more than another emulator case.
+        Paste the output as it was, without editing.
+  - type: input
+    id: driver
+    attributes:
+      label: Driver
+      description: The driver id, as listed by `oxrok -L`.
+      placeholder: serial-dmm
+    required: true
+  - type: input
+    id: model
+    attributes:
+      label: Device model
+      description: The exact model, as printed on the device.
+      placeholder: UT61E
+    required: true
+  - type: input
+    id: version
+    attributes:
+      label: oxrok version
+      description: The output of `oxrok --version`.
+    required: false
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: The commands, as typed.
+      render: bash
+      placeholder: |
+        oxrok -d serial-dmm -m UT61E --show
+    required: true
+  - type: textarea
+    id: out
+    attributes:
+      label: What it said
+      description: The output, pasted as it was.
+      render: bash
+    required: true
+  - type: textarea
+    id: note
+    attributes:
+      label: Anything else
+      description: What you expected, what the device showed, what you think went wrong.
+    required: false
