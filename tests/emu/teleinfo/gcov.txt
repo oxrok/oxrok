@@ -6,9 +6,9 @@ never reached, by function (line ranges hold no reached line):
   protocol.c
     teleinfo_receive_data: 201-202
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/serial.c         38.1%  153 of 402
+  src/serial.c         37.6%  151 of 402
   src/serial_libsp.c   40.6%  104 of 256
-  total                39.1%  257 of 658
+  total                38.8%  255 of 658
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
@@ -31,7 +31,7 @@ never reached, by function (line ranges hold no reached line):
     serial_set_handshake: never called (578-594)
     serial_set_paramstr: 654-656, 664-704
     serial_readline: never called (739-786)
-    serial_stream_detect: 866-869, 876-895, 907
+    serial_stream_detect: 839-840, 866-869, 876-895, 907
     sr_serial_extract_options: never called (952-981)
     serial_source_add: 992-993, 997-998, 1002
     serial_source_remove: 1013-1014, 1018
