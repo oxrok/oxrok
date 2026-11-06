@@ -17,8 +17,13 @@
 //!   `S 1 M 2 32 3\r`, which it calls setting real-time mode. Nothing says what
 //!   its numbers mean, how often the logger then sends, whether it answers
 //!   the command, or whether it stays in that mode across a host's close.
-//! - That the third digit is tenths is inferred from the driver's dividing the
-//!   field by 10. No recording shows a real field's digits.
+//! - The manual (photo `File:Mic_98581_manual_specs.jpg` on the wiki) and an
+//!   archived 2013 vendor page: -40.0 to 85.0 degrees, RH 0.1 to 99.9 %, a sample
+//!   interval of 1 s to 6 h set by the vendor's program, and a Fahrenheit range. A
+//!   display photo shows `25.7 °C`. So the third digit is taken for tenths, by
+//!   inference: those ranges fit 001 to 999 and 850, and no frame was ever recorded.
+//!   How a logger writes a temperature below 0 or sends Fahrenheit is not known,
+//!   and this model has neither.
 //! - No firmware source, no recording, no unit on a desk.
 //!
 //! Emulation artifacts:
