@@ -544,6 +544,7 @@ mod tests {
         assert!(ends_in_cr_alone(b"03030024913100400040\r"));
         assert!(ends_in_cr_alone(b"03030024913100400040\r0303"));
         assert!(!ends_in_cr_alone(b"03030024913100400040"));
+        assert!(!ends_in_cr_alone(b"03030024913100400040x"));
         assert!(!ends_in_cr_alone(b"0303002491310040004x\r"));
         assert!(!ends_in_cr_alone(b"0303002491310040004\r"));
         assert!(!ends_in_cr_alone(b""));

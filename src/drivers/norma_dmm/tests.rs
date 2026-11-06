@@ -772,6 +772,29 @@ fn an_expiry_after_a_line_counts_the_rest_as_lost_and_the_wait_stays() {
 }
 
 #[test]
+fn all_that_a_capture_left_are_dropped() {
+    let base = Instant::now();
+    let mut r = Requests::new(2, REQUEST_TIMEOUT, base);
+    assert_eq!(r.turn(base), Turn::Wait);
+    assert!(r.line(base));
+    assert!(r.line(base));
+    assert!(!r.line(base));
+    assert_eq!(r.turn(base), Turn::Ask);
+}
+
+/// They were lost, not late: nothing counts them from here, and no wait grows.
+#[test]
+fn an_expiry_gives_up_on_all_that_a_capture_left() {
+    let base = Instant::now();
+    let mut r = Requests::new(2, REQUEST_TIMEOUT, base);
+    r.expire();
+    assert_eq!(r.in_flight, 0);
+    assert_eq!(r.to_drop, 0);
+    assert_eq!(r.wait, Duration::from_secs(2));
+    assert!(!r.line(base));
+}
+
+#[test]
 fn the_limit_ends_at_its_time() {
     let base = Instant::now();
     let at = |ms: u64| base + Duration::from_millis(ms);
