@@ -215,12 +215,11 @@ impl Default for Parser {
 }
 
 impl Parser {
-    /// `dev_acquisition_start`'s reset, and the hold's time: a repeat counted from
-    /// the last capture would bring an old level at once.
+    /// `dev_acquisition_start`'s reset, and no level yet. A hold's time may stay: a
+    /// repeat it brings early has no level to say.
     pub fn start(&mut self) {
         self.state = State::Init;
         self.buf_len = 0;
-        self.hold_last_sent = None;
         self.have_level = false;
     }
 

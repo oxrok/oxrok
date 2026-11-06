@@ -113,7 +113,10 @@ impl Meter {
     }
 
     fn command(&mut self, byte: u8) {
-        self.writes.push(byte);
+        // A bound that doesn't bite must not eat the memory first.
+        if self.writes.len() < 100_000 {
+            self.writes.push(byte);
+        }
         if self.off {
             return;
         }
@@ -321,404 +324,429 @@ fn error_text(result: CoreResult<impl std::fmt::Debug>) -> String {
     result.expect_err("it should have failed").to_string()
 }
 
-#[test]
-fn the_bounds_are_what_they_say() {
-    assert_eq!(SILENCE_BOUND, Duration::from_secs(3));
-    assert_eq!(LEVEL_BOUND, Duration::from_secs(5));
-    assert_eq!(SCAN_WINDOW, Duration::from_millis(500));
-    assert_eq!(END_AFTER_STOP, Duration::from_millis(500));
-    assert_eq!(ASK_WAIT, Duration::from_millis(100));
-}
-
-#[test]
-fn a_scan_finds_the_sync_byte_where_it_comes() {
-    let mut fake = Fake::with(|m| {
-        m.input.extend([1, 2, 3, 0xa5]);
-        m.per_read = 1;
-    });
-    assert!(hears_a_meter(&mut fake, SCAN_WINDOW));
-    assert_eq!(fake.lock().bytes_read, 4, "and reads no further");
-}
-
-#[test]
-fn a_scan_of_no_sync_byte_is_no_meter_and_its_window_ends() {
-    let mut fake = Fake::with(|m| m.stream = vec![0xff]);
-    let started = Instant::now();
-    assert!(!hears_a_meter(&mut fake, Duration::from_millis(30)));
-    let took = started.elapsed();
-    assert!(took >= Duration::from_millis(30));
-    assert!(took < Duration::from_secs(20), "{took:?}");
-    let mut silent = Fake::default();
-    assert!(!hears_a_meter(&mut silent, Duration::from_millis(10)));
-}
-
-#[test]
-fn a_scan_stops_on_an_error() {
-    let mut fake = Fake::with(|m| m.read_error = true);
-    assert!(!hears_a_meter(&mut fake, Duration::from_secs(60)));
-    assert_eq!(fake.lock().reads, 1);
-}
-
-#[test]
-fn an_open_drops_what_is_queued() {
-    let fake = Fake::with(|m| m.input.extend([1, 2, 3]));
-    let mut device = CemDt885xDevice::from_port(Box::new(fake.clone()));
-    device.open().unwrap();
-    assert_eq!(fake.lock().input.len(), 0);
-}
-
-#[test]
-fn the_options_are_cs_in_cs_order() {
-    let device = Fake::default().device();
-    let keys: Vec<Key> = device.options(None).unwrap().iter().map(|o| o.key.clone()).collect();
-    assert_eq!(
-        keys,
-        [
-            Key::Continuous,
-            Key::LimitSamples,
-            Key::SplWeightFreq,
-            Key::SplWeightTime,
-            Key::SplMeasurementRange,
-            Key::Datalog,
-            Key::HoldMax,
-            Key::HoldMin,
-            Key::PowerOff,
-            Key::DataSource,
-        ]
-    );
-    assert!(device.options(Some("x")).is_err());
-    assert_eq!(
-        device.list(&Key::SplMeasurementRange, None).unwrap(),
-        ValueList::RangeU64(vec![(30, 130), (30, 80), (50, 100), (80, 130)])
-    );
-    assert_eq!(device.get(&Key::PowerOff, None).unwrap(), Value::Bool(false));
-    assert_eq!(device.get(&Key::DataSource, None).unwrap(), Value::from("Live"));
-    assert_eq!(device.get(&Key::LimitSamples, None).unwrap(), Value::U64(0));
-}
-
-#[test]
-fn a_get_waits_for_its_token_one_byte_at_a_time() {
-    let fake = Fake::with(|m| {
-        m.per_read = 1;
-        m.input.extend([0xa5, 0x40, 0xa5, 0x1c, 0, 0xa5, 0x03, 0xa5, 0x1f]);
-    });
-    let device = fake.device();
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
-    assert_eq!(device.get(&Key::SplWeightTime, None).unwrap(), Value::from("S"));
-    assert_eq!(fake.lock().input.len(), 2, "no byte past the token");
-    assert_eq!(fake.writes(), Vec::<u8>::new());
-}
-
-#[test]
-fn each_state_is_read_from_its_token() {
-    for (bytes, key, value) in [
-        (vec![0xa5, 0x1b, 0], Key::SplWeightFreq, Value::from("A")),
-        (vec![0xa5, 0x02], Key::SplWeightTime, Value::from("F")),
-        (vec![0xa5, 0x0a], Key::Datalog, Value::Bool(true)),
-        (vec![0xa5, 0x1a], Key::Datalog, Value::Bool(false)),
-        (vec![0xa5, 0x40], Key::SplMeasurementRange, Value::RangeU64(30, 130)),
-        (vec![0xa5, 0x30], Key::SplMeasurementRange, Value::RangeU64(30, 80)),
-        (vec![0xa5, 0x4b], Key::SplMeasurementRange, Value::RangeU64(50, 100)),
-        (vec![0xa5, 0x4c], Key::SplMeasurementRange, Value::RangeU64(80, 130)),
-        (vec![0xa5, 0x04], Key::HoldMax, Value::Bool(true)),
-        (vec![0xa5, 0x05], Key::HoldMax, Value::Bool(false)),
-        (vec![0xa5, 0x0e], Key::HoldMax, Value::Bool(false)),
-        (vec![0xa5, 0x05], Key::HoldMin, Value::Bool(true)),
-        (vec![0xa5, 0x04], Key::HoldMin, Value::Bool(false)),
-    ] {
-        let device = Fake::with(|m| m.input.extend(bytes.iter())).device();
-        assert_eq!(device.get(&key, None).unwrap(), value, "{bytes:02x?}");
+bounded_test! {
+    fn the_bounds_are_what_they_say() {
+        assert_eq!(SILENCE_BOUND, Duration::from_secs(3));
+        assert_eq!(LEVEL_BOUND, Duration::from_secs(5));
+        assert_eq!(SCAN_WINDOW, Duration::from_millis(500));
+        assert_eq!(END_AFTER_STOP, Duration::from_millis(500));
+        assert_eq!(ASK_WAIT, Duration::from_millis(100));
     }
 }
 
-#[test]
-fn a_range_and_a_hold_seen_are_not_waited_for_again() {
-    let fake = Fake::with(|m| m.input.extend([0xa5, 0x4c, 0xa5, 0x04]));
-    let device = fake.device();
-    let value = Value::RangeU64(80, 130);
-    assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), value);
-    assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), value, "with no byte left");
-    assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true));
-    assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true), "with no byte left");
-}
-
-#[test]
-fn a_wait_does_not_take_the_last_waits_token() {
-    // Two gets, the second starting on the data of a packet: C's check of the token
-    // after that byte would find the first get's.
-    let fake = Fake::with(|m| m.input.extend([0xa5, 0x1c, 0, 0x55, 0xa5, 0x1b, 0]));
-    let device = fake.device();
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
-}
-
-#[test]
-fn a_wait_starts_clean_after_one_that_ended_inside_a_packet() {
-    // A silent end just after an a5: the next byte must not be read as its token.
-    let fake = Fake::with(|m| m.input.extend([0xa5]));
-    let device = fake.device();
-    device.link().silence = Duration::from_millis(20);
-    assert!(device.get(&Key::SplWeightFreq, None).is_err());
-    fake.lock().input.extend([0x1c, 0, 0xa5, 0x1b, 0]);
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
-}
-
-#[test]
-fn a_silent_meter_fails_a_get_after_its_bound_and_not_before() {
-    let device = Fake::default().device();
-    device.link().silence = Duration::from_millis(40);
-    // Not the wait's own bound that ends it.
-    device.link().wait_bound = BOUND;
-    let started = Instant::now();
-    assert_eq!(
-        error_text(device.get(&Key::SplWeightFreq, None)),
-        "device error: no byte from the meter in 40 ms"
-    );
-    assert!(started.elapsed() >= Duration::from_millis(40));
-    assert!(started.elapsed() < BOUND);
-    assert_eq!(protocol::WAIT_SILENCE, Duration::from_secs(1));
-}
-
-#[test]
-fn each_byte_starts_the_silence_again() {
-    // Junk far apart, for longer than the bound, and then the token.
-    let fake = Fake::with(|m| {
-        m.gap = 5;
-        m.input.extend([0x00; 40]);
-        m.input.extend([0xa5, 0x1c, 0]);
-    });
-    let device = fake.device();
-    device.link().silence = Duration::from_millis(200);
-    device.link().wait_bound = BOUND;
-    let got = device.get(&Key::SplWeightFreq, None);
-    if got.is_err() {
-        // A stall of the host's is silence too.
-        assert!(fake.lock().longest_gap >= Duration::from_millis(150), "{got:?}");
+bounded_test! {
+    fn a_scan_finds_the_sync_byte_where_it_comes() {
+        let mut fake = Fake::with(|m| {
+            m.input.extend([1, 2, 3, 0xa5]);
+            m.per_read = 1;
+        });
+        assert!(hears_a_meter(&mut fake, SCAN_WINDOW));
+        assert_eq!(fake.lock().bytes_read, 4, "and reads no further");
     }
 }
 
-#[test]
-fn a_byte_late_within_the_silence_is_still_read() {
-    let fake = Fake::default();
-    let device = fake.device();
-    device.link().silence = Duration::from_secs(20);
-    let late = fake.clone();
-    let feeder = std::thread::spawn(move || {
-        // A read has come up empty: only then does the meter speak.
-        wait_for("reads", || late.lock().reads > 3);
-        late.lock().input.extend([0xa5, 0x1c, 0]);
-    });
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
-    feeder.join().unwrap();
+bounded_test! {
+    fn a_scan_of_no_sync_byte_is_no_meter_and_its_window_ends() {
+        let mut fake = Fake::with(|m| m.stream = vec![0xff]);
+        let started = Instant::now();
+        assert!(!hears_a_meter(&mut fake, Duration::from_millis(30)));
+        let took = started.elapsed();
+        assert!(took >= Duration::from_millis(30));
+        assert!(took < Duration::from_secs(20), "{took:?}");
+        let mut silent = Fake::default();
+        assert!(!hears_a_meter(&mut silent, Duration::from_millis(10)));
+    }
 }
 
-#[test]
-fn a_token_that_never_comes_fails_a_get_after_its_bound() {
-    let fake = Fake::with(|m| m.stream = vec![0xa5, 0x40]);
-    let device = fake.device();
-    device.link().wait_bound = Duration::from_millis(40);
-    let started = Instant::now();
-    assert_eq!(
-        error_text(device.get(&Key::SplWeightFreq, None)),
-        "device error: the meter did not say the frequency weighting in 40 ms"
-    );
-    assert!(started.elapsed() >= Duration::from_millis(40));
+bounded_test! {
+    fn a_scan_stops_on_an_error() {
+        let mut fake = Fake::with(|m| m.read_error = true);
+        assert!(!hears_a_meter(&mut fake, Duration::from_secs(60)));
+        assert_eq!(fake.lock().reads, 1);
+    }
 }
 
-#[test]
-fn a_silent_meter_ends_at_the_waits_bound_when_that_comes_first() {
-    let device = Fake::default().device();
-    device.link().silence = BOUND;
-    device.link().wait_bound = Duration::from_millis(30);
-    let started = Instant::now();
-    assert!(device.get(&Key::SplWeightFreq, None).is_err());
-    assert!(started.elapsed() < Duration::from_secs(20), "bytes never came to look at it");
+bounded_test! {
+    fn an_open_drops_what_is_queued() {
+        let fake = Fake::with(|m| m.input.extend([1, 2, 3]));
+        let mut device = CemDt885xDevice::from_port(Box::new(fake.clone()));
+        device.open().unwrap();
+        assert_eq!(fake.lock().input.len(), 0);
+    }
 }
 
-#[test]
-fn a_recording_get_and_a_range_set_have_times_of_their_own() {
-    // The long block's token and the range's, against a wait with room for far more.
-    let fake = Fake::with(|m| m.stream = vec![0xa5, 0x1f]);
-    let mut device = fake.device();
-    device.link().wait_bound = BOUND;
-    let started = Instant::now();
-    assert_eq!(
-        error_text(device.get(&Key::Datalog, None)),
-        "device error: the meter did not say the recording state in 1200 ms"
-    );
-    assert!(started.elapsed() >= Duration::from_millis(1200));
-    assert!(started.elapsed() < Duration::from_secs(20));
-    let started = Instant::now();
-    assert_eq!(
-        error_text(device.set(&Key::SplMeasurementRange, &Value::RangeU64(30, 80), None)),
-        "device error: the meter did not say the range in 600 ms"
-    );
-    assert!(started.elapsed() >= Duration::from_millis(600));
-    assert!(started.elapsed() < Duration::from_secs(20));
+bounded_test! {
+    fn the_options_are_cs_in_cs_order() {
+        let device = Fake::default().device();
+        let keys: Vec<Key> = device.options(None).unwrap().iter().map(|o| o.key.clone()).collect();
+        assert_eq!(
+            keys,
+            [
+                Key::Continuous,
+                Key::LimitSamples,
+                Key::SplWeightFreq,
+                Key::SplWeightTime,
+                Key::SplMeasurementRange,
+                Key::Datalog,
+                Key::HoldMax,
+                Key::HoldMin,
+                Key::PowerOff,
+                Key::DataSource,
+            ]
+        );
+        assert!(device.options(Some("x")).is_err());
+        assert_eq!(
+            device.list(&Key::SplMeasurementRange, None).unwrap(),
+            ValueList::RangeU64(vec![(30, 130), (30, 80), (50, 100), (80, 130)])
+        );
+        assert_eq!(device.get(&Key::PowerOff, None).unwrap(), Value::Bool(false));
+        assert_eq!(device.get(&Key::DataSource, None).unwrap(), Value::from("Live"));
+        assert_eq!(device.get(&Key::LimitSamples, None).unwrap(), Value::U64(0));
+    }
 }
 
-#[test]
-fn a_stray_log_start_does_not_outlast_any_bound() {
-    // bb and no dd: the parser never comes back to where C looks at its time.
-    let with_log = |wanted: &[u8]| {
+bounded_test! {
+    fn a_get_waits_for_its_token_one_byte_at_a_time() {
         let fake = Fake::with(|m| {
-            m.input.extend(wanted);
-            m.input.extend([0xbb, 0, 0x64]);
-            m.stream = vec![0x12];
+            m.per_read = 1;
+            m.input.extend([0xa5, 0x40, 0xa5, 0x1c, 0, 0xa5, 0x03, 0xa5, 0x1f]);
         });
         let device = fake.device();
-        device.link().announce = Some(Duration::from_millis(30));
-        (fake, device)
-    };
-    let (_fake, device) = with_log(&[]);
-    device.link().wait_bound = Duration::from_millis(30);
-    assert!(device.get(&Key::SplWeightFreq, None).is_err());
-    let (fake, mut device) = with_log(&[0xa5, 0x1b, 0]);
-    assert_eq!(
-        error_text(device.set(&Key::SplWeightFreq, &Value::from("C"), None)),
-        "device error: the meter did not say the frequency weighting in 30 ms; its state is \
-         unknown"
-    );
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ], "no second command in the dark");
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
+        assert_eq!(device.get(&Key::SplWeightTime, None).unwrap(), Value::from("S"));
+        assert_eq!(fake.lock().input.len(), 2, "no byte past the token");
+        assert_eq!(fake.writes(), Vec::<u8>::new());
+    }
 }
 
-#[test]
-fn a_read_error_fails_a_get_at_once() {
-    let device = Fake::with(|m| m.read_error = true).device();
-    let started = Instant::now();
-    assert!(device.get(&Key::SplWeightFreq, None).is_err());
-    assert!(started.elapsed() < BOUND);
+bounded_test! {
+    fn each_state_is_read_from_its_token() {
+        for (bytes, key, value) in [
+            (vec![0xa5, 0x1b, 0], Key::SplWeightFreq, Value::from("A")),
+            (vec![0xa5, 0x02], Key::SplWeightTime, Value::from("F")),
+            (vec![0xa5, 0x0a], Key::Datalog, Value::Bool(true)),
+            (vec![0xa5, 0x1a], Key::Datalog, Value::Bool(false)),
+            (vec![0xa5, 0x40], Key::SplMeasurementRange, Value::RangeU64(30, 130)),
+            (vec![0xa5, 0x30], Key::SplMeasurementRange, Value::RangeU64(30, 80)),
+            (vec![0xa5, 0x4b], Key::SplMeasurementRange, Value::RangeU64(50, 100)),
+            (vec![0xa5, 0x4c], Key::SplMeasurementRange, Value::RangeU64(80, 130)),
+            (vec![0xa5, 0x04], Key::HoldMax, Value::Bool(true)),
+            (vec![0xa5, 0x05], Key::HoldMax, Value::Bool(false)),
+            (vec![0xa5, 0x0e], Key::HoldMax, Value::Bool(false)),
+            (vec![0xa5, 0x05], Key::HoldMin, Value::Bool(true)),
+            (vec![0xa5, 0x04], Key::HoldMin, Value::Bool(false)),
+        ] {
+            let device = Fake::with(|m| m.input.extend(bytes.iter())).device();
+            assert_eq!(device.get(&key, None).unwrap(), value, "{bytes:02x?}");
+        }
+    }
 }
 
-#[test]
-fn a_set_of_what_the_meter_says_sends_nothing() {
-    let fake = Fake::with(|m| m.input.extend([0xa5, 0x1b, 0]));
-    let mut device = fake.device();
-    device.set(&Key::SplWeightFreq, &Value::from("A"), None).unwrap();
-    assert_eq!(fake.writes(), Vec::<u8>::new());
+bounded_test! {
+    fn a_range_and_a_hold_seen_are_not_waited_for_again() {
+        let fake = Fake::with(|m| m.input.extend([0xa5, 0x4c, 0xa5, 0x04]));
+        let device = fake.device();
+        let value = Value::RangeU64(80, 130);
+        assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), value);
+        assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), value, "with no byte left");
+        assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true));
+        assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true), "with no byte left");
+    }
 }
 
-#[test]
-fn a_set_sends_once_per_announcement_until_it_is_heard() {
-    let fake = Fake::with(|m| {
-        m.live = true;
-        m.per_read = 1;
-        m.deaf = 2;
-    });
-    let mut device = fake.device();
-    device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ; 3]);
-    assert!(fake.lock().freq_c);
+bounded_test! {
+    fn a_wait_does_not_take_the_last_waits_token() {
+        // Two gets, the second starting on the data of a packet: C's check of the token
+        // after that byte would find the first get's.
+        let fake = Fake::with(|m| m.input.extend([0xa5, 0x1c, 0, 0x55, 0xa5, 0x1b, 0]));
+        let device = fake.device();
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
+    }
 }
 
-#[test]
-fn each_setting_has_its_command_and_ends_in_the_state_asked() {
-    // Each with what stepping it takes on a meter that starts at its first state.
-    let cases = [
-        (Key::SplWeightFreq, Value::from("C"), vec![CMD_TOGGLE_WEIGHT_FREQ]),
-        (Key::SplWeightTime, Value::from("S"), vec![CMD_TOGGLE_WEIGHT_TIME]),
-        (Key::Datalog, Value::Bool(true), vec![CMD_TOGGLE_RECORDING]),
-        (Key::HoldMax, Value::Bool(true), vec![CMD_TOGGLE_HOLD_MAX_MIN]),
-        (Key::HoldMin, Value::Bool(true), vec![CMD_TOGGLE_HOLD_MAX_MIN; 2]),
-        (Key::SplMeasurementRange, Value::RangeU64(30, 80), vec![CMD_TOGGLE_MEAS_RANGE]),
-        (Key::SplMeasurementRange, Value::RangeU64(50, 100), vec![CMD_TOGGLE_MEAS_RANGE; 2]),
-        (Key::SplMeasurementRange, Value::RangeU64(80, 130), vec![CMD_TOGGLE_MEAS_RANGE; 3]),
-    ];
-    for (key, value, commands) in cases {
-        let fake = Fake::live();
+bounded_test! {
+    fn a_wait_starts_clean_after_one_that_ended_inside_a_packet() {
+        // A silent end just after an a5: the next byte must not be read as its token.
+        let fake = Fake::with(|m| m.input.extend([0xa5]));
+        let device = fake.device();
+        device.link().silence = Duration::from_millis(20);
+        assert!(device.get(&Key::SplWeightFreq, None).is_err());
+        fake.lock().input.extend([0x1c, 0, 0xa5, 0x1b, 0]);
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
+    }
+}
+
+bounded_test! {
+    fn a_silent_meter_fails_a_get_after_its_bound_and_not_before() {
+        let device = Fake::default().device();
+        device.link().silence = Duration::from_millis(40);
+        // Not the wait's own bound that ends it.
+        device.link().wait_bound = BOUND;
+        let started = Instant::now();
+        assert_eq!(
+            error_text(device.get(&Key::SplWeightFreq, None)),
+            "device error: no byte from the meter in 40 ms"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(40));
+        assert!(started.elapsed() < BOUND);
+        assert_eq!(protocol::WAIT_SILENCE, Duration::from_secs(1));
+    }
+}
+
+bounded_test! {
+    fn each_byte_starts_the_silence_again() {
+        // Junk far apart, for longer than the bound, and then the token.
+        let fake = Fake::with(|m| {
+            m.gap = 5;
+            m.input.extend([0x00; 40]);
+            m.input.extend([0xa5, 0x1c, 0]);
+        });
+        let device = fake.device();
+        device.link().silence = Duration::from_millis(200);
+        device.link().wait_bound = BOUND;
+        let got = device.get(&Key::SplWeightFreq, None);
+        if got.is_err() {
+            // A stall of the host's is silence too.
+            assert!(fake.lock().longest_gap >= Duration::from_millis(150), "{got:?}");
+        }
+    }
+}
+
+bounded_test! {
+    fn a_byte_late_within_the_silence_is_still_read() {
+        let fake = Fake::default();
+        let device = fake.device();
+        device.link().silence = Duration::from_secs(20);
+        let late = fake.clone();
+        let feeder = std::thread::spawn(move || {
+            // A read has come up empty: only then does the meter speak.
+            wait_for("reads", || late.lock().reads > 3);
+            late.lock().input.extend([0xa5, 0x1c, 0]);
+        });
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
+        feeder.join().unwrap();
+    }
+}
+
+bounded_test! {
+    fn a_token_that_never_comes_fails_a_get_after_its_bound() {
+        let fake = Fake::with(|m| m.stream = vec![0xa5, 0x40]);
+        let device = fake.device();
+        device.link().wait_bound = Duration::from_millis(40);
+        let started = Instant::now();
+        assert_eq!(
+            error_text(device.get(&Key::SplWeightFreq, None)),
+            "device error: the meter did not say the frequency weighting in 40 ms"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(40));
+    }
+}
+
+bounded_test! {
+    fn a_silent_meter_ends_at_the_waits_bound_when_that_comes_first() {
+        let device = Fake::default().device();
+        device.link().silence = BOUND;
+        device.link().wait_bound = Duration::from_millis(30);
+        let started = Instant::now();
+        assert!(device.get(&Key::SplWeightFreq, None).is_err());
+        assert!(started.elapsed() < Duration::from_secs(20), "bytes never came to look at it");
+    }
+}
+
+bounded_test! {
+    fn a_recording_get_and_a_range_set_have_times_of_their_own() {
+        // The long block's token and the range's, against a wait with room for far more.
+        let fake = Fake::with(|m| m.stream = vec![0xa5, 0x1f]);
         let mut device = fake.device();
-        device.set(&key, &value, None).unwrap();
-        assert_eq!(fake.writes(), commands, "{key:?}");
-        let m = fake.lock();
-        let right = match key {
-            Key::SplWeightFreq => m.freq_c,
-            Key::SplWeightTime => m.slow,
-            Key::Datalog => m.recording,
-            Key::HoldMax => m.hold == 1,
-            Key::HoldMin => m.hold == 2,
-            _ => m.range == commands.len(),
+        device.link().wait_bound = BOUND;
+        let started = Instant::now();
+        assert_eq!(
+            error_text(device.get(&Key::Datalog, None)),
+            "device error: the meter did not say the recording state in 1200 ms"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(1200));
+        assert!(started.elapsed() < Duration::from_secs(20));
+        let started = Instant::now();
+        assert_eq!(
+            error_text(device.set(&Key::SplMeasurementRange, &Value::RangeU64(30, 80), None)),
+            "device error: the meter did not say the range in 600 ms"
+        );
+        assert!(started.elapsed() >= Duration::from_millis(600));
+        assert!(started.elapsed() < Duration::from_secs(20));
+    }
+}
+
+bounded_test! {
+    fn a_stray_log_start_does_not_outlast_any_bound() {
+        // bb and no dd: the parser never comes back to where C looks at its time.
+        let with_log = |wanted: &[u8]| {
+            let fake = Fake::with(|m| {
+                m.input.extend(wanted);
+                m.input.extend([0xbb, 0, 0x64]);
+                m.stream = vec![0x12];
+            });
+            let device = fake.device();
+            device.link().announce = Some(Duration::from_millis(30));
+            (fake, device)
         };
-        assert!(right, "{key:?}");
+        let (_fake, device) = with_log(&[]);
+        device.link().wait_bound = Duration::from_millis(30);
+        assert!(device.get(&Key::SplWeightFreq, None).is_err());
+        let (fake, mut device) = with_log(&[0xa5, 0x1b, 0]);
+        assert_eq!(
+            error_text(device.set(&Key::SplWeightFreq, &Value::from("C"), None)),
+            "device error: the meter did not say the frequency weighting in 30 ms; its state is \
+             unknown"
+        );
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ], "no second command in the dark");
     }
-    // Off from max: on through min.
-    let fake = Fake::with(|m| {
-        m.live = true;
-        m.hold = 1;
-    });
-    fake.device().set(&Key::HoldMax, &Value::Bool(false), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_HOLD_MAX_MIN; 2]);
-    assert_eq!(fake.lock().hold, 0);
 }
 
-#[test]
-fn a_token_that_says_it_is_believed_only_when_the_next_agrees() {
-    // A command the meter takes late: the first says yes, the next says no, and so a
-    // second command, itself confirmed.
-    let fake = Fake::default();
-    let mut device = fake.device();
-    fake.lock().input.extend([0xa5, 0x1b, 0]);
-    let feeder = {
-        let fake = fake.clone();
-        std::thread::spawn(move || {
-            wait_for("the first", || !fake.writes().is_empty());
-            std::thread::sleep(protocol::PACKET_TIME * 2);
-            fake.lock().input.extend([0xa5, 0x1c, 0, 0xa5, 0x1b, 0]);
-            wait_for("the second", || fake.writes().len() > 1);
-            std::thread::sleep(protocol::PACKET_TIME * 2);
-            fake.lock().input.extend([0xa5, 0x1c, 0, 0xa5, 0x1c, 0]);
-        })
-    };
-    device.link().silence = BOUND;
-    device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
-    feeder.join().unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ; 2]);
-}
-
-#[test]
-fn no_next_announcement_is_an_error_that_says_the_state_is_unknown() {
-    let fake = Fake::default();
-    let mut device = fake.device();
-    fake.lock().input.extend([0xa5, 0x1b, 0]);
-    let feeder = {
-        let fake = fake.clone();
-        std::thread::spawn(move || {
-            wait_for("the first", || !fake.writes().is_empty());
-            std::thread::sleep(protocol::PACKET_TIME * 2);
-            fake.lock().input.extend([0xa5, 0x1c, 0]);
-        })
-    };
-    device.link().silence = Duration::from_millis(300);
-    device.link().announce = Some(BOUND);
-    assert_eq!(
-        error_text(device.set(&Key::SplWeightFreq, &Value::from("C"), None)),
-        "device error: no byte from the meter in 300 ms; its state is unknown"
-    );
-    feeder.join().unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ], "stopped sending once it said so");
-}
-
-#[test]
-fn what_completes_within_a_packets_time_of_a_command_is_no_answer() {
-    // The old state, already on its way, right behind the command.
-    let fake = Fake::with(|m| {
-        m.live = true;
-        m.per_read = 1;
-    });
-    let mut device = fake.device();
-    device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
-    fake.lock().input.extend(readout(0x06, 0x55));
-    let rx = start(&mut device);
-    until_end(&rx);
-    {
-        let mut m = fake.lock();
-        m.input.clear();
-        // A set from what the capture saw goes straight to its command.
-        m.input.extend([0xa5, 0x1b, 0, 0xa5, 0x1b, 0, 0xa5, 0x1b, 0]);
+bounded_test! {
+    fn a_read_error_fails_a_get_at_once() {
+        let device = Fake::with(|m| m.read_error = true).device();
+        let started = Instant::now();
+        assert!(device.get(&Key::SplWeightFreq, None).is_err());
+        assert!(started.elapsed() < BOUND);
     }
-    device.link().parser.flags = MqFlags::SPL_FREQ_WEIGHT_A;
-    device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ]);
-    assert!(fake.lock().freq_c);
+}
+
+bounded_test! {
+    fn a_set_of_what_the_meter_says_sends_nothing() {
+        let fake = Fake::with(|m| m.input.extend([0xa5, 0x1b, 0]));
+        let mut device = fake.device();
+        device.set(&Key::SplWeightFreq, &Value::from("A"), None).unwrap();
+        assert_eq!(fake.writes(), Vec::<u8>::new());
+    }
+}
+
+bounded_test! {
+    fn a_set_sends_once_per_announcement_until_it_is_heard() {
+        let fake = Fake::with(|m| {
+            m.live = true;
+            m.per_read = 1;
+            m.deaf = 2;
+        });
+        let mut device = fake.device();
+        device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ; 3]);
+        assert!(fake.lock().freq_c);
+    }
+}
+
+bounded_test! {
+    fn each_setting_has_its_command_and_ends_in_the_state_asked() {
+        // Each with what stepping it takes on a meter that starts at its first state.
+        let cases = [
+            (Key::SplWeightFreq, Value::from("C"), vec![CMD_TOGGLE_WEIGHT_FREQ]),
+            (Key::SplWeightTime, Value::from("S"), vec![CMD_TOGGLE_WEIGHT_TIME]),
+            (Key::Datalog, Value::Bool(true), vec![CMD_TOGGLE_RECORDING]),
+            (Key::HoldMax, Value::Bool(true), vec![CMD_TOGGLE_HOLD_MAX_MIN]),
+            (Key::HoldMin, Value::Bool(true), vec![CMD_TOGGLE_HOLD_MAX_MIN; 2]),
+            (Key::SplMeasurementRange, Value::RangeU64(30, 80), vec![CMD_TOGGLE_MEAS_RANGE]),
+            (Key::SplMeasurementRange, Value::RangeU64(50, 100), vec![CMD_TOGGLE_MEAS_RANGE; 2]),
+            (Key::SplMeasurementRange, Value::RangeU64(80, 130), vec![CMD_TOGGLE_MEAS_RANGE; 3]),
+        ];
+        for (key, value, commands) in cases {
+            let fake = Fake::live();
+            let mut device = fake.device();
+            device.set(&key, &value, None).unwrap();
+            assert_eq!(fake.writes(), commands, "{key:?}");
+            let m = fake.lock();
+            let right = match key {
+                Key::SplWeightFreq => m.freq_c,
+                Key::SplWeightTime => m.slow,
+                Key::Datalog => m.recording,
+                Key::HoldMax => m.hold == 1,
+                Key::HoldMin => m.hold == 2,
+                _ => m.range == commands.len(),
+            };
+            assert!(right, "{key:?}");
+        }
+        // Off from max: on through min.
+        let fake = Fake::with(|m| {
+            m.live = true;
+            m.hold = 1;
+        });
+        fake.device().set(&Key::HoldMax, &Value::Bool(false), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_HOLD_MAX_MIN; 2]);
+        assert_eq!(fake.lock().hold, 0);
+    }
+}
+
+bounded_test! {
+    fn a_token_that_says_it_is_believed_only_when_the_next_agrees() {
+        // A command the meter takes late: the first says yes, the next says no, and so a
+        // second command, itself confirmed.
+        let fake = Fake::default();
+        let mut device = fake.device();
+        fake.lock().input.extend([0xa5, 0x1b, 0]);
+        let feeder = {
+            let fake = fake.clone();
+            std::thread::spawn(move || {
+                wait_for("the first", || !fake.writes().is_empty());
+                std::thread::sleep(protocol::PACKET_TIME * 2);
+                fake.lock().input.extend([0xa5, 0x1c, 0, 0xa5, 0x1b, 0]);
+                wait_for("the second", || fake.writes().len() > 1);
+                std::thread::sleep(protocol::PACKET_TIME * 2);
+                fake.lock().input.extend([0xa5, 0x1c, 0, 0xa5, 0x1c, 0]);
+            })
+        };
+        device.link().silence = BOUND;
+        device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
+        feeder.join().unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ; 2]);
+    }
+}
+
+bounded_test! {
+    fn no_next_announcement_is_an_error_that_says_the_state_is_unknown() {
+        let fake = Fake::default();
+        let mut device = fake.device();
+        fake.lock().input.extend([0xa5, 0x1b, 0]);
+        let feeder = {
+            let fake = fake.clone();
+            std::thread::spawn(move || {
+                wait_for("the first", || !fake.writes().is_empty());
+                std::thread::sleep(protocol::PACKET_TIME * 2);
+                fake.lock().input.extend([0xa5, 0x1c, 0]);
+            })
+        };
+        device.link().silence = Duration::from_millis(300);
+        device.link().announce = Some(BOUND);
+        assert_eq!(
+            error_text(device.set(&Key::SplWeightFreq, &Value::from("C"), None)),
+            "device error: no byte from the meter in 300 ms; its state is unknown"
+        );
+        feeder.join().unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ], "stopped sending once it said so");
+    }
+}
+
+bounded_test! {
+    fn what_completes_within_a_packets_time_of_a_command_is_no_answer() {
+        // The old state, already on its way, right behind the command.
+        let fake = Fake::with(|m| {
+            m.live = true;
+            m.per_read = 1;
+        });
+        let mut device = fake.device();
+        device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        fake.lock().input.extend(readout(0x06, 0x55));
+        let rx = start(&mut device);
+        until_end(&rx);
+        {
+            let mut m = fake.lock();
+            m.input.clear();
+            // A set from what the capture saw goes straight to its command.
+            m.input.extend([0xa5, 0x1b, 0, 0xa5, 0x1b, 0, 0xa5, 0x1b, 0]);
+        }
+        device.link().parser.flags = MqFlags::SPL_FREQ_WEIGHT_A;
+        device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ]);
+        assert!(fake.lock().freq_c);
+    }
 }
 
 bounded_test! {
@@ -739,182 +767,201 @@ bounded_test! {
     }
 }
 
-#[test]
-fn a_failed_set_leaves_what_a_capture_saw() {
-    let mut stream = vec![0xa5, 0x1a, 0xa5, 0x4c, 0xa5, 0x0e, 0xa5, 0x1b, 0];
-    stream.extend(readout(0x06, 0x55));
-    let fake = Fake::with(|m| m.input.extend(stream));
-    let mut device = fake.device();
-    device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
-    let rx = start(&mut device);
-    until_end(&rx);
-    {
-        let mut m = fake.lock();
-        m.deaf = u32::MAX;
-        m.input.clear();
-        m.stream = vec![0xa5, 0x1a, 0xa5, 0x4c, 0xa5, 0x0e, 0xa5, 0x1b, 0];
+bounded_test! {
+    fn a_failed_set_leaves_what_a_capture_saw() {
+        let mut stream = vec![0xa5, 0x1a, 0xa5, 0x4c, 0xa5, 0x0e, 0xa5, 0x1b, 0];
+        stream.extend(readout(0x06, 0x55));
+        let fake = Fake::with(|m| m.input.extend(stream));
+        let mut device = fake.device();
+        device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut device);
+        until_end(&rx);
+        {
+            let mut m = fake.lock();
+            m.deaf = u32::MAX;
+            m.input.clear();
+            m.stream = vec![0xa5, 0x1a, 0xa5, 0x4c, 0xa5, 0x0e, 0xa5, 0x1b, 0];
+        }
+        device.link().toggle_bound = Some(Duration::from_millis(1));
+        device.link().announce = Some(Duration::from_millis(30));
+        for (key, value) in [
+            (Key::SplWeightFreq, Value::from("C")),
+            (Key::Datalog, Value::Bool(true)),
+            (Key::HoldMax, Value::Bool(true)),
+            (Key::SplMeasurementRange, Value::RangeU64(30, 80)),
+        ] {
+            assert!(device.set(&key, &value, None).is_err(), "{key:?}");
+        }
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
+        assert_eq!(device.get(&Key::Datalog, None).unwrap(), Value::Bool(false));
+        assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(false));
+        assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), Value::RangeU64(80, 130));
     }
-    device.link().toggle_bound = Some(Duration::from_millis(1));
-    device.link().announce = Some(Duration::from_millis(30));
-    for (key, value) in [
-        (Key::SplWeightFreq, Value::from("C")),
-        (Key::Datalog, Value::Bool(true)),
-        (Key::HoldMax, Value::Bool(true)),
-        (Key::SplMeasurementRange, Value::RangeU64(30, 80)),
-    ] {
-        assert!(device.set(&key, &value, None).is_err(), "{key:?}");
+}
+
+bounded_test! {
+    fn what_a_capture_saw_answers_and_a_set_keeps_it_true() {
+        let mut stream = vec![0xa5, 0x0a, 0xa5, 0x1b, 0, 0xa5, 0x02, 0xa5, 0x40, 0xa5, 0x0e];
+        stream.extend(readout(0x06, 0x55));
+        let fake = Fake::with(|m| {
+            m.input.extend(stream);
+            m.recording = true;
+        });
+        let mut device = fake.device();
+        device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut device);
+        until_end(&rx);
+        // Nothing is left to read, and no wait comes.
+        fake.lock().input.clear();
+        device.link().silence = Duration::from_millis(1);
+        assert_eq!(
+            device.get(&Key::Datalog, None).unwrap(),
+            Value::Bool(true),
+            "C reads the last token instead (protocol.c:487)"
+        );
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
+        assert_eq!(device.get(&Key::SplWeightTime, None).unwrap(), Value::from("F"));
+        assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(false));
+        // A set of what it says sends nothing. C's flag would go stale after a toggle.
+        device.set(&Key::SplWeightFreq, &Value::from("A"), None).unwrap();
+        device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes(), Vec::<u8>::new());
+        device.link().silence = BOUND;
+        fake.lock().live = true;
+        device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ]);
+        assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
+        fake.lock().writes.clear();
+        device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
+        assert_eq!(fake.writes(), Vec::<u8>::new(), "C would toggle here");
     }
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
-    assert_eq!(device.get(&Key::Datalog, None).unwrap(), Value::Bool(false));
-    assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(false));
-    assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), Value::RangeU64(80, 130));
 }
 
-#[test]
-fn what_a_capture_saw_answers_and_a_set_keeps_it_true() {
-    let mut stream = vec![0xa5, 0x0a, 0xa5, 0x1b, 0, 0xa5, 0x02, 0xa5, 0x40, 0xa5, 0x0e];
-    stream.extend(readout(0x06, 0x55));
-    let fake = Fake::with(|m| {
-        m.input.extend(stream);
-        m.recording = true;
-    });
-    let mut device = fake.device();
-    device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
-    let rx = start(&mut device);
-    until_end(&rx);
-    // Nothing is left to read, and no wait comes.
-    fake.lock().input.clear();
-    device.link().silence = Duration::from_millis(1);
-    assert_eq!(
-        device.get(&Key::Datalog, None).unwrap(),
-        Value::Bool(true),
-        "C reads the last token instead (protocol.c:487)"
-    );
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("A"));
-    assert_eq!(device.get(&Key::SplWeightTime, None).unwrap(), Value::from("F"));
-    assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(false));
-    // A set of what it says sends nothing. C's flag would go stale after a toggle.
-    device.set(&Key::SplWeightFreq, &Value::from("A"), None).unwrap();
-    device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes(), Vec::<u8>::new());
-    device.link().silence = BOUND;
-    fake.lock().live = true;
-    device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_WEIGHT_FREQ]);
-    assert_eq!(device.get(&Key::SplWeightFreq, None).unwrap(), Value::from("C"));
-    fake.lock().writes.clear();
-    device.set(&Key::SplWeightFreq, &Value::from("C"), None).unwrap();
-    assert_eq!(fake.writes(), Vec::<u8>::new(), "C would toggle here");
-}
-
-#[test]
-fn a_set_keeps_the_hold_and_recording_a_capture_saw_true() {
-    let mut stream = vec![0xa5, 0x1a, 0xa5, 0x0e, 0xa5, 0x1b, 0];
-    stream.extend(readout(0x06, 0x55));
-    let fake = Fake::with(|m| m.input.extend(stream));
-    let mut device = fake.device();
-    device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
-    let rx = start(&mut device);
-    until_end(&rx);
-    {
-        let mut m = fake.lock();
-        m.input.clear();
-        m.live = true;
+bounded_test! {
+    fn a_set_keeps_the_hold_and_recording_a_capture_saw_true() {
+        let mut stream = vec![0xa5, 0x1a, 0xa5, 0x0e, 0xa5, 0x1b, 0];
+        stream.extend(readout(0x06, 0x55));
+        let fake = Fake::with(|m| m.input.extend(stream));
+        let mut device = fake.device();
+        device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let rx = start(&mut device);
+        until_end(&rx);
+        {
+            let mut m = fake.lock();
+            m.input.clear();
+            m.live = true;
+        }
+        device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
+        device.set(&Key::HoldMax, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_RECORDING, CMD_TOGGLE_HOLD_MAX_MIN]);
+        assert_eq!(device.get(&Key::Datalog, None).unwrap(), Value::Bool(true));
+        assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true));
+        assert_eq!(device.get(&Key::HoldMin, None).unwrap(), Value::Bool(false));
+        // Sets of those send nothing: C's old state would toggle both again.
+        device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
+        device.set(&Key::HoldMax, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes().len(), 2);
     }
-    device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
-    device.set(&Key::HoldMax, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_RECORDING, CMD_TOGGLE_HOLD_MAX_MIN]);
-    assert_eq!(device.get(&Key::Datalog, None).unwrap(), Value::Bool(true));
-    assert_eq!(device.get(&Key::HoldMax, None).unwrap(), Value::Bool(true));
-    assert_eq!(device.get(&Key::HoldMin, None).unwrap(), Value::Bool(false));
-    // Sets of those send nothing: C's old state would toggle both again.
-    device.set(&Key::Datalog, &Value::Bool(true), None).unwrap();
-    device.set(&Key::HoldMax, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes().len(), 2);
 }
 
-#[test]
-fn a_range_set_is_remembered_for_a_get_as_c_does_not() {
-    let fake = Fake::live();
-    let mut device = fake.device();
-    device.set(&Key::SplMeasurementRange, &Value::RangeU64(50, 100), None).unwrap();
-    fake.lock().live = false;
-    assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), Value::RangeU64(50, 100));
-}
-
-#[test]
-fn a_bad_value_is_refused_says_why_and_sends_nothing() {
-    let fake = Fake::with(|m| m.stream = vec![0xa5, 0x40]);
-    let mut device = fake.device();
-    for (key, value, why) in [
-        (Key::SplWeightFreq, Value::from("Z"), "must be A or C"),
-        (Key::SplWeightTime, Value::from("Z"), "must be F or S"),
-        (Key::DataSource, Value::from("Cloud"), "must be Live or Memory"),
-        (Key::SplMeasurementRange, Value::RangeU64(10, 20), "must be 30-130"),
-        (Key::SplMeasurementRange, Value::U64(1), "must be 30-130"),
-        (Key::SplWeightFreq, Value::U64(1), "must be A or C"),
-    ] {
-        let text = error_text(device.set(&key, &value, None));
-        assert!(text.contains(why), "{key:?}: {text}");
+bounded_test! {
+    fn a_range_set_is_remembered_for_a_get_as_c_does_not() {
+        let fake = Fake::live();
+        let mut device = fake.device();
+        device.set(&Key::SplMeasurementRange, &Value::RangeU64(50, 100), None).unwrap();
+        fake.lock().live = false;
+        assert_eq!(device.get(&Key::SplMeasurementRange, None).unwrap(), Value::RangeU64(50, 100));
     }
-    for (key, value) in [
-        (Key::LimitSamples, Value::U64(0)),
-        (Key::Datalog, Value::U64(1)),
-        (Key::HoldMax, Value::U64(1)),
-        (Key::PowerOff, Value::U64(1)),
-    ] {
-        assert!(device.set(&key, &value, None).is_err(), "{key:?}");
+}
+
+bounded_test! {
+    fn a_bad_value_is_refused_says_why_and_sends_nothing() {
+        let fake = Fake::with(|m| m.stream = vec![0xa5, 0x40]);
+        let mut device = fake.device();
+        for (key, value, why) in [
+            (Key::SplWeightFreq, Value::from("Z"), "must be A or C"),
+            (Key::SplWeightTime, Value::from("Z"), "must be F or S"),
+            (Key::DataSource, Value::from("Cloud"), "must be Live or Memory"),
+            (Key::SplMeasurementRange, Value::RangeU64(10, 20), "must be 30-130"),
+            (Key::SplMeasurementRange, Value::U64(1), "must be 30-130"),
+            (Key::SplWeightFreq, Value::U64(1), "must be A or C"),
+        ] {
+            let text = error_text(device.set(&key, &value, None));
+            assert!(text.contains(why), "{key:?}: {text}");
+        }
+        for (key, value) in [
+            (Key::LimitSamples, Value::U64(0)),
+            (Key::Datalog, Value::U64(1)),
+            (Key::HoldMax, Value::U64(1)),
+            (Key::PowerOff, Value::U64(1)),
+        ] {
+            assert!(device.set(&key, &value, None).is_err(), "{key:?}");
+        }
+        assert!(device.set(&Key::Conn, &Value::from("x"), None).is_err());
+        assert!(device.get(&Key::Conn, None).is_err());
+        assert!(device.list(&Key::Conn, None).is_err());
+        assert_eq!(fake.writes(), Vec::<u8>::new());
     }
-    assert!(device.set(&Key::Conn, &Value::from("x"), None).is_err());
-    assert!(device.get(&Key::Conn, None).is_err());
-    assert!(device.list(&Key::Conn, None).is_err());
-    assert_eq!(fake.writes(), Vec::<u8>::new());
 }
 
-#[test]
-fn a_write_error_fails_a_set() {
-    let fake = Fake::with(|m| {
-        m.input.extend([0xa5, 0x1b, 0]);
-        m.write_error = true;
-    });
-    let mut device = fake.device();
-    assert!(device.set(&Key::SplWeightFreq, &Value::from("C"), None).is_err());
-    assert!(device.set(&Key::PowerOff, &Value::Bool(true), None).is_err());
+bounded_test! {
+    fn a_write_error_fails_a_set() {
+        let fake = Fake::with(|m| {
+            m.input.extend([0xa5, 0x1b, 0]);
+            m.write_error = true;
+        });
+        let mut device = fake.device();
+        assert!(device.set(&Key::SplWeightFreq, &Value::from("C"), None).is_err());
+        assert!(device.set(&Key::PowerOff, &Value::Bool(true), None).is_err());
+    }
 }
 
-#[test]
-fn power_off_says_it_until_the_meter_stops_and_off_says_nothing() {
-    let fake = Fake::with(|m| {
-        m.stream = vec![0xa5, 0x40];
-        m.deaf = 2;
-    });
-    let mut device = fake.device();
-    device.set(&Key::PowerOff, &Value::Bool(false), None).unwrap();
-    assert_eq!(fake.writes(), Vec::<u8>::new());
-    device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF; 3]);
-    assert!(fake.lock().off);
-    assert!(device.link().port.is_some());
+bounded_test! {
+    fn power_off_says_it_until_the_meter_stops_and_off_says_nothing() {
+        let fake = Fake::with(|m| {
+            m.stream = vec![0xa5, 0x40];
+            m.deaf = 2;
+        });
+        let mut device = fake.device();
+        device.set(&Key::PowerOff, &Value::Bool(false), None).unwrap();
+        assert_eq!(fake.writes(), Vec::<u8>::new());
+        device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF; 3]);
+        assert!(fake.lock().off);
+        assert!(device.link().port.is_some());
+    }
 }
 
-#[test]
-fn power_off_flushes_ahead_of_each_look() {
-    // What is queued says nothing of the meter now.
-    let fake = Fake::with(|m| m.input.extend([0xa5, 0x40, 0xa5, 0x40]));
-    let mut device = fake.device();
-    device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+bounded_test! {
+    fn power_off_gives_the_next_token_its_time() {
+        let fake = Fake::default();
+        let mut device = fake.device();
+        let started = Instant::now();
+        device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(25));
+    }
 }
 
-#[test]
-fn a_read_error_in_power_off_is_a_meter_gone() {
-    let fake = Fake::with(|m| {
-        m.read_error = true;
-        m.deaf = u32::MAX;
-    });
-    let mut device = fake.device();
-    device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
-    assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+bounded_test! {
+    fn power_off_flushes_ahead_of_each_look() {
+        // What is queued says nothing of the meter now.
+        let fake = Fake::with(|m| m.input.extend([0xa5, 0x40, 0xa5, 0x40]));
+        let mut device = fake.device();
+        device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+    }
+}
+
+bounded_test! {
+    fn a_read_error_in_power_off_is_a_meter_gone() {
+        let fake = Fake::with(|m| {
+            m.read_error = true;
+            m.deaf = u32::MAX;
+        });
+        let mut device = fake.device();
+        device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
+        assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+    }
 }
 
 bounded_test! {
@@ -933,20 +980,21 @@ bounded_test! {
     }
 }
 
-#[test]
-fn a_port_that_will_not_open_again_after_a_power_off_is_no_failure() {
-    // As C, which does not look at it. This name opens nothing.
-    let fake = Fake::default();
-    let mut device = CemDt885xDevice::new(
-        Link::new(Params::parse(SERIALCOMM).unwrap()),
-        "/dev/cem-dt-885x-no-such-port".to_owned(),
-        true,
-    );
-    device.pending = Some(Box::new(fake.clone()));
-    device.open().unwrap();
-    device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
-    assert!(device.link().port.is_none());
-    assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+bounded_test! {
+    fn a_port_that_will_not_open_again_after_a_power_off_is_no_failure() {
+        // As C, which does not look at it. This name opens nothing.
+        let fake = Fake::default();
+        let mut device = CemDt885xDevice::new(
+            Link::new(Params::parse(SERIALCOMM).unwrap()),
+            "/dev/cem-dt-885x-no-such-port".to_owned(),
+            true,
+        );
+        device.pending = Some(Box::new(fake.clone()));
+        device.open().unwrap();
+        device.set(&Key::PowerOff, &Value::Bool(true), None).unwrap();
+        assert!(device.link().port.is_none());
+        assert_eq!(fake.writes(), [CMD_TOGGLE_POWER_OFF]);
+    }
 }
 
 bounded_test! {
