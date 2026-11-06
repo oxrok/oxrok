@@ -46,7 +46,7 @@ Run on real hardware:
 |---|---|---|---|
 | `intronix-logicport` | two LogicPort LA1034 | no model | 60 bench checks with an ESP32 signal generator; captures match the libsigrok fork that has this driver |
 | `fx2lafw` | a Saleae Logic clone (`0925:3881`) | 78 cases, gcov 91.2% | upload and open order changed since the bench run, checked on the emulator only |
-| `rigol-ds` | a Rigol DS1102E | no model | other series have replay tests only |
+| `rigol-ds` | a Rigol DS1102E | `rigol-ds`, 75 cases, gcov 74.2% | other series have replay tests only |
 | `raspberrypi-pico` | a Pico with the sigrok-pico firmware | no model | digital, analog and mixed captures |
 
 Run on a microcontroller standing in for the device, and on the emulator,

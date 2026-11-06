@@ -9,6 +9,16 @@ release may change the library API.
 ### Added
 
 - Drivers: `colead-slm`.
+- Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
+
+### Changed
+
+- `*OPC?` is waited on for up to 30 s of silence, where it was asked 10
+  times. A SCPI resource that fails to open is no device, with a warning
+  that says why. After a timeout a SCPI port drains until quiet, so a
+  late answer doesn't shift what follows, unless it is later than the
+  drain.
+- The libusb backend gives a kernel driver back only if it detached one.
 
 ## [0.1.0-alpha.2] - 2026-11-06
 

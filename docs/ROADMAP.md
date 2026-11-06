@@ -26,7 +26,7 @@
 | 9d | EZ-USB family: `dreamsourcelab-dslogic`, `hantek-6xxx`, `hantek-dso`, `kingst-la2016`, `lecroy-logicstudio`, `saleae-logic16` | emulator-verified. 2026-11-03: the EZ-USB shell with renumeration, and `fx2lafw` emulator-verified (78 cases, gcov 91.2%), the USBee AX analog input ported. Batch 2: `saleae-logic16`, `dreamsourcelab-dslogic`, `kingst-la2016`, `hantek-6xxx`, `hantek-dso` modelled as oracle cases (80 to 138 cases each, gcov 90% to 96%). Ported: `saleae-logic16` (87 cases, batch 4), `kingst-la2016` (151) and `dreamsourcelab-dslogic` (94, batch 5); Batch 4: `lecroy-logicstudio` modelled (83 oracle cases, 56 of them library-verified through `tools/libsigrok-run.c`, as sigrok-cli cannot capture with it; gcov 95.9%). Batch 6 (2026-11-04) ported the rest: `lecroy-logicstudio` (94 cases, gcov 95.9%, its captures full against `tools/libsigrok-run.c`), `hantek-dso` (148, 96.2%), `hantek-6xxx` (102, 91.0%). All of 9d is ported and emulator-verified; none on hardware |
 | 9e | vendor USB: `zeroplus-logic-cube`, `greatfet`, `hantek-4032l`, `lascar-el-usb`, `testo`, `kecheng-kc-330b`, `ikalogic-scanalogic2`, `sysclk-lwla`, `sysclk-sla5032`, `saleae-logic-pro`, `uni-t-dmm` (raw USB path) | emulator-verified. Batch 4 (2026-11-03): `saleae-logic-pro` (102 oracle cases, gcov 97.0%) and `hantek-4032l` (121, 90.7%) modelled. Batch 5: `zeroplus-logic-cube` (121, 87.6%) and `sysclk-lwla` (130, 90.4%) modelled. Batch 6 (2026-11-04) ported `hantek-4032l` (135 cases, gcov 91.4%), `sysclk-lwla` (141, 91.1%), `zeroplus-logic-cube` (134, 87.6%) and `saleae-logic-pro` (107, 97.1%), none on hardware, and modelled `sysclk-sla5032` (142 oracle cases, 91.0%) and `ikalogic-scanalogic2` (134, 88.6%), ready for their ports. Batch 7 (2026-11-04) ported the rest: `uni-t-dmm` raw USB (78 cases, gcov 97.4%), `testo` (70, 91.3%), `sysclk-sla5032` (165, 91.5%), `ikalogic-scanalogic2` (143, 88.6%), `kecheng-kc-330b` (129, 79.3%), `lascar-el-usb` (152, 93.9%), `greatfet` (131, 84.8%). All of 9e is ported and emulator-verified; none on hardware |
 | 9f | serial instruments as CDC-ACM models, modbus included | emulator-verified; the ESP32 `EMIT` cases move to the host. Shell, tty harness and pilot done 2026-11-04: `serial-dmm` (29 cases, gcov 71.3%) and the first new driver on it, `korad-kaxxxxp` (130, 88.6%), neither on hardware. Batch 8 (2026-11-05): `ols` (213 cases, gcov 94.7%), `rdtech-dps` with `src/modbus` (226, 89.2%), `rdtech-um` (90, 93.7%), `rdtech-tc` (73, 93.8%), `manson-hcs-3xxx` (171, 91.9%), `fluke-dmm` (159, 98.6%), `atten-pps3xxx` (133, 90.5%), `gwinstek-gpd` (141, 95.6%), none on hardware. Batch 9 (2026-11-05): `maynuo-m97` (210 cases, gcov 95.8%), `motech-lps-301` (149, 79.3%), `juntek-jds6600` (229, 89.2%), `zketech-ebd-usb` (109, 86.6%), `agilent-dmm` (383, 97.4%), `gwinstek-psp` (154, 92.5%), `itech-it8500` (223, 93.6%), `arachnid-labs-re-load-pro` (131, 91.8%), none on hardware. Batch 10: `icstation-usbrelay` (43, 83.0%), `rohde-schwarz-sme-0x` (76, 94.9%), `appa-55ii` (72, 96.6%), `mastech-ms6514` (72, 94.9%), `pce-322a` (95, 88.1%), `devantech-eth008` (117, 88.2%), `uni-t-ut32x` (84, 94.5%), `uni-t-ut181a` (201, 90.1%), `atorch` (70, 95.8%), `link-mso19` (162, 92.0%), `norma-dmm` (95, 93.5%), `serial-lcr` (124, 87.4%), `conrad-digi-35-cpu` (58, 93.3%), `cem-dt-885x` (107, 94.0%), `kern-scale` (62, 93.5%), `bkprecision-1856d` (125, 89.4%), `colead-slm` (63, 95.6%), not on hardware; 63 of the 87 drivers ported, 24 to go. The emulated cases replace the `--hw` EMIT cases' parser and stream checks, not the real UART, adapter driver or handshake lines: keep at least one EMIT case |
-| 9g | SCPI instruments as TCP and USBTMC models | emulator-verified; `rigol-ds` series beyond the DS1102E included |
+| 9g | SCPI instruments as TCP and USBTMC models | foundation done: USBTMC shell, TCP carrier, SCPI helper, serial carrier, with `rigol-ds` on them (70 cases, and 5 for `rigol-ds-serial`, gcov 74.2%); the other drivers to go |
 | 9h | the odd transports: GPIB shim, parallel port shim, sysfs root, vendor CLI stub, BLE on the ESP32 | each driver either emulator-verified or listed as hardware-only with the reason |
 | 9i | Pico backend for the same models, replacing the C firmware in `hil/pico-hidcable` | one model runs on the host over USB/IP and on the Pico; the bench cases pass on both |
 
@@ -471,6 +471,22 @@ each with where it belongs:
   `the_second_half_of_a_line_end`, `korad` `a_long_gap`.
 - `manson` checks its bound between bytes of a reply, so a stall over
   its 5 s bound mid-reply could end a capture falsely.
+- SCPI drivers that can start on the foundation: `siglent-sdl10x0`,
+  `hp-59306a`, `lecroy-xstream`, `yokogawa-dlm`, `siglent-sds`,
+  `hameg-hmo`, `hp-3457a` (needs `get_uint8v`), `scpi-pps`, `scpi-dmm`,
+  `rigol-dg`, `beaglelogic`, `ipdbg-la`, `gwinstek-gds-800`, `fluke-45`.
+  `hp-3478a` holds: it is not in the oracle (`[libgpib]`), and needs
+  GPIB work first.
+- `devantech-eth008` and `rohde-schwarz-sme-0x` could move to the TCP
+  carrier. No model covers `rigol-ds`'s digital capture. A compound
+  query's answers go on separate lines. `block_wait`'s 3 s returns `Ok`
+  and reads anyway, and an unparsable status becomes 0. `get_opc` ends
+  on a USBTMC protocol error such as a bad tag, where C retries.
+- The emulator's `usbtmc` unplug case failed 1 round in 15 once with no
+  diff printed, and has not come back in 55 rounds since: cause unknown.
+- `hantek-dso`'s `interrupt continuous` differed once in CI's `.tx` at
+  a89eb525, undiagnosed; `cem-dt-885x` lost a session once in CI at
+  e0a87a95, after an interrupt's close, and passed on a rerun.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - saleae-logic-pro's `usb.c` gcov varies from run to run (76-79%).

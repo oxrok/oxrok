@@ -424,6 +424,16 @@ larger digital-only firmware variants.
 
 ## Rigol and Agilent oscilloscopes
 
+Emulated: model `rigol-ds`, on USBTMC, TCP and a serial port: DS1102E,
+VS5102, DS2072, DSO1012A, DSO1052B, DS1054Z, DS4024, MSO7034A, MSO5074;
+75 cases on 2026-11-06, gcov 74.2% of the driver (digital capture and
+memory depth paths not reached). Only the DS1102E rests on a recording;
+other models' ids, speeds, firmware strings and limits are marked
+guesses in the model. Over TCP sigrok-cli hangs on a silent instrument
+or a closed connection, and dies of SIGPIPE on a write after a close;
+oxrok fails the capture. Over a tty, C's capture asks for the block
+again and ends with no samples, as its read doesn't block.
+
 The `rigol-ds` driver covers the same 61 models as libsigrok's: Rigol
 VS5000, DS1000 (DS1052E, DS1102E, DS1152E and the D variants with the
 logic pod), DS2000 and DS2000A/MSO2000A, DS1000Z and MSO1000Z, DS4000,
