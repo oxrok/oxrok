@@ -355,6 +355,26 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- Take a bound's time ahead of the read that found nothing. A stall
+  between the two passes for silence with the answer already in; a fake
+  whose read returns empty after a stall, with bytes for the next, tests
+  it with no clock.
+- A re-ask with the same sequence number looks better than it is: at 6 s
+  of latency it doubled the samples, and each reading looked 1 s old and
+  was 6 s old. Report what a reply answers as well as its rate.
+- A mutant in a pure struct is only as good as the struct's reach: put
+  limits and the words of warnings in it, and the wait for a time limit
+  and a warning's text test with no logger.
+- A fake that holds bytes by read count, with a pace on the clock, makes
+  a slow reader look like a quiet line. Give bytes arrival times on the
+  clock that a late read still finds whole.
+- A `reply=` list that comes round can undo the bug it tests: play fault
+  lists once.
+- Never run a mutant loop alongside anything that builds; a killed loop
+  leaves its mutant in the tree. Check the tree after any kill.
+- A wrapper at `target/debug/oxrok` can stall oxrok alone on a tester,
+  and write what it saw to `tests/emu/`, which comes back. Count a stall
+  only if `/proc` reads `T`; many runs are too short for one to land.
 - A bound on silence needs the device's slowest pace, not a guess at it:
   a manual gave this logger's sample interval as up to 6 h, and a 30 s
   bound would have failed a working logger where C works. Look for the

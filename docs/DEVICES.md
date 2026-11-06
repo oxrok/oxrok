@@ -3238,6 +3238,49 @@ What the model found:
   warns at 30 s, and fails a capture only a sample limit could end at 6
   h 10 min.
 
+## Tondaj SL-814 (tondaj-sl-814)
+
+Tondaj SL-814 sound level meter (`tondaj-sl-814`): ported and emulated
+on the CDC-ACM shell. Model `tondaj-sl-814` (`data=`, `reply=`, `init=`,
+`uart=`, `answers=`, `mark=`, `quiet-mark=`, `late=`, `cut=`, and the
+shell's faults), 59 cases on 2026-11-06: 7 full on stock sigrok-cli, 33
+full under the lock preload, 2 stock failures, 14 hangs and 1 SIGINT
+under the preload, 1 `--oracle-differs`, 1 oxrok-only. gcov 90.8% of the
+driver. Never on hardware. From libserialport 0.1.2, stock sigrok-cli
+can only `--scan` this driver: `api.c:85` opens the port, `:96` returns
+with it open, and `dev_open`'s second open is refused. The preload
+disables the exclusive open, as for `gwinstek-gpd`, with the C driver
+unmodified, and compares a path users reach on 0.1.1; a hang label holds
+only under it, and on stock C fails at the open.
+
+A scan asks nothing, so any port that opens is a meter. A capture sends
+init at 500 ms, then one request 500 ms after each reply. Differences
+from C: C blocks with no timeout for init (`protocol.c:148`), reads for
+ever ahead of its limit check for a request (`:187`), and never asks
+again. oxrok asks again after 5 s of silence, one out at a time, waiting
+5, 10, 20, then 30 s. A request asked again carries sequence number 1,
+2, ..., so its late reply is recognised; with the same number it would
+answer the next request, and in simulation one reply stays owed for
+good, readings looking 1 s old at 6 s of latency. The wiki gives ZZ as
+0-255 and its script shows 1 working; other values were never seen on a
+meter, and a meter that ignored ZZ would see no reading after a lost
+reply. On a sample limit alone, a capture fails at 5 s with no sample
+yet, and after one warns and fails at 10 minutes. Under a time limit it
+ends there with a warning, exit 0 even with nothing captured; with
+neither limit it warns once and runs until stopped. A meter slower than
+30 s gives no reading. What comes with no command out is read away: in C
+one stray byte has every later reply cut in the same wrong place for
+good (`:193-198`). Each capture starts at init, where C keeps its state
+on an open device.
+
+Nothing checks a reading. There is no checksum and parity isn't checked,
+so a corrupted AA or BB can't be detected. A reply's form can't always
+tell a shifted one either: a reading of `01 0d` after exactly two stray
+bytes aligns falsely, `03 e8` + `01 0d 01 0d` giving 100.0 where the
+truth is 26.9. Sources: the sigrok wiki's page and its examples, which
+agree with C on the bits and contradict the page's "BCD". No firmware
+source found.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

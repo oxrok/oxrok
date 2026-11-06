@@ -117,6 +117,7 @@ Emulator and replay only, never run on hardware:
 | `sysclk-sla5032` | 165 | 91.5% |
 | `teleinfo` | 108 | 98.9% |
 | `testo` | 70 | 91.3% |
+| `tondaj-sl-814` | 59 | 90.8% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |

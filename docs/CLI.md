@@ -952,6 +952,11 @@ Deliberate, and kept small:
   real-time command at its first silence, where C sends it once per
   process (`protocol.c:189`); the receive buffer lasts one capture, and
   a second capture on an open port drops what queued in between.
+- `tondaj-sl-814`: where sigrok-cli waits for ever on a silent meter, a
+  capture asks again. It fails on a sample limit alone (5 s with no
+  sample yet, 10 minutes after one), ends with a warning at a time
+  limit, and warns once with no limit. A stray byte costs one reading,
+  where sigrok-cli reads nothing more.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
