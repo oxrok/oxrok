@@ -1,0 +1,2 @@
+oxrok: warn: oxrok::drivers::scpi_pps: No answer from the instrument for 3 s, still asking.
+oxrok: warn: oxrok::drivers::scpi_pps: The time limit ran out with nothing captured.
