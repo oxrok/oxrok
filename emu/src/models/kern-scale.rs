@@ -14,13 +14,13 @@
 //!   hand: `+0026.90 G U`, `-0000.04 G S`, `+00127.20 G S`, `+002014.8CT S`,
 //!   `+000000 PC S`, `+000000  % U`, and over its range `+0000.00 G E`. Its
 //!   values are zero filled, where the manual speaks of leading zeros
-//!   suppressed by spaces; both can be played with `packet=`. At 1200/8n2 it
-//!   sends a packet about every 128 ms in the capture with most, which is what a
-//!   14-byte packet takes on the line (11 bits a byte): it does not pause. The
-//!   captures hold no host's commands, so that `O1` answers `A00` before the
-//!   next packet is the manual's and the C's comment, not an observation.
-//! - One capture has a packet cut after 6 bytes, then `0xf0` and a whole packet;
-//!   what caused it isn't known.
+//!   suppressed by spaces; both can be played with `packet=`. A stable packet
+//!   comes about every 500 ms, and an unstable or error one about every 128 ms,
+//!   which at 1200/8n2 (11 bits a byte) is what 14 bytes take on the line: those
+//!   follow each other with no gap. The longest silence is 2018 ms, at a tare. The
+//!   captures hold no host's commands, so what mode that was isn't known, and that
+//!   `O1` answers `A00` before the next packet is the manual's and the C's comment,
+//!   not an observation.
 //! - No firmware source, no unit on a desk.
 //!
 //! Emulation artifacts:
@@ -43,7 +43,11 @@
 //! - `packet=HEX[,HEX...]`, the packets played in turn, a scan's first;
 //! - `noise=HEX`, bytes sent before each packet, `pad=HEX` after each;
 //! - `uart=LINE|native`, the line behind the cable, instead of 1200/8n2;
-//! - `ack=a00|e01|none`, the answer to `O1`. After `E01` no stream starts;
+//! - `ack=a00|e01|none`, the answer to `O1`. The manual names only the answer:
+//!   that no stream starts after `E01` is an assumption here, as `late=` is. A
+//!   stream already running goes on;
+//! - `ack-from=N`, the `O1` from which `ack=` holds, counted from 1; before it the
+//!   answer is `A00`;
 //! - `period=N`, offers per packet (4 to 1000, default 25);
 //! - `burst=N`, shots per `O1`, then silence and a mark a period later; 0 never
 //!   sends;
@@ -51,6 +55,11 @@
 //!   packet a shot and no mark;
 //! - `group=N`, packets per shot after the first `O1`, sent at once;
 //! - `late=N`, as above.
+//!
+//! The default packet is the 15-byte form, though the captured unit mostly had the
+//! 14-byte one: C needs a 15th byte to look at a 14-byte packet, so a 14-byte
+//! default would leave the last packet of every burst unread by it, and most cases
+//! would compare nothing. `packet=` and `pad=` have cases for the other form.
 //!
 //! The pedantic checks: what the host sends is whole commands of four
 //! characters, and only `O1`. A real scale has `O0` to `OB` and `T `, which no C
@@ -65,7 +74,7 @@ use crate::{Error, Result};
 pub const NAME: &str = "kern-scale";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "KERN EW/EG-N scale on a CDC-ACM cable; packet=HEX[,HEX...], noise=HEX, \
-                         pad=HEX, uart=LINE|native, ack=a00|e01|none, period=N, burst=N, \
+                         pad=HEX, uart=LINE|native, ack=a00|e01|none, ack-from=N, period=N, burst=N, \
                          scan-burst=N, group=N, late=N, and the shell's stall=, chunk=, \
                          in-limit=, in-stall=, out-hold=";
 
@@ -94,6 +103,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Scale>> {
     let mut pad = Vec::new();
     let mut uart = Some(Line::parse(LINE)?);
     let mut ack = Ack::A00;
+    let mut ack_from = 1;
     let mut period = 25;
     let mut burst = None;
     let mut scan_burst = None;
@@ -116,6 +126,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Scale>> {
                     _ => return Err(Error::Invalid(format!("ack={v}: a00, e01 or none"))),
                 };
             }
+            "ack-from" => ack_from = cable::parse_number(k, v, 1..=1000)?,
             "period" => period = cable::parse_number(k, v, 4..=1000)?,
             "burst" => burst = cable::parse_burst(v)?,
             "scan-burst" => scan_burst = cable::parse_burst(v)?,
@@ -130,6 +141,7 @@ fn function(options: &[(String, String)]) -> Result<Cdc<Scale>> {
         noise,
         pad,
         ack,
+        ack_from,
         period,
         burst,
         scan_burst,
@@ -166,6 +178,7 @@ struct Scale {
     noise: Vec<u8>,
     pad: Vec<u8>,
     ack: Ack,
+    ack_from: u32,
     period: u32,
     burst: Option<u32>,
     scan_burst: Option<u32>,
@@ -189,7 +202,8 @@ struct Scale {
 impl Scale {
     /// `O1` takes effect: the answer, and the stream unless it is refused.
     fn start(&mut self, port: &mut Port<'_>) {
-        match self.ack {
+        let ack = if self.commands < self.ack_from { Ack::A00 } else { self.ack };
+        match ack {
             Ack::A00 => port.send(b"A00\r\n"),
             Ack::E01 => {
                 port.send(b"E01\r\n");
@@ -367,6 +381,18 @@ mod tests {
     }
 
     #[test]
+    fn ack_from_puts_off_the_answer() {
+        let mut h =
+            scale(&[("period", "4"), ("ack", "e01"), ("ack-from", "2"), ("scan-burst", "1")]);
+        h.write(b"O1\r\n");
+        assert_eq!(h.offer(), Reply::Data(b"A00\r\n".to_vec()));
+        assert_eq!(offers(&mut h, 8), DEFAULT_PACKET);
+        h.write(b"O1\r\n");
+        assert_eq!(h.read(), b"E01\r\n");
+        assert_eq!(offers(&mut h, 20), b"");
+    }
+
+    #[test]
     fn a_misset_line_hears_nothing() {
         let mut h = scale(&[("period", "4")]);
         h.set_line(Line::parse("9600/8n1").unwrap());
@@ -460,6 +486,7 @@ mod tests {
             ("ack", "x"),
             ("period", "3"),
             ("group", "0"),
+            ("ack-from", "0"),
             ("late", "100001"),
             ("nothing", "1"),
         ] {
