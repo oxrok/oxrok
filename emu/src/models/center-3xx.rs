@@ -82,7 +82,7 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 }
 
 fn hex(text: &str) -> Result<Vec<u8>> {
-    if !text.is_ascii() || text.len() % 2 != 0 {
+    if !text.is_ascii() || !text.len().is_multiple_of(2) {
         return Err(Error::Invalid(format!("frames: '{text}' is not whole hex bytes")));
     }
     (0..text.len() / 2)
