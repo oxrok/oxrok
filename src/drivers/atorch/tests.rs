@@ -21,6 +21,8 @@ const QUICK: Pace = Pace {
 };
 /// Limits and bounds that no test here should reach by waiting.
 const NEVER: Duration = Duration::from_secs(3600);
+/// For all but the tests of a bound: a stall must not end a capture early.
+const CALM: Pace = Pace { grace: NEVER, silence: NEVER, ..QUICK };
 
 /// What the fake holds and saw. A byte goes from `coming` to `input` on the read
 /// its step names, whatever the time; a purge drops `input` alone, as a purge
@@ -38,6 +40,8 @@ struct State {
     purges: u32,
     writes: u32,
     fail_read: bool,
+    /// Reads fail from this read on.
+    fail_from: Option<u64>,
     /// Set by the read that gives bytes: a stop that lands inside a read.
     stop_on_read: Option<Arc<AtomicBool>>,
 }
@@ -91,7 +95,7 @@ impl Port for Fake {
             let mut guard = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             let s = &mut *guard;
             s.reads += 1;
-            if s.fail_read {
+            if s.fail_read || s.fail_from.is_some_and(|at| s.reads >= at) {
                 return Err(Error::device("the port went"));
             }
             while s.coming.front().is_some_and(|(at, _)| *at <= s.reads) {
@@ -225,7 +229,7 @@ fn run_probe(fake: &Fake, pace: Pace) -> Option<&'static str> {
     let (tx, rx) = sync_channel(1);
     let mut port = fake.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(probe(&mut port, &pace).map(|p| p.name));
+        let _ = tx.send(probe(&mut port, &pace).map(|p| p.name).ok());
     });
     rx.recv_timeout(BOUND).expect("the probe ended")
 }
@@ -284,18 +288,24 @@ fn a_probe_stops_at_an_unknown_type_and_does_not_read_on() {
 
 #[test]
 fn the_unknown_type_is_the_reports_own_with_noise_ahead() {
-    // C says `buf[3]`, here 0x55: the message's form is pinned by the emulator's
-    // case, which can't show this byte.
-    let mut framer = Framer::default();
-    let mut bytes = vec![0xaa, 0xbb];
+    // C says `buf[3]`, here 0x55.
+    let fake = Fake::default();
     let mut ac = report(1);
     ac[3] = 1;
-    bytes.extend_from_slice(&ac);
-    framer.room()[..bytes.len()].copy_from_slice(&bytes);
-    framer.filled(bytes.len());
-    let Some(Message::Report(r)) = framer.next_message() else { panic!("no report") };
-    assert_eq!(r.device_type(), 1);
-    assert_eq!(format!("({:#06x})", r.device_type()), "(0x0001)");
+    fake.send(&[&[0xaa, 0xbb][..], &ac[..]].concat());
+    let mut port = fake.clone();
+    let end = probe(&mut port, &SLOW_PROBE).map(|p| p.name);
+    assert_eq!(end, Err(ProbeEnd::UnknownType(1)));
+    assert_eq!(unknown_type_message(1), "Unrecognized device type (0x0001).");
+    assert_eq!(unknown_type_message(0xab), "Unrecognized device type (0x00ab).");
+}
+
+#[test]
+fn a_probe_takes_a_report_behind_a_reply_though_the_next_read_fails() {
+    let fake = Fake::default();
+    fake.with(|s| s.fail_from = Some(2));
+    fake.send(&[&[0xff, 0x55, 0x02, 1, 1, 0, 0, 0x40][..], &report(1)[..]].concat());
+    assert_eq!(run_probe(&fake, SLOW_PROBE), Some("DC Meter"));
 }
 
 #[test]
@@ -325,7 +335,7 @@ fn a_read_that_fails_ends_a_probe_at_once() {
 fn a_frame_holds_the_channels_in_order() {
     let fake = Fake::default();
     fake.send(&report(7));
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(1, Ordering::SeqCst);
     let rx = capture(&mut d);
     let packets = until_end(&rx);
@@ -354,7 +364,7 @@ fn a_frame_holds_the_channels_in_order() {
 fn only_the_channels_that_are_on_are_sent() {
     let fake = Fake::default();
     fake.send(&report(7));
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     for i in [0, 1, 2, 4] {
         d.enable_channel(i, false).unwrap();
     }
@@ -371,7 +381,7 @@ fn only_the_channels_that_are_on_are_sent() {
 fn a_frame_limit_is_the_end_even_in_the_middle_of_a_read() {
     let fake = Fake::default();
     fake.send(&[report(1), report(2), report(3)].concat());
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(2, Ordering::SeqCst);
     let rx = capture(&mut d);
     assert_eq!(numbers(&until_end(&rx)), [1, 2]);
@@ -382,7 +392,7 @@ fn a_frame_limit_is_the_end_even_in_the_middle_of_a_read() {
 fn all_of_a_read_is_taken_with_nothing_more_to_come() {
     let fake = Fake::default();
     fake.send(&[report(1), report(2)].concat());
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(2, Ordering::SeqCst);
     let rx = capture(&mut d);
     assert_eq!(numbers(&until_end(&rx)), [1, 2]);
@@ -400,7 +410,7 @@ fn a_byte_paced_stream_with_noise_gives_every_report() {
         stream.extend_from_slice(&[0xff, 0x55, 0x02, 1, 1, 0, 0, 0x40]);
     }
     fake.send(&stream);
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(5, Ordering::SeqCst);
     let rx = capture(&mut d);
     assert_eq!(numbers(&until_end(&rx)), [1, 2, 3, 4, 5]);
@@ -494,7 +504,7 @@ fn no_limit_waits_for_the_user_past_any_bound() {
 #[test]
 fn a_stop_ends_a_quiet_capture() {
     let fake = Fake::default();
-    let mut d = device(&fake, Pace { grace: NEVER, silence: NEVER, ..QUICK });
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(5, Ordering::SeqCst);
     d.limits.msec.store(3_600_000, Ordering::SeqCst);
     let rx = capture(&mut d);
@@ -513,7 +523,7 @@ fn a_stop_ends_a_quiet_capture() {
 fn a_stop_ends_a_capture_that_gets_reports_all_the_time() {
     let fake = Fake::default();
     fake.with(|s| s.endless = Some(report(9)));
-    let mut d = device(&fake, Pace { grace: NEVER, silence: NEVER, ..QUICK });
+    let mut d = device(&fake, CALM);
     let rx = capture(&mut d);
     assert_eq!(frames(&rx, 3), [9, 9, 9]);
     d.stop().unwrap();
@@ -527,12 +537,8 @@ fn a_stop_in_the_middle_of_a_read_sends_no_more_frames() {
     let stop = Arc::new(AtomicBool::new(false));
     fake.with(|s| s.stop_on_read = Some(Arc::clone(&stop)));
     fake.send(&[report(1), report(2)].concat());
-    let capture = Capture {
-        profile: dc(),
-        enabled: vec![true; 5],
-        limits: Arc::default(),
-        pace: Pace { grace: NEVER, silence: NEVER, ..QUICK },
-    };
+    let capture =
+        Capture { profile: dc(), enabled: vec![true; 5], limits: Arc::default(), pace: CALM };
     let (tx, rx) = sync_channel(64);
     let sink = PacketSink::new(tx, 0);
     let mut port = fake.clone();
@@ -548,7 +554,7 @@ fn a_close_does_not_hang_on_any_send_with_a_queue_nobody_reads() {
     for size in [1, 3, 7, 8] {
         let fake = Fake::default();
         fake.send(&[report(1), report(2)].concat());
-        let mut d = device(&fake, Pace { grace: NEVER, silence: NEVER, ..QUICK });
+        let mut d = device(&fake, CALM);
         let (tx, rx) = sync_channel(size);
         d.start(PacketSink::new(tx, 0)).unwrap();
         let deadline = Instant::now() + BOUND;
@@ -580,7 +586,9 @@ fn a_close_has_ended_the_capture_when_it_returns() {
         assert!(Instant::now() < deadline, "no read");
         std::thread::sleep(Duration::from_millis(1));
     }
-    d.close().unwrap();
+    assert!(within_bound(move || {
+        let _ = d.close();
+    }));
     // The device holds no port, and no thread holds one: only this `fake` is left.
     assert_eq!(Arc::strong_count(&fake.state), 1);
     drop(rx);
@@ -610,7 +618,7 @@ fn a_report_starts_the_silence_over() {
 
 /// A queue left unread that holds what is sent up to the End and no more.
 fn stuck_capture(fake: &Fake) -> (AtorchDevice, Receiver<(usize, Packet)>) {
-    let mut d = device(fake, QUICK);
+    let mut d = device(fake, CALM);
     d.limits.frames.store(1, Ordering::SeqCst);
     fake.send(&report(1));
     // The header, a frame's begin, 5 readings and its end: 8.
@@ -654,7 +662,7 @@ fn a_start_with_an_end_nobody_reads_does_not_hang() {
 #[test]
 fn a_start_while_one_runs_is_busy_and_a_start_after_works() {
     let fake = Fake::default();
-    let mut d = device(&fake, Pace { grace: NEVER, silence: NEVER, ..QUICK });
+    let mut d = device(&fake, CALM);
     let rx = capture(&mut d);
     let (tx, _rx2) = sync_channel(4);
     assert!(matches!(d.start(PacketSink::new(tx, 0)), Err(Error::Busy)));
@@ -678,7 +686,7 @@ fn a_start_on_a_closed_device_says_so() {
 #[test]
 fn the_first_capture_keeps_what_came_since_the_open_a_second_does_not() {
     let fake = Fake::default();
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     let opened = fake.get(|s| s.purges);
     assert_eq!(opened, 1, "the open's");
     d.limits.frames.store(1, Ordering::SeqCst);
@@ -699,7 +707,7 @@ fn the_first_capture_keeps_what_came_since_the_open_a_second_does_not() {
 #[test]
 fn a_new_open_has_a_first_capture_again() {
     let fake = Fake::default();
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(1, Ordering::SeqCst);
     fake.send(&report(1));
     let rx = capture(&mut d);
@@ -718,7 +726,7 @@ fn a_new_open_has_a_first_capture_again() {
 #[test]
 fn a_capture_cut_inside_a_report_leaves_nothing_to_the_next() {
     let fake = Fake::default();
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(1, Ordering::SeqCst);
     // A report and the first half of the next, in one read.
     let second = report(2);
@@ -737,7 +745,7 @@ fn a_capture_cut_inside_a_report_leaves_nothing_to_the_next() {
 fn a_capture_cut_inside_a_read_does_not_shift_a_byte_paced_next_one() {
     let fake = Fake::default();
     fake.with(|s| s.per_read = 1);
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(2, Ordering::SeqCst);
     let mut stream: Vec<u8> = Vec::new();
     for n in 1..=9 {
@@ -758,7 +766,7 @@ fn a_capture_cut_inside_a_read_does_not_shift_a_byte_paced_next_one() {
 fn a_limit_set_during_a_capture_counts() {
     let fake = Fake::default();
     fake.send(&[report(1), report(2)].concat());
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     let rx = capture(&mut d);
     assert_eq!(frames(&rx, 2), [1, 2]);
     d.set(&Key::LimitFrames, &Value::U64(3), None).unwrap();
@@ -772,13 +780,24 @@ fn a_limit_set_during_a_capture_counts() {
 fn a_read_that_fails_ends_a_capture_and_gives_the_port_back() {
     let fake = Fake::default();
     fake.send(&report(1));
-    let mut d = device(&fake, Pace { grace: NEVER, silence: NEVER, ..QUICK });
+    let mut d = device(&fake, CALM);
     d.limits.frames.store(5, Ordering::SeqCst);
     let rx = capture(&mut d);
     assert_eq!(frames(&rx, 1), [1]);
     fake.with(|s| s.fail_read = true);
     until_end(&rx);
     assert!(d.port.lock().unwrap().is_some());
+    d.close().unwrap();
+}
+
+#[test]
+fn a_capture_takes_a_report_behind_a_reply_though_the_next_read_fails() {
+    let fake = Fake::default();
+    fake.with(|s| s.fail_from = Some(2));
+    fake.send(&[&[0xff, 0x55, 0x02, 1, 1, 0, 0, 0x40][..], &report(1)[..]].concat());
+    let mut d = device(&fake, CALM);
+    let rx = capture(&mut d);
+    assert_eq!(numbers(&until_end(&rx)), [1]);
     d.close().unwrap();
 }
 
@@ -796,7 +815,7 @@ fn a_full_stream_of_what_is_no_report_does_not_reset_the_silence() {
 #[test]
 fn limits_read_back_and_a_zero_time_is_refused() {
     let fake = Fake::default();
-    let mut d = device(&fake, QUICK);
+    let mut d = device(&fake, CALM);
     assert!(matches!(d.get(&Key::LimitFrames, None), Ok(Value::U64(0))));
     assert!(matches!(d.get(&Key::LimitMsec, None), Ok(Value::U64(0))));
     d.set(&Key::LimitMsec, &Value::U64(500), None).unwrap();

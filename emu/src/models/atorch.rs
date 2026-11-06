@@ -6,10 +6,10 @@
 //!
 //! The device, and how sure this is:
 //!
-//! - The link: the units the driver was tested on (a J7-C USB meter and a
-//!   DL24MP load, says the driver's commit message) speak Bluetooth; so do
-//!   those of `esphome-atorch-dl24`. So this USB function, its ids and its
-//!   strings are an emulation artifact, a stand-in for an RFCOMM tty, and the
+//! - The link: Bluetooth on the units known. `NiceLabs/atorch-console`'s
+//!   `docs/UD18-SPP.pcap` is a btsnoop capture of a real UD18 over SPP, and the
+//!   units of `esphome-atorch-dl24` speak BLE. So this USB function, its ids and
+//!   its strings are an emulation artifact, a stand-in for an RFCOMM tty, and the
 //!   line settings do nothing, as there.
 //! - A message: `ff 55`, a type byte, then a body fixed by the type: 36 bytes
 //!   in all for a report (`01`), 8 for a reply (`02`), 10 for a command (`11`).
@@ -21,14 +21,16 @@
 //!   The fields are the driver's, big endian. Default reports are recordings
 //!   quoted in `atorch_dl24.cpp`, which come from `NiceLabs/atorch-console`'s
 //!   spec files: real bytes, not made up.
-//! - The rate: its README's log has one report a second. Here `period=` counts
-//!   offers of a read, about 20 ms each, so a report per half a second.
+//! - The rate: that capture has 91 reports of type 3, all with a good sum, 0.987
+//!   to 1.039 s apart; its readings give 1 C count = 1 mAh, 1 E count = 10 mWh. Here
+//!   `period=` counts offers of a read, about 20 ms each, so 50 is about a real
+//!   unit's rate. A real unit's bytes come in pieces too: `packet=` cuts them.
 //! - What it takes: commands exist on a real unit (`11`, with a reply `02`), as
 //!   those two sources show. No driver path this model serves sends one, so
 //!   anything written is flagged and has no effect.
 //!
-//! No firmware source was found; the sources are those two programs and the
-//! driver. Nothing here was checked on a unit.
+//! No firmware source was found; the sources are that capture, those two programs
+//! and the driver. Nothing here was checked on a unit.
 //!
 //! Emulation artifacts, besides the link: a stream starts over at each open,
 //! which a real unit does not know of (it goes by [`LineEvent::opened`]), so a
@@ -37,7 +39,9 @@
 //! `scan=N` and `burst=N` end the stream after a count: with them the bytes of a
 //! case do not depend on the clock. What's left is a margin: a report that lands
 //! inside an open is lost to its flush, and offers come fast at an open, with
-//! the kernel's 16 reads to fill. A `period` of 5 lost them, so the cases use 25.
+//! the kernel's 16 reads to fill, and two reports that come together in one read
+//! are another case. A `period` of 5 lost them, and at 25 a stall of about 0.45 s in
+//! an open did, so the cases use 50, which leaves about 0.95 s.
 //!
 //! Options, besides the shell's ([`Faults`]):
 //!

@@ -1,23 +1,22 @@
 gcov atorch (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        92.4%  73 of 79
-  protocol.c   96.6%  86 of 89
-  total        94.6%  159 of 168
+  protocol.c   98.9%  88 of 89
+  total        95.8%  161 of 168
 never reached, by function (line ranges hold no reached line):
   api.c
     config_get: 133, 142-143
     config_set: 162-163
     clear_helper: 195
   protocol.c
-    locate_next_valid_msg: 129-131
     atorch_receive_data_callback: 236
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
-  src/serial.c         29.9%  120 of 402
+  src/serial.c         30.1%  121 of 402
   src/serial_libsp.c   32.4%  83 of 256
-  total                30.9%  203 of 658
+  total                31.0%  204 of 658
 never reached, by function (line ranges hold no reached line):
   src/serial.c
     dev_is_supported: 62
-    serial_open: 87-88, 99, 101, 103, 107, 122, 140, 142
+    serial_open: 87-88, 99, 103, 107, 122, 140, 142
     serial_close: 162-163, 169, 173-174
     serial_flush: 193-194, 202
     serial_drain: never called (217-229)

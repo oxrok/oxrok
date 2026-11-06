@@ -7,10 +7,12 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! Atorch meters and loads (`DC Meter`: the DL24 family; `USB Meter`: the J7-C,
-//! UD18 and others), which report about once a second over a serial link,
-//! Bluetooth SPP on the units known, unasked. `conn=` names the port, as a rule
-//! an RFCOMM tty; libsigrok's `bt/rfcomm/MAC` form is not ported, as `src/serial`
-//! has no Bluetooth transport.
+//! UD18 and others), which report about once a second, unasked. `conn=` names a
+//! tty. That is an RFCOMM tty for a unit on Bluetooth SPP (a capture of a UD18;
+//! `serial_bt.c:85,89` names DL24M and UC96 `_SPP` units, on channel 2, which an
+//! `rfcomm bind` must then be told). libsigrok's `bt/...` names are refused by
+//! `serial::open`, as `src/serial` has no Bluetooth transport, so a BLE unit (`*_BLE`,
+//! `ac6328` and the like) has no tty and no path here.
 //!
 //! A scan waits up to 10 s for a report and goes by the type in it, and nothing
 //! is ever written to a unit. A capture gives a frame per report, with a sample
@@ -21,31 +23,34 @@
 //! - C looks for a message only after a read that brought bytes
 //!   (`protocol.c:151-157`, as `len <= 0` returns first), so what a read holds
 //!   beyond its first message waits for the next byte. A second report of a read
-//!   comes only with the report after it, or never, when no other comes. Here a
-//!   read's messages are all taken at once. A reply and a report in one read are
-//!   thus a device here and none in C.
+//!   comes only with the bytes after it, or never, when none come. Here a read's
+//!   messages are all taken at once. So `--time 1500` with two reports per read
+//!   gives 2 frames in C and 3 here. A reply and a report in one read find no
+//!   device in C only if nothing follows them within the probe's time, as a real
+//!   unit's next report would.
 //! - The stop in `parse_report_msg` (`protocol.c:192-193`) leaves the callback's
-//!   loop running (`protocol.c:239`), so by the code a report that the next read
-//!   brings would go out after the End. No run has shown it: the bytes must come
-//!   between two reads, and with 864 bytes on their way that read gave nothing.
-//!   Here the limit is the end.
+//!   loop running (`protocol.c:239`). With 20 reports in one write on a pty and
+//!   `--frames 1`, C goes on with frames and a repeated `SR_DF_END` after the first.
+//!   sigrok-cli hides that, and a library client would get it. Here the limit is
+//!   the end.
 //! - A scan's read can leave a report in `buf`, which only a probe's start clears
 //!   (`protocol.c:202-203`), so that it is a capture's first frame, from before
 //!   the capture. Here each capture starts empty. On a second capture of an open
 //!   device what the port has gathered in the meantime goes as well, a choice with
 //!   no C run behind it, as sigrok-cli makes one capture: it would be old
 //!   readings, given as new.
-//! - C reads a limit only when a report has come (`protocol.c:192`), so a unit
-//!   gone quiet holds a capture for ever. Here a time limit is kept as C keeps it
-//!   while reports come, the first past the limit being the last, and with none it
-//!   ends [`Pace::grace`] after the limit with a warning. A frame limit alone ends
-//!   after [`Pace::silence`] with an error. With neither limit the user ends it, as
-//!   in C.
-//! - After an unplug C reads nothing for ever and never ends. Here a read that
-//!   fails ends the capture, and a probe at once. A read that fails in C lands in
-//!   a `size_t` (`protocol.c:137`, 151), passes `len <= 0` and moves `wr_idx` back:
-//!   that comes from reading the code, as no run has reached it, an unplug reading
-//!   as EOF.
+//! - C reads a limit only when a report has come (`protocol.c:192`), and it never
+//!   calls `serial_timeout`, so a unit gone quiet holds a capture: runs passed
+//!   100 s on the emulator and 120 s on a pty. Here a time limit is kept as C keeps
+//!   it while reports come, the first past the limit being the last, and with none
+//!   it ends [`Pace::grace`] after the limit with a warning. A frame limit alone
+//!   ends after [`Pace::silence`] with an error. With neither limit the user ends
+//!   it, as in C.
+//! - After an unplug a read is EOF in C, which it takes for no data, so it never
+//!   ends. Here a read that fails ends the capture, and a probe at once. A real
+//!   read error in C lands in a `size_t` (`protocol.c:137`, 151), passes `len <= 0`
+//!   and moves `wr_idx` back: with EIO injected on a pty it logged `Read error (5)`,
+//!   sent a stale frame again and died of a SIGSEGV.
 //! - `Unrecognized device type` prints `buf[3]` where the report's fourth byte is
 //!   meant (`protocol.c:216`), so with anything ahead of the report in its read it
 //!   names another byte. Here it names the report's.
@@ -54,7 +59,9 @@
 //!
 //! The sum at a message's end goes unchecked, as in C, and so a false magic in
 //! the stream takes a report's length with it: some units fail the sum, says
-//! `esphome-atorch-dl24`'s README.
+//! `esphome-atorch-dl24`'s README, and the DL24M log in its issue 59 has last bytes
+//! that look random. Temperature is unsigned, as in C, so a reading below 0 would
+//! show about 65535 °C; `NiceLabs/atorch-console` reads the USB meter's as signed.
 //!
 //! See [`protocol`].
 
@@ -97,8 +104,9 @@ pub struct Pace {
     /// answers a stop sooner and is not seen on the wire.
     pub wait: Duration,
     /// How long past a time limit a capture waits for the report that would end
-    /// it in C: 3 s, three of a unit's reports at the once a second of the one log
-    /// seen (`esphome-atorch-dl24`'s README). A choice, in C for ever.
+    /// it in C: 3 s, three of a unit's reports. A capture of a UD18
+    /// (`NiceLabs/atorch-console`, `docs/UD18-SPP.pcap`) has them 0.987 to 1.039 s
+    /// apart. A choice, in C for ever.
     pub grace: Duration,
     /// How long a capture only a frame limit can end waits for a report: 30 s, as
     /// `rdtech-um` waits on a Bluetooth link. A choice, in C for ever.
@@ -165,9 +173,15 @@ impl Driver for AtorchDriver {
                 return Ok(Vec::new());
             }
         };
-        let Some(profile) = probe(port.as_mut(), &Pace::default()) else {
-            log::error!("Failed to find a supported Atorch device.");
-            return Ok(Vec::new());
+        let profile = match probe(port.as_mut(), &Pace::default()) {
+            Ok(profile) => profile,
+            Err(end) => {
+                if let ProbeEnd::UnknownType(device_type) = end {
+                    log::error!("{}", unknown_type_message(device_type));
+                }
+                log::error!("Failed to find a supported Atorch device.");
+                return Ok(Vec::new());
+            }
         };
         // The scan's close: `dev_open` opens it again.
         drop(port);
@@ -175,8 +189,22 @@ impl Driver for AtorchDriver {
     }
 }
 
-/// `atorch_probe`: the first report, or a report's type nobody knows, decides.
-fn probe(port: &mut dyn Port, pace: &Pace) -> Option<&'static Profile> {
+/// Why a probe found no unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProbeEnd {
+    /// The first report has this type, which nobody knows.
+    UnknownType(u8),
+    /// No report came, or the port failed.
+    NoReport,
+}
+
+/// What `atorch_probe` logs of an unknown type, the report's own byte.
+fn unknown_type_message(device_type: u8) -> String {
+    format!("Unrecognized device type ({device_type:#06x}).")
+}
+
+/// `atorch_probe`: the first report decides.
+fn probe(port: &mut dyn Port, pace: &Pace) -> std::result::Result<&'static Profile, ProbeEnd> {
     let mut framer = Framer::default();
     let started = Instant::now();
     while started.elapsed() <= pace.probe {
@@ -184,21 +212,17 @@ fn probe(port: &mut dyn Port, pace: &Pace) -> Option<&'static Profile> {
             Ok(got) => got,
             Err(e) => {
                 log::debug!("{e}");
-                return None;
+                return Err(ProbeEnd::NoReport);
             }
         };
         framer.filled(got);
         while let Some(message) = framer.next_message() {
             let Message::Report(report) = message else { continue };
             let device_type = report.device_type();
-            let profile = protocol::find_profile(device_type);
-            if profile.is_none() {
-                log::error!("Unrecognized device type ({device_type:#06x}).");
-            }
-            return profile;
+            return protocol::find_profile(device_type).ok_or(ProbeEnd::UnknownType(device_type));
         }
     }
-    None
+    Err(ProbeEnd::NoReport)
 }
 
 /// One unit.

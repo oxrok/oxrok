@@ -1,2 +1,2 @@
-sr: atorch: Unrecognized device type (masked).
+sr: atorch: Unrecognized device type (0x0001).
 sr: atorch: Failed to find a supported Atorch device.
