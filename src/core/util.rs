@@ -1,5 +1,10 @@
 // Counterpart in sigrok:
-//   libsigrok/src/strutil.c.
+//   libsigrok/src/strutil.c,
+//   Copyright (C) 2010 Uwe Hermann <uwe@hermann-uwe.de>,
+//   with commits by Gerhard Sittig, Frank Stettner, Stefan Brüns,
+//   Andreas Sandberg, Bert Vermeulen, Daniel Elstner, Aurelien Jacobs,
+//   Niklas Thorne, Soeren Apel
+//   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! Parsing and formatting helpers shared by the CLI and the formats.
