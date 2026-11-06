@@ -361,7 +361,7 @@ pub fn parse_spec(
             // builds the mapping, so it neither assigns the channel nor
             // cancels the defaults: with no valid name at all, every
             // channel keeps its default.
-            match channel_names.iter().position(|n| n == value) {
+            match channel_names.iter().position(|n| !n.is_empty() && n == value) {
                 Some(index) => {
                     assigned[pos] = true;
                     config.channels[pos] = Some(index);

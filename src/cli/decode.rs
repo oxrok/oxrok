@@ -10,7 +10,7 @@
 
 use crate::cli::args::Args;
 use crate::cli::parse;
-use oxrok::core::{Channel, Error, Packet, Result};
+use oxrok::core::{Channel, ChannelKind, Error, Packet, Result};
 use oxrok::decode::{Config, Decoder, DecoderInfo, Output, Registry, Stack};
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -59,6 +59,45 @@ pub struct Decoding {
     ended: usize,
 }
 
+/// The logic channels' names, each at its bit in a sample: a channel's place in
+/// the device's list says nothing, as a driver may list analog channels first. A
+/// bit no channel has is an empty name, which no value matches. The length is at
+/// least the number of channels, which a decoder's default mapping counts: a
+/// default on a bit no channel has reads 0, as under sigrok-cli.
+fn logic_bit_names(channels: &[Channel]) -> Vec<String> {
+    let logic = || channels.iter().filter(|c| c.kind == ChannelKind::Logic);
+    let bits = logic().map(|c| c.index + 1).max().unwrap_or(0);
+    let mut names = vec![String::new(); bits.max(channels.len())];
+    for c in logic() {
+        names[c.index].clone_from(&c.name);
+    }
+    names
+}
+
+/// A decoder's channel takes a logic channel. sigrok-cli hands it the bit of the
+/// analog channel's index, which may be another channel's or none.
+fn refuse_analog(
+    info: &DecoderInfo,
+    pairs: &[(String, String)],
+    channels: &[Channel],
+) -> Result<()> {
+    for (key, value) in pairs {
+        let is_channel = info
+            .channels
+            .iter()
+            .chain(info.optional_channels.iter())
+            .any(|c| c.id.eq_ignore_ascii_case(key));
+        let named = |kind| channels.iter().any(|c| c.kind == kind && c.name == *value);
+        if is_channel && named(ChannelKind::Analog) && !named(ChannelKind::Logic) {
+            return Err(Error::Arg(format!(
+                "Channel '{value}' is analog: decoder '{}' needs a logic channel for '{key}'.",
+                info.id
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl Decoding {
     /// Parses the decoder flags; `None` without `-P`.
     #[allow(clippy::too_many_lines)]
@@ -71,7 +110,7 @@ impl Decoding {
             return Ok(None);
         }
         let registry = registry();
-        let names: Vec<String> = channels.iter().map(|c| c.name.clone()).collect();
+        let names = logic_bit_names(channels);
         let mut instances = Vec::new();
         let mut pending = Vec::new();
         let mut counts: HashMap<&str, usize> = HashMap::new();
@@ -99,6 +138,9 @@ impl Decoding {
                 let pairs: Vec<(String, String)> =
                     parsed.items.into_iter().map(|(k, v)| (k, v.unwrap_or_default())).collect();
                 let channel_names: &[String] = if below.is_none() { &names } else { &[] };
+                if below.is_none() {
+                    refuse_analog(def.info, &pairs, channels)?;
+                }
                 let config = oxrok::decode::parse_spec(def.info, &pairs, channel_names)?;
                 let n = counts.entry(def.info.id).or_insert(0);
                 *n += 1;
@@ -404,4 +446,30 @@ pub fn decoder_detail(args: &Args) -> Result<()> {
     }
     println!("Documentation:\n{}", d.doc);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mixed() -> Vec<Channel> {
+        vec![
+            Channel::new(4, ChannelKind::Analog, "DSO"),
+            Channel::new(0, ChannelKind::Logic, "0"),
+            Channel::new(1, ChannelKind::Logic, "1"),
+            Channel::new(4, ChannelKind::Logic, "4"),
+        ]
+    }
+
+    #[test]
+    fn a_name_sits_at_its_logic_bit_whatever_the_list_s_order() {
+        assert_eq!(logic_bit_names(&mixed()), ["0", "1", "", "", "4"]);
+    }
+
+    #[test]
+    fn the_names_are_at_least_as_many_as_the_channels() {
+        let channels =
+            [Channel::new(0, ChannelKind::Logic, "D0"), Channel::new(1, ChannelKind::Analog, "A0")];
+        assert_eq!(logic_bit_names(&channels), ["D0", ""]);
+    }
 }
