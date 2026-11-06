@@ -349,6 +349,7 @@ impl Config {
 }
 
 /// The meter.
+#[allow(clippy::struct_excessive_bools)]
 struct Meter {
     config: Config,
     freq_c: bool,
@@ -428,7 +429,7 @@ impl Meter {
     /// Whether this block is the long one, placed so the last of the startup
     /// blocks is one.
     fn long_block(&self) -> bool {
-        (self.blocks + CYCLE - (self.config.startup + CYCLE - 1) % CYCLE) % CYCLE == 0
+        (self.blocks + CYCLE - (self.config.startup + CYCLE - 1) % CYCLE).is_multiple_of(CYCLE)
     }
 
     /// The level, the display's token and, for a level, the noise ahead of them.
