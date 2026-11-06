@@ -22,6 +22,7 @@
 //!
 //! Counts, durations and ranges belong to the stage their token is in.
 
+use crate::core::channel::ChannelKind;
 use crate::core::device::Device;
 use crate::core::error::{Error, Result};
 use crate::core::key::Key;
@@ -61,6 +62,10 @@ pub fn parse(device: &dyn Device, spec: &str) -> Result<Trigger> {
                 continue;
             }
             let ch = channel(lhs)?;
+            let analog = device
+                .channels()
+                .iter()
+                .any(|c| c.enabled && c.name == lhs && c.kind == ChannelKind::Analog);
             let modifier_at = rhs.find(['*', '>']);
             let codes = &rhs[..modifier_at.unwrap_or(rhs.len())];
             if codes.is_empty() {
@@ -73,6 +78,11 @@ pub fn parse(device: &dyn Device, spec: &str) -> Result<Trigger> {
                     return Err(Error::Arg(format!(
                         "Trigger match '{code}' not supported by device."
                     )));
+                }
+                // As `sr_trigger_match_add`: an index alone cannot tell an analog
+                // channel from a logic one that shares it (link-mso19).
+                if analog && matches!(m, TriggerMatch::Zero | TriggerMatch::One) {
+                    return Err(Error::arg("Invalid trigger match for an analog channel."));
                 }
                 trigger.add(base_stage + i, ch, m);
                 deepest = deepest.max(base_stage + i);
@@ -242,6 +252,17 @@ mod tests {
             and: true,
             max_stages: 2,
         }
+    }
+
+    #[test]
+    fn a_level_on_an_analog_channel_is_refused() {
+        let mut d = dev(TriggerFeatures::default());
+        d.channels.push(Channel::new(1, ChannelKind::Analog, "A0"));
+        let refused = "Invalid trigger match for an analog channel";
+        assert!(parse(&d, "A0=1").unwrap_err().to_string().contains(refused));
+        assert!(parse(&d, "A0=0").unwrap_err().to_string().contains(refused));
+        assert!(parse(&d, "A0=r").is_ok());
+        assert!(parse(&d, "D1=1").is_ok());
     }
 
     #[test]
