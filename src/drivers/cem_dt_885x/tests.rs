@@ -1,8 +1,8 @@
 // Counterpart in sigrok:
 //   libsigrok/src/hardware/cem-dt-885x/protocol.c,
 //   Copyright (C) 2013 Bert Vermeulen <bert@biot.com>,
-//   with commits by Uwe Hermann, Martin Ling, Soeren Apel, Daniel Elstner,
-//   Frank Stettner
+//   with commits by Uwe Hermann, Aurelien Jacobs, Daniel Elstner,
+//   Frank Stettner, Martin Ling
 //   (libsigrok libsigrok-unreleased-1848-g0bc24877).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 

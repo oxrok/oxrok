@@ -813,17 +813,13 @@ impl Link {
 
     /// `meas_range_get`, as low and high.
     pub fn meas_range_get(&mut self) -> Result<(u64, u64)> {
-        let token = match self.parser.range {
-            Some(token) => token,
-            None => {
-                let token = self.current(&RANGE, &RANGES.map(|r| r.2), self.wait_bound)?;
-                self.parser.range = Some(token);
-                token
-            }
-        };
+        if self.parser.range.is_none() {
+            let token = self.current(&RANGE, &RANGES.map(|r| r.2), self.wait_bound)?;
+            self.parser.range = Some(token);
+        }
         RANGES
             .iter()
-            .find(|r| r.2 == token)
+            .find(|r| Some(r.2) == self.parser.range)
             .map(|r| (r.0, r.1))
             .ok_or_else(|| Error::device("no such range"))
     }
