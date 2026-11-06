@@ -70,7 +70,7 @@ static DEV_OPTIONS: [OptionDesc; 10] = [
 
 /// How long a scan looks for an `a5`, where C has 25 ms from a comment's 23 between
 /// tokens. A real one has one there; a loaded host has to get to it too.
-const SCAN_WINDOW: Duration = Duration::from_millis(250);
+const SCAN_WINDOW: Duration = Duration::from_millis(500);
 /// One read of a scan.
 const SCAN_READ: Duration = Duration::from_millis(5);
 /// How long a capture that only samples or a log can end goes with no byte. A

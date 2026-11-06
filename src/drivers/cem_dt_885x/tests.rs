@@ -217,7 +217,7 @@ fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
 #[test]
 fn the_bounds_are_what_they_say() {
     assert_eq!(SILENCE_BOUND, Duration::from_secs(3));
-    assert_eq!(SCAN_WINDOW, Duration::from_millis(250));
+    assert_eq!(SCAN_WINDOW, Duration::from_millis(500));
     assert_eq!(END_AFTER_STOP, Duration::from_millis(500));
 }
 
@@ -236,7 +236,9 @@ fn a_scan_of_no_sync_byte_is_no_meter_and_its_window_ends() {
     let mut fake = Fake::with(|m| m.stream = vec![0xff]);
     let started = Instant::now();
     assert!(!hears_a_meter(&mut fake, Duration::from_millis(30)));
-    assert!(started.elapsed() >= Duration::from_millis(30));
+    let took = started.elapsed();
+    assert!(took >= Duration::from_millis(30));
+    assert!(took < Duration::from_secs(20), "{took:?}");
     let mut silent = Fake::default();
     assert!(!hears_a_meter(&mut silent, Duration::from_millis(10)));
 }
@@ -716,9 +718,12 @@ fn a_full_queue_does_not_hold_a_close() {
 
 #[test]
 fn a_close_joins_the_capture() {
+    // A queue no one reads: the End waits half a second after the stop, and a close
+    // that does not join is back long before that.
     let fake = Fake::with(|m| m.stream = readout(0x06, 0x55));
     let mut device = fake.device();
-    let rx = start(&mut device);
+    let (tx, rx) = sync_channel(1);
+    device.start(PacketSink::new(tx, 0)).unwrap();
     wait_for("levels", || fake.lock().bytes_read > 0);
     device.close().unwrap();
     assert_eq!(Arc::strong_count(&device.link), 1, "the thread is gone");
@@ -767,6 +772,21 @@ fn a_second_capture_on_an_open_port_starts_clean_and_nothing_shifts() {
     // The tail is passed over, so the display token that follows has the last whole
     // level there was, and the next is right.
     assert_eq!(levels(&until_end(&rx)), [65.5, 70.3]);
+}
+
+#[test]
+fn a_capture_stopped_inside_a_packet_leaves_nothing_for_the_next() {
+    let fake = Fake::with(|m| m.input.extend([0xa5, 0x0d, 0x07]));
+    let mut device = fake.device();
+    let rx = start(&mut device);
+    wait_for("the bytes", || fake.lock().bytes_read == 3);
+    device.stop().unwrap();
+    until_end(&rx);
+    // Its last byte, which must not finish the old packet's level of 70.2.
+    fake.lock().input.extend([0x02, 0xa5, 0x0b, 0]);
+    device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+    let rx = start(&mut device);
+    assert_eq!(levels(&until_end(&rx)), [0.0]);
 }
 
 #[test]
