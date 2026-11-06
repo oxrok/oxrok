@@ -1,0 +1,2 @@
+oxrok: warn: oxrok::drivers::appa_55ii: A frame's size is out of range: the capture ends.
+oxrok: warn: oxrok::cli::pipeline: Device only sent 2 samples.
