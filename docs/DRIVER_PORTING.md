@@ -290,16 +290,23 @@ SCPI model", has the API and what it can't show.
    names the socket `conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT`, inside `emu_cases`. Take
    the cases of each path once on the transport they're cheapest on, and scan, show
    and one capture on both.
-3. **The port** closes at the end of a probe, and its open calls `Scpi::reopen`, as
-   `sr_scpi_scan` and every driver's `dev_open` do (`src/drivers/rigol_ds`). A port
-   that keeps the probe's connection differs from C in the `.tx`: one
-   `GET_CAPABILITIES`, one `tcp_connect`.
+3. **The port** closes at the end of a probe, ignoring a failed close, as C does, and
+   its open calls `Scpi::reopen`, as `sr_scpi_scan` and every driver's `dev_open` do
+   (`src/drivers/rigol_ds`). Both are safe to repeat. A port that keeps the probe's
+   connection differs from C in the `.tx`: one `GET_CAPABILITIES`, one `tcp_connect`.
+   Take `Scpi`'s `cmd`, `cmd_resp`, `get_floatv`, `unquote_string` and `render` rather
+   than writing them again, and don't add a timeout's recovery to a driver: after one,
+   the next `send` drains the line until it is quiet, and `get_opc` keeps reading.
+   What that can't do: an answer later than the drain still shifts what follows, on
+   a line with no tags. On `tcp-raw` an answer the stack cuts in two is two answers,
+   C's rule too, and one of exactly a read's size ends after a read's timeout.
 4. **Expect these in the goldens.** Over TCP a silent instrument holds sigrok-cli for
    ever, a read after a close returns nothing for ever, and a write after one kills
    it with SIGPIPE: `--oracle-bug` for all three, with the texts in
-   `tools/emu/rigol-ds.sh`. `sr_scpi_get_opc` tries 100 times,
-   through timeouts, so 100 s of a muted `*OPC?`: `Scpi::get_opc` gives up after 3
-   silences, and a muted setting on a protocol with `*OPC?` belongs in a unit test.
+   `tools/emu/rigol-ds.sh`. `sr_scpi_get_opc` tries 100 times through timeouts, about
+   101 s of a muted `*OPC?`. `Scpi::get_opc` gives up after 30 s of silence, by choice
+   (`Scpi::opc_silence`), so a muted setting belongs in a unit test. Capture paths use
+   `get_opc_while` with their stop.
 5. **Case time.** A plain case is about 0.3 s for both tools on either carrier, plus
    what the driver sleeps; a DS1000's 100 ms per setting is the slow part of
    `rigol-ds`. A `model=` that changes the USB ids adds about 5.5 s. A case where C

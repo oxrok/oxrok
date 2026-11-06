@@ -871,16 +871,21 @@ What the first model taught:
 
 ### Writing a SCPI model
 
-`emu/src/models/rigol-ds.rs` and `tools/emu/rigol-ds.sh` are the template.
-A SCPI instrument is an `Instrument` (`emu/src/shells/scpi.rs`); one file says
-its commands, and the same device goes on USBTMC and on TCP:
+`emu/src/models/rigol-ds.rs` and `tools/emu/rigol-ds.sh` are the template, and
+`rigol-ds-serial` for a serial port. A SCPI instrument is an `Instrument`
+(`emu/src/shells/scpi.rs`); one file says its commands, and the same device goes on
+USBTMC, on TCP and on CDC-ACM:
 
 ```rust
 struct Meter;
 impl Instrument for Meter {
-    fn idn(&self) -> String { "Acme,M1,1,2".to_owned() }
+    fn idn(&self) -> Option<String> { Some("Acme,M1,1,2".to_owned()) }
     fn settings(&self) -> Settings {
-        Settings::default().with("CONF:VOLT:RANG", "10").with("OUTP:STAT", "0")
+        Settings::default()
+            .with("CONF:VOLT:RANG", "10")
+            .with("OUTP:STAT", "0")
+            .with("VOLT:LEV", "1.000")
+            .with_alias("VOLTAGE:LEVEL", "VOLT:LEV") // a set and a get spelled apart
     }
     fn command(&mut self, m: &Message<'_>, s: &mut Settings, v: &mut Violations) -> Answer {
         match m.header.as_str() {
@@ -909,31 +914,49 @@ pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
 }
 ```
 
+- `Instrument::idn` defaults to `None`: an HP of that age has no `*IDN?`, and a
+  driver that asks is flagged.
+- `Identity`: `speed` (high by default, 512 byte packets; `Speed::Full` for 64), and
+  `remote`, which says `RL1` in the capabilities. A tool sends `REN_CONTROL` and
+  `LOCAL_LOCKOUT` at each open and `GO_TO_LOCAL` at each close, unless the id is on
+  `scpi_usbtmc_libusb.c`'s table (the Rigol DS series it names, all Yokogawa, all
+  Siglent SDS). sigrok-cli skips its close at an error, so with `remote` on an id not
+  on that table every failing case differs by one line, and takes
+  `--tx-filter '/^ctl_in 21 a1 /d'`; pin the line in a case that succeeds
+  (`remote control` in `tools/emu/rigol-ds.sh`).
 - `Message`: `text` as sent, `header` in upper case with no leading colon,
   `args`, `is_query()`, `name()` without the `?`. The match sees what the driver
   sends, not SCPI's long and short forms: a port that sends another spelling
   shows in the `.tx` anyway.
 - `Answer`: `Text` gets the line end (`eol=`, or `Config::with_eol`), `Bytes` goes
   as it is, `Done` for a setting, `Silent` for nothing and no error, `Error(code,
-  text)` for the queue, `Unknown` for the `Engine`.
+  text)` for the queue, `Unknown` for the `Engine`. What a command says goes out with
+  or without a question mark: an HP's `RMATH HIRES`.
 - What the `Engine` answers once the model says `Unknown`: `*IDN?`, `*OPC?`,
   `*OPC`, `*WAI`, `*ESR?`, `*CLS`, `SYST:ERR?`, and then `Settings`. What nobody
   has is a violation with `-113`. Lines are cut at `;`, for `scpi-dmm`'s
   `*CLS;SYST:REM`.
 - Options all models take: `mute-at=N`, `silent-at=N`, `late-at=N:T`, `opc-late=N`,
-  `mark-at=N`, `idn=`, `eol=`, `framing=rigol`, counted in queries from 1; and on
-  USBTMC `stall=caps|ren|llo|local`, `in-stall=N`, `empty-at=N`, `bad-tag-at=N`,
-  `message=N`.
+  `mark-at=N`, `idn=`, `eol=`, `framing=rigol`, counted in queries from 1; on USBTMC
+  `stall=caps|ren|llo|local`, `in-stall=N`, `empty-at=N`, `bad-tag-at=N`, `message=N`;
+  on CDC-ACM `stall=line|lines|break`, `chunk=`, `in-limit=`, `in-stall=`, `out-hold=`,
+  `uart=LINE`.
+- **A serial instrument:** `config.cdc(NAME, &cdc::Identity::new(..), instrument)` in
+  `build`, with no `build_tcp` and `EMU_CDC=1` in the scenario, under the rules of
+  "Writing a serial model". Text must end in a line feed, as that is what ends a
+  serial read. `emu/src/models/rigol-ds-serial.rs` and its scenario are the template.
 - A model on TCP alone (`beaglelogic`, `ipdbg-la`): implement `shells::tcp::Stream`
   (`received`, `connected`, `closed`, `tick`, and `Port`'s `send`, `violation`,
   `mark`, `hang_up`), `build_tcp`, and `build` returning `NoUsb::new(NAME)`, with
-  `EMU_TCP=only`. A driver's wire with no SCPI on it needs no `Engine`.
+  `EMU_TCP=only` and no `EMU_TMC`. A driver's wire with no SCPI on it needs no
+  `Engine`. One that streams gives a digest in `log_rules`: a run of bytes is kept
+  whole unless one says otherwise.
 
-The scenario:
+The scenario, with `EMU_TMC` only where the model is on USBTMC:
 
 ```sh
 EMU_MODEL=NAME
-EMU_TMC=1        # the kernel's usbtmc unloaded for the session; --bound usbtmc loads it
+EMU_TMC=1        # usbtmc off this device before each tool; --bound usbtmc puts it on
 EMU_TCP=1        # the socket as well; only: nothing attached
 EMU_DRIVER=NAME
 EMU_FULL=$EMU_DRIVER
@@ -1001,12 +1024,13 @@ What the first model taught:
   so a scan and a capture are two USBTMC opens (`GET_CAPABILITIES` twice, with
   `bTag` going on where it stopped, as the instance stays) and two TCP connections.
   `Scpi::close` and `Scpi::reopen` do that; hold no connection in a device.
-- The kernel's `usbtmc` asks for the capabilities at each bind, and it binds again
-  once a tool lets go, on its own time, so with it loaded the count of
-  `GET_CAPABILITIES` in a `.tx` depends on the pace. That is why `EMU_TMC=1` unloads
-  it for the session, which also takes it off a real instrument on that machine
-  until the session ends. It has no `driver_override`, and
-  `/sys/bus/usb/drivers_autoprobe` at 0 stops the device from being configured.
+- The kernel's `usbtmc` asks for the capabilities at each bind (`usbtmc_probe`), and a
+  tool that detached it gives it back at its close (`USBDEVFS_CONNECT`), in the tool's
+  section. So `EMU_TMC=1` unbinds it from this device before each tool, and nothing
+  binds it again, as libsigrok and nusb re-attach only what they detached. A udev rule
+  scoped to emulated interfaces of its class keeps udev from loading the module for
+  them. The module is never unloaded, so a real instrument on the machine keeps its
+  driver, through a crash too.
 - `REQUEST_DEV_DEP_MSG_IN` asks for `INT32_MAX`.
 
 ### Writing a device model
