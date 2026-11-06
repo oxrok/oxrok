@@ -442,9 +442,9 @@ impl Device for CemDt885xDevice {
         capturing.store(true, Ordering::SeqCst);
         let spawned = std::thread::Builder::new().name("cem-dt-885x acquisition".to_owned()).spawn(
             move || {
-                capture.run(&sink, &stop2);
+                let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2);
+                send_end(&sink, &stop2, outcome);
             },
         );
         match spawned {
@@ -477,9 +477,9 @@ impl Drop for CemDt885xDevice {
 
 /// `End`, waiting for room in the queue for as long as nobody asked to stop, and
 /// after a stop only for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool) {
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
     let stopped_at = std::cell::Cell::new(None);
-    sink.send_while(Packet::End, || {
+    sink.end_while(outcome, || {
         if !stop.load(Ordering::SeqCst) {
             return true;
         }
@@ -509,13 +509,13 @@ struct Pass {
 }
 
 impl Capture {
-    fn run(&self, sink: &PacketSink, stop: &AtomicBool) {
+    /// `Ok` for a limit met, a stop, a log's end or no one listening. `Err` for a
+    /// port gone or a bound on a meter that stopped with the limit unmet.
+    fn run(&self, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
-            return;
+            return Ok(());
         }
-        if let Err(e) = self.passes(sink, stop) {
-            log::error!("Acquisition failed: {e}.");
-        }
+        self.passes(sink, stop).inspect_err(|e| log::error!("Acquisition failed: {e}."))
     }
 
     /// A read's worth, with the link's lock. Each byte goes as far as C's callback
@@ -623,15 +623,15 @@ impl Capture {
             let pass = self.pass(samples, &mut wants_log, stop)?;
             if bounded && last_level.elapsed() >= self.level_bound {
                 return Err(Error::device(format!(
-                    "no level from the meter in {} s",
-                    self.level_bound.as_secs()
+                    "no level from the meter in {}",
+                    protocol::spoken(self.level_bound)
                 )));
             }
             if pass.bytes == 0 {
                 if bounded && last_byte.elapsed() >= self.silence_bound {
                     return Err(Error::device(format!(
-                        "no byte from the meter in {} s",
-                        self.silence_bound.as_secs()
+                        "no byte from the meter in {}",
+                        protocol::spoken(self.silence_bound)
                     )));
                 }
                 // With the lock free: a get must not starve behind this loop.

@@ -493,7 +493,7 @@ pub const RECORDING: Setting = Setting {
 };
 
 /// A time as a message says it.
-fn spoken(time: Duration) -> String {
+pub(super) fn spoken(time: Duration) -> String {
     if time.subsec_millis() == 0 {
         format!("{} s", time.as_secs())
     } else {

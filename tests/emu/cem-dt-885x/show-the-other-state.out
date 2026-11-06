@@ -1,0 +1,16 @@
+Driver functions:
+    Sound level meter
+Scan options:
+    conn
+cem-dt-885x - CEM DT-885x with 1 channel: SPL
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    spl_weight_freq: A, C (current)
+    spl_weight_time: F, S (current)
+    spl_meas_range: 30-130, 30-80, 50-100, 80-130 (current)
+    datalog: on (current), off
+    hold_max: on, off (current)
+    hold_min: on (current), off
+    power_off: on, off (current)
+    data_source: Live (current), Memory

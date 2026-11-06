@@ -296,6 +296,11 @@ fn levels(packets: &[Packet]) -> Vec<f32> {
         .collect()
 }
 
+/// Why the capture failed, from its `Packet::Failed`.
+fn failure(packets: &[Packet]) -> Option<String> {
+    packets.iter().find_map(|p| if let Packet::Failed(why) = p { Some(why.clone()) } else { None })
+}
+
 /// A level's flags.
 fn first_flags(packets: &[Packet]) -> MqFlags {
     packets
@@ -956,6 +961,7 @@ bounded_test! {
         let packets = until_end(&rx);
         assert!(matches!(packets[0], Packet::Header { .. }));
         assert_eq!(levels(&packets), [65.5, 129.8, 65.5]);
+        assert_eq!(failure(&packets), None, "a limit met");
         assert_eq!(first_flags(&packets), MqFlags::SPL_FREQ_WEIGHT_C | MqFlags::SPL_TIME_WEIGHT_S);
         let Packet::Analog(a) = &packets[1] else { panic!("{:?}", packets[1]) };
         assert_eq!((a.mq, a.unit, a.digits), (Mq::SoundPressureLevel, Unit::DecibelSpl, 1));
@@ -988,7 +994,7 @@ bounded_test! {
             }
         }
         device.stop().unwrap();
-        until_end(&rx);
+        assert_eq!(failure(&until_end(&rx)), None, "a stop");
         device.close().unwrap();
         assert!(device.link().port.is_none());
     }
@@ -1151,6 +1157,7 @@ bounded_test! {
         let rx = start(&mut device);
         let packets = until_end(&rx);
         assert_eq!(levels(&packets), [40.0, 40.1]);
+        assert_eq!(failure(&packets), None, "the log's end");
         assert_eq!(first_flags(&packets), MqFlags::SPL_FREQ_WEIGHT_A);
         assert!(packets.iter().any(|p| {
             matches!(p, Packet::Meta(m) if m[0] == (Key::SampleInterval, Value::U64(16_000)))
@@ -1283,7 +1290,9 @@ bounded_test! {
         device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
         let started = Instant::now();
         let rx = start(&mut device);
-        assert_eq!(levels(&until_end(&rx)), Vec::<f32>::new());
+        let packets = until_end(&rx);
+        assert_eq!(levels(&packets), Vec::<f32>::new());
+        assert_eq!(failure(&packets).as_deref(), Some("device error: no byte from the meter in 50 ms"));
         assert!(started.elapsed() >= Duration::from_millis(50));
     }
 }
@@ -1298,7 +1307,9 @@ bounded_test! {
             device.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
             let started = Instant::now();
             let rx = start(&mut device);
-            assert_eq!(levels(&until_end(&rx)), Vec::<f32>::new());
+            let packets = until_end(&rx);
+            assert_eq!(levels(&packets), Vec::<f32>::new());
+            assert!(failure(&packets).is_some_and(|why| why.contains("no level from the meter")));
             assert!(started.elapsed() >= Duration::from_millis(50));
         }
     }
@@ -1365,16 +1376,18 @@ bounded_test! {
         device.silence_bound = Duration::from_millis(5);
         device.set(&Key::DataSource, &Value::from("Memory"), None).unwrap();
         let rx = start(&mut device);
-        until_end(&rx);
+        assert!(failure(&until_end(&rx)).is_some_and(|why| why.contains("no byte")));
     }
 }
 
 bounded_test! {
-    fn a_read_error_ends_a_capture() {
+    fn a_read_error_ends_a_capture_as_a_failed_one() {
         let fake = Fake::with(|m| m.read_error = true);
         let mut device = fake.device();
         let rx = start(&mut device);
-        assert_eq!(levels(&until_end(&rx)), Vec::<f32>::new());
+        let packets = until_end(&rx);
+        assert_eq!(levels(&packets), Vec::<f32>::new());
+        assert_eq!(failure(&packets).as_deref(), Some("device error: gone"));
     }
 }
 

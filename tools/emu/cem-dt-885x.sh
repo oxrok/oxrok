@@ -134,6 +134,7 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "set no such key" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c voltage=1 --set
     # Refused, in the driver's words for each and the shared wording of C's.
     emu_case "set freq no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c spl_weight_freq=Z --set
+    emu_case "set time no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c spl_weight_time=Z --set
     emu_case "set range no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c spl_meas_range=10-20 --set
     emu_case "set data_source no such" --oracle-bug "$OWN_WORDS" --stderr --expect-fail --tx-filter "$OUT" -- -d $X -c data_source=Cloud --set
 
@@ -148,11 +149,12 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "stock set fails" --oracle-bug "$NO_BYTE_BUG" --no-output --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C --set
 
     # power_off: 33, 25 ms, and a look for a byte, with the real read; then the port
-    # goes round. A lost one gets a block back at once, so the count is exact.
+    # goes round. A block on its way at the flush says 33 again, so each once; how
+    # many a lost one takes is in the unit tests.
     emu_options
-    emu_case "power off" --no-output --tx-filter "$OUT" -- -d $X -c power_off=on --set
+    emu_case "power off" --no-output --tx-filter "$ONCE" -- -d $X -c power_off=on --set
     emu_options deaf=2
-    emu_case "power off lost twice" --no-output --tx-filter "$OUT" -- -d $X -c power_off=on --set
+    emu_case "power off lost twice" --no-output --tx-filter "$ONCE" -- -d $X -c power_off=on --set
     emu_options deaf=1000000
     emu_case "power off on a deaf meter" --oracle-bug "$POWER_BUG" --oracle-hangs --timeout 7 --stderr --expect-fail --tx-filter "$ONCE" -- -d $X -c power_off=on --set
 
@@ -187,9 +189,9 @@ s/^(..)$/bulk_out 02 \1 -> told/
     # Past the buffer: protocol.c:289 stores a byte past it before :290 looks. Only
     # a level's low digits could show that, and the output has one decimal.
     emu_options setters=0 extra=a5e1$(printf '07%.0s' $(seq 1 101))
-    emu_case "unknown token over the buffer" --oracle-differs "$NO_LEVEL_YET" --tx-filter "$OUT" -- -d $X --samples 2
+    emu_case "unknown token over the buffer" --tx-filter "$OUT" -- -d $X --samples 2
     emu_options setters=0 extra=a506
-    emu_case "time cut by the next packet" --tx-filter "$OUT" -- -d $X --samples 2
+    emu_case "time cut by the next packet" --oracle-differs "$NO_LEVEL_YET" --tx-filter "$OUT" -- -d $X --samples 2
     # ff cuts any packet.
     emu_options setters=0 extra=a50dff
     emu_case "ff in a packet" --tx-filter "$OUT" -- -d $X --samples 2
@@ -202,7 +204,7 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "hold repeats the level" --tx-filter "$OUT" -- -d $X --samples 3
     emu_options setters=0 hold-after=1 hold-for=1
     emu_case "hold ends at once" --tx-filter "$OUT" -- -d $X --samples 2
-    emu_options setters=0 hold-blocks=2
+    emu_options setters=0 hold-blocks=2 hold-for=2
     emu_case "hold with no level yet" --oracle-differs "$NO_LEVEL_YET" --timeout 8 --tx-filter "$OUT" -- -d $X --samples 2
 
     # The log. Asked for once per byte, until its bb is read. A meter says levels
@@ -241,14 +243,14 @@ s/^(..)$/bulk_out 02 \1 -> told/
 
     # What ends a capture or does not, in oxrok's words.
     emu_options setters=0 time-only=1 blocks=2
-    emu_case "silence" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 6 --stderr --tx-filter "$OUT" -- -d $X --samples 1
+    emu_case "silence" --oracle-bug "$SILENT_BUG" --oracle-hangs --oxrok-fails "no byte from the meter" --timeout 6 --stderr --tx-filter "$OUT" -- -d $X --samples 1
     # Its log has no end and no more bytes.
     emu_options time-only=1 blocks=2 dump=bb0064
-    emu_case "silence ends a log" --oracle-bug "$SILENT_BUG" --oracle-hangs --timeout 6 --stderr --tx-filter "$ONCE" -- -d $X -c data_source=Memory --samples 1
+    emu_case "silence ends a log" --oracle-bug "$SILENT_BUG" --oracle-hangs --oxrok-fails "no byte from the meter" --timeout 6 --stderr --tx-filter "$ONCE" -- -d $X -c data_source=Memory --samples 1
     emu_options setters=0 time-only=1
-    emu_case "no level comes" --oracle-bug "$NO_LEVEL_BUG" --oracle-hangs --timeout 8 --stderr --tx-filter "$OUT" -- -d $X --samples 1
+    emu_case "no level comes" --oracle-bug "$NO_LEVEL_BUG" --oracle-hangs --oxrok-fails "no level from the meter" --timeout 8 --stderr --tx-filter "$OUT" -- -d $X --samples 1
     emu_options setters=0 mark=8
-    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --unplug model --timeout 6 --stderr --filter 's/Device only sent [0-9]+ samples/Device only sent N samples/' --tx-filter "$OUT" -- -d $X --samples 100000
+    emu_case "unplug in a capture" --oracle-bug "$UNPLUG_BUG" --oracle-hangs --oxrok-fails "the meter's port is gone" --unplug model --timeout 6 --stderr --filter 's/Device only sent [0-9]+ samples/Device only sent N samples/' --tx-filter "$OUT" -- -d $X --samples 100000
     # The model goes on sending after the point, so only a stop ends it. oxrok
     # takes SIGINT only once its capture is under way, so the point comes late.
     emu_options setters=0 mark=8
@@ -276,6 +278,10 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "show the other state" --keep-header --tx-filter "$OUT" -- -d $X --show
     for key in spl_weight_freq spl_weight_time datalog; do
         emu_case "get $key other" --tx-filter "$OUT" -- -d $X --get $key
+    done
+    for r in 30-80 50-100; do
+        emu_options setters=0 range=$r
+        emu_case "get range $r" --tx-filter "$OUT" -- -d $X --get spl_meas_range
     done
     for m in max min; do
         emu_options setters=0 hold-mode=$m
@@ -318,8 +324,9 @@ s/^(..)$/bulk_out 02 \1 -> told/
     emu_case "set hold_min on from max" --no-output --tx-filter "$ONCE" -- -d $X -c hold_min=on --set
 
     # No token at once, as on a real meter: a command shows in a later block. What the
-    # set ended in shows in the flags of a capture, or in a get.
-    emu_options announce=0 setters=1
+    # set ended in shows in the flags of a capture, or in a get. One level, as how many
+    # blocks a set takes depends on the time.
+    emu_options announce=0 levels=0654
     emu_case "no token at once, freq" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c spl_weight_freq=C --samples 2
     emu_case "no token at once, time" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c spl_weight_time=S --samples 2
     emu_case "no token at once, hold" --oracle-differs "$TOGGLE_BUG" --tx-filter "$ONCE" -- -d $X -c hold_max=on --samples 2
