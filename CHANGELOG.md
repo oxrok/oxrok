@@ -8,6 +8,14 @@ release may change the library API.
 
 ### Added
 
+- Native protocol decoders: 30 of libsigrokdecode 0.5.3's 111 now have
+  Rust implementations, each with an in-process native-vs-Python parity
+  test and checklist entry in `docs/NATIVE_DECODERS.md`. The native set
+  includes `can`, `jtag`, `swd`, `usb_signalling`, `usb_power_delivery`,
+  `onewire_link`, `ir_nec`, `mdio`, `lpc`, `z80`, `parallel`, `ps2`,
+  `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, the i2c stack
+  (`i2cfilter`, `i2cdemux`, `eeprom24xx`), `gpib`, `ieee488`, and the
+  timing/encoding set.
 - Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`, `mic-985xx`, `teleinfo`,
   `tondaj-sl-814`.
 - Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
