@@ -10,6 +10,7 @@ pub mod can;
 pub mod cec;
 pub mod counter;
 pub mod dali;
+pub mod dcf77;
 pub mod dmx512;
 pub mod eeprom24xx;
 pub mod em4100;
@@ -20,6 +21,7 @@ pub mod guess_bitrate;
 pub mod i2c;
 pub mod i2cdemux;
 pub mod i2cfilter;
+pub mod i2s;
 pub mod ieee488;
 pub mod ir_nec;
 pub mod ir_rc5;
@@ -42,11 +44,13 @@ pub mod rgb_led_ws281x;
 pub mod sda2506;
 pub mod sdcard_sd;
 pub mod seven_segment;
+pub mod spdif;
 pub mod spi;
 pub mod spiflash;
 pub mod st7735;
 pub mod stepper_motor;
 pub mod swd;
+pub mod tdm_audio;
 pub mod timing;
 pub mod uart;
 pub mod usb_power_delivery;
@@ -57,12 +61,13 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 48] = [
+pub static ALL: [&DecoderDef; 52] = [
     &avr_isp::DEF,
     &can::DEF,
     &cec::DEF,
     &counter::DEF,
     &dali::DEF,
+    &dcf77::DEF,
     &dmx512::DEF,
     &eeprom24xx::DEF,
     &em4100::DEF,
@@ -73,6 +78,7 @@ pub static ALL: [&DecoderDef; 48] = [
     &i2c::DEF,
     &i2cdemux::DEF,
     &i2cfilter::DEF,
+    &i2s::DEF,
     &ieee488::DEF,
     &ir_nec::DEF,
     &ir_rc5::DEF,
@@ -95,11 +101,13 @@ pub static ALL: [&DecoderDef; 48] = [
     &sda2506::DEF,
     &sdcard_sd::DEF,
     &seven_segment::DEF,
+    &spdif::DEF,
     &spi::DEF,
     &spiflash::DEF,
     &st7735::DEF,
     &stepper_motor::DEF,
     &swd::DEF,
+    &tdm_audio::DEF,
     &timing::DEF,
     &uart::DEF,
     &usb_power_delivery::DEF,
