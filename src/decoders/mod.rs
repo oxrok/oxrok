@@ -12,6 +12,8 @@ pub mod jtag;
 pub mod lpc;
 pub mod mdio;
 pub mod onewire_link;
+pub mod parallel;
+pub mod ps2;
 pub mod spi;
 pub mod swd;
 pub mod uart;
