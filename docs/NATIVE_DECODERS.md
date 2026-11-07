@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 23 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`) |
-| Native and parity-tested | 23 |
-| Pending | 88 |
+| Native now | 25 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`) |
+| Native and parity-tested | 25 |
+| Pending | 86 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -53,6 +53,12 @@ so the native and Python sides see identical packed samples, channel
 names and sample rate. The harness compares the complete `Output`
 sequence: annotation instance, span, class and texts; binary payload;
 `put_python` item; metadata name and value; and `End`, in order.
+
+The Python host maps `bytearray` to `Item::Bytes` and snapshots lists
+and tuples when an item is emitted. This is a host bug fix agreed during
+the IEEE488 port: without it, an item kept growing after emission and
+the comparison was non-deterministic. Python-to-Python chains receive an
+equal list, not the same object.
 
 The Python host keeps non-value objects as `Item::Opaque` so a Python
 decoder above gets the same object. For comparison only, `PyItem::to_item`
@@ -178,7 +184,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `em4305` | logic | 5 | pending | — |
 | `enc28j60` | stacked | 3 | pending | — |
 | `flexray` | logic | 6 | pending | — |
-| `gpib` | logic | 2 | pending | — |
+| `gpib` | logic | 2 | native, parity-tested | — |
 | `graycode` | logic | 3 | pending | — |
 | `guess_bitrate` | logic | 3 | pending | — |
 | `hdcp` | stacked | 2 | pending | — |
@@ -187,7 +193,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `i2cfilter` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2s` | logic | 4 | pending | — |
 | `iec` | logic | 7 | pending | — |
-| `ieee488` | logic | 2 | pending | — |
+| `ieee488` | logic | 2 | native, parity-tested | — |
 | `ir_nec` | logic | 1 | native, parity-tested | — |
 | `ir_rc5` | logic | 4 | pending | — |
 | `ir_rc6` | logic | 4 | pending | — |
