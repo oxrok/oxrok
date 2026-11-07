@@ -18,6 +18,9 @@ pub mod dali;
 pub mod dcf77;
 pub mod dmx512;
 pub mod ds1307;
+pub mod ds2408;
+pub mod ds243x;
+pub mod ds28ea00;
 pub mod dsi;
 pub mod edid;
 pub mod eeprom24xx;
@@ -39,6 +42,8 @@ pub mod ir_rc5;
 pub mod ir_rc6;
 pub mod jitter;
 pub mod jtag;
+pub mod jtag_ejtag;
+pub mod jtag_stm32;
 pub mod lin;
 pub mod lm75;
 pub mod lpc;
@@ -54,6 +59,7 @@ pub mod morse;
 pub mod mxc6225xu;
 pub mod nunchuk;
 pub mod onewire_link;
+pub mod onewire_network;
 pub mod ook;
 pub mod parallel;
 pub mod pca9571;
@@ -89,7 +95,7 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 80] = [
+pub static ALL: [&DecoderDef; 86] = [
     &ac97::DEF,
     &am230x::DEF,
     &atsha204a::DEF,
@@ -103,6 +109,9 @@ pub static ALL: [&DecoderDef; 80] = [
     &dcf77::DEF,
     &dmx512::DEF,
     &ds1307::DEF,
+    &ds2408::DEF,
+    &ds243x::DEF,
+    &ds28ea00::DEF,
     &dsi::DEF,
     &edid::DEF,
     &eeprom24xx::DEF,
@@ -124,6 +133,8 @@ pub static ALL: [&DecoderDef; 80] = [
     &ir_rc6::DEF,
     &jitter::DEF,
     &jtag::DEF,
+    &jtag_ejtag::DEF,
+    &jtag_stm32::DEF,
     &lin::DEF,
     &lm75::DEF,
     &lpc::DEF,
@@ -139,6 +150,7 @@ pub static ALL: [&DecoderDef; 80] = [
     &mxc6225xu::DEF,
     &nunchuk::DEF,
     &onewire_link::DEF,
+    &onewire_network::DEF,
     &ook::DEF,
     &parallel::DEF,
     &pca9571::DEF,
