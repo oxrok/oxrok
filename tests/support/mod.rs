@@ -163,10 +163,34 @@ fn plain_output(output: &Output) -> Output {
 pub struct CorpusCase {
     /// The test name.
     pub name: String,
+    /// `channel id=number` pairs of the decoder under test.
+    pub channels: Vec<(String, usize)>,
+    /// `option id=value` pairs of the decoder under test.
+    pub options: Vec<(String, String)>,
+    /// The input path, relative to the sigrok-dumps root.
+    pub input: Option<String>,
+    /// The `stack` line, bottom first, when the test uses a chain.
+    pub stack: Vec<String>,
+}
+
+/// One decoder of a corpus chain.
+#[derive(Clone, Debug)]
+pub struct CorpusDecoder {
+    /// The decoder id.
+    pub id: String,
     /// `channel id=number` pairs.
     pub channels: Vec<(String, usize)>,
     /// `option id=value` pairs.
     pub options: Vec<(String, String)>,
+}
+
+/// A corpus case with every decoder of the chain, not only the target.
+#[derive(Clone, Debug)]
+pub struct ChainCase {
+    /// The test name.
+    pub name: String,
+    /// The decoders, in `test.conf` order.
+    pub decoders: Vec<CorpusDecoder>,
     /// The input path, relative to the sigrok-dumps root.
     pub input: Option<String>,
     /// The `stack` line, bottom first, when the test uses a chain.
@@ -195,13 +219,12 @@ pub fn corpus_dumps_dir() -> Option<std::path::PathBuf> {
     p.is_dir().then_some(p)
 }
 
-/// The cases in sigrok-test for `decoder`, in file order.
-pub fn corpus_cases(decoder: &str) -> Vec<CorpusCase> {
+fn parse_conf(decoder: &str) -> Vec<ChainCase> {
     let Some(dir) = corpus_test_dir() else { return Vec::new() };
     let conf = dir.join("decoder/test").join(decoder).join("test.conf");
     let Ok(text) = std::fs::read_to_string(conf) else { return Vec::new() };
     let mut cases = Vec::new();
-    let mut current: Option<CorpusCase> = None;
+    let mut current: Option<ChainCase> = None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -211,10 +234,9 @@ pub fn corpus_cases(decoder: &str) -> Vec<CorpusCase> {
             if let Some(case) = current.take() {
                 cases.push(case);
             }
-            current = Some(CorpusCase {
+            current = Some(ChainCase {
                 name: name.to_owned(),
-                channels: Vec::new(),
-                options: Vec::new(),
+                decoders: Vec::new(),
                 input: None,
                 stack: Vec::new(),
             });
@@ -224,11 +246,11 @@ pub fn corpus_cases(decoder: &str) -> Vec<CorpusCase> {
         let mut words = line.split_whitespace();
         match words.next() {
             Some("protocol-decoder") => {
-                let id = words.next().unwrap_or_default();
-                if id == decoder {
-                    parse_pairs(line, "channel", &mut case.channels);
-                    parse_options(line, &mut case.options);
-                }
+                let id = words.next().unwrap_or_default().to_owned();
+                let mut next = CorpusDecoder { id, channels: Vec::new(), options: Vec::new() };
+                parse_pairs(line, "channel", &mut next.channels);
+                parse_options(line, &mut next.options);
+                case.decoders.push(next);
             }
             Some("stack") => {
                 case.stack = words.map(str::to_owned).collect();
@@ -243,6 +265,30 @@ pub fn corpus_cases(decoder: &str) -> Vec<CorpusCase> {
         cases.push(case);
     }
     cases
+}
+
+/// The cases in sigrok-test for `decoder`, in file order, with the
+/// target decoder's channel and option pairs.
+pub fn corpus_cases(decoder: &str) -> Vec<CorpusCase> {
+    parse_conf(decoder)
+        .into_iter()
+        .map(|case| {
+            let target = case.decoders.iter().find(|d| d.id == decoder);
+            CorpusCase {
+                name: case.name,
+                channels: target.map(|d| d.channels.clone()).unwrap_or_default(),
+                options: target.map(|d| d.options.clone()).unwrap_or_default(),
+                input: case.input,
+                stack: case.stack,
+            }
+        })
+        .collect()
+}
+
+/// The cases in sigrok-test for `decoder`, with every decoder of each
+/// chain.
+pub fn corpus_chain_cases(decoder: &str) -> Vec<ChainCase> {
+    parse_conf(decoder)
 }
 
 fn parse_pairs(line: &str, kind: &str, out: &mut Vec<(String, usize)>) {
@@ -270,16 +316,24 @@ fn parse_options(line: &str, out: &mut Vec<(String, String)>) {
 
 /// A `Config` for a corpus case, with numeric channel assignments.
 pub fn corpus_config(info: &oxrok::decode::DecoderInfo, case: &CorpusCase) -> Config {
+    corpus_config_parts(info, &case.channels, &case.options)
+}
+
+fn corpus_config_parts(
+    info: &oxrok::decode::DecoderInfo,
+    channel_pairs: &[(String, usize)],
+    option_pairs: &[(String, String)],
+) -> Config {
     let mut options: std::collections::HashMap<String, oxrok::decode::OptionValue> =
         info.options.iter().map(|o| (o.id.to_owned(), o.default.clone())).collect();
-    for (id, value) in &case.options {
+    for (id, value) in option_pairs {
         if let Some(o) = info.options.iter().find(|o| o.id == id) {
             options.insert(id.clone(), o.parse(value).expect("corpus option"));
         }
     }
     let count = info.channels.len() + info.optional_channels.len();
     let mut channels = vec![None; count];
-    for (id, index) in &case.channels {
+    for (id, index) in channel_pairs {
         if let Some(pos) = info
             .channels
             .iter()
@@ -292,10 +346,54 @@ pub fn corpus_config(info: &oxrok::decode::DecoderInfo, case: &CorpusCase) -> Co
     Config { options, channels }
 }
 
-/// Runs every single-decoder case in sigrok-test for `native_id`, and
-/// returns `(ran, skipped)`. Cases whose input is missing or that use a
-/// stack are skipped; the corpus is optional, so a missing checkout skips
-/// everything.
+/// Runs a decoder chain, bottom first, over `capture`.
+pub fn run_chain(parts: &[(&'static DecoderDef, Config)], capture: &Capture) -> Vec<Output> {
+    let mut stack = Stack::new();
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let chain: Vec<(String, Box<dyn oxrok::decode::Decoder>, Config)> = parts
+        .iter()
+        .map(|(def, cfg)| {
+            let n = seen.entry(def.info.id).or_insert(0);
+            *n += 1;
+            (format!("{}-{}", def.info.id, n), (def.new)(), cfg.clone())
+        })
+        .collect();
+    stack.add_chain(chain, capture.unit_size, capture.samplerate).expect("start decoder chain");
+    let rx = stack.outputs().expect("output receiver");
+    stack.feed(&capture.data);
+    stack.end();
+    let outputs: Vec<Output> = rx.into_iter().map(|o| plain_output(&o)).collect();
+    stack.join();
+    outputs
+}
+
+/// The native definitions and configs of a corpus chain, or `None` when
+/// a lower decoder is not native yet.
+fn chain_configs(
+    native_id: &str,
+    target: &'static DecoderDef,
+    case: &ChainCase,
+) -> Option<Vec<(&'static DecoderDef, Config)>> {
+    let ids: Vec<String> =
+        if case.stack.is_empty() { vec![native_id.to_owned()] } else { case.stack.clone() };
+    let mut out = Vec::new();
+    for id in ids {
+        let def = if id == native_id {
+            target
+        } else {
+            oxrok::decoders::ALL.iter().copied().find(|d| d.info.id == id)?
+        };
+        let record = case.decoders.iter().find(|d| d.id == id)?;
+        let cfg = corpus_config_parts(def.info, &record.channels, &record.options);
+        out.push((def, cfg));
+    }
+    Some(out)
+}
+
+/// Runs every case in sigrok-test for `native_id`, and returns
+/// `(ran, skipped)`. A case is skipped when its input is missing or a
+/// lower decoder of its chain is not native yet. The corpus is optional,
+/// so a missing checkout skips everything.
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub fn assert_corpus_parity(native_id: &str) -> (usize, usize) {
     assert_corpus_parity_def(native(native_id), native_id)
@@ -305,15 +403,11 @@ pub fn assert_corpus_parity(native_id: &str) -> (usize, usize) {
 /// decoder being ported need not be in `ALL` yet.
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub fn assert_corpus_parity_def(def: &'static DecoderDef, native_id: &str) -> (usize, usize) {
-    let cases = corpus_cases(native_id);
+    let cases = corpus_chain_cases(native_id);
     let Some(dumps) = corpus_dumps_dir() else { return (0, cases.len()) };
     let mut ran = 0;
     let mut skipped = 0;
     for case in cases {
-        if !case.stack.is_empty() {
-            skipped += 1;
-            continue;
-        }
         let Some(relative) = &case.input else {
             skipped += 1;
             continue;
@@ -323,10 +417,26 @@ pub fn assert_corpus_parity_def(def: &'static DecoderDef, native_id: &str) -> (u
             skipped += 1;
             continue;
         }
+        let Some(native_parts) = chain_configs(native_id, def, &case) else {
+            skipped += 1;
+            continue;
+        };
+        let mut python_parts = Vec::new();
+        let mut available = true;
+        for (native_def, cfg) in &native_parts {
+            let Some(py) = python_opt(native_def.info.id) else {
+                available = false;
+                break;
+            };
+            python_parts.push((py, cfg.clone()));
+        }
+        if !available {
+            skipped += 1;
+            continue;
+        }
         let capture = load(path.to_str().expect("utf-8 corpus path"));
-        let cfg = corpus_config(def.info, &case);
-        let python_def = python(native_id);
-        let (native, python) = (run(def, &cfg, &capture), run(python_def, &cfg, &capture));
+        let native = run_chain(&native_parts, &capture);
+        let python = run_chain(&python_parts, &capture);
         assert_eq!(
             native.len(),
             python.len(),
@@ -344,6 +454,11 @@ pub fn assert_corpus_parity_def(def: &'static DecoderDef, native_id: &str) -> (u
         ran += 1;
     }
     (ran, skipped)
+}
+
+#[cfg(any(feature = "python", feature = "rustpython"))]
+fn python_opt(id: &str) -> Option<&'static DecoderDef> {
+    oxrok::pydecode::defs().into_iter().find(|d| d.info.id == id)
 }
 
 #[cfg(any(feature = "python", feature = "rustpython"))]

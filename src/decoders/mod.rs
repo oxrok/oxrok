@@ -20,7 +20,7 @@ pub mod usb_signalling;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 9] = [
+pub static ALL: [&DecoderDef; 11] = [
     &can::DEF,
     &i2c::DEF,
     &ir_nec::DEF,
@@ -30,4 +30,6 @@ pub static ALL: [&DecoderDef; 9] = [
     &spi::DEF,
     &swd::DEF,
     &uart::DEF,
+    &usb_power_delivery::DEF,
+    &usb_signalling::DEF,
 ];

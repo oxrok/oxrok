@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 9 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`) |
-| Native and parity-tested | 9 |
-| Pending | 102 |
+| Native now | 11 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`) |
+| Native and parity-tested | 11 |
+| Pending | 100 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -248,9 +248,9 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `tlc5620` | logic | 7 | pending | — |
 | `uart` | logic | pilot | native, parity-tested | pilot |
 | `usb_packet` | stacked | 6 | pending | — |
-| `usb_power_delivery` | logic | 1 | pending | — |
+| `usb_power_delivery` | logic | 1 | native, parity-tested | — |
 | `usb_request` | stacked | 6 | pending | — |
-| `usb_signalling` | logic | 1 | pending | — |
+| `usb_signalling` | logic | 1 | native, parity-tested | — |
 | `wiegand` | logic | 5 | pending | — |
 | `x2444m` | stacked | 4 | pending | — |
 | `xfp` | stacked | 2 | pending | — |
