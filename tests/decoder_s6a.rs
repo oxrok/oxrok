@@ -150,6 +150,9 @@ mod tests {
 
     #[test]
     fn jtag_ejtag_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -160,6 +163,9 @@ mod tests {
 
     #[test]
     fn jtag_stm32_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -170,6 +176,9 @@ mod tests {
 
     #[test]
     fn onewire_network_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -180,6 +189,9 @@ mod tests {
 
     #[test]
     fn ds2408_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -190,6 +202,9 @@ mod tests {
 
     #[test]
     fn ds243x_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -200,6 +215,9 @@ mod tests {
 
     #[test]
     fn ds28ea00_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -210,6 +228,9 @@ mod tests {
 
     #[test]
     fn jtag_ejtag_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(JTAG_EJTAG);
         // The fixture's channel names and the test.conf mapping.
         assert_parity_def(
@@ -225,6 +246,9 @@ mod tests {
 
     #[test]
     fn jtag_stm32_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(JTAG_STM32);
         assert_parity_def(
             &jtag::DEF,
@@ -239,6 +263,9 @@ mod tests {
 
     #[test]
     fn onewire_network_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(ONEWIRE_NETWORK);
         assert_parity_def(&onewire_link::DEF, "onewire_link", &[("owr", "0")], &capture);
         let parts = onewire_network_chain();
@@ -248,6 +275,9 @@ mod tests {
 
     #[test]
     fn ds2408_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DS2408);
         let parts = onewire_device_chain(&ds2408::DEF);
         let outputs = assert_chain("ds2408", &capture, &parts);
@@ -257,6 +287,9 @@ mod tests {
     /// The channel access write success and failure paths.
     #[test]
     fn ds2408_channel_access_write_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (label, path) in [("write", DS2408_WRITE), ("write-fail", DS2408_WRITE_FAIL)] {
             let capture = load(path);
             let parts = onewire_device_chain(&ds2408::DEF);
@@ -267,6 +300,9 @@ mod tests {
 
     #[test]
     fn ds243x_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DS243X);
         // The ds2432 dump names its first channel OWR.
         assert_parity_def(&onewire_link::DEF, "onewire_link", &[("owr", "OWR")], &capture);
@@ -277,6 +313,9 @@ mod tests {
 
     #[test]
     fn ds28ea00_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DS28EA00);
         assert_parity_def(&onewire_link::DEF, "onewire_link", &[("owr", "0")], &capture);
         let parts = onewire_device_chain(&ds28ea00::DEF);

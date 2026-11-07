@@ -127,6 +127,9 @@ mod tests {
     /// probes: 0 MISO, 1 CS#, 2 MOSI, 3 CLK.
     #[test]
     fn max7219_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let spi_case = case("max7219", &[("cs", 1), ("clk", 3), ("mosi", 2)], &[]);
         let max_case = case("max7219", &[], &[]);
         assert_fixture("max7219", &max7219::DEF, &spi_case, &max_case, MAX7219_SR);
@@ -134,6 +137,9 @@ mod tests {
 
     #[test]
     fn mrf24j40_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // mrf24j40-reset-wakeup: cs=5, clk=3, mosi=2, miso=4.
         let spi_case =
             case("mrf24j40-reset-wakeup", &[("cs", 5), ("clk", 3), ("mosi", 2), ("miso", 4)], &[]);
@@ -143,6 +149,9 @@ mod tests {
 
     #[test]
     fn nes_gamepad_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // nes_gamepad_generated_a: cs=0, clk=2, miso=1, cpol=1.
         let spi_case = case(
             "nes_gamepad_generated_a",
@@ -155,6 +164,9 @@ mod tests {
 
     #[test]
     fn nrf24l01_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // nrf24l01-test-misc: cs=0, clk=1, mosi=2, miso=3.
         let spi_case =
             case("nrf24l01-test-misc", &[("cs", 0), ("clk", 1), ("mosi", 2), ("miso", 3)], &[]);
@@ -164,6 +176,9 @@ mod tests {
 
     #[test]
     fn rfm12_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // rfm12: clk=0, miso=2, mosi=1, cs=3.
         let spi_case = case("rfm12", &[("clk", 0), ("miso", 2), ("mosi", 1), ("cs", 3)], &[]);
         let rf_case = case("rfm12", &[], &[]);
@@ -172,6 +187,9 @@ mod tests {
 
     #[test]
     fn rgb_led_spi_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // ws2801_2ch_5mhz: clk=1, mosi=0.
         let spi_case = case("ws2801_2ch_5mhz", &[("clk", 1), ("mosi", 0)], &[]);
         let led_case = case("rgb_led_spi", &[], &[]);
@@ -180,6 +198,9 @@ mod tests {
 
     #[test]
     fn ssi32_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // ssi32_bananapi_loop_test: clk=2, miso=1, mosi=0, cs=3.
         let spi_case = case(
             "ssi32_bananapi_loop_test",
@@ -192,6 +213,9 @@ mod tests {
 
     #[test]
     fn x2444m_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // x2444m: clk=0, mosi=1, miso=2, cs=3, cs_polarity=active-high.
         let spi_case = case(
             "x2444m",
@@ -204,6 +228,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("max7219", &max7219::DEF),
             ("mrf24j40", &mrf24j40::DEF),
@@ -220,42 +247,66 @@ mod tests {
 
     #[test]
     fn max7219_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test has no max7219 test.conf.
         corpus("max7219", &max7219::DEF, 0);
     }
 
     #[test]
     fn mrf24j40_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("mrf24j40", &mrf24j40::DEF, 4);
     }
 
     #[test]
     fn nes_gamepad_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("nes_gamepad", &nes_gamepad::DEF, 12);
     }
 
     #[test]
     fn nrf24l01_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("nrf24l01", &nrf24l01::DEF, 14);
     }
 
     #[test]
     fn rfm12_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("rfm12", &rfm12::DEF, 1);
     }
 
     #[test]
     fn rgb_led_spi_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("rgb_led_spi", &rgb_led_spi::DEF, 1);
     }
 
     #[test]
     fn ssi32_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ssi32", &ssi32::DEF, 2);
     }
 
     #[test]
     fn x2444m_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("x2444m", &x2444m::DEF, 1);
     }
 }

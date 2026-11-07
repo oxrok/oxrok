@@ -113,6 +113,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in
             [&edid::DEF, &hdcp::DEF, &mlx90614::DEF, &mxc6225xu::DEF, &nunchuk::DEF, &xfp::DEF]
         {
@@ -124,6 +127,9 @@ mod tests {
     /// must both end the run with an error and no annotations.
     #[test]
     fn stacked_decoders_reject_logic_input() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(NUNCHUK);
         for def in
             [&edid::DEF, &hdcp::DEF, &mlx90614::DEF, &mxc6225xu::DEF, &nunchuk::DEF, &xfp::DEF]
@@ -134,6 +140,9 @@ mod tests {
 
     #[test]
     fn edid_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(EDID);
         let (native, reference) = chains(
             &edid::DEF,
@@ -146,6 +155,9 @@ mod tests {
 
     #[test]
     fn hdcp_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(HDCP);
         let (native, reference) =
             chains(&hdcp::DEF, &i2c_case("unknown_device", 0, 1), None, &case("hdcp", &[], &[]));
@@ -154,6 +166,9 @@ mod tests {
 
     #[test]
     fn mlx90614_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(MLX90614);
         let (native, reference) =
             chains(&mlx90614::DEF, &i2c_case("5s_24deg", 5, 7), None, &case("mlx90614", &[], &[]));
@@ -162,6 +177,9 @@ mod tests {
 
     #[test]
     fn mxc6225xu_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(MXC6225XU);
         let (native, reference) = chains(
             &mxc6225xu::DEF,
@@ -174,6 +192,9 @@ mod tests {
 
     #[test]
     fn nunchuk_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(NUNCHUK);
         let (native, reference) = chains(
             &nunchuk::DEF,
@@ -186,6 +207,9 @@ mod tests {
 
     #[test]
     fn xfp_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(XFP);
         let (native, reference) =
             chains(&xfp::DEF, &i2c_case("xfp", 0, 1), None, &case("xfp", &[], &[]));
@@ -203,31 +227,49 @@ mod tests {
 
     #[test]
     fn edid_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("edid", &edid::DEF);
     }
 
     #[test]
     fn hdcp_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("hdcp", &hdcp::DEF);
     }
 
     #[test]
     fn mlx90614_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("mlx90614", &mlx90614::DEF);
     }
 
     #[test]
     fn mxc6225xu_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("mxc6225xu", &mxc6225xu::DEF);
     }
 
     #[test]
     fn nunchuk_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("nunchuk", &nunchuk::DEF);
     }
 
     #[test]
     fn xfp_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("xfp", &xfp::DEF);
     }
 }
