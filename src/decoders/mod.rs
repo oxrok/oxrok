@@ -12,6 +12,8 @@ pub mod counter;
 pub mod dali;
 pub mod dmx512;
 pub mod eeprom24xx;
+pub mod em4100;
+pub mod em4305;
 pub mod gpib;
 pub mod graycode;
 pub mod guess_bitrate;
@@ -38,17 +40,19 @@ pub mod pwm;
 pub mod rc_encode;
 pub mod spi;
 pub mod spiflash;
+pub mod stepper_motor;
 pub mod swd;
 pub mod timing;
 pub mod uart;
 pub mod usb_power_delivery;
 pub mod usb_signalling;
+pub mod wiegand;
 pub mod z80;
 
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 39] = [
+pub static ALL: [&DecoderDef; 43] = [
     &avr_isp::DEF,
     &can::DEF,
     &cec::DEF,
@@ -56,6 +60,8 @@ pub static ALL: [&DecoderDef; 39] = [
     &dali::DEF,
     &dmx512::DEF,
     &eeprom24xx::DEF,
+    &em4100::DEF,
+    &em4305::DEF,
     &gpib::DEF,
     &graycode::DEF,
     &guess_bitrate::DEF,
@@ -82,10 +88,12 @@ pub static ALL: [&DecoderDef; 39] = [
     &rc_encode::DEF,
     &spi::DEF,
     &spiflash::DEF,
+    &stepper_motor::DEF,
     &swd::DEF,
     &timing::DEF,
     &uart::DEF,
     &usb_power_delivery::DEF,
     &usb_signalling::DEF,
+    &wiegand::DEF,
     &z80::DEF,
 ];
