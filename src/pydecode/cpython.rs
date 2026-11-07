@@ -34,6 +34,26 @@ const OUTPUT_META: u8 = 3;
 /// [`Item::Opaque`].
 pub struct PyItem(pub Py<PyAny>);
 
+impl PyItem {
+    /// The object's value as an [`Item`], with lists and tuples
+    /// converted recursively. Objects with no value form stay
+    /// [`Item::Opaque`]. For comparing what two hosts emit.
+    pub fn to_item(&self) -> Item {
+        Python::attach(|py| plain_item(self.0.bind(py)))
+    }
+}
+
+/// Like [`py_to_item`], but lists and tuples become [`Item::List`].
+fn plain_item(obj: &Bound<'_, PyAny>) -> Item {
+    if let Ok(l) = obj.cast::<PyList>() {
+        return Item::List(l.iter().map(|v| plain_item(&v)).collect());
+    }
+    if let Ok(t) = obj.cast::<PyTuple>() {
+        return Item::List(t.iter().map(|v| plain_item(&v)).collect());
+    }
+    py_to_item(obj)
+}
+
 fn init_interpreter(dir: &std::path::Path) -> Result<()> {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {

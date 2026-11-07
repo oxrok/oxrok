@@ -355,6 +355,12 @@ impl Uart {
         }
     }
 
+    /// A line level as the Python decoder passes it on: an `int` from
+    /// `wait`, or a `bool` after `not signal` when the line is inverted.
+    fn level_item(signal: bool, inv: bool) -> Item {
+        if inv { Item::Bool(signal) } else { Item::Int(i64::from(signal)) }
+    }
+
     fn frame_item(&self, rxtx: usize) -> Item {
         let l = &self.lines[rxtx];
         Item::List(vec![
@@ -386,7 +392,7 @@ impl Uart {
                         Item::List(vec![
                             Item::Str("INVALID STARTBIT".into()),
                             Item::Int(rxtx as i64),
-                            Item::Int(1),
+                            Self::level_item(signal, inv),
                         ]),
                     );
                     self.putg(ctx, rxtx + ANN_WARN, &["Frame error", "Frame err", "FE"]);
@@ -406,13 +412,13 @@ impl Uart {
                     Item::List(vec![
                         Item::Str("STARTBIT".into()),
                         Item::Int(rxtx as i64),
-                        Item::Int(0),
+                        Self::level_item(signal, inv),
                     ]),
                 );
                 self.putg(ctx, rxtx + ANN_START, &["Start bit", "Start", "S"]);
                 self.lines[rxtx].state = State::GetData;
             }
-            State::GetData => self.get_data_bit(ctx, rxtx, signal),
+            State::GetData => self.get_data_bit(ctx, rxtx, signal, inv),
             State::GetParity => {
                 let bit = u8::from(signal);
                 let ok = self.parity_ok(bit, self.lines[rxtx].value);
@@ -423,7 +429,7 @@ impl Uart {
                         Item::List(vec![
                             Item::Str("PARITYBIT".into()),
                             Item::Int(rxtx as i64),
-                            Item::Int(i64::from(bit)),
+                            Self::level_item(signal, inv),
                         ]),
                     );
                     self.putg(ctx, rxtx + ANN_PARITY_OK, &["Parity bit", "Parity", "P"]);
@@ -450,7 +456,7 @@ impl Uart {
                         Item::List(vec![
                             Item::Str("INVALID STOPBIT".into()),
                             Item::Int(rxtx as i64),
-                            Item::Int(0),
+                            Self::level_item(signal, inv),
                         ]),
                     );
                     self.putg(ctx, rxtx + ANN_WARN, &["Frame error", "Frame err", "FE"]);
@@ -462,7 +468,7 @@ impl Uart {
                     Item::List(vec![
                         Item::Str("STOPBIT".into()),
                         Item::Int(rxtx as i64),
-                        Item::Int(i64::from(signal)),
+                        Self::level_item(signal, inv),
                     ]),
                 );
                 self.putg(ctx, rxtx + ANN_STOP, &["Stop bit", "Stop", "T"]);
@@ -475,7 +481,7 @@ impl Uart {
         }
     }
 
-    fn get_data_bit(&mut self, ctx: &mut dyn Context, rxtx: usize, signal: bool) {
+    fn get_data_bit(&mut self, ctx: &mut dyn Context, rxtx: usize, signal: bool, inv: bool) {
         let s = ctx.samplenum();
         let o = self.opts().clone();
         if self.lines[rxtx].startsample.is_none() {
@@ -500,7 +506,7 @@ impl Uart {
             .iter()
             .map(|&(b, ss, es)| {
                 Item::List(vec![
-                    Item::Int(i64::from(b)),
+                    Self::level_item(b != 0, inv),
                     Item::Int(ss as i64),
                     Item::Int(es as i64),
                 ])

@@ -51,6 +51,26 @@ if _dir not in sys.path:
 /// [`Item::Opaque`].
 pub struct RpItem(pub PyObjectRef);
 
+impl RpItem {
+    /// The object's value as an [`Item`], with lists and tuples
+    /// converted recursively. Objects with no value form stay
+    /// [`Item::Opaque`]. For comparing what two hosts emit.
+    pub fn to_item(&self) -> Item {
+        with_vm(|vm| plain_item(&self.0, vm))
+    }
+}
+
+/// Like [`py_to_item`], but lists and tuples become [`Item::List`].
+fn plain_item(obj: &PyObjectRef, vm: &VirtualMachine) -> Item {
+    if let Some(l) = obj.downcast_ref::<PyList>() {
+        return Item::List(l.borrow_vec().iter().map(|o| plain_item(o, vm)).collect());
+    }
+    if let Some(t) = obj.downcast_ref::<PyTuple>() {
+        return Item::List(t.as_slice().iter().map(|o| plain_item(o, vm)).collect());
+    }
+    py_to_item(obj, vm)
+}
+
 /// The virtual machine new threads are made from.
 static ROOT: OnceLock<std::result::Result<Mutex<ThreadedVirtualMachine>, String>> = OnceLock::new();
 
