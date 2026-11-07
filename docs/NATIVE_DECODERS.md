@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 18 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`) |
-| Native and parity-tested | 18 |
-| Pending | 93 |
+| Native now | 20 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`) |
+| Native and parity-tested | 20 |
+| Pending | 91 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -156,7 +156,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `arm_tpiu` | stacked | 5 | pending | — |
 | `atsha204a` | stacked | 2 | pending | — |
 | `aud` | logic | 6 | pending | — |
-| `avr_isp` | stacked | 3 | pending | stacked on spi, not logic as the suggested order had it |
+| `avr_isp` | stacked | 3 | native, parity-tested | stacked on spi, not logic as the suggested order had it |
 | `avr_pdi` | logic | 6 | pending | — |
 | `can` | logic | 1 | native, parity-tested | — |
 | `cc1101` | stacked | 3 | pending | — |
@@ -236,7 +236,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `signature` | logic | 7 | pending | — |
 | `spdif` | logic | 4 | pending | — |
 | `spi` | logic | pilot | native, parity-tested | pilot |
-| `spiflash` | stacked | 3 | pending | — |
+| `spiflash` | stacked | 3 | native, parity-tested | — |
 | `ssi32` | stacked | 4 | pending | — |
 | `st7735` | logic | 5 | pending | — |
 | `stepper_motor` | logic | 5 | pending | — |
