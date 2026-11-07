@@ -228,12 +228,11 @@ mod python {
     use super::*;
 
     fn available() -> bool {
-        let (out, _, _) = oxrok(&["-L"]);
-        if out.contains("\n  timing ") {
-            return true;
+        let found = !oxrok::pydecode::defs().is_empty();
+        if !found {
+            eprintln!("no libsigrokdecode decoders found, skipping");
         }
-        eprintln!("no libsigrokdecode decoders found, skipping");
-        false
+        found
     }
 
     #[test]

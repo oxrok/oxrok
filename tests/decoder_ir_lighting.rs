@@ -79,6 +79,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("ir_rc5", &ir_rc5::DEF),
             ("ir_rc6", &ir_rc6::DEF),
@@ -95,6 +98,9 @@ mod tests {
 
     #[test]
     fn ir_rc5_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_rc5") {
             return;
         }
@@ -106,6 +112,9 @@ mod tests {
 
     #[test]
     fn ir_rc5_extended_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_rc5") {
             return;
         }
@@ -121,6 +130,9 @@ mod tests {
 
     #[test]
     fn ir_rc6_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_rc6") {
             return;
         }
@@ -131,6 +143,9 @@ mod tests {
 
     #[test]
     fn cec_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("cec") {
             return;
         }
@@ -141,6 +156,9 @@ mod tests {
 
     #[test]
     fn dali_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("dali") {
             return;
         }
@@ -151,6 +169,9 @@ mod tests {
 
     #[test]
     fn dmx512_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("dmx512") {
             return;
         }
@@ -182,26 +203,41 @@ mod tests {
 
     #[test]
     fn ir_rc5_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ir_rc5", &ir_rc5::DEF);
     }
 
     #[test]
     fn ir_rc6_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ir_rc6", &ir_rc6::DEF);
     }
 
     #[test]
     fn cec_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("cec", &cec::DEF);
     }
 
     #[test]
     fn dali_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("dali", &dali::DEF);
     }
 
     #[test]
     fn dmx512_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("dmx512", &dmx512::DEF);
     }
 }

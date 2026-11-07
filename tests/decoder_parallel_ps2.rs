@@ -37,6 +37,9 @@ mod tests {
     /// d7=7` for the clocked incremental capture.
     #[test]
     fn parallel_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -49,6 +52,9 @@ mod tests {
     /// clk=0 channel data=1`.
     #[test]
     fn ps2_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -59,6 +65,9 @@ mod tests {
 
     #[test]
     fn parallel_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(PARALLEL);
         // The numeric channel indexes from test.conf, as the corpus
         // runner builds them: clk and d0..d7 all on logic channels 0..7.
@@ -88,6 +97,9 @@ mod tests {
 
     #[test]
     fn ps2_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(PS2);
         // ps2_keyboard_asdfgh_no_inhibit: `channel clk=0 channel data=1`.
         let case = CorpusCase {
@@ -107,6 +119,9 @@ mod tests {
     /// The same ps2 mapping by channel name, through `parse_spec()`.
     #[test]
     fn ps2_regression_by_name() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(PS2);
         assert_parity_def(&ps2::DEF, "ps2", &[("clk", "Clock"), ("data", "Data")], &capture);
     }

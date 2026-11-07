@@ -95,6 +95,9 @@ mod tests {
 
     #[test]
     fn lpc_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let cfg = corpus_config(lpc::DEF.info, &lpc_case());
         let capture = load(LPC_SR);
         let native = run(&lpc::DEF, &cfg, &capture);
@@ -104,6 +107,9 @@ mod tests {
 
     #[test]
     fn lpc_named_channels() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(LPC_SR);
         assert_parity_def(
             &lpc::DEF,
@@ -122,6 +128,9 @@ mod tests {
 
     #[test]
     fn z80_sync_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let cfg = corpus_config(z80::DEF.info, &z80_case("kc85_sync_disasm"));
         let capture = load(Z80_SYNC_SR);
         let native = run(&z80::DEF, &cfg, &capture);
@@ -131,6 +140,9 @@ mod tests {
 
     #[test]
     fn z80_async_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let cfg = corpus_config(z80::DEF.info, &z80_case("kc85_async_disasm"));
         let capture = load(Z80_ASYNC_SR);
         let native = run(&z80::DEF, &cfg, &capture);
@@ -140,6 +152,9 @@ mod tests {
 
     #[test]
     fn z80_named_channels() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(Z80_SYNC_SR);
         assert_parity_def(
             &z80::DEF,
@@ -181,6 +196,9 @@ mod tests {
 
     #[test]
     fn lpc_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -191,6 +209,9 @@ mod tests {
 
     #[test]
     fn z80_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

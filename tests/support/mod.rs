@@ -97,6 +97,12 @@ pub fn python(id: &str) -> &'static DecoderDef {
         .unwrap_or_else(|| panic!("no Python decoder '{id}'"))
 }
 
+/// True when the Python decoders directory has decoders in it.
+#[cfg(any(feature = "python", feature = "rustpython"))]
+pub fn python_available() -> bool {
+    !oxrok::pydecode::defs().is_empty()
+}
+
 /// Parses `pairs` against `info`, as `-P dec:key=value` does.
 pub fn config(
     info: &oxrok::decode::DecoderInfo,

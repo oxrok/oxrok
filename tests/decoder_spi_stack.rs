@@ -68,6 +68,9 @@ mod tests {
 
     #[test]
     fn avr_isp_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's atmega88_scan: cs=1, clk=2, mosi=0, miso=3.
         let spi_case =
             case("atmega88_scan", &[("cs", 1), ("clk", 2), ("mosi", 0), ("miso", 3)], &[]);
@@ -83,6 +86,9 @@ mod tests {
 
     #[test]
     fn spiflash_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's probe_hex: cs=0, miso=1, clk=2, mosi=3.
         let spi_case = case("probe_hex", &[("cs", 0), ("miso", 1), ("clk", 2), ("mosi", 3)], &[]);
         let flash_case =
@@ -98,6 +104,9 @@ mod tests {
 
     #[test]
     fn avr_isp_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -108,6 +117,9 @@ mod tests {
 
     #[test]
     fn spiflash_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

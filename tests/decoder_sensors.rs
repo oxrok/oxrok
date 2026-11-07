@@ -73,6 +73,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("t55xx", &t55xx::DEF),
             ("am230x", &am230x::DEF),
@@ -89,6 +92,9 @@ mod tests {
 
     #[test]
     fn t55xx_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("t55xx") {
             return;
         }
@@ -99,6 +105,9 @@ mod tests {
 
     #[test]
     fn t55xx_case_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("t55xx") {
             return;
         }
@@ -109,6 +118,9 @@ mod tests {
 
     #[test]
     fn am230x_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("am230x") {
             return;
         }
@@ -119,6 +131,9 @@ mod tests {
 
     #[test]
     fn am230x_case_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("am230x") {
             return;
         }
@@ -129,6 +144,9 @@ mod tests {
 
     #[test]
     fn dsi_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("dsi") {
             return;
         }
@@ -139,6 +157,9 @@ mod tests {
 
     #[test]
     fn dsi_case_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("dsi") {
             return;
         }
@@ -149,6 +170,9 @@ mod tests {
 
     #[test]
     fn qi_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("qi") {
             return;
         }
@@ -159,6 +183,9 @@ mod tests {
 
     #[test]
     fn qi_case_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("qi") {
             return;
         }
@@ -169,6 +196,9 @@ mod tests {
 
     #[test]
     fn flexray_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("flexray") {
             return;
         }
@@ -180,6 +210,9 @@ mod tests {
 
     #[test]
     fn flexray_case_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("flexray") {
             return;
         }
@@ -216,26 +249,41 @@ mod tests {
 
     #[test]
     fn t55xx_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("t55xx", &t55xx::DEF);
     }
 
     #[test]
     fn am230x_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("am230x", &am230x::DEF);
     }
 
     #[test]
     fn dsi_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("dsi", &dsi::DEF);
     }
 
     #[test]
     fn qi_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("qi", &qi::DEF);
     }
 
     #[test]
     fn flexray_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("flexray", &flexray::DEF);
     }
 }

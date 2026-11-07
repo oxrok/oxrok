@@ -80,6 +80,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("sdcard_sd", &sdcard_sd::DEF),
             ("st7735", &st7735::DEF),
@@ -96,6 +99,9 @@ mod tests {
 
     #[test]
     fn sdcard_sd_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("sdcard_sd") {
             return;
         }
@@ -107,6 +113,9 @@ mod tests {
 
     #[test]
     fn st7735_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("st7735") {
             return;
         }
@@ -117,6 +126,9 @@ mod tests {
 
     #[test]
     fn rgb_led_ws281x_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("rgb_led_ws281x") {
             return;
         }
@@ -127,6 +139,9 @@ mod tests {
 
     #[test]
     fn sda2506_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("sda2506") {
             return;
         }
@@ -137,6 +152,9 @@ mod tests {
 
     #[test]
     fn seven_segment_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("seven_segment") {
             return;
         }
@@ -150,6 +168,9 @@ mod tests {
 
     #[test]
     fn rgb_led_ws281x_name_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("rgb_led_ws281x") {
             return;
         }
@@ -165,6 +186,9 @@ mod tests {
 
     #[test]
     fn seven_segment_common_anode_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("seven_segment") {
             return;
         }
@@ -198,26 +222,41 @@ mod tests {
 
     #[test]
     fn sdcard_sd_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("sdcard_sd", &sdcard_sd::DEF);
     }
 
     #[test]
     fn st7735_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("st7735", &st7735::DEF);
     }
 
     #[test]
     fn rgb_led_ws281x_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("rgb_led_ws281x", &rgb_led_ws281x::DEF);
     }
 
     #[test]
     fn sda2506_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("sda2506", &sda2506::DEF);
     }
 
     #[test]
     fn seven_segment_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("seven_segment", &seven_segment::DEF);
     }
 }

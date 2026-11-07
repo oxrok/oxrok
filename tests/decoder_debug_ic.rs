@@ -41,6 +41,9 @@ mod tests {
     /// The avr_pdi corpus uses `channel reset=0 channel data=1`.
     #[test]
     fn avr_pdi_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -52,6 +55,9 @@ mod tests {
     /// The swim corpus uses `channel swim=1`.
     #[test]
     fn swim_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -64,6 +70,9 @@ mod tests {
     /// channel sync=3`.
     #[test]
     fn ac97_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -77,6 +86,9 @@ mod tests {
     /// channel audata0=5`.
     #[test]
     fn aud_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -87,6 +99,9 @@ mod tests {
 
     #[test]
     fn avr_pdi_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(AVR_PDI);
         // The numeric channel indexes from test.conf, as the corpus runner
         // builds them: reset and data on logic channels 0 and 1.
@@ -106,6 +121,9 @@ mod tests {
 
     #[test]
     fn avr_pdi_break_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         // A run of eleven low DATA bit times is a PDI BREAK. The upstream
         // decoder's `if bitval == '0':` never matches an int, so it calls
         // put() with a None end sample and ends with an error; assert the
@@ -133,6 +151,9 @@ mod tests {
 
     #[test]
     fn swim_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(SWIM);
         // tests/sample1.sr: SWIM is logic channel 1.
         let case = CorpusCase {
@@ -165,6 +186,9 @@ mod tests {
 
     #[test]
     fn ac97_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(AC97);
         // alc655_snippet2: BIT-CLK, SDATA-OUT, SDATA-IN and SYNC are logic
         // channels 0, 1, 2 and 3.
@@ -189,6 +213,9 @@ mod tests {
 
     #[test]
     fn aud_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(AUD);
         // audgen-01: AUDCK, nAUDSYNC and AUDATA3..0 are logic channels 0..5.
         let case = CorpusCase {

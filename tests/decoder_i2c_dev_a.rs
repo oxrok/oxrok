@@ -110,6 +110,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for id in ["ds1307", "lm75", "rtc8564", "pca9571", "tca6408a", "atsha204a"] {
             let def = oxrok::decoders::ALL
                 .iter()
@@ -124,12 +127,18 @@ mod tests {
     /// `i2c` layer on a fixture so a chain difference can be localised.
     #[test]
     fn i2c_baseline_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DS1307_SR);
         assert_parity_def(&i2c::DEF, "i2c", &[("scl", "SCL"), ("sda", "SDA")], &capture);
     }
 
     #[test]
     fn ds1307_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DS1307_SR);
         let i2c_case = case("rtc_ds1307_200khz", &[("scl", 0), ("sda", 1)], &[]);
         let target_case = case("ds1307", &[], &[]);
@@ -142,6 +151,9 @@ mod tests {
 
     #[test]
     fn lm75_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(LM75_SR);
         // sigrok-test's rding_temper_fm75_3: sda=0, scl=1, filter 0x4f.
         let i2c_case = case("rding_temper", &[("sda", 0), ("scl", 1)], &[]);
@@ -157,6 +169,9 @@ mod tests {
 
     #[test]
     fn rtc8564_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(RTC8564_SR);
         let i2c_case = case("rtc_epson_8564je_snippet", &[("scl", 0), ("sda", 1)], &[]);
         let target_case = case("rtc8564", &[], &[]);
@@ -169,6 +184,9 @@ mod tests {
 
     #[test]
     fn pca9571_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(PCA9571_SR);
         let i2c_case = case("pca9571_simple", &[("sda", 0), ("scl", 1)], &[]);
         let target_case = case("pca9571", &[], &[]);
@@ -181,6 +199,9 @@ mod tests {
 
     #[test]
     fn tca6408a_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(TCA6408A_SR);
         let i2c_case = case("tca6408a_all_slaves", &[("scl", 0), ("sda", 1)], &[]);
         let target_case = case("tca6408a", &[], &[]);
@@ -193,6 +214,9 @@ mod tests {
 
     #[test]
     fn atsha204a_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(ATSHA204A_SR);
         let i2c_case = case("atsha204a_snippet", &[("sda", 0), ("scl", 1)], &[]);
         let target_case = case("atsha204a", &[], &[]);
@@ -205,31 +229,49 @@ mod tests {
 
     #[test]
     fn ds1307_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ds1307", &ds1307::DEF);
     }
 
     #[test]
     fn lm75_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("lm75", &lm75::DEF);
     }
 
     #[test]
     fn rtc8564_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("rtc8564", &rtc8564::DEF);
     }
 
     #[test]
     fn pca9571_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("pca9571", &pca9571::DEF);
     }
 
     #[test]
     fn tca6408a_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("tca6408a", &tca6408a::DEF);
     }
 
     #[test]
     fn atsha204a_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("atsha204a", &atsha204a::DEF);
     }
 }

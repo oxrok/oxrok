@@ -48,6 +48,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in [&dcf77::DEF, &spdif::DEF, &i2s::DEF, &tdm_audio::DEF] {
             assert_eq!(def.info, python(def.info.id).info);
         }
@@ -55,6 +58,9 @@ mod tests {
 
     #[test]
     fn dcf77_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -65,6 +71,9 @@ mod tests {
 
     #[test]
     fn spdif_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -75,6 +84,9 @@ mod tests {
 
     #[test]
     fn i2s_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -85,6 +97,9 @@ mod tests {
 
     #[test]
     fn tdm_audio_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -96,6 +111,9 @@ mod tests {
     /// `dcf77`: `channel data=1` on the Pollin DCF1 capture.
     #[test]
     fn dcf77_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &dcf77::DEF,
             DCF77,
@@ -112,6 +130,9 @@ mod tests {
     /// `spdif`: `channel data=0` on the 2ch-16bit-48khz capture.
     #[test]
     fn spdif_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &spdif::DEF,
             SPDIF,
@@ -129,6 +150,9 @@ mod tests {
     /// without a sample rate: the decoder does not need one.
     #[test]
     fn i2s_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &i2s::DEF,
             I2S,
@@ -145,6 +169,9 @@ mod tests {
     /// `tdm_audio`: `channel clock=3 channel frame=2 channel data=1`.
     #[test]
     fn tdm_audio_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &tdm_audio::DEF,
             TDM_AUDIO,

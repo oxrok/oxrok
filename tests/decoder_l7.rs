@@ -113,11 +113,17 @@ mod tests {
 
     #[test]
     fn iec_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("iec", &iec::DEF, &iec_case(), "iec/cbm_1571_read_status.sr");
     }
 
     #[test]
     fn iec_named_channels() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(&fixture("iec/cbm_1571_read_status.sr"));
         assert_parity_def(
             &iec::DEF,
@@ -140,6 +146,9 @@ mod tests {
 
     #[test]
     fn ook_nrz() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression(
             "ook",
             &ook::DEF,
@@ -150,6 +159,9 @@ mod tests {
 
     #[test]
     fn ook_diff_manchester() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression(
             "ook",
             &ook::DEF,
@@ -169,6 +181,9 @@ mod tests {
 
     #[test]
     fn ook_explicit_preambles() {
+        if !crate::support::python_available() {
+            return;
+        }
         for preamble in ["1010", "1111"] {
             regression(
                 "ook",
@@ -181,6 +196,9 @@ mod tests {
 
     #[test]
     fn tlc5620_without_ldac() {
+        if !crate::support::python_available() {
+            return;
+        }
         // LOAD is assigned but LDAC is not, so `self.ldac` is not 0 and
         // writes take the register path.
         regression(
@@ -193,6 +211,9 @@ mod tests {
 
     #[test]
     fn tlc5620_without_load() {
+        if !crate::support::python_available() {
+            return;
+        }
         // Only DATA and CLK assigned: no LOAD edge ever happens.
         regression(
             "tlc5620",
@@ -204,6 +225,9 @@ mod tests {
 
     #[test]
     fn mcs48_without_a12() {
+        if !crate::support::python_available() {
+            return;
+        }
         let mut without_bank = mcs48_case();
         without_bank.channels.retain(|(id, _)| id != "a12");
         regression("mcs48", &mcs48::DEF, &without_bank, "mcs48/i8039_sample.sr");
@@ -211,36 +235,57 @@ mod tests {
 
     #[test]
     fn maple_bus_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("maple_bus", &maple_bus::DEF, &maple_bus_case(), "maple_bus/bus_enumeration.sr");
     }
 
     #[test]
     fn ook_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("ook", &ook::DEF, &ook_case(), "ook/oregon_bthr968.sr");
     }
 
     #[test]
     fn signature_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("signature", &signature::DEF, &signature_case(), "signature/0003.sr");
     }
 
     #[test]
     fn tlc5620_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("tlc5620", &tlc5620::DEF, &tlc5620_case(), "tlc5620/ti_tlc5620_one_change.sr");
     }
 
     #[test]
     fn microwire_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("microwire", &microwire::DEF, &microwire_case(), "microwire/st_m93c66.sr");
     }
 
     #[test]
     fn mcs48_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         regression("mcs48", &mcs48::DEF, &mcs48_case(), "mcs48/i8039_sample.sr");
     }
 
     #[test]
     fn iec_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -251,6 +296,9 @@ mod tests {
 
     #[test]
     fn maple_bus_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -261,6 +309,9 @@ mod tests {
 
     #[test]
     fn ook_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -271,6 +322,9 @@ mod tests {
 
     #[test]
     fn signature_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -281,6 +335,9 @@ mod tests {
 
     #[test]
     fn tlc5620_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -291,6 +348,9 @@ mod tests {
 
     #[test]
     fn microwire_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -301,6 +361,9 @@ mod tests {
 
     #[test]
     fn mcs48_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

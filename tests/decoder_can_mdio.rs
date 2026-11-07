@@ -47,6 +47,9 @@ mod tests {
 
     #[test]
     fn can_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let case = case(
             "mcp2515dm-bm-125kbits_msg_222_5bytes",
             &[("can_rx", 2)],
@@ -61,6 +64,9 @@ mod tests {
 
     #[test]
     fn can_sample_point_option() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(CAN_SR);
         let chan = capture.channels[2].clone();
         assert_parity_def(
@@ -73,6 +79,9 @@ mod tests {
 
     #[test]
     fn mdio_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let case = case("lan8720a_read_write_read", &[("mdc", 0), ("mdio", 1)], &[]);
         let cfg = corpus_config(oxrok::decoders::mdio::DEF.info, &case);
         let capture = load(MDIO_SR);
@@ -83,6 +92,9 @@ mod tests {
 
     #[test]
     fn mdio_debug_bits_option() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(MDIO_SR);
         let mdc = capture.channels[0].clone();
         let mdio = capture.channels[1].clone();
@@ -96,6 +108,9 @@ mod tests {
 
     #[test]
     fn can_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -106,6 +121,9 @@ mod tests {
 
     #[test]
     fn mdio_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

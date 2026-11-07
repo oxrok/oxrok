@@ -84,6 +84,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in [
             &oxrok::decoders::graycode::DEF,
             &oxrok::decoders::morse::DEF,
@@ -96,6 +99,9 @@ mod tests {
 
     #[test]
     fn graycode_rotary_ramp_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("graycode") {
             return;
         }
@@ -107,6 +113,9 @@ mod tests {
 
     #[test]
     fn graycode_edges_option_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("graycode") {
             return;
         }
@@ -124,6 +133,9 @@ mod tests {
 
     #[test]
     fn morse_hi_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("morse") {
             return;
         }
@@ -134,6 +146,9 @@ mod tests {
 
     #[test]
     fn miller_mfrc522_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("miller") {
             return;
         }
@@ -145,6 +160,9 @@ mod tests {
 
     #[test]
     fn rc_encode_maplin_l95ar_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("rc_encode") {
             return;
         }
@@ -156,6 +174,9 @@ mod tests {
 
     #[test]
     fn rc_encode_maplin_l95ar_remote_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("rc_encode") {
             return;
         }
@@ -167,6 +188,9 @@ mod tests {
 
     #[test]
     fn graycode_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("graycode") || !corpus_ready() {
             return;
         }
@@ -177,6 +201,9 @@ mod tests {
 
     #[test]
     fn morse_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("morse") || !corpus_ready() {
             return;
         }
@@ -190,6 +217,9 @@ mod tests {
 
     #[test]
     fn miller_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("miller") || !corpus_ready() {
             return;
         }
@@ -200,6 +230,9 @@ mod tests {
 
     #[test]
     fn rc_encode_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("rc_encode") || !corpus_ready() {
             return;
         }

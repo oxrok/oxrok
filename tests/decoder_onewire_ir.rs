@@ -57,6 +57,9 @@ mod tests {
 
     #[test]
     fn onewire_link_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("onewire_link") {
             return;
         }
@@ -74,6 +77,9 @@ mod tests {
 
     #[test]
     fn onewire_link_overdrive_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("onewire_link") {
             return;
         }
@@ -89,6 +95,9 @@ mod tests {
 
     #[test]
     fn ir_nec_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_nec") {
             return;
         }
@@ -106,6 +115,9 @@ mod tests {
 
     #[test]
     fn ir_nec_carrier_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_nec") {
             return;
         }
@@ -121,6 +133,9 @@ mod tests {
 
     #[test]
     fn onewire_link_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("onewire_link") {
             return;
         }
@@ -141,6 +156,9 @@ mod tests {
 
     #[test]
     fn ir_nec_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ir_nec") {
             return;
         }

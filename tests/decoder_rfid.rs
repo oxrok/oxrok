@@ -71,6 +71,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("stepper_motor", &stepper_motor::DEF),
             ("wiegand", &wiegand::DEF),
@@ -86,6 +89,9 @@ mod tests {
 
     #[test]
     fn stepper_motor_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("stepper_motor") {
             return;
         }
@@ -98,6 +104,9 @@ mod tests {
 
     #[test]
     fn stepper_motor_steps_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("stepper_motor") {
             return;
         }
@@ -109,6 +118,9 @@ mod tests {
 
     #[test]
     fn stepper_motor_options_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("stepper_motor") {
             return;
         }
@@ -123,6 +135,9 @@ mod tests {
 
     #[test]
     fn wiegand_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("wiegand") {
             return;
         }
@@ -133,6 +148,9 @@ mod tests {
 
     #[test]
     fn wiegand_active_high_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("wiegand") {
             return;
         }
@@ -146,6 +164,9 @@ mod tests {
 
     #[test]
     fn em4100_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("em4100") {
             return;
         }
@@ -156,6 +177,9 @@ mod tests {
 
     #[test]
     fn em4305_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("em4305") {
             return;
         }
@@ -166,6 +190,9 @@ mod tests {
 
     #[test]
     fn em4100_options_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("em4100") {
             return;
         }
@@ -183,6 +210,9 @@ mod tests {
 
     #[test]
     fn em4305_options_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("em4305") {
             return;
         }
@@ -220,21 +250,33 @@ mod tests {
 
     #[test]
     fn stepper_motor_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("stepper_motor", &stepper_motor::DEF);
     }
 
     #[test]
     fn wiegand_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("wiegand", &wiegand::DEF);
     }
 
     #[test]
     fn em4100_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("em4100", &em4100::DEF);
     }
 
     #[test]
     fn em4305_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("em4305", &em4305::DEF);
     }
 }

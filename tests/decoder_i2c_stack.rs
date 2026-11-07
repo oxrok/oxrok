@@ -96,6 +96,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in [&i2cfilter::DEF, &i2cdemux::DEF, &eeprom24xx::DEF] {
             assert_eq!(def.info, python(def.info.id).info);
         }
@@ -103,6 +106,9 @@ mod tests {
 
     #[test]
     fn i2cfilter_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(TREKSTOR);
         let i2c_case = case("trekstor", &[("scl", 0), ("sda", 1)], &[]);
         let filter_case = case("trekstor_52", &[], &[("address", "52")]);
@@ -112,6 +118,9 @@ mod tests {
 
     #[test]
     fn i2cfilter_direction_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(TREKSTOR);
         let i2c_case = case("trekstor", &[("scl", 0), ("sda", 1)], &[]);
         let filter_case =
@@ -122,6 +131,9 @@ mod tests {
 
     #[test]
     fn i2cdemux_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(DEMUX);
         let i2c_case = case("trekstor", &[("scl", 0), ("sda", 1)], &[]);
         let demux_case = case("trekstor_demux", &[], &[]);
@@ -131,6 +143,9 @@ mod tests {
 
     #[test]
     fn eeprom24xx_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(EEPROM);
         let i2c_case = case("lcsoft", &[("scl", 1), ("sda", 0)], &[]);
         let eeprom_case = case("lcsoft", &[], &[]);
@@ -140,6 +155,9 @@ mod tests {
 
     #[test]
     fn eeprom24xx_after_filter_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(TREKSTOR);
         let i2c_case = case("trekstor", &[("scl", 0), ("sda", 1)], &[]);
         let filter_case = case("trekstor_52", &[], &[("address", "52")]);
@@ -162,6 +180,9 @@ mod tests {
 
     #[test]
     fn i2cfilter_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -172,6 +193,9 @@ mod tests {
 
     #[test]
     fn i2cdemux_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -188,6 +212,9 @@ mod tests {
 
     #[test]
     fn eeprom24xx_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

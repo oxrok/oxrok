@@ -37,6 +37,9 @@ mod tests {
     /// channel tms=2`.
     #[test]
     fn jtag_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -48,6 +51,9 @@ mod tests {
     /// The swd corpus uses `channel swclk=0 channel swdio=1`.
     #[test]
     fn swd_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -58,6 +64,9 @@ mod tests {
 
     #[test]
     fn jtag_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(JTAG);
         // The same mapping by channel name, through parse_spec().
         assert_parity_def(
@@ -90,6 +99,9 @@ mod tests {
 
     #[test]
     fn swd_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(SWD);
         // swclk/swdio are sample bits 0 and 1, as the corpus maps them.
         assert_parity_def(&swd::DEF, "swd", &[], &capture);

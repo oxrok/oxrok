@@ -86,6 +86,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in
             [&oxrok::decoders::lin::DEF, &oxrok::decoders::modbus::DEF, &oxrok::decoders::midi::DEF]
         {
@@ -95,6 +98,9 @@ mod tests {
 
     #[test]
     fn lin_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart =
             case("lin_burst_uart", &[("rx", 0)], &[("baudrate", "19200"), ("format", "ascii")]);
         let lin = case("lin_burst", &[], &[("version", "2")]);
@@ -104,6 +110,9 @@ mod tests {
 
     #[test]
     fn modbus_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case(
             "brainchild_uart",
             &[("rx", 0), ("tx", 1)],
@@ -121,6 +130,9 @@ mod tests {
 
     #[test]
     fn midi_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("midi_key1_uart", &[("rx", 0)], &[("baudrate", "31250")]);
         let midi = case("midi_key1", &[], &[]);
         let capture = load(MIDI_SR);
@@ -129,6 +141,9 @@ mod tests {
 
     #[test]
     fn lin_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -139,6 +154,9 @@ mod tests {
 
     #[test]
     fn modbus_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -149,6 +167,9 @@ mod tests {
 
     #[test]
     fn midi_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

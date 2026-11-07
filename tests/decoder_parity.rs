@@ -31,6 +31,9 @@ mod tests {
 
     #[test]
     fn uart_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("uart") {
             return;
         }
@@ -40,6 +43,9 @@ mod tests {
 
     #[test]
     fn uart_esp32_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("uart") {
             return;
         }
@@ -54,6 +60,9 @@ mod tests {
 
     #[test]
     fn uart_option_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("uart") {
             return;
         }
@@ -73,6 +82,9 @@ mod tests {
 
     #[test]
     fn i2c_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("i2c") {
             return;
         }
@@ -82,6 +94,9 @@ mod tests {
 
     #[test]
     fn i2c_esp32_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("i2c") {
             return;
         }
@@ -91,6 +106,9 @@ mod tests {
 
     #[test]
     fn i2c_option_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("i2c") {
             return;
         }
@@ -103,6 +121,9 @@ mod tests {
 
     #[test]
     fn spi_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("spi") {
             return;
         }
@@ -112,6 +133,9 @@ mod tests {
 
     #[test]
     fn spi_esp32_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("spi") {
             return;
         }
@@ -125,6 +149,9 @@ mod tests {
 
     #[test]
     fn spi_option_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("spi") {
             return;
         }
@@ -143,6 +170,9 @@ mod tests {
     /// native decoder has the same id.
     #[test]
     fn python_decoder_is_forced_by_id() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("uart") {
             return;
         }
@@ -160,6 +190,9 @@ mod tests {
     /// test says so and returns.
     #[test]
     fn pilot_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("uart") {
             return;
         }

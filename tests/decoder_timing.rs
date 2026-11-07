@@ -49,6 +49,9 @@ mod tests {
     /// `counter`: the `9bit_spi` capture uses `channel data=2`.
     #[test]
     fn counter_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -60,6 +63,9 @@ mod tests {
     /// `guess_bitrate`: `channel data=0` on the ES51978 capture.
     #[test]
     fn guess_bitrate_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -72,6 +78,9 @@ mod tests {
     /// falling on the TOIM4243 capture.
     #[test]
     fn jitter_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -83,6 +92,9 @@ mod tests {
     /// `pwm`: `channel data=4` on the ALSA test capture.
     #[test]
     fn pwm_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -94,6 +106,9 @@ mod tests {
     /// `timing`: `channel data=5` on the AM2301 capture.
     #[test]
     fn timing_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -104,6 +119,9 @@ mod tests {
 
     #[test]
     fn counter_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &counter::DEF,
             COUNTER,
@@ -122,6 +140,9 @@ mod tests {
 
     #[test]
     fn guess_bitrate_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &guess_bitrate::DEF,
             GUESS_BITRATE,
@@ -137,6 +158,9 @@ mod tests {
 
     #[test]
     fn jitter_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &jitter::DEF,
             JITTER,
@@ -155,6 +179,9 @@ mod tests {
 
     #[test]
     fn pwm_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &pwm::DEF,
             PWM,
@@ -170,6 +197,9 @@ mod tests {
 
     #[test]
     fn timing_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         check_case(
             &timing::DEF,
             TIMING,

@@ -99,6 +99,9 @@ mod tests {
 
     #[test]
     fn gpib_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("gpib") {
             return;
         }
@@ -108,6 +111,9 @@ mod tests {
 
     #[test]
     fn gpib_fixture_parity_by_channel_names() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("gpib") {
             return;
         }
@@ -117,6 +123,9 @@ mod tests {
 
     #[test]
     fn ieee488_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ieee488") {
             return;
         }
@@ -126,6 +135,9 @@ mod tests {
 
     #[test]
     fn ieee488_fixture_parity_by_channel_names() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ieee488") {
             return;
         }
@@ -135,6 +147,9 @@ mod tests {
 
     #[test]
     fn gpib_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("gpib") {
             return;
         }
@@ -162,6 +177,9 @@ mod tests {
 
     #[test]
     fn ieee488_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ieee488") {
             return;
         }

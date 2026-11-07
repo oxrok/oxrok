@@ -76,6 +76,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in
             [&oxrok::decoders::usb_signalling::DEF, &oxrok::decoders::usb_power_delivery::DEF]
         {
@@ -85,6 +88,9 @@ mod tests {
 
     #[test]
     fn usb_signalling_fixture() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(SIGNALLING_FIXTURE);
         let case = corpus_case(
             "usb_failed_setup_fullspeed",
@@ -96,6 +102,9 @@ mod tests {
 
     #[test]
     fn usb_signalling_low_speed_fixture() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(SIGNALLING_LOW_SPEED_FIXTURE);
         let case = corpus_case(
             "logitech_rx250_leftclick",
@@ -107,6 +116,9 @@ mod tests {
 
     #[test]
     fn usb_power_delivery_fixture() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(POWER_DELIVERY_FIXTURE);
         let case = corpus_case(
             "thinkpad_yoga_370-aukey_45w",
@@ -118,11 +130,17 @@ mod tests {
 
     #[test]
     fn usb_signalling_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("usb_signalling", &oxrok::decoders::usb_signalling::DEF);
     }
 
     #[test]
     fn usb_power_delivery_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("usb_power_delivery", &oxrok::decoders::usb_power_delivery::DEF);
     }
 }
