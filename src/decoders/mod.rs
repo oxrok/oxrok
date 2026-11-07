@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod am230x;
 pub mod avr_isp;
 pub mod can;
 pub mod cec;
@@ -12,9 +13,11 @@ pub mod counter;
 pub mod dali;
 pub mod dcf77;
 pub mod dmx512;
+pub mod dsi;
 pub mod eeprom24xx;
 pub mod em4100;
 pub mod em4305;
+pub mod flexray;
 pub mod gpib;
 pub mod graycode;
 pub mod guess_bitrate;
@@ -39,6 +42,7 @@ pub mod onewire_link;
 pub mod parallel;
 pub mod ps2;
 pub mod pwm;
+pub mod qi;
 pub mod rc_encode;
 pub mod rgb_led_ws281x;
 pub mod sda2506;
@@ -50,6 +54,7 @@ pub mod spiflash;
 pub mod st7735;
 pub mod stepper_motor;
 pub mod swd;
+pub mod t55xx;
 pub mod tdm_audio;
 pub mod timing;
 pub mod uart;
@@ -61,7 +66,8 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 52] = [
+pub static ALL: [&DecoderDef; 57] = [
+    &am230x::DEF,
     &avr_isp::DEF,
     &can::DEF,
     &cec::DEF,
@@ -69,9 +75,11 @@ pub static ALL: [&DecoderDef; 52] = [
     &dali::DEF,
     &dcf77::DEF,
     &dmx512::DEF,
+    &dsi::DEF,
     &eeprom24xx::DEF,
     &em4100::DEF,
     &em4305::DEF,
+    &flexray::DEF,
     &gpib::DEF,
     &graycode::DEF,
     &guess_bitrate::DEF,
@@ -96,6 +104,7 @@ pub static ALL: [&DecoderDef; 52] = [
     &parallel::DEF,
     &ps2::DEF,
     &pwm::DEF,
+    &qi::DEF,
     &rc_encode::DEF,
     &rgb_led_ws281x::DEF,
     &sda2506::DEF,
@@ -107,6 +116,7 @@ pub static ALL: [&DecoderDef; 52] = [
     &st7735::DEF,
     &stepper_motor::DEF,
     &swd::DEF,
+    &t55xx::DEF,
     &tdm_audio::DEF,
     &timing::DEF,
     &uart::DEF,
