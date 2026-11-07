@@ -34,11 +34,14 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerFeatures, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerFeatures,
+    TriggerMatch, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, UsbId};
-use protocol::{INTR_BUF_SIZE, Link, RateInfo, StageConfig, Status};
+use protocol::{
+    FPGA_FIRMWARE_8, FPGA_FIRMWARE_16, INTR_BUF_SIZE, Link, RateInfo, StageConfig, Status,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -101,6 +104,20 @@ impl Driver for LogicStudioDriver {
 
     fn long_name(&self) -> &'static str {
         "LeCroy LogicStudio"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(
+                [FX2_FIRMWARE],
+                "extracted with sigrok-util, see docs/DEVICES.md",
+            ),
+            FirmwareDependency::upload(
+                [FPGA_FIRMWARE_8, FPGA_FIRMWARE_16],
+                "extracted with sigrok-util, see docs/DEVICES.md",
+            )
+            .note("chosen by the number of channel groups"),
+        ]
     }
 
     fn classes(&self) -> &'static [DeviceClass] {

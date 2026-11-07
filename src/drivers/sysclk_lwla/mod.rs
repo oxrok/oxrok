@@ -31,15 +31,16 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value,
+    ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, libusb_error_name, split_conn};
 use protocol::{
     Capture, Edge, Link, MAX_LIMIT_MSEC, MAX_LIMIT_SAMPLES, Model, Readout, Regs,
     STATE_LENGTH_REQUEST, STATE_READ_FINISH, STATE_READ_PREPARE, STATE_READ_REQUEST,
     STATE_START_CAPTURE, STATE_STATUS_REQUEST, STATE_STOP_CAPTURE, STATUS_CAPTURING,
-    STATUS_MEM_AVAIL, STATUS_TRIGGERED, Status, StatusRequest,
+    STATUS_MEM_AVAIL, STATUS_TRIGGERED, Status, StatusRequest, bitstream_name,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -99,6 +100,27 @@ impl Driver for LwlaDriver {
 
     fn long_name(&self) -> &'static str {
         "Sysclk LWLA series"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        // Every bitstream the driver can load, from the one place that
+        // names them: the LWLA1034's four, by clock source and edge, the
+        // LWLA1016's two, by run length coding.
+        let names = [
+            bitstream_name(Model::Lwla1034, false, false, Edge::Positive, false),
+            bitstream_name(Model::Lwla1034, true, false, Edge::Positive, false),
+            bitstream_name(Model::Lwla1034, true, true, Edge::Positive, false),
+            bitstream_name(Model::Lwla1034, true, true, Edge::Negative, false),
+            bitstream_name(Model::Lwla1016, true, false, Edge::Positive, false),
+            bitstream_name(Model::Lwla1016, true, false, Edge::Positive, true),
+        ];
+        vec![
+            FirmwareDependency::upload(
+                names.into_iter().flatten().map(str::to_owned),
+                "the sigrok-firmware package",
+            )
+            .note("one per model, clock and edge setting"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

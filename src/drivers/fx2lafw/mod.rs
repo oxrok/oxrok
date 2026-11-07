@@ -31,8 +31,8 @@
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo,
-    Driver, Error, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, Result, SoftTriggerLogic,
-    Trigger, TriggerMatch, Unit, Value, ValueList,
+    Driver, Error, FirmwareDependency, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, Result,
+    SoftTriggerLogic, Trigger, TriggerMatch, Unit, Value, ValueList,
 };
 use crate::usb::{BulkStream, ControlRequest, Transport, UsbDeviceInfo, UsbId};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -246,6 +246,16 @@ impl Driver for Fx2lafwDriver {
 
     fn classes(&self) -> &'static [DeviceClass] {
         &CLASSES
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(
+                PROFILES.iter().map(|p| p.firmware),
+                "the sigrok-firmware-fx2lafw package",
+            )
+            .note("one per profile, chosen by the device's USB id"),
+        ]
     }
 
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {

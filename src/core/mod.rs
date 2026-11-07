@@ -38,6 +38,7 @@ pub use analog::{Mq, MqFlags, Unit};
 pub use channel::{Channel, ChannelGroup, ChannelKind};
 pub use device::{Device, DeviceClass, DeviceInfo, Driver, PacketSink, Registry};
 pub use error::{Error, Result};
+pub use firmware::{FirmwareDependency, FirmwareKind};
 pub use key::Key;
 pub use option::{Access, OptionDesc, ValueList, check_value, config_set, resolve_key};
 pub use packet::{AnalogData, LogicData, Packet};

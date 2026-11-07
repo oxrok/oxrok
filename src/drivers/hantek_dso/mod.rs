@@ -55,10 +55,10 @@ pub mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
-    Key, OptionDesc, Packet, PacketSink, Result, Value, ValueList,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, UsbId, libusb_error_name, split_conn};
-use protocol::{Frame, Levels, Link, Profile, Settings};
+use protocol::{Frame, Levels, Link, PROFILES, Profile, Settings};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -151,6 +151,13 @@ impl Driver for HantekDsoDriver {
 
     fn long_name(&self) -> &'static str {
         "Hantek DSO"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(PROFILES.iter().map(|p| p.firmware), "see docs/DEVICES.md")
+                .note("one per model, chosen by the device's product id"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

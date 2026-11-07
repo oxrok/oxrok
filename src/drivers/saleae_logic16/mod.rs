@@ -29,8 +29,9 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, SoftTriggerLogic, Trigger, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, SoftTriggerLogic, Trigger,
+    TriggerMatch, Value, ValueList,
 };
 use crate::usb::{BulkStream, Transport, UsbDeviceInfo, UsbId, split_conn};
 use protocol::{Converter, Link, VoltageRange};
@@ -110,6 +111,20 @@ impl Driver for Logic16Driver {
 
     fn long_name(&self) -> &'static str {
         "Saleae Logic16"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(
+                [FX2_FIRMWARE],
+                "extracted with sigrok-util from the vendor's application, see docs/DEVICES.md",
+            ),
+            FirmwareDependency::upload(
+                VoltageRange::ALL.iter().map(|r| r.bitstream()),
+                "extracted with sigrok-util from the vendor's application, see docs/DEVICES.md",
+            )
+            .note("chosen by voltage_threshold"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

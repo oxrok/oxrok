@@ -53,6 +53,9 @@ pub fn main() -> ExitCode {
     } else if args.list_supported {
         show::supported(&registry);
         Ok(())
+    } else if args.list_firmware {
+        show::firmware_list(&registry);
+        Ok(())
     } else if args.input_file.is_some() && args.show {
         input::show_props(&args)
     } else if args.input_format.is_some() && args.show {

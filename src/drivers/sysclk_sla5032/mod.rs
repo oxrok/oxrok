@@ -36,13 +36,15 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, SoftTriggerLogic, Trigger, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, SoftTriggerLogic, Trigger,
+    TriggerMatch, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, libusb_error_name, split_conn};
 use protocol::{
-    Decoder, Depths, Link, MAX_LIMIT_SAMPLES, MIN_LIMIT_SAMPLES, Output, RLE_SAMPLES_COUNT,
-    SAMPLERATES, UNIT_SIZE, USB_CONFIG, USB_INTERFACE, USB_PID_SLA5032, USB_VID_SYSCLK,
+    BITSTREAM_NAME, Decoder, Depths, Link, MAX_LIMIT_SAMPLES, MIN_LIMIT_SAMPLES, Output,
+    RLE_SAMPLES_COUNT, SAMPLERATES, UNIT_SIZE, USB_CONFIG, USB_INTERFACE, USB_PID_SLA5032,
+    USB_VID_SYSCLK,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -91,6 +93,13 @@ impl Driver for Sla5032Driver {
 
     fn long_name(&self) -> &'static str {
         "Sysclk SLA5032"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![FirmwareDependency::upload(
+            [BITSTREAM_NAME],
+            "the vendor's firmware, see docs/DEVICES.md",
+        )]
     }
 
     fn scan_options(&self) -> &'static [Key] {

@@ -25,8 +25,9 @@
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo,
-    Driver, Error, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, PreTriggerBuffer, Result,
-    SoftTrigger, Trigger, TriggerFeatures, TriggerMatch, Unit, Value, ValueList,
+    Driver, Error, FirmwareDependency, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink,
+    PreTriggerBuffer, Result, SoftTrigger, Trigger, TriggerFeatures, TriggerMatch, Unit, Value,
+    ValueList,
 };
 use crate::serial::{Params, Port};
 use std::collections::VecDeque;
@@ -115,6 +116,10 @@ impl Driver for RaspberryPiPicoDriver {
 
     fn long_name(&self) -> &'static str {
         "RaspberryPI PICO"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![FirmwareDependency::pre_flashed("the sigrok-pico firmware, flashed to the Pico")]
     }
 
     fn scan_options(&self) -> &'static [Key] {

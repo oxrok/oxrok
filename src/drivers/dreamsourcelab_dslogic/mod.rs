@@ -85,7 +85,8 @@ pub mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
-    Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value,
+    ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, UsbId, split_conn};
 use protocol::{Capture, FpgaConfig, Link, PROFILES, Profile, SAMPLERATES, THRESHOLDS, VID};
@@ -159,6 +160,27 @@ impl Driver for DslogicDriver {
 
     fn long_name(&self) -> &'static str {
         "DreamSourceLab DSLogic"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        let mut bitstreams = Vec::new();
+        for p in &PROFILES {
+            for t in [0.0f64, 2.0] {
+                let name = p.bitstream(t);
+                if !bitstreams.iter().any(|b| b == name) {
+                    bitstreams.push(name.to_owned());
+                }
+            }
+        }
+        vec![
+            FirmwareDependency::upload(
+                PROFILES.iter().map(|p| p.firmware),
+                "the sigrok-firmware package",
+            )
+            .note("one per model, chosen by the device's product id"),
+            FirmwareDependency::upload(bitstreams, "the sigrok-firmware package")
+                .note("chosen by model and threshold"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

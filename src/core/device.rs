@@ -7,6 +7,7 @@
 
 use crate::core::channel::{Channel, ChannelGroup};
 use crate::core::error::{Error, Result};
+use crate::core::firmware::FirmwareDependency;
 use crate::core::key::Key;
 use crate::core::option::{OptionDesc, ValueList};
 use crate::core::packet::Packet;
@@ -312,6 +313,13 @@ pub trait Driver: Send + Sync {
 
     /// What kind of instruments the driver serves.
     fn classes(&self) -> &'static [DeviceClass];
+
+    /// The firmware and bitstream files the driver needs: what it
+    /// uploads on open, or what the device must already run. None for
+    /// the drivers that talk to the device's own firmware.
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        Vec::new()
+    }
 
     /// Whether a capture ends by itself, with no limit to set: the driver
     /// offers none of the keys `--samples`, `--time`, `--frames` and

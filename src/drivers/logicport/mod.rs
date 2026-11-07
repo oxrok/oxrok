@@ -20,9 +20,9 @@ pub mod readout;
 
 use crate::core::key::CustomKey;
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerCombine, TriggerDuration, TriggerFeatures,
-    TriggerMatch, Value, ValueKind, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerCombine,
+    TriggerDuration, TriggerFeatures, TriggerMatch, Value, ValueKind, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, UsbId};
 use protocol::{
@@ -134,6 +134,22 @@ impl Driver for LogicPortDriver {
 
     fn long_name(&self) -> &'static str {
         "Intronix LogicPort"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        // The vendor's `LogicPort.ccf`, or the per image `.rbf` files
+        // `sigrok-fwextract-intronix-logicport` writes from it.
+        let mut files = vec![firmware::FILE.to_owned()];
+        for image in firmware::Image::ALL {
+            files.push(format!("intronix-logicport-{}.rbf", image.name()));
+        }
+        vec![
+            FirmwareDependency::upload(
+                files,
+                "the vendor's LogicPort.ccf, via sigrok-fwextract-intronix-logicport",
+            )
+            .note("the .ccf, or the per image .rbf files it writes"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

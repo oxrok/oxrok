@@ -45,10 +45,11 @@ pub mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
-    Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value,
+    ValueList,
 };
 use crate::usb::{BulkStream, Transport, UsbDeviceInfo, UsbId, libusb_error_name, split_conn};
-use protocol::{Download, Feed, Link, Model, Pwm, Setup, Stream};
+use protocol::{Download, Feed, Link, MODELS, Model, Pwm, Setup, Stream, mcu_firmware};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -240,6 +241,24 @@ impl Driver for La2016Driver {
 
     fn long_name(&self) -> &'static str {
         "Kingst LA2016"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        let mut bitstreams = Vec::new();
+        for m in &MODELS {
+            let name = m.bitstream();
+            if !bitstreams.contains(&name) {
+                bitstreams.push(name);
+            }
+        }
+        vec![
+            FirmwareDependency::upload(
+                [mcu_firmware(protocol::PID)],
+                "as sigrok, see docs/DEVICES.md",
+            ),
+            FirmwareDependency::upload(bitstreams, "as sigrok, see docs/DEVICES.md")
+                .note("one per model, from the EEPROM"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

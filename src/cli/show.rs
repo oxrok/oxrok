@@ -26,6 +26,60 @@ pub fn help() {
     println!("Usage: oxrok [OPTIONS]\n\nRun 'oxrok --help' for the options.");
 }
 
+/// A JSON string, escaped.
+fn json_string(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!("\"{escaped}\"")
+}
+
+/// `--list-firmware`: the firmware and bitstream files the drivers need,
+/// as JSON: one object per driver that has any, its dependencies with
+/// their kind (`upload` or `pre-flashed`), files, source and note.
+pub fn firmware_list(registry: &Registry) {
+    let mut out = String::from("[\n");
+    let mut first_driver = true;
+    for d in registry.drivers() {
+        let deps = d.firmware();
+        if deps.is_empty() {
+            continue;
+        }
+        if !first_driver {
+            out.push_str(",\n");
+        }
+        first_driver = false;
+        let _ = write!(out, "  {{\n    \"driver\": {}", json_string(d.id()));
+        out.push_str(",\n    \"firmware\": [");
+        for (i, dep) in deps.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str("\n      {");
+            let kind = match dep.kind {
+                oxrok::core::FirmwareKind::Upload => "upload",
+                oxrok::core::FirmwareKind::PreFlashed => "pre-flashed",
+            };
+            let _ = write!(out, "\"kind\": {}", json_string(kind));
+            out.push_str(",\n      \"files\": [");
+            out.push_str(&dep.files.iter().map(|f| json_string(f)).collect::<Vec<_>>().join(", "));
+            out.push_str("],\n      \"source\": ");
+            out.push_str(&json_string(dep.source));
+            if let Some(note) = dep.note {
+                out.push_str(",\n      \"note\": ");
+                out.push_str(&json_string(note));
+            }
+            out.push('}');
+        }
+        out.push_str("\n    ]\n  }");
+    }
+    out.push_str("\n]\n");
+    print!("{out}");
+}
+
 /// `-L`.
 pub fn supported(registry: &Registry) {
     println!("Supported hardware drivers:");

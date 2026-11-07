@@ -37,8 +37,9 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value,
+    ValueList,
 };
 use crate::ftdi::libftdi::{self, Context, FtdiError, Interface};
 use crate::usb::{Transport, UsbDeviceInfo};
@@ -206,6 +207,12 @@ impl Driver for PipistrelloOlsDriver {
 
     fn long_name(&self) -> &'static str {
         "Pipistrello OLS"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![FirmwareDependency::pre_flashed(
+            "the Open Logic Sniffer bitstream, already on the board",
+        )]
     }
 
     fn scan_options(&self) -> &'static [Key] {

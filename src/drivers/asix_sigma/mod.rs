@@ -47,12 +47,13 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Trigger, TriggerMatch, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Trigger, TriggerMatch, Value,
+    ValueList,
 };
 use crate::ftdi::libftdi::{Context, FtdiError};
 use crate::usb::{Transport, UsbDeviceInfo, split_conn};
-use protocol::{ClockEdge, Link, SAMPLERATES, TimeLimit, wmr, wreg};
+use protocol::{ClockEdge, Firmware, Link, SAMPLERATES, TimeLimit, wmr, wreg};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -187,6 +188,18 @@ impl Driver for AsixSigmaDriver {
 
     fn long_name(&self) -> &'static str {
         "ASIX SIGMA/SIGMA2"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(
+                [Firmware::Mhz50, Firmware::Mhz100, Firmware::Mhz200]
+                    .into_iter()
+                    .map(|f| f.file().to_owned()),
+                "the sigrok-firmware package",
+            )
+            .note("the FPGA netlist, chosen by the sample rate"),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

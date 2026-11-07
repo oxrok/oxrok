@@ -51,8 +51,10 @@ const MAGIC_INDEX: u16 = 5444;
 /// `USB_TIMEOUT_MS`, for every transfer.
 pub const USB_TIMEOUT: Duration = Duration::from_millis(100);
 
-const FPGA_FIRMWARE_8: &str = "lecroy-logicstudio16-8.bitstream";
-const FPGA_FIRMWARE_16: &str = "lecroy-logicstudio16-16.bitstream";
+/// The FPGA bitstream for 8 channel groups.
+pub const FPGA_FIRMWARE_8: &str = "lecroy-logicstudio16-8.bitstream";
+/// The FPGA bitstream for 16 channel groups.
+pub const FPGA_FIRMWARE_16: &str = "lecroy-logicstudio16-16.bitstream";
 const FPGA_FIRMWARE_SIZE: usize = 464_196;
 const FPGA_FIRMWARE_CHUNK_SIZE: usize = 2048;
 const FIRMWARE_HINT: &str = "extract it with sigrok-util, see docs/DEVICES.md";

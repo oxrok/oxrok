@@ -20,6 +20,10 @@ pub struct Args {
     #[arg(short = 'L', long = "list-supported")]
     pub list_supported: bool,
 
+    /// List the firmware and bitstream files the drivers need, as JSON
+    #[arg(long = "list-firmware", hide = true)]
+    pub list_firmware: bool,
+
     /// Set loglevel (0-5, default 2)
     #[arg(short = 'l', long, default_value_t = 2, value_name = "LEVEL")]
     pub loglevel: u8,

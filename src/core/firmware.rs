@@ -87,6 +87,60 @@ pub fn read(name: &str, hint: &str) -> Result<Vec<u8>> {
     }
 }
 
+/// How a driver's firmware gets onto the device.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FirmwareKind {
+    /// The driver uploads it on open.
+    Upload,
+    /// The device must already be running it.
+    PreFlashed,
+}
+
+/// A firmware or bitstream dependency of a driver: the files looked up
+/// in the firmware directories and where to get them. Drivers declare
+/// theirs with [`crate::core::Driver::firmware`], which `--list-firmware`
+/// and the site listing read.
+#[derive(Clone, Debug)]
+pub struct FirmwareDependency {
+    /// How it gets onto the device.
+    pub kind: FirmwareKind,
+    /// The file names looked up in the firmware directories; none for
+    /// [`FirmwareKind::PreFlashed`].
+    pub files: Vec<String>,
+    /// Where to get the files: a package, an extractor or a vendor
+    /// installer.
+    pub source: &'static str,
+    /// An extra word, e.g. which file a setting chooses.
+    pub note: Option<&'static str>,
+}
+
+impl FirmwareDependency {
+    /// Files the driver uploads on open. Names several of its devices
+    /// share are listed once, in the order first seen.
+    pub fn upload(files: impl IntoIterator<Item: Into<String>>, source: &'static str) -> Self {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut unique = Vec::new();
+        for f in files.into_iter().map(Into::into) {
+            if seen.insert(f.clone()) {
+                unique.push(f);
+            }
+        }
+        FirmwareDependency { kind: FirmwareKind::Upload, files: unique, source, note: None }
+    }
+
+    /// Firmware the device must already run; the driver uploads none.
+    pub fn pre_flashed(source: &'static str) -> Self {
+        FirmwareDependency { kind: FirmwareKind::PreFlashed, files: Vec::new(), source, note: None }
+    }
+
+    /// Adds a note.
+    #[must_use]
+    pub fn note(mut self, note: &'static str) -> Self {
+        self.note = Some(note);
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,5 +214,28 @@ mod tests {
         .map(PathBuf::from)
         .collect();
         assert_eq!(d, want, "empty variables are ignored");
+    }
+
+    #[test]
+    fn upload_lists_shared_names_once_in_order() {
+        let d = FirmwareDependency::upload(["a.fw", "b.fw", "a.fw", "c.fw", "b.fw"], "a package");
+        assert_eq!(d.files, vec!["a.fw", "b.fw", "c.fw"]);
+        assert_eq!(d.kind, FirmwareKind::Upload);
+        assert_eq!(d.source, "a package");
+        assert_eq!(d.note, None);
+    }
+
+    #[test]
+    fn pre_flashed_has_no_files() {
+        let d = FirmwareDependency::pre_flashed("flashed to the board");
+        assert_eq!(d.kind, FirmwareKind::PreFlashed);
+        assert!(d.files.is_empty());
+        assert_eq!(d.source, "flashed to the board");
+    }
+
+    #[test]
+    fn note_replaces_the_absent_one() {
+        let d = FirmwareDependency::upload(["a.fw"], "a package").note("chosen by a setting");
+        assert_eq!(d.note, Some("chosen by a setting"));
     }
 }

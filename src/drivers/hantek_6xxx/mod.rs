@@ -43,13 +43,13 @@ pub mod protocol;
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo,
-    Driver, Error, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, Result, Unit, Value,
-    ValueList,
+    Driver, Error, FirmwareDependency, Key, Mq, MqFlags, OptionDesc, Packet, PacketSink, Result,
+    Unit, Value, ValueList,
 };
 use crate::usb::{Transport, UsbDeviceInfo, split_conn};
 use protocol::{
     CONFIGURATION, Coupling, DEFAULT_SAMPLERATE, DEFAULT_VOLTAGE, FALLBACK_SAMPLERATE, FIRMWARE_ID,
-    FLUSH_SIZE, Found, INTERFACE, Limits, Link, Profile, SAMPLERATES, Scale,
+    FLUSH_SIZE, Found, INTERFACE, Limits, Link, PROFILES, Profile, SAMPLERATES, Scale,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -96,6 +96,16 @@ impl Driver for Hantek6xxxDriver {
 
     fn classes(&self) -> &'static [DeviceClass] {
         &CLASSES
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload(
+                PROFILES.iter().map(|p| p.firmware),
+                "the sigrok-firmware-fx2lafw package",
+            )
+            .note("one per board, chosen by the device's USB id"),
+        ]
     }
 
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {

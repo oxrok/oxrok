@@ -28,11 +28,11 @@
 pub mod protocol;
 
 use crate::core::{
-    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
-    Packet, PacketSink, Result, Value, ValueList,
+    Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,
+    FirmwareDependency, Key, OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::usb::{BulkStream, Transport, UsbDeviceInfo, UsbId, libusb_error_name, split_conn};
-use protocol::{Converter, Link};
+use protocol::{BITSTREAM, Converter, HINT, Link};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -77,6 +77,13 @@ impl Driver for LogicProDriver {
 
     fn long_name(&self) -> &'static str {
         "Saleae Logic Pro"
+    }
+
+    fn firmware(&self) -> Vec<FirmwareDependency> {
+        vec![
+            FirmwareDependency::upload([FX3_FIRMWARE], HINT),
+            FirmwareDependency::upload([BITSTREAM], HINT),
+        ]
     }
 
     fn scan_options(&self) -> &'static [Key] {

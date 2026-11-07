@@ -80,8 +80,10 @@ const FW_MAX_SIZE: usize = 256 * 1024;
 const FW_TIMEOUT: Duration = Duration::from_millis(100);
 const BITSTREAM_MAX_SIZE: usize = 512 * 1024;
 const BITSTREAM_PART_SIZE: usize = 1020;
-const BITSTREAM: &str = "saleae-logicpro16-fpga.bitstream";
-const HINT: &str = "extract it with sigrok-fwextract-saleae-logic16, see docs/DEVICES.md";
+/// The FPGA bitstream file.
+pub const BITSTREAM: &str = "saleae-logicpro16-fpga.bitstream";
+/// Where the firmware and bitstream come from.
+pub const HINT: &str = "extract it with sigrok-fwextract-saleae-logic16, see docs/DEVICES.md";
 
 /// The ADC writes of the open: address and value, in order, up to
 /// register `0x15` (`saleae_logic_pro_init()`).
