@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 48 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`) |
-| Native and parity-tested | 48 |
-| Pending | 63 |
+| Native now | 52 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`) |
+| Native and parity-tested | 52 |
+| Pending | 59 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -170,7 +170,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `cfp` | stacked | 6 | pending | — |
 | `counter` | logic | 3 | native, parity-tested | — |
 | `dali` | logic | 4 | native, parity-tested | — |
-| `dcf77` | logic | 4 | pending | — |
+| `dcf77` | logic | 4 | native, parity-tested | — |
 | `dmx512` | logic | 4 | native, parity-tested | test.conf stacks uart→dmx512 (no annotations either side); the fixture tests logic input |
 | `ds1307` | stacked | 1 | pending | — |
 | `ds2408` | stacked | 6 | pending | — |
@@ -191,7 +191,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `i2c` | logic | pilot | native, parity-tested | pilot |
 | `i2cdemux` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2cfilter` | stacked | 1 | native, parity-tested | stacked on i2c |
-| `i2s` | logic | 4 | pending | — |
+| `i2s` | logic | 4 | native, parity-tested | — |
 | `iec` | logic | 7 | pending | — |
 | `ieee488` | logic | 2 | native, parity-tested | — |
 | `ir_nec` | logic | 1 | native, parity-tested | — |
@@ -240,7 +240,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `sdcard_spi` | stacked | 3 | pending | — |
 | `seven_segment` | logic | 5 | native, parity-tested | — |
 | `signature` | logic | 7 | pending | — |
-| `spdif` | logic | 4 | pending | — |
+| `spdif` | logic | 4 | native, parity-tested | — |
 | `spi` | logic | pilot | native, parity-tested | pilot |
 | `spiflash` | stacked | 3 | native, parity-tested | — |
 | `ssi32` | stacked | 4 | pending | — |
@@ -250,7 +250,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `swim` | logic | 6 | pending | — |
 | `t55xx` | logic | 6 | pending | — |
 | `tca6408a` | stacked | 1 | pending | — |
-| `tdm_audio` | logic | 4 | pending | — |
+| `tdm_audio` | logic | 4 | native, parity-tested | — |
 | `timing` | logic | 3 | native, parity-tested | — |
 | `tlc5620` | logic | 7 | pending | — |
 | `uart` | logic | pilot | native, parity-tested | pilot |
