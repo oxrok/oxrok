@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 20 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`) |
-| Native and parity-tested | 20 |
-| Pending | 91 |
+| Native now | 23 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`) |
+| Native and parity-tested | 23 |
+| Pending | 88 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -172,7 +172,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ds28ea00` | stacked | 6 | pending | — |
 | `dsi` | logic | 6 | pending | — |
 | `edid` | stacked | 2 | pending | — |
-| `eeprom24xx` | stacked | 1 | pending | — |
+| `eeprom24xx` | stacked | 1 | native, parity-tested | — |
 | `eeprom93xx` | stacked | 6 | pending | — |
 | `em4100` | logic | 5 | pending | — |
 | `em4305` | logic | 5 | pending | — |
@@ -183,8 +183,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `guess_bitrate` | logic | 3 | pending | — |
 | `hdcp` | stacked | 2 | pending | — |
 | `i2c` | logic | pilot | native, parity-tested | pilot |
-| `i2cdemux` | stacked | 1 | pending | stacked on i2c |
-| `i2cfilter` | stacked | 1 | pending | stacked on i2c |
+| `i2cdemux` | stacked | 1 | native, parity-tested | stacked on i2c |
+| `i2cfilter` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2s` | logic | 4 | pending | — |
 | `iec` | logic | 7 | pending | — |
 | `ieee488` | logic | 2 | pending | — |
