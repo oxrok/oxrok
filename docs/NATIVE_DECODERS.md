@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 43 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`) |
-| Native and parity-tested | 43 |
-| Pending | 68 |
+| Native now | 48 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`) |
+| Native and parity-tested | 48 |
+| Pending | 63 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -233,18 +233,18 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `rc_encode` | logic | 3 | native, parity-tested | — |
 | `rfm12` | stacked | 4 | pending | — |
 | `rgb_led_spi` | stacked | 4 | pending | — |
-| `rgb_led_ws281x` | logic | 5 | pending | — |
+| `rgb_led_ws281x` | logic | 5 | native, parity-tested | — |
 | `rtc8564` | stacked | 1 | pending | — |
-| `sda2506` | logic | 5 | pending | — |
-| `sdcard_sd` | logic | 5 | pending | — |
+| `sda2506` | logic | 5 | native, parity-tested | — |
+| `sdcard_sd` | logic | 5 | native, parity-tested | — |
 | `sdcard_spi` | stacked | 3 | pending | — |
-| `seven_segment` | logic | 5 | pending | — |
+| `seven_segment` | logic | 5 | native, parity-tested | — |
 | `signature` | logic | 7 | pending | — |
 | `spdif` | logic | 4 | pending | — |
 | `spi` | logic | pilot | native, parity-tested | pilot |
 | `spiflash` | stacked | 3 | native, parity-tested | — |
 | `ssi32` | stacked | 4 | pending | — |
-| `st7735` | logic | 5 | pending | — |
+| `st7735` | logic | 5 | native, parity-tested | — |
 | `stepper_motor` | logic | 5 | native, parity-tested | — |
 | `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
 | `swim` | logic | 6 | pending | — |
