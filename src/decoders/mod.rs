@@ -6,12 +6,16 @@
 #![forbid(unsafe_code)]
 
 pub mod ac97;
+pub mod ade77xx;
+pub mod adf435x;
+pub mod adns5020;
 pub mod am230x;
 pub mod atsha204a;
 pub mod aud;
 pub mod avr_isp;
 pub mod avr_pdi;
 pub mod can;
+pub mod cc1101;
 pub mod cec;
 pub mod counter;
 pub mod dali;
@@ -26,6 +30,7 @@ pub mod edid;
 pub mod eeprom24xx;
 pub mod em4100;
 pub mod em4305;
+pub mod enc28j60;
 pub mod flexray;
 pub mod gpib;
 pub mod graycode;
@@ -77,6 +82,7 @@ pub mod rgb_led_ws281x;
 pub mod rtc8564;
 pub mod sda2506;
 pub mod sdcard_sd;
+pub mod sdcard_spi;
 pub mod seven_segment;
 pub mod signature;
 pub mod spdif;
@@ -103,14 +109,18 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 94] = [
+pub static ALL: [&DecoderDef; 100] = [
     &ac97::DEF,
+    &ade77xx::DEF,
+    &adf435x::DEF,
+    &adns5020::DEF,
     &am230x::DEF,
     &atsha204a::DEF,
     &aud::DEF,
     &avr_isp::DEF,
     &avr_pdi::DEF,
     &can::DEF,
+    &cc1101::DEF,
     &cec::DEF,
     &counter::DEF,
     &dali::DEF,
@@ -125,6 +135,7 @@ pub static ALL: [&DecoderDef; 94] = [
     &eeprom24xx::DEF,
     &em4100::DEF,
     &em4305::DEF,
+    &enc28j60::DEF,
     &flexray::DEF,
     &gpib::DEF,
     &graycode::DEF,
@@ -176,6 +187,7 @@ pub static ALL: [&DecoderDef; 94] = [
     &rtc8564::DEF,
     &sda2506::DEF,
     &sdcard_sd::DEF,
+    &sdcard_spi::DEF,
     &seven_segment::DEF,
     &signature::DEF,
     &spdif::DEF,
