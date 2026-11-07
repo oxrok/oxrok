@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 25 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`) |
-| Native and parity-tested | 25 |
-| Pending | 86 |
+| Native now | 30 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`) |
+| Native and parity-tested | 30 |
+| Pending | 81 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -168,7 +168,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `cc1101` | stacked | 3 | pending | — |
 | `cec` | logic | 4 | pending | — |
 | `cfp` | stacked | 6 | pending | — |
-| `counter` | logic | 3 | pending | — |
+| `counter` | logic | 3 | native, parity-tested | — |
 | `dali` | logic | 4 | pending | — |
 | `dcf77` | logic | 4 | pending | — |
 | `dmx512` | logic | 4 | pending | — |
@@ -186,7 +186,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `flexray` | logic | 6 | pending | — |
 | `gpib` | logic | 2 | native, parity-tested | — |
 | `graycode` | logic | 3 | pending | — |
-| `guess_bitrate` | logic | 3 | pending | — |
+| `guess_bitrate` | logic | 3 | native, parity-tested | — |
 | `hdcp` | stacked | 2 | pending | — |
 | `i2c` | logic | pilot | native, parity-tested | pilot |
 | `i2cdemux` | stacked | 1 | native, parity-tested | stacked on i2c |
@@ -197,7 +197,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ir_nec` | logic | 1 | native, parity-tested | — |
 | `ir_rc5` | logic | 4 | pending | — |
 | `ir_rc6` | logic | 4 | pending | — |
-| `jitter` | logic | 3 | pending | — |
+| `jitter` | logic | 3 | native, parity-tested | — |
 | `jtag` | logic | 1 | native, parity-tested | — |
 | `jtag_ejtag` | stacked | 6 | pending | — |
 | `jtag_stm32` | stacked | 6 | pending | — |
@@ -228,7 +228,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `parallel` | logic | 2 | native, parity-tested | — |
 | `pca9571` | stacked | 1 | pending | — |
 | `ps2` | logic | 2 | native, parity-tested | — |
-| `pwm` | logic | 3 | pending | — |
+| `pwm` | logic | 3 | native, parity-tested | — |
 | `qi` | logic | 6 | pending | — |
 | `rc_encode` | logic | 3 | pending | — |
 | `rfm12` | stacked | 4 | pending | — |
@@ -251,7 +251,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `t55xx` | logic | 6 | pending | — |
 | `tca6408a` | stacked | 1 | pending | — |
 | `tdm_audio` | logic | 4 | pending | — |
-| `timing` | logic | 3 | pending | — |
+| `timing` | logic | 3 | native, parity-tested | — |
 | `tlc5620` | logic | 7 | pending | — |
 | `uart` | logic | pilot | native, parity-tested | pilot |
 | `usb_packet` | stacked | 6 | pending | — |
