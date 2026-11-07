@@ -5,6 +5,17 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the MIDI protocol and the decoder's documented
 //   classes and texts.
+#![allow(
+    clippy::assigning_clones,
+    clippy::collapsible_if,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_not_else,
+    clippy::large_types_passed_by_value,
+    clippy::map_unwrap_or,
+    clippy::similar_names,
+    clippy::unnecessary_wraps
+)]
 
 //! MIDI: status bytes, channel messages, SysEx, system common and realtime.
 

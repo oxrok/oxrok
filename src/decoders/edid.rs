@@ -3,6 +3,13 @@
 //   Copyright (C) 2012 Bert Vermeulen <bert@biot.com>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the I2C bus protocol and the decoder's documented classes and texts.
+#![allow(
+    clippy::decimal_bitwise_operands,
+    clippy::format_push_string,
+    clippy::similar_names,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 //! Extended Display Identification Data (EDID) 1.3 structure decoder.
 //!

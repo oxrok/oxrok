@@ -5,6 +5,13 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the DS243x datasheets and the decoder's documented
 //   commands and texts.
+#![allow(
+    clippy::assigning_clones,
+    clippy::doc_markdown,
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    clippy::type_complexity
+)]
 
 //! Maxim DS2432/3: 1-Wire EEPROM commands, scratchpad, secrets and MACs.
 

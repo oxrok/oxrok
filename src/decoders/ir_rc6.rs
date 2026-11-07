@@ -5,6 +5,12 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the RC-6 biphase coding and the decoder's
 //   documented classes and texts.
+#![allow(
+    clippy::assigning_clones,
+    clippy::if_not_else,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 //! IR RC-6: sync and start bits, mode field, address and data, in the
 //! standard and mode 6 frame layouts.

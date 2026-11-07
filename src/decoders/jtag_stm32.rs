@@ -4,6 +4,12 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ARM Cortex-M3 debug port and the decoder's
 //   documented registers, ID codes and texts.
+#![allow(
+    clippy::doc_markdown,
+    clippy::identity_op,
+    clippy::similar_names,
+    clippy::unnecessary_wraps
+)]
 
 //! JTAG / STM32: the STM32F10xxx JTAG TAP and the ARM Cortex-M3 debug port.
 

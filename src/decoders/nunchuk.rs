@@ -3,6 +3,7 @@
 //   Copyright (C) 2010-2014 Uwe Hermann <uwe@hermann-uwe.de>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the I2C bus protocol and the decoder's documented classes and texts.
+#![allow(clippy::similar_names, clippy::too_many_lines)]
 
 //! Nintendo Wii Nunchuk controller over I2C.
 //!

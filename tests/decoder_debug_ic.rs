@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+#![allow(clippy::doc_markdown)]
 
 //! Parity of the native `avr_pdi`, `swim`, `ac97` and `aud` decoders with
 //! the unchanged libsigrokdecode Python decoders.

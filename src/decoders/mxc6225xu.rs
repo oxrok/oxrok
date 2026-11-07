@@ -3,6 +3,7 @@
 //   Copyright (C) 2012 Uwe Hermann <uwe@hermann-uwe.de>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the I2C bus protocol and the decoder's documented classes and texts.
+#![allow(clippy::format_push_string, clippy::identity_op)]
 
 //! MEMSIC MXC6225XU digital thermal orientation sensor over I2C.
 //!

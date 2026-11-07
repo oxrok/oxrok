@@ -3,6 +3,7 @@
 //   matching of wait()).
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the documented decoder API and the observed behaviour.
+#![allow(clippy::match_same_arms)]
 
 //! The protocol decoder runtime.
 //!

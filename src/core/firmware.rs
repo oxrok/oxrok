@@ -1,6 +1,7 @@
 // Counterpart in sigrok:
 //   libsigrok/src/resource.c.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
+#![allow(clippy::assert_is_empty)]
 
 //! Finding firmware and bitstream files.
 //!

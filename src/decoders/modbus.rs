@@ -4,6 +4,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the Modbus RTU framing and the decoder's documented
 //   classes and texts.
+#![allow(clippy::map_unwrap_or, clippy::match_same_arms, clippy::too_many_arguments)]
 
 //! Modbus RTU: server/client frames, function codes, CRC.
 

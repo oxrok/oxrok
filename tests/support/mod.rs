@@ -3,7 +3,7 @@
 //! Each integration test that uses this module must declare
 //! `mod support;` and be gated on the `python` or `rustpython` feature
 //! where it needs the reference decoder.
-
+#![allow(clippy::case_sensitive_file_extension_comparisons, clippy::default_trait_access)]
 #![allow(dead_code)]
 
 use oxrok::core::{Key, Packet, Value};

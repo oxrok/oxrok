@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the serial EEPROM protocol and the decoder's
 //   documented classes and texts.
+#![allow(clippy::struct_field_names)]
 
 //! Siemens SDA 2506-5: decodes the command and data bytes of the
 //! 1-Kbit serial EEPROM's clocked interface.

@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+#![allow(clippy::doc_markdown)]
 
 //! Native `jtag_ejtag`, `jtag_stm32`, `onewire_network`, `ds2408`,
 //! `ds243x` and `ds28ea00` against the unchanged libsigrokdecode Python

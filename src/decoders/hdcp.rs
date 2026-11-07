@@ -3,6 +3,7 @@
 //   Copyright (C) 2018 Dave Craig <dcraig@brightsign.biz>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the I2C bus protocol and the decoder's documented classes and texts.
+#![allow(clippy::assigning_clones, clippy::doc_markdown, clippy::match_same_arms)]
 
 //! HDCP over HDMI, on top of the I2C decoder.
 //!

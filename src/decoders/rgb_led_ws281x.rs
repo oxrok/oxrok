@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the WS281x pulse widths and the decoder's
 //   documented classes and texts.
+#![allow(clippy::doc_markdown)]
 
 //! RGB LED string (WS281x): decodes the reset-separated 24-bit GRB
 //! words of a WS2812/WS2811 data line.

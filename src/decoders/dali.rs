@@ -6,6 +6,12 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the DALI biphase coding and the decoder's
 //   documented classes and texts.
+#![allow(
+    clippy::bool_to_int_with_if,
+    clippy::many_single_char_names,
+    clippy::redundant_else,
+    clippy::struct_field_names
+)]
 
 //! DALI: forward and backward Manchester frames with addresses,
 //! commands and replies.

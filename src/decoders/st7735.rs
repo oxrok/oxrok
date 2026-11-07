@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ST7735 command set and the decoder's
 //   documented classes and texts.
+#![allow(clippy::similar_names, clippy::unused_self)]
 
 //! Sitronix ST7735 TFT controller: decodes the 8-bit command and data
 //! bytes of its 4-wire serial interface.

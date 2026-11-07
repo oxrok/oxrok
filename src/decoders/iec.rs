@@ -22,6 +22,7 @@
 //     or a channel reopen/close/open, `chr()` of the offset byte;
 //     without ATN a printable byte is shown as itself and 0x0a/0x0d as
 //     LF/CR.
+#![allow(clippy::needless_late_init)]
 
 //! IEC: the Commodore serial IEEE-488 bus, decoded to GPIB items.
 

@@ -4,6 +4,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the parallel bus protocol and the decoder's
 //   documented classes and texts.
+#![allow(clippy::redundant_else)]
 
 //! Parallel: items and words sampled on a clock edge or any data edge.
 

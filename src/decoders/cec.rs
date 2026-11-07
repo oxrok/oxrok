@@ -6,6 +6,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the HDMI-CEC bit timing and the decoder's
 //   documented classes and texts.
+#![allow(clippy::format_push_string, clippy::too_many_lines)]
 
 //! HDMI-CEC: start/bits/bytes/frames with EOM, ACK/NACK and the
 //! protocol header/opcode names.

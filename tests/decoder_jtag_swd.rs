@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+#![allow(clippy::needless_borrow)]
 
 //! Parity of the native `jtag` and `swd` decoders with the unchanged
 //! libsigrokdecode Python decoders.

@@ -6,6 +6,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the RC-5 biphase coding and the decoder's
 //   documented classes and texts.
+#![allow(clippy::bool_to_int_with_if, clippy::many_single_char_names, clippy::needless_late_init)]
 
 //! IR RC-5: 14 Manchester-coded bits, start bits, toggle, address and
 //! command.

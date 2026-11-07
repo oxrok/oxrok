@@ -4,6 +4,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the 1-Wire network layer and the decoder's
 //   documented ROM commands and texts.
+#![allow(clippy::identity_op)]
 
 //! 1-Wire network layer: ROM commands, 64 bit device addresses and data.
 

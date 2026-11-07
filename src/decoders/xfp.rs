@@ -4,6 +4,12 @@
 //   Copyright (C) 2016 Bert Vermeulen <bert@biot.com>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the I2C bus protocol and the decoder's documented classes and texts.
+#![allow(
+    clippy::int_plus_one,
+    clippy::match_same_arms,
+    clippy::needless_range_loop,
+    clippy::unused_self
+)]
 
 //! XFP I²C management interface structures.
 //!

@@ -4,6 +4,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the LIN framing and the decoder's documented
 //   classes and texts.
+#![allow(clippy::struct_field_names, clippy::unnecessary_wraps, clippy::unnested_or_patterns)]
 
 //! LIN: break, sync, protected identifier, data bytes and checksum.
 

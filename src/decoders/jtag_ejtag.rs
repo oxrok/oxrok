@@ -4,6 +4,14 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the MIPS EJTAG instruction set and the decoder's
 //   documented registers, control fields and texts.
+#![allow(
+    clippy::derivable_impls,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::identity_op,
+    clippy::similar_names,
+    clippy::unused_self
+)]
 
 //! JTAG / EJTAG: the MIPS EJTAG instruction set, registers and PrAcc.
 

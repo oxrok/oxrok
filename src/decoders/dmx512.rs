@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the DMX512 line timing and the decoder's
 //   documented classes and texts.
+#![allow(clippy::bool_to_int_with_if, clippy::too_many_lines)]
 
 //! DMX512: break, mark after break, start code, channels, interframe and
 //! interpacket times.

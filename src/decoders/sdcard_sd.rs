@@ -7,6 +7,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the SD bus command/response formats and the
 //   decoder's documented classes and texts.
+#![allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
 
 //! SD card, SD mode: decodes the 48-bit command tokens and the
 //! R1/R1b/R2/R3/R6/R7 responses on the CMD line.
