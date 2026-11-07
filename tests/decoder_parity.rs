@@ -154,4 +154,29 @@ mod tests {
             outputs.iter().any(|o| matches!(o, oxrok::decode::Output::Annotation { class: 0, .. }))
         );
     }
+
+    /// The pilot decoders against every single-decoder case in the
+    /// sigrok-test corpus. The checkouts are optional; without them the
+    /// test says so and returns.
+    #[test]
+    fn pilot_corpus_parity() {
+        if !available("uart") {
+            return;
+        }
+        if std::env::var_os("OXROK_CORPUS").is_none() {
+            eprintln!("set OXROK_CORPUS=1 to run the sigrok-test corpus");
+            return;
+        }
+        if crate::support::corpus_test_dir().is_none()
+            || crate::support::corpus_dumps_dir().is_none()
+        {
+            eprintln!("no sigrok-test/sigrok-dumps checkout, skipping corpus");
+            return;
+        }
+        for id in ["uart", "i2c", "spi"] {
+            let (ran, skipped) = crate::support::assert_corpus_parity(id);
+            eprintln!("{id}: {ran} corpus cases ran, {skipped} skipped");
+            assert!(ran > 0, "{id}: no corpus case ran");
+        }
+    }
 }
