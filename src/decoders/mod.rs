@@ -48,6 +48,7 @@ pub mod lin;
 pub mod lm75;
 pub mod lpc;
 pub mod maple_bus;
+pub mod max7219;
 pub mod mcs48;
 pub mod mdio;
 pub mod microwire;
@@ -56,7 +57,10 @@ pub mod miller;
 pub mod mlx90614;
 pub mod modbus;
 pub mod morse;
+pub mod mrf24j40;
 pub mod mxc6225xu;
+pub mod nes_gamepad;
+pub mod nrf24l01;
 pub mod nunchuk;
 pub mod onewire_link;
 pub mod onewire_network;
@@ -67,6 +71,8 @@ pub mod ps2;
 pub mod pwm;
 pub mod qi;
 pub mod rc_encode;
+pub mod rfm12;
+pub mod rgb_led_spi;
 pub mod rgb_led_ws281x;
 pub mod rtc8564;
 pub mod sda2506;
@@ -76,6 +82,7 @@ pub mod signature;
 pub mod spdif;
 pub mod spi;
 pub mod spiflash;
+pub mod ssi32;
 pub mod st7735;
 pub mod stepper_motor;
 pub mod swd;
@@ -89,13 +96,14 @@ pub mod uart;
 pub mod usb_power_delivery;
 pub mod usb_signalling;
 pub mod wiegand;
+pub mod x2444m;
 pub mod xfp;
 pub mod z80;
 
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 86] = [
+pub static ALL: [&DecoderDef; 94] = [
     &ac97::DEF,
     &am230x::DEF,
     &atsha204a::DEF,
@@ -139,6 +147,7 @@ pub static ALL: [&DecoderDef; 86] = [
     &lm75::DEF,
     &lpc::DEF,
     &maple_bus::DEF,
+    &max7219::DEF,
     &mcs48::DEF,
     &mdio::DEF,
     &microwire::DEF,
@@ -147,7 +156,10 @@ pub static ALL: [&DecoderDef; 86] = [
     &mlx90614::DEF,
     &modbus::DEF,
     &morse::DEF,
+    &mrf24j40::DEF,
     &mxc6225xu::DEF,
+    &nes_gamepad::DEF,
+    &nrf24l01::DEF,
     &nunchuk::DEF,
     &onewire_link::DEF,
     &onewire_network::DEF,
@@ -158,6 +170,8 @@ pub static ALL: [&DecoderDef; 86] = [
     &pwm::DEF,
     &qi::DEF,
     &rc_encode::DEF,
+    &rfm12::DEF,
+    &rgb_led_spi::DEF,
     &rgb_led_ws281x::DEF,
     &rtc8564::DEF,
     &sda2506::DEF,
@@ -167,6 +181,7 @@ pub static ALL: [&DecoderDef; 86] = [
     &spdif::DEF,
     &spi::DEF,
     &spiflash::DEF,
+    &ssi32::DEF,
     &st7735::DEF,
     &stepper_motor::DEF,
     &swd::DEF,
@@ -180,6 +195,7 @@ pub static ALL: [&DecoderDef; 86] = [
     &usb_power_delivery::DEF,
     &usb_signalling::DEF,
     &wiegand::DEF,
+    &x2444m::DEF,
     &xfp::DEF,
     &z80::DEF,
 ];

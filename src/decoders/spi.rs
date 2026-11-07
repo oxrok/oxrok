@@ -279,7 +279,11 @@ impl Spi {
         }
         self.putdata(ctx);
         if self.samplerate > 0 {
-            let elapsed = (s - self.ss_block + 1) as f64 / self.samplerate as f64;
+            // pd.py: elapsed = 1 / float(samplerate); elapsed *= delta;
+            // bitrate = int(1 / elapsed * ws). The two reciprocals round
+            // differently from delta / samplerate, so keep them.
+            let elapsed = 1.0 / self.samplerate as f64;
+            let elapsed = elapsed * (s - self.ss_block + 1) as f64;
             let bitrate = (1.0 / elapsed * f64::from(ws)) as i64;
             ctx.put_meta(self.ss_block, s, "Bitrate", Item::Int(bitrate));
         }
