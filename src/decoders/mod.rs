@@ -5,8 +5,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod ac97;
 pub mod am230x;
+pub mod aud;
 pub mod avr_isp;
+pub mod avr_pdi;
 pub mod can;
 pub mod cec;
 pub mod counter;
@@ -60,6 +63,7 @@ pub mod spiflash;
 pub mod st7735;
 pub mod stepper_motor;
 pub mod swd;
+pub mod swim;
 pub mod t55xx;
 pub mod tdm_audio;
 pub mod timing;
@@ -73,9 +77,12 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 64] = [
+pub static ALL: [&DecoderDef; 68] = [
+    &ac97::DEF,
     &am230x::DEF,
+    &aud::DEF,
     &avr_isp::DEF,
+    &avr_pdi::DEF,
     &can::DEF,
     &cec::DEF,
     &counter::DEF,
@@ -106,8 +113,8 @@ pub static ALL: [&DecoderDef; 64] = [
     &maple_bus::DEF,
     &mcs48::DEF,
     &mdio::DEF,
-    &midi::DEF,
     &microwire::DEF,
+    &midi::DEF,
     &miller::DEF,
     &modbus::DEF,
     &morse::DEF,
@@ -129,6 +136,7 @@ pub static ALL: [&DecoderDef; 64] = [
     &st7735::DEF,
     &stepper_motor::DEF,
     &swd::DEF,
+    &swim::DEF,
     &t55xx::DEF,
     &tdm_audio::DEF,
     &timing::DEF,

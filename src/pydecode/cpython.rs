@@ -468,11 +468,15 @@ pub struct PyDecoder {
     info: &'static DecoderInfo,
     module: &'static str,
     obj: Option<Py<PyAny>>,
+    /// The sample rate from `metadata`, kept for `start` because
+    /// libsigrokdecode delivers it before `start` while the stack calls
+    /// `start` first.
+    samplerate: u64,
 }
 
 impl PyDecoder {
     fn new(info: &'static DecoderInfo, module: &'static str) -> Self {
-        PyDecoder { info, module, obj: None }
+        PyDecoder { info, module, obj: None, samplerate: 0 }
     }
 
     fn py_err(e: &PyErr, py: Python<'_>) -> Error {
@@ -533,6 +537,11 @@ impl Decoder for PyDecoder {
                 let base = obj.cast::<SrdDecoder>()?;
                 base.borrow_mut().channels = config.channels.iter().map(Option::is_some).collect();
             }
+            // libsigrokdecode calls metadata() before start(), and some
+            // decoders (swim, for one) read the samplerate there.
+            if self.samplerate > 0 && obj.hasattr("metadata").unwrap_or(false) {
+                obj.call_method1("metadata", (CONF_SAMPLERATE, self.samplerate))?;
+            }
             obj.call_method0("start")?;
             self.obj = Some(obj.unbind());
             Ok(())
@@ -541,6 +550,7 @@ impl Decoder for PyDecoder {
     }
 
     fn metadata(&mut self, samplerate: u64) {
+        self.samplerate = samplerate;
         if let Some(obj) = &self.obj {
             Python::attach(|py| {
                 let obj = obj.bind(py);

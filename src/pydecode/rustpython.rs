@@ -312,7 +312,8 @@ pub(super) fn scan(dir: &Path, names: Vec<String>) -> Result<Vec<&'static Decode
                     let module = leak(name.clone());
                     let factory: &'static (dyn Fn() -> Box<dyn Decoder> + Send + Sync) =
                         Box::leak(Box::new(move || {
-                            Box::new(RpDecoder { info, module, obj: None }) as Box<dyn Decoder>
+                            Box::new(RpDecoder { info, module, obj: None, samplerate: 0 })
+                                as Box<dyn Decoder>
                         }));
                     defs.push(&*Box::leak(Box::new(DecoderDef { info, new: factory })));
                 }
@@ -505,6 +506,10 @@ pub struct RpDecoder {
     info: &'static DecoderInfo,
     module: &'static str,
     obj: Option<PyObjectRef>,
+    /// The sample rate from `metadata`, kept for `start` because
+    /// libsigrokdecode delivers it before `start` while the stack calls
+    /// `start` first.
+    samplerate: u64,
 }
 
 impl RpDecoder {
@@ -556,6 +561,12 @@ impl Decoder for RpDecoder {
                 let channels: Vec<PyObjectRef> =
                     config.channels.iter().map(|c| vm.ctx.new_bool(c.is_some()).into()).collect();
                 obj.set_attr("_oxrok_channels", vm.ctx.new_list(channels), vm)?;
+                // libsigrokdecode calls metadata() before start(), and
+                // some decoders (swim, for one) read the samplerate there.
+                if self.samplerate > 0 && obj.get_attr("metadata", vm).is_ok() {
+                    let args = (vm.ctx.new_int(CONF_SAMPLERATE), vm.ctx.new_int(self.samplerate));
+                    vm.call_method(&obj, "metadata", args)?;
+                }
                 vm.call_method(&obj, "start", ())?;
                 Ok(obj)
             })();
@@ -567,6 +578,7 @@ impl Decoder for RpDecoder {
     }
 
     fn metadata(&mut self, samplerate: u64) {
+        self.samplerate = samplerate;
         let Some(obj) = &self.obj else { return };
         with_vm(|vm| {
             if obj.get_attr("metadata", vm).is_err() {

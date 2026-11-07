@@ -469,6 +469,12 @@ impl Stack {
         let Some((instance, mut decoder, config)) = iter.next() else {
             return Err(Error::arg("empty decoder chain"));
         };
+        // libsigrokdecode delivers the samplerate before start(), and
+        // some decoders read it there. Native decoders take it in start()
+        // or metadata(), so it is delivered on both sides of start().
+        if samplerate > 0 {
+            decoder.metadata(samplerate);
+        }
         decoder.start(&config)?;
         if samplerate > 0 {
             decoder.metadata(samplerate);
@@ -476,6 +482,9 @@ impl Stack {
         let mut uppers = Vec::new();
         let mut ids = vec![instance.clone()];
         for (id, mut dec, cfg) in iter {
+            if samplerate > 0 {
+                dec.metadata(samplerate);
+            }
             dec.start(&cfg)?;
             if samplerate > 0 {
                 dec.metadata(samplerate);
