@@ -17,10 +17,10 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 3 (`i2c`, `spi`, `uart`) |
-| Native and parity-tested | 3 |
-| Pending | 108 |
-| Exceptions | 0 |
+| Native now | 9 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`) |
+| Native and parity-tested | 9 |
+| Pending | 102 |
+| Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
 libsigrokdecode 0.5.3 has no deprecation flag in the decoder API: no
@@ -157,7 +157,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `aud` | logic | 6 | pending | — |
 | `avr_isp` | stacked | 3 | pending | stacked on spi, not logic as the suggested order had it |
 | `avr_pdi` | logic | 6 | pending | — |
-| `can` | logic | 1 | pending | — |
+| `can` | logic | 1 | native, parity-tested | — |
 | `cc1101` | stacked | 3 | pending | — |
 | `cec` | logic | 4 | pending | — |
 | `cfp` | stacked | 6 | pending | — |
@@ -187,11 +187,11 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `i2s` | logic | 4 | pending | — |
 | `iec` | logic | 7 | pending | — |
 | `ieee488` | logic | 2 | pending | — |
-| `ir_nec` | logic | 1 | pending | — |
+| `ir_nec` | logic | 1 | native, parity-tested | — |
 | `ir_rc5` | logic | 4 | pending | — |
 | `ir_rc6` | logic | 4 | pending | — |
 | `jitter` | logic | 3 | pending | — |
-| `jtag` | logic | 1 | pending | — |
+| `jtag` | logic | 1 | native, parity-tested | — |
 | `jtag_ejtag` | stacked | 6 | pending | — |
 | `jtag_stm32` | stacked | 6 | pending | — |
 | `lin` | stacked | 5 | pending | stacked on uart, not logic as the suggested order had it |
@@ -200,7 +200,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `maple_bus` | logic | 7 | pending | — |
 | `max7219` | stacked | 4 | pending | — |
 | `mcs48` | logic | 2 | pending | — |
-| `mdio` | logic | 1 | pending | — |
+| `mdio` | logic | 1 | native, parity-tested | — |
 | `microwire` | logic | 2 | pending | — |
 | `midi` | stacked | 5 | pending | — |
 | `miller` | logic | 3 | pending | — |
@@ -212,7 +212,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `nes_gamepad` | stacked | 4 | pending | — |
 | `nrf24l01` | stacked | 4 | pending | — |
 | `nunchuk` | stacked | 2 | pending | — |
-| `onewire_link` | logic | 1 | pending | — |
+| `onewire_link` | logic | 1 | native, parity-tested | — |
 | `onewire_network` | stacked | 6 | pending | — |
 | `ook` | logic | 7 | pending | — |
 | `ook_oregon` | stacked | 6 | pending | — |
@@ -239,7 +239,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ssi32` | stacked | 4 | pending | — |
 | `st7735` | logic | 5 | pending | — |
 | `stepper_motor` | logic | 5 | pending | — |
-| `swd` | logic | 1 | pending | — |
+| `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
 | `swim` | logic | 6 | pending | — |
 | `t55xx` | logic | 6 | pending | — |
 | `tca6408a` | stacked | 1 | pending | — |
@@ -258,11 +258,21 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 
 ## Exceptions
 
-None identified yet. A decoder belongs here only when its Python
-behaviour cannot be reproduced without changing the native runtime or
-adding a dependency; the entry must name the exact `pd.py` lines and
-keep the Python fallback. Metadata-only, stacked and error-path
-differences are not exceptions.
+One documented divergence so far:
+
+- `swd`, option `strict_start=yes`: if a line reset arrives before the
+  first request, upstream indexes `self.apdp`/`self.rw` while they are
+  still `None` and raises `AttributeError`. The native decoder has no
+  packet to flush at that point and continues. The corpus case with
+  `strict_start=yes` that does have a request matches exactly. The
+  difference is explained at the `put_python_data` call in
+  `src/decoders/swd.rs`.
+
+A decoder otherwise belongs here only when its Python behaviour cannot
+be reproduced without changing the native runtime or adding a
+dependency; the entry must name the exact `pd.py` lines and keep the
+Python fallback. Metadata-only, stacked and error-path differences are
+not exceptions.
 
 ## Appendix: full inventory
 
