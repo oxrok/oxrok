@@ -21,7 +21,7 @@ use crate::decode::{
 };
 use malachite_bigint::{BigInt, Sign};
 use rustpython_vm::builtins::{
-    PyBaseExceptionRef, PyBytes, PyFloat, PyInt, PyList, PyStr, PyTuple,
+    PyBaseExceptionRef, PyByteArray, PyBytes, PyFloat, PyInt, PyList, PyStr, PyTuple,
 };
 use rustpython_vm::vm::thread::ThreadedVirtualMachine;
 use rustpython_vm::{AsObject, Interpreter, PyObjectRef, PyResult, VirtualMachine, pymodule};
@@ -364,8 +364,21 @@ fn py_to_item(obj: &PyObjectRef, vm: &VirtualMachine) -> Item {
     if let Some(s) = obj.downcast_ref::<PyStr>() {
         return Item::Str(s.to_string());
     }
+    if let Some(b) = obj.downcast_ref::<PyByteArray>() {
+        return Item::Bytes(b.borrow_buf().to_vec());
+    }
     if let Some(b) = obj.downcast_ref::<PyBytes>() {
         return Item::Bytes(b.as_bytes().to_vec());
+    }
+    // Snapshot lists and tuples: Python decoders keep emitting the same
+    // mutable object (e.g. ieee488's `last_listener`) and later mutate it,
+    // so holding a reference would make the observed value depend on when
+    // the consumer looks at it. A stacked decoder gets an equal list back.
+    if let Some(l) = obj.downcast_ref::<PyList>() {
+        return Item::List(l.borrow_vec().iter().map(|o| py_to_item(o, vm)).collect());
+    }
+    if let Some(t) = obj.downcast_ref::<PyTuple>() {
+        return Item::List(t.as_slice().iter().map(|o| py_to_item(o, vm)).collect());
     }
     Item::Opaque(Arc::new(RpItem(obj.clone())))
 }

@@ -20,7 +20,9 @@ use crate::decode::{
 };
 use pyo3::exceptions::PyEOFError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{
+    PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PyInt, PyList, PyString, PyTuple,
+};
 use std::sync::{Arc, OnceLock};
 
 use super::{CONF_SAMPLERATE, leak};
@@ -328,8 +330,21 @@ fn py_to_item(obj: &Bound<'_, PyAny>) -> Item {
     if let Ok(s) = obj.cast::<PyString>() {
         return Item::Str(s.to_string_lossy().into_owned());
     }
+    if let Ok(b) = obj.cast::<PyByteArray>() {
+        return Item::Bytes(b.to_vec());
+    }
     if let Ok(b) = obj.cast::<PyBytes>() {
         return Item::Bytes(b.as_bytes().to_vec());
+    }
+    // Snapshot lists and tuples: Python decoders keep emitting the same
+    // mutable object (e.g. ieee488's `last_listener`) and later mutate it,
+    // so holding a reference would make the observed value depend on when
+    // the consumer looks at it. A stacked decoder gets an equal list back.
+    if let Ok(l) = obj.cast::<PyList>() {
+        return Item::List(l.iter().map(|v| py_to_item(&v)).collect());
+    }
+    if let Ok(t) = obj.cast::<PyTuple>() {
+        return Item::List(t.iter().map(|v| py_to_item(&v)).collect());
     }
     Item::Opaque(Arc::new(PyItem(obj.clone().unbind())))
 }
