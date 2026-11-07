@@ -38,8 +38,13 @@ pub mod parallel;
 pub mod ps2;
 pub mod pwm;
 pub mod rc_encode;
+pub mod rgb_led_ws281x;
+pub mod sda2506;
+pub mod sdcard_sd;
+pub mod seven_segment;
 pub mod spi;
 pub mod spiflash;
+pub mod st7735;
 pub mod stepper_motor;
 pub mod swd;
 pub mod timing;
@@ -52,7 +57,7 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 43] = [
+pub static ALL: [&DecoderDef; 48] = [
     &avr_isp::DEF,
     &can::DEF,
     &cec::DEF,
@@ -86,8 +91,13 @@ pub static ALL: [&DecoderDef; 43] = [
     &ps2::DEF,
     &pwm::DEF,
     &rc_encode::DEF,
+    &rgb_led_ws281x::DEF,
+    &sda2506::DEF,
+    &sdcard_sd::DEF,
+    &seven_segment::DEF,
     &spi::DEF,
     &spiflash::DEF,
+    &st7735::DEF,
     &stepper_motor::DEF,
     &swd::DEF,
     &timing::DEF,
