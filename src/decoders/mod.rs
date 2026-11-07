@@ -5,8 +5,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod can;
 pub mod i2c;
 pub mod jtag;
+pub mod mdio;
 pub mod spi;
 pub mod swd;
 pub mod uart;
@@ -14,4 +16,5 @@ pub mod uart;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 3] = [&i2c::DEF, &spi::DEF, &uart::DEF];
+pub static ALL: [&DecoderDef; 7] =
+    [&can::DEF, &i2c::DEF, &jtag::DEF, &mdio::DEF, &spi::DEF, &swd::DEF, &uart::DEF];
