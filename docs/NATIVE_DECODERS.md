@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 39 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`) |
-| Native and parity-tested | 39 |
-| Pending | 72 |
+| Native now | 43 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`) |
+| Native and parity-tested | 43 |
+| Pending | 68 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -180,8 +180,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `edid` | stacked | 2 | pending | — |
 | `eeprom24xx` | stacked | 1 | native, parity-tested | — |
 | `eeprom93xx` | stacked | 6 | pending | — |
-| `em4100` | logic | 5 | pending | — |
-| `em4305` | logic | 5 | pending | — |
+| `em4100` | logic | 5 | native, parity-tested | — |
+| `em4305` | logic | 5 | native, parity-tested | — |
 | `enc28j60` | stacked | 3 | pending | — |
 | `flexray` | logic | 6 | pending | — |
 | `gpib` | logic | 2 | native, parity-tested | no sigrok-test dir; covered through ieee488 captures |
@@ -245,7 +245,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `spiflash` | stacked | 3 | native, parity-tested | — |
 | `ssi32` | stacked | 4 | pending | — |
 | `st7735` | logic | 5 | pending | — |
-| `stepper_motor` | logic | 5 | pending | — |
+| `stepper_motor` | logic | 5 | native, parity-tested | — |
 | `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
 | `swim` | logic | 6 | pending | — |
 | `t55xx` | logic | 6 | pending | — |
@@ -258,7 +258,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `usb_power_delivery` | logic | 1 | native, parity-tested | — |
 | `usb_request` | stacked | 6 | pending | — |
 | `usb_signalling` | logic | 1 | native, parity-tested | — |
-| `wiegand` | logic | 5 | pending | — |
+| `wiegand` | logic | 5 | native, parity-tested | — |
 | `x2444m` | stacked | 4 | pending | — |
 | `xfp` | stacked | 2 | pending | — |
 | `z80` | logic | 2 | native, parity-tested | — |
