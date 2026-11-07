@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 52 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`) |
-| Native and parity-tested | 52 |
-| Pending | 59 |
+| Native now | 57 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`, `t55xx`, `am230x`, `dsi`, `qi`, `flexray`) |
+| Native and parity-tested | 57 |
+| Pending | 54 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -155,7 +155,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ade77xx` | stacked | 3 | pending | — |
 | `adf435x` | stacked | 3 | pending | — |
 | `adns5020` | stacked | 3 | pending | — |
-| `am230x` | logic | 6 | pending | — |
+| `am230x` | logic | 6 | native, parity-tested | — |
 | `amulet_ascii` | stacked | 5 | pending | — |
 | `arm_etmv3` | stacked | 5 | pending | — |
 | `arm_itm` | stacked | 5 | pending | — |
@@ -176,14 +176,14 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ds2408` | stacked | 6 | pending | — |
 | `ds243x` | stacked | 6 | pending | — |
 | `ds28ea00` | stacked | 6 | pending | — |
-| `dsi` | logic | 6 | pending | — |
+| `dsi` | logic | 6 | native, parity-tested | — |
 | `edid` | stacked | 2 | pending | — |
 | `eeprom24xx` | stacked | 1 | native, parity-tested | — |
 | `eeprom93xx` | stacked | 6 | pending | — |
 | `em4100` | logic | 5 | native, parity-tested | — |
 | `em4305` | logic | 5 | native, parity-tested | — |
 | `enc28j60` | stacked | 3 | pending | — |
-| `flexray` | logic | 6 | pending | — |
+| `flexray` | logic | 6 | native, parity-tested | — |
 | `gpib` | logic | 2 | native, parity-tested | no sigrok-test dir; covered through ieee488 captures |
 | `graycode` | logic | 3 | native, parity-tested | — |
 | `guess_bitrate` | logic | 3 | native, parity-tested | — |
@@ -229,7 +229,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `pca9571` | stacked | 1 | pending | — |
 | `ps2` | logic | 2 | native, parity-tested | — |
 | `pwm` | logic | 3 | native, parity-tested | — |
-| `qi` | logic | 6 | pending | — |
+| `qi` | logic | 6 | native, parity-tested | — |
 | `rc_encode` | logic | 3 | native, parity-tested | — |
 | `rfm12` | stacked | 4 | pending | — |
 | `rgb_led_spi` | stacked | 4 | pending | — |
@@ -248,7 +248,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `stepper_motor` | logic | 5 | native, parity-tested | — |
 | `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
 | `swim` | logic | 6 | pending | — |
-| `t55xx` | logic | 6 | pending | — |
+| `t55xx` | logic | 6 | native, parity-tested | — |
 | `tca6408a` | stacked | 1 | pending | — |
 | `tdm_audio` | logic | 4 | native, parity-tested | — |
 | `timing` | logic | 3 | native, parity-tested | — |
