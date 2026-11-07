@@ -40,7 +40,7 @@ checked against the allowed values.
 
 ## Native decoders
 
-57 of the 111 decoders of libsigrokdecode 0.5.3 are native now;
+64 of the 111 decoders of libsigrokdecode 0.5.3 are native now;
 `docs/NATIVE_DECODERS.md` is the checklist, with the status, batch and
 the documented exceptions for every decoder. Each native decoder
 reproduces libsigrokdecode's annotation classes, rows, texts, sample

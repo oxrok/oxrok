@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 57 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`, `t55xx`, `am230x`, `dsi`, `qi`, `flexray`) |
-| Native and parity-tested | 57 |
-| Pending | 54 |
+| Native now | 64 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`, `t55xx`, `am230x`, `dsi`, `qi`, `flexray`, `iec`, `maple_bus`, `ook`, `signature`, `tlc5620`, `microwire`, `mcs48`) |
+| Native and parity-tested | 64 |
+| Pending | 47 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -192,7 +192,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `i2cdemux` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2cfilter` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2s` | logic | 4 | native, parity-tested | — |
-| `iec` | logic | 7 | pending | — |
+| `iec` | logic | 7 | native, parity-tested | — |
 | `ieee488` | logic | 2 | native, parity-tested | — |
 | `ir_nec` | logic | 1 | native, parity-tested | — |
 | `ir_rc5` | logic | 4 | native, parity-tested | — |
@@ -204,11 +204,11 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `lin` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
 | `lm75` | stacked | 1 | pending | — |
 | `lpc` | logic | 2 | native, parity-tested | — |
-| `maple_bus` | logic | 7 | pending | — |
+| `maple_bus` | logic | 7 | native, parity-tested | — |
 | `max7219` | stacked | 4 | pending | — |
-| `mcs48` | logic | 2 | pending | — |
+| `mcs48` | logic | 2 | native, parity-tested | — |
 | `mdio` | logic | 1 | native, parity-tested | — |
-| `microwire` | logic | 2 | pending | — |
+| `microwire` | logic | 2 | native, parity-tested | — |
 | `midi` | stacked | 5 | native, parity-tested | — |
 | `miller` | logic | 3 | native, parity-tested | — |
 | `mlx90614` | stacked | 2 | pending | — |
@@ -221,7 +221,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `nunchuk` | stacked | 2 | pending | — |
 | `onewire_link` | logic | 1 | native, parity-tested | — |
 | `onewire_network` | stacked | 6 | pending | — |
-| `ook` | logic | 7 | pending | — |
+| `ook` | logic | 7 | native, parity-tested | — |
 | `ook_oregon` | stacked | 6 | pending | — |
 | `ook_vis` | stacked | 6 | pending | — |
 | `pan1321` | stacked | 5 | pending | — |
@@ -239,7 +239,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `sdcard_sd` | logic | 5 | native, parity-tested | — |
 | `sdcard_spi` | stacked | 3 | pending | — |
 | `seven_segment` | logic | 5 | native, parity-tested | — |
-| `signature` | logic | 7 | pending | — |
+| `signature` | logic | 7 | native, parity-tested | — |
 | `spdif` | logic | 4 | native, parity-tested | — |
 | `spi` | logic | pilot | native, parity-tested | pilot |
 | `spiflash` | stacked | 3 | native, parity-tested | — |
@@ -252,7 +252,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `tca6408a` | stacked | 1 | pending | — |
 | `tdm_audio` | logic | 4 | native, parity-tested | — |
 | `timing` | logic | 3 | native, parity-tested | — |
-| `tlc5620` | logic | 7 | pending | — |
+| `tlc5620` | logic | 7 | native, parity-tested | — |
 | `uart` | logic | pilot | native, parity-tested | pilot |
 | `usb_packet` | stacked | 6 | pending | — |
 | `usb_power_delivery` | logic | 1 | native, parity-tested | — |
