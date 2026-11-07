@@ -7,7 +7,10 @@
 
 pub mod avr_isp;
 pub mod can;
+pub mod cec;
 pub mod counter;
+pub mod dali;
+pub mod dmx512;
 pub mod eeprom24xx;
 pub mod gpib;
 pub mod graycode;
@@ -17,6 +20,8 @@ pub mod i2cdemux;
 pub mod i2cfilter;
 pub mod ieee488;
 pub mod ir_nec;
+pub mod ir_rc5;
+pub mod ir_rc6;
 pub mod jitter;
 pub mod jtag;
 pub mod lin;
@@ -43,10 +48,13 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 34] = [
+pub static ALL: [&DecoderDef; 39] = [
     &avr_isp::DEF,
     &can::DEF,
+    &cec::DEF,
     &counter::DEF,
+    &dali::DEF,
+    &dmx512::DEF,
     &eeprom24xx::DEF,
     &gpib::DEF,
     &graycode::DEF,
@@ -56,6 +64,8 @@ pub static ALL: [&DecoderDef; 34] = [
     &i2cfilter::DEF,
     &ieee488::DEF,
     &ir_nec::DEF,
+    &ir_rc5::DEF,
+    &ir_rc6::DEF,
     &jitter::DEF,
     &jtag::DEF,
     &lin::DEF,
