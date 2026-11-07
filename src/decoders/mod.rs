@@ -19,6 +19,7 @@ pub mod dcf77;
 pub mod dmx512;
 pub mod ds1307;
 pub mod dsi;
+pub mod edid;
 pub mod eeprom24xx;
 pub mod em4100;
 pub mod em4305;
@@ -26,6 +27,7 @@ pub mod flexray;
 pub mod gpib;
 pub mod graycode;
 pub mod guess_bitrate;
+pub mod hdcp;
 pub mod i2c;
 pub mod i2cdemux;
 pub mod i2cfilter;
@@ -46,8 +48,11 @@ pub mod mdio;
 pub mod microwire;
 pub mod midi;
 pub mod miller;
+pub mod mlx90614;
 pub mod modbus;
 pub mod morse;
+pub mod mxc6225xu;
+pub mod nunchuk;
 pub mod onewire_link;
 pub mod ook;
 pub mod parallel;
@@ -78,12 +83,13 @@ pub mod uart;
 pub mod usb_power_delivery;
 pub mod usb_signalling;
 pub mod wiegand;
+pub mod xfp;
 pub mod z80;
 
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 74] = [
+pub static ALL: [&DecoderDef; 80] = [
     &ac97::DEF,
     &am230x::DEF,
     &atsha204a::DEF,
@@ -98,6 +104,7 @@ pub static ALL: [&DecoderDef; 74] = [
     &dmx512::DEF,
     &ds1307::DEF,
     &dsi::DEF,
+    &edid::DEF,
     &eeprom24xx::DEF,
     &em4100::DEF,
     &em4305::DEF,
@@ -105,6 +112,7 @@ pub static ALL: [&DecoderDef; 74] = [
     &gpib::DEF,
     &graycode::DEF,
     &guess_bitrate::DEF,
+    &hdcp::DEF,
     &i2c::DEF,
     &i2cdemux::DEF,
     &i2cfilter::DEF,
@@ -125,8 +133,11 @@ pub static ALL: [&DecoderDef; 74] = [
     &microwire::DEF,
     &midi::DEF,
     &miller::DEF,
+    &mlx90614::DEF,
     &modbus::DEF,
     &morse::DEF,
+    &mxc6225xu::DEF,
+    &nunchuk::DEF,
     &onewire_link::DEF,
     &ook::DEF,
     &parallel::DEF,
@@ -157,5 +168,6 @@ pub static ALL: [&DecoderDef; 74] = [
     &usb_power_delivery::DEF,
     &usb_signalling::DEF,
     &wiegand::DEF,
+    &xfp::DEF,
     &z80::DEF,
 ];
