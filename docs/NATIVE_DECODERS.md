@@ -76,9 +76,9 @@ on the bench `.sr` captures:
 
 | Decoder | Capture | Cases | Result |
 |---|---|---|---|
-| `uart` | `uart-hi.vcd`, `uart-esp32.sr` | default; `format`, `bit_order`, `data_bits`, `parity`, `stop_bits`, `invert_rx`; 921600 bench capture | pass |
-| `i2c` | `i2c-write-read.vcd`, `i2c-esp32.sr` | default; `address_format=shifted/unshifted`; bench capture | pass |
-| `spi` | `spi-mode0.vcd`, `spi-esp32.sr` | default; `cpol`/`cpha`, `bitorder`, `wordsize`, `cs_polarity`; bench capture | pass |
+| `uart` | `uart-hi.vcd`, `uart-esp32.sr` | default; `format`, `bit_order`, `data_bits`, `parity`, `stop_bits`, `invert_rx`; 921600 bench capture | pass, 52 corpus cases |
+| `i2c` | `i2c-write-read.vcd`, `i2c-esp32.sr` | default; `address_format=shifted/unshifted`; bench capture | pass, 9 corpus cases |
+| `spi` | `spi-mode0.vcd`, `spi-esp32.sr` | default; `cpol`/`cpha`, `bitorder`, `wordsize`, `cs_polarity`; bench capture | pass, 13 corpus cases |
 
 The harness found one real mismatch before it went green: with
 `invert_rx=yes`, Python’s `inspect_sample` does `signal = not signal`,
@@ -98,13 +98,14 @@ used here has 118 decoder directories and 594 cases, more than the 111
 0.5.3 decoders because it also covers newer decoders such as `ir_irmp`
 and `caliper`.
 
-The next harness step is a corpus runner that reads `test.conf`, maps
-`channel`/`option` pairs to `Config`, loads the named `.sr`, and runs
-native-vs-Python parity without needing the `.output` goldens. Cases
-whose decoder is not ported yet, or whose input the dump is missing,
-are skipped and counted. That gives every port a ready set of real
-captures; the existing `tools/diffcli.sh` stays the end-to-end check
-against sigrok-cli.
+The corpus runner reads `test.conf`, maps `channel`/`option` pairs to
+`Config`, builds the whole `stack` for stacked cases, loads the named
+`.sr`, and compares the native chain with the Python chain. It does not
+need the `.output` goldens. It is opt-in with `OXROK_CORPUS=1`; cases
+whose lower decoder is not native yet, or whose input the dump is
+missing, are skipped and counted. `OXROK_CORPUS_DECODER=<id>` limits a
+run to one decoder. The existing `tools/diffcli.sh` stays the
+end-to-end check against sigrok-cli.
 
 ## Batch order
 
