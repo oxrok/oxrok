@@ -81,6 +81,9 @@ mod tests {
 
     #[test]
     fn info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in [
             &oxrok::decoders::amulet_ascii::DEF,
             &oxrok::decoders::arm_etmv3::DEF,
@@ -94,6 +97,9 @@ mod tests {
 
     #[test]
     fn amulet_ascii_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("amulet_bootup_uart", &[("tx", 0), ("rx", 1)], &[]);
         let amulet = case("amulet_bootup", &[], &[]);
         let capture = load(AMULET_SR);
@@ -105,6 +111,9 @@ mod tests {
 
     #[test]
     fn arm_etmv3_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("stm32f105_uart", &[("rx", 4)], &[("baudrate", "8000000")]);
         let tpiu = case("stm32f105_tpiu", &[], &[("stream", "2")]);
         let etm = case("stm32f105_etmv3", &[], &[]);
@@ -121,6 +130,9 @@ mod tests {
 
     #[test]
     fn arm_itm_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("stm32f105_uart", &[("rx", 4)], &[("baudrate", "8000000")]);
         let tpiu = case("stm32f105_tpiu", &[], &[("stream", "1")]);
         let itm = case("stm32f105_itm", &[], &[]);
@@ -137,6 +149,9 @@ mod tests {
 
     #[test]
     fn arm_tpiu_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("stm32f105_uart", &[("rx", 4)], &[("baudrate", "8000000")]);
         let tpiu = case("stm32f105_tpiu", &[], &[("stream", "2")]);
         let capture = load(ARM_TPIU_SR);
@@ -148,6 +163,9 @@ mod tests {
 
     #[test]
     fn pan1321_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         let uart = case("pan1321_jres_uart", &[("tx", 0), ("rx", 3)], &[("baudrate", "115200")]);
         let pan = case("pan1321_jres", &[], &[]);
         let capture = load(PAN1321_SR);
@@ -159,6 +177,9 @@ mod tests {
 
     #[test]
     fn amulet_ascii_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -170,6 +191,9 @@ mod tests {
 
     #[test]
     fn arm_etmv3_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -181,6 +205,9 @@ mod tests {
 
     #[test]
     fn arm_itm_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -191,6 +218,9 @@ mod tests {
 
     #[test]
     fn arm_tpiu_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -201,6 +231,9 @@ mod tests {
 
     #[test]
     fn pan1321_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 94 (`ac97`, `am230x`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `ds2408`, `ds243x`, `ds28ea00`, `dsi`, `edid`, `eeprom24xx`, `em4100`, `em4305`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `hdcp`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `jtag_ejtag`, `jtag_stm32`, `lin`, `lm75`, `lpc`, `maple_bus`, `max7219`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `mlx90614`, `modbus`, `morse`, `mrf24j40`, `mxc6225xu`, `nes_gamepad`, `nrf24l01`, `nunchuk`, `onewire_link`, `onewire_network`, `ook`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rfm12`, `rgb_led_spi`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `ssi32`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `x2444m`, `xfp`, `z80`) |
-| Native and parity-tested | 94 |
-| Pending | 17 |
+| Native now | 105 (`ac97`, `ade77xx`, `adf435x`, `adns5020`, `am230x`, `amulet_ascii`, `arm_etmv3`, `arm_itm`, `arm_tpiu`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cc1101`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `ds2408`, `ds243x`, `ds28ea00`, `dsi`, `edid`, `eeprom24xx`, `em4100`, `em4305`, `enc28j60`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `hdcp`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `jtag_ejtag`, `jtag_stm32`, `lin`, `lm75`, `lpc`, `maple_bus`, `max7219`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `mlx90614`, `modbus`, `morse`, `mrf24j40`, `mxc6225xu`, `nes_gamepad`, `nrf24l01`, `nunchuk`, `onewire_link`, `onewire_network`, `ook`, `pan1321`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rfm12`, `rgb_led_spi`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `sdcard_spi`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `ssi32`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `x2444m`, `xfp`, `z80`) |
+| Native and parity-tested | 105 |
+| Pending | 6 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -157,20 +157,20 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | Decoder | Kind | Batch | Status | Notes |
 |---|---|---|---|---|
 | `ac97` | logic | 6 | native, parity-tested | — |
-| `ade77xx` | stacked | 3 | pending | — |
-| `adf435x` | stacked | 3 | pending | — |
-| `adns5020` | stacked | 3 | pending | — |
+| `ade77xx` | stacked | 3 | native, parity-tested | — |
+| `adf435x` | stacked | 3 | native, parity-tested | — |
+| `adns5020` | stacked | 3 | native, parity-tested | — |
 | `am230x` | logic | 6 | native, parity-tested | — |
-| `amulet_ascii` | stacked | 5 | pending | — |
-| `arm_etmv3` | stacked | 5 | pending | — |
-| `arm_itm` | stacked | 5 | pending | — |
-| `arm_tpiu` | stacked | 5 | pending | — |
+| `amulet_ascii` | stacked | 5 | native, parity-tested | — |
+| `arm_etmv3` | stacked | 5 | native, parity-tested | — |
+| `arm_itm` | stacked | 5 | native, parity-tested | — |
+| `arm_tpiu` | stacked | 5 | native, parity-tested | — |
 | `atsha204a` | stacked | 2 | native, parity-tested | — |
 | `aud` | logic | 6 | native, parity-tested | — |
 | `avr_isp` | stacked | 3 | native, parity-tested | stacked on spi, not logic as the suggested order had it |
 | `avr_pdi` | logic | 6 | native, parity-tested | — |
 | `can` | logic | 1 | native, parity-tested | — |
-| `cc1101` | stacked | 3 | pending | — |
+| `cc1101` | stacked | 3 | native, parity-tested | — |
 | `cec` | logic | 4 | native, parity-tested | — |
 | `cfp` | stacked | 6 | pending | — |
 | `counter` | logic | 3 | native, parity-tested | — |
@@ -187,7 +187,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `eeprom93xx` | stacked | 6 | pending | — |
 | `em4100` | logic | 5 | native, parity-tested | — |
 | `em4305` | logic | 5 | native, parity-tested | — |
-| `enc28j60` | stacked | 3 | pending | — |
+| `enc28j60` | stacked | 3 | native, parity-tested | — |
 | `flexray` | logic | 6 | native, parity-tested | — |
 | `gpib` | logic | 2 | native, parity-tested | no sigrok-test dir; covered through ieee488 captures |
 | `graycode` | logic | 3 | native, parity-tested | — |
@@ -229,7 +229,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ook` | logic | 7 | native, parity-tested | — |
 | `ook_oregon` | stacked | 6 | pending | — |
 | `ook_vis` | stacked | 6 | pending | — |
-| `pan1321` | stacked | 5 | pending | — |
+| `pan1321` | stacked | 5 | native, parity-tested | — |
 | `parallel` | logic | 2 | native, parity-tested | — |
 | `pca9571` | stacked | 1 | native, parity-tested | — |
 | `ps2` | logic | 2 | native, parity-tested | — |
@@ -242,7 +242,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `rtc8564` | stacked | 1 | native, parity-tested | — |
 | `sda2506` | logic | 5 | native, parity-tested | — |
 | `sdcard_sd` | logic | 5 | native, parity-tested | — |
-| `sdcard_spi` | stacked | 3 | pending | — |
+| `sdcard_spi` | stacked | 3 | native, parity-tested | — |
 | `seven_segment` | logic | 5 | native, parity-tested | — |
 | `signature` | logic | 7 | native, parity-tested | — |
 | `spdif` | logic | 4 | native, parity-tested | — |

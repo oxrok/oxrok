@@ -109,6 +109,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for def in [
             &ade77xx::DEF,
             &adf435x::DEF,
@@ -125,12 +128,18 @@ mod tests {
     /// single-decoder helper.
     #[test]
     fn spi_layer_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         let capture = load(CC1101);
         assert_parity_def(&spi::DEF, "spi", &[], &capture);
     }
 
     #[test]
     fn ade77xx_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // The ADE7758 dump has no CS#: clk=0, miso=1, mosi=2.
         let capture = load(ADE77XX);
         let spi_case = case("ade7758", &[("clk", 0), ("miso", 1), ("mosi", 2)], &[]);
@@ -141,6 +150,9 @@ mod tests {
 
     #[test]
     fn adf435x_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's set-4000mhz: cs=0, mosi=1, clk=2.
         let capture = load(ADF435X);
         let spi_case = case("set-4000mhz", &[("cs", 0), ("mosi", 1), ("clk", 2)], &[]);
@@ -151,6 +163,9 @@ mod tests {
 
     #[test]
     fn adns5020_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's init: clk=4, mosi=3, cs=5.
         let capture = load(ADNS5020);
         let spi_case = case("init", &[("clk", 4), ("mosi", 3), ("cs", 5)], &[]);
@@ -161,6 +176,9 @@ mod tests {
 
     #[test]
     fn cc1101_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's cc1101-read-write: mosi=0, miso=2, clk=1, cs=5.
         let capture = load(CC1101);
         let spi_case =
@@ -172,6 +190,9 @@ mod tests {
 
     #[test]
     fn enc28j60_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's enc28j60-init-and-ping: cs=0, miso=1, clk=2, mosi=3.
         let capture = load(ENC28J60);
         let spi_case =
@@ -183,6 +204,9 @@ mod tests {
 
     #[test]
     fn sdcard_spi_regression() {
+        if !crate::support::python_available() {
+            return;
+        }
         // sigrok-test's cmd17: cs=0, mosi=1, clk=2, miso=3.
         let capture = load(SDCARD_SPI);
         let spi_case = case("cmd17", &[("cs", 0), ("mosi", 1), ("clk", 2), ("miso", 3)], &[]);
@@ -193,6 +217,9 @@ mod tests {
 
     #[test]
     fn ade77xx_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -203,6 +230,9 @@ mod tests {
 
     #[test]
     fn adf435x_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -213,6 +243,9 @@ mod tests {
 
     #[test]
     fn adns5020_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -223,6 +256,9 @@ mod tests {
 
     #[test]
     fn cc1101_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -233,6 +269,9 @@ mod tests {
 
     #[test]
     fn enc28j60_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }
@@ -243,6 +282,9 @@ mod tests {
 
     #[test]
     fn sdcard_spi_corpus() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !corpus_enabled() {
             return;
         }

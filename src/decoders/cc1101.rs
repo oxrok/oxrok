@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the CC1101 SPI command/register map and the
 //   decoder's documented classes and texts.
+#![allow(clippy::semicolon_if_nothing_returned, clippy::unused_self)]
 
 //! CC1101: Texas Instruments low-power sub-1GHz RF transceiver.
 

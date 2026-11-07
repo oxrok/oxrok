@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ENC28J60 SPI command set and register banks and
 //   the decoder's documented classes and texts.
+#![allow(clippy::identity_op)]
 
 //! ENC28J60: Microchip 10Base-T Ethernet controller.
 

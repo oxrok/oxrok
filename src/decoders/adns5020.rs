@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ADNS-5020 register map and the decoder's
 //   documented classes and texts.
+#![allow(clippy::assigning_clones, clippy::collapsible_if, clippy::len_zero)]
 
 //! ADNS-5020: Avago bidirectional optical mouse sensor.
 

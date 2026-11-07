@@ -6,6 +6,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the SD card SPI-mode command set and the decoder's
 //   documented classes and texts.
+#![allow(clippy::doc_markdown, clippy::struct_excessive_bools, clippy::unnecessary_wraps)]
 
 //! SD card (SPI mode): the low-level SPI-mode command and data protocol.
 

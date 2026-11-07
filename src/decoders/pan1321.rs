@@ -3,6 +3,7 @@
 //   Copyright (C) 2012-2013 Uwe Hermann <uwe@hermann-uwe.de>.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the PAN1321 command and reply texts.
+#![allow(clippy::format_push_string)]
 
 //! PAN1321: the Panasonic Bluetooth SPP module's AT command set.
 

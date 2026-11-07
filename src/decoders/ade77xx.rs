@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ADE7758 register map (datasheet rev E) and the
 //   decoder's documented classes and texts.
+#![allow(clippy::doc_markdown, clippy::similar_names, clippy::unused_self)]
 
 //! ADE77xx: Analog Devices poly phase energy metering ICs.
 

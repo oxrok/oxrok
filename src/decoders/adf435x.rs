@@ -5,6 +5,7 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ADF4350/ADF4351 register map and the decoder's
 //   documented classes and texts.
+#![allow(clippy::doc_markdown, clippy::unused_self)]
 
 //! ADF435x: Analog Devices ADF4350/ADF4351 wideband synthesizer.
 

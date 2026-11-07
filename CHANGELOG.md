@@ -25,7 +25,7 @@ rounding.
 
 ### Added
 
-- Native protocol decoders: 94 of libsigrokdecode 0.5.3's 111 now have
+- Native protocol decoders: 105 of libsigrokdecode 0.5.3's 111 now have
   Rust implementations, each with an in-process native-vs-Python parity
   test and checklist entry in `docs/NATIVE_DECODERS.md`. The native set
   includes `can`, `jtag`, `swd`, `usb_signalling`, `usb_power_delivery`,

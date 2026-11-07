@@ -4,6 +4,13 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ITM/DWT packet formats and the decoder's
 //   documented classes and texts.
+#![allow(
+    clippy::collapsible_if,
+    clippy::collapsible_match,
+    clippy::too_many_lines,
+    clippy::unused_self,
+    clippy::verbose_bit_mask
+)]
 
 //! ARM ITM: instrumentation and DWT trace packets.
 

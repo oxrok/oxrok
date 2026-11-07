@@ -4,6 +4,12 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the Amulet ASCII protocol and the decoder's
 //   documented classes and texts.
+#![allow(
+    clippy::doc_markdown,
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 //! Amulet ASCII: the LCD controller's command, value and string protocol.
 

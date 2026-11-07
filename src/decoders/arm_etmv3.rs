@@ -4,6 +4,17 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like
 //   it, written from the ETMv3 signal protocol packet formats and the
 //   decoder's documented classes and texts.
+#![allow(
+    clippy::assigning_clones,
+    clippy::collapsible_if,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_same_then_else,
+    clippy::no_effect_underscore_binding,
+    clippy::struct_field_names,
+    clippy::unnecessary_wraps,
+    clippy::unused_self
+)]
 
 //! ARM ETMv3: branch, synchronization, trigger and header packets.
 
