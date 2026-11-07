@@ -10,6 +10,10 @@ pub mod ade77xx;
 pub mod adf435x;
 pub mod adns5020;
 pub mod am230x;
+pub mod amulet_ascii;
+pub mod arm_etmv3;
+pub mod arm_itm;
+pub mod arm_tpiu;
 pub mod atsha204a;
 pub mod aud;
 pub mod avr_isp;
@@ -70,6 +74,7 @@ pub mod nunchuk;
 pub mod onewire_link;
 pub mod onewire_network;
 pub mod ook;
+pub mod pan1321;
 pub mod parallel;
 pub mod pca9571;
 pub mod ps2;
@@ -109,12 +114,16 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 100] = [
+pub static ALL: [&DecoderDef; 105] = [
     &ac97::DEF,
     &ade77xx::DEF,
     &adf435x::DEF,
     &adns5020::DEF,
     &am230x::DEF,
+    &amulet_ascii::DEF,
+    &arm_etmv3::DEF,
+    &arm_itm::DEF,
+    &arm_tpiu::DEF,
     &atsha204a::DEF,
     &aud::DEF,
     &avr_isp::DEF,
@@ -175,6 +184,7 @@ pub static ALL: [&DecoderDef; 100] = [
     &onewire_link::DEF,
     &onewire_network::DEF,
     &ook::DEF,
+    &pan1321::DEF,
     &parallel::DEF,
     &pca9571::DEF,
     &ps2::DEF,
