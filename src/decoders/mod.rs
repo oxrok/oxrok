@@ -9,6 +9,7 @@ pub mod can;
 pub mod i2c;
 pub mod ir_nec;
 pub mod jtag;
+pub mod lpc;
 pub mod mdio;
 pub mod onewire_link;
 pub mod spi;
@@ -16,15 +17,17 @@ pub mod swd;
 pub mod uart;
 pub mod usb_power_delivery;
 pub mod usb_signalling;
+pub mod z80;
 
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 11] = [
+pub static ALL: [&DecoderDef; 13] = [
     &can::DEF,
     &i2c::DEF,
     &ir_nec::DEF,
     &jtag::DEF,
+    &lpc::DEF,
     &mdio::DEF,
     &onewire_link::DEF,
     &spi::DEF,
@@ -32,4 +35,5 @@ pub static ALL: [&DecoderDef; 11] = [
     &uart::DEF,
     &usb_power_delivery::DEF,
     &usb_signalling::DEF,
+    &z80::DEF,
 ];
