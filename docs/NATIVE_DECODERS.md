@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 15 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`) |
-| Native and parity-tested | 15 |
-| Pending | 96 |
+| Native now | 18 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`) |
+| Native and parity-tested | 18 |
+| Pending | 93 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -195,7 +195,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `jtag` | logic | 1 | native, parity-tested | — |
 | `jtag_ejtag` | stacked | 6 | pending | — |
 | `jtag_stm32` | stacked | 6 | pending | — |
-| `lin` | stacked | 5 | pending | stacked on uart, not logic as the suggested order had it |
+| `lin` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
 | `lm75` | stacked | 1 | pending | — |
 | `lpc` | logic | 2 | native, parity-tested | — |
 | `maple_bus` | logic | 7 | pending | — |
@@ -203,10 +203,10 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `mcs48` | logic | 2 | pending | — |
 | `mdio` | logic | 1 | native, parity-tested | — |
 | `microwire` | logic | 2 | pending | — |
-| `midi` | stacked | 5 | pending | — |
+| `midi` | stacked | 5 | native, parity-tested | — |
 | `miller` | logic | 3 | pending | — |
 | `mlx90614` | stacked | 2 | pending | — |
-| `modbus` | stacked | 5 | pending | stacked on uart, not logic as the suggested order had it |
+| `modbus` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
 | `morse` | logic | 3 | pending | — |
 | `mrf24j40` | stacked | 4 | pending | — |
 | `mxc6225xu` | stacked | 2 | pending | — |
