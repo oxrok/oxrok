@@ -246,7 +246,7 @@ mod python {
     }
 
     #[test]
-    fn native_to_python_chain_keeps_order() {
+    fn native_stacked_chain_keeps_order() {
         if !available() {
             return;
         }
@@ -256,10 +256,10 @@ mod python {
         assert_eq!(lines[0], "i2c-1: Start");
         assert_eq!(lines[1], "eeprom24xx-1: Control code bits: 1010");
         assert!(lines.iter().any(|l| l.starts_with("eeprom24xx-1: Data byte")), "{out}");
-        // A decoder exception on one item does not stop the chain.
+        // Both decoders are native now, so this is a native chain: the
+        // Python-only rtc8564 exception path is not in it any more.
         let (out, err, ok) = oxrok(&["-i", I2C, "-P", "i2c,rtc8564"]);
-        assert!(ok);
-        assert!(err.contains("handle_reg_0x55"), "{err}");
+        assert!(ok, "{err}");
         assert!(out.contains("rtc8564-1: Write date/time"), "{out}");
     }
 

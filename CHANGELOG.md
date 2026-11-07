@@ -6,6 +6,23 @@ release may change the library API.
 
 ## [Unreleased]
 
+## [0.2.0-alpha.1] - 2026-11-07
+
+This release is the decoder milestone. 94 of libsigrokdecode 0.5.3's
+111 decoders now have native Rust implementations, each with an
+in-process native-vs-Python parity test, and `-L` prefers the native
+one. The remaining 17 still run unchanged through the Python host
+(CPython or the built-in RustPython), so every `-P` id works; they land
+in a later release. The checklist is `docs/NATIVE_DECODERS.md`; the one
+documented divergence is `swd` with `strict_start=yes` and a line reset
+before the first request.
+
+The parity work also fixed shared runtime details: `Item::BigUint`
+equality, `bytearray` and mutable-list item conversion, long wait
+condition names, sample-rate delivery before `start()`, and SPI bitrate
+rounding.
+
+
 ### Added
 
 - Native protocol decoders: 94 of libsigrokdecode 0.5.3's 111 now have
@@ -16,6 +33,8 @@ release may change the library API.
   `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, the i2c stack
   (`i2cfilter`, `i2cdemux`, `eeprom24xx`), `gpib`, `ieee488`, and the
   timing/encoding set.
+- Firmware dependencies: drivers declare the firmware and bitstream files
+  they need, and `--list-firmware` prints them as JSON.
 - Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`, `mic-985xx`, `teleinfo`,
   `tondaj-sl-814`.
 - Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
@@ -28,6 +47,14 @@ release may change the library API.
   late answer doesn't shift what follows, unless it is later than the
   drain.
 - The libusb backend gives a kernel driver back only if it detached one.
+
+### Known issues
+
+- Two unrelated CI tests are flaky at this release: macOS
+  `formats_cli::csv_matches_sigrok_cli` (an extra identical CSV row) and
+  Windows `appa_55ii::tests::the_end_comes_after_the_port_is_back`
+  ("there was no room for it"). They pass on reruns and are not in the
+  decoder code.
 
 ## [0.1.0-alpha.2] - 2026-11-06
 

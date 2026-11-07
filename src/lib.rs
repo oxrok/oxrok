@@ -28,9 +28,9 @@
 //! # Installing
 //!
 //! ```text
-//! cargo install oxrok --version 0.1.0-alpha.2 --locked
-//! cargo install oxrok --version 0.1.0-alpha.2 --locked --features rustpython
-//! cargo install oxrok --version 0.1.0-alpha.2 --locked --features python
+//! cargo install oxrok --version 0.2.0-alpha.1 --locked
+//! cargo install oxrok --version 0.2.0-alpha.1 --locked --features rustpython
+//! cargo install oxrok --version 0.2.0-alpha.1 --locked --features python
 //! ```
 //!
 //! The archives of a GitHub release, where it has them, hold a `rustpython`
@@ -56,7 +56,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxrok = { version = "0.1.0-alpha.2", default-features = false, features = ["nusb"] }
+//! oxrok = { version = "0.2.0-alpha.1", default-features = false, features = ["nusb"] }
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses
