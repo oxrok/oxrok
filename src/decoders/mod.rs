@@ -6,7 +6,9 @@
 #![forbid(unsafe_code)]
 
 pub mod i2c;
+pub mod jtag;
 pub mod spi;
+pub mod swd;
 pub mod uart;
 
 use crate::decode::DecoderDef;
