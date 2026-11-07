@@ -73,6 +73,7 @@ impl PartialEq for Item {
         match (self, other) {
             (Item::Str(a), Item::Str(b)) => a == b,
             (Item::Int(a), Item::Int(b)) => a == b,
+            (Item::BigUint(a), Item::BigUint(b)) => a == b,
             (Item::Float(a), Item::Float(b)) => a == b,
             (Item::List(a), Item::List(b)) => a == b,
             (Item::Bytes(a), Item::Bytes(b)) => a == b,
@@ -699,6 +700,17 @@ mod tests {
         assert_eq!(
             Item::BigUint(vec![0xff; 19]).to_string(),
             "5708990770823839524233143877797980545530986495"
+        );
+    }
+
+    #[test]
+    fn wide_integers_compare_by_value() {
+        use super::Item;
+        assert_eq!(Item::BigUint(vec![0x01, 0x00]), Item::BigUint(vec![0x01, 0x00]));
+        assert_ne!(Item::BigUint(vec![0x01, 0x00]), Item::BigUint(vec![0x01, 0x01]));
+        assert_eq!(
+            Item::List(vec![Item::Str("DATA".into()), Item::BigUint(vec![0xff; 19])]),
+            Item::List(vec![Item::Str("DATA".into()), Item::BigUint(vec![0xff; 19])])
         );
     }
 

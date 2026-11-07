@@ -174,6 +174,9 @@ mod tests {
             return;
         }
         for id in ["uart", "i2c", "spi"] {
+            if std::env::var("OXROK_CORPUS_DECODER").is_ok_and(|only| only != id) {
+                continue;
+            }
             let (ran, skipped) = crate::support::assert_corpus_parity(id);
             eprintln!("{id}: {ran} corpus cases ran, {skipped} skipped");
             assert!(ran > 0, "{id}: no corpus case ran");
