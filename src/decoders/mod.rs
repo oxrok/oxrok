@@ -5,6 +5,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod avr_isp;
 pub mod can;
 pub mod i2c;
 pub mod ir_nec;
@@ -18,6 +19,7 @@ pub mod onewire_link;
 pub mod parallel;
 pub mod ps2;
 pub mod spi;
+pub mod spiflash;
 pub mod swd;
 pub mod uart;
 pub mod usb_power_delivery;
@@ -27,7 +29,8 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 18] = [
+pub static ALL: [&DecoderDef; 20] = [
+    &avr_isp::DEF,
     &can::DEF,
     &i2c::DEF,
     &ir_nec::DEF,
@@ -41,6 +44,7 @@ pub static ALL: [&DecoderDef; 18] = [
     &parallel::DEF,
     &ps2::DEF,
     &spi::DEF,
+    &spiflash::DEF,
     &swd::DEF,
     &uart::DEF,
     &usb_power_delivery::DEF,
