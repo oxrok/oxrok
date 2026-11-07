@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 34 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`) |
-| Native and parity-tested | 34 |
-| Pending | 77 |
+| Native now | 39 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`) |
+| Native and parity-tested | 39 |
+| Pending | 72 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -166,12 +166,12 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `avr_pdi` | logic | 6 | pending | — |
 | `can` | logic | 1 | native, parity-tested | — |
 | `cc1101` | stacked | 3 | pending | — |
-| `cec` | logic | 4 | pending | — |
+| `cec` | logic | 4 | native, parity-tested | — |
 | `cfp` | stacked | 6 | pending | — |
 | `counter` | logic | 3 | native, parity-tested | — |
-| `dali` | logic | 4 | pending | — |
+| `dali` | logic | 4 | native, parity-tested | — |
 | `dcf77` | logic | 4 | pending | — |
-| `dmx512` | logic | 4 | pending | — |
+| `dmx512` | logic | 4 | native, parity-tested | test.conf stacks uart→dmx512 (no annotations either side); the fixture tests logic input |
 | `ds1307` | stacked | 1 | pending | — |
 | `ds2408` | stacked | 6 | pending | — |
 | `ds243x` | stacked | 6 | pending | — |
@@ -184,7 +184,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `em4305` | logic | 5 | pending | — |
 | `enc28j60` | stacked | 3 | pending | — |
 | `flexray` | logic | 6 | pending | — |
-| `gpib` | logic | 2 | native, parity-tested | — |
+| `gpib` | logic | 2 | native, parity-tested | no sigrok-test dir; covered through ieee488 captures |
 | `graycode` | logic | 3 | native, parity-tested | — |
 | `guess_bitrate` | logic | 3 | native, parity-tested | — |
 | `hdcp` | stacked | 2 | pending | — |
@@ -195,8 +195,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `iec` | logic | 7 | pending | — |
 | `ieee488` | logic | 2 | native, parity-tested | — |
 | `ir_nec` | logic | 1 | native, parity-tested | — |
-| `ir_rc5` | logic | 4 | pending | — |
-| `ir_rc6` | logic | 4 | pending | — |
+| `ir_rc5` | logic | 4 | native, parity-tested | — |
+| `ir_rc6` | logic | 4 | native, parity-tested | — |
 | `jitter` | logic | 3 | native, parity-tested | — |
 | `jtag` | logic | 1 | native, parity-tested | — |
 | `jtag_ejtag` | stacked | 6 | pending | — |
@@ -213,7 +213,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `miller` | logic | 3 | native, parity-tested | — |
 | `mlx90614` | stacked | 2 | pending | — |
 | `modbus` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
-| `morse` | logic | 3 | native, parity-tested | — |
+| `morse` | logic | 3 | native, parity-tested | no test.conf; synthetic VCD fixture |
 | `mrf24j40` | stacked | 4 | pending | — |
 | `mxc6225xu` | stacked | 2 | pending | — |
 | `nes_gamepad` | stacked | 4 | pending | — |
