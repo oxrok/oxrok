@@ -14,6 +14,8 @@ pub mod onewire_link;
 pub mod spi;
 pub mod swd;
 pub mod uart;
+pub mod usb_power_delivery;
+pub mod usb_signalling;
 
 use crate::decode::DecoderDef;
 
