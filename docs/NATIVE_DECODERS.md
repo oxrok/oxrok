@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 30 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`) |
-| Native and parity-tested | 30 |
-| Pending | 81 |
+| Native now | 34 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`) |
+| Native and parity-tested | 34 |
+| Pending | 77 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -185,7 +185,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `enc28j60` | stacked | 3 | pending | — |
 | `flexray` | logic | 6 | pending | — |
 | `gpib` | logic | 2 | native, parity-tested | — |
-| `graycode` | logic | 3 | pending | — |
+| `graycode` | logic | 3 | native, parity-tested | — |
 | `guess_bitrate` | logic | 3 | native, parity-tested | — |
 | `hdcp` | stacked | 2 | pending | — |
 | `i2c` | logic | pilot | native, parity-tested | pilot |
@@ -210,10 +210,10 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `mdio` | logic | 1 | native, parity-tested | — |
 | `microwire` | logic | 2 | pending | — |
 | `midi` | stacked | 5 | native, parity-tested | — |
-| `miller` | logic | 3 | pending | — |
+| `miller` | logic | 3 | native, parity-tested | — |
 | `mlx90614` | stacked | 2 | pending | — |
 | `modbus` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
-| `morse` | logic | 3 | pending | — |
+| `morse` | logic | 3 | native, parity-tested | — |
 | `mrf24j40` | stacked | 4 | pending | — |
 | `mxc6225xu` | stacked | 2 | pending | — |
 | `nes_gamepad` | stacked | 4 | pending | — |
@@ -230,7 +230,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ps2` | logic | 2 | native, parity-tested | — |
 | `pwm` | logic | 3 | native, parity-tested | — |
 | `qi` | logic | 6 | pending | — |
-| `rc_encode` | logic | 3 | pending | — |
+| `rc_encode` | logic | 3 | native, parity-tested | — |
 | `rfm12` | stacked | 4 | pending | — |
 | `rgb_led_spi` | stacked | 4 | pending | — |
 | `rgb_led_ws281x` | logic | 5 | pending | — |
