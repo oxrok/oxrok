@@ -1,0 +1,19 @@
+$timescale 1 ms $end
+$scope module top $end
+$var wire 1 ! D0 $end
+$upscope $end
+$enddefinitions $end
+#0 0!
+#10 1!
+#110 0!
+#210 1!
+#310 0!
+#410 1!
+#510 0!
+#610 1!
+#710 0!
+#1010 1!
+#1110 0!
+#1210 1!
+#1310 0!
+#2410 0!

@@ -10,6 +10,7 @@ pub mod can;
 pub mod counter;
 pub mod eeprom24xx;
 pub mod gpib;
+pub mod graycode;
 pub mod guess_bitrate;
 pub mod i2c;
 pub mod i2cdemux;
@@ -22,11 +23,14 @@ pub mod lin;
 pub mod lpc;
 pub mod mdio;
 pub mod midi;
+pub mod miller;
 pub mod modbus;
+pub mod morse;
 pub mod onewire_link;
 pub mod parallel;
 pub mod ps2;
 pub mod pwm;
+pub mod rc_encode;
 pub mod spi;
 pub mod spiflash;
 pub mod swd;
@@ -39,12 +43,13 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 30] = [
+pub static ALL: [&DecoderDef; 34] = [
     &avr_isp::DEF,
     &can::DEF,
     &counter::DEF,
     &eeprom24xx::DEF,
     &gpib::DEF,
+    &graycode::DEF,
     &guess_bitrate::DEF,
     &i2c::DEF,
     &i2cdemux::DEF,
@@ -57,11 +62,14 @@ pub static ALL: [&DecoderDef; 30] = [
     &lpc::DEF,
     &mdio::DEF,
     &midi::DEF,
+    &miller::DEF,
     &modbus::DEF,
+    &morse::DEF,
     &onewire_link::DEF,
     &parallel::DEF,
     &ps2::DEF,
     &pwm::DEF,
+    &rc_encode::DEF,
     &spi::DEF,
     &spiflash::DEF,
     &swd::DEF,
