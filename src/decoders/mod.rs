@@ -24,7 +24,7 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 13] = [
+pub static ALL: [&DecoderDef; 15] = [
     &can::DEF,
     &i2c::DEF,
     &ir_nec::DEF,
@@ -32,6 +32,8 @@ pub static ALL: [&DecoderDef; 13] = [
     &lpc::DEF,
     &mdio::DEF,
     &onewire_link::DEF,
+    &parallel::DEF,
+    &ps2::DEF,
     &spi::DEF,
     &swd::DEF,
     &uart::DEF,

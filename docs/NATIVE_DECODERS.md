@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 11 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`) |
-| Native and parity-tested | 11 |
-| Pending | 100 |
+| Native now | 15 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`) |
+| Native and parity-tested | 15 |
+| Pending | 96 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -197,7 +197,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `jtag_stm32` | stacked | 6 | pending | — |
 | `lin` | stacked | 5 | pending | stacked on uart, not logic as the suggested order had it |
 | `lm75` | stacked | 1 | pending | — |
-| `lpc` | logic | 2 | pending | — |
+| `lpc` | logic | 2 | native, parity-tested | — |
 | `maple_bus` | logic | 7 | pending | — |
 | `max7219` | stacked | 4 | pending | — |
 | `mcs48` | logic | 2 | pending | — |
@@ -219,9 +219,9 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ook_oregon` | stacked | 6 | pending | — |
 | `ook_vis` | stacked | 6 | pending | — |
 | `pan1321` | stacked | 5 | pending | — |
-| `parallel` | logic | 2 | pending | — |
+| `parallel` | logic | 2 | native, parity-tested | — |
 | `pca9571` | stacked | 1 | pending | — |
-| `ps2` | logic | 2 | pending | — |
+| `ps2` | logic | 2 | native, parity-tested | — |
 | `pwm` | logic | 3 | pending | — |
 | `qi` | logic | 6 | pending | — |
 | `rc_encode` | logic | 3 | pending | — |
@@ -255,7 +255,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `wiegand` | logic | 5 | pending | — |
 | `x2444m` | stacked | 4 | pending | — |
 | `xfp` | stacked | 2 | pending | — |
-| `z80` | logic | 2 | pending | — |
+| `z80` | logic | 2 | native, parity-tested | — |
 
 ## Exceptions
 
