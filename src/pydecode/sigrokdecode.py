@@ -12,7 +12,14 @@ OUTPUT_BINARY = 2
 OUTPUT_META = 3
 SRD_CONF_SAMPLERATE = 10000
 
-_CONDS = {'l': 0, 'h': 1, 'r': 2, 'f': 3, 'e': 4, 's': 5}
+_CONDS = {
+    'l': 0, 'low': 0,
+    'h': 1, 'high': 1,
+    'r': 2, 'rising': 2,
+    'f': 3, 'falling': 3,
+    'e': 4, 'edge': 4,
+    's': 5, 'stable': 5,
+}
 
 
 def _sum(iterable, /, start=0):

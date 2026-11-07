@@ -25,6 +25,7 @@ pub mod i2c;
 pub mod i2cdemux;
 pub mod i2cfilter;
 pub mod i2s;
+pub mod iec;
 pub mod ieee488;
 pub mod ir_nec;
 pub mod ir_rc5;
@@ -33,12 +34,16 @@ pub mod jitter;
 pub mod jtag;
 pub mod lin;
 pub mod lpc;
+pub mod maple_bus;
+pub mod mcs48;
 pub mod mdio;
 pub mod midi;
+pub mod microwire;
 pub mod miller;
 pub mod modbus;
 pub mod morse;
 pub mod onewire_link;
+pub mod ook;
 pub mod parallel;
 pub mod ps2;
 pub mod pwm;
@@ -48,6 +53,7 @@ pub mod rgb_led_ws281x;
 pub mod sda2506;
 pub mod sdcard_sd;
 pub mod seven_segment;
+pub mod signature;
 pub mod spdif;
 pub mod spi;
 pub mod spiflash;
@@ -57,6 +63,7 @@ pub mod swd;
 pub mod t55xx;
 pub mod tdm_audio;
 pub mod timing;
+pub mod tlc5620;
 pub mod uart;
 pub mod usb_power_delivery;
 pub mod usb_signalling;
@@ -66,7 +73,7 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 57] = [
+pub static ALL: [&DecoderDef; 64] = [
     &am230x::DEF,
     &avr_isp::DEF,
     &can::DEF,
@@ -87,6 +94,7 @@ pub static ALL: [&DecoderDef; 57] = [
     &i2cdemux::DEF,
     &i2cfilter::DEF,
     &i2s::DEF,
+    &iec::DEF,
     &ieee488::DEF,
     &ir_nec::DEF,
     &ir_rc5::DEF,
@@ -95,12 +103,16 @@ pub static ALL: [&DecoderDef; 57] = [
     &jtag::DEF,
     &lin::DEF,
     &lpc::DEF,
+    &maple_bus::DEF,
+    &mcs48::DEF,
     &mdio::DEF,
     &midi::DEF,
+    &microwire::DEF,
     &miller::DEF,
     &modbus::DEF,
     &morse::DEF,
     &onewire_link::DEF,
+    &ook::DEF,
     &parallel::DEF,
     &ps2::DEF,
     &pwm::DEF,
@@ -110,6 +122,7 @@ pub static ALL: [&DecoderDef; 57] = [
     &sda2506::DEF,
     &sdcard_sd::DEF,
     &seven_segment::DEF,
+    &signature::DEF,
     &spdif::DEF,
     &spi::DEF,
     &spiflash::DEF,
@@ -119,6 +132,7 @@ pub static ALL: [&DecoderDef; 57] = [
     &t55xx::DEF,
     &tdm_audio::DEF,
     &timing::DEF,
+    &tlc5620::DEF,
     &uart::DEF,
     &usb_power_delivery::DEF,
     &usb_signalling::DEF,

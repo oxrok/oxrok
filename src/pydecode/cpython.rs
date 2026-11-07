@@ -282,12 +282,12 @@ fn parse_conds(conds: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<Vec<Cond>>> {
             }
             let ch: usize = k.extract()?;
             let kind = match v.extract::<String>()?.as_str() {
-                "l" => CondKind::Low,
-                "h" => CondKind::High,
-                "r" => CondKind::Rising,
-                "f" => CondKind::Falling,
-                "e" => CondKind::Edge,
-                "s" => CondKind::Stable,
+                "l" | "low" => CondKind::Low,
+                "h" | "high" => CondKind::High,
+                "r" | "rising" => CondKind::Rising,
+                "f" | "falling" => CondKind::Falling,
+                "e" | "edge" => CondKind::Edge,
+                "s" | "stable" => CondKind::Stable,
                 other => {
                     return Err(pyo3::exceptions::PyValueError::new_err(format!(
                         "unknown condition '{other}'"
