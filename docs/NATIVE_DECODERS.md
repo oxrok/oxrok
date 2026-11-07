@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 74 (`ac97`, `am230x`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `dsi`, `eeprom24xx`, `em4100`, `em4305`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `lin`, `lm75`, `lpc`, `maple_bus`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `modbus`, `morse`, `onewire_link`, `ook`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `z80`) |
-| Native and parity-tested | 74 |
-| Pending | 37 |
+| Native now | 94 (`ac97`, `am230x`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `ds2408`, `ds243x`, `ds28ea00`, `dsi`, `edid`, `eeprom24xx`, `em4100`, `em4305`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `hdcp`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `jtag_ejtag`, `jtag_stm32`, `lin`, `lm75`, `lpc`, `maple_bus`, `max7219`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `mlx90614`, `modbus`, `morse`, `mrf24j40`, `mxc6225xu`, `nes_gamepad`, `nrf24l01`, `nunchuk`, `onewire_link`, `onewire_network`, `ook`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rfm12`, `rgb_led_spi`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `ssi32`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `x2444m`, `xfp`, `z80`) |
+| Native and parity-tested | 94 |
+| Pending | 17 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -178,11 +178,11 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `dcf77` | logic | 4 | native, parity-tested | — |
 | `dmx512` | logic | 4 | native, parity-tested | test.conf stacks uart→dmx512 (no annotations either side); the fixture tests logic input |
 | `ds1307` | stacked | 1 | native, parity-tested | — |
-| `ds2408` | stacked | 6 | pending | — |
-| `ds243x` | stacked | 6 | pending | — |
-| `ds28ea00` | stacked | 6 | pending | — |
+| `ds2408` | stacked | 6 | native, parity-tested | — |
+| `ds243x` | stacked | 6 | native, parity-tested | — |
+| `ds28ea00` | stacked | 6 | native, parity-tested | — |
 | `dsi` | logic | 6 | native, parity-tested | — |
-| `edid` | stacked | 2 | pending | — |
+| `edid` | stacked | 2 | native, parity-tested | — |
 | `eeprom24xx` | stacked | 1 | native, parity-tested | — |
 | `eeprom93xx` | stacked | 6 | pending | — |
 | `em4100` | logic | 5 | native, parity-tested | — |
@@ -192,7 +192,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `gpib` | logic | 2 | native, parity-tested | no sigrok-test dir; covered through ieee488 captures |
 | `graycode` | logic | 3 | native, parity-tested | — |
 | `guess_bitrate` | logic | 3 | native, parity-tested | — |
-| `hdcp` | stacked | 2 | pending | — |
+| `hdcp` | stacked | 2 | native, parity-tested | — |
 | `i2c` | logic | pilot | native, parity-tested | pilot |
 | `i2cdemux` | stacked | 1 | native, parity-tested | stacked on i2c |
 | `i2cfilter` | stacked | 1 | native, parity-tested | stacked on i2c |
@@ -204,28 +204,28 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ir_rc6` | logic | 4 | native, parity-tested | — |
 | `jitter` | logic | 3 | native, parity-tested | — |
 | `jtag` | logic | 1 | native, parity-tested | — |
-| `jtag_ejtag` | stacked | 6 | pending | — |
-| `jtag_stm32` | stacked | 6 | pending | — |
+| `jtag_ejtag` | stacked | 6 | native, parity-tested | — |
+| `jtag_stm32` | stacked | 6 | native, parity-tested | — |
 | `lin` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
 | `lm75` | stacked | 1 | native, parity-tested | — |
 | `lpc` | logic | 2 | native, parity-tested | — |
 | `maple_bus` | logic | 7 | native, parity-tested | — |
-| `max7219` | stacked | 4 | pending | — |
+| `max7219` | stacked | 4 | native, parity-tested | — |
 | `mcs48` | logic | 2 | native, parity-tested | — |
 | `mdio` | logic | 1 | native, parity-tested | — |
 | `microwire` | logic | 2 | native, parity-tested | — |
 | `midi` | stacked | 5 | native, parity-tested | — |
 | `miller` | logic | 3 | native, parity-tested | — |
-| `mlx90614` | stacked | 2 | pending | — |
+| `mlx90614` | stacked | 2 | native, parity-tested | — |
 | `modbus` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
 | `morse` | logic | 3 | native, parity-tested | no test.conf; synthetic VCD fixture |
-| `mrf24j40` | stacked | 4 | pending | — |
-| `mxc6225xu` | stacked | 2 | pending | — |
-| `nes_gamepad` | stacked | 4 | pending | — |
-| `nrf24l01` | stacked | 4 | pending | — |
-| `nunchuk` | stacked | 2 | pending | — |
+| `mrf24j40` | stacked | 4 | native, parity-tested | — |
+| `mxc6225xu` | stacked | 2 | native, parity-tested | — |
+| `nes_gamepad` | stacked | 4 | native, parity-tested | — |
+| `nrf24l01` | stacked | 4 | native, parity-tested | — |
+| `nunchuk` | stacked | 2 | native, parity-tested | — |
 | `onewire_link` | logic | 1 | native, parity-tested | — |
-| `onewire_network` | stacked | 6 | pending | — |
+| `onewire_network` | stacked | 6 | native, parity-tested | — |
 | `ook` | logic | 7 | native, parity-tested | — |
 | `ook_oregon` | stacked | 6 | pending | — |
 | `ook_vis` | stacked | 6 | pending | — |
@@ -236,8 +236,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `pwm` | logic | 3 | native, parity-tested | — |
 | `qi` | logic | 6 | native, parity-tested | — |
 | `rc_encode` | logic | 3 | native, parity-tested | — |
-| `rfm12` | stacked | 4 | pending | — |
-| `rgb_led_spi` | stacked | 4 | pending | — |
+| `rfm12` | stacked | 4 | native, parity-tested | — |
+| `rgb_led_spi` | stacked | 4 | native, parity-tested | — |
 | `rgb_led_ws281x` | logic | 5 | native, parity-tested | — |
 | `rtc8564` | stacked | 1 | native, parity-tested | — |
 | `sda2506` | logic | 5 | native, parity-tested | — |
@@ -248,7 +248,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `spdif` | logic | 4 | native, parity-tested | — |
 | `spi` | logic | pilot | native, parity-tested | pilot |
 | `spiflash` | stacked | 3 | native, parity-tested | — |
-| `ssi32` | stacked | 4 | pending | — |
+| `ssi32` | stacked | 4 | native, parity-tested | — |
 | `st7735` | logic | 5 | native, parity-tested | — |
 | `stepper_motor` | logic | 5 | native, parity-tested | — |
 | `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
@@ -264,8 +264,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `usb_request` | stacked | 6 | pending | — |
 | `usb_signalling` | logic | 1 | native, parity-tested | — |
 | `wiegand` | logic | 5 | native, parity-tested | — |
-| `x2444m` | stacked | 4 | pending | — |
-| `xfp` | stacked | 2 | pending | — |
+| `x2444m` | stacked | 4 | native, parity-tested | — |
+| `xfp` | stacked | 2 | native, parity-tested | — |
 | `z80` | logic | 2 | native, parity-tested | — |
 
 ## Exceptions
