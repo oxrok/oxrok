@@ -7,6 +7,7 @@
 
 pub mod ac97;
 pub mod am230x;
+pub mod atsha204a;
 pub mod aud;
 pub mod avr_isp;
 pub mod avr_pdi;
@@ -16,6 +17,7 @@ pub mod counter;
 pub mod dali;
 pub mod dcf77;
 pub mod dmx512;
+pub mod ds1307;
 pub mod dsi;
 pub mod eeprom24xx;
 pub mod em4100;
@@ -36,6 +38,7 @@ pub mod ir_rc6;
 pub mod jitter;
 pub mod jtag;
 pub mod lin;
+pub mod lm75;
 pub mod lpc;
 pub mod maple_bus;
 pub mod mcs48;
@@ -48,11 +51,13 @@ pub mod morse;
 pub mod onewire_link;
 pub mod ook;
 pub mod parallel;
+pub mod pca9571;
 pub mod ps2;
 pub mod pwm;
 pub mod qi;
 pub mod rc_encode;
 pub mod rgb_led_ws281x;
+pub mod rtc8564;
 pub mod sda2506;
 pub mod sdcard_sd;
 pub mod seven_segment;
@@ -65,6 +70,7 @@ pub mod stepper_motor;
 pub mod swd;
 pub mod swim;
 pub mod t55xx;
+pub mod tca6408a;
 pub mod tdm_audio;
 pub mod timing;
 pub mod tlc5620;
@@ -77,9 +83,10 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 68] = [
+pub static ALL: [&DecoderDef; 74] = [
     &ac97::DEF,
     &am230x::DEF,
+    &atsha204a::DEF,
     &aud::DEF,
     &avr_isp::DEF,
     &avr_pdi::DEF,
@@ -89,6 +96,7 @@ pub static ALL: [&DecoderDef; 68] = [
     &dali::DEF,
     &dcf77::DEF,
     &dmx512::DEF,
+    &ds1307::DEF,
     &dsi::DEF,
     &eeprom24xx::DEF,
     &em4100::DEF,
@@ -109,6 +117,7 @@ pub static ALL: [&DecoderDef; 68] = [
     &jitter::DEF,
     &jtag::DEF,
     &lin::DEF,
+    &lm75::DEF,
     &lpc::DEF,
     &maple_bus::DEF,
     &mcs48::DEF,
@@ -121,11 +130,13 @@ pub static ALL: [&DecoderDef; 68] = [
     &onewire_link::DEF,
     &ook::DEF,
     &parallel::DEF,
+    &pca9571::DEF,
     &ps2::DEF,
     &pwm::DEF,
     &qi::DEF,
     &rc_encode::DEF,
     &rgb_led_ws281x::DEF,
+    &rtc8564::DEF,
     &sda2506::DEF,
     &sdcard_sd::DEF,
     &seven_segment::DEF,
@@ -138,6 +149,7 @@ pub static ALL: [&DecoderDef; 68] = [
     &swd::DEF,
     &swim::DEF,
     &t55xx::DEF,
+    &tca6408a::DEF,
     &tdm_audio::DEF,
     &timing::DEF,
     &tlc5620::DEF,
