@@ -40,14 +40,21 @@ checked against the allowed values.
 
 ## Native decoders
 
-`uart`, `i2c` and `spi` reproduce libsigrokdecode's annotation classes,
-rows, texts, sample ranges, binary output and metadata;
-`tests/decode_cli.rs` compares their output with sigrok-cli's
-byte for byte on synthetic captures, and `tools/diffcli.sh` repeats the
-comparison in every output mode. Two details to know: `uart` keeps an
-upstream quirk that selections depend on (stop bits are tagged with the
-parity-ok class), and the i2c decoder's short name is `I2C`, not the
-upstream `I2C` with a superscript two, so the sources stay ASCII.
+30 of the 111 decoders of libsigrokdecode 0.5.3 are native now;
+`docs/NATIVE_DECODERS.md` is the checklist, with the status, batch and
+the documented exceptions for every decoder. Each native decoder
+reproduces libsigrokdecode's annotation classes, rows, texts, sample
+ranges, binary output and metadata, and has an in-process native-vs-
+Python parity test: the two run on the same capture and configuration,
+and the full output sequence must match. The sigrok-test corpus is an
+opt-in, larger check (`OXROK_CORPUS=1`).
+
+`uart`, `i2c` and `spi` also have byte-for-byte sigrok-cli goldens in
+`tests/decode_cli.rs`, and `tools/diffcli.sh` repeats the comparison in
+every output mode. Two details to know: `uart` keeps an upstream quirk
+that selections depend on (stop bits are tagged with the parity-ok
+class), and the i2c decoder's short name is `I2C`, not the upstream
+`I2C` with a superscript two, so the sources stay ASCII.
 
 Each native decoder's source names the `pd.py` it corresponds to and
 that file's authors, like the rest of the code (`docs/LICENSING.md`),
