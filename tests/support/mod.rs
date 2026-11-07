@@ -4,6 +4,8 @@
 //! `mod support;` and be gated on the `python` or `rustpython` feature
 //! where it needs the reference decoder.
 
+#![allow(dead_code)]
+
 use oxrok::core::{Key, Packet, Value};
 use oxrok::decode::{Config, DecoderDef, Item, Output, Stack, parse_spec};
 
@@ -296,7 +298,13 @@ pub fn corpus_config(info: &oxrok::decode::DecoderInfo, case: &CorpusCase) -> Co
 /// everything.
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub fn assert_corpus_parity(native_id: &str) -> (usize, usize) {
-    let def = native(native_id);
+    assert_corpus_parity_def(native(native_id), native_id)
+}
+
+/// Like [`assert_corpus_parity`], with the native definition at hand so a
+/// decoder being ported need not be in `ALL` yet.
+#[cfg(any(feature = "python", feature = "rustpython"))]
+pub fn assert_corpus_parity_def(def: &'static DecoderDef, native_id: &str) -> (usize, usize) {
     let cases = corpus_cases(native_id);
     let Some(dumps) = corpus_dumps_dir() else { return (0, cases.len()) };
     let mut ran = 0;
@@ -345,7 +353,17 @@ pub fn parity(
     pairs: &[(&str, &str)],
     capture: &Capture,
 ) -> (Vec<Output>, Vec<Output>) {
-    let native_def = native(native_id);
+    parity_def(native(native_id), python_id, pairs, capture)
+}
+
+/// Like [`parity`], with the native definition at hand.
+#[cfg(any(feature = "python", feature = "rustpython"))]
+pub fn parity_def(
+    native_def: &'static DecoderDef,
+    python_id: &str,
+    pairs: &[(&str, &str)],
+    capture: &Capture,
+) -> (Vec<Output>, Vec<Output>) {
     let python_def = python(python_id);
     let cfg = config(native_def.info, pairs, &capture.channels);
     (run(native_def, &cfg, capture), run(python_def, &cfg, capture))
@@ -368,7 +386,20 @@ fn comparable(output: &Output) -> Output {
 /// Asserts that the native and Python decoders emit the same outputs.
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub fn assert_parity(native_id: &str, pairs: &[(&str, &str)], capture: &Capture) {
-    let (native, python) = parity(native_id, native_id, pairs, capture);
+    assert_parity_def(native(native_id), native_id, pairs, capture);
+}
+
+/// Like [`assert_parity`], with the native definition at hand so a decoder
+/// being ported need not be in `ALL` yet.
+#[cfg(any(feature = "python", feature = "rustpython"))]
+pub fn assert_parity_def(
+    native_def: &'static DecoderDef,
+    python_id: &str,
+    pairs: &[(&str, &str)],
+    capture: &Capture,
+) {
+    let (native, python) = parity_def(native_def, python_id, pairs, capture);
+    let native_id = native_def.info.id;
     assert_eq!(
         native.len(),
         python.len(),
