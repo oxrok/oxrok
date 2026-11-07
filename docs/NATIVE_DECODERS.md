@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 64 (`i2c`, `spi`, `uart`, `can`, `mdio`, `jtag`, `swd`, `onewire_link`, `ir_nec`, `usb_signalling`, `usb_power_delivery`, `lpc`, `z80`, `parallel`, `ps2`, `lin`, `modbus`, `midi`, `avr_isp`, `spiflash`, `i2cfilter`, `i2cdemux`, `eeprom24xx`, `gpib`, `ieee488`, `counter`, `guess_bitrate`, `jitter`, `pwm`, `timing`, `graycode`, `morse`, `miller`, `rc_encode`, `ir_rc5`, `ir_rc6`, `cec`, `dali`, `dmx512`, `stepper_motor`, `wiegand`, `em4100`, `em4305`, `sdcard_sd`, `st7735`, `rgb_led_ws281x`, `sda2506`, `seven_segment`, `dcf77`, `spdif`, `i2s`, `tdm_audio`, `t55xx`, `am230x`, `dsi`, `qi`, `flexray`, `iec`, `maple_bus`, `ook`, `signature`, `tlc5620`, `microwire`, `mcs48`) |
-| Native and parity-tested | 64 |
-| Pending | 47 |
+| Native now | 74 (`ac97`, `am230x`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `dsi`, `eeprom24xx`, `em4100`, `em4305`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `lin`, `lm75`, `lpc`, `maple_bus`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `modbus`, `morse`, `onewire_link`, `ook`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `z80`) |
+| Native and parity-tested | 74 |
+| Pending | 37 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -53,6 +53,11 @@ so the native and Python sides see identical packed samples, channel
 names and sample rate. The harness compares the complete `Output`
 sequence: annotation instance, span, class and texts; binary payload;
 `put_python` item; metadata name and value; and `End`, in order.
+
+The decoder stack delivers the sample rate to `metadata()` before
+`start()` as libsigrokdecode does, and again after it. Some decoders
+(`swim`) read it in `start()`; the Python hosts buffer the pre-start
+value. Native decoders keep taking it in either call.
 
 The Python host maps `bytearray` to `Item::Bytes` and snapshots lists
 and tuples when an item is emitted. This is a host bug fix agreed during
@@ -151,7 +156,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 
 | Decoder | Kind | Batch | Status | Notes |
 |---|---|---|---|---|
-| `ac97` | logic | 6 | pending | — |
+| `ac97` | logic | 6 | native, parity-tested | — |
 | `ade77xx` | stacked | 3 | pending | — |
 | `adf435x` | stacked | 3 | pending | — |
 | `adns5020` | stacked | 3 | pending | — |
@@ -160,10 +165,10 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `arm_etmv3` | stacked | 5 | pending | — |
 | `arm_itm` | stacked | 5 | pending | — |
 | `arm_tpiu` | stacked | 5 | pending | — |
-| `atsha204a` | stacked | 2 | pending | — |
-| `aud` | logic | 6 | pending | — |
+| `atsha204a` | stacked | 2 | native, parity-tested | — |
+| `aud` | logic | 6 | native, parity-tested | — |
 | `avr_isp` | stacked | 3 | native, parity-tested | stacked on spi, not logic as the suggested order had it |
-| `avr_pdi` | logic | 6 | pending | — |
+| `avr_pdi` | logic | 6 | native, parity-tested | — |
 | `can` | logic | 1 | native, parity-tested | — |
 | `cc1101` | stacked | 3 | pending | — |
 | `cec` | logic | 4 | native, parity-tested | — |
@@ -172,7 +177,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `dali` | logic | 4 | native, parity-tested | — |
 | `dcf77` | logic | 4 | native, parity-tested | — |
 | `dmx512` | logic | 4 | native, parity-tested | test.conf stacks uart→dmx512 (no annotations either side); the fixture tests logic input |
-| `ds1307` | stacked | 1 | pending | — |
+| `ds1307` | stacked | 1 | native, parity-tested | — |
 | `ds2408` | stacked | 6 | pending | — |
 | `ds243x` | stacked | 6 | pending | — |
 | `ds28ea00` | stacked | 6 | pending | — |
@@ -202,7 +207,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `jtag_ejtag` | stacked | 6 | pending | — |
 | `jtag_stm32` | stacked | 6 | pending | — |
 | `lin` | stacked | 5 | native, parity-tested | stacked on uart, not logic as the suggested order had it |
-| `lm75` | stacked | 1 | pending | — |
+| `lm75` | stacked | 1 | native, parity-tested | — |
 | `lpc` | logic | 2 | native, parity-tested | — |
 | `maple_bus` | logic | 7 | native, parity-tested | — |
 | `max7219` | stacked | 4 | pending | — |
@@ -226,7 +231,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `ook_vis` | stacked | 6 | pending | — |
 | `pan1321` | stacked | 5 | pending | — |
 | `parallel` | logic | 2 | native, parity-tested | — |
-| `pca9571` | stacked | 1 | pending | — |
+| `pca9571` | stacked | 1 | native, parity-tested | — |
 | `ps2` | logic | 2 | native, parity-tested | — |
 | `pwm` | logic | 3 | native, parity-tested | — |
 | `qi` | logic | 6 | native, parity-tested | — |
@@ -234,7 +239,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `rfm12` | stacked | 4 | pending | — |
 | `rgb_led_spi` | stacked | 4 | pending | — |
 | `rgb_led_ws281x` | logic | 5 | native, parity-tested | — |
-| `rtc8564` | stacked | 1 | pending | — |
+| `rtc8564` | stacked | 1 | native, parity-tested | — |
 | `sda2506` | logic | 5 | native, parity-tested | — |
 | `sdcard_sd` | logic | 5 | native, parity-tested | — |
 | `sdcard_spi` | stacked | 3 | pending | — |
@@ -247,9 +252,9 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `st7735` | logic | 5 | native, parity-tested | — |
 | `stepper_motor` | logic | 5 | native, parity-tested | — |
 | `swd` | logic | 1 | native, parity-tested | exception: `strict_start` before the first request |
-| `swim` | logic | 6 | pending | — |
+| `swim` | logic | 6 | native, parity-tested | — |
 | `t55xx` | logic | 6 | native, parity-tested | — |
-| `tca6408a` | stacked | 1 | pending | — |
+| `tca6408a` | stacked | 1 | native, parity-tested | — |
 | `tdm_audio` | logic | 4 | native, parity-tested | — |
 | `timing` | logic | 3 | native, parity-tested | — |
 | `tlc5620` | logic | 7 | native, parity-tested | — |
