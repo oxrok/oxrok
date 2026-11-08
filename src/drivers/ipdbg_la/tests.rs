@@ -292,6 +292,13 @@ fn a_later_match_changes_an_earlier_one_as_in_c() {
 }
 
 #[test]
+fn a_rising_match_clears_what_a_falling_one_left_in_the_last_value() {
+    let t = trigger_of(&[(0, TriggerMatch::Falling), (0, TriggerMatch::Rising)]);
+    let f = convert_trigger(Some(&t), 1, |_| true);
+    assert_eq!((f.value[0], f.value_last[0]), (1, 0));
+}
+
+#[test]
 fn a_disabled_channel_or_one_past_the_sample_sets_nothing() {
     let t = trigger_of(&[(1, TriggerMatch::One), (2, TriggerMatch::One), (99, TriggerMatch::One)]);
     let f = convert_trigger(Some(&t), 1, |c| c != 1);
@@ -585,6 +592,23 @@ fn time_the_thread_did_not_run_is_excused_up_to_a_cap() {
 }
 
 #[test]
+fn a_byte_ends_what_a_stall_excused() {
+    let t = Instant::now();
+    let mut r = Silence::new(t, 1024);
+    r.look(t);
+    let _ = r.got(t, 1);
+    r.look(at(t, 50));
+    let _ = r.got(at(t, 50), 1);
+    // The next silence has no credit of the last: a warning at 30 s of it.
+    for s in 51..80 {
+        r.look(at(t, s));
+        assert_eq!(r.empty(), Verdict::Wait, "at {s}");
+    }
+    r.look(at(t, 80));
+    assert!(matches!(r.empty(), Verdict::Warn(_)));
+}
+
+#[test]
 fn the_bound_goes_by_the_time_ahead_of_the_read() {
     let t = Instant::now();
     let mut r = Silence::new(t, 1024);
@@ -686,6 +710,20 @@ fn bytes_do_not_give_the_wait_back_as_in_c() {
     let got = receive_blocking(&mut wire, &mut id);
     assert_eq!(got, 3);
     assert!(f.lock().steps.is_empty());
+}
+
+#[test]
+fn a_late_byte_does_not_start_the_wait_again() {
+    // Past the 2 s with one byte in, the next empty read ends it, with the rest offered.
+    let f = Fake::with(vec![
+        Step::Late(Duration::from_millis(2100), b"I".to_vec()),
+        Step::Empty,
+        Step::Data(b"DBG".to_vec()),
+    ]);
+    let mut wire = f.clone();
+    let mut id = [0u8; 4];
+    assert_eq!(receive_blocking(&mut wire, &mut id), 1);
+    assert_eq!(f.lock().steps.len(), 1);
 }
 
 #[test]
@@ -1092,6 +1130,22 @@ fn a_full_queue_does_not_hold_a_close() {
 }
 
 #[test]
+fn the_wire_goes_back_ahead_of_the_end() {
+    bounded(|| {
+        let f = Fake::with(vec![Step::Data(ramp(8))]);
+        let mut d = device(16, 3, &f);
+        d.set(&Key::CaptureRatio, &Value::U64(0), None).expect("a ratio");
+        // A queue of one, with the last samples left in it: the End can't go.
+        let (tx, rx) = sync_channel(1);
+        d.start(PacketSink::new(tx, 0)).expect("a start");
+        assert!(matches!(rx.recv().expect("a header").1, Packet::Header { .. }));
+        assert_eq!(rx.recv().expect("a trigger").1, Packet::Trigger);
+        wait_for(|| d.lock().wire.is_some());
+        drop(rx);
+    });
+}
+
+#[test]
 fn a_restart_after_a_stuck_end_does_not_hang() {
     bounded(|| {
         let f = Fake::with(vec![Step::Data(ramp(8))]);
@@ -1201,7 +1255,11 @@ fn a_close_waits_for_the_server_to_close_first() {
             let mut buf = [0u8; 16];
             while !matches!(s.read(&mut buf), Ok(0) | Err(_)) {}
             // The client's FIN has come, and it should still be waiting.
-            std::thread::sleep(Duration::from_millis(200));
+            // By the clock and no sleep: under the sleep shim a sleep outlasts the 2 s.
+            let fin = Instant::now();
+            while fin.elapsed() < Duration::from_millis(200) {
+                std::thread::yield_now();
+            }
             closed_tx.send(Instant::now()).expect("the test");
         });
         let wire = connect("127.0.0.1", Some(&port.to_string())).expect("a connection");

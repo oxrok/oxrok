@@ -57,7 +57,7 @@ emu_cases() {
     # The words of the system's resolver are its own, in both tools.
     R0='s/(invalid argument).*$/\1./'
     W="$L
-s/^(sr: ipdbg-la: Address lookup failed: [^ ]+): .*/\1: WHY/"
+s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/"
     NO_HEADER="dev_acquisition_start (api.c:240-258) sends no header and sigrok-cli drops what comes before one (session.c:285-287), so stock prints no sample and exits 0; oxrok sends one where the maintainer's branch does"
     STRSPLIT="ipdbg_la_split_addr_port reads strs[2] of a list of two (api.c:51), which is a crash on a conn= of one field; oxrok finds no device"
     NO_PORT="C's %s of a missing port prints (null) (protocol.c:133); oxrok says no port"
@@ -67,7 +67,6 @@ s/^(sr: ipdbg-la: Address lookup failed: [^ ]+): .*/\1: WHY/"
     WAIT_TRIGGER="sigrok-cli's -w keeps samples from its decoders alone (session.c:402-404), and its output module gets them all, where oxrok's -w holds them back from the output too (src/cli/pipeline.rs)"
     QUIET_LIMIT="config_set takes a limit past the memory with nothing said and no change (api.c:212-213); oxrok does the same and warns"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
-    SIGPIPE="tcp_send is a plain send() (protocol.c:164) and nothing ignores SIGPIPE, so a write after a close kills sigrok-cli (exit 141) or, if every write beat the close, it waits for ever; oxrok's capture fails"
 
     emu_case "scan" --keep-header -- -d $T --scan
     emu_case "show" --keep-header -- -d $T --show
@@ -192,7 +191,10 @@ s/^(sr: ipdbg-la: Address lookup failed: [^ ]+): .*/\1: WHY/"
     emu_options never=1 mark-arm=1
     emu_case "never triggers" --oracle-bug "$SIGINT_BUG" --interrupt tcp-model --timeout 8 --no-output -- -d $T --samples 8 -O bits
     emu_options
-    emu_case "unplug at the scan's end" --unplug tcp-in=2 --oracle-bug "$SIGPIPE" --timeout 4 --no-output --oxrok-fails "closed the connection" -- -d $T --samples 8 -O bits
+    # C's end here goes with the clock. tcp_send is a plain send() (protocol.c:164) and
+    # nothing ignores SIGPIPE: it failed at once in one session and ran out a 60 s timeout
+    # in another, and its stderr left its golden in 2 of 15 runs. So oxrok alone.
+    emu_case "unplug at the scan's end" --no-oracle-only --unplug tcp-in=2 --timeout 4 --no-output --oxrok-fails "closed the connection" -- -d $T --samples 8 -O bits
     emu_options
 
     # A client's stop, which sigrok-cli has no way to ask for.
