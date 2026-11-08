@@ -249,6 +249,10 @@ impl Scpi {
             if n > 0 {
                 out.extend_from_slice(&chunk[..n]);
                 deadline = Instant::now() + self.read_timeout;
+            } else if self.transport.read_complete() {
+                // Silence ended what had begun, as tcp-raw has an answer with no line
+                // end: whole, with no line end to say so ([`Scpi::out_of_step`]).
+                break;
             } else if Instant::now() >= deadline {
                 log::debug!("Timed out waiting for the SCPI response.");
                 self.stale = true;
