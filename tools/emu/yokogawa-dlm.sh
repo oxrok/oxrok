@@ -10,24 +10,15 @@ EMU_GCOV_SHARED="src/scpi/scpi.c src/scpi/scpi_usbtmc_libusb.c src/scpi/scpi_tcp
 
 # yokogawa-dlm/api.c's start sends no header, and sigrok-cli skips all before a header
 # (session.c:286), so a stock capture prints nothing and exits 0: the "stock" cases pin
-# that. Every other capture case below runs sigrok-cli under tools/oracle-dlm-header.c,
-# which gives its callback the missing header ahead of the first packet, and changes
-# nothing else: the driver is stock, and its wire and its packets are compared. Its
-# labels are said to hold on stock C where they do; the others say "under the preload".
-dlm_header() {
-    DLM_STOCK_CLI=$SIGROK_CLI
-    [ "$no_oracle" = 1 ] && return
-    cc -shared -fPIC -o "$TMP/dlm-header.so" "$TOOLS/oracle-dlm-header.c" -ldl 2>"$TMP/dlm-header.err" \
-        || { emu_fail "$EMU_MODEL: could not build the preload (a C compiler?)"; return; }
-    printf '%s\n' '#!/bin/sh' \
-        "LD_PRELOAD=$TMP/dlm-header.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec $(command -v "$SIGROK_CLI") \"\$@\"" \
-        >"$TMP/dlm-sigrok-cli"
-    chmod +x "$TMP/dlm-sigrok-cli"
-    DLM_HEADER_CLI=$TMP/dlm-sigrok-cli
-}
-
+# that. Every other capture case below runs sigrok-cli under tools/oracle-header.c
+# (emu_header_oracle), which gives its callback the missing header ahead of the first
+# packet, and changes nothing else: the driver is stock, and its wire and its packets
+# are compared. Its labels are said to hold on stock C where they do; the others say
+# "under the preload".
 emu_cases() {
-    dlm_header
+    emu_header_oracle
+    DLM_HEADER_CLI=$SIGROK_CLI
+    SIGROK_CLI=$EMU_STOCK_CLI
     A='1~64!d'
     U=yokogawa-dlm
     T=yokogawa-dlm:conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT
@@ -57,7 +48,10 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     COUNT="dlm_analog_samples_send reads samples_per_frame bytes and never the header's count (protocol.c:919): C takes a line end for a sample, or a block short of what it says, with exit 0; oxrok says it is cut short"
     UAF="on an empty block protocol.c:1074 frees the static buffer and keeps the pointer, and the next read writes to it (under the preload; stock too, which has only no output to show): sigrok-cli crashes, and oxrok stops the scope and asks again"
     INDEX="logic channels have the index 32 + bit (DLM_DIG_CHAN_INDEX_OFFS), and the bits output reads the byte at index / 8 of a one byte sample: C shows each channel 4 samples on, and bytes past the buffer at the end (under the preload); oxrok shows the bit of its own sample"
+    TRUNC="array_float_get truncates the significand (protocol.c:361): 2.900E-03 is 2 there with exit 0, and 0.100E-06 is 0, no entry; oxrok takes the entry within 1% of the value read whole, and none else"
     NAN_="config_set's two comparisons pass a NaN (api.c), and :TRIGGER:DELAY:TIME -NAN goes out with exit 0; oxrok refuses it"
+    SLOW="C waits for ever and says nothing; oxrok says a frame lengthens its wait"
+    LF="dlm_analog_samples_send never reads the header's count (protocol.c:919), so a block with no line end is taken whole; oxrok on USBTMC, where a block comes whole, says a byte of it is lost"
     WARNS="C ignores frame_limit with no word; oxrok warns that it reads one frame"
     WHOLE="an answer of exactly a read's size has no short read to end it, and the recv blocks with no timeout (scpi_tcp.c, tcp.c), so C never ends (under the preload, and stock); oxrok ends on a read's silence"
     SIGPIPE="sr_tcp_write_bytes is a plain send() and nothing ignores SIGPIPE, so a write after the instrument closed kills sigrok-cli; oxrok's write returns EPIPE and the capture fails"
@@ -168,22 +162,28 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_options
 
     # What an open reads, wrong. Every answer's values, by the path it takes.
-    for v in 1.000E-08 10.00E-09 2.000E+00 5.000E+02 1.000E+01 1.000E+02 2.900E-03; do
+    for v in 1.000E-08 10.00E-09 2.000E+00 5.000E+02 1.000E+01 1.000E+02; do
         emu_options say=TIMEBASE:TDIV?=$v
         emu_case "timebase answers $v" -- -d $T --get timebase
     done
-    for v in abc 4.000E-03 1.000E-10 E-03 0.100E-06; do
+    for v in abc 4.000E-03 1.000E-10 E-03; do
         emu_options say=TIMEBASE:TDIV?=$v
         emu_case "timebase answers bad $v" --expect-fail --stderr --filter "$L" -- -d $T --get timebase
     done
     emu_options say=TIMEBASE:TDIV?=-2.000E-03
     emu_case "timebase answers negative" --expect-fail --stderr --filter "$L" -- -d $T --get timebase
     # What C reads as something else.
-    for v in 2.000E 2.000E+03 2.000E-003; do
+    for v in 2.000E 2.000E+03; do
         emu_options say=TIMEBASE:TDIV?=$v
         emu_case "timebase misread $v" --oracle-differs "$MISREAD" --expect-fail --stderr -- -d $T --get timebase
     done
-    for v in 2.000E-03 2.900E-03 5.000E+02 1.000E+00; do
+    emu_options say=TIMEBASE:TDIV?=2.000E-003
+    emu_case "timebase misread 2.000E-003" --oracle-differs "$MISREAD" -- -d $T --get timebase
+    emu_options say=TIMEBASE:TDIV?=2.900E-03
+    emu_case "timebase truncated 2.900E-03" --oracle-differs "$TRUNC" --expect-fail --stderr -- -d $T --get timebase
+    emu_options say=TIMEBASE:TDIV?=0.100E-06
+    emu_case "timebase truncated 0.100E-06" --oracle-bug "$TRUNC" -- -d $T --get timebase
+    for v in 2.000E-03 5.000E+02 1.000E+00; do
         emu_options say=CHANNEL2:VDIV?=$v
         emu_case "vdiv answers $v" -- -d $T -g 2 --get vdiv
     done
@@ -191,6 +191,8 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
         emu_options say=CHANNEL2:VDIV?=$v
         emu_case "vdiv answers bad $v" --expect-fail --stderr --filter "$L" -- -d $T -g 2 --get vdiv
     done
+    emu_options say=CHANNEL2:VDIV?=2.900E-03
+    emu_case "vdiv truncated 2.900E-03" --oracle-differs "$TRUNC" --expect-fail --stderr -- -d $T -g 2 --get vdiv
     emu_options say=CHANNEL2:VDIV?=2.000E+03
     emu_case "vdiv misread 2 kV" --oracle-differs "$MISREAD" --expect-fail --stderr -- -d $T -g 2 --get vdiv
     emu_options say=CHANNEL1:DISPLAY?=maybe
@@ -293,6 +295,11 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_options
     emu_case "frame marks" --keep-header --filter '/^[1-4]: /d' -- -d $T $F -O analog
     emu_case "two frames are one" --digest --filter "$A" -- -d $T --frames 2 -O analog
+    # 50 s a division: a frame takes up to 500 s, which the waits add.
+    emu_options length=16 say=TIMEBASE:TDIV?=5.000E+01
+    emu_case "a slow timebase" -- -d $T -C 1 $F -O analog
+    emu_case "a slow timebase warns" --oracle-differs "$SLOW" --stderr --filter "$L" -- -d $T -C 1 $F -O analog
+    emu_options
     emu_options length=16
     emu_case "two frames warn" --oracle-differs "$WARNS" --stderr --filter "$L" -- -d $T -C 1 --frames 2 -O analog
     emu_options
@@ -339,6 +346,8 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_case "logic goes off" --digest --filter '1,$d' -- -d $T -C 1 $F -O analog
     emu_options model=DL9505L on=D0,D1 logic=1 length=16
     emu_case "DL9505L logic" --digest --filter '1,$d' -- -d $T -C A0,B7 $F -O binary
+    # C's refusal of channel 4 with logic holds on every model (api.c:458-484, :520-521).
+    emu_case "DL9505L channel 4 with logic refused" --expect-fail --stderr --filter "$S2" -- -d $T -C 4,A0 $F -O binary
     emu_options
 
     # Blocks that aren't what they should be.
@@ -353,6 +362,11 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_case "header says more" --oracle-differs "$COUNT" --stderr --filter "$L" --oxrok-fails "Truncated" -- -d $T -C 1 $F -O analog
     emu_options length=16 claim=15
     emu_case "header says one less" --oracle-differs "$COUNT" --stderr --filter "$L" --oxrok-fails "Truncated" -- -d $T -C 1 $F -O analog
+    # The line end counted as data: a byte lost, or only late on tcp-raw.
+    emu_options length=16 claim=17
+    emu_case "no line end usb" --oracle-differs "$LF" --stderr --filter "$L" --oxrok-fails "line end" -- -d $U -C 1 $F -O analog
+    emu_case "no line end tcp" -- -d $T -C 1 $F -O analog
+    emu_case "no line end tcp warns" --oracle-differs "$LF" --stderr --filter "$L" -- -d $T -C 1 $F -O analog
     emu_options length=16 say=WAVEFORM:SEND?=X
     emu_case "block is no block" --stderr --filter "$L" --oxrok-fails "malformed" -- -d $T -C 1 $F -O analog
     emu_options length=16 say=WAVEFORM:SEND?=#8abc
@@ -410,5 +424,5 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_case "usbtmc bulk in stalled" --expect-fail -- -d $U --show
     emu_options
 
-    SIGROK_CLI=$DLM_STOCK_CLI
+    SIGROK_CLI=$EMU_STOCK_CLI
 }

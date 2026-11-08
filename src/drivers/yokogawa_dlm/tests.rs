@@ -111,7 +111,10 @@ struct Fake {
 
 impl ScpiTransport for Fake {
     fn resource(&self) -> &'static str {
-        "fake"
+        match self.carrier {
+            Carrier::Usbtmc => "usbtmc/fake",
+            Carrier::TcpRaw => "tcp-raw/fake",
+        }
     }
 
     fn send(&mut self, data: &[u8]) -> Result<()> {
@@ -862,7 +865,7 @@ fn empty_blocks_for_ever_end_a_capture() {
         let packets = capture(&mut d);
         assert_eq!(
             failure(&packets).as_deref(),
-            Some("device error: The scope sends only empty waveforms: 0.03 s through :STOP.")
+            Some("device error: The scope sends only empty waveforms: 0.04 s through :STOP.")
         );
         assert!(writes(&line).iter().filter(|c| *c == ":STOP").count() >= 1);
     });
@@ -897,7 +900,7 @@ fn a_silent_scope_ends_a_capture_with_no_sample_at_the_short_bound() {
             let packets = capture(&mut d);
             assert_eq!(
                 failure(&packets).as_deref(),
-                Some("device error: No answer from the scope in 0.03 s.")
+                Some("device error: No answer from the scope in 0.04 s.")
             );
         }
     });
@@ -940,7 +943,7 @@ fn after_a_sample_silence_ends_at_the_long_bound() {
         let packets = capture(&mut d);
         assert_eq!(
             failure(&packets).as_deref(),
-            Some("device error: No answer from the scope in 0.03 s.")
+            Some("device error: No answer from the scope in 0.04 s.")
         );
         assert_eq!(analog(&packets), vec![10.0], "what it had stays");
     });
@@ -1131,7 +1134,7 @@ fn a_failed_read_begin_is_tried_again_within_the_bound() {
         let packets = capture(&mut d);
         assert_eq!(
             failure(&packets).as_deref(),
-            Some("device error: No answer from the scope in 0.02 s.")
+            Some("device error: No answer from the scope in 0.03 s.")
         );
     });
 }
@@ -1497,66 +1500,134 @@ fn a_probe_takes_only_a_yokogawa_it_knows() {
 ///
 /// The format has no checksum: any flip in a sample is a wrong sample, and no reader can
 /// know. What is counted is what the framing lets through: of the flips in the header
-/// and the line end, none gives a wrong value. Of the lost bytes, any byte of the data
-/// gives a block that looks whole but for its line end, whose last sample is the line
-/// end and whose others are shifted: 8 of 19 here. Only a warning says so.
+/// and the line end, none gives a wrong value, on either carrier. Of the lost bytes, any
+/// byte of the data gives a block that looks whole but for its line end, whose last
+/// sample is the line end and whose others are shifted. On USBTMC, where a block comes
+/// whole, that is refused: none of 19 is wrong. On `tcp-raw` the line end may only be
+/// late, so it is a warning, and 8 of 19 are wrong.
 #[test]
 fn flips_and_lost_bytes_of_a_frame() {
     bounded(|| {
         // Value classes: all zero, the extremes, a line end, and digits, which a header
         // whose count of digits flips reads as its own.
-        for data in [
-            vec![0u8; 8],
-            vec![0x7f, 0x80, 0xff, 0x01, 0x7f, 0x80, 0xff, 0x01],
-            vec![b'\n'; 8],
-            vec![b'0'; 8],
-            vec![b'9', b'#', b'8', b'0', b'0', b'0', b'0', b'0'],
-        ] {
-            let frame = block(&data);
-            let good: Vec<f32> = data.iter().map(|b| protocol::volts(*b, 5.0, 0.0)).collect();
-            let run = |raw: Vec<u8>| {
-                let (mut d, _) = device(|l| {
-                    l.samples = 8;
-                    l.blocks.push_back(raw);
-                    l.blocks.push_back(block(&[]));
-                });
-                d.bounds.empty = Duration::ZERO;
-                d.open().unwrap();
-                let packets = capture(&mut d);
-                (failure(&packets), analog(&packets))
-            };
-            assert_eq!(run(frame.clone()), (None, good.clone()), "as it is");
-            let framing: Vec<usize> = (0..10).chain([frame.len() - 1]).collect();
-            let mut wrong = 0;
-            let mut refused = 0;
-            for at in framing {
-                for bit in 0..8 {
-                    let mut raw = frame.clone();
-                    raw[at] ^= 1 << bit;
-                    let (failed, samples) = run(raw);
-                    if failed.is_some() {
-                        refused += 1;
-                    } else if samples != good {
-                        wrong += 1;
+        for carrier in [Carrier::Usbtmc, Carrier::TcpRaw] {
+            for data in [
+                vec![0u8; 8],
+                vec![0x7f, 0x80, 0xff, 0x01, 0x7f, 0x80, 0xff, 0x01],
+                vec![b'\n'; 8],
+                vec![b'0'; 8],
+                vec![b'9', b'#', b'8', b'0', b'0', b'0', b'0', b'0'],
+            ] {
+                let frame = block(&data);
+                let good: Vec<f32> = data.iter().map(|b| protocol::volts(*b, 5.0, 0.0)).collect();
+                let run = |raw: Vec<u8>| {
+                    let (mut d, _) = device_on("710110", carrier, |l| {
+                        l.samples = 8;
+                        l.blocks.push_back(raw);
+                        // An empty block only ever after, as long as the bound takes.
+                        for _ in 0..10_000 {
+                            l.blocks.push_back(block(&[]));
+                        }
+                    });
+                    d.bounds.empty = Duration::ZERO;
+                    d.bounds.gap = Duration::from_millis(5);
+                    d.open().unwrap();
+                    let packets = capture(&mut d);
+                    (failure(&packets), analog(&packets))
+                };
+                assert_eq!(run(frame.clone()), (None, good.clone()), "as it is");
+                let framing: Vec<usize> = (0..10).chain([frame.len() - 1]).collect();
+                let mut wrong = 0;
+                let mut refused = 0;
+                for at in framing {
+                    for bit in 0..8 {
+                        let mut raw = frame.clone();
+                        raw[at] ^= 1 << bit;
+                        let (failed, samples) = run(raw);
+                        if failed.is_some() {
+                            refused += 1;
+                        } else if samples != good {
+                            wrong += 1;
+                        }
                     }
                 }
-            }
-            assert_eq!(wrong, 0, "flips over {data:?}");
-            assert!(refused > 60, "{refused} of 88 over {data:?}");
-            let mut wrong_lost = 0;
-            for at in 0..frame.len() {
-                let mut raw = frame.clone();
-                raw.remove(at);
-                let (failed, samples) = run(raw);
-                if failed.is_none() && samples != good {
-                    wrong_lost += 1;
-                    assert!((10..18).contains(&at), "a lost byte of the framing, at {at}");
+                assert_eq!(wrong, 0, "flips over {data:?}");
+                assert!(refused > 60, "{refused} of 88 over {data:?}");
+                let mut wrong_lost = 0;
+                for at in 0..frame.len() {
+                    let mut raw = frame.clone();
+                    raw.remove(at);
+                    let (failed, samples) = run(raw);
+                    if failed.is_none() && samples != good {
+                        wrong_lost += 1;
+                        assert!((10..18).contains(&at), "a lost byte of the framing, at {at}");
+                    }
                 }
+                // A line end's own value in the last place hides the loss of one more.
+                let last_is_lf = data.last() == Some(&b'\n');
+                let expect = if carrier == Carrier::Usbtmc || last_is_lf { 0 } else { 8 };
+                assert_eq!(wrong_lost, expect, "lost bytes over {data:?}");
             }
-            // A line end's own value in the last place hides the loss of one more.
-            let last_is_lf = data.last() == Some(&b'\n');
-            assert_eq!(wrong_lost, if last_is_lf { 0 } else { 8 }, "lost bytes over {data:?}");
         }
+    });
+}
+
+/// The manual ends every answer with a line end: on USBTMC a block without one lost a
+/// byte. On `tcp-raw` it may come with the next answer, and is only a warning.
+#[test]
+fn a_block_with_no_line_end_fails_on_usbtmc_alone() {
+    bounded(|| {
+        for carrier in [Carrier::Usbtmc, Carrier::TcpRaw] {
+            let (mut d, _) = device_on("710110", carrier, |l| {
+                l.samples = 2;
+                let mut short = block(&[25, 50]);
+                short.pop();
+                l.blocks.push_back(short);
+            });
+            d.open().unwrap();
+            let packets = capture(&mut d);
+            if carrier == Carrier::Usbtmc {
+                assert_eq!(
+                    failure(&packets).as_deref(),
+                    Some("device error: A block with no line end: a byte of it is lost.")
+                );
+                assert_eq!(analog(&packets), Vec::<f32>::new());
+            } else {
+                assert_eq!(failure(&packets), None);
+                assert_eq!(analog(&packets), vec![10.0, 20.0]);
+            }
+        }
+    });
+}
+
+/// 5 s a division is 50 s a frame: a bound of 30 ms before the first sample becomes
+/// 50 s and 30 ms, and an answer after many times 30 ms is no silence.
+#[test]
+fn a_slow_timebase_gives_the_scope_its_frame() {
+    bounded(|| {
+        let (mut d, _) = device(|l| {
+            l.samples = 1;
+            l.say.insert(":TIMEBASE:TDIV?".to_owned(), b"5.000E+00\n".to_vec());
+            l.blocks.push_back(block(&[25]));
+            l.block_waits.push_back(60);
+        });
+        d.bounds.first = Duration::from_millis(30);
+        d.open().unwrap();
+        let packets = capture(&mut d);
+        assert_eq!(failure(&packets), None);
+        assert_eq!(analog(&packets), vec![10.0]);
+        // And at 1 ms a division it is the bound as set.
+        let (mut d, _) = device(|l| {
+            l.samples = 1;
+            l.blocks.push_back(block(&[25]));
+            l.block_waits.push_back(60);
+        });
+        d.bounds.first = Duration::from_millis(30);
+        d.open().unwrap();
+        assert_eq!(
+            failure(&capture(&mut d)).as_deref(),
+            Some("device error: No answer from the scope in 0.04 s.")
+        );
     });
 }
 

@@ -177,46 +177,38 @@ pub fn length(text: &str) -> Option<u32> {
     text.trim().parse().ok()
 }
 
-/// `array_float_get`: the table's index of `2.000E-03`.
+/// `array_float_get`: the table's index of `2.000E-03`, the entry within 1% of the value.
 ///
-/// It keeps C's way, truncating the significand, so `2.900E-03` reads as 2 mV. Where it
-/// leaves C:
+/// Where it leaves C:
 ///
+/// - The value is read whole, as a number. C truncates the significand, so `2.900E-03`
+///   is 2 mV there with exit 0; here it is within 1% of no entry, and no value. The
+///   table's neighbours are a factor of 2 apart at least, so 1% only takes rounding.
 /// - No `E`, or a significand of ten bytes or more, is no value here. There C reads
 ///   past the end, or writes past `ss` (`protocol.c:336-337`).
-/// - An exponent is a sign and two digits at most. C takes three bytes, so `1.000E-003`
-///   is 1 s there, and an empty one is 0, so `2.000E` is 2 s.
-/// - A positive exponent of 3 or more is no entry. C drops the sign (`abs(e)`,
-///   `protocol.c:345`), so `2.000E+03` reads there as `2.000E-03`: 2 kV a division is
-///   2 mV.
+/// - An exponent is a sign and up to three digits, read as they are. C takes three
+///   bytes, so `1.000E-003` is 1 s there, and an empty one is 0, so `2.000E` is 2 s.
+/// - A positive exponent is positive. C drops the sign (`abs(e)`, `protocol.c:345`), so
+///   `2.000E+03` reads there as `2.000E-03`: 2 kV a division is 2 mV.
 pub fn scaled_index(value: &str, table: &[(u64, u64)]) -> Option<usize> {
-    let pos = value.find('E')?;
-    let (significand, exponent) = (&value[..pos], &value[pos + 1..]);
-    if significand.len() >= 10 || exponent.is_empty() || exponent.len() > 3 {
+    let (significand, exponent) = value.split_once('E')?;
+    let digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
+    if significand.is_empty()
+        || significand.len() >= 10
+        || digits.is_empty()
+        || digits.len() > 3
+        || !digits.bytes().all(|b| b.is_ascii_digit())
+    {
         return None;
     }
-    let mut s = number(significand)?;
-    let e: i32 = exponent.parse().ok()?;
-    let mut power = e.unsigned_abs();
-    if power > 18 || (e > 0 && power >= 3) {
+    let v: f64 = value.parse().ok()?;
+    if !(v.is_finite() && v > 0.0) {
         return None;
     }
-    // f is a multiple of 1000: `s *= 10` moves it up or down to the nearest.
-    while !power.is_multiple_of(3) {
-        s *= 10.0;
-        if e < 0 {
-            power += 1;
-        } else {
-            power -= 1;
-        }
-    }
-    if power > 18 {
-        return None;
-    }
-    let f = 10u64.pow(power);
-    // Truncated "to circumvent rounding errors", as C says.
-    let s_int = s as u32;
-    table.iter().position(|entry| u64::from(s_int) == entry.0 && f == entry.1)
+    table.iter().position(|&(p, q)| {
+        let entry = p as f64 / q as f64;
+        ((v - entry) / entry).abs() <= 0.01
+    })
 }
 
 /// C's `(float)p / q`, printed with `%E`.
@@ -318,6 +310,32 @@ pub struct Bounds {
     pub empty: Duration,
     /// The pause between two requests after an empty block.
     pub empty_pause: Duration,
+}
+
+impl Bounds {
+    /// What a timebase of `seconds` a division adds to the waits: ten divisions, the
+    /// time of a frame before the scope can have one. `:TIMebase:TDIV` goes up to 500 s
+    /// (IM 710105-17E p. 5-240), so a frame may take 5000 s. `Some` holds a warning when
+    /// that makes them long.
+    pub fn for_timebase(self, seconds: f64) -> (Bounds, Option<String>) {
+        let frame = Duration::from_secs_f64((seconds * 10.0).clamp(0.0, 1e6));
+        let longer = Bounds {
+            warn: self.warn + frame,
+            first: self.first + frame,
+            later: self.later + frame,
+            gap: self.gap,
+            empty: self.empty + frame,
+            empty_pause: self.empty_pause,
+        };
+        let warning = (frame >= Duration::from_secs(60)).then(|| {
+            format!(
+                "A frame takes up to {} s at this timebase; the scope gets {} s to answer.",
+                frame.as_secs(),
+                longer.first.as_secs()
+            )
+        });
+        (longer, warning)
+    }
 }
 
 impl Default for Bounds {
@@ -496,8 +514,13 @@ mod tests {
         assert_eq!(scaled_index("1.000E+00", tb), at((1, 1)));
         assert_eq!(scaled_index("1.000E+01", tb), at((10, 1)));
         assert_eq!(scaled_index("5.000E+02", tb), at((500, 1)));
-        assert_eq!(scaled_index("0.100E-06", tb), None, "0 once truncated, as in C");
-        assert_eq!(scaled_index("2.900E-03", &VDIVS), Some(0), "truncated, as in C");
+        assert_eq!(scaled_index("0.100E-06", tb), at((100, 1_000_000_000)), "C: 0");
+        assert_eq!(scaled_index("1.000E-003", tb), at((1, 1000)), "C: 1 s");
+        assert_eq!(scaled_index("1.995E-03", tb), at((2, 1000)), "rounding");
+        assert_eq!(scaled_index("2.019E-03", tb), at((2, 1000)));
+        assert_eq!(scaled_index("2.900E-03", &VDIVS), None, "C: 2 mV");
+        assert_eq!(scaled_index("2.021E-03", &VDIVS), None, "past 1%");
+        assert_eq!(scaled_index("1.979E-03", &VDIVS), None);
     }
 
     /// Every entry of both tables comes back from the form the manual prints.
@@ -524,7 +547,6 @@ mod tests {
             "abc",
             "2.000E",
             "2.000e-03",
-            "2.000E-003",
             "2.000E-3x",
             "12345678901E-03",
             "00000002.000E-03",
@@ -534,6 +556,11 @@ mod tests {
             "1.000E-10",
             "1.000E-99",
             "nanE-03",
+            "infE+00",
+            "0.000E+00",
+            "2.0x0E-03",
+            "2.000E-0x",
+            " 2.000E-03",
             "-2.000E-03",
         ] {
             assert_eq!(scaled_index(text, &VDIVS), None, "{text:?}");
@@ -726,6 +753,27 @@ mod tests {
             e.empty(t + Duration::from_secs(10)),
             Quiet::GiveUp("The scope sends only empty waveforms: 10 s through :STOP.".to_owned())
         );
+    }
+
+    #[test]
+    fn a_slow_timebase_lengthens_the_waits() {
+        let (b, warning) = Bounds::default().for_timebase(500.0);
+        assert_eq!(b.first, Duration::from_secs(5120));
+        assert_eq!(b.later, Duration::from_secs(5600));
+        assert_eq!(b.warn, Duration::from_secs(5010));
+        assert_eq!(b.empty, Duration::from_secs(5010));
+        assert_eq!(b.gap, Duration::from_secs(5));
+        assert_eq!(
+            warning.as_deref(),
+            Some("A frame takes up to 5000 s at this timebase; the scope gets 5120 s to answer.")
+        );
+        let (b, warning) = Bounds::default().for_timebase(1e-3);
+        assert_eq!(b.first, Duration::from_millis(120_010));
+        assert_eq!(warning, None);
+        let (b, warning) = Bounds::default().for_timebase(5.0);
+        assert_eq!(b.first, Duration::from_secs(170));
+        assert_eq!(warning, None, "under a minute");
+        assert!(Bounds::default().for_timebase(6.0).1.is_some());
     }
 
     #[test]

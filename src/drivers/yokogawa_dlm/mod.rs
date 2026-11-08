@@ -59,9 +59,17 @@
 //!   four samples ahead, and past the end of the buffer on the last ones. The 16 and 32
 //!   channel models still get a byte per sample, as in C.
 //!
+//! Channel 4 with logic is refused at a capture's start, as C's `dlm_check_channels`
+//! does (`api.c:458-484`, `:520-521`), on every model. Its comment says CH4 and logic
+//! share their inputs on a DLM2000, and the sigrok wiki's table has those as "4 analog
+//! / 3 analog+8 digital". For the DL9000 C has a TODO and no source says either way.
+//!
+//! Setting a channel on or off with `-C` changes the scope's own display, and its logic
+//! pod, at once, as C does, and it stays so after the capture.
+//!
 //! Kept as in C, unproven against a scope: a trigger position past the middle sends a
 //! negative delay, which the manual's range doesn't have; `:LOGIC:PODA:BITn` and
-//! `:LOGIC:MODE` for the DL9000's pods; channel 4 refused with logic on every model.
+//! `:LOGIC:MODE` for the DL9000's pods; channel 4 refused with logic on the DL9000.
 
 #![forbid(unsafe_code)]
 
@@ -701,11 +709,19 @@ impl Device for YokogawaDevice {
         if self.frame_limit > 1 {
             log::warn!("Only what the scope holds is read: 1 frame of {}.", self.frame_limit);
         }
+        // The timebase as the open read it or a setting made it: asking the scope
+        // again here would be a query C doesn't send.
+        let (p, q) = protocol::TIMEBASES[self.state.timebase];
+        let (bounds, warning) = self.bounds.for_timebase(p as f64 / q as f64);
+        if let Some(text) = warning {
+            log::warn!("{text}");
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let acq = Acquisition {
             channels: enabled,
             state: self.state.clone(),
-            bounds: self.bounds,
+            usbtmc: scpi.resource().starts_with("usbtmc"),
+            bounds,
             stop: Arc::clone(&stop),
         };
         let slot = Arc::clone(&self.scpi);
@@ -732,6 +748,9 @@ impl Device for YokogawaDevice {
 /// One acquisition on its own thread.
 struct Acquisition {
     channels: Vec<Channel>,
+    /// A block comes whole, to the end of its message, so one with no line end lost a
+    /// byte.
+    usbtmc: bool,
     state: State,
     bounds: Bounds,
     stop: Arc<AtomicBool>,
@@ -971,10 +990,14 @@ impl Acquisition {
             if header.bytes < need || answer.after < header.bytes {
                 return fail("Truncated waveform data packet received.");
             }
-            // The manual ends every answer with one, so a byte may be gone, and the last
-            // sample a line end, which nothing here can tell. On `tcp-raw` it may only be
-            // late, and then it begins the next answer.
+            // The manual ends every answer with one (<RMT>, p. 4-5). On USBTMC a block comes
+            // whole, so a byte is gone and the last sample is the line end. On `tcp-raw`
+            // the line end may only be late, and then it begins the next answer: that a
+            // byte is lost there is only a warning, as nothing tells the two apart.
             if answer.after == header.bytes {
+                if self.usbtmc {
+                    return fail("A block with no line end: a byte of it is lost.");
+                }
                 tail = true;
                 log::warn!("A block with no line end: a byte of it may be lost.");
             }
