@@ -247,6 +247,15 @@ pub trait Device: Send {
         }
     }
 
+    /// Whether `value` can be set on `key`, asked for every `-c` of a command line
+    /// before any is sent, so a refusal leaves the device as it was: a supply's
+    /// `enabled=on` goes last, and must not go at an old set point. [`Device::set`]
+    /// still checks it too, for a library client. The default takes anything.
+    fn check_set(&self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+        let _ = (key, value, group);
+        Ok(())
+    }
+
     /// Whether a capture with `trigger` can start at all, asked before the
     /// output is opened: a refusal here leaves an existing output file
     /// alone. [`Device::start`] may refuse later for other reasons.

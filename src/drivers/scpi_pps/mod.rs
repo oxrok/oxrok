@@ -28,10 +28,15 @@
 //! An output is live, so what this does about a setting that didn't happen:
 //!
 //! - **A refused setting.** SCPI gives no answer to one, and the driver reads no error
-//!   queue. So a value the instrument refuses still exits 0, in C as here. What can be
-//!   said is said: a value outside what the output lists gets a warning and goes out
-//!   anyway, as the tables are lower than some units go (a DP832 is listed at 30 V).
-//!   `--get` asks the instrument each time, so it finds out.
+//!   queue, so an instrument that refuses a value says nothing. So a value is judged
+//!   against what its output lists before anything is sent ([`Device::check_set`], for
+//!   every `-c` of a command line at once): within 10% past the end away from zero it
+//!   goes with a warning, as the tables are lower than some units go (a DP832 listed
+//!   at 30 V and 3 A takes 32 V and 3.2 A), and further, or past the end at zero, it is
+//!   refused and nothing of the command line goes. Otherwise the instrument would keep
+//!   its old set point, and the `enabled=on` the CLI sends last would switch the output
+//!   on at it. An output that lists 0 to 0, as a PM2800's with no module does, takes
+//!   anything with a warning. `--get` asks the instrument each time.
 //! - **A failed write** is an error saying the state is unknown, and the output's
 //!   `enabled=on` that the CLI sends last doesn't go.
 //! - **A failed selection** goes no further: what was to go to that output doesn't
@@ -65,6 +70,14 @@
 //!   limit ends it here, with a warning if nothing came and exit 0.
 //! - **A connection that closed or a device gone** ends a capture with an error. C goes
 //!   on reading 0 bytes, or dies of SIGPIPE at the next write.
+//! - **An answer cut short** on a line with no tags, by a read that gave up on its head
+//!   or by C's rule that a short read ends a tcp-raw answer (which `src/scpi/tcp.rs`
+//!   keeps), makes no reading, and the line is found again by asking `*IDN?` (`ID?` on
+//!   an HP) and dropping everything before its answer: a drain on quiet can't, as the
+//!   tail may come later than any quiet is waited. C takes the head for a reading and
+//!   each one after it is of the quantity before, for good.
+//! - **USBTMC** asks again with a new `bTag` after a timeout, as C does, and relies on
+//!   the transport dropping an answer with the old one (`src/scpi/usbtmc.rs`).
 //! - **One question out at a time** on a line with no tags: see [`protocol`]. Over TCP
 //!   that is C, which blocks. Over a serial port C asks again after 1 s: on the model,
 //!   which drops an answer nobody read at the next command, it loses that reading and
@@ -293,7 +306,7 @@ impl PpsDevice {
         group_specs: Vec<GroupSpec>,
         scpi: Scpi,
         serialcomm: Option<&str>,
-        _hpib: bool,
+        hpib: bool,
     ) -> PpsDevice {
         let has = |command: Cmd| scpi::cmd_get(profile.commands, &command).is_some();
         let ac = group_specs.iter().any(|g| g.ac);
@@ -345,6 +358,8 @@ impl PpsDevice {
             })
             .collect();
         let resource = scpi.resource().to_owned();
+        // `ID?` says only the model, and that is what the model is here.
+        let identify = (if hpib { "ID?" } else { "*IDN?" }, id.model.clone());
         PpsDevice {
             info: DeviceInfo {
                 driver: "scpi-pps",
@@ -363,7 +378,7 @@ impl PpsDevice {
             resource,
             serialcomm: serialcomm.map(str::to_owned),
             limits: Arc::new(Limits::default()),
-            link: Arc::new(Mutex::new(Link::new(profile))),
+            link: Arc::new(Mutex::new(Link::new(profile, identify))),
             closed: Some(scpi),
             beeper_was_set: false,
             worker: None,
@@ -405,10 +420,12 @@ impl PpsDevice {
             .ok_or_else(|| Error::UnknownKey(key.id().to_owned()))
     }
 
-    /// A setting of an output's set point: warns of a value outside what it lists. The
-    /// result of a set says nothing of whether it was taken, so this is all there is.
-    fn check_range(&self, key: &Key, value: f64, group: Option<&str>) {
-        let Some(spec) = group.and_then(|g| self.spec_of(g).ok()) else { return };
+    /// A set point against what its output lists. The result of a set says nothing of
+    /// whether it was taken, so this is where a value is judged: see [`range_check`].
+    /// `warn` says so of a value it lets through: a set does, and a check ahead of it
+    /// doesn't, so a command line says it once.
+    fn check_range(&self, key: &Key, value: f64, group: Option<&str>, warn: bool) -> Result<()> {
+        let Some(spec) = group.and_then(|g| self.spec_of(g).ok()) else { return Ok(()) };
         let range = match key {
             Key::VoltageTarget => spec.voltage,
             Key::CurrentLimit => spec.current,
@@ -416,17 +433,70 @@ impl PpsDevice {
             Key::OverVoltageProtectionThreshold => spec.ovp,
             Key::OverCurrentProtectionThreshold => spec.ocp,
             Key::OverCurrentProtectionDelay => spec.ocp_delay,
-            _ => return,
+            _ => return Ok(()),
         };
-        let (low, high) = (range[0], range[1]);
-        if (low != 0.0 || high != 0.0) && !(low..=high).contains(&value) {
-            log::warn!(
-                "{} {value} is outside the {low} to {high} this output lists: the instrument \
-                 may refuse it, and no answer would say so.",
-                key.id()
-            );
+        let output = group.unwrap_or_default();
+        match range_check(range[0], range[1], value) {
+            Range::Within => Ok(()),
+            Range::Unknown | Range::Over if !warn => Ok(()),
+            Range::Unknown => {
+                log::warn!(
+                    "{} {value}: output {output} lists no range, so it goes as it is.",
+                    key.id()
+                );
+                Ok(())
+            }
+            Range::Over => {
+                log::warn!(
+                    "{} {value} is past the {} to {} output {output} lists: the instrument \
+                     may refuse it, and no answer would say so.",
+                    key.id(),
+                    range[0],
+                    range[1]
+                );
+                Ok(())
+            }
+            Range::Refused => Err(Error::Arg(format!(
+                "{} {value} is outside what output {output} takes, {} to {} and 10% past \
+                 its end: nothing was sent",
+                key.id(),
+                range[0],
+                range[1]
+            ))),
         }
     }
+}
+
+/// What a set point is against an output's listed range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Range {
+    Within,
+    /// No range is listed: 0 to 0, as a PM2800 output with no module has.
+    Unknown,
+    /// Past the end away from zero, by 10% of it at most: a unit may take that, as a
+    /// DP832 listed at 30 V and 3 A takes 32 V and 3.2 A.
+    Over,
+    /// Further, or past the end at zero: an instrument refuses it with no answer, and
+    /// an `enabled=on` after it would switch the output on at the old set point.
+    Refused,
+}
+
+/// `value` against `low` to `high`, with the slack of [`Range::Over`] on the end
+/// further from zero.
+fn range_check(low: f64, high: f64, value: f64) -> Range {
+    if low == 0.0 && high == 0.0 {
+        return Range::Unknown;
+    }
+    if (low..=high).contains(&value) {
+        return Range::Within;
+    }
+    let slack = 0.1 * low.abs().max(high.abs());
+    let over = if high.abs() >= low.abs() {
+        value > high && value <= high + slack
+    } else {
+        value < low && value >= low - slack
+    };
+    if over { Range::Over } else { Range::Refused }
 }
 
 fn number_of(key: &Key, value: &Value) -> Result<f64> {
@@ -585,6 +655,15 @@ impl Device for PpsDevice {
         read_answer(dialect, form, &answer)
     }
 
+    /// A set point far outside its output's range is refused before anything of a
+    /// command line is sent: [`range_check`].
+    fn check_set(&self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+        match value.as_f64() {
+            Some(v) if v.is_finite() => self.check_range(key, v, group, false),
+            _ => Ok(()),
+        }
+    }
+
     fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
         if !self.option(key, group)?.access.set {
             return Err(Error::UnknownKey(key.id().to_owned()));
@@ -632,7 +711,7 @@ impl Device for PpsDevice {
             other => return Err(Error::UnknownKey(other.id().to_owned())),
         };
         if let Some(number) = number {
-            self.check_range(key, number, group);
+            self.check_range(key, number, group, true)?;
         }
         let args: Vec<CmdArg<'_>> = number.map(CmdArg::Float).into_iter().collect();
         self.link().cmd(group, command, &args).map_err(|e| {
@@ -742,6 +821,7 @@ impl Device for PpsDevice {
         let watch = self.watch.clone();
         #[cfg(not(test))]
         let watch: Option<Watch> = None;
+        self.link().begin_capture(protocol::PATIENCE);
         let capture = Capture {
             link: Arc::clone(&self.link),
             limits: Arc::clone(&self.limits),
@@ -750,6 +830,7 @@ impl Device for PpsDevice {
             stop: Arc::clone(&stop),
             whole_device: self.plans.len() > 1,
             watch,
+            sweep: self.profile.dialect == Dialect::Hp66xxb,
         };
         let (stop2, running2) = (Arc::clone(&stop), Arc::clone(&running));
         let handle = std::thread::Builder::new()
@@ -785,6 +866,30 @@ struct Capture {
     stop: Arc<AtomicBool>,
     whole_device: bool,
     watch: Option<Watch>,
+    /// An HP 66xxB, whose reading takes its sweep's time.
+    sweep: bool,
+}
+
+/// An HP 66xxB's sweep, `points` readings `tint` apart, which a reading takes: the bound
+/// it sets ([`protocol::sweep_bound`]) and the patience for one question to match. A
+/// failed query leaves the usual ones.
+fn sweep(link: &mut Link) -> Option<Duration> {
+    let read = |link: &mut Link, query: &str| {
+        let answer = link.ask(query);
+        answer.ok().and_then(|a| protocol::number(&a))
+    };
+    let points = read(link, "SENS:SWE:POIN?")?;
+    let tint = read(link, "SENS:SWE:TINT?")?;
+    let bound = protocol::sweep_bound(points, tint)?;
+    log::warn!(
+        "A reading takes up to {:.0} s here ({points} points {tint} s apart), so a capture \
+         waits up to {:.0} s for one.",
+        bound.as_secs_f64() / 2.0,
+        bound.as_secs_f64()
+    );
+    let reads = u32::try_from(bound.as_secs()).unwrap_or(u32::MAX);
+    link.begin_capture(reads);
+    Some(bound)
 }
 
 impl Capture {
@@ -799,13 +904,20 @@ impl Capture {
 
     fn run(&self, sink: &PacketSink) -> Result<()> {
         let go_on = || !self.stopped();
-        self.link.lock().expect("link lock").init_acquisition();
+        let sweep = {
+            let mut link = self.link.lock().expect("link lock");
+            link.init_acquisition();
+            if self.sweep { sweep(&mut link) } else { None }
+        };
         if !sink.send_while(Packet::header(), go_on) {
             return Ok(());
         }
         let began = Instant::now();
         let time_limited = self.limits.msec.load(Ordering::SeqCst) > 0;
         let mut watch = self.watch.clone().unwrap_or_else(|| Watch::new(time_limited));
+        if let Some(bound) = sweep {
+            watch = watch.waiting(bound);
+        }
         let mut at = 0;
         let mut samples = 0u64;
         let mut last_pass = None::<Instant>;

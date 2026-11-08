@@ -27,7 +27,9 @@ emu_cases() {
     STACK="s/^'(CV|CC|CC-|UR)'\$/'from the stack'/"
     NO_VALUE="sr_scpi_cmd_resp's failure is dropped and api.c:583 reads the variant it never set: sigrok-cli dies of SIGSEGV; oxrok fails the get"
     NAN_SENT="config_set has no check and %.6f of a NaN makes :SOUR:VOLT nan, which goes to a live output; oxrok refuses it"
-    OUT_OF_RANGE="config_set has no check, and neither tool can see a refusal, as a SCPI setting has no answer: both send it and exit 0, and oxrok warns of a value outside what the output lists"
+    OUT_OF_RANGE="config_set has no check, and neither tool can see a refusal, as a SCPI setting has no answer: both send a value a little past the listed range and exit 0, and oxrok warns of it"
+    FAR_OUT="config_set has no check, so C sends 120 V to a 30 V output, which keeps its old set point with no answer to say so, and then :OUTP ON switches it on there, exit 0; oxrok refuses the value before sending anything"
+    SWEEP="oxrok asks an HP 66xxB for its sweep at a capture's start, SENS:SWE:POIN? and SENS:SWE:TINT?, to wait as long as a reading takes; C asks nothing and waits as the transport does"
 
     # A DP832: three outputs, a table with everything, and a beeper.
     emu_case "scan" --keep-header -- -d $U --scan
@@ -202,6 +204,7 @@ emu_cases() {
     emu_options model=PM2832/01 on=1
     emu_case "pm2832 second output has no module" --keep-header -- -d $T --show
     emu_case "pm2832 capture" -- -d $T -C V2,I2 --samples 1
+    emu_case "pm2832 an output with no range takes a value" --no-output -- -d $T -g 2 -c voltage_target=5 --set
     emu_options idn=PHILIPS,PM2813/41,1,2
     emu_case "pm28 not in the matrix" --no-output -- -d $T --scan
 
@@ -214,23 +217,25 @@ emu_cases() {
     emu_case "6632b ovp active" -- -d $T -g 1 --get ovp_active
     emu_case "6632b ocp active" -- -d $T -g 1 --get ocp_active
     emu_case "6632b otp active" -- -d $T -g 1 --get otp_active
-    emu_case "6632b capture" --keep-header -- -d $T --samples 2
+    emu_case "6632b capture" --oracle-differs "$SWEEP" --keep-header -- -d $T --samples 2
     emu_options model=6632B on=1 event-at=2:cc,4:cv,6:ccn,8:ur
-    emu_case "6632b regulation changes" --keep-header -- -d $T -C V1 --samples 9
+    emu_case "6632b regulation changes" --oracle-differs "$SWEEP" --keep-header -- -d $T -C V1 --samples 9
     emu_options model=6632B on=1 event-at=2:ovp,4:clear,6:ocp,8:otp
-    emu_case "6632b trips" --keep-header -- -d $T -C V1 --samples 9
+    emu_case "6632b trips" --oracle-differs "$SWEEP" --keep-header -- -d $T -C V1 --samples 9
     emu_options model=6632B on=1 event-at=2:idle
-    emu_case "6632b idle" --keep-header -- -d $T -C V1 --samples 3
+    emu_case "6632b idle" --oracle-differs "$SWEEP" --keep-header -- -d $T -C V1 --samples 3
     emu_options model=6632B on=1 event-at=2:mixed
-    emu_case "6632b mixed" --keep-header -- -d $T -C V1 --samples 3
+    emu_case "6632b mixed" --oracle-differs "$SWEEP" --keep-header -- -d $T -C V1 --samples 3
     emu_options model=6632B reg=99
     emu_case "6632b regulation ur" -- -d $T -g 1 --get regulation
     emu_options model=6632B reg=1024
     emu_case "6632b regulation cc" -- -d $T -g 1 --get regulation
     emu_options model=6632B reg=2048
     emu_case "6632b regulation negative" -- -d $T -g 1 --get regulation
+    emu_options model=6632B on=1 sweep=4096:0.1
+    emu_case "6632b a long sweep" --oracle-differs "$SWEEP" --stderr -- -d $T -C V1 --samples 1
     emu_options model=6611C on=1
-    emu_case "6611c capture" -- -d $T --samples 1
+    emu_case "6611c capture" --oracle-differs "$SWEEP" -- -d $T --samples 1
     emu_options model=66312A
     emu_case "66312a group" -- -d $T -g 1 --show
 
@@ -297,8 +302,11 @@ emu_cases() {
 
     # A setting the instrument refuses, and one that goes nowhere.
     emu_options on=1
-    emu_case "a refused setting exits 0" -- -d $T -g 1 -c voltage_target=999 -C V1 --samples 1
-    emu_case "a refused setting warns" --oracle-differs "$OUT_OF_RANGE" --stderr -- -d $T -g 1 -c voltage_target=999 --set
+    emu_case "a little past the range exits 0" -- -d $T -g 1 -c voltage_target=32 -C V1 --samples 1
+    emu_case "a little past the range warns" --oracle-differs "$OUT_OF_RANGE" --stderr -- -d $T -g 1 -c voltage_target=32 --set
+    emu_case "far past the range goes nowhere" --oracle-differs "$FAR_OUT" --expect-fail --stderr -- -d $T -g 1 -c voltage_target=120:enabled=on --set
+    emu_case "far past the range sends nothing" --no-output --oracle-differs "$FAR_OUT" --expect-fail -- -d $T -g 1 -c voltage_target=120:enabled=on --set
+    emu_case "below the range goes nowhere" --no-output --oracle-differs "$FAR_OUT" --expect-fail -- -d $T -g 1 -c current_limit=-1 --set
     emu_case "nan goes nowhere" --oracle-differs "$NAN_SENT" --expect-fail --stderr -- -d $T -g 1 -c voltage_target=nan --set
 
     # Silent, on USBTMC with its tags and on TCP with none. The scan's queries are one
@@ -346,7 +354,7 @@ emu_cases() {
     emu_options model=6632B status=junk
     emu_case "6632b junk status" --oracle-differs "$STATUS_JUNK" --expect-fail --stderr --filter "$STACK" -- -d $T -g 1 --get regulation
     emu_options model=6632B status=junk on=1
-    emu_case "6632b junk in a capture" -- -d $T -C V1 --samples 1
+    emu_case "6632b junk in a capture" --oracle-differs "$SWEEP" -- -d $T -C V1 --samples 1
     # What a probe finds: C has an EA's nominal values all as 0.
     emu_options model=PS_2084-05B nominal=junk
     emu_case "ea nominal junk" --keep-header -- -d $T --scan

@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::scpi_pps: A reading takes up to 410 s here (4096 points 0.1 s apart), so a capture waits up to 819 s for one.

@@ -22,7 +22,11 @@
 //! one question out at a time. [`Link::measure`] asks once and keeps reading, for
 //! [`PATIENCE`] reads, as C over TCP does by blocking, rather than asking again: an answer
 //! late by a minute is then still the right one. USBTMC's tags let it ask again at
-//! each timeout, as C.
+//! each timeout, as C. An answer that came cut short, with no line end, is no reading:
+//! the line is found again by asking who the instrument is and dropping what comes
+//! before that answer ([`Link`]'s resync), as the tail could otherwise stand for the
+//! next answer for good. A question an earlier capture left out is given up at the
+//! next start, and its answer drained.
 //!
 //! A reading is a number of the forms SCPI has, and [`number`] refuses what `strtod`
 //! makes something of: an empty answer, where C has 0, and hexadecimal, `nan` and
@@ -88,10 +92,11 @@ pub const PATIENCE: u32 = 30;
 /// ever, and over a serial port 1 s.
 pub const GET_PATIENCE: u32 = 5;
 /// A capture that has had no reading ends in failure after this long of silence. C
-/// asks for ever. The slowest pace known: an HP 66xxB measures over as much as 4096
-/// points 31.2 ms apart, 128 s, which the instrument may have been left set to (from
-/// its programming guide, as remembered: no copy to hand). Under a time limit there's
-/// a warning and no failure.
+/// asks for ever. A choice: a supply answers a reading in milliseconds to a second.
+/// An HP 66xxB measures over `SENS:SWE:POIN` points (0 to 4096) `SENS:SWE:TINT` apart
+/// (15.6 us to 31200 s, by the 6613C's guide), which can be far longer, so a capture on
+/// one asks and waits twice that ([`sweep_bound`]). Under a time limit there's a
+/// warning and no failure.
 pub const NO_SAMPLE_BOUND: Duration = Duration::from_secs(180);
 /// How long a capture with no reading yet takes answers that are no reading.
 pub const NO_USABLE_BOUND: Duration = Duration::from_secs(30);
@@ -101,6 +106,18 @@ pub const LONG_BOUND: Duration = Duration::from_secs(600);
 pub const WARN_AFTER: Duration = Duration::from_secs(3);
 /// How far past a time limit a capture waits for the answer to a question it asked.
 pub const LIMIT_GRACE: Duration = Duration::from_secs(5);
+
+/// The bounds a capture on an HP 66xxB takes from its sweep, `points` readings `tint`
+/// seconds apart: twice what a reading takes, and no less than the usual ones. `None`
+/// for a sweep no longer than the usual bound allows, or one that is no sweep.
+pub fn sweep_bound(points: f64, tint: f64) -> Option<Duration> {
+    let takes = points * tint;
+    if !(takes.is_finite() && takes > 0.0) {
+        return None;
+    }
+    let bound = Duration::try_from_secs_f64(2.0 * takes).unwrap_or(Duration::MAX);
+    (bound > NO_SAMPLE_BOUND).then_some(bound)
+}
 
 /// What [`Watch`] has to say.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -148,6 +165,15 @@ impl Watch {
             long_bound: LONG_BOUND,
             warn_after: WARN_AFTER,
         }
+    }
+
+    /// With a reading's bound raised to `bound`, before and after the first, for an
+    /// instrument whose reading takes long.
+    #[must_use]
+    pub fn waiting(mut self, bound: Duration) -> Watch {
+        self.no_sample_bound = self.no_sample_bound.max(bound);
+        self.long_bound = self.long_bound.max(bound);
+        self
     }
 
     /// With these bounds, for a test: no reading, silence; no reading, junk; a reading
@@ -331,12 +357,54 @@ pub struct Link {
     owed: bool,
     /// For how many reads it has been out.
     waited: u32,
+    /// How many it may be out: [`PATIENCE`], or more for a slow reading.
+    patience: u32,
+    /// What asks who the instrument is, and what the answer holds: to find the line's
+    /// place again after an answer cut short.
+    identify: (&'static str, String),
 }
 
 impl Link {
-    /// Not open yet.
-    pub fn new(profile: &'static Profile) -> Link {
-        Link { scpi: None, profile, owed: false, waited: 0 }
+    /// Not open yet. `identify` is the query that names the instrument and what its
+    /// answer holds.
+    pub fn new(profile: &'static Profile, identify: (&'static str, String)) -> Link {
+        Link { scpi: None, profile, owed: false, waited: 0, patience: PATIENCE, identify }
+    }
+
+    /// A capture's start: a question an earlier capture left out is given up, and the
+    /// next send drains its answer, as the line is still marked stale; `patience`
+    /// reads for one question from now on.
+    pub fn begin_capture(&mut self, patience: u32) {
+        self.owed = false;
+        self.waited = 0;
+        self.patience = patience.max(PATIENCE);
+    }
+
+    /// Finds the line's place again after an answer cut short, whose tail may still
+    /// come and be taken for the next answer, for good: asks who the instrument is and
+    /// reads until that answer comes, everything before it dropped. A drain on quiet
+    /// can't do this, as a tail may come later than any quiet is waited for.
+    ///
+    /// # Errors
+    ///
+    /// A failed write or read that ends a capture.
+    fn resync(&mut self) -> Result<()> {
+        let (query, name) = self.identify.clone();
+        let patience = self.patience;
+        log::warn!("An answer came cut short: asking {query} to find where the line is.");
+        let scpi = self.scpi()?;
+        scpi.send(query)?;
+        for _ in 0..patience {
+            match scpi.late_answer() {
+                Ok(line) if line.contains(&name) => return Ok(()),
+                Ok(line) => log::debug!("Dropped '{line}' ahead of the answer to {query}."),
+                Err(Error::Timeout) => {}
+                Err(e) if is_unusable(&e) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        log::warn!("No answer to {query}: the line may still be out of step.");
+        Ok(())
     }
 
     fn scpi(&mut self) -> Result<&mut Scpi> {
@@ -383,7 +451,22 @@ impl Link {
             result = scpi.late_answer();
             waited += 1;
         }
+        // Part of an answer is no value, and its tail would be the next one's.
+        let cut = scpi.out_of_step() && matches!(result, Ok(_) | Err(Error::Timeout));
+        if cut {
+            self.resync()?;
+            return Err(Error::device("SCPI: the answer came cut short"));
+        }
         result
+    }
+
+    /// A query of the driver's own, outside the table: the answer as text.
+    ///
+    /// # Errors
+    ///
+    /// No answer, or a failed write.
+    pub fn ask(&mut self, query: &str) -> Result<String> {
+        self.scpi()?.get_string(query)
     }
 
     /// A reading of `channel`, as one pass of `scpi_pps_receive_data`. On a line with
@@ -401,15 +484,28 @@ impl Link {
         let result =
             if owed { scpi.late_answer() } else { scpi.cmd_resp(table, selection, &command, &[]) };
         let tagless = scpi.owes_answer();
+        let out_of_step = scpi.out_of_step();
         match result {
+            Ok(text) if out_of_step => {
+                self.owed = false;
+                self.waited = 0;
+                self.resync()?;
+                Ok(Reading::Junk(format!("'{text}', cut short")))
+            }
             Ok(text) => {
                 self.owed = false;
                 self.waited = 0;
                 Ok(number(&text).map_or(Reading::Junk(text), Reading::Value))
             }
+            Err(Error::Timeout) if out_of_step => {
+                self.owed = false;
+                self.waited = 0;
+                self.resync()?;
+                Ok(Reading::Silent)
+            }
             Err(Error::Timeout) => {
                 self.waited = if owed { self.waited + 1 } else { 1 };
-                self.owed = tagless && self.waited < PATIENCE;
+                self.owed = tagless && self.waited < self.patience;
                 Ok(Reading::Silent)
             }
             Err(e) if is_unusable(&e) => {

@@ -295,6 +295,9 @@ pub fn plan_configs(device: &dyn Device, args: &Args) -> Result<ConfigPlan> {
             }
             oxrok::core::check_value(&key, &value)
                 .map_err(|e| Error::Arg(format!("Failed to set device option '{name}': {e}.")))?;
+            device
+                .check_set(&key, &value, group.as_deref())
+                .map_err(|e| Error::Arg(format!("Failed to set device option '{name}': {e}.")))?;
             items.push(ConfigItem { name, key, value, group: group.clone(), config });
         }
     }

@@ -38,6 +38,8 @@ struct State {
     failing_writes: u32,
     failing_after: Option<u32>,
     gone: bool,
+    /// A piece that ends a read ends an answer, line end or not: C's tcp-raw rule.
+    short_ends: bool,
     closes: u32,
     discards: u32,
     /// Reads to come that fail with a device's error, as a bad USBTMC header does.
@@ -122,7 +124,7 @@ impl ScpiTransport for Fake {
         if front.1.is_empty() {
             let last = buf[..n].last() == Some(&b'\n');
             s.coming.pop_front();
-            self.complete = last;
+            self.complete = last || s.short_ends;
         }
         Ok(n)
     }
@@ -403,8 +405,8 @@ fn a_close_forgets_the_selection() {
 fn a_set_outside_the_listed_range_still_goes() {
     let (mut device, state) = device();
     clear(&state);
-    device.set(&Key::VoltageTarget, &Value::F64(99.5), Some("1")).unwrap();
-    assert_eq!(written(&state), [":INST:NSEL 1", ":SOUR:VOLT 99.500000"]);
+    device.set(&Key::VoltageTarget, &Value::F64(32.5), Some("1")).unwrap();
+    assert_eq!(written(&state), [":INST:NSEL 1", ":SOUR:VOLT 32.500000"]);
 }
 
 #[test]
@@ -1405,4 +1407,241 @@ fn a_late_answer_leaves_no_drain() {
         device.close().unwrap();
     });
     assert_eq!(probe.lock().unwrap().discards, 0);
+}
+
+/// A DP832 that sends its second voltage in two pieces, the tail `wait` reads later.
+fn split_second_volts(wait: u32) -> impl FnMut(&str) -> Vec<(u32, String)> + Send {
+    let mut volts = 0;
+    move |l: &str| match l {
+        ":MEAS:VOLT?" => {
+            volts += 1;
+            if volts == 2 {
+                vec![(0, "12.".to_owned()), (wait, "345\n".to_owned())]
+            } else {
+                vec![(0, "12.5\n".to_owned())]
+            }
+        }
+        other => dp832(other),
+    }
+}
+
+fn capture_of(device: &mut PpsDevice, rounds: u64) -> Vec<Packet> {
+    with_limit(device, rounds);
+    for pos in [2, 3, 4, 5, 6, 7, 8] {
+        device.enable_channel(pos, false).unwrap();
+    }
+    let (tx, rx) = sync_channel(256);
+    device.start(PacketSink::new(tx, 0)).unwrap();
+    let packets = collect(&rx);
+    device.stop().unwrap();
+    packets
+}
+
+/// An answer cut in two, on a line with no tags: as a read that gives up on its head
+/// (a tty), and as a short read that ends it (C's tcp-raw rule). Each reading after it
+/// is of its own quantity, and the line is found again by `*IDN?`.
+#[test]
+fn an_answer_cut_in_two_shifts_nothing() {
+    for (short_ends, wait) in [(false, 3), (false, 20), (true, 3), (true, 20)] {
+        let (mut device, state) = device_with(Box::new(split_second_volts(wait)), false, false);
+        state.lock().unwrap().short_ends = short_ends;
+        clear(&state);
+        let probe = Arc::clone(&state);
+        let packets = bounded(move || {
+            let packets = capture_of(&mut device, 6);
+            device.close().unwrap();
+            packets
+        });
+        let read = readings(&packets);
+        assert_eq!(read.len(), 12, "{short_ends} {wait}: {read:?}");
+        for (channel, value) in read {
+            let want = if channel == 0 { 12.5 } else { 1.5 };
+            assert_eq!(value, want, "{short_ends} {wait}: channel {channel}");
+        }
+        assert!(written(&probe).contains(&"*IDN?".to_owned()), "{short_ends} {wait}");
+    }
+}
+
+/// A get whose answer came cut short is an error, and the next get is its own.
+#[test]
+fn a_get_cut_short_is_an_error_and_the_next_is_whole() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        ":SOUR:VOLT?" if first => {
+            first = false;
+            vec![(0, "7.".to_owned()), (3, "25\n".to_owned())]
+        }
+        ":SOUR:VOLT?" => vec![(0, "7.5\n".to_owned())],
+        other => dp832(other),
+    };
+    let (device, _) = device_with(Box::new(respond), false, false);
+    let e = device.get(&Key::VoltageTarget, Some("1")).unwrap_err();
+    assert!(e.to_string().contains("cut short"), "{e}");
+    assert_eq!(device.get(&Key::VoltageTarget, Some("1")).unwrap(), Value::F64(7.5));
+}
+
+/// A question an earlier capture left out is given up at the next start: its answer is
+/// drained, not filed under the new capture's first channel.
+#[test]
+fn a_question_left_out_by_a_capture_is_given_up_at_the_next() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        ":MEAS:VOLT?" if first => {
+            first = false;
+            vec![(1_000_000, "99\n".to_owned())]
+        }
+        other => dp832(other),
+    };
+    let (mut device, state) = device_with(Box::new(respond), false, false);
+    for pos in 1..9 {
+        device.enable_channel(pos, false).unwrap();
+    }
+    let probe = Arc::clone(&state);
+    let packets = bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        // Until the question is out and waited on.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !device.link().owed() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        device.stop().unwrap();
+        drop(rx);
+        // Its answer has come by the next start.
+        probe.lock().unwrap().coming.front_mut().unwrap().0 = 0;
+        with_limit(&mut device, 1);
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let packets = collect(&rx);
+        device.close().unwrap();
+        packets
+    });
+    assert_eq!(readings(&packets), [(0, 12.5)]);
+}
+
+#[test]
+fn a_set_point_against_its_range() {
+    use super::Range::{Over, Refused, Unknown, Within};
+    let cases = [
+        ((0.0, 30.0, 15.0), Within),
+        ((0.0, 30.0, 32.0), Over),
+        ((0.0, 30.0, 33.0), Over),
+        ((0.0, 30.0, 33.01), Refused),
+        ((0.0, 30.0, 120.0), Refused),
+        ((0.0, 30.0, -0.5), Refused),
+        ((1e-3, 1.03, 0.0), Refused),
+        ((-30.0, 0.0, -32.0), Over),
+        ((-30.0, 0.0, -34.0), Refused),
+        ((-30.0, 0.0, 1.0), Refused),
+        ((0.0, 0.0, 5.0), Unknown),
+    ];
+    for ((low, high, value), want) in cases {
+        assert_eq!(super::range_check(low, high, value), want, "{value} in {low}..{high}");
+    }
+}
+
+/// Far past a range is refused before the wire, by `check_set` for a command line and
+/// by `set` for a library; a little past it goes with a warning; a PM2800 output with no
+/// module lists none, and goes.
+#[test]
+fn a_set_point_far_out_of_range_goes_nowhere() {
+    let (mut device, state) = device();
+    clear(&state);
+    let far = Value::F64(120.0);
+    assert!(device.check_set(&Key::VoltageTarget, &far, Some("1")).is_err());
+    let e = device.set(&Key::VoltageTarget, &far, Some("1")).unwrap_err();
+    assert!(e.to_string().contains("nothing was sent"), "{e}");
+    assert!(device.check_set(&Key::CurrentLimit, &Value::F64(-1.0), Some("1")).is_err());
+    assert_eq!(written(&state), Vec::<String>::new());
+    device.set(&Key::VoltageTarget, &Value::F64(32.0), Some("1")).unwrap();
+    device.set(&Key::CurrentLimit, &Value::F64(3.2), Some("1")).unwrap();
+    assert_eq!(written(&state), [":INST:NSEL 1", ":SOUR:VOLT 32.000000", ":SOUR:CURR 3.200000"]);
+    let respond = |l: &str| match l {
+        "*IDN?" => vec![(0, "PHILIPS,PM2832/01,1,2\n".to_owned())],
+        _ => Vec::new(),
+    };
+    let (mut pm, state) = device_with(Box::new(respond), false, false);
+    clear(&state);
+    pm.set(&Key::VoltageTarget, &Value::F64(5.0), Some("2")).unwrap();
+    assert_eq!(written(&state), [":INST:NSEL 2", ":SOUR:VOLT 5.000000"]);
+}
+
+#[test]
+fn a_sweep_sets_its_bound() {
+    assert_eq!(protocol::sweep_bound(2048.0, 15.6e-6), None, "the usual is no longer");
+    assert_eq!(
+        protocol::sweep_bound(4096.0, 0.0312),
+        Some(Duration::from_secs_f64(2.0 * 4096.0 * 0.0312)),
+        "twice 128 s is past 180"
+    );
+    assert_eq!(protocol::sweep_bound(4096.0, 0.02), None, "twice 82 s is within it");
+    assert_eq!(protocol::sweep_bound(4096.0, 0.1), Some(Duration::from_secs_f64(819.2)));
+    assert_eq!(protocol::sweep_bound(f64::NAN, 1.0), None);
+    assert_eq!(protocol::sweep_bound(0.0, 1.0), None);
+    assert!(protocol::sweep_bound(4096.0, 31200.0).is_some());
+}
+
+/// An HP 66xxB says its sweep at a capture's start, and a long one gives a question its
+/// time: an answer later than the usual patience is still the one asked for.
+#[test]
+fn an_hp_66xxb_waits_as_long_as_its_sweep() {
+    let mut first = true;
+    let respond = move |l: &str| match l {
+        "SENS:SWE:POIN?" => vec![(0, "+4.096000E+03\n".to_owned())],
+        "SENS:SWE:TINT?" => vec![(0, "+1.000000E-01\n".to_owned())],
+        ":MEAS:VOLT?" if first => {
+            first = false;
+            vec![(60, "+1.000000E+00\n".to_owned())]
+        }
+        other => hp66b(other, "0\n", ("0\n", "0\n"), ("0\n", "0\n")),
+    };
+    let (mut device, state) = device_with(Box::new(respond), false, false);
+    with_limit(&mut device, 1);
+    device.enable_channel(1, false).unwrap();
+    clear(&state);
+    let probe = Arc::clone(&state);
+    let packets = bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        let packets = collect(&rx);
+        device.close().unwrap();
+        packets
+    });
+    assert_eq!(readings(&packets), [(0, 1.0)]);
+    let asked = written(&probe);
+    assert!(asked.contains(&"SENS:SWE:POIN?".to_owned()), "{asked:?}");
+    assert_eq!(asked.iter().filter(|l| *l == ":MEAS:VOLT?").count(), 1, "{asked:?}");
+}
+
+/// A long sweep raises the silence bound too: a capture silent past the usual bound
+/// goes on.
+#[test]
+fn a_long_sweep_raises_the_silence_bound() {
+    let respond = |l: &str| match l {
+        "SENS:SWE:POIN?" => vec![(0, "4096\n".to_owned())],
+        "SENS:SWE:TINT?" => vec![(0, "0.1\n".to_owned())],
+        ":MEAS:VOLT?" | ":MEAS:CURR?" => Vec::new(),
+        other => hp66b(other, "0\n", ("0\n", "0\n"), ("0\n", "0\n")),
+    };
+    let (mut device, state) = device_with(Box::new(respond), true, false);
+    device.watch = Some(watch(false, [20, 10_000, 10_000, 10_000]));
+    let packets = bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        device.start(PacketSink::new(tx, 0)).unwrap();
+        // Well past 20 ms of silence, in reads.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while state.lock().unwrap().reads < 200 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        device.stop().unwrap();
+        let mut packets = Vec::new();
+        while let Ok((_, p)) = rx.recv_timeout(Duration::from_secs(5)) {
+            packets.push(p);
+        }
+        device.close().unwrap();
+        packets
+    });
+    assert_eq!(failure(&packets), None);
 }

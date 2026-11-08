@@ -1,0 +1,14 @@
+V1: 12.0010 V DC
+V1: 12.0020 V DC
+META regulation: CC
+V1: 12.0030 V DC
+V1: 12.0040 V DC
+META regulation: CV
+V1: 12.0050 V DC
+V1: 12.0060 V DC
+META regulation: CC-
+V1: 12.0070 V DC
+V1: 12.0000 V DC
+META enabled: 1
+META regulation: UR
+V1: 12.0010 V DC

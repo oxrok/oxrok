@@ -111,6 +111,8 @@ pub struct Scpi {
     channel: Option<String>,
     /// The last read gave up with part of an answer, whose tail is still to come.
     cut: bool,
+    /// The last answer had no line end: on a line with no tags, one ended by silence.
+    unended: bool,
 }
 
 /// How many answers `*OPC?` gets.
@@ -133,6 +135,7 @@ impl Scpi {
             stale: false,
             channel: None,
             cut: false,
+            unended: false,
         }
     }
 
@@ -254,6 +257,7 @@ impl Scpi {
             }
         }
         self.cut = false;
+        self.unended = out.last() != Some(&b'\n');
         Ok(out)
     }
 
@@ -276,6 +280,14 @@ impl Scpi {
     /// answer read and dropped. On USBTMC a read is a new request, and C asks again.
     pub fn owes_answer(&self) -> bool {
         !self.transport.tags_answers() && !self.cut
+    }
+
+    /// Whether the line may be out of step: on a line with no tags, the last read gave
+    /// up on part of an answer, or the last answer had no line end, which silence ended.
+    /// Its tail may come as an answer of its own. An instrument that ends no answer with
+    /// a line feed is always so.
+    pub fn out_of_step(&self) -> bool {
+        !self.transport.tags_answers() && (self.cut || self.unended)
     }
 
     /// Reads on for the answer to the question out, as [`Scpi::get_opc_while`] does, as
