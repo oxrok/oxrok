@@ -1476,8 +1476,16 @@ EOF
             if [ "$EMU_CDC" = 1 ]; then
                 emu_tx_tty "$t" <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
+            # libusb's backend reads string descriptors at listing, which nusb and
+            # sigrok-cli don't. The kernel's own reads when a reset enumerates the
+            # device again (USBTMC's reset at the open of a Siglent, between the
+            # configuration descriptor and SET_CONFIGURATION) are in every tool's
+            # log and in the goldens, so they stay, and line numbers in a case's
+            # --tx-filter count the same on both backends.
             if [ "$EMU_TMC" = 1 ] && [ $t = b ] && [ "${OXROK_USB_BACKEND:-}" = libusb ]; then
-                sed -E '/^ctl_in 00 06 03[0-9a-f]{2} /d' "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
+                awk '/^ctl_in 00 06 0200 / { e = 1 } /^ctl_out 00 09 / { e = 0 }
+                    /^ctl_in 00 06 03[0-9a-f][0-9a-f] / && !e { next } { print }' \
+                    "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
             if [ -n "$tx_filter" ]; then
                 sed -E "$tx_filter" "$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
