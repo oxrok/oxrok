@@ -438,3 +438,50 @@ fn the_null_output_discards_logic() {
     assert!(ok);
     assert_eq!(out, "A0: -10.0000 V DC\nA0: -10.0000 V DC\n");
 }
+
+/// `-w` holds back what comes before the trigger, as sigrok-cli's manual
+/// says: the output is the rest of the capture, from the trigger on. A
+/// difference from sigrok-cli 0.7.2, whose output module gets every sample
+/// (docs/CLI.md).
+#[test]
+fn wait_trigger_starts_the_output_at_the_trigger() {
+    let run = |w: bool| {
+        let mut args = vec![
+            "-d",
+            DEMO4,
+            "-g",
+            "Logic",
+            "-c",
+            "pattern=incremental",
+            "--samples",
+            "12",
+            "-t",
+            "D2=r",
+            "-O",
+            "csv:header=false:trigger=true",
+        ];
+        if w {
+            args.push("-w");
+        }
+        let (out, _, ok) = oxrok(&args);
+        assert!(ok);
+        out
+    };
+    let all = run(false);
+    let waited = run(true);
+    let lines: Vec<&str> = all.lines().collect();
+    // The title, then a row per sample with the trigger column last.
+    let at = lines.iter().position(|l| l.ends_with(",1")).expect("a trigger row");
+    assert_eq!(at, 5);
+    let want: Vec<&str> = std::iter::once(lines[0]).chain(lines[at..].iter().copied()).collect();
+    assert_eq!(waited.lines().collect::<Vec<_>>(), want);
+}
+
+/// With no trigger, `-w` would write nothing at all: refused.
+#[test]
+fn wait_trigger_needs_a_trigger() {
+    let (out, err, ok) = oxrok(&["-d", DEMO4, "--samples", "12", "-w", "-O", "bits"]);
+    assert!(!ok);
+    assert!(out.is_empty());
+    assert_eq!(err, "-w waits for a trigger: give one with -t.\n");
+}
