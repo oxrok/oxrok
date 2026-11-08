@@ -10,27 +10,31 @@
 //! The Fluke 45 dual display multimeter on its RS-232 port, with SCPI's words and a
 //! prompt after each command.
 //!
-//! A scan asks `*IDN?` and asks once more after a reopen, and closes the port. A
-//! capture goes round the two displays: `FUNC1?`, `AUTO?`, then `VAL1?` and `MOD?` for
-//! a display in use on a channel enabled, and the same for 2. A round with a reading
-//! is a sample, as in C, so two displays give two packets per sample.
+//! A scan sends a device clear (`^C`) and asks `*IDN?`, and if no answer comes in a
+//! second, clears and asks once more after a reopen; then it closes the port. A
+//! capture starts with a device clear and goes round the two displays: `FUNC1?`,
+//! `AUTO?`, then `VAL1?` and `MOD?` for a display in use on a channel enabled, and the
+//! same for 2. A round with a reading is a sample, as in C, so two displays give two
+//! packets per sample.
 //!
 //! Where it goes its own way, see `docs/DEVICES.md`:
 //!
-//! - It waits for the prompt before the next command, as the manual says a host must.
-//!   C sends on the answer's line end, and reads one line more at its stop
-//!   (`api.c:209`); here a stop leaves what is out counted, for the next capture.
+//! - One question at a time: the next goes only after the last one's prompt, as the
+//!   manual says a host must (5-11). C sends on the answer's line end, and gives up on
+//!   an answer after a second and asks the next question, which a meter still busy
+//!   discards, and then takes the late answer for the next question's.
+//! - A device clear at a capture's start and a scan's, so that a meter left in the
+//!   middle of `VAL1?` is ready (5-4); none in C.
 //! - It reads lines, in whatever pieces they came. libsigrok takes a read ending in LF
 //!   as one answer, so with answer and prompt in one read, as a cable's latency timer
-//!   makes likely, C has `VDC\r\n=>` for the function and no reading ever.
-//! - A question given up on is counted, its late answer goes with it, and no later
-//!   answer is shifted: [`protocol::Requests`]. The wait for an answer grows.
+//!   makes likely, C has `VDC\r\n=>` for the function and no reading ever. An echo of
+//!   the question (echo is On at the factory) is passed over.
 //! - `VAL1?` with no reading is no sample, where C crashes on the NULL
 //!   (`protocol.c:265`). A reading that isn't one is refused, where C sends what the
 //!   stack holds (`protocol.c:272`).
 //! - A silence ends: [`protocol::Watch`]. C has no bound.
-//! - `AACDC` says AC and DC, `REL` says relative, and `CONT` on the second display has
-//!   its unit: see [`protocol`] for C's lines.
+//! - Labels by the manual: overload either way, AACDC, REL, dB, dB Power, and the
+//!   modifiers on the primary display alone; see [`protocol`] for C's lines.
 //! - Only a serial port: a `conn=` of USBTMC or TCP finds nothing, as the meter has
 //!   neither, and with no `conn=` nothing is probed. C would ask any USBTMC device.
 
@@ -45,7 +49,10 @@ use crate::core::{
     OptionDesc, Packet, PacketSink, Result, Value, ValueList,
 };
 use crate::scpi::{self, Resource, Scpi};
-use protocol::{Kind, LONGEST_LINE, Limits, Next, Reply, Requests, Step, Timing, Watch};
+use protocol::{
+    CLEAR_WAIT, ID_WAIT, Kind, LONGEST_LINE, Limits, Next, PROMPT_WAIT, Reply, Requests, Step,
+    Timing, Watch,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -66,9 +73,27 @@ const STOP_CHECK: Duration = Duration::from_millis(5);
 const PACE: Duration = Duration::from_millis(10);
 /// How long a stopped capture tries to hand over its End on a full queue.
 const END_AFTER_STOP: Duration = Duration::from_millis(500);
+/// The RS-232 device clear (5-4).
+const DEVICE_CLEAR: &[u8] = b"\x03";
+/// The three prompts (5-4).
+const PROMPTS: [&[u8]; 3] = [b"=>", b"?>", b"!>"];
+/// How long a prompt with nothing after it waits for its line end before it is taken
+/// as whole: ten characters at 1200 baud.
+const BARE_PROMPT: Duration = Duration::from_millis(100);
 
 /// The `fluke-45` driver.
 pub struct Fluke45Driver;
+
+/// What a question came to, or why it has no answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Asked {
+    /// What the meter said, or that it was given up on.
+    Reply(Reply),
+    /// The capture is stopped, with the question out.
+    Stopped,
+    /// The time limit has passed, and the question has had a second at least.
+    TimeUp,
+}
 
 /// The port and what a line has said so far.
 pub(crate) struct Link {
@@ -80,6 +105,8 @@ pub(crate) struct Link {
     lines: std::collections::VecDeque<Vec<u8>>,
     /// A line so long that nothing can make use of it is going past.
     overlong: bool,
+    /// When the last bytes came.
+    came: Instant,
 }
 
 impl Link {
@@ -90,6 +117,7 @@ impl Link {
             part: Vec::new(),
             lines: std::collections::VecDeque::new(),
             overlong: false,
+            came: Instant::now(),
         }
     }
 
@@ -123,23 +151,76 @@ impl Link {
         self.part.clear();
         self.overlong = false;
         self.scpi.send(command)?;
-        self.requests.sent(kind, Instant::now());
+        self.requests.sent(command, kind, Instant::now());
         Ok(())
     }
 
-    /// A question and what it came to; `None` for a stop or a limit's end.
+    /// Reads what has come into lines; whether anything came. A gone tty can give 0 at
+    /// once, so an empty read takes a millisecond at least. A prompt with nothing after
+    /// it for [`BARE_PROMPT`] is a line, as no answer starts with one: a meter that ends
+    /// its prompt with nothing is understood too.
+    fn read(&mut self) -> Result<bool> {
+        let mut buf = [0u8; 256];
+        let looked = Instant::now();
+        let got = self.scpi.read_some(&mut buf, STOP_CHECK)?;
+        if got > 0 {
+            self.came = Instant::now();
+            self.take(&buf[..got]);
+            return Ok(true);
+        }
+        if looked.elapsed() < Duration::from_millis(1) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let bare = self.part.iter().position(|c| !c.is_ascii_control()).unwrap_or(0);
+        if PROMPTS.contains(&&self.part[bare..])
+            && looked.saturating_duration_since(self.came) >= BARE_PROMPT
+        {
+            self.lines.push_back(std::mem::take(&mut self.part));
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// A device clear, and its prompt waited for, a second at most: whether it came.
+    /// What was on its way, the late answer of a question given up on among it, goes.
+    fn clear(&mut self, go_on: &dyn Fn() -> bool) -> Result<bool> {
+        self.part.clear();
+        self.lines.clear();
+        self.overlong = false;
+        self.requests.cleared();
+        self.scpi.send_raw(DEVICE_CLEAR)?;
+        let deadline = Instant::now() + CLEAR_WAIT;
+        loop {
+            while let Some(line) = self.lines.pop_front() {
+                let bare = line.iter().position(|c| !c.is_ascii_control()).unwrap_or(line.len());
+                if &line[bare..] == b"=>" {
+                    return Ok(true);
+                }
+                log::debug!("Dropped at a device clear: {:?}.", String::from_utf8_lossy(&line));
+            }
+            let looked = Instant::now();
+            if !go_on() || looked >= deadline {
+                log::debug!("No prompt for the device clear.");
+                return Ok(false);
+            }
+            self.read()?;
+        }
+    }
+
+    /// A question and what it came to. `watch` bounds the wait, or `bound` of silence
+    /// does: either way the question is then given up on, with a device clear.
     fn query(
         &mut self,
         command: &str,
         kind: Kind,
         watch: &mut Option<&mut Watch>,
+        bound: Option<Duration>,
         go_on: &dyn Fn() -> bool,
-    ) -> Result<Option<Reply>> {
+    ) -> Result<Asked> {
         self.ask(command, kind)?;
-        let mut buf = [0u8; 256];
         loop {
             if !go_on() {
-                return Ok(None);
+                return Ok(Asked::Stopped);
             }
             while let Some(line) = self.lines.pop_front() {
                 let text = String::from_utf8_lossy(&line);
@@ -149,45 +230,62 @@ impl Link {
                     watch.heard(&step);
                 }
                 if let Step::Done(reply) = step {
-                    return Ok(Some(reply));
+                    return Ok(Asked::Reply(reply));
                 }
             }
             // Stamped ahead of the read: what an empty read says holds from here, and
             // a stall after it would pass for silence with the answer already in.
             let looked = Instant::now();
-            let got = self.scpi.read_some(&mut buf, STOP_CHECK)?;
-            if got > 0 {
-                self.take(&buf[..got]);
-                if let Some(watch) = watch.as_deref_mut() {
-                    Self::check(watch, Instant::now())?;
+            if self.read()? {
+                if let Some(watch) = watch.as_deref_mut()
+                    && self.give_up(watch, Instant::now(), go_on)?
+                {
+                    return Ok(Asked::Reply(Reply::Silent));
                 }
                 continue;
             }
-            // A gone tty can give 0 at once.
-            if looked.elapsed() < Duration::from_millis(1) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
             if let Some(watch) = watch.as_deref_mut() {
-                Self::check(watch, looked)?;
+                if self.give_up(watch, looked, go_on)? {
+                    return Ok(Asked::Reply(Reply::Silent));
+                }
                 if watch.time_is_up(looked)
-                    && looked.saturating_duration_since(self.requests.heard_at())
-                        >= protocol::FIRST_WAIT
+                    && looked.saturating_duration_since(self.requests.heard_at()) >= PROMPT_WAIT
                 {
-                    return Ok(Some(self.requests.give_up()));
+                    return Ok(Asked::TimeUp);
                 }
             }
-            if let Some(reply) = self.requests.expired(looked) {
-                return Ok(Some(reply));
+            // An answer whose prompt is late goes ahead of a bound.
+            if let Some(reply) = self.requests.prompt_late(looked) {
+                return Ok(Asked::Reply(reply));
+            }
+            if let Some(bound) = bound
+                && !self.requests.has_answer()
+                && looked.saturating_duration_since(self.requests.heard_at()) >= bound
+            {
+                self.clear(go_on)?;
+                return Ok(Asked::Reply(Reply::Silent));
             }
         }
     }
 
-    fn check(watch: &mut Watch, now: Instant) -> Result<()> {
+    /// What the watch says at `now`: an error to end the capture, or whether the
+    /// question was given up on and the meter cleared.
+    fn give_up(
+        &mut self,
+        watch: &mut Watch,
+        now: Instant,
+        go_on: &dyn Fn() -> bool,
+    ) -> Result<bool> {
         match watch.check(now) {
-            Next::Wait => Ok(()),
+            Next::Wait => Ok(false),
             Next::Warn => {
                 log::warn!("{}", watch.silence_message());
-                Ok(())
+                Ok(false)
+            }
+            Next::Clear => {
+                log::warn!("No answer to {}; clearing the meter.", self.requests.command());
+                self.clear(go_on)?;
+                Ok(true)
             }
             Next::GiveUp(why) => Err(Error::device(why.message())),
         }
@@ -216,14 +314,17 @@ struct Worker {
     handle: JoinHandle<Link>,
 }
 
-/// `probe_device` on an open port: the id if it answers, once more after a reopen.
+/// `probe_device` on an open port: the id if it answers, once more after a reopen,
+/// each time after a device clear, and with [`ID_WAIT`] for the answer, C's second.
 fn ask_id(scpi: Scpi) -> Result<(scpi::HwInfo, Scpi)> {
     let mut link = Link::new(scpi);
+    let go_on = || true;
     let mut asked = 0;
     loop {
         asked += 1;
-        let reply = link.query("*IDN?", Kind::Id, &mut None, &|| true);
-        if let Ok(Some(Reply::Answer(text))) = reply {
+        link.clear(&go_on)?;
+        let reply = link.query("*IDN?", Kind::Id, &mut None, Some(ID_WAIT), &go_on);
+        if let Ok(Asked::Reply(Reply::Answer(text))) = reply {
             return Ok((scpi::parse_hw_id(&text)?, link.scpi));
         }
         if asked == 2 {
@@ -458,7 +559,28 @@ struct Capture {
 }
 
 impl Capture {
-    /// One display's questions. Whether it gave a sample; `None` for a stop.
+    /// A question; the reply, or `None` where the capture ends, said if a time limit
+    /// ended it with nothing to show.
+    fn ask(
+        link: &mut Link,
+        command: &str,
+        kind: Kind,
+        watch: &mut Watch,
+        go_on: &dyn Fn() -> bool,
+    ) -> Result<Option<Reply>> {
+        match link.query(command, kind, &mut Some(&mut *watch), None, go_on)? {
+            Asked::Reply(reply) => Ok(Some(reply)),
+            Asked::Stopped => Ok(None),
+            Asked::TimeUp => {
+                if !watch.sampled() {
+                    log::warn!("{}", watch.time_limit_message());
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// One display's questions. Whether it gave a sample; `None` where the capture ends.
     fn display(
         &self,
         i: usize,
@@ -468,13 +590,12 @@ impl Capture {
         go_on: &dyn Fn() -> bool,
     ) -> Result<Option<bool>> {
         let n = i + 1;
-        let mut watching = Some(&mut *watch);
-        let Some(func) = link.query(&format!("FUNC{n}?"), Kind::Function, &mut watching, go_on)?
+        let Some(func) = Self::ask(link, &format!("FUNC{n}?"), Kind::Function, watch, go_on)?
         else {
             return Ok(None);
         };
-        // A failed FUNC? returns ahead of AUTO? in C (`protocol.c:57`); one the meter
-        // refused or that says no function does not.
+        // A FUNC? given up on returns ahead of AUTO?, as a failed one does in C
+        // (`protocol.c:57`); one the meter refused or that says no function does not.
         if matches!(func, Reply::Silent) {
             return Ok(Some(false));
         }
@@ -482,7 +603,7 @@ impl Capture {
             Reply::Answer(word) => protocol::function(word),
             _ => None,
         };
-        let Some(auto) = link.query("AUTO?", Kind::Flag, &mut watching, go_on)? else {
+        let Some(auto) = Self::ask(link, "AUTO?", Kind::Flag, watch, go_on)? else {
             return Ok(None);
         };
         let Some(mut label) = label.filter(|_| self.enabled[i]) else {
@@ -491,8 +612,7 @@ impl Capture {
         if matches!(&auto, Reply::Answer(a) if a == "1") {
             label.flags |= crate::core::MqFlags::AUTORANGE;
         }
-        let Some(value) = link.query(&format!("VAL{n}?"), Kind::Reading, &mut watching, go_on)?
-        else {
+        let Some(value) = Self::ask(link, &format!("VAL{n}?"), Kind::Reading, watch, go_on)? else {
             return Ok(None);
         };
         let Some(reading) = (match &value {
@@ -503,10 +623,12 @@ impl Capture {
             return Ok(Some(false));
         };
         let mut digits = reading.digits;
-        let Some(mods) = link.query("MOD?", Kind::Modifiers, &mut watching, go_on)? else {
+        // Asked for both displays, as C does, and on the primary display alone (5-22).
+        let Some(mods) = Self::ask(link, "MOD?", Kind::Modifiers, watch, go_on)? else {
             return Ok(None);
         };
-        if let Reply::Answer(text) = &mods
+        if i == 0
+            && let Reply::Answer(text) = &mods
             && let Some(mods) = protocol::modifiers(text)
         {
             protocol::apply_modifiers(mods, &mut label, &mut digits);
@@ -538,6 +660,9 @@ impl Capture {
             msec: self.limit_msec,
         };
         let mut watch = Watch::new(self.timing, limits, Instant::now());
+        // A meter left in the middle of a command, by an earlier capture or anything
+        // else, is ready after this.
+        link.clear(&go_on)?;
         let mut samples = 0u64;
         loop {
             let mut sent = false;

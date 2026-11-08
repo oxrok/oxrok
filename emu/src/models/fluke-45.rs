@@ -52,7 +52,7 @@
 //! - `say=N:TEXT`, the Nth query (from 1) answers TEXT and a prompt, or TEXT alone
 //!   when that is `!>`, `?>` or `=>`; once each, and any number of them;
 //! - `prompts=apart|together|none`, how the prompt goes; `idn=TEXT`;
-//! - `latency=T`, every answer T offers late; `trigger=T`, a reading T offers late, as
+//! - `latency=T`, every answer but `*IDN?`'s T offers late; `trigger=T`, a reading T offers late, as
 //!   on an external trigger; `blocked=T`, at power on a reading is on its way, due in T
 //!   offers, and what comes before it is discarded, as a meter a host left in `VAL1?`.
 
@@ -147,7 +147,8 @@ impl Instrument for Meter {
     fn command(&mut self, m: &Message<'_>, _s: &mut Settings, v: &mut Violations) -> Answer {
         self.queries += 1;
         let n = self.queries;
-        let mut late = self.latency;
+        // An identity is no measurement: it comes at once.
+        let mut late = if m.header == "*IDN?" { 0 } else { self.latency };
         // A reading is taken whatever is said for it, so that the next is the next.
         let text = match m.header.as_str() {
             "*IDN?" => self.idn.clone(),

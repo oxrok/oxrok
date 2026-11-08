@@ -225,6 +225,13 @@ impl Scpi {
         read
     }
 
+    /// Sends `data` as it is, with no line end and nothing settled first: an RS-232
+    /// control byte such as a Fluke's `^C`.
+    pub fn send_raw(&mut self, data: &[u8]) -> Result<()> {
+        log::debug!("SCPI send raw: {data:02x?}");
+        self.transport.send(data)
+    }
+
     /// Reads what has come, waiting at most `timeout`, for a driver that finds an
     /// instrument's lines itself and answers for what a late one means: a read that
     /// finds nothing leaves [`Scpi::send`] with nothing to settle. Returns 0 on a
@@ -572,25 +579,23 @@ impl Scpi {
 
 /// An answer to `*IDN?`, split into its fields.
 pub fn parse_hw_id(response: &str) -> Result<HwInfo> {
-    {
-        let fields: Vec<&str> = response.split(',').collect();
-        if fields.len() < 3 {
-            return Err(Error::device(format!("SCPI: short *IDN? response '{response}'")));
-        }
-        let manufacturer = fields[0].find("IDN ").map_or(fields[0], |i| &fields[0][i + 4..]);
-        let (serial, firmware) = if fields.len() < 4 {
-            log::warn!("Short IDN response, assume missing serial number.");
-            ("Unknown", fields[2])
-        } else {
-            (fields[2], fields[3])
-        };
-        Ok(HwInfo {
-            manufacturer: manufacturer.trim().to_owned(),
-            model: fields[1].trim().to_owned(),
-            serial_number: serial.trim().to_owned(),
-            firmware_version: firmware.trim().to_owned(),
-        })
+    let fields: Vec<&str> = response.split(',').collect();
+    if fields.len() < 3 {
+        return Err(Error::device(format!("SCPI: short *IDN? response '{response}'")));
     }
+    let manufacturer = fields[0].find("IDN ").map_or(fields[0], |i| &fields[0][i + 4..]);
+    let (serial, firmware) = if fields.len() < 4 {
+        log::warn!("Short IDN response, assume missing serial number.");
+        ("Unknown", fields[2])
+    } else {
+        (fields[2], fields[3])
+    };
+    Ok(HwInfo {
+        manufacturer: manufacturer.trim().to_owned(),
+        model: fields[1].trim().to_owned(),
+        serial_number: serial.trim().to_owned(),
+        firmware_version: firmware.trim().to_owned(),
+    })
 }
 
 /// As `parse_strict_bool`: `1` and `0` whole, the words by how they start, so

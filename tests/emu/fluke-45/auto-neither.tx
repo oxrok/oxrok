@@ -1,15 +1,15 @@
 ctl_out 21 22 0003 0000 - -> ok
-bulk_out 02 2a49444e3f0a -> 6
+bulk_out 02 2a49444e3f0a
 bulk_in 82 -> 464c554b452c2034352c20373635343332312c20312e362044312e360d0a
-bulk_out 02 46554e43313f0a -> 7
+bulk_out 02 46554e43313f0a
 bulk_in 82 -> 5644430d0a
-bulk_out 02 4155544f3f0a -> 6
+bulk_out 02 4155544f3f0a
 bulk_in 82 -> 320d0a
-bulk_out 02 56414c313f0a -> 6
+bulk_out 02 56414c313f0a
 bulk_in 82 -> 2b312e32333435452b300d0a
-bulk_out 02 4d4f443f0a -> 5
+bulk_out 02 4d4f443f0a
 bulk_in 82 -> 300d0a
-bulk_out 02 46554e43323f0a -> 7
+bulk_out 02 46554e43323f0a
 bulk_in 82 -> 213e0d0a
-bulk_out 02 4155544f3f0a -> 6
+bulk_out 02 4155544f3f0a
 bulk_in 82 -> 310d0a

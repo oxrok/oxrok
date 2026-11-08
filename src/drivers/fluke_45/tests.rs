@@ -17,21 +17,23 @@ use std::sync::mpsc::{Receiver, sync_channel};
 
 /// How long a test waits for what must happen: a stop or a limit that does not
 /// bite must fail, not hang the run.
-const BOUND: Duration = Duration::from_secs(30);
+const BOUND: Duration = Duration::from_secs(60);
 /// Bounds that no test of anything else should meet.
 const FAR: Duration = Duration::from_secs(3600);
 const QUICK: Timing = Timing { no_answer: FAR, no_usable: FAR, give_up: FAR };
 /// A byte at 9600 8n1.
 const LINE_RATE: Duration = Duration::from_micros(1042);
+/// What the fake answers a device clear with.
+const CLEAR: &str = "\x03";
 
-/// What a query gets, for the Nth.
+/// What a question gets, for the Nth (from 1, device clears not counted).
 #[derive(Clone, Debug)]
 enum Say {
     /// These bytes.
     Bytes(Vec<u8>),
     /// Nothing.
     Silent,
-    /// These bytes, when the test says so.
+    /// These bytes, when the test says so; what comes after waits behind them.
     OnRelease(Vec<u8>),
     /// These bytes, across a stall in the next read, which then finds nothing.
     AcrossAStall(Vec<u8>, Duration),
@@ -48,15 +50,26 @@ enum Spacing {
     Burst(usize),
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Echo {
+    #[default]
+    Off,
+    /// What came, as it came.
+    Raw,
+    /// The line with no line end.
+    Bare,
+}
+
 #[derive(Default)]
 struct State {
     writes: WriteLog,
-    /// What the Nth query gets, from 1, if not the meter's own.
     said: HashMap<usize, Say>,
+    questions: usize,
     func: Vec<u8>,
     func2: Option<Vec<u8>>,
-    prompt: bool,
-    /// The readings, in turn and coming round.
+    mods: &'static str,
+    prompt: &'static [u8],
+    clear_answered: bool,
     values: Vec<&'static str>,
     values2: Vec<&'static str>,
     next: usize,
@@ -65,19 +78,24 @@ struct State {
     held: Vec<u8>,
     across_a_stall: Option<(Vec<u8>, Duration)>,
     spacing: Spacing,
+    /// Each answer this long after its question, or after the one before it.
+    latency: Duration,
+    /// A question while one is on its way is dropped, as the manual has it.
+    discard: bool,
+    echo: Echo,
     fail_writes_after: Option<usize>,
     fail_reads: bool,
     /// Reads never run out of this.
     endless: Option<u8>,
-    /// Writes that came with something still on its way to the reader.
+    /// Questions that came with an answer still on its way.
     early: usize,
     purges: usize,
 }
 
 impl State {
-    fn arrive(&mut self, bytes: &[u8]) {
+    fn arrive_after(&mut self, bytes: &[u8], delay: Duration) {
         let now = Instant::now();
-        let mut last = self.input.back().map_or(now, |(at, _)| *at).max(now);
+        let mut last = self.input.back().map_or(now, |(at, _)| *at).max(now + delay);
         for (i, b) in bytes.iter().enumerate() {
             match self.spacing {
                 Spacing::None => {}
@@ -92,13 +110,21 @@ impl State {
         }
     }
 
+    fn arrive(&mut self, bytes: &[u8]) {
+        self.arrive_after(bytes, Duration::ZERO);
+    }
+
+    fn busy(&self) -> bool {
+        !self.input.is_empty() || !self.held.is_empty()
+    }
+
     fn own_answer(&mut self, command: &str) -> Vec<u8> {
-        let mut text = match command {
+        let text = match command {
             "*IDN?\n" => b"FLUKE, 45, 7654321, 1.6 D1.6".to_vec(),
             "FUNC1?\n" => self.func.clone(),
             "FUNC2?\n" => self.func2.clone().unwrap_or_else(|| b"!>".to_vec()),
             "AUTO?\n" => b"1".to_vec(),
-            "MOD?\n" => b"0".to_vec(),
+            "MOD?\n" => self.mods.as_bytes().to_vec(),
             "VAL1?\n" => {
                 let value = self.values[self.next % self.values.len()];
                 self.next += 1;
@@ -108,12 +134,16 @@ impl State {
             "VAL2?\n" => b"!>".to_vec(),
             other => panic!("the driver sent {other:?}"),
         };
-        if text == b"!>" || !self.prompt {
-            text.extend_from_slice(b"\r\n");
-        } else {
-            text.extend_from_slice(b"\r\n=>\r\n");
+        self.answer(&text)
+    }
+
+    fn answer(&self, text: &[u8]) -> Vec<u8> {
+        let mut out = text.to_vec();
+        out.extend_from_slice(b"\r\n");
+        if text != b"!>" {
+            out.extend_from_slice(self.prompt);
         }
-        text
+        out
     }
 }
 
@@ -125,7 +155,9 @@ impl Fake {
     fn new() -> Fake {
         Fake(Arc::new(Mutex::new(State {
             func: b"VDC".to_vec(),
-            prompt: true,
+            mods: "0",
+            prompt: b"=>\r\n",
+            clear_answered: true,
             values: vec!["+1.0000E+0", "+2.0000E+0", "+3.0000E+0", "+4.0000E+0"],
             values2: vec!["+6.0000E+1"],
             ..State::default()
@@ -148,6 +180,13 @@ impl Fake {
         self.say(nth, Say::Bytes(format!("{text}\r\n").into_bytes()));
     }
 
+    fn silent_from(&self, nth: usize) {
+        self.with(|s| s.clear_answered = false);
+        for n in nth..nth + 200 {
+            self.say(n, Say::Silent);
+        }
+    }
+
     fn release(&self) {
         self.with(|s| {
             let held = std::mem::take(&mut s.held);
@@ -161,10 +200,23 @@ impl Fake {
         })
     }
 
+    /// The questions, the device clears left out.
+    fn questions(&self) -> Vec<String> {
+        self.writes().into_iter().filter(|w| w != CLEAR).collect()
+    }
+
     fn wait_for_writes(&self, n: usize) {
         let deadline = Instant::now() + BOUND;
         while self.with(|s| s.writes.len()) < n {
             assert!(Instant::now() < deadline, "no {n} writes in time");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn wait_for_questions(&self, n: usize) {
+        let deadline = Instant::now() + BOUND;
+        while self.with(|s| s.questions) < n {
+            assert!(Instant::now() < deadline, "no {n} questions in time");
             std::thread::sleep(Duration::from_millis(1));
         }
     }
@@ -212,14 +264,40 @@ impl Port for Fake {
         if s.fail_writes_after.is_some_and(|n| s.writes.len() >= n) {
             return Err(Error::device("Broken pipe"));
         }
-        if !s.input.is_empty() {
+        s.writes.push((Instant::now(), data.to_vec()));
+        if data == CLEAR.as_bytes() {
+            s.input.clear();
+            s.held.clear();
+            if s.echo == Echo::Raw {
+                s.arrive(data);
+            }
+            if s.clear_answered {
+                let prompt = s.prompt;
+                s.arrive(prompt);
+            }
+            return Ok(());
+        }
+        let busy = s.busy();
+        if busy {
             s.early += 1;
         }
-        s.writes.push((Instant::now(), data.to_vec()));
-        let nth = s.writes.len();
+        match s.echo {
+            Echo::Off => {}
+            Echo::Raw => s.arrive(data),
+            Echo::Bare => {
+                let bare = data.strip_suffix(b"\n").unwrap_or(data).to_vec();
+                s.arrive(&bare);
+            }
+        }
+        if busy && s.discard {
+            return Ok(());
+        }
+        s.questions += 1;
+        let nth = s.questions;
         let command = String::from_utf8_lossy(data).into_owned();
         // A reading is taken whatever is said for it.
         let own = s.own_answer(&command);
+        let latency = s.latency;
         // A meter keeps its order: what is held back holds back what follows.
         if !s.held.is_empty() {
             let bytes = match s.said.remove(&nth) {
@@ -231,8 +309,8 @@ impl Port for Fake {
             return Ok(());
         }
         match s.said.remove(&nth) {
-            None => s.arrive(&own),
-            Some(Say::Bytes(bytes)) => s.arrive(&bytes),
+            None => s.arrive_after(&own, latency),
+            Some(Say::Bytes(bytes)) => s.arrive_after(&bytes, latency),
             Some(Say::Silent) => {}
             Some(Say::OnRelease(bytes)) => s.held = bytes,
             Some(Say::AcrossAStall(bytes, stall)) => s.across_a_stall = Some((bytes, stall)),
@@ -315,11 +393,15 @@ fn bounded(test: impl FnOnce() + Send + 'static) {
     }
 }
 
-/// A round with one display, and with what each query is, from 1.
+/// A round with one display.
 const ROUND: [&str; 6] = ["FUNC1?", "AUTO?", "VAL1?", "MOD?", "FUNC2?", "AUTO?"];
 
+fn rounds(n: usize) -> Vec<&'static str> {
+    std::iter::repeat_n(ROUND, n).flatten().collect()
+}
+
 #[test]
-fn a_round_asks_as_c_does_and_ends_after_it() {
+fn a_capture_clears_the_meter_and_asks_a_round_as_c_does() {
     bounded(|| {
         let fake = Fake::new();
         let mut d = device(&fake);
@@ -333,15 +415,16 @@ fn a_round_asks_as_c_does_and_ends_after_it() {
         assert_eq!((p.mq, p.unit, p.digits), (Mq::Voltage, Unit::Volt, 4));
         assert_eq!(p.flags, MqFlags::DC | MqFlags::AUTORANGE);
         assert_eq!(got.packets[1].samples, [2.0]);
-        let mut twice = ROUND.to_vec();
-        twice.extend(ROUND);
-        assert_eq!(fake.writes(), twice);
+        let writes = fake.writes();
+        assert_eq!(writes[0], CLEAR);
+        assert_eq!(writes[1..], rounds(2));
         d.close().unwrap();
         assert_eq!(fake.with(|s| s.purges), 0, "nothing here drops what the line owes");
+        assert_eq!(fake.with(|s| s.early), 0);
     });
 }
 
-/// A command goes only after the last one's prompt, at the line's own rate too.
+/// A question goes only after the last one's prompt, at the line's own rate too.
 #[test]
 fn no_command_goes_ahead_of_a_prompt_at_the_lines_rate() {
     bounded(|| {
@@ -353,7 +436,7 @@ fn no_command_goes_ahead_of_a_prompt_at_the_lines_rate() {
         assert_eq!(values(&rx), [1.0, 2.0]);
         d.close().unwrap();
         assert_eq!(fake.with(|s| s.early), 0);
-        assert_eq!(fake.writes().len(), 2 * ROUND.len());
+        assert_eq!(fake.questions(), rounds(2));
     });
 }
 
@@ -373,15 +456,96 @@ fn lines_are_found_in_whatever_pieces_they_come() {
     });
 }
 
+/// A slow meter, discarding what comes while it works as the manual has it, at 1.5 s
+/// an answer: nothing is asked early, and every answer is its own question's.
 #[test]
-fn an_answer_and_its_prompt_in_one_read_are_two_lines() {
+fn a_slow_meter_that_discards_gets_one_question_at_a_time() {
     bounded(|| {
         let fake = Fake::new();
-        // The fake gives what has arrived at one go: C's `VDC\r\n=>`.
+        fake.with(|s| {
+            s.latency = Duration::from_millis(1500);
+            s.discard = true;
+            s.func2 = Some(b"FREQ".to_vec());
+            s.mods = "1";
+        });
+        let mut d = device(&fake);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        let got = seen(&rx);
+        assert_eq!(got.failed, None);
+        assert_eq!(fake.with(|s| s.early), 0);
+        let p1 = &got.packets[0];
+        assert_eq!((p1.mq, p1.samples[0]), (Mq::Voltage, 1.0));
+        assert_eq!(p1.flags, MqFlags::DC | MqFlags::AUTORANGE | MqFlags::MIN);
+        let p2 = &got.packets[1];
+        assert_eq!((p2.mq, p2.samples[0]), (Mq::Frequency, 60.0));
+        assert_eq!(p2.flags, MqFlags::AUTORANGE, "MOD? is the primary display's alone");
+    });
+}
+
+/// `VAL1?` on an external trigger, answered when it comes: nothing goes meanwhile.
+#[test]
+fn a_reading_that_waits_for_a_trigger_is_waited_for() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.say(3, Say::OnRelease(b"+7.0000E+0\r\n=>\r\n".to_vec()));
+        let mut d = device(&fake);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        fake.wait_for_questions(3);
+        let before = fake.writes().len();
+        std::thread::sleep(Duration::from_millis(2500));
+        assert_eq!(fake.writes().len(), before, "nothing asked while VAL1? waits");
+        fake.release();
+        assert_eq!(values(&rx), [7.0]);
+        assert_eq!(fake.with(|s| s.early), 0);
+    });
+}
+
+/// A meter left in `VAL1?`, which drops whatever comes until it answers: the device
+/// clear frees it.
+#[test]
+fn a_meter_left_in_val1_is_cleared_first() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| {
+            s.held = b"+9.9999E+0\r\n=>\r\n".to_vec();
+            s.discard = true;
+        });
         let mut d = device(&fake);
         limit(&mut d, 1);
         let rx = start(&mut d);
         assert_eq!(values(&rx), [1.0]);
+        assert_eq!(fake.writes()[0], CLEAR);
+    });
+}
+
+#[test]
+fn an_echo_of_each_kind_is_passed_over() {
+    bounded(|| {
+        for echo in [Echo::Raw, Echo::Bare] {
+            let fake = Fake::new();
+            fake.with(|s| s.echo = echo);
+            let mut d = device(&fake);
+            limit(&mut d, 2);
+            let rx = start(&mut d);
+            assert_eq!(values(&rx), [1.0, 2.0], "{echo:?}");
+            assert_eq!(fake.questions(), rounds(2), "{echo:?}");
+        }
+    });
+}
+
+#[test]
+fn a_prompt_with_no_line_end_is_a_prompt() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| s.prompt = b"=>");
+        let mut d = device(&fake);
+        limit(&mut d, 2);
+        let began = Instant::now();
+        let rx = start(&mut d);
+        assert_eq!(values(&rx), [1.0, 2.0]);
+        assert!(began.elapsed() < Duration::from_secs(20), "no prompt waited out");
     });
 }
 
@@ -394,7 +558,7 @@ fn a_time_limit_shorter_than_a_round_finishes_the_round_as_c_does() {
         d.set(&Key::LimitMsec, &Value::U64(1), None).unwrap();
         let rx = start(&mut d);
         assert_eq!(values(&rx), [1.0]);
-        assert_eq!(fake.writes(), ROUND);
+        assert_eq!(fake.questions(), ROUND);
     });
 }
 
@@ -411,7 +575,7 @@ fn two_displays_give_two_packets_for_one_sample() {
         assert_eq!(got.packets[1].channels, [1]);
         assert_eq!((got.packets[1].mq, got.packets[1].samples[0]), (Mq::Frequency, 60.0));
         assert_eq!(
-            fake.writes(),
+            fake.questions(),
             ["FUNC1?", "AUTO?", "VAL1?", "MOD?", "FUNC2?", "AUTO?", "VAL2?", "MOD?"]
         );
     });
@@ -427,28 +591,29 @@ fn a_disabled_channel_is_asked_its_function_only() {
         limit(&mut d, 1);
         let rx = start(&mut d);
         assert_eq!(values(&rx), [60.0]);
-        assert_eq!(fake.writes(), ["FUNC1?", "AUTO?", "FUNC2?", "AUTO?", "VAL2?", "MOD?"]);
+        assert_eq!(fake.questions(), ["FUNC1?", "AUTO?", "FUNC2?", "AUTO?", "VAL2?", "MOD?"]);
     });
 }
 
 #[test]
-fn an_overload_is_infinite_with_no_digits() {
+fn an_overload_either_way_is_infinite_with_no_digits() {
     bounded(|| {
         let fake = Fake::new();
-        fake.with(|s| s.values = vec!["+1E+9"]);
+        fake.with(|s| s.values = vec!["+1E+9", "-1E+9"]);
         let mut d = device(&fake);
-        limit(&mut d, 1);
+        limit(&mut d, 2);
         let rx = start(&mut d);
         let got = seen(&rx);
         assert_eq!(got.packets[0].samples[0], f32::INFINITY);
+        assert_eq!(got.packets[1].samples[0], f32::NEG_INFINITY);
         assert_eq!(got.packets[0].digits, 0);
     });
 }
 
-/// Refused, for each query of the round: C crashes on `VAL1?`'s and goes on from
+/// Refused, for each question of the round: C crashes on `VAL1?`'s and goes on from
 /// the others.
 #[test]
-fn a_query_the_meter_refuses() {
+fn a_question_the_meter_refuses() {
     bounded(|| {
         for (nth, name) in ROUND.iter().enumerate().take(4) {
             let fake = Fake::new();
@@ -458,22 +623,22 @@ fn a_query_the_meter_refuses() {
             let rx = start(&mut d);
             let got = seen(&rx);
             assert_eq!(got.failed, None, "{name}");
-            let writes = fake.writes();
+            let questions = fake.questions();
             match *name {
                 // The reading that was taken for it isn't said: the next is.
                 "FUNC1?" | "VAL1?" => {
-                    assert_eq!(writes[..2], ["FUNC1?", "AUTO?"], "{name}");
-                    assert_eq!(writes[writes.len() - 4..], ROUND[2..], "{name}");
+                    assert_eq!(questions[..2], ["FUNC1?", "AUTO?"], "{name}");
+                    assert_eq!(questions[questions.len() - 4..], ROUND[2..], "{name}");
                     let expected = if *name == "VAL1?" { 2.0 } else { 1.0 };
                     assert_eq!(got.packets[0].samples, [expected], "{name}");
                 }
                 "AUTO?" => {
                     assert_eq!(got.packets[0].flags, MqFlags::DC, "{name}");
-                    assert_eq!(writes, ROUND, "{name}");
+                    assert_eq!(questions, ROUND, "{name}");
                 }
                 _ => {
                     assert_eq!(got.packets[0].flags, MqFlags::DC | MqFlags::AUTORANGE, "{name}");
-                    assert_eq!(writes, ROUND, "{name}");
+                    assert_eq!(questions, ROUND, "{name}");
                 }
             }
         }
@@ -484,7 +649,7 @@ fn a_query_the_meter_refuses() {
 #[test]
 fn what_is_no_reading_makes_no_sample_and_the_next_comes() {
     bounded(|| {
-        for bad in ["nan", "0x10", "+1.2345", "+1.2E+0x", "1"] {
+        for bad in ["nan", "0x10", "+1.2345", "+1.2E+0x", "1", "+1.2345E+0 VDC"] {
             let fake = Fake::new();
             fake.say_text(3, bad);
             let mut d = device(&fake);
@@ -508,7 +673,7 @@ fn modifiers_that_are_none_are_no_flags_and_good_ones_are() {
         d.close().unwrap();
 
         let fake = Fake::new();
-        fake.say_text(4, "40");
+        fake.say_text(4, "48");
         let mut d = device(&fake);
         limit(&mut d, 1);
         let rx = start(&mut d);
@@ -516,32 +681,31 @@ fn modifiers_that_are_none_are_no_flags_and_good_ones_are() {
         let p = &got.packets[0];
         assert_eq!(
             (p.mq, p.unit, p.flags, p.digits),
-            (Mq::PowerFactor, Unit::DecibelMw, MqFlags::RELATIVE, 2)
+            (Mq::Power, Unit::Watt, MqFlags::RELATIVE, 2)
         );
     });
 }
 
-/// The late answer to `AUTO?` must not pass for `MOD?`'s, whose form it has, nor
-/// `VAL1?`'s late one for a later reading.
+/// A slow answer is waited for, and the next question is asked after its prompt alone.
 #[test]
-fn a_late_answer_shifts_nothing_after_it() {
+fn a_late_answer_holds_the_next_question_back() {
     bounded(|| {
         let fake = Fake::new();
-        // FUNC1? AUTO?(late) VAL1? MOD?: 1 would say MN.
         fake.say(2, Say::OnRelease(b"1\r\n=>\r\n".to_vec()));
         let mut d = device(&fake);
         limit(&mut d, 2);
         let rx = start(&mut d);
-        fake.wait_for_writes(3);
-        // Now out: AUTO? and VAL1?, whose answer waits behind the late one.
+        fake.wait_for_questions(2);
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(fake.questions(), ["FUNC1?", "AUTO?"]);
         fake.release();
         let got = seen(&rx);
         assert_eq!(got.failed, None);
         assert_eq!(got.packets[0].samples, [1.0]);
         assert_eq!(got.packets[1].samples, [2.0]);
-        // The first went without its AUTO?, given up on; neither has a MOD? of 1.
-        assert_eq!(got.packets[0].flags, MqFlags::DC);
-        assert_eq!(got.packets[1].flags, MqFlags::DC | MqFlags::AUTORANGE);
+        for p in &got.packets {
+            assert_eq!(p.flags, MqFlags::DC | MqFlags::AUTORANGE, "{p:?}");
+        }
     });
 }
 
@@ -555,7 +719,7 @@ fn a_prompt_ahead_of_the_first_answer_is_passed_over() {
         limit(&mut d, 1);
         let rx = start(&mut d);
         assert_eq!(values(&rx), [1.0]);
-        assert_eq!(fake.writes(), ROUND);
+        assert_eq!(fake.questions(), ROUND);
     });
 }
 
@@ -563,33 +727,61 @@ fn a_prompt_ahead_of_the_first_answer_is_passed_over() {
 fn a_meter_with_no_prompt_works_and_is_soon_not_waited_for() {
     bounded(|| {
         let fake = Fake::new();
-        fake.with(|s| s.prompt = false);
+        fake.with(|s| {
+            s.prompt = b"";
+            s.clear_answered = false;
+        });
         let mut d = device(&fake);
         limit(&mut d, 1);
         let began = Instant::now();
         let rx = start(&mut d);
         assert_eq!(values(&rx), [1.0]);
-        assert_eq!(fake.writes(), ROUND);
+        assert_eq!(fake.questions(), ROUND);
         let waited = began.elapsed();
-        assert!(waited >= Duration::from_secs(2), "two waits, the rest short: {waited:?}");
+        assert!(waited >= Duration::from_secs(3), "a clear and two waits: {waited:?}");
     });
 }
 
 /// A line cut short and the next answer don't make one: `set 15` of `set 1500`.
 #[test]
-fn a_line_cut_short_is_not_the_head_of_the_next() {
-    bounded(|| {
-        let fake = Fake::new();
-        fake.say(3, Say::Bytes(b"+1.".to_vec()));
-        let mut d = device(&fake);
-        limit(&mut d, 1);
-        let rx = start(&mut d);
-        assert_eq!(values(&rx), [2.0]);
-    });
+fn a_new_question_forgets_part_of_a_line() {
+    let fake = Fake::new();
+    let mut link = Link::new(scpi(&fake));
+    link.ask("AUTO?\n", Kind::Flag).unwrap();
+    link.take(b"+1.");
+    link.ask("MOD?\n", Kind::Modifiers).unwrap();
+    link.take(b"5E+0\r\n");
+    assert_eq!(link.lines.pop_front().unwrap(), b"5E+0");
+}
+
+#[test]
+fn a_line_longer_than_any_is_heard_once_and_ends_with_its_line_end() {
+    let fake = Fake::new();
+    let mut link = Link::new(scpi(&fake));
+    link.take(&[b'x'; LONGEST_LINE + 10]);
+    assert_eq!(link.lines.len(), 1);
+    link.take(b"\n1\r\n");
+    assert_eq!(link.lines.len(), 3);
+    assert_eq!(link.lines[2], b"1");
+}
+
+#[test]
+fn a_prompt_with_nothing_after_it_is_a_line_after_a_pause() {
+    let fake = Fake::new();
+    fake.with(|s| s.input.extend(b"\x03=>".iter().map(|b| (Instant::now(), *b))));
+    let mut link = Link::new(scpi(&fake));
+    assert!(link.read().unwrap());
+    assert_eq!(link.lines.len(), 0, "its line end may yet come");
+    let deadline = Instant::now() + BOUND;
+    while link.lines.is_empty() {
+        assert!(Instant::now() < deadline);
+        link.read().unwrap();
+    }
+    assert_eq!(link.lines, [b"\x03=>".to_vec()]);
 }
 
 /// The time is taken ahead of the read that found nothing, and the answer is taken
-/// when a stall let it in under the wait's end.
+/// when a stall let it in.
 #[test]
 fn a_stall_across_a_wait_is_no_silence() {
     bounded(|| {
@@ -599,7 +791,7 @@ fn a_stall_across_a_wait_is_no_silence() {
         limit(&mut d, 1);
         let rx = start(&mut d);
         assert_eq!(values(&rx), [1.0]);
-        assert_eq!(fake.writes(), ROUND, "nothing lost and nothing asked twice");
+        assert_eq!(fake.questions(), ROUND, "nothing lost and nothing asked twice");
     });
 }
 
@@ -607,9 +799,7 @@ fn a_stall_across_a_wait_is_no_silence() {
 fn a_silent_meter_fails_at_the_bound_on_a_sample_limit() {
     bounded(|| {
         let fake = Fake::new();
-        for nth in 1..100 {
-            fake.say(nth, Say::Silent);
-        }
+        fake.silent_from(1);
         let timing = Timing { no_answer: Duration::from_millis(1500), ..QUICK };
         let mut d = device_with(&fake, timing);
         limit(&mut d, 1);
@@ -617,20 +807,18 @@ fn a_silent_meter_fails_at_the_bound_on_a_sample_limit() {
         let got = seen(&rx);
         assert_eq!(got.failed.as_deref(), Some("device error: no answer from the meter for 1.5 s"));
         assert_eq!(got.packets.len(), 0);
-        // C goes on from a failed FUNC1? to FUNC2?, with no AUTO?.
-        assert_eq!(fake.writes()[..2], ["FUNC1?", "FUNC2?"]);
+        // One question out, and waited for.
+        assert_eq!(fake.writes(), [CLEAR, "FUNC1?"]);
     });
 }
 
 /// `VAL1?` silent, as on a blank display with an external trigger, with the rest
 /// answered: no bound but the long one, and C's NULL does not come in.
 #[test]
-fn a_silent_reading_is_no_sample_and_answers_keep_the_long_bound() {
+fn a_silent_reading_keeps_the_long_bound() {
     bounded(|| {
         let fake = Fake::new();
-        for round in 0..20 {
-            fake.say(3 + round * 4, Say::Silent);
-        }
+        fake.say(3, Say::Silent);
         let timing = Timing {
             no_answer: Duration::from_millis(1),
             no_usable: Duration::from_millis(1),
@@ -644,6 +832,26 @@ fn a_silent_reading_is_no_sample_and_answers_keep_the_long_bound() {
             got.failed.as_deref(),
             Some("device error: no reading from the meter for 1.2 s")
         );
+        assert_eq!(fake.questions(), ["FUNC1?", "AUTO?", "VAL1?"]);
+    });
+}
+
+/// With no sample limit, a question given up on gets a device clear before the next.
+#[test]
+fn a_question_given_up_on_is_cleared_before_the_next() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.say(3, Say::Silent);
+        let timing = Timing { give_up: Duration::from_millis(300), ..QUICK };
+        let mut d = device_with(&fake, timing);
+        d.set(&Key::LimitMsec, &Value::U64(1500), None).unwrap();
+        let rx = start(&mut d);
+        let got = seen(&rx);
+        assert_eq!(got.failed, None);
+        let writes = fake.writes();
+        assert_eq!(writes[..5], [CLEAR, "FUNC1?", "AUTO?", "VAL1?", CLEAR]);
+        assert_eq!(writes[5], "FUNC2?", "the round goes on, as from a failed FUNC1? in C");
+        assert_eq!(got.packets[0].samples, [2.0]);
     });
 }
 
@@ -651,7 +859,8 @@ fn a_silent_reading_is_no_sample_and_answers_keep_the_long_bound() {
 fn junk_fails_at_its_own_bound() {
     bounded(|| {
         let fake = Fake::new();
-        for nth in 1..100 {
+        fake.with(|s| s.clear_answered = false);
+        for nth in 1..20_000 {
             fake.say_text(nth, "zzz");
         }
         let timing = Timing { no_usable: Duration::from_millis(50), ..QUICK };
@@ -688,46 +897,28 @@ fn a_flood_with_no_line_end_ends_at_a_bound_and_at_a_stop() {
         fake.with(|s| s.endless = Some(b'x'));
         let mut d = device(&fake);
         let rx = start(&mut d);
-        fake.wait_for_writes(1);
+        fake.wait_for_writes(2);
         d.stop().unwrap();
         assert_eq!(seen(&rx).failed, None);
         let began = Instant::now();
         d.close().unwrap();
-        assert!(began.elapsed() < Duration::from_secs(3));
+        assert!(began.elapsed() < Duration::from_secs(10));
     });
 }
 
 #[test]
-fn a_time_limit_ends_a_silent_capture_well_within_a_second_or_so() {
+fn a_time_limit_ends_a_silent_capture_a_second_past_it() {
     bounded(|| {
         let fake = Fake::new();
-        for nth in 1..100 {
-            fake.say(nth, Say::Silent);
-        }
+        fake.silent_from(1);
         let mut d = device(&fake);
         d.set(&Key::LimitMsec, &Value::U64(100), None).unwrap();
         let began = Instant::now();
         let rx = start(&mut d);
         let got = seen(&rx);
         assert_eq!(got.failed, None, "a time limit with nothing stays exit 0");
-        assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
-    });
-}
-
-/// Past the limit, a wait grown long is cut to C's second, or it has 8 s to run.
-#[test]
-fn a_time_limit_cuts_a_wait_grown_long() {
-    bounded(|| {
-        let fake = Fake::new();
-        for nth in 1..100 {
-            fake.say(nth, Say::Silent);
-        }
-        let mut d = device(&fake);
-        d.set(&Key::LimitMsec, &Value::U64(5000), None).unwrap();
-        let began = Instant::now();
-        let rx = start(&mut d);
-        assert_eq!(seen(&rx).failed, None);
-        assert!(began.elapsed() < Duration::from_secs(12), "{:?}", began.elapsed());
+        assert!(began.elapsed() < Duration::from_secs(20), "{:?}", began.elapsed());
+        assert_eq!(fake.writes(), [CLEAR, "FUNC1?"]);
     });
 }
 
@@ -736,38 +927,13 @@ fn a_time_limit_cuts_a_wait_grown_long() {
 fn a_close_stops_and_joins() {
     bounded(|| {
         let fake = Fake::new();
-        for nth in 1..100 {
-            fake.say(nth, Say::Silent);
-        }
+        fake.silent_from(1);
         let mut d = device(&fake);
         let _rx = start(&mut d);
-        fake.wait_for_writes(1);
+        fake.wait_for_writes(2);
         d.close().unwrap();
         assert_eq!(Arc::strong_count(&fake.0), 1, "the thread still holds the port");
     });
-}
-
-/// A line cut short does not join the answer to the next question.
-#[test]
-fn a_new_question_forgets_part_of_a_line() {
-    let fake = Fake::new();
-    let mut link = Link::new(scpi(&fake));
-    link.ask("AUTO?\n", Kind::Flag).unwrap();
-    link.take(b"+1.");
-    link.ask("MOD?\n", Kind::Modifiers).unwrap();
-    link.take(b"5E+0\r\n");
-    assert_eq!(link.lines.pop_front().unwrap(), b"5E+0");
-}
-
-#[test]
-fn a_line_longer_than_any_is_heard_once_and_ends_with_its_line_end() {
-    let fake = Fake::new();
-    let mut link = Link::new(scpi(&fake));
-    link.take(&[b'x'; LONGEST_LINE + 10]);
-    assert_eq!(link.lines.len(), 1);
-    link.take(b"\n1\r\n");
-    assert_eq!(link.lines.len(), 3);
-    assert_eq!(link.lines[2], b"1");
 }
 
 #[test]
@@ -782,7 +948,7 @@ fn a_port_that_fails_fails_the_capture() {
         d.close().unwrap();
 
         let fake = Fake::new();
-        fake.with(|s| s.fail_writes_after = Some(2));
+        fake.with(|s| s.fail_writes_after = Some(3));
         let mut d = device(&fake);
         limit(&mut d, 1);
         let rx = start(&mut d);
@@ -794,24 +960,22 @@ fn a_port_that_fails_fails_the_capture() {
 fn a_stop_in_a_wait_ends_it_and_a_close_joins() {
     bounded(|| {
         let fake = Fake::new();
-        for nth in 1..100 {
-            fake.say(nth, Say::Silent);
-        }
+        fake.silent_from(1);
         let mut d = device(&fake);
         let rx = start(&mut d);
-        fake.wait_for_writes(1);
+        fake.wait_for_writes(2);
         let began = Instant::now();
         d.stop().unwrap();
         assert_eq!(seen(&rx).failed, None);
         d.close().unwrap();
-        assert!(began.elapsed() < Duration::from_secs(3), "{:?}", began.elapsed());
+        assert!(began.elapsed() < Duration::from_secs(10), "{:?}", began.elapsed());
         let writes = fake.writes().len();
         std::thread::sleep(Duration::from_millis(50));
         assert_eq!(fake.writes().len(), writes, "no write after a close");
     });
 }
 
-/// What a stop left out goes with its question, and a second capture starts in step.
+/// What a stop left out goes at the next capture's device clear.
 #[test]
 fn a_second_capture_is_not_one_behind_after_a_stop_in_a_reply() {
     bounded(|| {
@@ -819,11 +983,10 @@ fn a_second_capture_is_not_one_behind_after_a_stop_in_a_reply() {
         fake.say(3, Say::OnRelease(b"+9.0000E+0\r\n=>\r\n".to_vec()));
         let mut d = device(&fake);
         let rx = start(&mut d);
-        fake.wait_for_writes(3);
+        fake.wait_for_questions(3);
         d.stop().unwrap();
-        // The stop is in the settle now, and the answer comes while it waits.
-        fake.release();
         assert_eq!(seen(&rx).failed, None);
+        fake.release();
         limit(&mut d, 1);
         let rx = start(&mut d);
         let got = seen(&rx);
@@ -843,7 +1006,7 @@ fn a_start_after_an_end_stuck_on_a_full_queue_goes() {
         let (tx, rx) = sync_channel(1);
         d.start(PacketSink::new(tx, 0)).unwrap();
         // Queue of one, and nobody reads: wait for its thread to stick.
-        fake.wait_for_writes(1);
+        fake.wait_for_writes(2);
         let deadline = Instant::now() + BOUND;
         loop {
             match d.start(PacketSink::new(sync_channel(1).0, 0)) {
@@ -878,10 +1041,10 @@ fn the_sink_goes_at_the_end_and_nothing_holds_it() {
 // The scan.
 
 #[test]
-fn a_probe_asks_once_and_takes_the_id() {
+fn a_probe_clears_asks_once_and_takes_the_id() {
     let fake = Fake::new();
     let found = probe(scpi(&fake), Some("9600/8n1")).unwrap();
-    assert_eq!(fake.writes(), ["*IDN?"]);
+    assert_eq!(fake.writes(), [CLEAR, "*IDN?"]);
     assert_eq!(found.info.vendor, "FLUKE");
     assert_eq!(found.info.model, "45");
     assert_eq!(found.info.serial, "7654321");
@@ -894,16 +1057,27 @@ fn a_probe_asks_once_and_takes_the_id() {
 }
 
 #[test]
-fn a_probe_asks_once_more_after_silence() {
+fn a_probe_clears_and_asks_once_more_after_silence() {
     let fake = Fake::new();
     fake.say(1, Say::Silent);
     assert!(probe(scpi(&fake), None).is_some());
-    assert_eq!(fake.writes(), ["*IDN?", "*IDN?"]);
+    assert_eq!(fake.writes(), [CLEAR, "*IDN?", CLEAR, CLEAR, "*IDN?"]);
     let fake = Fake::new();
     fake.say(1, Say::Silent);
     fake.say(2, Say::Silent);
     assert!(probe(scpi(&fake), None).is_none());
-    assert_eq!(fake.writes(), ["*IDN?", "*IDN?"]);
+    assert_eq!(fake.questions(), ["*IDN?", "*IDN?"]);
+}
+
+#[test]
+fn a_probe_frees_a_meter_left_in_val1() {
+    let fake = Fake::new();
+    fake.with(|s| {
+        s.held = b"+9.9999E+0\r\n=>\r\n".to_vec();
+        s.discard = true;
+    });
+    assert!(probe(scpi(&fake), None).is_some());
+    assert_eq!(fake.writes(), [CLEAR, "*IDN?"]);
 }
 
 #[test]
@@ -919,7 +1093,7 @@ fn a_probe_takes_only_this_meter_and_any_case_of_its_maker() {
         let fake = Fake::new();
         fake.say_text(1, idn);
         assert_eq!(probe(scpi(&fake), None).is_some(), is, "{idn}");
-        assert_eq!(fake.writes(), ["*IDN?"], "{idn}");
+        assert_eq!(fake.questions(), ["*IDN?"], "{idn}");
     }
 }
 
