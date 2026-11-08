@@ -1,0 +1,3 @@
+sr: hp-3457a: Can not use front and rear channels at the same time!
+sr: session: Could not start hp-3457a device (null) acquisition.
+free(): double free detected in tcache 2

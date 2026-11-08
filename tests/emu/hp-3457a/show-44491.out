@@ -1,0 +1,13 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+hp-3457a - Hewlett-Packard 3457A 2.8 with 15 channels: Front 44491a0 44491a1 44491a2 44491a3 44491a4 44491a5 44491a6 44491a7 44491a8 44491a9 44491a10 44491a11 44491a12 44491a13
+Channel groups:
+    Front: channel Front
+    44491a: channels 44491a0 44491a1 44491a2 44491a3 44491a4 44491a5 44491a6 44491a7 44491a8 44491a9 44491a10 44491a11 44491a12 44491a13
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 
+    measured_quantity: 
+    nplc: 1.000000 (current)
