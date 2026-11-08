@@ -1176,17 +1176,24 @@ limits = [
 [drivers.gwinstek-gds-800]
 name = "GW Instek GDS-800"
 libsigrok = "gwinstek-gds-800"
-ids = []
+ids = ["gwinstek-gds-800"]
 kind = "scope"
-connection = "tcp"
+connection = "serial"
 vendor = "GW Instek"
-models = ["GDS-820", "GDS-822", "GDS-824", "GDS-832", "GDS-834", "GDS-842", "GDS-844"]
-status = ["not-ported"]
-emu = []
+models = ["GDS-806", "GDS-810", "GDS-820", "GDS-840"]
+status = ["emulated"]
+emu = ["gwinstek-gds-800"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "SCPI on the scope's RS-232 port; two analog channels, frames by limit_frames, and the last block's sample rate by --get samplerate.",
+  "A single trigger is armed each frame; until a first block comes it waits, warning at 30 s, and a stop ends it.",
+  "A scale answer off the manual's 1-2-5 steps is used and warned of.",
+]
+limits = [
+  "Never run on hardware; the volts per count are SCAL * 10 / 256, unverified at probe factors other than 10X.",
+  ":ACQ<X>:MEM? needs firmware 2.03; with older firmware it warns and the scope stays silent.",
+  "No field of a block has a checksum, so a damaged point or scale answer can't be detected.",
+]
 
 [drivers.hameg-hmo]
 name = "HAMEG HMO"
@@ -1300,17 +1307,25 @@ limits = [
 [drivers.lecroy-xstream]
 name = "LeCroy X-Stream"
 libsigrok = "lecroy-xstream"
-ids = []
-kind = "logic-analyzer"
-connection = "tcp"
+ids = ["lecroy-xstream"]
+kind = "scope"
+connection = "usb"
 vendor = "LeCroy"
 models = []
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["lecroy-xstream"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "Any instrument whose `*IDN?` says `LECROY` gets one configuration: four channels, ten divisions by eight.",
+  "A capture reads each enabled channel's waveform in turn and arms the scope between frames; `--frames` sets how many.",
+  "A wait for a trigger has no time limit: a warning comes, and a stop or a gone device ends it.",
+]
+limits = [
+  "USBTMC is the real path; `tcp-raw` is plain SCPI on a socket, which no LeCroy manual documents (the network interface there is VICP).",
+  "`--time`, `--samples` and `--continuous` are refused.",
+  "`horiz_triggerpos` sends `TRIG POS`, which no LeCroy manual has.",
+  "Not checked on a real scope.",
+]
 
 [drivers.mooshimeter-dmm]
 name = "Mooshimeter DMM"
@@ -1368,19 +1383,26 @@ behaviour = []
 limits = []
 
 [drivers.scpi-pps]
-name = "SCPI PPS (generic)"
+name = "SCPI power supplies (generic)"
 libsigrok = "scpi-pps"
-ids = []
+ids = ["scpi-pps", "hpib-pps"]
 kind = "supply"
-connection = "tcp"
+connection = "usb"
 vendor = ""
-models = []
-status = ["not-ported"]
-emu = []
+models = ["Agilent N5700", "BK 9130", "Chroma 61604", "Chroma 62000", "EA PS 20xx", "EEZ PSU/BB3", "HP 663xA", "HP 663xB/661xC", "Keysight E36300A", "Rigol DP700/DP800", "OWON P4000/SPE6103", "Philips PM2800", "R&S HMC804x/NGE100B/HMP"]
+status = ["emulated"]
+emu = ["scpi-pps", "scpi-pps-serial"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "SCPI over USBTMC, TCP and serial; hpib-pps reads HP's older ID? language, only with conn=.",
+  "Settings go to the output named by -g; enabled=on goes after the set points, and a set point more than 10% outside the output's range is refused before anything is sent.",
+  "A capture reads each enabled channel in turn, at least 10 ms apart; an answer cut short is dropped and the line found again with *IDN?.",
+  "A silent instrument ends a capture after 180 s with no reading (10 minutes after one, longer for an HP 66xxB set to a long sweep); under --time it ends at the limit with a warning.",
+]
+limits = [
+  "A setting has no answer: an instrument that refuses a value within the listed range says nothing; --get reads back the real value.",
+  "Every model is emulated from the driver's tables; none was run on a real unit.",
+]
 
 [drivers.siglent-sdl10x0]
 name = "Siglent SDL1000X electronic loads"

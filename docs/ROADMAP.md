@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 77 of libsigrok's 87 `src/hardware` drivers are
-ported; the 10 still missing are listed below. Native decoder porting is
+crates.io. 80 of libsigrok's 87 `src/hardware` drivers are
+ported; the 7 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 10 libsigrok drivers with no oxrok port. Each needs a device model,
+The 7 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (6)
+### SCPI instruments (3)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -27,10 +27,7 @@ remaining drivers can start there.
 | driver | kind | notes |
 |---|---|---|
 | `scpi-dmm` | meter | many SCPI multimeter models |
-| `scpi-pps` | supply | many SCPI power-supply models |
-| `gwinstek-gds-800` | scope | GDS-800 series |
 | `hameg-hmo` | scope | HMO series |
-| `lecroy-xstream` | scope | XStream series |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
@@ -312,6 +309,11 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `scpi-pps`: the answer forms and the HP 66xxB sweep queries against a real
+  supply or a recording.
+- `lecroy-xstream`: whether a real X-Stream sends `ALL,`, what its firmware
+  does with a second USB request, and keepalive ending a dead TCP peer.
 
 - `rigol-dg` on a real DG1000Z: the answers to `X? MIN|MAX` for amplitude,
   offset and square duty. On a DG800/DG900: whether `FUNC` and the MIN/MAX

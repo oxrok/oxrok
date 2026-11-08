@@ -3589,6 +3589,74 @@ warns at 30 s and fails at 10 minutes; `--time` and `--continuous` only
 warn. Lines have no checksum: a flipped bit that leaves a digit a digit is a
 wrong reading.
 
+### LeCroy X-Stream oscilloscopes (`lecroy-xstream`)
+
+Ported and emulated on USBTMC and tcp-raw, against the X-Stream remote
+control manual (WM-RCM-E Rev C, 2004); not checked on a real scope. 134
+cases on 2026-11-08 (105 full, 21 `--oracle-bug`, 8 `--oracle-differs`),
+gcov 90.3%. Any instrument whose `*IDN?` says `LECROY` gets one
+configuration: four channels, ten divisions by eight. USBTMC is the real
+path: the manual's network interface is VICP, which oxrok doesn't speak, so
+`tcp-raw` is unverified.
+
+libsigrok frees the `TRIG_SELECT?` answer and goes on reading the source in
+it (`protocol.c:439`, since 36165cf0 in 2021); the free writes its first 32
+bytes, so stock C opens no scope that answers `EDGE,SR,C1,HT,OFF`. So most
+full cases use a longer answer that lets C open, and two cases run C with a
+preload whose `free` does nothing on the real answer, agreeing with oxrok.
+Also not copied: volts read as amperes (`protocol.c:580`), the vertical
+offset added where the manual subtracts it (`:561`), TRIGTIME and RISTIME
+read as samples (`:556`), every field taken as little endian, a block with
+`ALL,` ahead of it refused, the manual's trigger sources `EX`, `EX10`, `PA`
+and `ETM10` refused, and retries for ever.
+
+A scope armed with `ARM;WAIT` may wait for ever, as the manual says, so that
+wait gets a warning and no failure: a stop, a gone USB device, or TCP
+keepalive (a few minutes) ends it. After a stop in that wait, the next use of
+the connection reads through `*OPC?` first. A block for another channel than
+the one asked (`WAVE_SOURCE`) ends a capture. A line end that comes late
+after a block is dropped from the next answer. `--time`, `--samples` and
+`--continuous` are refused; use `--frames`.
+
+### GW Instek GDS-800 (`gwinstek-gds-800`)
+
+GDS-806, 810, 820 and 840, on the scope's RS-232 port: ported and emulated
+on the CDC-ACM shell, 64 cases on 2026-11-08 (45 full, 9 `--oracle-differs`,
+5 `--oracle-bug`, 3 library, 2 oxrok alone), gcov 88.9%. Never on hardware;
+from GW Instek's programming manual and the C driver. A block is read a byte
+at a time, so a point of 0x0A or 0x0D is a point; C doubles a line feed that
+ends a read (rarely, since the read must end on it) and then reads the rest
+of the block as its scale: 0 V with exit 0, as libsigrok's unmerged pull
+request 121 reports from a GDS-2000. Up to a capture's first block oxrok
+waits as long as a single trigger takes, warning at 30 s; after it, 10
+minutes of silence fails the capture. No field has a sum: a flip in the
+scale answer gives a wrong volts per division for the whole channel at exit
+0 (11 of 48 flips of `1.00V`), and a scale off the manual's 1-2-5 steps
+warns. The volts per count are C's `SCAL * 10 / 256`, unverified at probes
+other than 10X.
+
+### SCPI power supplies (`scpi-pps`, `hpib-pps`)
+
+Power supplies of the driver's 44 profiles (Agilent N5700, BK 9130, Chroma
+61604 and 62000, EA PS 20xx, EEZ PSU/BB3, HP 663xA, 663xB and 661xC,
+Keysight E36300A, Rigol DP700/DP800, OWON P4000/SPE6103, Philips PM2800,
+R&S HMC804x/NGE100B/HMP), on USBTMC, tcp-raw and serial; `hpib-pps` with
+`conn=` for HP's older `ID?` language. Emulated only (`scpi-pps`,
+`scpi-pps-serial`): 238 cases on 2026-11-08, gcov 92.3%. The profile tables
+match C's to the line, checked by script, except the N5700's `:CURR:PROT:STAT
+ON?` typo, which oxrok sends as `ON`/`OFF` as the N5700 guide has it.
+
+A setting gets no answer, so a set point is judged against its output's
+range before anything is sent: refused when more than 10% past it or below
+it, sent with a warning within 10% (real units run a little past their
+tables). `-c` sends `enabled=on` last, so an output never comes on at its old
+set point. A capture asks one channel per pass, at least 10 ms apart; on TCP
+and serial it keeps one question out through timeouts, and finds the line
+again with `*IDN?` after an answer cut short. A silent instrument ends a
+capture after 180 s (10 minutes after a reading; an HP 66xxB's sweep time
+twice over when longer, read from `SENS:SWE:POIN?` and `TINT?`), or at the
+time limit with a warning.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

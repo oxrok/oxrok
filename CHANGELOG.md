@@ -9,7 +9,10 @@ release may change the library API.
 ### Added
 
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
-  `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`.
+  `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
+  `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`.
+- SCPI over TCP: an answer ends at its line end, not at a short read, and the
+  sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request
   315, now part of the oracle.
 - `-w` with no `-t` is refused.

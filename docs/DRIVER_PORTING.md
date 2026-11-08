@@ -355,6 +355,20 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- On tcp-raw an answer ends at its line end, or after a read's whole timeout of
+  silence; a short read ends nothing (`src/scpi/tcp.rs`). A driver that reads
+  with `read_begin`/`read_data` itself must treat a read of 0 with
+  `read_complete()` as the end, and an instrument that ends no text with a line
+  feed pays a read's timeout per answer.
+- After an answer cut short on a line with no tags, a drain on quiet can't find
+  the line's place: the tail may come later than any quiet. Ask for something
+  recognisable (`*IDN?`) and drop what comes before its answer.
+- A use-after-free can hold for years and break with one free: 36165cf0 added the
+  `g_free` that made `lecroy-xstream`'s open fail. A preload whose `free` does
+  nothing, given with `--oracle-env`, makes the real answer a full case.
+- A wait for a device that holds its answer until a trigger has no honest bound
+  before the first answer: warn and wait, end it by a stop, and bound only what
+  follows.
 - A prompted line (`=>`) is an exchange: answer, then a prompt that says the
   command is done. Send the next command only after the prompt, and on giving up
   send a device clear and wait for its prompt, or a late answer lands under the

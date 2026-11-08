@@ -1018,6 +1018,17 @@ Deliberate, and kept small:
   MIN, MAX, HOLD, REL and dB go on the primary display only. A refused or lost `VAL1?`
   is no sample, where sigrok-cli crashes. A silent meter fails a sample-limited capture
   at 30 s, or 10 minutes after a sample, where sigrok-cli waits for ever.
+- `lecroy-xstream`: a block with `ALL,` ahead of it, the manual's trigger sources and
+  a late line end are taken, where sigrok-cli refuses or hangs. Volts are volts, and
+  the offset is subtracted, as the manual says. `--time`, `--samples` and
+  `--continuous` are refused, as in sigrok-cli.
+- `gwinstek-gds-800`: a failed capture exits 1 where sigrok-cli exits 0. A scale or
+  size that is no number is refused, not read as 0 V; a scale off the manual's steps
+  warns; a silent scope waits with a warning until a first block, and fails after 10
+  minutes once one has come. A start with every channel off is refused.
+- `scpi-pps`: a set point more than 10% outside its output's range is refused before
+  any `-c` goes out, and `enabled=on` goes last. An answer cut short on TCP or serial
+  is no reading, and the line is found again with `*IDN?`.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

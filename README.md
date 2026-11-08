@@ -127,6 +127,9 @@ Emulator and replay only, never run on hardware:
 | `siglent-sds` | 101 | 80.0% |
 | `yokogawa-dlm` | 204 | 88.3% |
 | `fluke-45` | 96 | 94.4% |
+| `lecroy-xstream` | 134 | 90.3% |
+| `gwinstek-gds-800` | 64 | 88.9% |
+| `scpi-pps` | 238 | 92.3% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |
