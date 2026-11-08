@@ -122,6 +122,7 @@ pub mod drivers {
     pub mod korad_kaxxxxp;
     pub mod lascar_el_usb;
     pub mod lecroy_logicstudio;
+    pub mod lecroy_xstream;
     pub mod link_mso19;
     pub mod logicport;
     pub mod manson_hcs_3xxx;
@@ -203,6 +204,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::norma_dmm::SiemensB102xDriver));
     registry.register(Box::new(drivers::rigol_dg::RigolDgDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
+    registry.register(Box::new(drivers::lecroy_xstream::LecroyXstreamDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
     registry.register(Box::new(drivers::siglent_sdl10x0::SiglentSdl10x0Driver));

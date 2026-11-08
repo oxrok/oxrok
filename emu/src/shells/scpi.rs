@@ -108,6 +108,12 @@ pub enum Answer {
     /// [`Answer::Apart`], its first line this many ticks on: a measurement that waits
     /// for a trigger, or a slow instrument. What comes on meanwhile waits behind it.
     After(u32, Vec<String>),
+    /// These bytes, after this many ticks: what an acquisition holds back, binary as a
+    /// block is. What comes on in the meantime waits behind them, as for `late-at=`.
+    BytesAfter(u32, Vec<u8>),
+    /// Pieces of bytes, `line-gap=` ticks apart, as [`Answer::Apart`] has lines: a
+    /// block, and its line end that a socket's peer sends late.
+    BytesApart(Vec<Vec<u8>>),
     /// Done, and nothing to say: a setting.
     Done,
     /// Heard, and no answer ever, with no error.
@@ -587,6 +593,12 @@ impl<I: Instrument> Engine<I> {
             Answer::After(ticks, lines) => (lines, Some(ticks)),
             Answer::Text(text) => return (with_eol(text), Vec::new(), None),
             Answer::Bytes(bytes) => return (bytes, Vec::new(), None),
+            Answer::BytesAfter(ticks, bytes) => return (bytes, Vec::new(), Some(ticks)),
+            Answer::BytesApart(pieces) => {
+                let mut pieces = pieces.into_iter();
+                let first = pieces.next().unwrap_or_default();
+                return (first, pieces.collect(), Some(0));
+            }
             Answer::Error(code, text) => {
                 self.error(code, &text);
                 return (Vec::new(), Vec::new(), None);
