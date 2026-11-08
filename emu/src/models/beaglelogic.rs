@@ -25,7 +25,11 @@
 //! - **Settings.** `kernel/beaglelogic.c`: 100 MHz, 8 bits (`sampleunit` 1), one-shot
 //!   at probe. `samplerate` takes 1 to 100 MHz and keeps `100M / (100M / rate)`, so
 //!   60 MHz becomes 100 MHz; what's outside is `-EINVAL`, so `ERR`. While a capture
-//!   runs the module's mutex is held and a set is `-EBUSY`, so `ERR`. Sysfs prints
+//!   runs the module's mutex is held and a set is `-EBUSY`, so `ERR`, and that lasts
+//!   past a `close`: the goroutine sees its flag only once its read returns, which is
+//!   at the next full buffer, and the file's release then waits for the PRU to write
+//!   out its last one (`beaglelogic_f_release`, `beaglelogic_stop`). A `get` in that
+//!   time waits on the mutex (`beaglelogic_start`) and then streams. Sysfs prints
 //!   `sampleunit` as `8bit`, which the server makes `1` (`0` for anything else), and
 //!   `triggerflags` as `0:oneshot`, of which it keeps the digit.
 //! - **`close`.** The server's flag is read after the next write, so one read's worth
@@ -60,11 +64,13 @@
 //!   that many bytes a tick instead of all at once; `paced=1`, a buffer at a time at
 //!   the rate; `first=T`, a wait in ticks before the first byte;
 //! - `tail=N`, that many bytes after a `close`;
+//! - `busy=T`, the module still finishing a capture for `T` ticks from power on and
+//!   after each stream's end: sets are `ERR`, and a `get` starts when it's done;
 //! - `mark=N`, the event point (`tcp-model`) once `N` bytes have gone, 0 at `get`.
 //!
 //! The pedantic checks: a second connection while one is up, as the server wouldn't
 //! read it; a command no C path sends (`memalloc N`, `bufunitsize N`, `exit`, `state`,
-//! asking for `triggerflags`) or nobody knows; a set's value that isn't a number or,
+//! or nobody knows; a set's value that isn't a number or,
 //! for `sampleunit` and `triggerflags`, isn't 0 or 1; a `get` on a stream; a `close`
 //! with none; a line with no end in 256 bytes.
 
@@ -79,7 +85,7 @@ pub const NAME: &str = "beaglelogic";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A BeagleLogic behind its TCP server, on a socket only; samplerate=, \
                          sampleunit=, triggerflags=, bufunitsize=, memalloc=, version=, say=, \
-                         mute=, late=, refuse=, hangup=, total=, free=, chunk=, paced=, first=, tail=, \
+                         mute=, late=, refuse=, hangup=, total=, free=, chunk=, paced=, first=, tail=, busy=, \
                          mark=";
 
 /// `coreclockfreq / 2`, in the module: the rate a divisor of 1 gives.
@@ -111,6 +117,7 @@ struct Config {
     chunk: Option<u64>,
     paced: bool,
     first: u32,
+    busy: u32,
     tail: u64,
     mark: Option<u64>,
 }
@@ -134,6 +141,7 @@ impl Default for Config {
             chunk: None,
             paced: false,
             first: 0,
+            busy: 0,
             tail: 0,
             mark: None,
         }
@@ -178,6 +186,7 @@ fn parse(options: &[(String, String)]) -> Result<Config> {
             "chunk" => c.chunk = Some(number::<u64>(k, v)?.clamp(1, MOST_A_TICK)),
             "paced" => c.paced = v == "1",
             "first" => c.first = number(k, v)?,
+            "busy" => c.busy = number(k, v)?,
             "tail" => c.tail = number(k, v)?,
             "mark" => c.mark = Some(number(k, v)?),
             _ => return Err(Error::Invalid(format!("{NAME} has no option {k}"))),
@@ -221,13 +230,16 @@ pub struct BeagleLogic {
     run: Option<Run>,
     /// A `get` came: with no buffers it starts nothing, and a `close` is still right.
     asked: bool,
+    /// Ticks the module still holds its mutex, finishing a capture.
+    busy: u32,
     /// Answers held back, with the ticks left. What comes behind a late one waits.
     later: VecDeque<(u32, Vec<u8>)>,
 }
 
 impl BeagleLogic {
     fn new(config: Config) -> BeagleLogic {
-        BeagleLogic {
+        let busy = config.busy;
+        let mut model = BeagleLogic {
             samplerate: config.samplerate,
             sampleunit: config.sampleunit,
             triggerflags: config.triggerflags,
@@ -238,8 +250,11 @@ impl BeagleLogic {
             connections: 0,
             run: None,
             asked: false,
+            busy: 0,
             later: VecDeque::new(),
-        }
+        };
+        model.busy = busy;
+        model
     }
 
     /// An answer: at once, or behind what is held, or after `late` ticks.
@@ -295,6 +310,7 @@ impl BeagleLogic {
             "sampleunit" => self.sampleunit.to_string(),
             "bufunitsize" => self.bufunitsize.to_string(),
             "memalloc" => self.memalloc.to_string(),
+            "triggerflags" => self.triggerflags.to_string(),
             _ => String::new(),
         };
         self.answer(port, cmd, &told.unwrap_or(own));
@@ -302,8 +318,8 @@ impl BeagleLogic {
 
     fn set(&mut self, cmd: &str, value: &str, port: &mut Port) {
         let key = format!("{cmd}+");
-        let done = if self.run.is_some() {
-            // The module's mutex is held for all of a capture.
+        let done = if self.run.is_some() || self.busy > 0 {
+            // The module's mutex is held for all of a capture, and until its end.
             false
         } else if self.config.refuse.iter().any(|r| r == cmd) {
             false
@@ -354,6 +370,8 @@ impl BeagleLogic {
             (u64::MAX, 0)
         };
         let wait = if self.config.paced { self.config.first.max(period) } else { self.config.first };
+        // `beaglelogic_start` waits for the mutex.
+        let wait = wait.max(self.busy);
         self.run = Some(Run {
             sample: 0,
             sent: 0,
@@ -406,7 +424,9 @@ impl BeagleLogic {
     }
 
     fn end(&mut self, port: &mut Port) {
-        if self.run.take().is_none() && !std::mem::take(&mut self.asked) {
+        if self.run.take().is_some() {
+            self.busy = self.config.busy;
+        } else if !std::mem::take(&mut self.asked) {
             port.violation("close with no stream");
         }
         self.asked = false;
@@ -420,7 +440,7 @@ impl BeagleLogic {
         let text = String::from_utf8_lossy(line);
         let words: Vec<&str> = text.trim().split(' ').collect();
         match words.as_slice() {
-            ["version" | "samplerate" | "sampleunit" | "bufunitsize" | "memalloc"] => {
+            ["version" | "samplerate" | "sampleunit" | "bufunitsize" | "memalloc" | "triggerflags"] => {
                 self.query(words[0], port);
             }
             ["samplerate" | "sampleunit" | "triggerflags", value] => {
@@ -462,10 +482,13 @@ impl Stream for BeagleLogic {
         self.later.clear();
         self.asked = false;
         // Unlike the server's goroutine: see the module's comment.
-        self.run = None;
+        if self.run.take().is_some() {
+            self.busy = self.config.busy;
+        }
     }
 
     fn tick(&mut self, port: &mut Port) {
+        self.busy = self.busy.saturating_sub(1);
         while let Some((ticks, _)) = self.later.front_mut() {
             if *ticks > 0 {
                 *ticks -= 1;
@@ -700,6 +723,29 @@ mod tests {
     }
 
     #[test]
+    fn a_module_finishing_a_capture_refuses_sets_and_starts_late() {
+        let mut m = model(&[("busy", "2"), ("memalloc", "4")]);
+        assert_eq!(said(&talk(&mut m, "sampleunit 0\n")), b"ERR\r\n");
+        assert_eq!(said(&talk(&mut m, "triggerflags\n")), b"0\r\n", "a question is answered");
+        assert_eq!(said(&talk(&mut m, "get\n")), b"", "waiting on the mutex");
+        let mut p = Port::default();
+        m.tick(&mut p);
+        assert_eq!(said(&p), b"");
+        m.tick(&mut p);
+        assert_eq!(said(&p), [0, 1, 2, 3]);
+        assert_eq!(said(&talk(&mut m, "close\n")), b"");
+        assert_eq!(said(&talk(&mut m, "sampleunit 0\n")), b"ERR\r\n", "busy again after a close");
+        let mut p = Port::default();
+        m.tick(&mut p);
+        m.tick(&mut p);
+        assert_eq!(said(&talk(&mut m, "sampleunit 0\n")), b"OK\r\n");
+        // A connection's end is a close to the module.
+        talk(&mut m, "get\n");
+        m.closed();
+        assert_eq!(said(&talk(&mut m, "samplerate 1000\n")), b"ERR\r\n");
+    }
+
+    #[test]
     fn a_late_answer_holds_those_behind_it() {
         let mut m = model(&[("late", "samplerate:2")]);
         assert_eq!(said(&talk(&mut m, "samplerate\nsampleunit\n")), b"");
@@ -731,7 +777,6 @@ mod tests {
             "bufunitsize 1024\n",
             "exit\n",
             "state\n",
-            "triggerflags\n",
             "nonsense\n",
             "sampleunit 2\n",
             "triggerflags 2\n",
