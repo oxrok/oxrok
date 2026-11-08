@@ -36,6 +36,8 @@
 //!   - `line-gap=N`: the ticks between the lines of an [`Answer::Apart`], 3 by default;
 //!   - `early=discard`: a line that comes while an [`Answer::Apart`] is going out is
 //!     dropped, with an error;
+//!   - `echo=raw|line|bare`: on CDC-ACM, what comes is sent back, as it came, as each
+//!     line with CR LF, or as each line with no line end;
 //!   - `framing=rigol`: on TCP, the length before each answer that `tcp-rigol`
 //!     reads;
 //!   - `uart=LINE`: on CDC-ACM, what the host must set before anything passes;
@@ -103,6 +105,9 @@ pub enum Answer {
     /// see them to tell them apart: a Fluke 45's answer and its prompt. What the next
     /// command says waits behind them, a gap on.
     Apart(Vec<String>),
+    /// [`Answer::Apart`], its first line this many ticks on: a measurement that waits
+    /// for a trigger, or a slow instrument. What comes on meanwhile waits behind it.
+    After(u32, Vec<String>),
     /// Done, and nothing to say: a setting.
     Done,
     /// Heard, and no answer ever, with no error.
@@ -182,6 +187,14 @@ pub trait Instrument: Send {
         Settings::default()
     }
 
+    /// A control byte (below a space, but for CR, LF and tab), as it comes and outside
+    /// any line: an RS-232 `^C`. `Some` clears what is waiting to go, the line coming
+    /// in too, as a device clear does, and sends this; `None` keeps the byte in the line.
+    fn control(&mut self, byte: u8) -> Option<Answer> {
+        let _ = byte;
+        None
+    }
+
     /// A message, before the [`Engine`] looks at it. `s` holds the settings.
     /// A model flags what the host must not do on `v`.
     fn command(&mut self, m: &Message<'_>, s: &mut Settings, v: &mut Violations) -> Answer {
@@ -206,6 +219,8 @@ pub struct Config {
     eol: Vec<u8>,
     line_gap: u32,
     early_discard: bool,
+    echo: Echo,
+    pending: (Vec<String>, u32),
     rigol_tcp: bool,
     uart: Option<cdc::Line>,
     tmc: usbtmc::Faults,
@@ -228,6 +243,8 @@ impl Default for Config {
             eol: b"\n".to_vec(),
             line_gap: 3,
             early_discard: false,
+            echo: Echo::Off,
+            pending: (Vec::new(), 0),
             rigol_tcp: false,
             uart: None,
             tmc: usbtmc::Faults::default(),
@@ -242,6 +259,21 @@ impl Config {
     #[must_use]
     pub fn with_eol(mut self, eol: &[u8]) -> Config {
         self.eol = eol.to_vec();
+        self
+    }
+
+    /// With these lines waiting to go at power on, a gap apart, the first after
+    /// `ticks`: an instrument a host left in the middle of a command.
+    #[must_use]
+    pub fn with_pending(mut self, lines: &[&str], ticks: u32) -> Config {
+        self.pending = (lines.iter().map(|l| (*l).to_owned()).collect(), ticks);
+        self
+    }
+
+    /// Whether a line that comes while an answer is still to go is dropped.
+    #[must_use]
+    pub fn with_early_discard(mut self) -> Config {
+        self.early_discard = true;
         self
     }
 
@@ -285,6 +317,14 @@ impl Config {
                 "discard" => self.early_discard = true,
                 _ => return Err(Error::Invalid(format!("early={value}: discard"))),
             },
+            "echo" => {
+                self.echo = match value {
+                    "raw" => Echo::Raw,
+                    "line" => Echo::Line,
+                    "bare" => Echo::Bare,
+                    _ => return Err(Error::Invalid(format!("echo={value}: raw, line or bare"))),
+                };
+            }
             "framing" => match value {
                 "rigol" => self.rigol_tcp = true,
                 _ => return Err(Error::Invalid(format!("framing={value}: rigol"))),
@@ -337,6 +377,15 @@ impl Config {
     }
 }
 
+/// What `echo=` sends back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Echo {
+    Off,
+    Raw,
+    Line,
+    Bare,
+}
+
 struct Waiting {
     bytes: Vec<u8>,
     ticks: u32,
@@ -354,13 +403,15 @@ pub struct Engine<I> {
     queries: u32,
     opcs: u32,
     mark: bool,
+    /// What `echo=` has to send, ahead of any answer.
+    echoed: Vec<u8>,
 }
 
 impl<I: Instrument> Engine<I> {
     /// At power on.
     pub fn new(instrument: I, config: Config) -> Engine<I> {
         let settings = instrument.settings();
-        Engine {
+        let mut engine = Engine {
             instrument,
             settings,
             config,
@@ -371,12 +422,36 @@ impl<I: Instrument> Engine<I> {
             queries: 0,
             opcs: 0,
             mark: false,
+            echoed: Vec::new(),
+        };
+        let (lines, ticks) = std::mem::take(&mut engine.config.pending);
+        for (i, line) in lines.into_iter().enumerate() {
+            let mut bytes = line.into_bytes();
+            bytes.extend_from_slice(&engine.config.eol);
+            let ticks = if i == 0 { ticks } else { engine.config.line_gap };
+            engine.answers.push_back(Waiting { bytes, ticks });
         }
+        engine
     }
 
     /// Bytes from the host, in whatever pieces.
     fn input(&mut self, data: &[u8], v: &mut Violations) {
+        if self.config.echo == Echo::Raw {
+            self.echoed.extend_from_slice(data);
+        }
         for b in data {
+            if *b < b' ' && !matches!(*b, b'\n' | b'\r' | b'\t') {
+                if let Some(answer) = self.instrument.control(*b) {
+                    self.line.clear();
+                    self.answers.clear();
+                    let (bytes, rest, _) = self.lines_of(answer);
+                    for bytes in std::iter::once(bytes).chain(rest).filter(|b| !b.is_empty()) {
+                        let ticks = if self.answers.is_empty() { 0 } else { self.config.line_gap };
+                        self.answers.push_back(Waiting { bytes, ticks });
+                    }
+                    continue;
+                }
+            }
             if *b == b'\n' {
                 let line = std::mem::take(&mut self.line);
                 self.line_in(&line, v);
@@ -390,6 +465,15 @@ impl<I: Instrument> Engine<I> {
     }
 
     fn line_in(&mut self, line: &[u8], v: &mut Violations) {
+        let shown = line.strip_suffix(b"\r").unwrap_or(line);
+        match self.config.echo {
+            Echo::Line => {
+                self.echoed.extend_from_slice(shown);
+                self.echoed.extend_from_slice(b"\r\n");
+            }
+            Echo::Bare => self.echoed.extend_from_slice(shown),
+            Echo::Off | Echo::Raw => {}
+        }
         let Ok(text) = std::str::from_utf8(line) else {
             v.report(format!("a line that is no text: {line:02x?}"));
             self.error(-120, "Invalid character");
@@ -488,34 +572,39 @@ impl<I: Instrument> Engine<I> {
         }
     }
 
-    fn conclude(&mut self, m: &Message<'_>, answer: Answer, v: &mut Violations) {
-        let mut rest = Vec::new();
-        let apart = matches!(answer, Answer::Apart(_));
-        let with_eol = |text: String, eol: &[u8]| {
+    /// An answer's bytes: the first transfer, the lines to go apart after it, and the
+    /// ticks the first waits, if it says.
+    fn lines_of(&mut self, answer: Answer) -> (Vec<u8>, Vec<Vec<u8>>, Option<u32>) {
+        let eol = self.config.eol.clone();
+        let with_eol = |text: String| {
             let mut bytes = text.into_bytes();
-            bytes.extend_from_slice(eol);
+            bytes.extend_from_slice(&eol);
             bytes
         };
-        let bytes = match answer {
-            Answer::Apart(lines) => {
-                let mut lines = lines.into_iter().map(|l| with_eol(l, &self.config.eol));
-                let first = lines.next().unwrap_or_default();
-                rest = lines.collect();
-                first
-            }
-            Answer::Text(text) => with_eol(text, &self.config.eol),
-            Answer::Bytes(bytes) => bytes,
-            Answer::Done | Answer::Silent => Vec::new(),
+        let (lines, after) = match answer {
+            Answer::Apart(lines) => (lines, None),
+            Answer::After(ticks, lines) => (lines, Some(ticks)),
+            Answer::Text(text) => return (with_eol(text), Vec::new(), None),
+            Answer::Bytes(bytes) => return (bytes, Vec::new(), None),
             Answer::Error(code, text) => {
                 self.error(code, &text);
-                Vec::new()
+                return (Vec::new(), Vec::new(), None);
             }
-            Answer::Unknown => {
-                v.report(format!("{}: the instrument has no such command", m.text));
-                self.error(-113, "Undefined header");
-                Vec::new()
+            Answer::Done | Answer::Silent | Answer::Unknown => {
+                return (Vec::new(), Vec::new(), None);
             }
         };
+        let mut lines = lines.into_iter().map(with_eol);
+        let first = lines.next().unwrap_or_default();
+        (first, lines.collect(), Some(after.unwrap_or(0)))
+    }
+
+    fn conclude(&mut self, m: &Message<'_>, answer: Answer, v: &mut Violations) {
+        if answer == Answer::Unknown {
+            v.report(format!("{}: the instrument has no such command", m.text));
+            self.error(-113, "Undefined header");
+        }
+        let (bytes, rest, apart) = self.lines_of(answer);
         // What a command has to say goes out, query or not: an HP's `RMATH HIRES`.
         if !m.is_query() && bytes.is_empty() {
             return;
@@ -531,9 +620,10 @@ impl<I: Instrument> Engine<I> {
         {
             return;
         }
-        let ticks = match self.config.late_at {
-            Some((at, ticks)) if at == n => ticks,
-            _ if apart && !self.answers.is_empty() => self.config.line_gap,
+        let ticks = match (self.config.late_at, apart) {
+            (Some((at, ticks)), _) if at == n => ticks,
+            (_, Some(after)) if after > 0 => after,
+            (_, Some(_)) if !self.answers.is_empty() => self.config.line_gap,
             _ => self.config.pace,
         };
         if let Some((at, later)) = self.config.split_at
@@ -607,6 +697,10 @@ struct OnTty<I>(Engine<I>);
 
 impl<I: Instrument> OnTty<I> {
     fn out(&mut self, port: &mut cdc::Port<'_>) {
+        let echoed = std::mem::take(&mut self.0.echoed);
+        if !echoed.is_empty() {
+            port.send(&echoed);
+        }
         while let Some(bytes) = self.0.take() {
             port.send(&bytes);
         }

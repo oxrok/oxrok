@@ -4,24 +4,28 @@
 //! A Fluke 45 dual display multimeter on its RS-232 port, on the CDC-ACM shell.
 //!
 //! The device, and how sure this is. The users manual (PN 855981, rev. 4, chapter 5,
-//! read page by page on manualsdir.com):
+//! pages as printed):
 //!
-//! - `*IDN?` answers `FLUKE, 45, nnnnnnn, n.n Dn.n`, with those spaces.
-//! - An answer ends in CR LF. `=>` means the command ran and the interface is ready.
-//! - "Wait for the meter to return a prompt before sending another command": a second
-//!   string before that is a device-dependent command error, and is discarded. The
-//!   driver in C does not wait, and is taken as having worked on its author's meter,
-//!   so by default the model takes it, and `early=discard` has the manual's word.
-//! - `FUNC1?` answers a mnemonic. `FUNC2?` and `VAL2?` with the secondary display off
-//!   are an Execution Error.
-//! - `AUTO?` answers 1 or 0. `MOD?` answers a sum of 1 MN, 2 MX, 4 HOLD, 8 dB, 16 dB
-//!   Power, 32 REL, 64 COMP.
-//! - `VAL1?` answers what the display shows, as `+1.2345E+0`. On a blank display it
-//!   waits for the next triggered measurement, which `late-at=` and `mute-at=` stand
-//!   in for. Slow is 2.5 readings a second.
+//! - 5-2, Table 5-1: 9600 baud, no parity, 8 bits, 1 stop bit, and echo On at the
+//!   factory: "each command sent to the meter ... is echoed".
+//! - 5-4: `^C` is a device clear, "causing `=>` followed by a carriage return and line
+//!   feed to be output"; 5-20 has "`<CR><LF>` and a new prompt". After each command
+//!   the meter sends one of three prompts: `=>` done, `?>` a Command Error (not
+//!   understood), `!>` an Execution Error (understood, not done).
+//! - 5-11: an answer ends in CR LF. "Wait for the meter to return a prompt before
+//!   sending another command", or the second string is a command error and is
+//!   discarded. Readings are `+1.2345E+0`, and `+1E+9` and `-1E+9` are positive and
+//!   negative overload.
+//! - 5-22: `FUNC1?` answers a mnemonic, and `FUNC2?` with the second display off is
+//!   an Execution Error. AACDC, VACDC and CONT are on the primary display only, and
+//!   with AACDC or VACDC there is no second display.
+//! - 5-23: `MOD?` answers a sum of 1 MN, 2 MX, 4 HOLD, 8 dB, 16 dB Power, 32 REL, 64
+//!   COMP. In dB Power the primary display is in watts.
+//! - 5-24: `AUTO?` answers 1 or 0. 5-26: `VAL1?` answers what the display shows; on a
+//!   blank display it waits for the next triggered measurement. Slow is 2.5 readings
+//!   a second. FORMAT 2 adds a unit (`+1.2345E+0 VDC`), which this model doesn't do.
 //!
-//! From C alone, on pages not read: `!>` for an execution error, `?>` for a command
-//! error, and `+1E+9` for an overload. No firmware was found, nor a recording.
+//! No firmware was found, nor a recording.
 //!
 //! Emulation artifacts:
 //!
@@ -29,46 +33,59 @@
 //!   whatever cable the host has.
 //! - An answer and its prompt go a few offers apart ([`Answer::Apart`]), where a real
 //!   one sends them about 5 ms apart at 9600 baud. libsigrok takes a read that ends in
-//!   LF for a whole answer, so sent together C reads `VDC\r\n=>` and has no function:
-//!   `prompts=together` shows that, as a USB cable's latency timer may.
-//! - Numbers don't move: a reading comes from the list, and no measurement takes time.
+//!   LF for a whole answer, so sent together C reads `VDC\r\n=>` and has no function,
+//!   and C's own `protocol.h` says "Always USB-serial", where an adapter's latency
+//!   timer (16 ms on an FTDI) usually puts the two in one read: the apart model is
+//!   the case C needs, not the likely one. `prompts=together` is the other.
+//! - Numbers don't move: a reading comes from the list, and no measurement takes time
+//!   unless `latency=` or `trigger=` says.
 //! - Commands no driver path sends are flagged and answered `?>`, though the meter has
 //!   them.
 //!
-//! Options, besides those of [`scpi::Config`]:
+//! Options, besides those of [`scpi::Config`] (`early=discard` is the manual's word on a
+//! command before the prompt, `echo=` the meter's echo):
 //!
-//! - `func=NAME`, `func2=NAME` or `none`, the two displays;
+//! - `func=NAME`, `func2=NAME` or `none`, the two displays, refused where the manual
+//!   says no meter can be so;
 //! - `auto=0|1`, `mod=N`;
 //! - `values=A,B,...`, `values2=A,B,...`, the readings in turn, coming round;
 //! - `say=N:TEXT`, the Nth query (from 1) answers TEXT and a prompt, or TEXT alone
 //!   when that is `!>`, `?>` or `=>`; once each, and any number of them;
-//! - `prompts=apart|together|none`, how the prompt goes; `idn=TEXT`.
+//! - `prompts=apart|together|none`, how the prompt goes; `idn=TEXT`;
+//! - `latency=T`, every answer T offers late; `trigger=T`, a reading T offers late, as
+//!   on an external trigger; `blocked=T`, at power on a reading is on its way, due in T
+//!   offers, and what comes before it is discarded, as a meter a host left in `VAL1?`.
 
+use crate::Error;
 use crate::Result;
 use crate::model::{DeviceModel, Violations};
 use crate::options::parse_number;
 use crate::shells::cdc::Identity;
 use crate::shells::scpi::{self, Answer, Instrument, Message, Settings};
-use crate::Error;
 
 /// The model name.
 pub const NAME: &str = "fluke-45";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "A Fluke 45 multimeter on CDC-ACM; func=, func2=, auto=, mod=, values=, \
-                         values2=, say=, prompts=, idn=, and the SCPI shell's mute-at=, \
-                         silent-at=, late-at=, mark-at=, line-gap=, early=, and stall=, chunk=, \
-                         in-limit=, in-stall=, out-hold=, uart=";
+                         values2=, say=, prompts=, idn=, latency=, trigger=, blocked=, and the \
+                         SCPI shell's mute-at=, silent-at=, late-at=, mark-at=, line-gap=, \
+                         early=, echo=, and stall=, chunk=, in-limit=, in-stall=, out-hold=, \
+                         uart=";
 
 /// As the manual gives it, with a serial number and versions of the form.
 const IDN: &str = "FLUKE, 45, 7654321, 1.6 D1.6";
 /// The manual's two examples, then two more of other ranges.
 const VALUES: &str = "+1.2345E+0,+6.7890E+3,-2.5000E-3,+3.0000E+2";
 const VALUES2: &str = "+6.0000E+1,+5.9990E+1";
-/// What `FUNC1?` can answer, as C's table has them.
+/// What `FUNC1?` can answer: Table 5-11's mnemonics.
 const FUNCTIONS: [&str; 10] =
     ["AAC", "AACDC", "ADC", "CONT", "DIODE", "FREQ", "OHMS", "VAC", "VACDC", "VDC"];
+/// What the primary display alone has (5-22).
+const PRIMARY_ONLY: [&str; 3] = ["AACDC", "CONT", "VACDC"];
 /// The most `say=` a model holds.
 const MOST_SAID: usize = 64;
+/// What a meter left in `VAL1?` answers when it comes.
+const BLOCKED_READING: &str = "+9.9999E+0";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Prompts {
@@ -90,21 +107,25 @@ struct Meter {
     next2: usize,
     said: Vec<(u32, String)>,
     prompts: Prompts,
+    latency: u32,
+    trigger: u32,
     queries: u32,
 }
 
 impl Meter {
-    /// An answer and what follows it.
-    fn answer(&self, text: String) -> Answer {
+    /// An answer and what follows it, `late` offers on.
+    fn answer(&self, text: String, late: u32) -> Answer {
         // Apart too: it may follow an earlier answer's prompt.
-        if matches!(text.as_str(), "!>" | "?>" | "=>") {
-            return Answer::Apart(vec![text]);
-        }
-        match self.prompts {
-            Prompts::Apart => Answer::Apart(vec![text, "=>".to_owned()]),
-            Prompts::Together => Answer::Text(format!("{text}\r\n=>")),
-            Prompts::None => Answer::Text(text),
-        }
+        let lines = if matches!(text.as_str(), "!>" | "?>" | "=>") {
+            vec![text]
+        } else {
+            match self.prompts {
+                Prompts::Apart => vec![text, "=>".to_owned()],
+                Prompts::Together => vec![format!("{text}\r\n=>")],
+                Prompts::None => vec![text],
+            }
+        };
+        Answer::After(late, lines)
     }
 
     fn take(list: &[String], next: &mut usize) -> String {
@@ -115,9 +136,18 @@ impl Meter {
 }
 
 impl Instrument for Meter {
+    /// `^C`, a device clear (5-4).
+    fn control(&mut self, byte: u8) -> Option<Answer> {
+        (byte == 0x03).then(|| match self.prompts {
+            Prompts::None => Answer::Silent,
+            _ => Answer::Apart(vec!["=>".to_owned()]),
+        })
+    }
+
     fn command(&mut self, m: &Message<'_>, _s: &mut Settings, v: &mut Violations) -> Answer {
         self.queries += 1;
         let n = self.queries;
+        let mut late = self.latency;
         // A reading is taken whatever is said for it, so that the next is the next.
         let text = match m.header.as_str() {
             "*IDN?" => self.idn.clone(),
@@ -125,8 +155,14 @@ impl Instrument for Meter {
             "FUNC2?" => self.func2.clone().unwrap_or_else(|| "!>".to_owned()),
             "AUTO?" => u32::from(self.auto).to_string(),
             "MOD?" => self.modifiers.to_string(),
-            "VAL1?" => Meter::take(&self.values, &mut self.next),
-            "VAL2?" if self.func2.is_some() => Meter::take(&self.values2, &mut self.next2),
+            "VAL1?" => {
+                late += self.trigger;
+                Meter::take(&self.values, &mut self.next)
+            }
+            "VAL2?" if self.func2.is_some() => {
+                late += self.trigger;
+                Meter::take(&self.values2, &mut self.next2)
+            }
             "VAL2?" => "!>".to_owned(),
             _ => {
                 v.report(format!("{}: no driver path sends this", m.text));
@@ -135,13 +171,12 @@ impl Instrument for Meter {
         };
         if let Some(at) = self.said.iter().position(|(at, _)| *at == n) {
             let (_, said) = self.said.remove(at);
-            return self.answer(said);
+            return self.answer(said, late);
         }
-        self.answer(text)
+        self.answer(text, late)
     }
 }
 
-/// A word it does not say is for C's own check, and `say=` has that.
 fn function(key: &str, value: &str) -> Result<String> {
     if FUNCTIONS.contains(&value) {
         Ok(value.to_owned())
@@ -171,9 +206,13 @@ fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config)> {
         next2: 0,
         said: Vec::new(),
         prompts: Prompts::Apart,
+        latency: 0,
+        trigger: 0,
         queries: 0,
     };
     let mut config = scpi::Config::default().with_eol(b"\r\n");
+    let mut blocked = None;
+    let ticks = |k: &str, v: &str| parse_number(k, v, 0..=1 << 20);
     for (k, v) in options {
         match k.as_str() {
             "idn" => meter.idn.clone_from(v),
@@ -184,6 +223,9 @@ fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config)> {
             "mod" => meter.modifiers = parse_number(k, v, 0..=127)?,
             "values" => meter.values = values(k, v)?,
             "values2" => meter.values2 = values(k, v)?,
+            "latency" => meter.latency = ticks(k, v)?,
+            "trigger" => meter.trigger = ticks(k, v)?,
+            "blocked" => blocked = Some(ticks(k, v)?),
             "say" => {
                 let (at, text) = v
                     .split_once(':')
@@ -211,6 +253,20 @@ fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config)> {
                 }
             }
         }
+    }
+    if let Some(func2) = &meter.func2 {
+        if PRIMARY_ONLY.contains(&func2.as_str()) {
+            return Err(Error::Invalid(format!("func2={func2}: the primary display's alone")));
+        }
+        if matches!(meter.func.as_str(), "AACDC" | "VACDC") {
+            return Err(Error::Invalid(format!(
+                "func={} has no second display, so no func2={func2}",
+                meter.func
+            )));
+        }
+    }
+    if let Some(ticks) = blocked {
+        config = config.with_pending(&[BLOCKED_READING, "=>"], ticks).with_early_discard();
     }
     Ok((meter, config))
 }
@@ -260,6 +316,11 @@ mod tests {
                 })
                 .collect()
         }
+
+        /// How many offers until something comes, up to `most`.
+        fn quiet_for(&mut self, most: usize) -> usize {
+            (0..most).take_while(|_| self.offers(1).is_empty()).count()
+        }
     }
 
     #[test]
@@ -284,6 +345,14 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_behind_a_prompt_is_a_line_of_its_own() {
+        let mut r = Rig::new(&[]);
+        r.write("AUTO?\n");
+        r.write("FUNC2?\n");
+        assert_eq!(r.offers(40), ["1\r\n", "=>\r\n", "!>\r\n"]);
+    }
+
+    #[test]
     fn readings_come_round_and_the_manuals_idn_has_spaces() {
         let mut r = Rig::new(&[("values", "+1E+0,+2E+0")]);
         for expected in ["+1E+0\r\n", "+2E+0\r\n", "+1E+0\r\n"] {
@@ -296,14 +365,6 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_behind_a_prompt_is_a_line_of_its_own() {
-        let mut r = Rig::new(&[]);
-        r.write("AUTO?\n");
-        r.write("FUNC2?\n");
-        assert_eq!(r.offers(40), ["1\r\n", "=>\r\n", "!>\r\n"]);
-    }
-
-    #[test]
     fn together_and_none() {
         let mut r = Rig::new(&[("prompts", "together")]);
         r.write("AUTO?\n");
@@ -311,6 +372,8 @@ mod tests {
         let mut r = Rig::new(&[("prompts", "none")]);
         r.write("AUTO?\n");
         assert_eq!(r.offers(10), ["1\r\n"]);
+        r.write("\x03");
+        assert_eq!(r.offers(10).len(), 0);
     }
 
     #[test]
@@ -352,22 +415,80 @@ mod tests {
     }
 
     #[test]
+    fn a_device_clear_drops_what_is_on_its_way_and_says_its_prompt() {
+        let mut r = Rig::new(&[("trigger", "50")]);
+        r.write("VAL1?\n");
+        assert_eq!(r.offers(10).len(), 0);
+        r.write("FUN");
+        r.write("\x03");
+        assert_eq!(r.offers(60), ["=>\r\n"]);
+        r.write("FUNC1?\n");
+        assert_eq!(r.offers(10), ["VDC\r\n", "=>\r\n"]);
+    }
+
+    #[test]
+    fn latency_and_trigger_hold_answers_back_and_what_follows_waits() {
+        let mut r = Rig::new(&[("latency", "20")]);
+        r.write("AUTO?\n");
+        assert!(r.quiet_for(100) >= 19);
+        let mut r = Rig::new(&[("trigger", "30")]);
+        r.write("AUTO?\n");
+        assert_eq!(r.offers(10), ["1\r\n", "=>\r\n"]);
+        r.write("VAL1?\n");
+        r.write("MOD?\n");
+        assert!(r.quiet_for(100) >= 29);
+        assert_eq!(r.offers(20), ["=>\r\n", "0\r\n", "=>\r\n"]);
+    }
+
+    #[test]
+    fn a_meter_left_in_val1_discards_until_it_answers_or_is_cleared() {
+        let mut r = Rig::new(&[("blocked", "30")]);
+        r.write("*IDN?\n");
+        assert!(r.quiet_for(100) >= 29);
+        assert_eq!(r.offers(20), ["=>\r\n"]);
+        let mut r = Rig::new(&[("blocked", "1000")]);
+        r.write("\x03");
+        assert_eq!(r.offers(10), ["=>\r\n"]);
+        r.write("*IDN?\n");
+        assert_eq!(r.offers(10)[0], format!("{IDN}\r\n"));
+    }
+
+    #[test]
+    fn echo_as_it_came_as_a_line_or_bare() {
+        let mut r = Rig::new(&[("echo", "raw")]);
+        r.write("AUTO?\n");
+        assert_eq!(r.offers(10), ["AUTO?\n1\r\n", "=>\r\n"]);
+        let mut r = Rig::new(&[("echo", "line")]);
+        r.write("AUTO?\n");
+        assert_eq!(r.offers(10), ["AUTO?\r\n1\r\n", "=>\r\n"]);
+        let mut r = Rig::new(&[("echo", "bare")]);
+        r.write("AUTO?\n");
+        assert_eq!(r.offers(10), ["AUTO?1\r\n", "=>\r\n"]);
+    }
+
+    #[test]
     fn bad_options() {
         for bad in [
-            ("no-such", "1"),
-            ("func", "VOLTS"),
-            ("func2", "VOLTS"),
-            ("auto", "2"),
-            ("mod", "128"),
-            ("values", "+1E+0,"),
-            ("say", "1"),
-            ("say", "x:y"),
-            ("prompts", "maybe"),
-            ("early", "keep"),
-            ("line-gap", "0"),
+            &[("no-such", "1")][..],
+            &[("func", "VOLTS")],
+            &[("func2", "VOLTS")],
+            &[("func2", "CONT")],
+            &[("func2", "AACDC")],
+            &[("func", "VACDC"), ("func2", "FREQ")],
+            &[("func", "AACDC"), ("func2", "VDC")],
+            &[("auto", "2")],
+            &[("mod", "128")],
+            &[("values", "+1E+0,")],
+            &[("say", "1")],
+            &[("say", "x:y")],
+            &[("prompts", "maybe")],
+            &[("early", "keep")],
+            &[("echo", "loud")],
+            &[("line-gap", "0")],
         ] {
-            assert!(build(&opts(&[bad])).is_err(), "{bad:?}");
+            assert!(build(&opts(bad)).is_err(), "{bad:?}");
         }
+        assert!(build(&opts(&[("func", "CONT"), ("func2", "FREQ")])).is_ok());
         assert_eq!(build(&[]).unwrap().name(), NAME);
     }
 }
