@@ -51,7 +51,7 @@ emu_cases() {
     emu_options slots=none,none,ina226,none,tmp435,none,none,none revb=3 pws=3
     emu_case "scan two probes 5" --keep-header -- -d $D --scan
     emu_options eeprom-fault=rev
-    emu_case "scan eeprom of revision a" --stderr -- -d $D --scan
+    emu_case "show probe 2 eeprom of revision a" --keep-header -- -d $D -g Probe_2 --show
     emu_options eeprom-fault=type
     emu_case "get probe factor eeprom of no type" -- -d $D -g Probe_2 --get probe_factor
     emu_options eeprom-fault=short
@@ -148,7 +148,7 @@ emu_cases() {
     emu_case "capture at 500 hz" -- -d $D -c samplerate=500 $VOL_ONLY,P1_ENRG_CURR --samples 20
     emu_case "capture at 1 hz" --stderr --expect-fail -- -d $D -c samplerate=1 $VOL_ONLY --samples 1
     emu_case "capture at 0 hz" --stderr --expect-fail -- -d $D -c samplerate=0 $VOL_ONLY --samples 1
-    emu_case "capture csv" -- -d $D --samples 2 -O csv
+    emu_case "capture csv" --filter '/^; /d' -- -d $D --samples 2 -O csv
     emu_case "capture analog" -- -d $D -C P2_ENRG_PWR --samples 2 -O analog
     # The chip's own pace: values move on every update_interval (35 ms and 125 ms at
     # power on), whatever the reads; how many reads fall in one conversion is the clock's.

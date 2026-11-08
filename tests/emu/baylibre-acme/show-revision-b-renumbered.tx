@@ -23,3 +23,4 @@ sysfs_put class/hwmon/hwmon4/shunt_resistor "20000\n" -> ok
 sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
 sysfs_get class/i2c-adapter/i2c-1/1-004b/name -> "tmp435\n"
 sysfs_get class/hwmon/hwmon0/shunt_resistor -> "20000\n"
+sysfs_get class/gpio/gpio497/value -> "1\n"

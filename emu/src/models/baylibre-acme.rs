@@ -9,13 +9,13 @@
 //! - **Slots.** Eight connectors. Connector `i` (1 to 8) has an ina226 power
 //!   monitor at I2C address 0x40, 0x41, 0x44, 0x45, 0x42, 0x43, 0x46, 0x47, and
 //!   connectors 5 to 8 a tmp435 at 0x4c, 0x49, 0x4f, 0x4b too
-//!   (`baylibre-acme/protocol.c:89-95`). The device tree declares the chips
+//!   (`baylibre-acme/protocol.c:84-90`). The device tree declares the chips
 //!   whether a probe is plugged or not, so a declared chip has its
 //!   `class/i2c-adapter/i2c-1/1-00XX/name` (`ina226\n`, `tmp435\n`), and only a
 //!   chip that answered its driver's probe has a `hwmon/hwmonN` beside it.
 //!   `slots=` says, per connector: `ina226` or `tmp435` (a probe of that kind),
 //!   `none` (chips declared, no probe: the C's "is there an actual probe
-//!   connected?", `protocol.c:192-201`), `empty` (nothing declared) or `other`
+//!   connected?", `protocol.c:180-187`), `empty` (nothing declared) or `other`
 //!   (another chip, `lm75`, at the ina226's address). Default
 //!   `ina226,ina226,none,none,tmp435,none,none,none`.
 //! - **hwmon.** The probes that answered get `class/hwmon/hwmonN`, N counting
@@ -50,14 +50,17 @@
 //!   1; written only when an output, else EPERM). A revision A probe has its
 //!   power switch on GPIO 486, 498, 502, 482, 478, 506, 510, 474 and a line that
 //!   reads 1 when it has a switch on 487, 499, 503, 483, 479, 507, 511, 475; a
-//!   revision B probe its switch on 489 + 2 * (n - 1) (`protocol.c:97-107`). At
+//!   revision B probe its switch on 489 + 2 * (n - 1) (`protocol.c:92-102`), n
+//!   its connector on that cape, where the ina226 addresses 0x40 to 0x47 are
+//!   connectors 1 to 8 in order (`revB_addr_to_num`), not the `slots=` order of
+//!   revision A. At
 //!   power on the GPIOs of the probes are exported, as a board's start up would:
 //!   the sense line of each revision A probe (an input reading 1 for a probe in
 //!   `pws=`), and the switch of each probe in `pws=` (an output, `power=on`: 1).
 //!   `unexported=all|N,...` leaves GPIOs out. Driving a sense line as an output
 //!   is a violation: it fights the probe.
 //! - **Revision B probes** (`revb=1,2`: connector numbers) have an EEPROM at the
-//!   address 0x10 above their ina226 (`protocol.c:154-159`), reached through
+//!   address 0x10 above their ina226 (`protocol.c:150-155`), reached through
 //!   `class/i2c-dev/i2c-1/device`, a link to the adapter: 256 bytes of a 24c02,
 //!   the first 61 the C's `struct probe_eeprom` big endian (type 1 for USB,
 //!   revision `B`, shunt in µΩ from `eeprom-shunt=`, 20000, the power switch
@@ -457,9 +460,12 @@ fn gpios(c: &Config) -> Vec<Gpio> {
         if !matches!(kind, Slot::Ina226 | Slot::Tmp435) {
             continue;
         }
-        if c.revb[slot] {
+        // A probe whose EEPROM the kernel's reader rejects is one of revision A
+        // to anyone, a board's start up included.
+        if c.revb[slot] && c.eeprom_fault.is_none() {
             if c.pws[slot] {
-                out.push(Gpio(REVB_PWS[slot], c.pws_out, c.power_on, false));
+                let connector = revb_connector(ENRG_ADDRS[slot]);
+                out.push(Gpio(REVB_PWS[connector - 1], c.pws_out, c.power_on, false));
             }
         } else {
             out.push(Gpio(REVA_SENSE[slot], false, c.pws[slot], true));
@@ -469,6 +475,13 @@ fn gpios(c: &Config) -> Vec<Gpio> {
         }
     }
     out
+}
+
+/// The connector of a revision B probe at `addr`: on that cape the addresses
+/// run in connector order, 0x40 to 0x47 (`revB_addr_to_num`, `protocol.c:310-319`),
+/// and its switch is that connector's.
+fn revb_connector(addr: u8) -> usize {
+    usize::from(addr - 0x3f)
 }
 
 /// `DIV_ROUND_CLOSEST` of the kernel, for a positive divisor.
@@ -1206,6 +1219,25 @@ mod tests {
         let (_, said) = fs.take();
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("GPIO 487"), "{said:?}");
+    }
+
+    /// A revision B probe's switch is its connector's on that cape, which the
+    /// address says: 0x44 on revision A's connector 3 is connector 5.
+    #[test]
+    fn a_revision_b_switch_is_its_addresss_connectors() {
+        let (_, ops) = built(&[
+            ("slots", "none,none,ina226,ina226,ina226,ina226,ina226,none"),
+            ("revb", "3,4,5,6,7"),
+            ("pws", "3,4,5,6,7"),
+        ]);
+        for gpio in [497, 499, 493, 495, 501] {
+            assert_eq!(text(&ops, &format!("class/gpio/gpio{gpio}/value")), "1\n", "GPIO {gpio}");
+        }
+        // A rejected EEPROM makes a probe of revision A, for the start up too.
+        let (_, ops) = built(&[("eeprom-fault", "rev")]);
+        assert_eq!(text(&ops, "class/gpio/gpio499/direction"), "in\n");
+        assert_eq!(text(&ops, "class/gpio/gpio498/direction"), "out\n");
+        assert!(file(&ops, "class/gpio/gpio491/value").is_none());
     }
 
     #[test]

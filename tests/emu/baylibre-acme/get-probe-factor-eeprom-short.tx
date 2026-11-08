@@ -4,6 +4,7 @@ sysfs_get class/gpio/gpio487/value -> "1\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
 sysfs_dir class/i2c-adapter/i2c-1/1-0041/hwmon
 sysfs_get class/i2c-adapter/i2c-1/1-0051/eeprom -> 000000010000004200004e200141434d452d34312d303030310000000055534200000000000000000000000000000000000000000000000000000000
+sysfs_get class/gpio/gpio499/value -> "1\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0044/name -> "ina226\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0045/name -> "ina226\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0042/name -> "ina226\n"
