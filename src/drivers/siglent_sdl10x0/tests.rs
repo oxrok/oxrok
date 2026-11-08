@@ -60,6 +60,8 @@ struct Wire {
     asked_amps: u32,
     input: Option<&'static str>,
     number: Option<&'static str>,
+    /// What the next other question gets instead, as it stands, with no line end.
+    piece: Option<&'static str>,
     idn: Option<&'static str>,
     /// Answers take this long on the clock, one after the other.
     pace: Option<Duration>,
@@ -141,6 +143,10 @@ impl Wire {
             ":FUNC?" => self.enqueue("RESISTANCE"),
             ":POWer:PROTection:STATe?" | ":CURRent:PROTection:STATe?" => {
                 self.enqueue("1");
+            }
+            q if q.ends_with('?') && self.piece.is_some() => {
+                let piece = self.piece.take().unwrap_or_default();
+                self.coming.push_back((None, piece.as_bytes().to_vec()));
             }
             q if q.ends_with('?') => {
                 let number = self.number.unwrap_or("8.000");
@@ -1275,4 +1281,16 @@ fn a_piece_with_no_line_end_is_junk() {
     assert_eq!(failure(&packets), None);
     assert_eq!(frames(&packets), [(11.5, 0.1)]);
     assert!(w.lock().unwrap().discards > 0);
+}
+
+/// A get whose answer was cut leaves its piece for the resync to drop, not for the
+/// next answer to be read behind.
+#[test]
+fn a_cut_get_leaves_nothing_for_the_next() {
+    let w = wire();
+    let d = device(&w, FAR);
+    w.lock().unwrap().piece = Some("2.");
+    assert!(matches!(d.get(&Key::CurrentLimit, Some("1")), Err(Error::Timeout)));
+    w.lock().unwrap().number = Some("2.6");
+    assert_eq!(d.get(&Key::CurrentLimit, Some("1")).unwrap(), Value::F64(f64::from(2.6_f32)));
 }
