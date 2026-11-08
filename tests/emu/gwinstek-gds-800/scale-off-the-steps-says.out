@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::gwinstek_gds_800: :CHAN1:SCAL? said '3.00V', which is no step in the manual: the volts may be wrong.

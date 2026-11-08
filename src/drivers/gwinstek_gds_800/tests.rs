@@ -31,6 +31,8 @@ struct Scope {
     /// The read that finds this many bytes read takes this long and finds nothing, once:
     /// a stall inside a read, with the next byte there for the next one.
     stall_at: Option<(usize, Duration)>,
+    /// A read is in that stall now.
+    in_stall: bool,
     /// `:ACQ<X>:MEM?` from this one on gets no answer.
     silent_from: Option<usize>,
     /// Time per byte, as a line at this rate has it.
@@ -38,7 +40,7 @@ struct Scope {
     /// Bytes appear only this often.
     burst: Option<Duration>,
     fail_writes_from: Option<usize>,
-    /// A memory read's write takes this long: a port with no room.
+    /// A memory read's write after the first takes this long: a port with no room.
     write_delay: Duration,
     /// Reads fail once this many reads have found bytes.
     fail_reads_after: Option<usize>,
@@ -87,8 +89,10 @@ impl Port for Fake {
                     && s.bytes_read == at
                 {
                     s.stall_at = None;
+                    s.in_stall = true;
                     drop(s);
                     std::thread::sleep(stall);
+                    self.0.lock().unwrap().in_stall = false;
                     return Ok(0);
                 }
                 if s.fail_reads_after.is_some_and(|n| s.bytes_read >= n) {
@@ -128,7 +132,11 @@ impl Port for Fake {
 
     fn write(&mut self, data: &[u8]) -> Result<()> {
         if data.ends_with(b":MEM?\n") {
-            let delay = self.0.lock().unwrap().write_delay;
+            // The second memory read on: before the first block there is no limit.
+            let delay = {
+                let s = self.0.lock().unwrap();
+                if s.block_at >= 1 { s.write_delay } else { Duration::ZERO }
+            };
             std::thread::sleep(delay);
         }
         let mut s = self.0.lock().unwrap();
@@ -306,13 +314,27 @@ fn capture_block(block: Vec<u8>) -> (Vec<Packet>, Arc<Mutex<Scope>>) {
     (capture_or_stop(&mut d, Duration::from_secs(3)), seen)
 }
 
+/// Waits `how_long` by the clock, in steps of a millisecond, so a sleep shim that scales
+/// sleeps scales only the steps: a pause that must stay under a limit stays so.
+fn pause(how_long: Duration) {
+    let until = Instant::now() + how_long;
+    while Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+/// The capture is over: its thread gave the instrument back. A wait for something it
+/// should do fails at once then, rather than at its bound.
+fn ended(d: &GdsDevice) -> bool {
+    d.scpi.lock().unwrap().is_some()
+}
+
 /// What a device warned of.
 fn warned(d: &GdsDevice) -> Vec<String> {
     d.shared.warned.lock().unwrap().clone()
 }
 
-#[test]
-fn a_frame_goes_as_c_sends_it() {
+fn a_frame_goes_as_c_sends_it_body() {
     let (mut d, seen) =
         scope(|s| s.blocks = vec![block_of(&ramp(500), 1), block_of(&ramp(500), 2)]);
     let packets = capture(&mut d);
@@ -337,8 +359,7 @@ fn a_frame_goes_as_c_sends_it() {
     assert_eq!(a.flags, MqFlags::empty());
 }
 
-#[test]
-fn a_limit_of_frames_counts_each_frame_and_arms_each() {
+fn a_limit_of_frames_counts_each_frame_and_arms_each_body() {
     let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
     d.enable_channel(1, false).unwrap();
     d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
@@ -348,8 +369,7 @@ fn a_limit_of_frames_counts_each_frame_and_arms_each() {
     assert_eq!(sent(&seen).iter().filter(|w| *w == ":RUN").count(), 2);
 }
 
-#[test]
-fn only_the_second_channel_is_read_when_the_first_is_off() {
+fn only_the_second_channel_is_read_when_the_first_is_off_body() {
     let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 2)]);
     d.enable_channel(0, false).unwrap();
     assert_eq!(shape(&capture(&mut d)), ["H", "[", "[1]x500", "]"]);
@@ -401,8 +421,7 @@ fn a_limit_set_on_a_running_capture_counts_body() {
     d.stop().unwrap();
 }
 
-#[test]
-fn the_rate_is_there_after_a_capture() {
+fn the_rate_is_there_after_a_capture_body() {
     let (mut d, _seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
     d.enable_channel(1, false).unwrap();
     assert_eq!(d.get(&Key::Samplerate, None).unwrap(), Value::U64(0), "none yet");
@@ -410,8 +429,7 @@ fn the_rate_is_there_after_a_capture() {
     assert_eq!(d.get(&Key::Samplerate, None).unwrap(), Value::U64(100_000_000));
 }
 
-#[test]
-fn a_line_feed_in_the_points_is_a_point() {
+fn a_line_feed_in_the_points_is_a_point_body() {
     // A point of 0x000A, and one at a read's end for sure, and the bytes C's serial
     // layer cuts: an LF and a CR, here 0x0A0D.
     let mut points = ramp(500);
@@ -429,8 +447,7 @@ fn a_line_feed_in_the_points_is_a_point() {
     assert_eq!(values[499], 10.0 * vbit);
 }
 
-#[test]
-fn a_line_feed_behind_the_block_is_no_scale() {
+fn a_line_feed_behind_the_block_is_no_scale_body() {
     // The manual's words: an LF behind each answer. C reads it as its scale, and 0 V.
     let mut block = block_of(&ramp(500), 1);
     block.push(b'\n');
@@ -439,8 +456,7 @@ fn a_line_feed_behind_the_block_is_no_scale() {
     assert_eq!(samples(&packets)[1], -99.0 * (10.0f32 / 256.0));
 }
 
-#[test]
-fn an_empty_answer_and_nothing_more_is_no_answer() {
+fn an_empty_answer_and_nothing_more_is_no_answer_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.scale = b"\n".to_vec();
@@ -608,8 +624,7 @@ fn junk_ends_a_wait_at_its_count_and_never_resets_the_silence() {
     assert_eq!(s.after_junk(t0 + Duration::from_secs(600)), Verdict::GiveUp);
 }
 
-#[test]
-fn a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop() {
+fn a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop_body() {
     let (mut d, seen) = scope(|_| {});
     d.enable_channel(1, false).unwrap();
     d.times.warn = Duration::from_millis(5);
@@ -618,10 +633,10 @@ fn a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop() {
     // Well past both, by empty reads and not by a sleep alone.
     let wait = Instant::now() + BOUND;
     while seen.lock().unwrap().empty_reads < 200 {
-        assert!(Instant::now() < wait, "no reads");
+        assert!(Instant::now() < wait && !ended(&d), "no reads");
         std::thread::sleep(Duration::from_millis(1));
     }
-    std::thread::sleep(Duration::from_millis(50));
+    pause(Duration::from_millis(50));
     assert!(rx.try_recv().is_err(), "a first block has no limit");
     assert_eq!(
         warned(&d),
@@ -634,8 +649,7 @@ fn a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop() {
     assert_eq!(sent(&seen).last().map(String::as_str), Some(":ACQ1:MEM?"));
 }
 
-#[test]
-fn a_first_block_that_comes_late_says_so_and_is_a_block() {
+fn a_first_block_that_comes_late_says_so_and_is_a_block_body() {
     let (mut d, seen) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.hold_after = Some(0);
@@ -646,10 +660,10 @@ fn a_first_block_that_comes_late_says_so_and_is_a_block() {
     let rx = start(&mut d);
     let wait = Instant::now() + BOUND;
     while warned(&d).is_empty() {
-        assert!(Instant::now() < wait, "no warning");
+        assert!(Instant::now() < wait && !ended(&d), "no warning");
         std::thread::sleep(Duration::from_millis(1));
     }
-    std::thread::sleep(Duration::from_millis(30));
+    pause(Duration::from_millis(30));
     d.times.limit = Duration::from_secs(1000);
     // The limit is the thread's copy, so the rest must come with no pause: all at once.
     seen.lock().unwrap().hold_after = None;
@@ -660,8 +674,7 @@ fn a_first_block_that_comes_late_says_so_and_is_a_block() {
     assert_eq!(warned(&d).last().map(String::as_str), Some("The scope is answering again."));
 }
 
-#[test]
-fn after_a_sample_silence_has_its_limit() {
+fn after_a_sample_silence_has_its_limit_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.silent_from = Some(1);
@@ -672,8 +685,27 @@ fn after_a_sample_silence_has_its_limit() {
     assert_eq!(failure(&packets).unwrap(), "device error: No answer from the scope in 0.04 s.");
 }
 
-#[test]
-fn a_stall_inside_a_read_is_no_silence() {
+/// A stop returns once the thread is done: it is caught inside a read that only ends
+/// later, and the instrument must be back when the stop returns.
+fn a_stop_joins_the_thread_body() {
+    let (mut d, seen) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.stall_at = Some((50, Duration::from_millis(300)));
+    });
+    d.enable_channel(1, false).unwrap();
+    let rx = start(&mut d);
+    let wait = Instant::now() + BOUND;
+    while !seen.lock().unwrap().in_stall {
+        assert!(Instant::now() < wait && !ended(&d), "no stall");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    d.stop().unwrap();
+    assert!(d.scpi.lock().unwrap().is_some(), "the stop returned with the thread still in a read");
+    assert!(!seen.lock().unwrap().in_stall);
+    drop(rx);
+}
+
+fn a_stall_inside_a_read_is_no_silence_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.stall_at = Some((100, Duration::from_millis(300)));
@@ -685,8 +717,7 @@ fn a_stall_inside_a_read_is_no_silence() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn silence_in_a_block_runs_from_its_last_byte() {
+fn silence_in_a_block_runs_from_its_last_byte_body() {
     // Four pauses, each under the limit and together over it.
     let (mut d, seen) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
@@ -698,7 +729,7 @@ fn silence_in_a_block_runs_from_its_last_byte() {
     for at in [40, 60, 80, 0] {
         let wait = Instant::now() + BOUND * 6;
         loop {
-            assert!(Instant::now() < wait, "no bytes");
+            assert!(Instant::now() < wait && !ended(&d), "no bytes");
             let s = seen.lock().unwrap();
             if s.hold_after.is_some_and(|h| s.bytes_read >= h) {
                 break;
@@ -706,7 +737,7 @@ fn silence_in_a_block_runs_from_its_last_byte() {
             drop(s);
             std::thread::sleep(Duration::from_millis(1));
         }
-        std::thread::sleep(Duration::from_millis(800));
+        pause(Duration::from_millis(800));
         seen.lock().unwrap().hold_after = (at > 0).then_some(at);
     }
     let packets = to_end(&rx);
@@ -715,8 +746,7 @@ fn silence_in_a_block_runs_from_its_last_byte() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn silence_starts_again_at_a_blocks_start() {
+fn silence_starts_again_at_a_blocks_start_body() {
     // A first `#` long after the limit, then a pause: the time ahead of it doesn't count.
     let (mut d, seen) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
@@ -725,14 +755,14 @@ fn silence_starts_again_at_a_blocks_start() {
     d.enable_channel(1, false).unwrap();
     d.times.limit = Duration::from_secs(1);
     let rx = start(&mut d);
-    std::thread::sleep(Duration::from_millis(1500));
+    pause(Duration::from_millis(1500));
     seen.lock().unwrap().hold_after = Some(1);
     let wait = Instant::now() + BOUND * 6;
     while seen.lock().unwrap().bytes_read < 1 {
-        assert!(Instant::now() < wait, "no #");
+        assert!(Instant::now() < wait && !ended(&d), "no #");
         std::thread::sleep(Duration::from_millis(1));
     }
-    std::thread::sleep(Duration::from_millis(100));
+    pause(Duration::from_millis(100));
     seen.lock().unwrap().hold_after = None;
     let packets = to_end(&rx);
     d.stop().unwrap();
@@ -740,8 +770,7 @@ fn silence_starts_again_at_a_blocks_start() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn old_firmware_warns_and_still_asks() {
+fn old_firmware_warns_and_still_asks_body() {
     let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
     "V.2.01".clone_into(&mut d.info.version);
     d.enable_channel(1, false).unwrap();
@@ -754,8 +783,7 @@ fn old_firmware_warns_and_still_asks() {
     );
 }
 
-#[test]
-fn other_warnings_are_said() {
+fn other_warnings_are_said_body() {
     let (mut d, _) = scope(|s| s.blocks = vec![block_of(&ramp(500), 2)]);
     d.enable_channel(1, false).unwrap();
     capture(&mut d);
@@ -785,8 +813,7 @@ fn the_manuals_steps() {
     }
 }
 
-#[test]
-fn a_scale_off_the_steps_warns_once_and_is_used() {
+fn a_scale_off_the_steps_warns_once_and_is_used_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.scale = b"3.00V\n".to_vec();
@@ -822,8 +849,7 @@ fn scale_outcome(answer: &[u8], good: &[f32]) -> (&'static str, bool) {
 }
 
 /// The field that can give wrong readings: all of a channel, by one flip, at exit 0.
-#[test]
-fn every_flip_and_lost_byte_of_a_scale() {
+fn every_flip_and_lost_byte_of_a_scale_body() {
     // (answer, flips wrong, same, failed, of the wrong how many warn; lost bytes wrong)
     #[allow(clippy::type_complexity)]
     let table: [(&[u8], usize, usize, usize, usize, usize); 3] = [
@@ -873,8 +899,7 @@ fn every_flip_and_lost_byte_of_a_scale() {
     }
 }
 
-#[test]
-fn a_block_cut_short_fails_with_its_frame_closed() {
+fn a_block_cut_short_fails_with_its_frame_closed_body() {
     let points = ramp(500);
     let mut block = block_of(&points, 1);
     block.truncate(block.len() - 100);
@@ -883,8 +908,7 @@ fn a_block_cut_short_fails_with_its_frame_closed() {
     assert!(failure(&packets).unwrap().contains("No answer from the scope"));
 }
 
-#[test]
-fn a_late_block_is_a_block() {
+fn a_late_block_is_a_block_body() {
     let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
     d.enable_channel(1, false).unwrap();
     d.times.limit = Duration::from_secs(1000);
@@ -901,8 +925,7 @@ fn a_late_block_is_a_block() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn junk_ahead_of_a_block_is_passed_over_and_a_flood_is_not() {
+fn junk_ahead_of_a_block_is_passed_over_and_a_flood_is_not_body() {
     let mut block = b"stale answer\n".to_vec();
     block.extend_from_slice(&block_of(&ramp(500), 1));
     let (packets, _) = capture_block(block);
@@ -917,8 +940,7 @@ fn junk_ahead_of_a_block_is_passed_over_and_a_flood_is_not() {
     );
 }
 
-#[test]
-fn a_bad_head_fails_as_c_says_or_says_why() {
+fn a_bad_head_fails_as_c_says_or_says_why_body() {
     let cases: [(&[u8], &str); 5] = [
         (b"#3100", "device error: Data size digits is not 4, 5 or 6 but '3'."),
         (b"#x100", "device error: Data size digits is not 4, 5 or 6 but 'x'."),
@@ -933,8 +955,7 @@ fn a_bad_head_fails_as_c_says_or_says_why() {
     }
 }
 
-#[test]
-fn a_block_of_the_most_points_passes_and_no_point_is_a_frame_with_none() {
+fn a_block_of_the_most_points_passes_and_no_point_is_a_frame_with_none_body() {
     let (packets, _) = capture_block(block_of(&ramp(125_000), 1));
     assert_eq!(samples(&packets).len(), 125_000);
     assert_eq!(failure(&packets), None);
@@ -949,8 +970,7 @@ fn a_block_of_the_most_points_passes_and_no_point_is_a_frame_with_none() {
 
 /// The eight fields at each bit, with what the format can catch. No sum, so a flipped
 /// bit in a point is a wrong point, as for C; the head is where a check can be.
-#[test]
-fn every_single_bit_flip_of_a_head_and_its_fields() {
+fn every_single_bit_flip_of_a_head_and_its_fields_body() {
     let points = ramp(500);
     let good_block = block_of(&points, 1);
     let good = samples(&capture_block(good_block.clone()).0);
@@ -982,8 +1002,7 @@ fn every_single_bit_flip_of_a_head_and_its_fields() {
 
 /// A byte lost anywhere leaves the block one short, or its head unreadable: never a
 /// reading. Here each of the head and fields, and points at each end of the record.
-#[test]
-fn every_lost_byte_of_a_head_and_some_points() {
+fn every_lost_byte_of_a_head_and_some_points_body() {
     let points = ramp(500);
     let good_block = block_of(&points, 1);
     let head = good_block.len() - points.len();
@@ -1003,8 +1022,7 @@ fn every_lost_byte_of_a_head_and_some_points() {
     assert_eq!(outcomes, head + 6);
 }
 
-#[test]
-fn a_block_of_another_channel_is_noted_and_kept() {
+fn a_block_of_another_channel_is_noted_and_kept_body() {
     let (mut d, _) = scope(|s| s.blocks = vec![block_of(&ramp(500), 2)]);
     d.enable_channel(1, false).unwrap();
     assert_eq!(samples(&capture(&mut d)).len(), 500, "as C");
@@ -1065,8 +1083,7 @@ fn a_close_joins_and_nothing_writes_after_it_body() {
     assert!(d.scpi.lock().unwrap().is_some(), "and it opens again");
 }
 
-#[test]
-fn a_full_queue_does_not_hold_a_stop_or_a_restart() {
+fn a_full_queue_does_not_hold_a_stop_or_a_restart_body() {
     let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
     d.set(&Key::LimitFrames, &Value::U64(0), None).unwrap();
     d.enable_channel(1, false).unwrap();
@@ -1076,7 +1093,7 @@ fn a_full_queue_does_not_hold_a_stop_or_a_restart() {
     // and the rate come ahead of the header.
     let wait = Instant::now() + BOUND;
     while seen.lock().unwrap().bytes_read < 10 {
-        assert!(Instant::now() < wait, "no block read");
+        assert!(Instant::now() < wait && !ended(&d), "no block read");
         std::thread::sleep(Duration::from_millis(1));
     }
     std::thread::sleep(Duration::from_millis(20));
@@ -1131,8 +1148,7 @@ fn nobody_listening_ends_it_quietly_body() {
     assert!(sent(&seen).len() < 100);
 }
 
-#[test]
-fn a_failed_write_at_each_step_is_a_failed_capture() {
+fn a_failed_write_at_each_step_is_a_failed_capture_body() {
     for (from, count) in [(0, 0), (1, 1), (2, 2), (3, 3), (4, 4)] {
         let (mut d, seen) = scope(|s| {
             s.blocks = vec![block_of(&ramp(500), 1)];
@@ -1147,8 +1163,7 @@ fn a_failed_write_at_each_step_is_a_failed_capture() {
     }
 }
 
-#[test]
-fn a_failed_read_is_a_failed_capture_at_once() {
+fn a_failed_read_is_a_failed_capture_at_once_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.fail_reads_after = Some(50);
@@ -1160,8 +1175,7 @@ fn a_failed_read_is_a_failed_capture_at_once() {
     assert_eq!(failure(&packets).unwrap(), "device error: read failed");
 }
 
-#[test]
-fn a_scale_that_never_comes_is_a_failed_capture() {
+fn a_scale_that_never_comes_is_a_failed_capture_body() {
     let (mut d, _) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.scale = Vec::new();
@@ -1172,8 +1186,7 @@ fn a_scale_that_never_comes_is_a_failed_capture() {
     assert_eq!(failure(&packets).unwrap(), "device error: No answer to :CHAN1:SCAL?.");
 }
 
-#[test]
-fn a_scale_that_is_none_is_a_failed_capture_and_no_samples() {
+fn a_scale_that_is_none_is_a_failed_capture_and_no_samples_body() {
     for answer in ["abc\n", "0V\n", "1kV\n"] {
         let (mut d, _) = scope(|s| {
             s.blocks = vec![block_of(&ramp(500), 1)];
@@ -1190,8 +1203,7 @@ fn a_scale_that_is_none_is_a_failed_capture_and_no_samples() {
     }
 }
 
-#[test]
-fn a_real_rate_changes_nothing() {
+fn a_real_rate_changes_nothing_body() {
     // 1014 bytes at 38400 baud 8n1, about 0.26 s.
     let (mut d, _) = scope(|s| {
         s.byte_time = Some(Duration::from_micros(260));
@@ -1204,8 +1216,7 @@ fn a_real_rate_changes_nothing() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn a_burst_every_50_ms_changes_nothing() {
+fn a_burst_every_50_ms_changes_nothing_body() {
     let (mut d, _) = scope(|s| {
         s.burst = Some(Duration::from_millis(50));
         s.blocks = vec![block_of(&ramp(500), 1)];
@@ -1221,8 +1232,7 @@ fn a_burst_every_50_ms_changes_nothing() {
 /// Holds the line after the head and the rate, so what comes next is an empty read.
 const HEAD_AND_RATE: usize = 6 + 4;
 
-#[test]
-fn a_slow_client_is_no_silence() {
+fn a_slow_client_is_no_silence_body() {
     let (mut d, seen) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.hold_after = Some(HEAD_AND_RATE);
@@ -1233,10 +1243,10 @@ fn a_slow_client_is_no_silence() {
     let (tx, rx) = sync_channel(1);
     d.start(PacketSink::new(tx, 0)).unwrap();
     // The header fills the queue, and the frame's start waits on it, past the limit.
-    std::thread::sleep(Duration::from_millis(2500));
+    pause(Duration::from_millis(2500));
     assert!(matches!(rx.recv_timeout(BOUND).unwrap().1, Packet::Header { .. }));
     assert_eq!(rx.recv_timeout(BOUND).unwrap().1, Packet::FrameBegin);
-    std::thread::sleep(Duration::from_millis(100));
+    pause(Duration::from_millis(100));
     seen.lock().unwrap().hold_after = None;
     let packets = to_end(&rx);
     d.stop().unwrap();
@@ -1244,32 +1254,32 @@ fn a_slow_client_is_no_silence() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn a_slow_write_is_no_silence() {
+fn a_slow_write_is_no_silence_body() {
+    // The first channel's block and scale pass; the second's write takes longer than
+    // the limit, and the line is held until it is out.
+    let first = block_of(&ramp(500), 1).len() + VOLT.len();
     let (mut d, seen) = scope(|s| {
         s.write_delay = Duration::from_millis(2500);
-        s.blocks = vec![block_of(&ramp(500), 1)];
-        s.hold_after = Some(0);
+        s.blocks = vec![block_of(&ramp(500), 1), block_of(&ramp(500), 2)];
+        s.hold_after = Some(first);
     });
-    d.enable_channel(1, false).unwrap();
     // Longer than the test's last pause, at the shim's 12 times too.
     d.times.limit = Duration::from_secs(2);
     let rx = start(&mut d);
     let wait = Instant::now() + BOUND * 6;
-    while !sent(&seen).iter().any(|w| w.ends_with(":MEM?")) {
-        assert!(Instant::now() < wait, "no memory read");
+    while sent(&seen).iter().filter(|w| w.ends_with(":MEM?")).count() < 2 {
+        assert!(Instant::now() < wait && !ended(&d), "no second memory read");
         std::thread::sleep(Duration::from_millis(1));
     }
-    std::thread::sleep(Duration::from_millis(100));
+    pause(Duration::from_millis(100));
     seen.lock().unwrap().hold_after = None;
     let packets = to_end(&rx);
     d.stop().unwrap();
     assert_eq!(failure(&packets), None);
-    assert_eq!(samples(&packets).len(), 500);
+    assert_eq!(samples(&packets).len(), 1000);
 }
 
-#[test]
-fn a_scale_has_the_answers_wait_and_not_a_reads() {
+fn a_scale_has_the_answers_wait_and_not_a_reads_body() {
     let (mut d, seen) = scope(|s| {
         s.blocks = vec![block_of(&ramp(500), 1)];
         s.scale = Vec::new();
@@ -1279,11 +1289,11 @@ fn a_scale_has_the_answers_wait_and_not_a_reads() {
     let rx = start(&mut d);
     let wait = Instant::now() + BOUND;
     while !sent(&seen).iter().any(|w| w.ends_with(":SCAL?")) {
-        assert!(Instant::now() < wait, "no scale asked");
+        assert!(Instant::now() < wait && !ended(&d), "no scale asked");
         std::thread::sleep(Duration::from_millis(1));
     }
     // Far more than a read's 2 ms.
-    std::thread::sleep(Duration::from_millis(100));
+    pause(Duration::from_millis(100));
     queue(&mut seen.lock().unwrap(), VOLT.as_bytes());
     let packets = to_end(&rx);
     d.stop().unwrap();
@@ -1291,15 +1301,19 @@ fn a_scale_has_the_answers_wait_and_not_a_reads() {
     assert_eq!(samples(&packets).len(), 500);
 }
 
-#[test]
-fn the_instrument_is_back_before_the_end() {
-    let (mut d, _) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
+fn the_instrument_is_back_before_the_end_body() {
+    // The line is held until the test has the slot, or a quick capture ends first.
+    let (mut d, seen) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.hold_after = Some(0);
+    });
     d.enable_channel(1, false).unwrap();
     let rx = start(&mut d);
     // With the slot held, the End can't come, as the thread puts the instrument back
     // first. Taken after the start, which needs it.
     let slot = Arc::clone(&d.scpi);
     let guard = slot.lock().unwrap();
+    seen.lock().unwrap().hold_after = None;
     let wait = Instant::now() + BOUND;
     loop {
         assert!(Instant::now() < wait, "no frame end");
@@ -1336,7 +1350,10 @@ fn bounded(body: fn()) {
         body();
         let _ = done_tx.send(());
     });
-    assert!(done_rx.recv_timeout(BOUND * 2).is_ok() || test.is_finished(), "a test hung");
+    assert!(
+        done_rx.recv_timeout(BOUND * 4 + BOUND / 2).is_ok() || test.is_finished(),
+        "a test hung"
+    );
     test.join().unwrap();
 }
 
@@ -1350,6 +1367,43 @@ macro_rules! bounded_tests {
 }
 
 bounded_tests! {
+    a_stop_joins_the_thread: a_stop_joins_the_thread_body,
+    a_frame_goes_as_c_sends_it: a_frame_goes_as_c_sends_it_body,
+    a_limit_of_frames_counts_each_frame_and_arms_each: a_limit_of_frames_counts_each_frame_and_arms_each_body,
+    only_the_second_channel_is_read_when_the_first_is_off: only_the_second_channel_is_read_when_the_first_is_off_body,
+    the_rate_is_there_after_a_capture: the_rate_is_there_after_a_capture_body,
+    a_line_feed_in_the_points_is_a_point: a_line_feed_in_the_points_is_a_point_body,
+    a_line_feed_behind_the_block_is_no_scale: a_line_feed_behind_the_block_is_no_scale_body,
+    an_empty_answer_and_nothing_more_is_no_answer: an_empty_answer_and_nothing_more_is_no_answer_body,
+    a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop: a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop_body,
+    a_first_block_that_comes_late_says_so_and_is_a_block: a_first_block_that_comes_late_says_so_and_is_a_block_body,
+    after_a_sample_silence_has_its_limit: after_a_sample_silence_has_its_limit_body,
+    a_stall_inside_a_read_is_no_silence: a_stall_inside_a_read_is_no_silence_body,
+    silence_in_a_block_runs_from_its_last_byte: silence_in_a_block_runs_from_its_last_byte_body,
+    silence_starts_again_at_a_blocks_start: silence_starts_again_at_a_blocks_start_body,
+    old_firmware_warns_and_still_asks: old_firmware_warns_and_still_asks_body,
+    other_warnings_are_said: other_warnings_are_said_body,
+    a_scale_off_the_steps_warns_once_and_is_used: a_scale_off_the_steps_warns_once_and_is_used_body,
+    every_flip_and_lost_byte_of_a_scale: every_flip_and_lost_byte_of_a_scale_body,
+    a_block_cut_short_fails_with_its_frame_closed: a_block_cut_short_fails_with_its_frame_closed_body,
+    a_late_block_is_a_block: a_late_block_is_a_block_body,
+    junk_ahead_of_a_block_is_passed_over_and_a_flood_is_not: junk_ahead_of_a_block_is_passed_over_and_a_flood_is_not_body,
+    a_bad_head_fails_as_c_says_or_says_why: a_bad_head_fails_as_c_says_or_says_why_body,
+    a_block_of_the_most_points_passes_and_no_point_is_a_frame_with_none: a_block_of_the_most_points_passes_and_no_point_is_a_frame_with_none_body,
+    every_single_bit_flip_of_a_head_and_its_fields: every_single_bit_flip_of_a_head_and_its_fields_body,
+    every_lost_byte_of_a_head_and_some_points: every_lost_byte_of_a_head_and_some_points_body,
+    a_block_of_another_channel_is_noted_and_kept: a_block_of_another_channel_is_noted_and_kept_body,
+    a_full_queue_does_not_hold_a_stop_or_a_restart: a_full_queue_does_not_hold_a_stop_or_a_restart_body,
+    a_failed_write_at_each_step_is_a_failed_capture: a_failed_write_at_each_step_is_a_failed_capture_body,
+    a_failed_read_is_a_failed_capture_at_once: a_failed_read_is_a_failed_capture_at_once_body,
+    a_scale_that_never_comes_is_a_failed_capture: a_scale_that_never_comes_is_a_failed_capture_body,
+    a_scale_that_is_none_is_a_failed_capture_and_no_samples: a_scale_that_is_none_is_a_failed_capture_and_no_samples_body,
+    a_real_rate_changes_nothing: a_real_rate_changes_nothing_body,
+    a_burst_every_50_ms_changes_nothing: a_burst_every_50_ms_changes_nothing_body,
+    a_slow_client_is_no_silence: a_slow_client_is_no_silence_body,
+    a_slow_write_is_no_silence: a_slow_write_is_no_silence_body,
+    a_scale_has_the_answers_wait_and_not_a_reads: a_scale_has_the_answers_wait_and_not_a_reads_body,
+    the_instrument_is_back_before_the_end: the_instrument_is_back_before_the_end_body,
     a_limit_of_zero_goes_on_until_stopped: a_limit_of_zero_goes_on_until_stopped_body,
     a_stop_in_a_block_ends_it_with_the_frame_closed_and_the_next_capture_drains_it: a_stop_in_a_block_ends_it_with_the_frame_closed_and_the_next_capture_drains_it_body,
     a_stop_before_any_block_ends_it_with_no_header: a_stop_before_any_block_ends_it_with_no_header_body,

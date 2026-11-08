@@ -219,6 +219,8 @@ struct Shared {
 }
 
 impl Shared {
+    /// Logs a warning, and keeps it for the tests.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn warn(&self, words: &str) {
         log::warn!("{words}");
         #[cfg(test)]
