@@ -466,7 +466,7 @@ fn a_setpoint_the_load_would_refuse_is_refused_before_anything_goes() {
     let w = wire();
     let mut d = device(&w, FAR);
     let g = Some("1");
-    for (key, value, why) in [
+    for (key, number, why) in [
         (
             Key::CurrentLimit,
             50.0,
@@ -508,10 +508,10 @@ fn a_setpoint_the_load_would_refuse_is_refused_before_anything_goes() {
             "current_limit 1.23456 has more than three places, and would go out as 1.235",
         ),
     ] {
-        let v = Value::F64(value);
-        let e = d.check_set(&key, &v, g).unwrap_err().to_string();
-        assert!(e.ends_with(why), "{e}");
-        assert!(d.set(&key, &v, g).is_err());
+        let value = Value::F64(number);
+        let error = d.check_set(&key, &value, g).unwrap_err().to_string();
+        assert!(error.ends_with(why), "{error}");
+        assert!(d.set(&key, &value, g).is_err());
     }
     assert_eq!(lines(&w), Vec::<String>::new());
     for (key, value) in

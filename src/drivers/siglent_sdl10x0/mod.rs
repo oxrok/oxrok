@@ -208,13 +208,22 @@ struct Link {
     /// A capture's last answer as it came: the same text to the next question is a
     /// copy, and every answer after it would be the one before's.
     last: Option<String>,
-    /// A copy made the last resync since the last frame: the same again is no copy
-    /// but a load whose readings are alike.
-    copied: bool,
-    /// The two readings came out the same, twice over a resync: no copy check.
-    alike: bool,
+    /// How a copy of an answer is looked for.
+    copies: Copies,
     /// The slowest answer a capture had, which a quiet line must outlast.
     slowest: Duration,
+}
+
+/// How a capture looks for a copy of an answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Copies {
+    /// The same text twice in a row resyncs.
+    Look,
+    /// A copy made the last resync since the last frame: the same again is no copy
+    /// but a load whose two readings are alike.
+    Resynced,
+    /// The readings came out alike over a resync: no more looking.
+    Off,
 }
 
 /// The longest answer taken: a reading is ten characters or so.
@@ -403,8 +412,7 @@ impl Sdl10x0Device {
                     capturing: false,
                     rest: Vec::new(),
                     last: None,
-                    copied: false,
-                    alike: false,
+                    copies: Copies::Look,
                     slowest: Duration::ZERO,
                 })),
                 clients: Arc::new(AtomicUsize::new(0)),
@@ -740,8 +748,7 @@ impl Capture {
         {
             let mut link = self.shared.lock();
             link.last = None;
-            link.copied = false;
-            link.alike = false;
+            link.copies = Copies::Look;
         }
         loop {
             let volts = match self.ask(ASK_VOLTAGE, &mut watch, started, stop)? {
@@ -758,7 +765,11 @@ impl Capture {
                 Asked::Again => continue,
                 Asked::Over => return Ok(()),
             };
-            self.shared.lock().copied = false;
+            let mut link = self.shared.lock();
+            if link.copies == Copies::Resynced {
+                link.copies = Copies::Look;
+            }
+            drop(link);
             for packet in frame(volts, amps) {
                 if !sink.send_while(packet, go_on) {
                     return Ok(());
@@ -909,15 +920,17 @@ impl Capture {
                 log::warn!("{line}");
             }
             let reading = protocol::reading(&text);
-            let mut copy = !link.alike
+            let mut copy = link.copies != Copies::Off
                 && link.last.as_deref() == Some(text.as_str())
                 && reading.is_some_and(|v| v != 0.0);
-            if copy && link.copied {
+            if copy && link.copies == Copies::Resynced {
                 // The same over a clean line: what the load reads, alike.
-                link.alike = true;
+                link.copies = Copies::Off;
                 copy = false;
             }
-            link.copied |= copy;
+            if copy {
+                link.copies = Copies::Resynced;
+            }
             if let (Some(value), false) = (reading, copy) {
                 link.slowest = link.slowest.max(asked_at.elapsed().min(SLOWEST));
                 link.last = Some(text);

@@ -519,15 +519,15 @@ mod tests {
     }
 
     /// The first transfer of an answer to the request with `tag`, `whole` long.
-    fn answer_of(tag: u8, whole: usize, text: &[u8]) -> Option<Vec<u8>> {
+    fn answer_of(tag: u8, whole: usize, text: &[u8]) -> Vec<u8> {
         let mut data = vec![DEV_DEP_MSG_IN, tag, !tag, 0];
         data.extend((whole as u32).to_le_bytes());
         data.extend([EOM, 0, 0, 0]);
         data.extend_from_slice(text);
-        Some(data)
+        data
     }
 
-    fn answer(tag: u8, text: &[u8]) -> Option<Vec<u8>> {
+    fn answer(tag: u8, text: &[u8]) -> Vec<u8> {
         answer_of(tag, text.len(), text)
     }
 
@@ -569,7 +569,7 @@ mod tests {
         let (mut tmc, seen) = open(0x1ab1);
         tmc.send(b"Q?\n").unwrap();
         assert!(matches!(tmc.read_begin(), Err(Error::Timeout)));
-        seen.lock().unwrap().ins.push_back(answer(3, b"1\n"));
+        seen.lock().unwrap().ins.push_back(Some(answer(3, b"1\n")));
         tmc.read_begin().unwrap();
         assert_eq!(ops(&seen), ["message 1", "request 2", "request 3"]);
     }
@@ -582,7 +582,7 @@ mod tests {
         tmc.send(b"Q?\n").unwrap();
         assert!(matches!(tmc.read_begin(), Err(Error::Timeout)));
         assert!(matches!(tmc.read_begin(), Err(Error::Timeout)));
-        seen.lock().unwrap().ins.push_back(answer(2, b"1\n"));
+        seen.lock().unwrap().ins.push_back(Some(answer(2, b"1\n")));
         tmc.read_begin().unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(tmc.read_data(&mut buf, TIMEOUT).unwrap(), 2);
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(ops(&seen), ["message 1", "request 2"]);
         // A new question makes its own request.
         tmc.send(b"Q?\n").unwrap();
-        seen.lock().unwrap().ins.push_back(answer(4, b"2\n"));
+        seen.lock().unwrap().ins.push_back(Some(answer(4, b"2\n")));
         tmc.read_begin().unwrap();
         assert_eq!(ops(&seen), ["message 3", "request 4"]);
     }
@@ -601,7 +601,7 @@ mod tests {
         let (mut tmc, seen) = open(0x1ab1);
         tmc.wait_out_requests(true);
         tmc.send(b"Q?\n").unwrap();
-        seen.lock().unwrap().ins.push_back(answer_of(2, 5, b"12"));
+        seen.lock().unwrap().ins.push_back(Some(answer_of(2, 5, b"12")));
         tmc.read_begin().unwrap();
         let mut buf = [0u8; 16];
         assert_eq!(tmc.read_data(&mut buf, TIMEOUT).unwrap(), 2);
