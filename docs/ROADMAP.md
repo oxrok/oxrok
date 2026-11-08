@@ -83,9 +83,8 @@ are the fallbacks. Prologix adapters over serial are an oxrok extra.
 - A stable release. Every published version so far is a pre-release, so
   `cargo install oxrok` needs an explicit `--version`.
 
-Static binaries, the release archives, `make dist`, notices,
-`cargo publish` and codesigning the macOS CLI (`make sign-cli`)
-already work.
+Static binaries, the release archives, `make dist`, notices and
+`cargo publish` already work.
 
 ## Pico backend
 

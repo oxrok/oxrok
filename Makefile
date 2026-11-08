@@ -135,6 +135,10 @@ notices-all:
 dist: notices build $(if $(FEATURES),decoders)
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)
+	# Sign the built binary before it is staged, so the archive carries the
+	# signature (dist's build can overwrite a prior sign-cli signature).
+	# macOS only; skipped when SIGN_IDENTITY is empty.
+	@if command -v codesign >/dev/null 2>&1 && [ -n "$(SIGN_IDENTITY)" ]; then codesign --force --sign "$(SIGN_IDENTITY)" $(BIN); fi
 	cp $(BIN) README.md LICENSE NOTICE CHANGELOG.md $(STAGE)/
 	cp $(NOTICES) $(STAGE)/$(NOTICES_NAME)
 ifneq (,$(FEATURES))
