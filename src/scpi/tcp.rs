@@ -281,6 +281,31 @@ impl ScpiTransport for Tcp {
         Ok(())
     }
 
+    fn take_pending(&mut self) -> Vec<u8> {
+        if self.rigol {
+            return Vec::new();
+        }
+        self.after_block = false;
+        std::mem::take(&mut self.pending)
+    }
+
+    fn take_line_end(&mut self) -> Option<bool> {
+        if self.rigol {
+            return None;
+        }
+        if !self.after_block {
+            return Some(false);
+        }
+        let end = match self.pending.as_slice() {
+            [b'\r', b'\n', ..] => 2,
+            [b'\n', ..] => 1,
+            _ => return Some(false),
+        };
+        self.pending.drain(..end);
+        self.after_block = false;
+        Some(true)
+    }
+
     fn discard(&mut self, timeout: Duration) -> Result<Option<usize>> {
         let held = std::mem::take(&mut self.pending).len();
         if held > 0 {
@@ -487,6 +512,25 @@ mod tests {
         let mut one = [0u8; 1];
         assert_eq!(tcp.read_data(&mut one, BOUND).unwrap(), 1);
         assert_eq!(&one, b"\n");
+        assert_eq!(answer(&mut tcp, BOUND), b"OK\n");
+    }
+
+    /// What came past an answer's end, as it came, for a driver with framing of its
+    /// own; and a block's line end, asked for.
+    #[test]
+    fn what_came_past_an_end_and_a_block_s_line_end() {
+        let (mut tcp, _listener, mut peer) = pair(false);
+        peer.write_all(b"1\n2\n").unwrap();
+        assert_eq!(answer(&mut tcp, BOUND), b"1\n");
+        assert_eq!(tcp.take_pending(), b"2\n");
+        assert_eq!(tcp.take_pending(), b"");
+        peer.write_all(b"#12ab\nOK\n").unwrap();
+        assert_eq!(answer(&mut tcp, BOUND), b"#12ab");
+        assert_eq!(tcp.take_line_end(), Some(true));
+        assert_eq!(answer(&mut tcp, BOUND), b"OK\n");
+        peer.write_all(b"#12abOK\n").unwrap();
+        assert_eq!(answer(&mut tcp, BOUND), b"#12ab");
+        assert_eq!(tcp.take_line_end(), Some(false), "no line end");
         assert_eq!(answer(&mut tcp, BOUND), b"OK\n");
     }
 
