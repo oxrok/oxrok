@@ -102,7 +102,10 @@ fn capture(
 
 // Rates above 1 MHz load the vendor FPGA image, which the user extracts
 // from the LogicPort software; the recording holds the bytes the device
-// saw, so the test needs the same file to reproduce them.
+// saw, so the test needs the same file to reproduce them, and skips in CI.
+// The upload's digests can't be checked without the file either. What the
+// session shows without it (pins, stale bytes, init counter, capture) is
+// held by the emulator model's `the_reconfiguring_recording_byte_for_byte`.
 #[test]
 fn ten_megahertz_capture_with_fpga_configuration() {
     if ["intronix-logicport.ccf", "intronix-logicport-timing-sdr.rbf"]
@@ -146,10 +149,10 @@ fn compressed_capture_expands_count_records() {
     assert_eq!(at, Some(250));
 }
 
-/// A close joins the capture thread, which must not stay on a full queue
-/// nobody reads.
-#[test]
-fn a_close_does_not_wait_for_a_reader() {
+/// Starts the compressed recording's capture into a queue of `room`
+/// packets, reads `read` of them and no more, then closes: a close joins the
+/// capture thread, which must not stay on a full queue nobody reads.
+fn close_with_a_reader_gone(room: usize, read: usize) {
     let replay = Replay::from_text(include_str!("fixtures/logicport/capture-1m-rle.txt")).unwrap();
     let mut dev = LogicPortDevice::from_transport(Box::new(replay));
     dev.open().unwrap();
@@ -159,18 +162,17 @@ fn a_close_does_not_wait_for_a_reader() {
     for pos in 0..dev.channels().len() {
         dev.enable_channel(pos, pos == 32).unwrap();
     }
-    dev.set(&Key::LimitSamples, &Value::U64(500), None).unwrap();
+    // No limit: all of the memory's 5100 or so samples, two chunks of 4096.
+    dev.set(&Key::LimitSamples, &Value::U64(0), None).unwrap();
     let mut trigger = Trigger::new();
     trigger.add(0, 32, TriggerMatch::Rising);
     dev.set_trigger(Some(trigger)).unwrap();
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    let (tx, rx) = std::sync::mpsc::sync_channel(room);
     dev.start(oxrok::core::PacketSink::new(tx, 0)).unwrap();
-    // The queue is full once the thread has sent something.
-    let t0 = std::time::Instant::now();
-    while rx.try_recv().is_err() && t0.elapsed() < std::time::Duration::from_secs(20) {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+    for _ in 0..read {
+        rx.recv_timeout(std::time::Duration::from_secs(20)).expect("a packet");
     }
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(300));
     let (done, ended) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         dev.close().unwrap();
@@ -178,6 +180,19 @@ fn a_close_does_not_wait_for_a_reader() {
     });
     assert!(ended.recv_timeout(std::time::Duration::from_secs(20)).is_ok(), "the close hangs");
     drop(rx);
+}
+
+/// The header is the first send, and with no room it waits.
+#[test]
+fn a_close_does_not_wait_on_the_header() {
+    close_with_a_reader_gone(0, 0);
+}
+
+/// The header read, the first chunk of samples fills the queue and the
+/// second waits.
+#[test]
+fn a_close_does_not_wait_on_the_samples() {
+    close_with_a_reader_gone(1, 1);
 }
 
 #[test]

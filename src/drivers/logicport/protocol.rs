@@ -550,8 +550,10 @@ pub struct Link {
     pub threshold_cal: i32,
     /// Last DAC value written.
     threshold_dac: Option<u16>,
-    /// The last configuration ended on the image check: the FPGA holds
-    /// another image or none, which a resync does not change.
+    /// The last configuration failed past the upload: the image check
+    /// found another image, or the FPGA's init never finished. Neither is a
+    /// link fault, so the acquisition does not resync and try again, and an
+    /// image whose init was not seen to finish is not taken as loaded.
     pub image_refused: bool,
 }
 
@@ -904,6 +906,7 @@ impl Link {
         }
         let stream = firmware::load_image(image)?;
         log::info!("Configuring FPGA with image '{}'.", image.name());
+        self.image_refused = false;
         self.threshold_dac = None;
         let mut result = Err(Error::device("FPGA configuration failed"));
         let mut step = "none";
@@ -965,7 +968,11 @@ impl Link {
         }
         if result.is_err() {
             log::error!("Failed to configure the FPGA.");
-            self.image_refused = step == "image check";
+            self.image_refused = step == "image check" || step == "init";
+            if step == "init" {
+                // Its init never finished: not a loaded image.
+                self.fpga_image = None;
+            }
         }
         result
     }
@@ -1111,6 +1118,10 @@ pub fn parse_calibration(buf: &[u8]) -> Option<i32> {
     if buf.get(pos..pos + 4) == Some(&PNP) {
         pos += 4;
     }
+    // C's bound: the last word (bytes 126-127) is the checksum.
+    if pos + 4 > buf.len().min(128) - 2 {
+        return None;
+    }
     let s = buf.get(pos..pos + 4)?;
     if !(s[0] == b'+' || s[0] == b'-') || !s[1..].iter().all(u8::is_ascii_digit) {
         return None;
@@ -1144,14 +1155,24 @@ mod tests {
     #[test]
     fn calibration_parsing() {
         let mut eeprom = vec![0u8; 128];
-        eeprom[0x12] = 0x80 | 0x66;
+        // As the real unit has it (tests/fixtures/ftdi/logicport-probe.txt).
+        eeprom[0x12] = 0x80 | 0x58;
         eeprom[0x13] = 0x12;
-        let pos = 0x66 + 0x12;
+        let pos = 0x58 + 0x12;
         eeprom[pos..pos + 4].copy_from_slice(&[0x02, 0x03, 0x01, 0x00]);
         eeprom[pos + 4..pos + 8].copy_from_slice(b"-004");
         assert_eq!(parse_calibration(&eeprom), Some(-4));
         eeprom[pos + 4] = b'x';
         assert_eq!(parse_calibration(&eeprom), None);
+        // A string reaching into the checksum word is not one, as in C.
+        let mut eeprom = vec![0u8; 128];
+        eeprom[0x12] = 0x80 | 0x70;
+        eeprom[0x13] = 0x0b;
+        eeprom[0x7b..0x7f].copy_from_slice(b"-004");
+        assert_eq!(parse_calibration(&eeprom), None);
+        eeprom[0x13] = 0x0a;
+        eeprom[0x7a..0x7e].copy_from_slice(b"-004");
+        assert_eq!(parse_calibration(&eeprom), Some(-4));
     }
 
     #[test]
