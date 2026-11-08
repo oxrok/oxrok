@@ -75,11 +75,16 @@ impl Line {
             return Some(vec![Piece::Bytes(waveform(channel, self.depth))]);
         }
         if let Some(rest) = c.strip_suffix(":WF? DAT2") {
+            if let Some(n) = rest.strip_prefix('C') {
+                let channel: u8 = n.parse().unwrap_or(1);
+                return Some(vec![Piece::Bytes(dat2(&codes(channel, self.depth)))]);
+            }
             let channel: usize = rest.trim_start_matches('D').parse().unwrap_or(0);
             return Some(vec![Piece::Bytes(digital(channel, self.depth))]);
         }
         let t = match c {
             "DI:SW?" => "OFF",
+            "TRMD?" => "STOP",
             ":TDIV?" => "5.00E-04",
             "TRSE?" => "EDGE,SR,C1,HT,OFF",
             ":INR?" => {
@@ -134,6 +139,14 @@ fn waveform_of(samples: &[u8], array: usize) -> Vec<u8> {
     out
 }
 
+/// `Cn:WF? DAT2`: the codes alone (p.264-265).
+fn dat2(samples: &[u8]) -> Vec<u8> {
+    let mut out = format!("DAT2,#9{:09}", samples.len()).into_bytes();
+    out.extend_from_slice(samples);
+    out.extend_from_slice(b"\n\n");
+    out
+}
+
 fn waveform(channel: u8, n: usize) -> Vec<u8> {
     waveform_of(&codes(channel, n), n)
 }
@@ -147,7 +160,8 @@ fn digital(channel: usize, depth: usize) -> Vec<u8> {
             })
         })
         .collect();
-    let mut out = format!("DAT2,#9{:09}", bytes.len()).into_bytes();
+    // Points, a bit each (p.268).
+    let mut out = format!("DAT2,#9{depth:09}").into_bytes();
     out.extend_from_slice(&bytes);
     out.extend_from_slice(b"\n\n");
     out
@@ -394,7 +408,7 @@ fn a_silent_probe_asks_again_once_through_a_reopen() {
 
 #[test]
 fn an_open_reads_in_cs_order() {
-    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X", |_| {});
     d.close().unwrap();
     line.lock().unwrap().log = WriteLog::default();
     d.open().unwrap();
@@ -474,7 +488,7 @@ fn a_source_that_is_no_channel_has_no_level_to_ask_for() {
 
 #[test]
 fn a_frame_has_all_its_samples_with_one_request_a_channel() {
-    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X", |_| {});
     d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
     let (packets, d) = capture(d);
     let got = samples(&packets);
@@ -492,6 +506,8 @@ fn a_frame_has_all_its_samples_with_one_request_a_channel() {
     assert_eq!(
         line.lock().unwrap().sent(),
         [
+            "WFSU SP,0,TYPE,1",
+            "ACQW SAMPLING",
             "SANU? C1",
             ":TDIV?",
             "ARM",
@@ -566,7 +582,7 @@ fn a_non_spo_model_has_no_arm_and_waits_for_inr() {
 
 #[test]
 fn a_scope_armed_and_waiting_is_polled_until_it_says_so() {
-    let (d, line) = device("SDS1202X-E", |l| {
+    let (d, line) = device("SDS1202X", |l| {
         l.turns.insert(
             ":INR?".to_owned(),
             VecDeque::from([Some(text("8192")), Some(text("0")), Some(text("1"))]),
@@ -579,30 +595,166 @@ fn a_scope_armed_and_waiting_is_polled_until_it_says_so() {
     assert_eq!(sent.iter().filter(|c| *c == "ARM").count(), 1);
 }
 
+/// p.175: 0 is single mode with no signal, 8192 a trigger ready with no waveform yet;
+/// only bit 0 says one is there. C fails the start on anything but 8192 and 8193 after
+/// `ARM`, and in its wait takes any value but 0.
 #[test]
-fn a_scope_that_did_not_arm_fails_the_capture() {
-    for inr in ["0", "1", "8194"] {
-        let (d, line) = device("SDS1202X-E", |l| {
-            l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text(inr))]));
+fn only_bit_0_of_inr_is_a_waveform() {
+    for list in [["0", "1"], ["8192", "1"], ["8194", "8193"], ["2", "8193"]] {
+        let (d, line) = device("SDS1202X", |l| {
+            let turns = [Some(text(list[0])), Some(text("8192")), Some(text(list[1]))];
+            l.turns.insert(":INR?".to_owned(), VecDeque::from(turns));
         });
         let (packets, _d) = capture(d);
-        let why = failure(&packets).expect("a failure");
-        assert!(why.contains("Device did not enter ARM mode"), "{why}");
-        assert_eq!(samples(&packets).len(), 0);
-        assert!(!line.lock().unwrap().sent().iter().any(|c| c.contains("WF?")));
+        assert_eq!(failure(&packets), None, "{list:?}");
+        assert_eq!(samples(&packets).len(), 1400, "{list:?}");
+        let sent = line.lock().unwrap().sent();
+        let at = sent.iter().position(|c| c.contains("WF?")).unwrap();
+        assert_eq!(sent[..at].iter().filter(|c| *c == ":INR?").count(), 3, "{list:?}");
     }
+}
+
+/// An E series on the screen as pull request 247 has it: a single shot, `TRMD?` until
+/// `STOP`, the settings read again, and `DAT2`.
+#[test]
+fn an_e_series_takes_a_single_shot_and_reads_dat2() {
+    let (d, line) = device("SDS1202X-E", |l| {
+        let polls = [Some(text("SINGLE")), Some(text("SINGLE")), Some(text("STOP"))];
+        l.turns.insert("TRMD?".to_owned(), VecDeque::from(polls));
+    });
+    // The scale has moved on the front panel since the open.
+    line.lock()
+        .unwrap()
+        .turns
+        .insert("C1:VDIV?".to_owned(), VecDeque::from([Some(text("5.00E-01"))]));
+    let (packets, _d) = capture(d);
+    assert_eq!(failure(&packets), None);
+    let got = samples(&packets);
+    assert_eq!(got.len(), 1400);
+    assert_eq!(got[0], (0, protocol::volts(codes(1, 700)[0], 0.5, 0.0)), "read after the stop");
+    assert_eq!(got[700], (1, protocol::volts(codes(2, 700)[0], 1.0, 0.0)));
+    assert_eq!(
+        line.lock().unwrap().sent(),
+        [
+            "SANU? C1",
+            ":TDIV?",
+            "TRMD SINGLE",
+            "TRMD?",
+            "TRMD?",
+            "TRMD?",
+            "C1:VDIV?",
+            "C2:VDIV?",
+            "C1:OFST?",
+            "C2:OFST?",
+            "SANU? C1",
+            ":TDIV?",
+            "C1:WF? DAT2",
+            "C2:WF? DAT2",
+        ]
+    );
+}
+
+/// Only `STOP` ends the wait, as in pull request 247: `AUTO` or `NORM` is no shot done.
+#[test]
+fn a_single_shot_waits_for_stop_and_nothing_else() {
+    let (d, line) = device("SDS1202X-E", |l| {
+        let polls = [Some(text("AUTO")), Some(text("NORM")), Some(text("STOP"))];
+        l.turns.insert("TRMD?".to_owned(), VecDeque::from(polls));
+    });
+    let (packets, _d) = capture(d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(line.lock().unwrap().sent().iter().filter(|c| *c == "TRMD?").count(), 3);
+}
+
+/// Points that aren't a whole number of bytes: the last byte's spare bits are no samples.
+#[test]
+fn digital_points_need_not_fill_their_last_byte() {
+    let (mut d, _) = device("SDS1104X-E", |l| {
+        l.depth = 20;
+        l.turns.insert("DI:SW?".to_owned(), VecDeque::from([Some(text("ON"))]));
+    });
+    for pos in 0..d.channels.len() {
+        let name = d.channels[pos].name.clone();
+        d.enable_channel(pos, name == "D0").unwrap();
+    }
+    let (packets, _d) = capture(d);
+    assert_eq!(failure(&packets), None);
+    let logic: usize = packets
+        .iter()
+        .filter_map(|p| match p {
+            Packet::Logic(l) => Some(l.data.len()),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(logic, 40, "20 points of 2 bytes, from 3 bytes of bits");
+}
+
+#[test]
+fn an_e_series_shot_that_never_stops_ends_only_by_a_stop() {
+    let (mut d, line) = device("SDS1202X-E", |l| {
+        l.turns.insert(
+            "TRMD?".to_owned(),
+            std::iter::repeat_n(Some(text("SINGLE")), 100_000).collect(),
+        );
+    });
+    d.timing.first = Duration::from_millis(5);
+    let line2 = Arc::clone(&line);
+    bounded(move || {
+        let (tx, rx) = sync_channel(64);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        while line2.lock().unwrap().sent().iter().filter(|c| *c == "TRMD?").count() < 20 {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        d.stop().unwrap();
+        let packets: Vec<_> = rx.try_iter().map(|(_, p)| p).collect();
+        assert_eq!(failure(&packets), None, "SINGLE is an answer, not silence");
+        assert!(matches!(packets.last(), Some(Packet::End)));
+    });
+}
+
+#[test]
+fn an_e_series_shot_takes_each_frame_again() {
+    let (mut d, line) = device("SDS1202X-E", |_| {});
+    only(&mut d, 0);
+    d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+    let (packets, _d) = capture(d);
+    assert_eq!(count(&packets, |p| matches!(p, Packet::FrameEnd)), 2);
+    let sent = line.lock().unwrap().sent();
+    assert_eq!(sent.iter().filter(|c| *c == "TRMD SINGLE").count(), 2);
+    assert!(!sent.iter().any(|c| c == "ARM" || c.ends_with("WF? ALL")));
+}
+
+/// A head shorter than the first read leaves samples in it: here a bare `#9` with no
+/// `DAT2,`, as no scope is shown to send but the parser takes.
+#[test]
+fn a_dat2_block_cut_anywhere_comes_whole() {
+    let block = dat2(&codes(1, 50));
+    let mut pieces = Vec::new();
+    for b in block {
+        pieces.push(Piece::Bytes(vec![b]));
+    }
+    let short = vec![Piece::Bytes(dat2(&codes(2, 3))[5..].to_vec())];
+    let (d, _) = device("SDS1202X-E", move |l| {
+        l.turns.insert("C1:WF? DAT2".to_owned(), VecDeque::from([Some(pieces)]));
+        l.turns.insert("C2:WF? DAT2".to_owned(), VecDeque::from([Some(short)]));
+    });
+    let (packets, _d) = capture(d);
+    assert_eq!(failure(&packets), None);
+    let got: Vec<(usize, f32)> = samples(&packets);
+    assert_eq!(got.len(), 53);
+    assert_eq!(got[50], (1, protocol::volts(codes(2, 3)[0], 1.0, 0.0)), "read with the head");
 }
 
 #[test]
 fn an_inr_that_is_no_number_is_no_trigger() {
-    let (d, _) = device("SDS1202X-E", |l| {
+    let (d, _) = device("SDS1202X", |l| {
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("7.00E+05"))]));
     });
     let (packets, _d) = capture(d);
     let why = failure(&packets).expect("a failure, where C reads what its stack held");
     assert!(why.contains("No usable :INR? answer: '7.00E+05'"), "{why}");
     // In the wait as well.
-    let (d, _) = device("SDS1202X-E", |l| {
+    let (d, _) = device("SDS1202X", |l| {
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("8192")), Some(text("OFF"))]));
     });
     let (packets, _d) = capture(d);
@@ -611,7 +763,7 @@ fn an_inr_that_is_no_number_is_no_trigger() {
 
 #[test]
 fn a_trigger_that_never_comes_ends_only_by_a_stop() {
-    let (d, line) = device("SDS1202X-E", |l| {
+    let (d, line) = device("SDS1202X", |l| {
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("8192"))]));
         l.no_trigger = true;
     });
@@ -640,7 +792,7 @@ fn a_trigger_that_never_comes_ends_only_by_a_stop() {
 
 #[test]
 fn a_silent_scope_with_no_sample_fails_at_the_bound() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([None]));
     });
     d.timing.first = Duration::from_millis(40);
@@ -654,7 +806,7 @@ fn a_silent_scope_with_no_sample_fails_at_the_bound() {
 
 #[test]
 fn a_silent_inr_fails_with_its_name() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert(":INR?".to_owned(), std::iter::repeat_n(None, 1000).collect());
     });
     d.timing.first = Duration::from_millis(40);
@@ -667,7 +819,7 @@ fn a_silent_inr_fails_with_its_name() {
 /// would lose the 8193 that was on its way.
 #[test]
 fn a_late_inr_is_waited_for_and_not_asked_again() {
-    let (d, line) = device("SDS1202X-E", |l| {
+    let (d, line) = device("SDS1202X", |l| {
         let late = vec![Piece::Gap(20), Piece::Bytes(b"8193\n".to_vec())];
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(late)]));
     });
@@ -680,7 +832,7 @@ fn a_late_inr_is_waited_for_and_not_asked_again() {
 
 #[test]
 fn a_late_answer_within_the_bound_makes_the_frame() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.depth = 400;
         let mut late = vec![Piece::Gap(5)];
         late.push(Piece::Bytes(waveform(1, 400)));
@@ -697,7 +849,7 @@ fn a_late_answer_within_the_bound_makes_the_frame() {
 fn after_a_sample_silence_warns_and_goes_on_to_the_long_limit() {
     // The first bound is far under what the gap takes: only the long limit ends it.
     let gap = Piece::Gap(u32::MAX);
-    let (mut d, _) = device("SDS1202X-E", move |l| {
+    let (mut d, _) = device("SDS1202X", move |l| {
         l.depth = 400;
         let mut block = waveform(1, 400);
         block.truncate(15 + 346 + 100);
@@ -719,7 +871,7 @@ fn after_a_sample_silence_warns_and_goes_on_to_the_long_limit() {
 
 #[test]
 fn a_block_cut_at_a_messages_end_fails_with_what_came() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.usb = true;
         let mut block = waveform(1, 400);
         block.truncate(15 + 346 + 39);
@@ -735,7 +887,7 @@ fn a_block_cut_at_a_messages_end_fails_with_what_came() {
 
 #[test]
 fn bytes_that_are_no_block_fail_at_once() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([Some(text("7.00E+05"))]));
     });
     // Over any test's time if it took this for silence.
@@ -746,7 +898,7 @@ fn bytes_that_are_no_block_fail_at_once() {
 
 #[test]
 fn a_descriptor_that_doesnt_fit_fails_and_a_length_that_lies_costs_samples() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert(
             "C1:WF? ALL".to_owned(),
             VecDeque::from([Some(vec![Piece::Bytes(waveform_of(&codes(1, 100), 5000))])]),
@@ -757,7 +909,7 @@ fn a_descriptor_that_doesnt_fit_fails_and_a_length_that_lies_costs_samples() {
     assert_eq!(failure(&packets), None);
     assert_eq!(samples(&packets).len(), 100, "no more than the block holds");
 
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert(
             "C1:WF? ALL".to_owned(),
             VecDeque::from([Some(vec![Piece::Bytes(waveform_of(&codes(1, 100), 60))])]),
@@ -770,7 +922,7 @@ fn a_descriptor_that_doesnt_fit_fails_and_a_length_that_lies_costs_samples() {
 
     let mut bad = waveform(1, 100);
     bad[15 + 36..15 + 40].copy_from_slice(&5000u32.to_le_bytes());
-    let (mut d, _) = device("SDS1202X-E", move |l| {
+    let (mut d, _) = device("SDS1202X", move |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([Some(vec![Piece::Bytes(bad)])]));
     });
     only(&mut d, 0);
@@ -788,7 +940,7 @@ fn a_block_at_a_slow_pace_comes_whole() {
         pieces.push(Piece::Bytes(vec![b]));
         pieces.push(Piece::Gap(1));
     }
-    let (mut d, _) = device("SDS1202X-E", move |l| {
+    let (mut d, _) = device("SDS1202X", move |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([Some(pieces)]));
     });
     only(&mut d, 0);
@@ -808,7 +960,7 @@ fn a_prefix_of_any_length_takes_no_samples_with_it() {
     block.extend(desc);
     block.extend(codes(1, 344));
     // The first read of 15 runs past a head of 5.
-    let (mut d, _) = device("SDS1202X-E", move |l| {
+    let (mut d, _) = device("SDS1202X", move |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([Some(vec![Piece::Bytes(block)])]));
     });
     only(&mut d, 0);
@@ -820,7 +972,7 @@ fn a_prefix_of_any_length_takes_no_samples_with_it() {
 
 #[test]
 fn a_scale_and_an_offset_are_the_scopes() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.turns.insert("C2:VDIV?".to_owned(), VecDeque::from([Some(text("5.00E-01"))]));
         l.turns.insert("C2:OFST?".to_owned(), VecDeque::from([Some(text("2.50E-01"))]));
     });
@@ -938,17 +1090,17 @@ fn the_analyzer_goes_off_once_when_nothing_uses_it() {
     only(&mut d, 0);
     let (_, mut d) = capture(d);
     let sent = line.lock().unwrap().sent();
-    assert!(sent.contains(&"DGST OFF".to_owned()));
+    assert!(sent.contains(&"DI:SW OFF".to_owned()));
     assert!(!sent.contains(&"SANU? D0".to_owned()), "it isn't on now");
     line.lock().unwrap().log = WriteLog::default();
     only(&mut d, 0);
     let (_, _d) = capture(d);
-    assert!(!line.lock().unwrap().sent().contains(&"DGST OFF".to_owned()), "C says it each time");
+    assert!(!line.lock().unwrap().sent().contains(&"DI:SW OFF".to_owned()), "C says it each time");
 }
 
 #[test]
 fn what_is_on_stays_known_from_one_capture_to_the_next() {
-    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X", |_| {});
     only(&mut d, 1);
     let (_, mut d) = capture(d);
     assert!(line.lock().unwrap().sent().contains(&"C1:TRA OFF".to_owned()));
@@ -999,7 +1151,7 @@ fn an_fpar_too_short_to_count_fails() {
 
 #[test]
 fn a_write_that_fails_ends_the_capture() {
-    let (d, _) = device("SDS1202X-E", |l| l.refuse = Some("ARM".to_owned()));
+    let (d, _) = device("SDS1202X", |l| l.refuse = Some("ARM".to_owned()));
     let (packets, _d) = capture(d);
     assert!(failure(&packets).expect("a failure").contains("the fake refuses this write"));
     assert!(matches!(packets.last(), Some(Packet::End)));
@@ -1007,7 +1159,7 @@ fn a_write_that_fails_ends_the_capture() {
 
 #[test]
 fn a_failed_read_of_the_depth_leaves_the_capture_going() {
-    let (d, _) = device("SDS1202X-E", |l| {
+    let (d, _) = device("SDS1202X", |l| {
         l.turns.insert("SANU? C1".to_owned(), VecDeque::from([Some(text("junk"))]));
     });
     let (packets, _d) = capture(d);
@@ -1020,7 +1172,7 @@ fn a_stop_in_a_block_ends_it_and_nothing_is_sent_after_a_close() {
     let block = waveform(1, 400);
     let (head, _) = block.split_at(15 + 346 + 50);
     let pieces = vec![Piece::Bytes(head.to_vec()), Piece::Gap(u32::MAX)];
-    let (mut d, line) = device("SDS1202X-E", move |l| {
+    let (mut d, line) = device("SDS1202X", move |l| {
         l.turns.insert("C1:WF? ALL".to_owned(), VecDeque::from([Some(pieces)]));
     });
     only(&mut d, 0);
@@ -1045,7 +1197,7 @@ fn a_stop_in_a_block_ends_it_and_nothing_is_sent_after_a_close() {
 
 #[test]
 fn a_close_with_a_queue_no_one_reads_ends() {
-    let (mut d, _) = device("SDS1202X-E", |_| {});
+    let (mut d, _) = device("SDS1202X", |_| {});
     d.set(&Key::LimitFrames, &Value::U64(0), None).unwrap();
     bounded(move || {
         let (tx, rx) = sync_channel(1);
@@ -1075,7 +1227,7 @@ impl<T> EmptyForTest for std::sync::mpsc::Receiver<T> {
 
 #[test]
 fn a_join_at_a_close_takes_the_thread_with_it() {
-    let (mut d, line) = device("SDS1202X-E", |l| {
+    let (mut d, line) = device("SDS1202X", |l| {
         l.no_trigger = true;
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("8192"))]));
     });
@@ -1095,7 +1247,7 @@ fn a_join_at_a_close_takes_the_thread_with_it() {
 
 #[test]
 fn a_start_with_nothing_enabled_is_refused_and_sends_nothing() {
-    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X", |_| {});
     for pos in 0..2 {
         d.enable_channel(pos, false).unwrap();
     }
@@ -1107,7 +1259,7 @@ fn a_start_with_nothing_enabled_is_refused_and_sends_nothing() {
 
 #[test]
 fn a_start_on_a_running_capture_is_busy() {
-    let (mut d, _) = device("SDS1202X-E", |l| {
+    let (mut d, _) = device("SDS1202X", |l| {
         l.no_trigger = true;
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("8192"))]));
     });
@@ -1138,7 +1290,7 @@ fn settings_go_out_as_cs_do() {
         (Key::TriggerSlope, s("f"), None, "C1:TRSL NEG"),
         (Key::TriggerSlope, s("r"), None, "C1:TRSL POS"),
         (Key::TriggerLevel, Value::F64(0.5), None, ":TRIG:EDGE:LEV 0.500"),
-        (Key::HorizTriggerpos, Value::F64(0.25), None, ":TIM:OFFS 0.001750"),
+        (Key::HorizTriggerpos, Value::F64(0.25), None, ":TIM:OFFS 0.004125"),
         (Key::Vdiv, r(500, 1000), group, "C2:VDIV 500MV"),
         (Key::Vdiv, r(1, 1), group, "C2:VDIV 1V"),
         (Key::Vdiv, r(1, 2000), group, "C2:VDIV 500UV"),
@@ -1183,11 +1335,11 @@ fn a_slope_follows_the_source_in_the_scopes_word() {
 }
 
 #[test]
-fn a_position_is_of_the_divisions_where_cs_is_of_its_timebases() {
+fn a_position_is_cs_of_the_timebases() {
     let (mut d, line) = device("SDS1052DL+", |_| {});
     d.set(&Key::HorizTriggerpos, &Value::F64(0.75), None).unwrap();
-    // 5e-4 s by 18 divisions.
-    assert_eq!(line.lock().unwrap().sent()[0], ":TIM:OFFS -0.002250");
+    // 5e-4 s by the 31 timebases of 5 ns to 50 s, as C (`api.c:569`).
+    assert_eq!(line.lock().unwrap().sent()[0], ":TIM:OFFS -0.003875");
     assert_eq!(d.get(&Key::HorizTriggerpos, None).unwrap().as_f64(), Some(0.75));
 }
 
@@ -1248,7 +1400,7 @@ fn a_write_that_fails_leaves_the_state_known() {
 
 #[test]
 fn a_probe_factor_reads_the_scales_again() {
-    let (mut d, line) = device("SDS1202X-E", |l| {
+    let (mut d, line) = device("SDS1202X", |l| {
         l.turns.insert("C1:VDIV?".to_owned(), VecDeque::from([Some(text("1.00E+01"))]));
     });
     // That turn was the open's: this one's own.
@@ -1267,7 +1419,7 @@ fn a_probe_factor_reads_the_scales_again() {
 
 #[test]
 fn a_probe_factor_whose_scales_dont_come_back_is_still_set() {
-    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X", |_| {});
     line.lock().unwrap().turns.insert("C1:VDIV?".to_owned(), VecDeque::from([None]));
     d.set(&Key::ProbeFactor, &Value::U64(10), Some("CH1")).unwrap();
     assert_eq!(d.get(&Key::ProbeFactor, Some("CH1")).unwrap().as_u64(), Some(10));
@@ -1276,7 +1428,7 @@ fn a_probe_factor_whose_scales_dont_come_back_is_still_set() {
 
 #[test]
 fn a_samplerate_is_asked_for_each_time() {
-    let (d, line) = device("SDS1202X-E", |l| l.depth = 7000);
+    let (d, line) = device("SDS1202X", |l| l.depth = 7000);
     assert_eq!(d.get(&Key::Samplerate, None).unwrap().as_u64(), Some(1_000_000));
     assert_eq!(line.lock().unwrap().sent(), ["SANU? C1", ":TDIV?"]);
     line.lock()
@@ -1289,7 +1441,7 @@ fn a_samplerate_is_asked_for_each_time() {
 
 #[test]
 fn a_failed_samplerate_says_what_was_known() {
-    let (d, line) = device("SDS1202X-E", |l| l.depth = 7000);
+    let (d, line) = device("SDS1202X", |l| l.depth = 7000);
     assert_eq!(d.get(&Key::Samplerate, None).unwrap().as_u64(), Some(1_000_000));
     assert_eq!(d.state.samplerate, 0.0, "a get changes nothing");
     line.lock().unwrap().turns.insert("SANU? C1".to_owned(), VecDeque::from([None]));
@@ -1308,7 +1460,7 @@ fn an_analyzer_on_asks_its_own_depth() {
 
 #[test]
 fn a_get_of_another_key_asks_nothing() {
-    let (d, line) = device("SDS1202X-E", |_| {});
+    let (d, line) = device("SDS1202X", |_| {});
     assert!(d.get(&Key::LimitSamples, None).is_err());
     assert!(d.get(&Key::Vdiv, None).is_err(), "a group is wanted");
     assert!(d.get(&Key::Coupling, Some("CH9")).is_err());
@@ -1317,7 +1469,7 @@ fn a_get_of_another_key_asks_nothing() {
 
 #[test]
 fn during_a_capture_a_get_waits_for_nothing_and_a_set_is_refused() {
-    let (mut d, line) = device("SDS1202X-E", |l| {
+    let (mut d, line) = device("SDS1202X", |l| {
         l.no_trigger = true;
         l.turns.insert(":INR?".to_owned(), VecDeque::from([Some(text("8192"))]));
     });
@@ -1359,7 +1511,7 @@ fn options_are_cs_in_its_order() {
     assert_eq!(ids, ["num_vdiv", "vdiv", "timebase", "coupling", "probe_factor", "data_source"]);
     assert_eq!(d.options(Some("LA")).unwrap().len(), 0);
     assert!(d.options(Some("CH5")).is_err());
-    let (d, _) = device("SDS1202X-E", |_| {});
+    let (d, _) = device("SDS1202X", |_| {});
     assert!(d.options(Some("LA")).is_err(), "it has no analyzer");
     assert!(d.options(Some("CH3")).is_err());
 }
@@ -1419,7 +1571,7 @@ fn lists_are_cs() {
 
 #[test]
 fn a_new_capture_after_one_ended_runs() {
-    let (d, _) = device("SDS1202X-E", |_| {});
+    let (d, _) = device("SDS1202X", |_| {});
     let (first, d) = capture(d);
     let (second, _d) = capture(d);
     assert_eq!(samples(&first).len(), samples(&second).len());
@@ -1466,28 +1618,17 @@ fn the_long_limits_are_these() {
     assert_eq!(TIMING.no_trigger, Duration::from_secs(60));
 }
 
-/// The real sleep at a real timebase, from below: a sleep's length only grows.
+/// The real sleep at a real timebase, from below: a sleep's length only grows. The
+/// timebase is the scope's, read at the start and again after the shot.
 #[test]
 fn a_real_preparation_is_waited_for() {
-    let (mut d, _) = device("SDS1202X-E", |_| {});
+    let (mut d, line) = device("SDS1202X-E", |_| {});
+    let slow = std::iter::repeat_n(Some(text("5.00E-02")), 4).collect();
+    line.lock().unwrap().turns.insert(":TDIV?".to_owned(), slow);
     d.timing.sleeps = true;
-    d.state.timebase = 0.05;
     only(&mut d, 0);
     let began = Instant::now();
-    let d = {
-        d.state.limit_frames = 1;
-        d
-    };
-    // The capture reads the timebase off the scope: this one's slow.
-    let (mut d2, line) = device("SDS1202X-E", |_| {});
-    line.lock()
-        .unwrap()
-        .turns
-        .insert(":TDIV?".to_owned(), VecDeque::from([Some(text("5.00E-02"))]));
-    d2.timing.sleeps = true;
-    only(&mut d2, 0);
-    drop(d);
-    let (packets, _d) = capture(d2);
+    let (packets, _d) = capture(d);
     assert_eq!(failure(&packets), None);
     assert!(began.elapsed() >= Duration::from_millis(70), "a tenth of a sweep of 0.7 s");
 }

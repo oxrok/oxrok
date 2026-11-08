@@ -5,7 +5,8 @@
 # so most of what a capture does is pinned on oxrok alone: what C does there stays in
 # each case's .oracle. What C can run is compared in full: every setting, and a capture
 # of waveforms with no samples, whose wire is all there. A USBTMC capture costs C 7 s a
-# channel, its source's timeout with nothing to read.
+# channel, its source's timeout with nothing to read. An E series on the screen goes as
+# libsigrok pull request 247 does, so its captures are oxrok's own wire throughout.
 EMU_MODEL=siglent-sds
 EMU_TMC=1
 EMU_TCP=1
@@ -20,14 +21,16 @@ emu_cases() {
     T=siglent-sds:conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT
 
     FEW="under 363 samples, the first read has more than they (protocol.c:562): it moves devc->buffer for good by the descriptor (:565) and sends the same count again, past the buffer's end to a segfault; oxrok reads them"
-    ZERO="protocol.c:569 asks for num_samples - num_block_bytes, which has counted the 363 of the header, and :612 ends only at num_samples + 363 of them, so once it holds num_samples bytes it asks for 0 for ever, sending an empty packet each time; here glibc aborts on the third (double free), and it has sent the samples from the third to the 361st before the last; oxrok reads the block to its end"
+    ZERO="protocol.c:569 asks for num_samples - num_block_bytes, which has counted the 363 of the header, and :612 ends only at num_samples + 363 of them, so once it holds num_samples bytes it asks for 0 for ever, sending an empty packet each time, having sent the samples from the third to the 361st before the last; on this box the process then dies at a heap check of glibc's, and pull request 247's report shows the empty packets going on; oxrok reads the block to its end"
     BEGIN_TWICE="channel_start (protocol.c:298) begins a read of the answer and the callback (:531) begins another, whose request nothing answers: LIBUSB_ERROR_TIMEOUT, and each next callback asks again, for ever (bug 1356's title); oxrok asks once"
     NO_END="a block with no samples is the one C ends, by read_complete, which a raw TCP read of exactly 363 bytes never says (scpi_tcp.c:171): 'Read should have been completed', and the capture ends at its first channel"
     NO_FPAR="capture_start reads FPAR? with no read begun (protocol.c:192), which on USBTMC is a read past the last message: 'Read error while reading data header', and the start fails; oxrok begins one"
-    TRIGGERPOS="api.c:569 multiplies by num_timebases where the seconds want the horizontal divisions: C sends another offset, oxrok keeps its choice"
+    E_SINGLE="for an E series oxrok goes as libsigrok pull request 247, the one code shown to finish captures on real ones: TRMD SINGLE, TRMD? until STOP, the scales again, then C1:WF? DAT2, where C sends ARM, :INR? and C1:WF? ALL; a block with no samples C ends at its first channel ('Read should have been completed', scpi_tcp.c:171)"
+    INR0="after ARM, protocol.c:174-183 takes anything but 8192 and 8193 for a scope that did not arm and fails the start; the guide gives 0 as single mode with no signal yet (p.175), and oxrok polls on"
     SLOPE="after a set, api.c:558 asks '%s:TRSL' of the list's name, CH2, where the open asked of the scope's, C2: C sends CH2:TRSL NEG"
     KPTS="protocol.c:916 takes Kpts by 10000, ten times what it says; oxrok by 1000"
-    PTS="protocol.c:918 makes 0 of a plain 'pts', so a rate of 0; oxrok reads it"
+    PTS="protocol.c:918 makes 0 of a number with neither Mpts nor Kpts, so a rate of 0; oxrok reads it"
+    PLAIN="protocol.c:918 makes 0 of a plain number, the form the guide gives for the older models (p.35), so a rate of 0; oxrok reads it"
     VDIV5="api.c:109 has { 500, 100000 } for 500 uV, which is 5 mV: C says that of 5 mV, and C's first entry of a --show says 0.005 V where it sends 500UV"
     CUT="C's first 363 bytes hold two samples it drops (protocol.c:565 is on the other path), and it reads to the message's end, a read error, which it takes for an end at exit 0; oxrok has all that came, fails, and says so. tests/siglent_sds_oracle.rs compares the two by value"
     FOUR="protocol.c:802 does a strlen of the fifth field after checking for four: SIGSEGV"
@@ -60,7 +63,7 @@ emu_cases() {
     emu_case "set trigger slope" --no-output -- -d $T --config triggerslope=f --set
     emu_case "set a source and its slope" --no-output --oracle-differs "$SLOPE" -- -d $T --config triggersource=CH2 --config triggerslope=f --set
     emu_case "set trigger level" --no-output -- -d $T --config triggerlevel=0.5 --set
-    emu_case "set horiz_triggerpos" --no-output --oracle-differs "$TRIGGERPOS" -- -d $T --config horiz_triggerpos=0.25 --set
+    emu_case "set horiz_triggerpos" --no-output -- -d $T --config horiz_triggerpos=0.25 --set
     emu_case "set vdiv" --no-output -- -d $T -g CH2 --config vdiv=500mV --set
     emu_case "set coupling" --no-output -- -d $T -g CH2 "--config=coupling=D50 DC 50 Ohm" --set
     emu_case "set probe factor" --no-output -- -d $T -g CH1 --config probe_factor=10 --set
@@ -96,10 +99,10 @@ emu_cases() {
     emu_options off=2,4
     emu_case "channels off show" -- -d $T -g CH1 --get coupling
     emu_case "channels off capture what is on tcp" --oracle-bug "$ZERO" --digest --filter "$A" -- -d $T --frames 1 -O analog
-    emu_options off=1 inr=8192,0,0,1
-    emu_case "waits for a trigger tcp" --oracle-bug "$ZERO" --digest --filter "$A" -- -d $T -C CH1 --frames 1 -O analog
-    emu_options inr=0
-    emu_case "did not arm" --no-output --expect-fail --oxrok-fails "Device did not enter ARM mode" -- -d $T --frames 1 -O analog
+    emu_options off=1 trmd=3
+    emu_case "waits for a single shot tcp" --oracle-bug "$ZERO" --digest --filter "$A" -- -d $T -C CH1 --frames 1 -O analog
+    emu_options depth=0
+    emu_case "e frame of nothing tcp" --no-output --oracle-differs "$E_SINGLE" -- -d $T -C CH1,CH2 --frames 1 -O analog
     emu_options depth=32 la=1
     emu_case "digital channels tcp" --oracle-differs "$DIGITAL" -- -d $T -C D0,D9 --frames 1 -O bits
     emu_case "digital channels" --oracle-bug "$DIGITAL_USB" --oracle-hangs --timeout 10 -- -d $U -C D0,D9 --frames 1 -O bits
@@ -125,6 +128,8 @@ emu_cases() {
     emu_case "spo empty frame tcp" --no-output --oracle-differs "$NO_END" -- -d $T --frames 1 -O analog
     emu_options model=SDS1202X depth=0 inr=8192,0,0,1
     emu_case "spo waits for a trigger" --no-output -- -d $U --frames 1 -O analog
+    emu_options model=SDS1202X depth=0 inr=0,0,1
+    emu_case "spo inr of 0 after arm" --no-output --oracle-bug "$INR0" -- -d $U --frames 1 -O analog
     emu_options model=SDS1202X depth=0
     emu_case "lib a source and its slope" --no-output --libsigrok -- -d $U -c triggersource=CH2 -c triggerslope=f --frames 1 -O analog
     emu_case "lib horiz_triggerpos" --no-output --libsigrok -- -d $U -c horiz_triggerpos=0.25 --frames 1 -O analog
@@ -143,6 +148,8 @@ emu_cases() {
     # A non-SPO model: no ARM.
     emu_options model=SDS1052DL+ sanu=1.40Mpts
     emu_case "non spo show" --keep-header -- -d $T --show
+    emu_options model=SDS1052DL+ depth=1600
+    emu_case "non spo samplerate as the guide has it" --oracle-differs "$PLAIN" -- -d $T --get samplerate
     emu_options model=SDS1052DL+ depth=0 inr=0,0,8193
     emu_case "non spo empty frame" --no-output -- -d $U --frames 1 -O analog
     emu_options model=SDS1052DL+ depth=400

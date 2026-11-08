@@ -355,3 +355,131 @@ impl ScpiTransport for Usbtmc {
         self.start()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usb::{EndpointDesc, InterfaceClass, InterfaceDesc};
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    /// A device whose claims go at a reset, as nusb's do, and whose transfers fail on
+    /// an interface not claimed. It logs every call.
+    struct Device {
+        info: UsbDeviceInfo,
+        log: Arc<Mutex<Vec<String>>>,
+        claimed: bool,
+        answers: VecDeque<Result<Vec<u8>>>,
+    }
+
+    impl Device {
+        fn new(vendor: u16, answers: Vec<Result<Vec<u8>>>) -> (Device, Arc<Mutex<Vec<String>>>) {
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let info =
+                UsbDeviceInfo { vendor_id: vendor, product_id: 0xee38, ..Default::default() };
+            let d = Device { info, log: Arc::clone(&log), claimed: false, answers: answers.into() };
+            (d, log)
+        }
+
+        fn note(&self, what: String) {
+            self.log.lock().unwrap().push(what);
+        }
+
+        fn held(&self) -> Result<()> {
+            if self.claimed { Ok(()) } else { Err(Error::device("interface not claimed")) }
+        }
+    }
+
+    impl Transport for Device {
+        fn info(&self) -> &UsbDeviceInfo {
+            &self.info
+        }
+        fn set_configuration(&mut self, _c: u8) -> Result<()> {
+            Ok(())
+        }
+        fn claim_interface(&mut self, i: u8) -> Result<()> {
+            self.note(format!("claim {i}"));
+            self.claimed = true;
+            Ok(())
+        }
+        fn release_interface(&mut self, i: u8) -> Result<()> {
+            self.note(format!("release {i}"));
+            self.claimed = false;
+            Ok(())
+        }
+        fn reset(&mut self) -> Result<()> {
+            self.note("reset".to_owned());
+            self.claimed = false;
+            Ok(())
+        }
+        fn max_packet_size(&mut self, _e: u8) -> Result<usize> {
+            Ok(512)
+        }
+        fn interfaces(&mut self) -> Result<Vec<InterfaceDesc>> {
+            let ep = |address| EndpointDesc { address, transfer_type: 2, max_packet_size: 512 };
+            Ok(vec![InterfaceDesc {
+                class: InterfaceClass { number: 0, class: 0xfe, subclass: 3, protocol: 1 },
+                endpoints: vec![ep(0x82), ep(0x01)],
+            }])
+        }
+        fn control_out(&mut self, _r: ControlRequest, _d: &[u8], _t: Duration) -> Result<()> {
+            self.held()
+        }
+        fn control_in(&mut self, r: ControlRequest, l: usize, _t: Duration) -> Result<Vec<u8>> {
+            self.held()?;
+            self.note(format!("ctl_in {}", r.request));
+            Ok(vec![0; l])
+        }
+        fn bulk_out(&mut self, _e: u8, data: &[u8], _t: Duration) -> Result<usize> {
+            self.held()?;
+            self.note(format!("bulk_out {} tag {}", data[0], data[1]));
+            Ok(data.len())
+        }
+        fn bulk_in(&mut self, _e: u8, _l: usize, _t: Duration) -> Result<Vec<u8>> {
+            self.held()?;
+            self.note("bulk_in".to_owned());
+            self.answers.pop_front().unwrap_or(Err(Error::Timeout))
+        }
+        fn interrupt_out(&mut self, _e: u8, data: &[u8], _t: Duration) -> Result<usize> {
+            Ok(data.len())
+        }
+        fn interrupt_in(&mut self, _e: u8, _l: usize, _t: Duration) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn bulk_in_stream(
+            &mut self,
+            _e: u8,
+            _s: usize,
+            _c: usize,
+        ) -> Result<Box<dyn crate::usb::BulkStream>> {
+            Err(Error::device("no stream here"))
+        }
+    }
+
+    /// A whole message of `text`, answering the request with `tag`.
+    fn message(tag: u8, text: &[u8]) -> Vec<u8> {
+        let mut m = vec![DEV_DEP_MSG_IN, tag, !tag, 0];
+        m.extend((text.len() as u32).to_le_bytes());
+        m.extend([EOM, 0, 0, 0]);
+        m.extend_from_slice(text);
+        m
+    }
+
+    #[test]
+    fn a_siglent_is_claimed_again_after_its_reset() {
+        let (d, log) = Device::new(0xf4ec, vec![Ok(message(2, b"1\n"))]);
+        let mut t = Usbtmc::from_transport(Box::new(d), "usbtmc/x".to_owned()).unwrap();
+        assert_eq!(log.lock().unwrap()[..4], ["claim 0", "reset", "claim 0", "ctl_in 7"]);
+        t.send(b"*OPC?\n").unwrap();
+        t.read_begin().unwrap();
+        let mut buf = [0u8; 8];
+        assert_eq!(t.read_data(&mut buf, TIMEOUT).unwrap(), 2);
+    }
+
+    #[test]
+    fn another_vendor_has_no_reset() {
+        let (d, log) = Device::new(0x1ab1, Vec::new());
+        Usbtmc::from_transport(Box::new(d), "usbtmc/x".to_owned()).unwrap();
+        assert_eq!(log.lock().unwrap()[..2], ["claim 0", "ctl_in 7"]);
+    }
+}

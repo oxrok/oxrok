@@ -17,7 +17,15 @@
 //! doesn't run: stock C reads a waveform's first 363 bytes, then asks for what is left
 //! of `samples - 363` and at the end for 0 bytes without end, so it has never
 //! finished a waveform with samples in it (`docs/DEVICES.md`). Here a waveform is read
-//! to its end, one request a channel, all samples.
+//! to its end, one request a channel, all samples. An E series on the screen takes a
+//! single shot and `DAT2`, as libsigrok pull request 247 does on real ones.
+//!
+//! Page numbers are those of Siglent's "SDS1000-Series & SDS2000X & SDS2000X-E
+//! Programming Guide", PG01-E02D.
+//!
+//! The scales and offsets that turn codes into volts are read at the open, and on an E
+//! series again after each shot. On the others, as in C, a scale changed on the front
+//! panel after the open scales the samples wrongly, and nothing says so.
 //!
 //! `conn=` takes a SCPI resource (`usbtmc`, `usbtmc/BUS.ADDR`, `tcp-raw/HOST/PORT`);
 //! without it every USBTMC device is asked `*IDN?`.
@@ -34,7 +42,7 @@ use crate::core::{
 };
 use crate::scpi::Scpi;
 use models::{Model, Protocol};
-use protocol::{Armed, BlockHead, Quiet, Silence, Waveform};
+use protocol::{BlockHead, Quiet, Silence, Waveform};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -560,12 +568,14 @@ impl Device for SiglentDevice {
                     log::error!("Invalid horiz. trigger position: {pos}.");
                     return Err(Error::Arg(format!("Invalid horiz. trigger position: {pos}.")));
                 }
-                // The position is a fraction of the frame; the scope wants seconds.
-                // C multiplies by `num_timebases` (`api.c:569`), where a frame is the
-                // number of divisions.
+                // The position is a fraction of the frame; the scope wants seconds. C
+                // multiplies by `num_timebases` (`api.c:569`), where a frame would seem to
+                // want the divisions. No source says which, and the guide has no
+                // `:TIM:OFFS` at all (it has `TRDL`, p.185), so a scope likely ignores it:
+                // C's number goes out.
                 let seconds = -(pos - 0.5)
                     * f64::from(self.state.timebase)
-                    * f64::from(self.model.series.num_hdiv);
+                    * self.model.timebases().len() as f64;
                 self.send(&format!(":TIM:OFFS {seconds:.6}"))?;
                 self.state.horiz_triggerpos = pos as f32;
             }
@@ -881,8 +891,11 @@ impl Capture {
             }
         }
         if self.st.la_enabled && !some_digital {
-            scpi.send("DGST OFF")?;
-            // C keeps this true after a success, and so turns it off at each capture.
+            // C sends `DGST OFF` (`api.c:851`), which the guide gives for the SDS1000X
+            // and SDS2000X and not for the X-E series (p.74), the only ones in C's table
+            // with an analyzer: `DI:SW` is theirs (p.77). C also keeps the flag true
+            // after it, and so says it again at each capture.
+            scpi.send("DI:SW OFF")?;
             self.st.la_enabled = false;
         }
         match self.protocol() {
@@ -998,8 +1011,14 @@ impl Capture {
     }
 
     /// `siglent_sds_capture_start`, and the wait for a trigger the callback does next.
+    ///
+    /// An E series on the screen goes as libsigrok pull request 247 does, the one code
+    /// shown to finish captures on real ones: `TRMD SINGLE`, then `TRMD?` until `STOP`,
+    /// then the scales and the depth read again, as a front panel may have moved them.
+    /// C's `ARM` stays for the others. That a second frame arms again on either is
+    /// unproven: C never finished one, and pull request 247 takes one frame.
     fn capture_start(
-        &self,
+        &mut self,
         scpi: &mut Scpi,
         frames: u64,
         limit: &mut u64,
@@ -1007,14 +1026,17 @@ impl Capture {
     ) -> Result<Flow> {
         match (self.protocol(), self.st.data_source) {
             (Protocol::NonSpo, _) => self.trigger_wait(scpi, silence),
+            (Protocol::Eseries, DataSource::Screen) => self.single(scpi, silence),
             (_, DataSource::Screen) => {
                 scpi.send("ARM")?;
                 let Some(text) = self.ask(scpi, ":INR?", silence)? else {
                     return Ok(Flow::Stopped);
                 };
-                match protocol::armed(protocol::parse_inr(&text)?)? {
-                    Armed::Triggered => Ok(Flow::Go),
-                    Armed::Waiting => self.trigger_wait(scpi, silence),
+                if protocol::acquired(protocol::parse_inr(&text)?) {
+                    log::debug!("Device triggered.");
+                    Ok(Flow::Go)
+                } else {
+                    self.trigger_wait(scpi, silence)
                 }
             }
             (_, DataSource::History) => {
@@ -1022,6 +1044,39 @@ impl Capture {
                 Ok(Flow::Go)
             }
         }
+    }
+
+    /// One single shot on an E series, as pull request 247 has it.
+    fn single(&mut self, scpi: &mut Scpi, silence: &mut Silence) -> Result<Flow> {
+        scpi.send("TRMD SINGLE")?;
+        let began = Instant::now();
+        let mut said = false;
+        loop {
+            let Some(mode) = self.ask(scpi, "TRMD?", silence)? else {
+                return Ok(Flow::Stopped);
+            };
+            if mode.trim() == "STOP" {
+                break;
+            }
+            if !said && began.elapsed() >= self.timing.no_trigger {
+                said = true;
+                log::warn!("No trigger in {} s; still waiting.", began.elapsed().as_secs());
+            }
+            if self.timing.sleeps {
+                std::thread::sleep(self.timing.poll);
+            }
+        }
+        log::debug!("Device stopped.");
+        // As pull request 247, a failure here leaves what was known.
+        let mut st = self.st.clone();
+        let read = read_vertical(scpi, self.model, &mut st)
+            .and_then(|()| read_horizontal(scpi, self.model, &mut st));
+        match read {
+            Ok(()) => self.st = st,
+            Err(e) => log::warn!("Couldn't read the settings again after the stop: {e}"),
+        }
+        self.shared.lock().expect("state lock").clone_from(&self.st);
+        Ok(if self.stopped() { Flow::Stopped } else { Flow::Go })
     }
 
     /// `FPAR?`, its count, and `FRAM`. C reads it with no read begun, so on USBTMC it
@@ -1041,8 +1096,10 @@ impl Capture {
         scpi.send(&format!("FRAM {}", frames + 1))
     }
 
-    /// `:INR?` until it says anything. A trigger that doesn't come is no error, whatever
-    /// the timebase, and a silence is: the scope always has this to say.
+    /// `:INR?` until bit 0 says a signal was acquired; see [`protocol::acquired`]. C takes
+    /// any value but 0, so 8192 alone, a trigger ready and no waveform, for one. A
+    /// trigger that doesn't come is no error, whatever the timebase, and a silence is:
+    /// the scope always has this to say.
     fn trigger_wait(&self, scpi: &mut Scpi, silence: &mut Silence) -> Result<Flow> {
         let began = Instant::now();
         let mut said = false;
@@ -1050,7 +1107,7 @@ impl Capture {
             let Some(text) = self.ask(scpi, ":INR?", silence)? else {
                 return Ok(Flow::Stopped);
             };
-            if protocol::parse_inr(&text)? != 0 {
+            if protocol::acquired(protocol::parse_inr(&text)?) {
                 log::debug!("Device triggered.");
                 self.pause(self.after_trigger());
                 return Ok(if self.stopped() { Flow::Stopped } else { Flow::Go });
@@ -1098,20 +1155,22 @@ impl Capture {
         }
     }
 
-    /// Starts reading an answer. On USBTMC this is a request and its first transfer, and
-    /// an answer not ready by the transport's second is asked for again, as C's next
-    /// callback does.
-    fn begin(&self, scpi: &mut Scpi, silence: &mut Silence, what: &str) -> Result<Flow> {
-        loop {
-            if self.stopped() {
-                return Ok(Flow::Stopped);
+    /// Starts reading an answer, once. On USBTMC this is a request and its first transfer,
+    /// and C's next callback asks again after a timeout (`protocol.c:526`): a scope
+    /// preparing a long record would then owe an answer for each, all but the last with
+    /// the wrong tag. Here there is no second request: how long one is waited for is the
+    /// transport's, `src/scpi/usbtmc.rs`. On TCP a begin asks nothing and can't time
+    /// out; the reads that follow wait under the silence rule.
+    fn begin(&self, scpi: &mut Scpi, what: &str) -> Result<Flow> {
+        if self.stopped() {
+            return Ok(Flow::Stopped);
+        }
+        match scpi.read_begin() {
+            Ok(()) => Ok(Flow::Go),
+            Err(Error::Timeout) => {
+                Err(Error::device(format!("No answer to {what}: the scope is silent.")))
             }
-            let began = Instant::now();
-            match scpi.read_begin() {
-                Ok(()) => return Ok(Flow::Go),
-                Err(Error::Timeout) => quiet(silence, began, what)?,
-                Err(e) => return Err(e),
-            }
+            Err(e) => Err(e),
         }
     }
 
@@ -1166,12 +1225,17 @@ impl Capture {
         silence: &mut Silence,
     ) -> Result<Flow> {
         log::debug!("Start reading data from channel {}.", ch.name);
-        scpi.send(&format!("C{}:WF? ALL", ch.index + 1))?;
-        let what = format!("C{}:WF? ALL", ch.index + 1);
+        // An E series in a single shot takes the waveform alone, `DAT2`, whose length
+        // is its samples (p.264-265), as pull request 247 does; C's `ALL` has a LeCroy
+        // descriptor ahead of them.
+        let single =
+            self.protocol() == Protocol::Eseries && self.st.data_source == DataSource::Screen;
+        let what = format!("C{}:WF? {}", ch.index + 1, if single { "DAT2" } else { "ALL" });
+        scpi.send(&what)?;
         silence.heard(Instant::now());
         silence.set_first(self.block_bound());
         self.pause(self.preparation());
-        if self.begin(scpi, silence, &what)? == Flow::Stopped {
+        if self.begin(scpi, &what)? == Flow::Stopped {
             return Ok(Flow::Stopped);
         }
         // The head's first read takes no more than the head and a part of what follows,
@@ -1179,10 +1243,18 @@ impl Capture {
         let Some((length, mut descriptor)) = self.head(scpi, silence, &what)? else {
             return Ok(Flow::Stopped);
         };
-        if self.fill(scpi, &mut descriptor, protocol::DESC_HEAD, silence, &what)? == Flow::Stopped {
-            return Ok(Flow::Stopped);
-        }
-        let shape = Waveform::new(length, &descriptor)?;
+        let mut early = Vec::new();
+        let shape = if single {
+            std::mem::swap(&mut early, &mut descriptor);
+            Waveform { descriptor: 0, samples: length, disagrees: false }
+        } else {
+            if self.fill(scpi, &mut descriptor, protocol::DESC_HEAD, silence, &what)?
+                == Flow::Stopped
+            {
+                return Ok(Flow::Stopped);
+            }
+            Waveform::new(length, &descriptor)?
+        };
         if shape.disagrees {
             log::warn!(
                 "A waveform's lengths disagree: {length} bytes, with a descriptor of {}. \
@@ -1192,7 +1264,7 @@ impl Capture {
             );
         }
         // What the descriptor has beyond the two fields, which nothing here reads.
-        let mut skip = shape.descriptor - descriptor.len();
+        let mut skip = shape.descriptor.saturating_sub(descriptor.len());
         let mut buf = vec![0u8; READ_CHUNK];
         while skip > 0 {
             let want = skip.min(buf.len());
@@ -1220,6 +1292,15 @@ impl Capture {
             )
         };
         let mut left = shape.samples;
+        // On `DAT2` the head's first read may hold samples.
+        early.truncate(left);
+        if !early.is_empty() {
+            if !send(&early) {
+                return Ok(Flow::Stopped);
+            }
+            left -= early.len();
+            silence.sampled(Instant::now());
+        }
         while left > 0 {
             let want = left.min(buf.len());
             let got = match self.some(scpi, &mut buf[..want], silence, &what) {
@@ -1246,6 +1327,9 @@ impl Capture {
 
     /// All enabled logic channels at once, as `siglent_sds_get_digital`: one packet
     /// of 16 bit samples. Unlike C's, it comes back for the next frame.
+    ///
+    /// `#9` gives points, a bit each, low bit first: 700 points come as 88 bytes (p.268).
+    /// C reads the bytes `SANU? D0` counts, of what holds an eighth of them.
     fn digital(
         &self,
         scpi: &mut Scpi,
@@ -1253,10 +1337,6 @@ impl Capture {
         sink: &PacketSink,
         silence: &mut Silence,
     ) -> Result<Flow> {
-        let depth = usize::try_from(self.st.depth_digital).unwrap_or(usize::MAX);
-        if depth == 0 {
-            log::warn!("The scope says it has no digital samples.");
-        }
         let mut samples = Vec::new();
         let mut buf = vec![0u8; READ_CHUNK];
         for index in channels {
@@ -1265,12 +1345,13 @@ impl Capture {
             silence.heard(Instant::now());
             silence.set_first(self.block_bound());
             self.pause(self.preparation());
-            if self.begin(scpi, silence, &what)? == Flow::Stopped {
+            if self.begin(scpi, &what)? == Flow::Stopped {
                 return Ok(Flow::Stopped);
             }
-            let Some((length, mut data)) = self.head(scpi, silence, &what)? else {
+            let Some((points, mut data)) = self.head(scpi, silence, &what)? else {
                 return Ok(Flow::Stopped);
             };
+            let length = points.div_ceil(8);
             let mut left = length.saturating_sub(data.len());
             data.truncate(length);
             while left > 0 {
@@ -1283,9 +1364,9 @@ impl Capture {
             }
             silence.sampled(Instant::now());
             line_feeds(scpi);
-            let count = depth.min(data.len().saturating_mul(8));
-            if count < depth {
-                log::warn!("{what} gave {count} samples of {depth}.");
+            let count = points;
+            if self.st.depth_digital != 0 && self.st.depth_digital != count as u64 {
+                log::debug!("{what} gave {count} points; SANU? D0 said {}.", self.st.depth_digital);
             }
             if samples.len() < count {
                 samples.resize(count, 0u16);

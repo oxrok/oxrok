@@ -1,7 +1,7 @@
 gcov siglent-sds (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        80.3%  388 of 483
-  protocol.c   79.0%  452 of 572
-  total        79.6%  840 of 1055
+  protocol.c   79.7%  456 of 572
+  total        80.0%  844 of 1055
 never reached, by function (line ranges hold no reached line):
   api.c
     clear_helper: 240
@@ -16,10 +16,10 @@ never reached, by function (line ranges hold no reached line):
     siglent_sds_event_wait: 63, 71-72, 76, 97-118
     siglent_sds_trigger_wait: 129
     siglent_sds_stop_wait: never called (134-136)
-    siglent_sds_capture_start: 158, 171, 181-182, 197-208, 221, 225, 239-260
+    siglent_sds_capture_start: 158, 171, 197-208, 221, 225, 231-260
     siglent_sds_channel_start: 277, 288, 295
     siglent_sds_get_digital: 372, 374, 377, 393, 402, 442-443
-    siglent_sds_receive: 479, 482, 494, 496, 502-510, 527, 533-536, 543, 554-557, 652, 667-671
+    siglent_sds_receive: 479, 482, 494, 496, 502-510, 527, 543, 554-557, 652, 667-671
     siglent_sds_get_dev_cfg: 719, 728, 745, 754, 762, 772, 783, 807-808, 810-811, 813-814, 827, 836
     siglent_sds_get_dev_cfg_vertical: 858, 870
     siglent_sds_get_dev_cfg_horizontal: 898-899, 904-906, 912-914, 926, 931, 940

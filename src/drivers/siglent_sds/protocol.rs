@@ -15,7 +15,8 @@
 //! `C1:WF? ALL` answers `ALL,#9NNNNNNNNN`, a `LeCroy` `WAVEDESC` of 346 bytes, signed
 //! bytes of samples and two line feeds. `Dn:WF? DAT2` answers `DAT2,#9NNNNNNNNN`, a bit
 //! per sample and two line feeds. C takes 15 bytes off either, and nothing here does:
-//! a pull request tested on real E series scopes reads 16 off the second.
+//! the guide's example takes 16 off the second (p.268, p.340), and its `#9` counts points,
+//! a bit each.
 //!
 //! A sample has no check of its own. What a flipped bit in the header can do is what
 //! [`Waveform::new`] says.
@@ -25,8 +26,8 @@ use std::time::{Duration, Instant};
 
 /// `:INR?`: a trigger is ready.
 pub const TRIG_READY: u32 = 8192;
-/// `:INR?`: a trigger is ready and a signal was acquired.
-pub const DATA_TRIG_READY: u32 = 8193;
+/// `:INR?`: a signal was acquired.
+pub const DATA_ACQUIRED: u32 = 1;
 /// Where the descriptor's own length is: `WAVE_DESCRIPTOR`.
 const DESC_LENGTH_AT: usize = 36;
 /// Where the samples' length is: `WAVE_ARRAY_1`.
@@ -38,30 +39,26 @@ const PREFIX_LONGEST: usize = 16;
 
 /// `:INR?`: a decimal number or no answer, where C's `sr_atoi` leaves its value
 /// unset and goes on with what the stack held.
+/// The guide gives it as 0 to 65535 (p.175).
 pub fn parse_inr(text: &str) -> Result<u32> {
     let t = text.trim();
-    if !t.is_empty() && t.bytes().all(|b| b.is_ascii_digit()) {
-        return t.parse().map_err(|_| Error::device(format!("No usable :INR? answer: '{t}'.")));
+    if !t.is_empty()
+        && t.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(v) = t.parse::<u16>()
+    {
+        return Ok(u32::from(v));
     }
     Err(Error::device(format!("No usable :INR? answer: '{t}'.")))
 }
 
-/// Whether the first `:INR?` after `ARM` says wait, go, or that the scope did not arm.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Armed {
-    /// It waits for a trigger.
-    Waiting,
-    /// It has already triggered.
-    Triggered,
-}
-
-/// What `:INR?` means right after `ARM`.
-pub fn armed(inr: u32) -> Result<Armed> {
-    match inr {
-        TRIG_READY => Ok(Armed::Waiting),
-        DATA_TRIG_READY => Ok(Armed::Triggered),
-        other => Err(Error::device(format!("Device did not enter ARM mode: :INR? says {other}."))),
-    }
+/// Whether a signal was acquired: `:INR?`'s bit 0. The guide says the register
+/// "only returns 0 bit and 13 bit" (p.175): 0 in single mode with no signal, 1 for a
+/// signal acquired, 8192 for a trigger ready, 8193 for both (p.25, p.175-176). C takes
+/// 8193 right after `ARM` for a trigger, 8192 for a wait and anything else for a scope
+/// that did not arm, and in its wait any value but 0 for a trigger. Here only bit 0
+/// says a waveform is there, and anything else is a wait.
+pub fn acquired(inr: u32) -> bool {
+    inr & DATA_ACQUIRED != 0
 }
 
 /// A number as `sr_atof_ascii` reads one: all of the text is the number.
@@ -69,11 +66,13 @@ fn number(text: &str) -> Option<f32> {
     text.trim().parse::<f32>().ok().filter(|v| v.is_finite())
 }
 
-/// `SANU? C1` on an SPO or non-SPO model: `7.00Mpts`, `70.00Kpts` or `700pts`.
+/// `SANU? C1` on an SPO or non-SPO model. The guide gives `28Mpts` for the SPO models
+/// and a plain number, `1600`, for the older ones (p.35).
 ///
-/// C takes `Kpts` by 10000 (`protocol.c:916`), and a plain `pts` as 0 samples, which
-/// makes a rate of 0. Here they mean what they say. Anything else says nothing: 0, as
-/// in C, with a word from the caller.
+/// C takes `Kpts` by 10000 (`protocol.c:916`), and anything with neither suffix as 0
+/// samples, which makes a rate of 0 (`:918`). Here `Kpts` is 1000 and a number with or
+/// without `pts` is that many, which is a reading of the guide's "others", not a capture
+/// of one. Anything else says nothing: 0, as in C, with a word from the caller.
 pub fn sample_points(text: &str) -> Result<Option<u64>> {
     let t = text.trim();
     let scaled = |digits: &str, factor: f32| {
@@ -85,16 +84,18 @@ pub fn sample_points(text: &str) -> Result<Option<u64>> {
         scaled(digits, 1e6)
     } else if let Some(digits) = t.strip_suffix("Kpts") {
         scaled(digits, 1e3)
-    } else if let Some(digits) = t.strip_suffix("pts") {
-        scaled(digits, 1.0)
+    } else if let Some(v) = number(t.strip_suffix("pts").unwrap_or(t)) {
+        Ok(Some(v as u64))
     } else {
         Ok(None)
     }
 }
 
-/// `SANU? C1` on an E series: `7.00E+05`.
+/// `SANU? C1` on an E series: `7.00E+05pts` (p.35). `CHDR OFF` suppresses units in
+/// numbers (p.23), which may or may not take `pts` with it: either is taken.
 pub fn sample_points_e(text: &str) -> Result<u64> {
-    number(text)
+    let t = text.trim();
+    number(t.strip_suffix("pts").unwrap_or(t))
         .map(|v| v as u64)
         .ok_or_else(|| Error::device(format!("SCPI: not a number: '{}'", text.trim())))
 }
@@ -272,7 +273,7 @@ impl Waveform {
 ///
 /// C loops over `depth` bytes of what may be `depth / 8` and keeps `depth` samples, so
 /// it reads past what came, keeps the right ones and has a heap's luck. It takes 15
-/// bytes off a head that (by the report in pull request 247) has 16, so its first 8
+/// bytes off a head that has 16 (p.268), so its first 8
 /// samples are the head's last digit. Neither is copied.
 pub fn merge_digital(samples: &mut [u16], data: &[u8], index: usize) {
     for (i, sample) in samples.iter_mut().enumerate() {
@@ -402,20 +403,20 @@ mod tests {
     fn inr_is_a_number_or_nothing() {
         assert_eq!(parse_inr("8193\n").unwrap(), 8193);
         assert_eq!(parse_inr(" 0").unwrap(), 0);
-        for bad in ["", "OFF", "8193X", "-1", "+5", "1.5", "7.00E+05", "99999999999"] {
+        assert_eq!(parse_inr("65535").unwrap(), 65535);
+        for bad in ["", "OFF", "8193X", "-1", "+5", "1.5", "7.00E+05", "65536", "99999999999"] {
             let e = parse_inr(bad).unwrap_err().to_string();
             assert!(e.contains("No usable :INR? answer"), "{bad}: {e}");
         }
     }
 
     #[test]
-    fn what_inr_says_after_arm() {
-        assert_eq!(armed(8192).unwrap(), Armed::Waiting);
-        assert_eq!(armed(8193).unwrap(), Armed::Triggered);
-        for other in [0, 1, 8194] {
-            let e = armed(other).unwrap_err().to_string();
-            assert!(e.contains("Device did not enter ARM mode"), "{e}");
-        }
+    fn only_bit_0_says_a_signal_was_acquired() {
+        assert!(acquired(8193));
+        assert!(acquired(1));
+        assert!(!acquired(8192), "a trigger ready is no waveform yet");
+        assert!(!acquired(0), "single mode with no signal");
+        assert!(!acquired(2));
     }
 
     #[test]
@@ -424,11 +425,14 @@ mod tests {
         assert_eq!(sample_points("14.00Mpts").unwrap(), Some(14_000_000));
         assert_eq!(sample_points("70.00Kpts").unwrap(), Some(70_000), "C makes 700000 of it");
         assert_eq!(sample_points("700pts").unwrap(), Some(700), "C makes 0 of it");
-        assert_eq!(sample_points("7.00E+05").unwrap(), None);
+        assert_eq!(sample_points("1600").unwrap(), Some(1600), "the guide's older models");
+        assert_eq!(sample_points("7.00E+05").unwrap(), Some(700_000));
+        assert_eq!(sample_points("odd").unwrap(), None);
         assert!(sample_points("x.yMpts").is_err());
         assert!(sample_points("Kpts").is_err());
         assert_eq!(sample_points_e("7.00E+05").unwrap(), 700_000);
         assert_eq!(sample_points_e("1.40E+07").unwrap(), 14_000_000);
+        assert_eq!(sample_points_e("7.00E+05pts").unwrap(), 700_000, "p.35");
         for bad in ["7.00Mpts", "", "nan", "inf"] {
             assert!(sample_points_e(bad).is_err(), "{bad}");
         }
