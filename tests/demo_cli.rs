@@ -482,6 +482,6 @@ fn wait_trigger_starts_the_output_at_the_trigger() {
 fn wait_trigger_needs_a_trigger() {
     let (out, err, ok) = oxrok(&["-d", DEMO4, "--samples", "12", "-w", "-O", "bits"]);
     assert!(!ok);
-    assert!(out.is_empty());
+    assert_eq!(out, "");
     assert_eq!(err, "-w waits for a trigger: give one with -t.\n");
 }
