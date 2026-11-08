@@ -49,7 +49,10 @@
 //! - `hpid=TEXT`: what `ID?` says (`ID?` is only an HP in COMP language's otherwise);
 //!   `rom=TEXT`: what `ROM?` says, `mute` for nothing;
 //! - `nominal=TEXT`: an EA's answer to the three nominal queries, `chan-info=TEXT`:
-//!   an EEZ's to its limits.
+//!   an EEZ's to its limits;
+//! - `sweep=POINTS:TINT`: an HP 66xxB's `SENS:SWE:POIN?` and `SENS:SWE:TINT?`, 2048
+//!   and 1.56e-5 by default, which are its `*RST` points and its shortest interval
+//!   by the 6613C's guide. Readings come at once whatever they say.
 //!
 //! The pedantic checks: only what a model's table has, what the Engine flags; a
 //! channel with no output refuses with `-222`, as a real one would.
@@ -65,7 +68,7 @@ use crate::{Error, Result};
 pub const NAME: &str = "scpi-pps";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "SCPI and HP-IB bench supplies on USBTMC and TCP; model=, load=, on=, \
-                         channels=, beeper=, event-at=, reg=, status=, bad-at=, bad=, say=, hpid=, rom=, \
+                         channels=, beeper=, event-at=, reg=, status=, bad-at=, bad=, say=, hpid=, rom=, sweep=, \
                          nominal=, chan-info=, and the SCPI shell's mute-at=, silent-at=, late-at=, \
                          mark-at=, idn=, eol=, stall=, in-stall=, empty-at=, bad-tag-at=, message=";
 
@@ -630,6 +633,7 @@ pub(super) struct Supply {
     rom: Option<String>,
     nominal: Option<String>,
     chan_info: Option<String>,
+    sweep: (f64, f64),
 }
 
 /// A table's text against what came: `None` if it is another command, else the `%s`
@@ -1058,6 +1062,8 @@ impl Supply {
                 self.word(e)
             }
             ("STAT:OPER:COND?", _, Dialect::Hp66xxb) => self.word(Self::oper_cond(c)),
+            ("SENS:SWE:POIN?", _, Dialect::Hp66xxb) => Answer::Text(nr3(self.sweep.0)),
+            ("SENS:SWE:TINT?", _, Dialect::Hp66xxb) => Answer::Text(nr3(self.sweep.1)),
             // An HP in COMP language says who it is, and any can be told to here.
             ("ID?", _, _) => match (&self.hpid, dialect) {
                 (Some(text), _) => Answer::Text(text.clone()),
@@ -1135,6 +1141,7 @@ const VOLTS: [f64; 6] = [12.0, 5.0, 3.3, 1.8, 2.5, 9.0];
 const AMPS: [f64; 6] = [1.5, 0.5, 2.0, 0.25, 1.0, 0.75];
 
 /// A supply and its shell, from the `-o` options.
+#[allow(clippy::too_many_lines)]
 pub(super) fn parts(options: &[(String, String)]) -> Result<(Supply, scpi::Config)> {
     let mut config = scpi::Config::default();
     let mut kind = KINDS.iter().find(|k| k.model == "DP832").expect("a default");
@@ -1143,6 +1150,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Supply, scpi::Confi
     let (mut reg_text, mut status_text, mut bad_at, mut bad) = (None, None, None, None);
     let (mut say, mut hpid, mut rom, mut nominal, mut chan_info) = (None, None, None, None, None);
     let spaced = |text: &str| text.replace('_', " ");
+    let mut sweep = (2048.0, 1.56e-5);
     for (k, v) in options {
         if config.option(k, v)? {
             continue;
@@ -1180,6 +1188,11 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Supply, scpi::Confi
             "rom" => rom = Some(spaced(v)),
             "nominal" => nominal = Some(spaced(v)),
             "chan-info" => chan_info = Some(v.clone()),
+            "sweep" => {
+                let bad = || Error::Invalid(format!("sweep={v}: as in 4096:0.1"));
+                let (points, tint) = v.split_once(':').ok_or_else(bad)?;
+                sweep = (points.parse().map_err(|_| bad())?, tint.parse().map_err(|_| bad())?);
+            }
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
@@ -1229,6 +1242,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Supply, scpi::Confi
         rom,
         nominal,
         chan_info,
+        sweep,
     };
     Ok((supply, config))
 }
