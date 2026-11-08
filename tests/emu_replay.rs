@@ -203,15 +203,21 @@ fn replay(path: &Path) -> Result<(), String> {
     } else if !status.success() {
         return Err(format!("oxrok exited with {status}:\n{err}"));
     }
-    // As diffcli.sh keeps it: the version line goes.
-    let got = match got.split_once('\n') {
-        Some((first, rest)) if first.starts_with("oxrok ") => rest.to_owned(),
-        _ => got,
-    };
+    // The version line goes, wherever it is: a framed capture prints it after
+    // FRAME-BEGIN, and a fixture recorded before a release would differ by it.
+    let (got, expected) = (without_version(&got), without_version(&expected));
     if got != expected {
         return Err(format!("output differs:\n--- recorded\n{expected}--- replayed\n{got}"));
     }
     Ok(())
+}
+
+/// `out` without its `oxrok X.Y...` version line.
+fn without_version(out: &str) -> String {
+    let version = |l: &str| {
+        l.strip_prefix("oxrok ").is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    out.split_inclusive('\n').filter(|l| !version(l)).collect()
 }
 
 #[test]
