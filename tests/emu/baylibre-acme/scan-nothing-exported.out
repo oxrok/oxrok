@@ -1,2 +1,2 @@
-sr: gpio: Error opening /sys/class/gpio/gpio487/direction: No such file or directory
-sr: gpio: Error opening /sys/class/gpio/gpio479/direction: No such file or directory
+The following devices were found:
+baylibre-acme - BayLibre ACME with 8 channels: P1_ENRG_PWR P1_ENRG_CURR P1_ENRG_VOL P2_ENRG_PWR P2_ENRG_CURR P2_ENRG_VOL P5_TEMP_IN P5_TEMP_OUT

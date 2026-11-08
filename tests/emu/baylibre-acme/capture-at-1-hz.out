@@ -1,4 +1,1 @@
-sr: baylibre-acme: Failed to set timer
-sr: session: Could not start baylibre-acme device (null) acquisition.
-sr: session: sr_session_source_remove_channel: channel was NULL
-g_io_channel_shutdown: assertion 'channel != NULL' failed
+P1_ENRG_VOL: 4.975 V

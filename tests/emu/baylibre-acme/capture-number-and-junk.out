@@ -1,1 +1,1 @@
-P1_ENRG_VOL: 5.000 V
+sr: baylibre-acme: Error reading from channel P1_ENRG_VOL (hwmon: 0): not a number: "5000mV\n"

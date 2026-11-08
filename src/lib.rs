@@ -86,6 +86,8 @@ pub mod drivers {
     pub mod asix_sigma;
     pub mod atorch;
     pub mod atten_pps3xxx;
+    #[cfg(target_os = "linux")]
+    pub mod baylibre_acme;
     pub mod beaglelogic;
     pub mod bkprecision_1856d;
     pub mod cem_dt_885x;
@@ -254,4 +256,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
     registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
     registry.register(Box::new(drivers::hp_3457a::Hp3457aDriver));
+    // Linux alone has the files it reads, as libsigrok builds it there alone.
+    #[cfg(target_os = "linux")]
+    registry.register(Box::new(drivers::baylibre_acme::BaylibreAcmeDriver::default()));
 }

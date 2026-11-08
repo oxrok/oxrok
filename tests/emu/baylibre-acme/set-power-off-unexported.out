@@ -1,3 +1,0 @@
-sr: gpio: Error opening /sys/class/gpio/gpio486/direction: No such file or directory
-sr: baylibre-acme: Error setting power-off state: gpio: 486
-Failed to set device option 'power_off': input/output error.

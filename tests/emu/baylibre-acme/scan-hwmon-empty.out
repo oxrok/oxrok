@@ -1,1 +1,2 @@
-timeout: the monitored command dumped core
+sr: baylibre-acme: Unable to determine the hwmon entry
+sr: baylibre-acme: Error registering power probe 1

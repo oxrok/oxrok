@@ -1,1 +1,11 @@
-sr: gpio: Error opening /sys/class/gpio/gpio487/direction: No such file or directory
+Driver functions:
+    Thermometer
+    Power meter
+baylibre-acme - BayLibre ACME with 8 channels: P1_ENRG_PWR P1_ENRG_CURR P1_ENRG_VOL P2_ENRG_PWR P2_ENRG_CURR P2_ENRG_VOL P5_TEMP_IN P5_TEMP_OUT
+Channel groups:
+    Probe_1: channels P1_ENRG_PWR P1_ENRG_CURR P1_ENRG_VOL
+    Probe_2: channels P2_ENRG_PWR P2_ENRG_CURR P2_ENRG_VOL
+    Probe_5: channels P5_TEMP_IN P5_TEMP_OUT
+Supported configuration options on channel group Probe_1:
+    probe_factor: 10 (current)
+    power_off: on, off (current)

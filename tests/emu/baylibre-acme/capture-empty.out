@@ -1,2 +1,1 @@
-P1_ENRG_VOL: 0 mV
-P1_ENRG_VOL: 0 mV
+sr: baylibre-acme: Error reading from channel P1_ENRG_VOL (hwmon: 0): nothing to read

@@ -17,3 +17,5 @@ sysfs_get class/i2c-adapter/i2c-1/1-0046/name -> "ina226\n"
 sysfs_get class/i2c-adapter/i2c-1/1-004f/name -> "tmp435\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
 sysfs_get class/i2c-adapter/i2c-1/1-004b/name -> "tmp435\n"
+sysfs_put class/gpio/export "486\n" -> ok
+sysfs_get class/gpio/gpio486/value -> "1\n"

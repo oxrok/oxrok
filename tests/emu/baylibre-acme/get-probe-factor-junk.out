@@ -1,1 +1,2 @@
-0
+sr: baylibre-acme: Error reading shunt resistance: /sys/class/hwmon/hwmon0/shunt_resistor holds no resistance
+Failed to get 'probe_factor': device error: /sys/class/hwmon/hwmon0/shunt_resistor holds no resistance

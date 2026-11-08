@@ -1,5 +1,7 @@
 sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
 sysfs_dir class/i2c-adapter/i2c-1/1-0040/hwmon
+sysfs_put class/gpio/export "487\n" -> ok
+sysfs_get class/gpio/gpio487/value -> "1\n"
 sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
 sysfs_dir class/i2c-adapter/i2c-1/1-0041/hwmon
 sysfs_get class/i2c-adapter/i2c-1/1-0051/eeprom -> @256:deed16ecbe73f03c6039bd66defd4389f7de4b08d375b0e68f83f61b64788ded

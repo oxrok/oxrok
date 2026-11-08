@@ -1,1 +1,2 @@
-sr: baylibre-acme: Error reading from channel P1_ENRG_VOL (hwmon: 0): Is a directory
+P1_ENRG_CURR: 388 mA
+P1_ENRG_CURR: 401 mA
