@@ -71,8 +71,9 @@
 //! - **A connection that closed or a device gone** ends a capture with an error. C goes
 //!   on reading 0 bytes, or dies of SIGPIPE at the next write.
 //! - **An answer cut short** on a line with no tags, by a read that gave up on its head
-//!   or by C's rule that a short read ends a tcp-raw answer (which `src/scpi/tcp.rs`
-//!   keeps), makes no reading, and the line is found again by asking `*IDN?` (`ID?` on
+//!   or with no line end once a read's timeout of silence ended it on tcp-raw (where
+//!   C's rule is that a short read ends an answer, and `src/scpi/tcp.rs` waits for the
+//!   line end), makes no reading, and the line is found again by asking `*IDN?` (`ID?` on
 //!   an HP) and dropping everything before its answer: a drain on quiet can't, as the
 //!   tail may come later than any quiet is waited. C takes the head for a reading and
 //!   each one after it is of the quantity before, for good.
