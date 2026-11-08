@@ -52,7 +52,8 @@
 //!   or wrong, for the answers a driver must take or refuse;
 //! - `block-lf=0|1`; `digits=N`, a block length's digits (as few as fit);
 //! - counted in data reads, from 1: `cut-at=N`, half of what the block announces;
-//!   `zero-at=N`, `#10`; `junk-at=N`, a line of text; `indefinite-at=N`, `#0`;
+//!   `zero-at=N`, `#10`; `text-at=N`, a line of text (the shell's `junk-at` is
+//!   another fault); `indefinite-at=N`, `#0`;
 //!   `odd-at=N`, a block one byte longer than a whole number of samples;
 //!   `bad-len-at=N`, a block whose length is no number; `pause-at=N:T`, a block that
 //!   stops after 10 bytes for T ticks (on TCP, 20 ms each) and then goes on.
@@ -76,7 +77,7 @@ pub const NAME: &str = "hameg-hmo";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Hameg and R&S HMO, RTB, RTM, RTA, RTH scopes on USBTMC and TCP; model=, \
                          points=, points2=, set=HEADER=VALUE, block-lf=, digits=, cut-at=, \
-                         zero-at=, junk-at=, indefinite-at=, odd-at=, bad-len-at=, pause-at=, remote=, and \
+                         zero-at=, text-at=, indefinite-at=, odd-at=, bad-len-at=, pause-at=, remote=, and \
                          the SCPI shell's options";
 
 const HAMEG: &str = "HAMEG";
@@ -159,7 +160,7 @@ fn sci(value: f64) -> String {
 struct DataFaults {
     cut_at: Option<u32>,
     zero_at: Option<u32>,
-    junk_at: Option<u32>,
+    text_at: Option<u32>,
     indefinite_at: Option<u32>,
     odd_at: Option<u32>,
     bad_len_at: Option<u32>,
@@ -209,7 +210,7 @@ impl Scope {
         let at = Some(self.reads);
         let end: &[u8] = if self.block_lf { b"\n" } else { b"" };
         let f = self.faults;
-        if f.junk_at == at {
+        if f.text_at == at {
             return Answer::Text("NOT A BLOCK".to_owned());
         }
         if f.zero_at == at {
@@ -476,7 +477,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
             "digits" => digits = Some(number(1..=9)? as usize),
             "cut-at" => faults.cut_at = Some(number(1..=1 << 24)?),
             "zero-at" => faults.zero_at = Some(number(1..=1 << 24)?),
-            "junk-at" => faults.junk_at = Some(number(1..=1 << 24)?),
+            "text-at" => faults.text_at = Some(number(1..=1 << 24)?),
             "indefinite-at" => faults.indefinite_at = Some(number(1..=1 << 24)?),
             "odd-at" => faults.odd_at = Some(number(1..=1 << 24)?),
             "bad-len-at" => faults.bad_len_at = Some(number(1..=1 << 24)?),
@@ -743,7 +744,7 @@ mod tests {
         });
         assert_eq!(clean(&mut s, on), b"#10\n");
         assert_eq!(clean(&mut s, on).len(), 4 + 16 + 1);
-        let mut s = on_socket(&[("points", "4"), ("junk-at", "1"), ("indefinite-at", "2")]);
+        let mut s = on_socket(&[("points", "4"), ("text-at", "1"), ("indefinite-at", "2")]);
         assert_eq!(clean(&mut s, on), b"NOT A BLOCK\n");
         assert_eq!(&clean(&mut s, on)[..2], b"#0");
         let mut s = on_socket(&[("points", "4"), ("odd-at", "1"), ("bad-len-at", "2")]);

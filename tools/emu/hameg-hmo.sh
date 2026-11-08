@@ -244,7 +244,7 @@ x'
     emu_case "block cut tcp" --filter "$A" --oracle-bug "$CUT_TCP" --oracle-hangs --timeout 45 -- -d $T -C D0 --frames 1 -O bits
     emu_options zero-at=1
     emu_case "empty block" --filter "$A" --oracle-bug "$ZERO" -- -d $T -C CH1,D0 --frames 1 -O bits
-    emu_options junk-at=1
+    emu_options text-at=1
     emu_case "text for a block" --no-output --tx-filter "$FOLD" --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 8 --oxrok-fails "No usable answer" -- -d $U -C CH1 --frames 1 -O bits
     emu_options indefinite-at=1
     emu_case "indefinite block" --no-output --tx-filter "$FOLD" --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 8 --oxrok-fails "No usable answer" -- -d $U -C CH1 --frames 1 -O bits
