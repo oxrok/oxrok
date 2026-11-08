@@ -1,0 +1,1 @@
+Failed to set device option 'samplerate': invalid argument: The device takes a samplerate of at most 100 MHz, not 4294968296 Hz.

@@ -1,0 +1,1 @@
+device error: The device refused 'sampleunit 0' and holds 1: it refuses settings while it finishes a capture's last buffer, for up to a buffer's time, so try again

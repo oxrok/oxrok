@@ -1,0 +1,4 @@
+tcp_connect
+tcp_out 76657273696f6e0a -> 8
+tcp_in 5 -> 466f6f0d0a
+tcp_close

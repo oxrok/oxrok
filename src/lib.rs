@@ -86,6 +86,7 @@ pub mod drivers {
     pub mod asix_sigma;
     pub mod atorch;
     pub mod atten_pps3xxx;
+    pub mod beaglelogic;
     pub mod bkprecision_1856d;
     pub mod cem_dt_885x;
     pub mod center_3xx;
@@ -226,6 +227,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::zketech_ebd_usb::ZketechEbdUsbDriver));
     registry.register(Box::new(drivers::colead_slm::ColeadSlmDriver));
     registry.register(Box::new(drivers::tondaj_sl_814::TondajSl814Driver));
+    registry.register(Box::new(drivers::beaglelogic::BeagleLogicDriver));
     registry.register(Box::new(drivers::pce_322a::Pce322aDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
     registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));

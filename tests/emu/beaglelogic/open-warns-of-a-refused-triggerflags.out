@@ -1,0 +1,1 @@
+sr: beaglelogic: The device refused 'triggerflags 1' and holds 0: it refuses settings while it finishes a capture's last buffer, and a capture with no limit stops at the end of the device's buffer.
