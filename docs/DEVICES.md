@@ -80,6 +80,31 @@ power cycle) configures and captures in about 4 s: the open sees no
 answer, loads the image by bit-bang, resyncs once while the FPGA comes
 up, and proceeds.
 
+### LogicPort emulator model
+
+Emulated by `emu/src/models/intronix-logicport.rs`, scenario
+`tools/emu/intronix-logicport.sh`. The oracle is the C driver of libsigrok
+pull request 315, folded into the main oracle as
+`tools/oracle-patches/libsigrok-pr315-intronix-logicport.patch`. 121 cases
+run under both tools (110 full, 5 `--oracle-bug`, 6 `--oracle-differs`)
+and 33 are oxrok's alone (extended triggers, options, the `.rbf` fallback,
+oxrok's failure messages); gcov on the C driver 92.0% (940 of 1022) on
+2026-11-08. Not emulated: allocation and libftdi error paths, three stages
+(sigrok-cli can't parse `;` in `-t`), an unwrapped 500 MHz capture. Both
+real recordings replay against the model byte for byte in its unit tests,
+and the output on the model equals the real unit's `.bits` fixtures. The
+stand-in `.ccf` comes from the scenario's `lp_ccf`; the vendor's file is in
+no commit, golden or fixture, and `EMU_LP_REAL_FW=DIR` adds two cases
+against it, without goldens.
+
+C bug not copied: a failed upload returns without `BITMODE_RESET`
+(`protocol.c:624-636`), and libftdi keeps its bit-bang flag across the
+close, so the reopen is refused at 4 x 460800 Bd and no retry can work.
+oxrok resets the bit mode first. Where oxrok differs on purpose: an FPGA
+whose init counter never finishes fails the capture, where C goes on to
+capture after "Failed to configure the FPGA"; a corrupt file or a wrong
+image isn't retried, as in C.
+
 ## Serial multimeters
 
 Handheld meters with a serial cable, one driver id per meter as in
@@ -3421,9 +3446,118 @@ piece for an answer and, cut inside a number, blocks for good. Of the
 single-bit flips of a reading, 30 of 104 give a wrong value, and 8 of 13
 lost bytes.
 
+### Rigol DG function generators (`rigol-dg`)
+
+DG811, DG812, DG821, DG822, DG831, DG832, DG952, DG972, DG992, DG1022Z,
+DG1032Z, DG1062Z, and the generator of the MSO5354, MSO5204, MSO5104,
+MSO5102, MSO5074 and MSO5072, on USBTMC (1ab1:0642 DG1000Z, 0643 DG800
+and DG900, 0515 MSO5000, from libsigrok's udev rules) or TCP (`tcp-raw`,
+`tcp-rigol`). Emulated on both carriers (`emu/src/models/rigol-dg.rs`), 162
+cases on 2026-11-08 (119 full, 35 `--oracle-differs`, 8 `--oracle-bug`),
+gcov 89.7%, no hardware. Groups 1 and 2: enabled, pattern,
+output_frequency, amplitude, offset, phase, output_duty_cycle on a square
+or pulse. Every get and set reads the instrument, with an `*OPC?` before
+each query.
+
+Settings drive a live output, and the generator sets a value out of range
+to the nearest limit with no error (DG1000Z guide p.2-97, 2-155, 2-182,
+2-185). So such a value is refused before anything goes out: frequency and
+phase by the table, a pulse's duty by 0.001 to 99.999 %, and amplitude,
+offset and duty cycle by what `X? MIN` and `X? MAX` say just before the
+set. Where those don't answer, and on an MSO5000, the value goes with a
+warning that it will be clamped. `pattern=` sends `SOURn:FUNC x`, which
+keeps what is valid for the new waveform (p.2-97, 2-109); C sends
+`SOURn:APPL:x` with no values, which takes 1 kHz, 5 Vpp, 0 V and 0 degrees.
+
+A capture runs the frequency counter: on if `COUN:STAT?` isn't `RUN`, off
+at the end, one `COUN:MEAS?` 100 ms after each answer, a frame of FREQ1,
+PERIOD1, DUTY1 and WIDTH1 per reading, as `f32` (about 7 of the counter's
+10 digits). A counter that is off answers zeros, which make a reading as in
+C. Facts are from the DG1000Z Programming Guide; the DG800/DG900 and
+MSO5000 guides weren't found, so their commands come from the C table, and
+the model's amplitude, offset and square duty limits are stand-ins. A
+counter that doesn't answer gets 30 s before its first reading and 10
+minutes after one, with a warning. Nothing checks a reading's digits.
+
+### Siglent SDL1000X electronic loads (`siglent-sdl10x0`)
+
+Siglent SDL1020X, SDL1030X and their -E versions, on USBTMC and tcp-raw.
+Emulated: model `siglent-sdl10x0`, with the SCPI shell's `split-at=`,
+`double-at=` and `junk-at=` for answers in pieces, twice, and junk ahead of
+a late answer. 121 cases on 2026-11-08 (77 full, 7 `--oracle-bug`, 37
+`--oracle-differs`), gcov 90.6%. Stock C ends a USBTMC capture at its first
+callback with no transfer in flight (`protocol.c:169-173`), so USBTMC
+captures have no C to compare.
+
+Voltage and current come from questions asked in turn, one out at a time.
+An answer is gathered up to its line end; junk, a copy or a cut answer
+resyncs the line and starts the round again from the voltage question: a
+new connection on TCP, a device clear on USBTMC. On USBTMC the one request
+is waited out rather than asked again. A setpoint outside the load's range
+(30 A, 150 V, the model's wattage, 0.03 to 10000 ohm) or with more than
+three decimals is refused before any `-c` goes out, so the input never goes
+on at an old setting. A silent load warns at 10 s and fails at 10 minutes,
+or at 10 s with no reading yet; under `--time` it ends with a warning.
+What can still go wrong: a damaged digit in a right form, and a copy that
+arrives after the next answer. Never on hardware; the model's USB id
+(`f4ec:1621`) is from memory, and no udev rule covers it.
+
+### Yokogawa DL/DLM scopes (`yokogawa-dlm`)
+
+DLM2022, 2032, 2052, 2024, 2034, 2054, DL9040, 9140, 9240, DL9505L,
+9510L, 9705L and 9710L, on USBTMC (0b21:0030, from sigrok's wiki) or
+tcp-raw. Emulated: model `yokogawa-dlm`, 204 cases on 2026-11-08 (154 full,
+35 `--oracle-differs`, 11 `--oracle-bug`, 2 `--libsigrok --hangs`, 2 oxrok
+alone), gcov 88.3%. Stock C sends no `SR_DF_HEADER` and has never sent one,
+so sigrok-cli prints nothing from a stock capture; 69 cases run it under
+`tools/oracle-header.c`, and three pin stock C's empty output. Stock C also
+finds no model without pods (`g_malloc0(0)` is NULL, `protocol.c:780-786`).
+
+A capture reads what the scope holds, one frame, every enabled channel.
+`-C` changes the scope's own channel displays and logic pod at once, as C
+does, and they stay so after the capture. Channel 4 and logic can't be
+captured together (`api.c:458-484`: they share inputs on the DLM2000). A
+timebase or volts-per-division answer is matched to its table entry within
+1%, or refused, where C truncates (`2.9E-03` reads as 2 mV) and reads only
+three exponent digits (`2.000E-003` as 2 s). The block's own byte count is
+read; on USBTMC a block with no line end fails, on tcp-raw it warns. A
+scope that stops answering ends the capture at 120 s before any sample and
+600 s after one, plus ten divisions of the timebase (5000 s at 500 s/div).
+Never on a real scope; the DL9000 follows the DLM2000's commands with no
+manual read. A real DLM's Ethernet is VXI-11, which oxrok lacks.
+
+### Siglent SDS oscilloscopes (`siglent-sds`)
+
+Siglent SDS1000CML/CNL/DL, SDS1000X and X+, SDS1000X-E and SDS2000X, on
+USBTMC and TCP. Model `siglent-sds`, 101 cases on 2026-11-08 (67 full, 20
+`--oracle-bug`, 11 `--oracle-differs`, 3 library), gcov 80.0% of the
+driver (more in fact: a crashed sigrok-cli writes no counts). Never on
+hardware. Page numbers are Siglent's "SDS1000-Series & SDS2000X & SDS2000X-E
+Programming Guide", PG01-E02D.
+
+Stock C finishes no capture with samples unless a read error ends it: with
+363 samples or more it asks for 0 bytes for ever at a block's end
+(`protocol.c:569`, `:612`), and under 363 it walks its buffer off its end;
+an E series on USBTMC begins a read twice (`:298`, `:531`). libsigrok pull
+request 247's report shows the same on real scopes. So the full capture
+cases are of blocks with no samples, and one capture C ends has its values
+checked by `tests/siglent_sds_oracle.rs`.
+
+An E series on the screen goes as pull request 247 does, the only code
+shown to finish captures on real ones: `TRMD SINGLE`, `TRMD?` until `STOP`,
+scales read again, then `Cn:WF? DAT2` (p.264-265). The others keep C's
+`ARM`, and wait until `:INR?`'s bit 0 says a waveform was acquired (p.175).
+`Dn:WF? DAT2`'s `#9` counts points, a bit each, low bit first (p.268). The
+analyzer goes off with `DI:SW OFF` (p.77), where C's `DGST OFF` isn't on the
+X-E (p.74). `:TIM:OFFS` and `:TRIG:EDGE:LEV`, which C sends, aren't in the
+guide, so a scope likely ignores them. A setting has no answer, so a refused
+one shows only at the next open. A silent scope with no sample yet fails at
+30 s or three times C's own preparation sleep; after a sample it warns and
+fails at 10 minutes. Each block is begun once.
+
 ## Oracle
 
-The oracle is libsigrok 0bc24877 with three patches, in
+The oracle is libsigrok 0bc24877 with four patches, in
 `tools/oracle-patches/`. Apply all when building the oracle, and mark
 each file `git update-index --assume-unchanged`, or `--dirty` changes
 attribution and gcov headers.
@@ -3436,6 +3570,10 @@ attribution and gcov headers.
 - `libsigrok-mastech-ms6514-scan.patch` makes the MS6514's scan ask for
   one frame: asking for two with a buffer of two refuses every scan, so
   stock libsigrok finds no MS6514.
+- `libsigrok-pr315-intronix-logicport.patch` is pull request 315, the
+  `intronix-logicport` driver (`0bc24877..9692e249`, six commits, one of
+  them `usb.c` taking bus number 0). It builds only with libftdi's headers
+  (`libftdi-devel`). The emulator's other models don't use it.
 - `libsigrok-teleinfo-scan.patch` gives teleinfo's scan a buffer of two
   packets, for the same reason: `d03815a0` left stock libsigrok finding
   no Teleinfo since 0.5.2. It looks at byte 292 as 0.5.1 did, and differs

@@ -981,6 +981,37 @@ Deliberate, and kept small:
   with a warning. `--get nplc` fails when the meter did not say its time. A stop ends a
   capture, where sigrok-cli segfaults. Every capture after an open selects its
   terminals.
+- `rigol-dg`: a value the generator would clamp is refused and nothing is sent:
+  frequency and phase out of the table, a pulse duty outside 0.001 to 99.999 %, and
+  amplitude, offset or duty outside what the instrument says for `X? MIN` and `X? MAX`,
+  asked just before. `pattern=` sends `SOURn:FUNC x`, which keeps frequency, amplitude
+  and offset; sigrok-cli sends `SOURn:APPL:x`, which puts the output at 1 kHz and
+  5 Vpp. A reading that isn't a number, or a short answer, is no value. A capture asks
+  the counter again past a timeout, for 30 s before its first reading and 10 minutes
+  after, where sigrok-cli ends at the first timeout with exit 0.
+- `siglent-sdl10x0`: a setpoint outside the load's range, or with more than three
+  decimals, is refused before any `-c` goes out, so `-c current_limit=50:enabled=on`
+  sends nothing. `--get ocp_threshold` gives the number, where sigrok-cli fails.
+  `regulation` takes CURRENT, VOLTAGE, POWER and RESISTANCE as well as CC, CV, CP and
+  CR, and refuses `Unknown`. A capture waits for a late answer, where sigrok-cli ends
+  with exit 0 at 100 ms, and an answer that isn't whole resyncs the line.
+- `yokogawa-dlm`: a capture reads what the scope holds, one frame; `--frames N` with N
+  > 1 warns. `-C` changes the scope's own displays and logic pod at once, as
+  sigrok-cli does. A timebase or volts-per-division answer is matched within 1% or
+  refused, where sigrok-cli truncates it. The waits add ten divisions of the timebase.
+- `siglent-sds` reads a waveform to its end, where sigrok-cli aborts, segfaults or
+  hangs on any with samples; an E series takes a single shot and `DAT2`. A slope after
+  a source goes to `C2:TRSL`. The first `vdiv` is 500 uV. `Kpts` means 1000.
+  `:INR?` 0 is a wait, not a refused start. A frame limit over logic channels is
+  honoured.
+- `-w` (`--wait-trigger`) writes nothing before the trigger: the output starts at the
+  trigger, as sigrok-cli's manual says ("Don't output any sample data ... before the
+  trigger", `sigrok-cli.1:267-272`) and as its code did until the 2014 output rework
+  (`2be182e^:sigrok-cli.c:879-881`, then `6709a69`/`b4d72c2`). sigrok-cli 0.7.2 now
+  holds back only what goes to decoders and its sample count (`session.c:403`), so its
+  output modules get every sample and it warns "Device only sent N samples.". So
+  `--samples 100 -t D0=r -w` writes 50 samples with no warning, and `csv:trigger=true`
+  writes the trigger row on. `-w` with no `-t` is refused, as it would write nothing.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

@@ -44,7 +44,7 @@ Run on real hardware:
 
 | driver | hardware | emulator | notes |
 |---|---|---|---|
-| `intronix-logicport` | two LogicPort LA1034 | no model | 60 bench checks with an ESP32 signal generator; captures match the libsigrok fork that has this driver |
+| `intronix-logicport` | two LogicPort LA1034 | `intronix-logicport`, 154 cases, gcov 92.0% | 60 bench checks with an ESP32 signal generator; captures match the libsigrok fork that has this driver |
 | `fx2lafw` | a Saleae Logic clone (`0925:3881`) | 78 cases, gcov 91.2% | upload and open order changed since the bench run, checked on the emulator only |
 | `rigol-ds` | a Rigol DS1102E | `rigol-ds`, 75 cases, gcov 74.2% | other series emulated, from guesses at their ids and limits |
 | `raspberrypi-pico` | a Pico with the sigrok-pico firmware | no model | digital, analog and mixed captures |
@@ -122,6 +122,10 @@ Emulator and replay only, never run on hardware:
 | `ipdbg-la` | 125 | 93.2% |
 | `beaglelogic` | 113 | 71.1% |
 | `hp-3457a` | 103 | 94.8% |
+| `rigol-dg` | 162 | 89.7% |
+| `siglent-sdl10x0` | 121 | 90.6% |
+| `siglent-sds` | 101 | 80.0% |
+| `yokogawa-dlm` | 204 | 88.3% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |

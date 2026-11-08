@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 72 of libsigrok's 87 `src/hardware` drivers are
-ported; the 15 still missing are listed below. Native decoder porting is
+crates.io. 76 of libsigrok's 87 `src/hardware` drivers are
+ported; the 11 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 15 libsigrok drivers with no oxrok port. Each needs a device model,
+The 11 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (11)
+### SCPI instruments (7)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -28,13 +28,9 @@ remaining drivers can start there.
 |---|---|---|
 | `scpi-dmm` | meter | many SCPI multimeter models |
 | `scpi-pps` | supply | many SCPI power-supply models |
-| `rigol-dg` | generator | DG series |
-| `siglent-sds` | scope | SDS series |
-| `siglent-sdl10x0` | load | SDL series |
 | `gwinstek-gds-800` | scope | GDS-800 series |
 | `hameg-hmo` | scope | HMO series |
 | `lecroy-xstream` | scope | XStream series |
-| `yokogawa-dlm` | scope | DLM series |
 | `fluke-45` | meter | Fluke 45 |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
@@ -106,8 +102,6 @@ The models are plain Rust with no I/O for this reason; see
 - Variable-length and `after_open` meters (BM85x) and the multi-display
   meters (EEVblog 121GW, MS2115B, Metex 4-display) wait for CDC-ACM
   coverage; they hold most of `serial-dmm`'s unreached lines.
-- A LogicPort model on the FTDI shell. oxrok alone has the driver, so
-  its cases must be held to the bench recordings, not sigrok-cli.
 - `asix-sigma`'s inline bulk OUT payloads are not covered by
   `EMU_TX_FOLD`.
 - The harness records USB and HID only. Add `--record` for serial, so
@@ -220,6 +214,15 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Driver behaviour
 
+- Analog samples are `f32` in the core (`AnalogData.samples`): `rigol-dg`'s
+  counter gives 10 digits and keeps about 7.
+- A core output maps a logic channel to its bit by its listing index, so
+  `yokogawa-dlm` needs `Device::channels_listed_as_they_are()`; a separate
+  channel-to-bit map would let a driver keep C's index-32 channels.
+- A VXI-11 transport, the Yokogawa DLM's Ethernet path.
+- `siglent-sds`: an E-series history mode as pull request 247 has it
+  (`HSMD`, `FRAM`).
+
 - `hp-3457a`'s look at the line before each question, which catches an extra
   answer, has no counterpart on USBTMC.
 
@@ -310,6 +313,17 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `rigol-dg` on a real DG1000Z: the answers to `X? MIN|MAX` for amplitude,
+  offset and square duty. On a DG800/DG900: whether `FUNC` and the MIN/MAX
+  queries behave as on the DG1000Z, and channel 2 with the counter on. The
+  MSO5000 generator's syntax.
+- `siglent-sds` and `siglent-sdl10x0`: a recording from a real unit. The
+  SDL's USB id, and what its USBTMC does with INITIATE_CLEAR (and whether it
+  needs the bulk OUT halt cleared after, which `Transport` has no call for).
+  The SDS E series' second frame, and multi-frame `ARM` on the others.
+- `yokogawa-dlm`: the DL9000 series' commands, USB id and channel 4/logic
+  sharing need a manual or a recording.
 
 - `hp-3457a` and `hp-59306a` behind a TCP bridge with real HP-IB: untried.
   For the 3457A, whether a measurement holds up `ID?`, and what `PRESET`

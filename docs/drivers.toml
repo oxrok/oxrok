@@ -49,19 +49,21 @@ kind = "logic-analyzer"
 connection = "usb"
 vendor = "Intronix"
 models = ["LA1034"]
-status = ["hardware"]
-emu = []
+status = ["hardware", "emulated"]
+emu = ["intronix-logicport"]
 evidence = [
-  "Two LogicPort LA1034 units; 60 bench checks with an ESP32 signal generator; captures match the libsigrok fork that has this driver.",
+  "Two LogicPort LA1034 units; 60 bench checks with an ESP32 signal generator.",
+  "Emulated: 121 cases against the C driver of libsigrok pull request 315 and 33 for the extended triggers and options; both real recordings replay against the model byte for byte.",
 ]
 behaviour = [
   "34 channels (D0-D31, CLK1, CLK2), 1 kHz to 500 MHz, state mode on CLK1 or CLK2, run length compression up to 200 MHz.",
-  "Options beyond the common set: clock_qualifier, sample_point, invert, frequency_channel, frequency (read only).",
-  "Triggers take the extended forms (counts, durations, value ranges, or/and combines, two stages).",
+  "Triggers take the extended forms (counts, durations, value ranges, or/and combines, two stages); options clock_qualifier, sample_point, invert, frequency_channel and frequency.",
+  "Loads the FPGA image the settings need, and retries an upload that failed; a corrupt file, a wrong image or an FPGA whose init never finishes fails the capture.",
+  "A --show on a cold device uploads an image, to measure the frequency.",
 ]
 limits = [
-  "The clock qualifier input check is still unverified (needs a wire from GPIO15 to CLK2).",
   "Firmware is the vendor's LogicPort.ccf, unmodified, looked up in the firmware directories.",
+  "The clock qualifier input check is still unverified (needs a wire from GPIO15 to CLK2).",
 ]
 
 [drivers.fx2lafw]
@@ -1321,17 +1323,27 @@ limits = []
 [drivers.rigol-dg]
 name = "Rigol DG"
 libsigrok = "rigol-dg"
-ids = []
+ids = ["rigol-dg"]
 kind = "generator"
-connection = "tcp"
+connection = "usb"
 vendor = "Rigol"
-models = []
-status = ["not-ported"]
-emu = []
+models = ["DG811", "DG812", "DG821", "DG822", "DG831", "DG832", "DG952", "DG972", "DG992", "DG1022Z", "DG1032Z", "DG1062Z", "MSO5354", "MSO5204", "MSO5104", "MSO5102", "MSO5074", "MSO5072"]
+status = ["emulated"]
+emu = ["rigol-dg"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "Sets and reads each channel's output, waveform, frequency, amplitude, offset, phase and duty cycle, asking the instrument each time.",
+  "A value outside what the generator takes is refused before it is sent, using the instrument's own limits for amplitude, offset and duty cycle.",
+  "Changing the pattern keeps the frequency, amplitude and offset where they are valid for the new waveform.",
+  "A capture runs the frequency counter: frequency, period, duty cycle and pulse width every 100 ms, the counter turned off again if it was off.",
+  "USBTMC and TCP (tcp-raw, tcp-rigol).",
+]
+limits = [
+  "Where the instrument doesn't report its limits, and on MSO5000s, an out-of-range amplitude or offset is sent with a warning that it will be clamped.",
+  "Counter readings carry about 7 significant digits; a counter that is off reads as zero.",
+  "MSO5000s have no counter, so no capture from them.",
+  "Not yet run on hardware.",
+]
 
 [drivers.scpi-dmm]
 name = "SCPI DMM (generic)"
@@ -1364,46 +1376,67 @@ behaviour = []
 limits = []
 
 [drivers.siglent-sdl10x0]
-name = "Siglent SDL10x0"
+name = "Siglent SDL1000X electronic loads"
 libsigrok = "siglent-sdl10x0"
-ids = []
+ids = ["siglent-sdl10x0"]
 kind = "load"
-connection = "tcp"
+connection = "usb"
 vendor = "Siglent"
-models = ["SDL1020P", "SDL1030P", "SDL1060P"]
-status = ["not-ported"]
-emu = []
+models = ["SDL1020X-E", "SDL1020X", "SDL1030X-E", "SDL1030X"]
+status = ["emulated"]
+emu = ["siglent-sdl10x0"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "Captures voltage and current over USBTMC or tcp-raw, one question out at a time; a frame is the two.",
+  "An answer is taken whole, up to its line end; junk, a copy or a cut answer resyncs the line and asks the round again.",
+  "A setpoint outside the load's range or with more than three decimals is refused before anything is sent, so the input never goes on at an old setting.",
+  "A silent load warns at 10 s and fails at 10 minutes, or at 10 s with no reading yet; under --time it ends with a warning instead.",
+]
+limits = [
+  "The USB id in the model (f4ec:1621) is unverified, and no udev rule covers it.",
+  "A wrong number in the right form, or a copy that comes after the next answer, can't be told from a reading.",
+]
 
 [drivers.siglent-sds]
-name = "Siglent SDS"
+name = "Siglent SDS1000/SDS2000"
 libsigrok = "siglent-sds"
-ids = []
+ids = ["siglent-sds"]
 kind = "scope"
-connection = "tcp"
+connection = "usb"
 vendor = "Siglent"
-models = []
-status = ["not-ported"]
-emu = []
+models = ["SDS1000CML/CNL/DL", "SDS1000X", "SDS1000X+", "SDS1000X-E", "SDS2000X"]
+status = ["emulated"]
+emu = ["siglent-sds"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "SCPI over USBTMC and TCP; all 26 models of the driver's table.",
+  "An E series on the screen takes a single shot (TRMD SINGLE) and reads DAT2, as libsigrok pull request 247 does on real ones; the others ARM and wait for :INR?'s bit 0.",
+  "Analog channels in volts and the 16 logic inputs of the X-E, one frame per limit.",
+]
+limits = [
+  "Never on hardware: the model follows Siglent's programming guide PG01-E02D and the pull request, with no recording.",
+  "Settings get no answer from the scope, so a refused one shows only at the next open.",
+  "Off the E series, scales read at the open are used for the whole capture.",
+]
 
 [drivers.yokogawa-dlm]
-name = "Yokogawa DLM"
+name = "Yokogawa DL/DLM"
 libsigrok = "yokogawa-dlm"
-ids = []
-kind = "meter"
-connection = "tcp"
+ids = ["yokogawa-dlm"]
+kind = "scope"
+connection = "usb"
 vendor = "Yokogawa"
-models = []
-status = ["not-ported"]
-emu = []
+models = ["DLM2022", "DLM2032", "DLM2052", "DLM2024", "DLM2034", "DLM2054", "DL9040", "DL9140", "DL9240", "DL9505L", "DL9510L", "DL9705L", "DL9710L"]
+status = ["emulated"]
+emu = ["yokogawa-dlm"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "SCPI over USBTMC or tcp-raw; a capture reads one frame, every enabled channel, as the scope holds it.",
+  "-C changes the scope's own channel displays and logic pod at once, and they stay so after the capture.",
+  "Logic comes as one byte per sample, bit n being Dn; channel 4 and logic can't be captured together.",
+  "A scope that stops answering ends the capture: 120 s before any sample and 600 s after one, plus ten divisions of the timebase, with a warning.",
+]
+limits = [
+  "No real scope has been tried; the DL9000 series follows the DLM2000's commands with no manual read.",
+  "Ethernet on a real DLM is VXI-11, which oxrok lacks; only USBTMC is known to reach one.",
+]

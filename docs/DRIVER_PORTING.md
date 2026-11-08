@@ -355,6 +355,37 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- Read the instrument's programming guide before a model: `siglent-sds`'s had
+  the `#9` of digital data in points, not bytes, and a command (`DGST`) not on the
+  very models that use it. A model written from the C and a port written from the
+  same reading agreed on both.
+- When a pull request has been used on real units and the C on main can't
+  finish, follow the pull request there, as an `--oracle-differs` naming it.
+- A setting with no answer on a generator that clamps: "it may refuse it" is
+  false, and a value meant in another unit reaches full scale. Read what the
+  manual says a set does at its limit, refuse before sending, and ask the
+  instrument's own limits (`X? MIN`, `X? MAX`) for what moves with the load.
+- A bare "apply" command with its values left out can mean "use the defaults",
+  not "keep": on a live output that is a jump to 5 Vpp.
+- tcp-raw takes a short read for a whole answer, so a split or doubled answer
+  shifts every later reading for good. Gather to the line end, and resync on
+  anything else: a new connection on TCP, INITIATE_CLEAR on USBTMC.
+- A USBTMC read after a timeout that makes a new request gets the old answer with
+  the old tag on a real device. `Scpi::wait_out_requests` waits out the one
+  request.
+- A setpoint a device refuses in silence must be refused before the `-c` is sent:
+  `Device::check_set`.
+- An instrument's slowest pace can be its own setting: a 500 s/div timebase makes
+  a frame 5000 s, so a fixed bound fails a scope that is still working.
+- A C rule that truncates a value to match a table gives a wrong value with exit
+  0. Match within a tolerance, or refuse.
+- To stop a process at its request, hook the send in a preload and raise SIGSTOP
+  there, with a forked child sending SIGCONT. nusb makes raw syscalls, so its USB
+  requests can't be hooked; libusb's go through `ioctl(USBDEVFS_SUBMITURB)`.
+- glibc's words for a heap abort change with its version and the heap's layout:
+  `diffcli.sh` makes them one line.
+- A merge tool that only resolves text can join two branches that each add the
+  same helper: build after every merge.
 - A short read ends a `tcp-raw` response, so half a number is a number. Learn
   from the first answer whether the line ends its answers, and if it does, wait
   for the end.

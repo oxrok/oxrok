@@ -1,0 +1,2832 @@
+From 5941962199785ea13ef9801ced20d7a6b841d7b5 Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Sun, 18 Oct 2026 10:31:28 +0200
+Subject: [PATCH 1/6] usb: Accept bus number 0 in bus.address connection
+ strings
+
+libusb on macOS can report bus number 0, so a device listed by a scan
+as conn=0.1 could not be selected with that connection string. USB
+device addresses start at 1, so check the address only.
+---
+ src/usb.c | 9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/src/usb.c b/src/usb.c
+index feafe9d2..6cbf5b4d 100644
+--- a/src/usb.c
++++ b/src/usb.c
+@@ -405,7 +405,12 @@ SR_PRIV GSList *sr_usb_find(libusb_context *usb_ctx, const char *conn)
+ 		sr_err("Invalid input, or neither VID:PID nor bus.address specified.");
+ 		return NULL;
+ 	}
+-	if (!(vid && pid) && !(bus && addr)) {
++	/*
++	 * USB device addresses start at 1, but bus numbers can be 0 (seen
++	 * with libusb on macOS), so only the address tells if bus.address
++	 * was specified.
++	 */
++	if (!(vid && pid) && !addr) {
+ 		sr_err("Could neither determine VID:PID nor bus.address numbers.");
+ 		return NULL;
+ 	}
+@@ -425,7 +430,7 @@ SR_PRIV GSList *sr_usb_find(libusb_context *usb_ctx, const char *conn)
+ 
+ 		b = libusb_get_bus_number(devlist[i]);
+ 		a = libusb_get_device_address(devlist[i]);
+-		if (bus && addr && (b != bus || a != addr))
++		if (addr && (b != bus || a != addr))
+ 			continue;
+ 
+ 		sr_dbg("Found USB device (VID:PID = %04x:%04x, bus.address = "
+-- 
+2.56.0
+
+
+From 794d27b25b26de6ec698a421a86110d8283263ea Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Sun, 18 Oct 2026 00:31:17 +0200
+Subject: [PATCH 2/6] intronix-logicport: Initial driver skeleton.
+
+---
+ Makefile.am                                |   6 +
+ configure.ac                               |   1 +
+ src/hardware/intronix-logicport/api.c      | 154 +++++++++++++++++++++
+ src/hardware/intronix-logicport/protocol.c |  43 ++++++
+ src/hardware/intronix-logicport/protocol.h |  35 +++++
+ 5 files changed, 239 insertions(+)
+ create mode 100644 src/hardware/intronix-logicport/api.c
+ create mode 100644 src/hardware/intronix-logicport/protocol.c
+ create mode 100644 src/hardware/intronix-logicport/protocol.h
+
+diff --git a/Makefile.am b/Makefile.am
+index 3b68142f..f816cb34 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -478,6 +478,12 @@ src_libdrivers_la_SOURCES += \
+ 	src/hardware/ikalogic-scanaplus/protocol.c \
+ 	src/hardware/ikalogic-scanaplus/api.c
+ endif
++if HW_INTRONIX_LOGICPORT
++src_libdrivers_la_SOURCES += \
++	src/hardware/intronix-logicport/protocol.h \
++	src/hardware/intronix-logicport/protocol.c \
++	src/hardware/intronix-logicport/api.c
++endif
+ if HW_IPDBG_LA
+ src_libdrivers_la_SOURCES += \
+ 	src/hardware/ipdbg-la/protocol.h \
+diff --git a/configure.ac b/configure.ac
+index 024dd4da..4ba2ab04 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -348,6 +348,7 @@ SR_DRIVER([Hung-Chang DSO-2100], [hung-chang-dso-2100], [libieee1284])
+ SR_DRIVER([ICStation USBRelay], [icstation-usbrelay], [serial_comm])
+ SR_DRIVER([Ikalogic Scanalogic-2], [ikalogic-scanalogic2], [libusb])
+ SR_DRIVER([Ikalogic Scanaplus], [ikalogic-scanaplus], [libftdi])
++SR_DRIVER([Intronix LogicPort], [intronix-logicport])
+ SR_DRIVER([IPDBG LA], [ipdbg-la])
+ SR_DRIVER([ITECH IT8500], [itech-it8500], [serial_comm])
+ SR_DRIVER([JUNTEK JDS6600], [juntek-jds6600], [serial_comm])
+diff --git a/src/hardware/intronix-logicport/api.c b/src/hardware/intronix-logicport/api.c
+new file mode 100644
+index 00000000..45067756
+--- /dev/null
++++ b/src/hardware/intronix-logicport/api.c
+@@ -0,0 +1,154 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <config.h>
++#include "protocol.h"
++
++static struct sr_dev_driver intronix_logicport_driver_info;
++
++static GSList *scan(struct sr_dev_driver *di, GSList *options)
++{
++	struct drv_context *drvc;
++	GSList *devices;
++
++	(void)options;
++
++	devices = NULL;
++	drvc = di->context;
++	drvc->instances = NULL;
++
++	/* TODO: scan for devices, either based on a SR_CONF_CONN option
++	 * or on a USB scan. */
++
++	return devices;
++}
++
++static int dev_open(struct sr_dev_inst *sdi)
++{
++	(void)sdi;
++
++	/* TODO: get handle from sdi->conn and open it. */
++
++	return SR_OK;
++}
++
++static int dev_close(struct sr_dev_inst *sdi)
++{
++	(void)sdi;
++
++	/* TODO: get handle from sdi->conn and close it. */
++
++	return SR_OK;
++}
++
++static int config_get(uint32_t key, GVariant **data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		return SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int config_set(uint32_t key, GVariant *data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		ret = SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int config_list(uint32_t key, GVariant **data,
++	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
++{
++	int ret;
++
++	(void)sdi;
++	(void)data;
++	(void)cg;
++
++	ret = SR_OK;
++	switch (key) {
++	/* TODO */
++	default:
++		return SR_ERR_NA;
++	}
++
++	return ret;
++}
++
++static int dev_acquisition_start(const struct sr_dev_inst *sdi)
++{
++	/* TODO: configure hardware, reset acquisition state, set up
++	 * callbacks and send header packet. */
++
++	(void)sdi;
++
++	return SR_OK;
++}
++
++static int dev_acquisition_stop(struct sr_dev_inst *sdi)
++{
++	/* TODO: stop acquisition. */
++
++	(void)sdi;
++
++	return SR_OK;
++}
++
++static struct sr_dev_driver intronix_logicport_driver_info = {
++	.name = "intronix-logicport",
++	.longname = "Intronix LogicPort",
++	.api_version = 1,
++	.init = std_init,
++	.cleanup = std_cleanup,
++	.scan = scan,
++	.dev_list = std_dev_list,
++	.dev_clear = std_dev_clear,
++	.config_get = config_get,
++	.config_set = config_set,
++	.config_list = config_list,
++	.dev_open = dev_open,
++	.dev_close = dev_close,
++	.dev_acquisition_start = dev_acquisition_start,
++	.dev_acquisition_stop = dev_acquisition_stop,
++	.context = NULL,
++};
++SR_REGISTER_DEV_DRIVER(intronix_logicport_driver_info);
+diff --git a/src/hardware/intronix-logicport/protocol.c b/src/hardware/intronix-logicport/protocol.c
+new file mode 100644
+index 00000000..dab21ca6
+--- /dev/null
++++ b/src/hardware/intronix-logicport/protocol.c
+@@ -0,0 +1,43 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#include <config.h>
++#include "protocol.h"
++
++SR_PRIV int intronix_logicport_receive_data(int fd, int revents, void *cb_data)
++{
++	const struct sr_dev_inst *sdi;
++	struct dev_context *devc;
++
++	(void)fd;
++
++	sdi = cb_data;
++	if (!sdi)
++		return TRUE;
++
++	devc = sdi->priv;
++	if (!devc)
++		return TRUE;
++
++	if (revents == G_IO_IN) {
++		/* TODO */
++	}
++
++	return TRUE;
++}
+diff --git a/src/hardware/intronix-logicport/protocol.h b/src/hardware/intronix-logicport/protocol.h
+new file mode 100644
+index 00000000..cc9f3543
+--- /dev/null
++++ b/src/hardware/intronix-logicport/protocol.h
+@@ -0,0 +1,35 @@
++/*
++ * This file is part of the libsigrok project.
++ *
++ * Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef LIBSIGROK_HARDWARE_INTRONIX_LOGICPORT_PROTOCOL_H
++#define LIBSIGROK_HARDWARE_INTRONIX_LOGICPORT_PROTOCOL_H
++
++#include <stdint.h>
++#include <glib.h>
++#include <libsigrok/libsigrok.h>
++#include "libsigrok-internal.h"
++
++#define LOG_PREFIX "intronix-logicport"
++
++struct dev_context {
++};
++
++SR_PRIV int intronix_logicport_receive_data(int fd, int revents, void *cb_data);
++
++#endif
+-- 
+2.56.0
+
+
+From 6bacc0747f972b04854ae994ce4a924ac66fc75d Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Sun, 18 Oct 2026 19:35:36 +0200
+Subject: [PATCH 3/6] intronix-logicport: Initial driver implementation.
+
+Support the Intronix LogicPort LA1034: it performs FPGA bit-bang
+loading via the onboard FTDI chip. Depends on the vendor LogicPort.ccf
+file that must be instaled as intronix-logicport.ccf.
+
+Supports: 1kHz-500MHz, and up to 2048 samples with RLE compression,
+          hardware triggers, voltage threshold configuration.
+---
+ configure.ac                               |    2 +-
+ src/hardware/intronix-logicport/api.c      |  412 +++++-
+ src/hardware/intronix-logicport/protocol.c | 1539 +++++++++++++++++++-
+ src/hardware/intronix-logicport/protocol.h |  122 +-
+ 4 files changed, 2029 insertions(+), 46 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index 4ba2ab04..eaab28f1 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -348,7 +348,7 @@ SR_DRIVER([Hung-Chang DSO-2100], [hung-chang-dso-2100], [libieee1284])
+ SR_DRIVER([ICStation USBRelay], [icstation-usbrelay], [serial_comm])
+ SR_DRIVER([Ikalogic Scanalogic-2], [ikalogic-scanalogic2], [libusb])
+ SR_DRIVER([Ikalogic Scanaplus], [ikalogic-scanaplus], [libftdi])
+-SR_DRIVER([Intronix LogicPort], [intronix-logicport])
++SR_DRIVER([Intronix LogicPort], [intronix-logicport], [libftdi])
+ SR_DRIVER([IPDBG LA], [ipdbg-la])
+ SR_DRIVER([ITECH IT8500], [itech-it8500], [serial_comm])
+ SR_DRIVER([JUNTEK JDS6600], [juntek-jds6600], [serial_comm])
+diff --git a/src/hardware/intronix-logicport/api.c b/src/hardware/intronix-logicport/api.c
+index 45067756..7adccb8e 100644
+--- a/src/hardware/intronix-logicport/api.c
++++ b/src/hardware/intronix-logicport/api.c
+@@ -18,41 +18,232 @@
+  */
+ 
+ #include <config.h>
++#include <libusb.h>
+ #include "protocol.h"
+ 
+-static struct sr_dev_driver intronix_logicport_driver_info;
++/*
++ * Intronix LogicPort LA1034: 34 channels (D0-D31, CLK1, CLK2), 2048
++ * samples deep, up to 500MHz timing or 200MHz state mode.
++ *
++ * Hardware features without a sigrok equivalent, and thus not exposed:
++ * trigger occurrence counts, durations and value (bus range) terms, the
++ * "A or B" and "A and B in any order" trigger combinations, the state
++ * mode qualifier and setup/hold sampling points, per channel input
++ * inversion, the frequency counter and live input activity.
++ */
++
++#define USB_STR_MAXLEN		64
++
++static const uint32_t scanopts[] = {
++	SR_CONF_CONN,
++};
++
++static const uint32_t drvopts[] = {
++	SR_CONF_LOGIC_ANALYZER,
++};
++
++static const uint32_t devopts[] = {
++	SR_CONF_CONN | SR_CONF_GET,
++	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
++	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
++	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
++	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
++	SR_CONF_VOLTAGE_THRESHOLD | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
++	SR_CONF_RLE | SR_CONF_GET | SR_CONF_SET,
++	SR_CONF_EXTERNAL_CLOCK | SR_CONF_GET | SR_CONF_SET,
++	SR_CONF_EXTERNAL_CLOCK_SOURCE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
++	SR_CONF_CLOCK_EDGE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
++};
++
++static const int32_t trigger_matches[] = {
++	SR_TRIGGER_ZERO,
++	SR_TRIGGER_ONE,
++	SR_TRIGGER_RISING,
++	SR_TRIGGER_FALLING,
++	SR_TRIGGER_EDGE,
++};
++
++static const char *clock_sources[] = {
++	"CLK1", "CLK2",
++};
++
++static const char *clock_edges[] = {
++	"rising", "falling",
++};
++
++static const struct logicport_rate *find_rate(uint64_t samplerate)
++{
++	size_t i;
++
++	for (i = 0; i < logicport_rates_count; i++)
++		if (logicport_rates[i].samplerate == samplerate)
++			return &logicport_rates[i];
++
++	return NULL;
++}
++
++static gboolean conn_matches(GSList *conn_devices, libusb_device *dev)
++{
++	const struct sr_usb_dev_inst *usb;
++	GSList *l;
++
++	for (l = conn_devices; l; l = l->next) {
++		usb = l->data;
++		if (usb->bus == libusb_get_bus_number(dev) &&
++		    usb->address == libusb_get_device_address(dev))
++			return TRUE;
++	}
++
++	return FALSE;
++}
++
++static struct sr_dev_inst *scan_device(struct ftdi_context *ftdic,
++	libusb_device *dev)
++{
++	struct sr_dev_inst *sdi;
++	struct dev_context *devc;
++	char vendor[USB_STR_MAXLEN], model[USB_STR_MAXLEN];
++	char serial[USB_STR_MAXLEN], name[8];
++	int i, ret;
++
++	ret = ftdi_usb_get_strings(ftdic, dev, vendor, sizeof(vendor),
++		model, sizeof(model), serial, sizeof(serial));
++	if (ret < 0) {
++		sr_dbg("Failed to get USB strings (%d): %s.",
++			ret, ftdi_get_error_string(ftdic));
++		serial[0] = '\0';
++	} else if (strcmp(model, LOGICPORT_USB_DESC)) {
++		sr_dbg("Unexpected product string '%s'.", model);
++	}
++
++	devc = g_malloc0(sizeof(struct dev_context));
++	devc->usb_bus = libusb_get_bus_number(dev);
++	devc->usb_address = libusb_get_device_address(dev);
++	devc->segment = -1;
++	devc->fpga_image = -1;
++	devc->rate = find_rate(SR_MHZ(100));
++	devc->capture_ratio = 50;
++	devc->threshold = 1.5;
++
++	sdi = g_malloc0(sizeof(struct sr_dev_inst));
++	sdi->status = SR_ST_INACTIVE;
++	sdi->vendor = g_strdup("Intronix");
++	sdi->model = g_strdup("LogicPort");
++	sdi->serial_num = serial[0] ? g_strdup(serial) : NULL;
++	sdi->connection_id = g_strdup_printf("%u.%u",
++		devc->usb_bus, devc->usb_address);
++	sdi->priv = devc;
++
++	for (i = 0; i < 32; i++) {
++		g_snprintf(name, sizeof(name), "D%d", i);
++		sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
++	}
++	sr_channel_new(sdi, LOGICPORT_CH_CLK1, SR_CHANNEL_LOGIC, TRUE, "CLK1");
++	sr_channel_new(sdi, LOGICPORT_CH_CLK2, SR_CHANNEL_LOGIC, TRUE, "CLK2");
++
++	return sdi;
++}
+ 
+ static GSList *scan(struct sr_dev_driver *di, GSList *options)
+ {
+ 	struct drv_context *drvc;
+-	GSList *devices;
++	struct sr_config *src;
++	struct ftdi_context *ftdic;
++	struct ftdi_device_list *devlist, *curdev;
++	struct sr_dev_inst *sdi;
++	GSList *devices, *conn_devices, *l;
++	const char *conn;
++	int ret;
++
++	drvc = di->context;
+ 
+-	(void)options;
++	conn = NULL;
++	for (l = options; l; l = l->next) {
++		src = l->data;
++		if (src->key == SR_CONF_CONN)
++			conn = g_variant_get_string(src->data, NULL);
++	}
++	conn_devices = NULL;
++	if (conn) {
++		conn_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn);
++		if (!conn_devices)
++			return NULL;
++	}
++
++	ftdic = ftdi_new();
++	if (!ftdic) {
++		sr_err("Failed to initialize libftdi.");
++		g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
++		return NULL;
++	}
+ 
+ 	devices = NULL;
+-	drvc = di->context;
+-	drvc->instances = NULL;
++	devlist = NULL;
++	ret = ftdi_usb_find_all(ftdic, &devlist, LOGICPORT_USB_VENDOR,
++		LOGICPORT_USB_PRODUCT);
++	if (ret < 0)
++		sr_err("Failed to list devices (%d): %s.",
++			ret, ftdi_get_error_string(ftdic));
++	for (curdev = devlist; ret > 0 && curdev; curdev = curdev->next) {
++		if (conn && !conn_matches(conn_devices, curdev->dev))
++			continue;
++		sdi = scan_device(ftdic, curdev->dev);
++		devices = g_slist_append(devices, sdi);
++	}
+ 
+-	/* TODO: scan for devices, either based on a SR_CONF_CONN option
+-	 * or on a USB scan. */
++	ftdi_list_free(&devlist);
++	ftdi_free(ftdic);
++	g_slist_free_full(conn_devices, (GDestroyNotify)sr_usb_dev_inst_free);
+ 
+-	return devices;
++	return std_scan_complete(di, devices);
+ }
+ 
+ static int dev_open(struct sr_dev_inst *sdi)
+ {
+-	(void)sdi;
++	struct dev_context *devc;
++	int ret;
++
++	devc = sdi->priv;
++
++	devc->ftdic = ftdi_new();
++	if (!devc->ftdic) {
++		sr_err("Failed to initialize libftdi.");
++		return SR_ERR;
++	}
++
++	ret = logicport_open(devc);
++	if (ret != SR_OK) {
++		ftdi_free(devc->ftdic);
++		devc->ftdic = NULL;
++		return ret;
++	}
+ 
+-	/* TODO: get handle from sdi->conn and open it. */
++	logicport_read_calibration(devc);
++
++	/*
++	 * An unconfigured FPGA (or one that was left halfway through
++	 * reconfiguration) doesn't drain the FIFO, so retrying won't help.
++	 * That's not an error, it gets configured when acquisition starts.
++	 */
++	devc->fpga_image = -1;
++	devc->threshold_dac = -1;
++	if (logicport_resync(devc, FALSE, 1) == SR_OK)
++		logicport_probe_image(devc);
+ 
+ 	return SR_OK;
+ }
+ 
+ static int dev_close(struct sr_dev_inst *sdi)
+ {
+-	(void)sdi;
++	struct dev_context *devc;
++
++	devc = sdi->priv;
++	if (!devc->ftdic)
++		return SR_ERR_BUG;
+ 
+-	/* TODO: get handle from sdi->conn and close it. */
++	logicport_close(devc);
++	ftdi_free(devc->ftdic);
++	devc->ftdic = NULL;
+ 
+ 	return SR_OK;
+ }
+@@ -60,75 +251,218 @@ static int dev_close(struct sr_dev_inst *sdi)
+ static int config_get(uint32_t key, GVariant **data,
+ 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
++	const struct dev_context *devc;
+ 
+-	(void)sdi;
+-	(void)data;
+ 	(void)cg;
+ 
+-	ret = SR_OK;
++	if (!sdi)
++		return SR_ERR_ARG;
++	devc = sdi->priv;
++
+ 	switch (key) {
+-	/* TODO */
++	case SR_CONF_CONN:
++		*data = g_variant_new_string(sdi->connection_id);
++		break;
++	case SR_CONF_SAMPLERATE:
++		*data = g_variant_new_uint64(devc->rate->samplerate);
++		break;
++	case SR_CONF_LIMIT_SAMPLES:
++		*data = g_variant_new_uint64(devc->limit_samples);
++		break;
++	case SR_CONF_CAPTURE_RATIO:
++		*data = g_variant_new_uint64(devc->capture_ratio);
++		break;
++	case SR_CONF_VOLTAGE_THRESHOLD:
++		*data = std_gvar_tuple_double(devc->threshold, devc->threshold);
++		break;
++	case SR_CONF_RLE:
++		*data = g_variant_new_boolean(devc->rle);
++		break;
++	case SR_CONF_EXTERNAL_CLOCK:
++		*data = g_variant_new_boolean(devc->external_clock);
++		break;
++	case SR_CONF_EXTERNAL_CLOCK_SOURCE:
++		*data = g_variant_new_string(clock_sources[devc->clock_source]);
++		break;
++	case SR_CONF_CLOCK_EDGE:
++		*data = g_variant_new_string(clock_edges[devc->clock_edge]);
++		break;
+ 	default:
+ 		return SR_ERR_NA;
+ 	}
+ 
+-	return ret;
++	return SR_OK;
+ }
+ 
+ static int config_set(uint32_t key, GVariant *data,
+ 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
++	struct dev_context *devc;
++	const struct logicport_rate *rate;
++	double low, high, threshold;
++	uint64_t ratio;
++	int idx;
+ 
+-	(void)sdi;
+-	(void)data;
+ 	(void)cg;
+ 
+-	ret = SR_OK;
++	devc = sdi->priv;
++
+ 	switch (key) {
+-	/* TODO */
++	case SR_CONF_SAMPLERATE:
++		rate = find_rate(g_variant_get_uint64(data));
++		if (!rate)
++			return SR_ERR_SAMPLERATE;
++		devc->rate = rate;
++		break;
++	case SR_CONF_LIMIT_SAMPLES:
++		devc->limit_samples = g_variant_get_uint64(data);
++		break;
++	case SR_CONF_CAPTURE_RATIO:
++		ratio = g_variant_get_uint64(data);
++		if (ratio > 100)
++			return SR_ERR_ARG;
++		devc->capture_ratio = ratio;
++		break;
++	case SR_CONF_VOLTAGE_THRESHOLD:
++		g_variant_get(data, "(dd)", &low, &high);
++		threshold = (low + high) / 2.0;
++		if (threshold < LOGICPORT_THRESHOLD_MIN ||
++		    threshold > LOGICPORT_THRESHOLD_MAX)
++			return SR_ERR_ARG;
++		devc->threshold = threshold;
++		break;
++	case SR_CONF_RLE:
++		devc->rle = g_variant_get_boolean(data);
++		break;
++	case SR_CONF_EXTERNAL_CLOCK:
++		devc->external_clock = g_variant_get_boolean(data);
++		break;
++	case SR_CONF_EXTERNAL_CLOCK_SOURCE:
++		idx = std_str_idx(data, ARRAY_AND_SIZE(clock_sources));
++		if (idx < 0)
++			return SR_ERR_ARG;
++		devc->clock_source = idx;
++		break;
++	case SR_CONF_CLOCK_EDGE:
++		idx = std_str_idx(data, ARRAY_AND_SIZE(clock_edges));
++		if (idx < 0)
++			return SR_ERR_ARG;
++		devc->clock_edge = idx;
++		break;
+ 	default:
+-		ret = SR_ERR_NA;
++		return SR_ERR_NA;
+ 	}
+ 
+-	return ret;
++	return SR_OK;
+ }
+ 
+ static int config_list(uint32_t key, GVariant **data,
+ 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
+ {
+-	int ret;
+-
+-	(void)sdi;
+-	(void)data;
+-	(void)cg;
++	uint64_t samplerates[32];
++	size_t i;
+ 
+-	ret = SR_OK;
+ 	switch (key) {
+-	/* TODO */
++	case SR_CONF_SCAN_OPTIONS:
++	case SR_CONF_DEVICE_OPTIONS:
++		return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
++	case SR_CONF_SAMPLERATE:
++		for (i = 0; i < logicport_rates_count && i < ARRAY_SIZE(samplerates); i++)
++			samplerates[i] = logicport_rates[i].samplerate;
++		*data = std_gvar_samplerates(samplerates, i);
++		break;
++	case SR_CONF_TRIGGER_MATCH:
++		*data = std_gvar_array_i32(ARRAY_AND_SIZE(trigger_matches));
++		break;
++	case SR_CONF_VOLTAGE_THRESHOLD:
++		*data = std_gvar_min_max_step_thresholds(LOGICPORT_THRESHOLD_MIN,
++			LOGICPORT_THRESHOLD_MAX, LOGICPORT_THRESHOLD_STEP);
++		break;
++	case SR_CONF_EXTERNAL_CLOCK_SOURCE:
++		*data = g_variant_new_strv(ARRAY_AND_SIZE(clock_sources));
++		break;
++	case SR_CONF_CLOCK_EDGE:
++		*data = g_variant_new_strv(ARRAY_AND_SIZE(clock_edges));
++		break;
+ 	default:
+ 		return SR_ERR_NA;
+ 	}
+ 
+-	return ret;
++	return SR_OK;
++}
++
++/* Load the FPGA image the current settings need, then write the settings. */
++static int prepare(const struct sr_dev_inst *sdi)
++{
++	struct drv_context *drvc;
++	struct dev_context *devc;
++	int ret;
++
++	drvc = sdi->driver->context;
++	devc = sdi->priv;
++
++	ret = logicport_configure_fpga(drvc->sr_ctx, devc,
++		logicport_select_image(devc));
++	if (ret != SR_OK)
++		return ret;
++
++	return logicport_program(devc);
+ }
+ 
+ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
+ {
+-	/* TODO: configure hardware, reset acquisition state, set up
+-	 * callbacks and send header packet. */
++	struct dev_context *devc;
++	int ret;
+ 
+-	(void)sdi;
++	devc = sdi->priv;
+ 
+-	return SR_OK;
++	if (devc->rle && !devc->external_clock &&
++	    devc->rate->samplerate > LOGICPORT_RLE_MAX_RATE) {
++		sr_err("RLE is only available up to %" PRIu64 " MHz.",
++			LOGICPORT_RLE_MAX_RATE / SR_MHZ(1));
++		return SR_ERR_ARG;
++	}
++
++	ret = logicport_convert_trigger(sdi);
++	if (ret != SR_OK)
++		return ret;
++
++	ret = prepare(sdi);
++	if (ret == SR_ERR_IO || ret == SR_ERR_TIMEOUT) {
++		/* The link may be out of step, resync and try once more. */
++		sr_dbg("Retrying acquisition setup after resync.");
++		if (logicport_resync(devc, TRUE, 1) == SR_OK)
++			logicport_probe_image(devc);
++		ret = prepare(sdi);
++	}
++	if (ret == SR_OK)
++		ret = logicport_start(devc);
++	if (ret != SR_OK) {
++		sr_err("Failed to start acquisition.");
++		return ret;
++	}
++	devc->acq_running = TRUE;
++	sr_dbg("Acquisition armed.");
++
++	std_session_send_df_header(sdi);
++
++	return sr_session_source_add(sdi->session, -1, 0, 10,
++		logicport_receive_data, (void *)sdi);
+ }
+ 
+ static int dev_acquisition_stop(struct sr_dev_inst *sdi)
+ {
+-	/* TODO: stop acquisition. */
++	struct dev_context *devc;
++
++	devc = sdi->priv;
++
++	if (devc->acq_running) {
++		logicport_halt(devc);
++		devc->acq_running = FALSE;
++	}
+ 
+-	(void)sdi;
++	sr_session_source_remove(sdi->session, -1);
++	std_session_send_df_end(sdi);
+ 
+ 	return SR_OK;
+ }
+diff --git a/src/hardware/intronix-logicport/protocol.c b/src/hardware/intronix-logicport/protocol.c
+index dab21ca6..f2b5090d 100644
+--- a/src/hardware/intronix-logicport/protocol.c
++++ b/src/hardware/intronix-logicport/protocol.c
+@@ -18,26 +18,1555 @@
+  */
+ 
+ #include <config.h>
++#include <math.h>
++#include <stdlib.h>
++#include <string.h>
+ #include "protocol.h"
+ 
+-SR_PRIV int intronix_logicport_receive_data(int fd, int revents, void *cb_data)
++/*
++ * The LogicPort is an FT245BL USB FIFO bridge in front of an Altera
++ * Cyclone FPGA. The FPGA is SRAM based and gets configured by the host
++ * in FTDI bit-bang mode (passive serial). Once configured, the host
++ * talks to it in FIFO mode with a small register protocol: every
++ * command is a five byte header (opcode, 16-bit offset, 16-bit count
++ * minus one), optionally followed by write data. The device answers
++ * each command with a three byte ack (opcode, 16-bit sequence number)
++ * followed by read data. A 32-bit register address is split into a
++ * segment (upper 16 bits, selected by a separate command) and an
++ * offset.
++ */
++
++#define CMD_WRITE		0xc1
++#define CMD_READ		0xc2
++#define CMD_SET_SEGMENT		0xc3
++#define CMD_RESYNC		0x01
++#define ACK_LEN			3
++
++#define USB_TIMEOUT_MS		1000
++#define WRITE_ACK_TIMEOUT_MS	1000
++#define READ_TIMEOUT_MS		2000
++#define PROBE_TIMEOUT_MS	250
++#define LINK_TIMEOUT_MS		3000
++#define LATENCY_TIMER_MS	4
++/* Sets the bit-bang clock for FPGA configuration, unused in FIFO mode. */
++#define BITBANG_BAUDRATE	460800
++
++/* Control and status block. */
++#define REG_STATUS		0x00100000	/* R */
++#define REG_CONFIG_CTRL		0x00100000	/* W, only ever write 0. */
++#define REG_ARM			0x00100002
++#define REG_RUN			0x00100003
++#define REG_PRE_DEPTH		0x00100004
++#define REG_POST_DEPTH		0x00100006
++#define REG_THRESHOLD		0x00100008
++#define REG_END_PREFILL		0x0010000a	/* W */
++#define REG_UNFILLED		0x0010000a	/* R */
++#define REG_END_POSTFILL	0x0010000b
++#define REG_TRIGGER_COMBINE	0x0010000d
++#define REG_IMAGE_ID		0x0010000f
++
++/* Trigger levels A and B share a layout. */
++#define REG_TRIGGER_LEVEL_A	0x00200000
++#define REG_TRIGGER_LEVEL_B	0x00400000
++#define TRIG_PATTERN_MASK	0x00
++#define TRIG_PATTERN_VALUE	0x05
++#define TRIG_COUNT_HIGH		0x0a
++#define TRIG_COUNT_LOW		0x0e
++#define TRIG_CONDITION		0x14
++#define TRIG_COUNTER_SOURCE	0x16
++#define TRIG_COUNTER_MODE	0x17
++#define TRIG_CONSECUTIVE	0x18
++#define TRIG_PREQUALIFY		0x19
++#define TRIG_RISING_MASK	0x29
++#define TRIG_FALLING_MASK	0x2e
++
++/* Sample clocking and channel configuration. */
++#define REG_CLOCK_MODE		0x01000000	/* W */
++#define REG_TRIGGER_POS		0x01000000	/* R */
++#define REG_CHANNEL_CFG		0x01000001
++#define REG_COMPRESSION		0x01000002
++#define REG_COMPRESSION_MASK	0x01000003
++#define REG_INVERT_MASK		0x01000008
++
++/* Sample memory. */
++#define REG_WRITE_PTR		0x02000000
++#define REG_WRITE_PTR_B		0x02000100
++#define MEM_LANES_A		0x02001000
++#define MEM_LANES_B		0x02005000
++#define MEM_LANE_STRIDE		0x1000
++#define MEM_FLAGS		0x02009000
++
++/* Timebase. */
++#define REG_PRESCALER		0x20000000
++#define REG_STEP		0x20000001
++
++#define REG_INIT_COUNTER	0x40000005
++
++/*
++ * Status register. It cannot tell "idle" from "pre-filling",
++ * and a previous capture's "done" survives into later sessions, so the
++ * driver only looks at it after having started the acquisition itself.
++ */
++#define STATUS_DONE		(1 << 0)
++#define STATUS_WRAPPED		(1 << 1)
++#define STATUS_TRIGGERED	(1 << 5)
++#define STATUS_PREFILLED	(1 << 6)
++
++#define FLAG_CLK1		(1 << 1)
++#define FLAG_CLK2		(1 << 2)
++#define FLAG_COUNT		(1 << 3)
++#define FLAG_DDR_B_SHIFT	4
++
++#define CLOCK_MODE_CLK1		(1 << 2)
++#define CLOCK_MODE_CLK2		(1 << 1)
++#define CLOCK_MODE_FALLING	(1 << 0)
++#define CLOCK_MODE_NO_QUAL	(1 << 4)
++
++#define COND_PATTERN_TRUE	1
++#define COUNTER_SRC_EDGE	3
++#define COUNTER_MODE_OCCURRENCE	1
++
++/*
++ * The threshold DAC output settles with a time constant of about 30 ms
++ * (measured), a full scale step needs about 165 ms to get within 50 mV.
++ */
++#define THRESHOLD_SETTLE_MS	200
++
++/* Trigger pipeline delays, in samples. */
++#define TRIGGER_DELAY_SDR	7
++#define TRIGGER_DELAY_DDR	21
++
++/* Bit-bang pins used for passive serial FPGA configuration. */
++#define BB_DATA0		(1 << 0)
++#define BB_DCLK			(1 << 1)
++#define BB_NCONFIG		(1 << 2)
++#define BB_NSTATUS		(1 << 3)
++#define BB_CONF_DONE		(1 << 4)
++#define BB_OUTPUTS		(BB_DATA0 | BB_DCLK | BB_NCONFIG)
++
++#define BB_CHUNK_BYTES		10000
++#define BB_EXTRA_CLOCKS		32
++/*
++ * LogicPort.ccf from the vendor software, used unmodified. A text line of
++ * nine XOR obfuscated decimal numbers (eight image sizes in 16 byte units
++ * and their XOR) is followed by the images, each a ready bit-bang stream
++ * whose first two 4 KiB blocks are swapped.
++ */
++#define FW_FILE			"intronix-logicport.ccf"
++#define CCF_KEY			0x916662
++#define CCF_HEADER_MAX		128
++#define CCF_SWAP_BLOCK		4096
++#define RESYNC_RETRIES		5
++#define CONFIG_RETRIES		3
++
++/*
++ * Flush the host side receive direction only. Before libftdi 1.5 the
++ * purge functions were named after the opposite direction.
++ */
++#if defined HAVE_FTDI_TCIFLUSH && HAVE_FTDI_TCIFLUSH
++#  define PURGE_FTDI_RX ftdi_tciflush
++#else
++#  define PURGE_FTDI_RX ftdi_usb_purge_tx_buffer
++#endif
++
++static const char *image_names[IMAGE_COUNT] = {
++	[IMAGE_STATE_AFTER] = "state-after",
++	[IMAGE_STATE_BEFORE_CLK1_RISE] = "state-before-clk1-rise",
++	[IMAGE_STATE_BEFORE_CLK2_RISE] = "state-before-clk2-rise",
++	[IMAGE_STATE_BEFORE_CLK1_FALL] = "state-before-clk1-fall",
++	[IMAGE_STATE_BEFORE_CLK2_FALL] = "state-before-clk2-fall",
++	[IMAGE_STATE_ON] = "state-on",
++	[IMAGE_TIMING_DDR] = "timing-ddr",
++	[IMAGE_TIMING_SDR] = "timing-sdr",
++};
++
++SR_PRIV const struct logicport_rate logicport_rates[] = {
++	{ SR_KHZ(1),   FALSE, 0x61, 0x00 },
++	{ SR_KHZ(2),   FALSE, 0x51, 0x44 },
++	{ SR_KHZ(5),   FALSE, 0x51, 0x11 },
++	{ SR_KHZ(10),  FALSE, 0x51, 0x00 },
++	{ SR_KHZ(20),  FALSE, 0x41, 0x44 },
++	{ SR_KHZ(50),  FALSE, 0x41, 0x11 },
++	{ SR_KHZ(100), FALSE, 0x41, 0x00 },
++	{ SR_KHZ(200), FALSE, 0x31, 0x44 },
++	{ SR_KHZ(500), FALSE, 0x31, 0x11 },
++	{ SR_MHZ(1),   FALSE, 0x31, 0x00 },
++	{ SR_MHZ(2),   FALSE, 0x21, 0x44 },
++	{ SR_MHZ(5),   FALSE, 0x21, 0x11 },
++	{ SR_MHZ(10),  FALSE, 0x21, 0x00 },
++	{ SR_MHZ(20),  FALSE, 0x11, 0x44 },
++	{ SR_MHZ(50),  FALSE, 0x11, 0x11 },
++	{ SR_MHZ(100), FALSE, 0x11, 0x00 },
++	{ SR_MHZ(200), FALSE, 0x01, 0x00 },
++	{ SR_MHZ(250), FALSE, 0x00, 0x00 },
++	{ SR_MHZ(500), TRUE,  0x00, 0x00 },
++};
++SR_PRIV const size_t logicport_rates_count = ARRAY_SIZE(logicport_rates);
++
++/*
++ * Raw transfer errors are expected while the FPGA is unconfigured (the
++ * FIFO isn't drained), so they are only logged at debug level here.
++ */
++static int read_raw(struct dev_context *devc, uint8_t *buf, size_t len,
++	unsigned int timeout_ms)
++{
++	gint64 deadline;
++	size_t got;
++	int ret;
++
++	deadline = g_get_monotonic_time() + (gint64)timeout_ms * 1000;
++	got = 0;
++	while (got < len) {
++		ret = ftdi_read_data(devc->ftdic, buf + got, len - got);
++		if (ret < 0) {
++			sr_dbg("Failed to read FTDI data (%d): %s.",
++				ret, ftdi_get_error_string(devc->ftdic));
++			return SR_ERR_IO;
++		}
++		got += ret;
++		if (ret == 0 && g_get_monotonic_time() > deadline) {
++			sr_dbg("Read timeout (%zu of %zu bytes).", got, len);
++			return SR_ERR_TIMEOUT;
++		}
++	}
++
++	return SR_OK;
++}
++
++static int write_raw(struct dev_context *devc, const uint8_t *buf, size_t len)
++{
++	int ret;
++
++	ret = ftdi_write_data(devc->ftdic, buf, len);
++	if (ret < 0) {
++		sr_dbg("Failed to write FTDI data (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		return SR_ERR_IO;
++	}
++	if ((size_t)ret != len) {
++		sr_dbg("Short FTDI write (%d of %zu bytes).", ret, len);
++		return SR_ERR_IO;
++	}
++
++	return SR_OK;
++}
++
++/* Send one command and check its ack; read data follows the ack. */
++static int send_cmd(struct dev_context *devc, uint8_t cmd, uint16_t arg0,
++	uint16_t arg1, const uint8_t *wdata, size_t wlen,
++	uint8_t *rdata, size_t rlen, unsigned int timeout_ms)
++{
++	uint8_t buf[5 + 8], ack[ACK_LEN];
++	int ret;
++
++	if (wlen > sizeof(buf) - 5)
++		return SR_ERR_BUG;
++	/* Fail fast until the next resync once the link is out of step. */
++	if (devc->io_error)
++		return SR_ERR_IO;
++
++	buf[0] = cmd;
++	write_u16le(&buf[1], arg0);
++	write_u16le(&buf[3], arg1);
++	if (wlen)
++		memcpy(&buf[5], wdata, wlen);
++
++	ret = write_raw(devc, buf, 5 + wlen);
++	if (ret == SR_OK)
++		ret = read_raw(devc, ack, sizeof(ack), timeout_ms);
++	if (ret == SR_OK && (ack[0] != cmd || read_u16be(&ack[1]) != devc->seq)) {
++		sr_dbg("Bad ack %02x %02x %02x for command 0x%02x, seq %u.",
++			ack[0], ack[1], ack[2], cmd, devc->seq);
++		ret = SR_ERR_IO;
++	}
++	if (ret == SR_OK && rlen)
++		ret = read_raw(devc, rdata, rlen, timeout_ms);
++	if (ret != SR_OK) {
++		devc->segment = -1;
++		devc->io_error = TRUE;
++		return ret;
++	}
++	devc->seq++;
++
++	return SR_OK;
++}
++
++static int set_segment(struct dev_context *devc, uint32_t addr)
++{
++	uint16_t segment;
++	int ret;
++
++	segment = addr >> 16;
++	if (devc->segment == segment)
++		return SR_OK;
++
++	ret = send_cmd(devc, CMD_SET_SEGMENT, segment, 0, NULL, 0, NULL, 0,
++		WRITE_ACK_TIMEOUT_MS);
++	if (ret != SR_OK)
++		return ret;
++	devc->segment = segment;
++
++	return SR_OK;
++}
++
++static int reg_write(struct dev_context *devc, uint32_t addr,
++	const uint8_t *data, size_t len)
++{
++	int ret;
++
++	ret = set_segment(devc, addr);
++	if (ret != SR_OK)
++		return ret;
++
++	return send_cmd(devc, CMD_WRITE, addr & 0xffff, len - 1, data, len,
++		NULL, 0, WRITE_ACK_TIMEOUT_MS);
++}
++
++static int reg_read_timeout(struct dev_context *devc, uint32_t addr,
++	uint8_t *data, size_t len, unsigned int timeout_ms)
++{
++	int ret;
++
++	ret = set_segment(devc, addr);
++	if (ret != SR_OK)
++		return ret;
++
++	return send_cmd(devc, CMD_READ, addr & 0xffff, len - 1, NULL, 0,
++		data, len, timeout_ms);
++}
++
++static int reg_read(struct dev_context *devc, uint32_t addr,
++	uint8_t *data, size_t len)
++{
++	return reg_read_timeout(devc, addr, data, len, READ_TIMEOUT_MS);
++}
++
++static int reg_write_u8(struct dev_context *devc, uint32_t addr, uint8_t value)
++{
++	return reg_write(devc, addr, &value, 1);
++}
++
++static int reg_read_u8(struct dev_context *devc, uint32_t addr, uint8_t *value)
++{
++	return reg_read(devc, addr, value, 1);
++}
++
++static int reg_read_u16(struct dev_context *devc, uint32_t addr, uint16_t *value)
++{
++	uint8_t buf[2];
++	int ret;
++
++	ret = reg_read(devc, addr, buf, sizeof(buf));
++	if (ret == SR_OK)
++		*value = read_u16le(buf);
++
++	return ret;
++}
++
++SR_PRIV int logicport_open(struct dev_context *devc)
++{
++	char *desc;
++	int ret;
++
++	desc = g_strdup_printf("d:%u/%u", devc->usb_bus, devc->usb_address);
++	ret = ftdi_usb_open_string(devc->ftdic, desc);
++	g_free(desc);
++	if (ret < 0) {
++		sr_err("Failed to open device (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		return SR_ERR;
++	}
++
++	ret = ftdi_usb_reset(devc->ftdic);
++	if (ret < 0) {
++		sr_err("Failed to reset FTDI chip (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		goto err_close;
++	}
++
++	ret = ftdi_set_latency_timer(devc->ftdic, LATENCY_TIMER_MS);
++	if (ret < 0) {
++		sr_err("Failed to set FTDI latency timer (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		goto err_close;
++	}
++
++	ret = ftdi_set_baudrate(devc->ftdic, BITBANG_BAUDRATE);
++	if (ret < 0) {
++		sr_err("Failed to set FTDI baudrate (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		goto err_close;
++	}
++
++	devc->ftdic->usb_read_timeout = USB_TIMEOUT_MS;
++	devc->ftdic->usb_write_timeout = USB_TIMEOUT_MS;
++
++	return SR_OK;
++
++err_close:
++	ftdi_usb_close(devc->ftdic);
++
++	return SR_ERR;
++}
++
++SR_PRIV void logicport_close(struct dev_context *devc)
++{
++	ftdi_usb_close(devc->ftdic);
++}
++
++/*
++ * Resynchronize with the FPGA's command parser. The device keeps its
++ * sequence counter across host sessions, so this is needed on every
++ * open. The flood of zeros drains any partially received command of
++ * maximum length, the final 0x01 resets the parser and the counter.
++ */
++static int resync_once(struct dev_context *devc, gboolean reopen)
++{
++	uint8_t *zeros, cmd;
++	int ret;
++
++	devc->segment = -1;
++
++	if (reopen) {
++		logicport_close(devc);
++		g_usleep(50 * 1000);
++		ret = logicport_open(devc);
++		if (ret != SR_OK)
++			return ret;
++	}
++
++	if (PURGE_FTDI_BOTH(devc->ftdic) < 0)
++		return SR_ERR_IO;
++
++	zeros = g_malloc0(65535);
++	ret = write_raw(devc, zeros, 65535);
++	if (ret == SR_OK)
++		ret = write_raw(devc, zeros, 30000);
++	g_free(zeros);
++	if (ret != SR_OK)
++		return ret;
++
++	cmd = CMD_RESYNC;
++	ret = write_raw(devc, &cmd, 1);
++	if (ret != SR_OK)
++		return ret;
++
++	g_usleep(50 * 1000);
++	if (PURGE_FTDI_BOTH(devc->ftdic) < 0)
++		return SR_ERR_IO;
++	devc->seq = 0;
++	devc->io_error = FALSE;
++
++	return SR_OK;
++}
++
++SR_PRIV int logicport_resync(struct dev_context *devc, gboolean reopen,
++	int attempts)
++{
++	int i, ret;
++
++	ret = SR_ERR;
++	for (i = 0; i < attempts; i++) {
++		ret = resync_once(devc, reopen || i > 0);
++		if (ret == SR_OK)
++			return SR_OK;
++		sr_dbg("Resync attempt %d failed.", i + 1);
++		if (i + 1 < attempts)
++			g_usleep(500 * 1000);
++	}
++	sr_dbg("Failed to resynchronize with the device.");
++
++	return ret;
++}
++
++/* Find out which FPGA image is loaded. An unconfigured FPGA won't reply. */
++SR_PRIV int logicport_probe_image(struct dev_context *devc)
++{
++	uint8_t id;
++
++	devc->fpga_image = -1;
++	if (reg_read_timeout(devc, REG_IMAGE_ID, &id, 1, PROBE_TIMEOUT_MS) != SR_OK) {
++		sr_dbg("No reply from the FPGA, assuming it is unconfigured.");
++		return SR_ERR;
++	}
++	if ((id & 0xf0) != 0x10 || (id & 0x0f) >= IMAGE_COUNT) {
++		sr_dbg("Unexpected FPGA image ID 0x%02x.", id);
++		return SR_ERR;
++	}
++	devc->fpga_image = id & 0x0f;
++	sr_dbg("FPGA image %d is loaded.", devc->fpga_image);
++
++	return SR_OK;
++}
++
++/*
++ * The threshold calibration offset is kept as a signed decimal string
++ * (e.g. "+003") at the start of the EEPROM user area, which follows the
++ * string descriptors and the four byte PnP block. The EEPROM is never
++ * written.
++ */
++SR_PRIV int logicport_read_calibration(struct dev_context *devc)
++{
++	static const uint8_t pnp[] = { 0x02, 0x03, 0x01, 0x00 };
++	uint8_t buf[128];
++	char str[5];
++	size_t pos;
++	int ret;
++
++	devc->threshold_cal = 0;
++	memset(buf, 0, sizeof(buf));
++
++	ret = ftdi_read_eeprom(devc->ftdic);
++	if (ret == 0)
++		ret = ftdi_get_eeprom_buf(devc->ftdic, buf, sizeof(buf));
++	if (ret < 0) {
++		sr_warn("Failed to read EEPROM (%d): %s.",
++			ret, ftdi_get_error_string(devc->ftdic));
++		return SR_ERR;
++	}
++
++	/* Serial number descriptor: byte offset (bit 7 set) and length. */
++	pos = (buf[0x12] & 0x7f) + buf[0x13];
++	if (pos + sizeof(pnp) <= sizeof(buf) &&
++	    !memcmp(&buf[pos], pnp, sizeof(pnp)))
++		pos += sizeof(pnp);
++	if (pos + 4 > sizeof(buf) - 2 ||
++	    (buf[pos] != '+' && buf[pos] != '-') ||
++	    !g_ascii_isdigit(buf[pos + 1]) || !g_ascii_isdigit(buf[pos + 2]) ||
++	    !g_ascii_isdigit(buf[pos + 3])) {
++		sr_warn("No threshold calibration found in EEPROM.");
++		return SR_ERR_DATA;
++	}
++
++	memcpy(str, &buf[pos], 4);
++	str[4] = '\0';
++	devc->threshold_cal = atoi(str);
++	sr_dbg("Threshold calibration offset: %d.", devc->threshold_cal);
++
++	return SR_OK;
++}
++
++static int wait_pins(struct dev_context *devc, uint8_t mask)
++{
++	gint64 deadline;
++	uint8_t pins;
++
++	deadline = g_get_monotonic_time() + 1000 * 1000;
++	do {
++		if (ftdi_read_pins(devc->ftdic, &pins) < 0)
++			return SR_ERR_IO;
++		if (pins & mask)
++			return SR_OK;
++	} while (g_get_monotonic_time() < deadline);
++	sr_dbg("Timeout waiting for pins 0x%02x (pins 0x%02x).", mask, pins);
++
++	return SR_ERR_TIMEOUT;
++}
++
++/* Send a bit-bang stream: two bytes per bit, DCLK low then high. */
++static int send_bitstream(struct dev_context *devc, const uint8_t *stream,
++	size_t size)
++{
++	size_t off, len;
++	int ret;
++
++	for (off = 0; off < size; off += len) {
++		len = MIN(size - off, BB_CHUNK_BYTES);
++		ret = write_raw(devc, stream + off, len);
++		if (ret != SR_OK)
++			return ret;
++		/* The bit-bang echo is of no use, don't let it pile up. */
++		if (PURGE_FTDI_RX(devc->ftdic) < 0)
++			return SR_ERR_IO;
++	}
++
++	return SR_OK;
++}
++
++static int send_extra_clocks(struct dev_context *devc)
++{
++	uint8_t buf[2 * BB_EXTRA_CLOCKS];
++	size_t i;
++
++	for (i = 0; i < BB_EXTRA_CLOCKS; i++) {
++		buf[2 * i] = BB_NCONFIG;
++		buf[2 * i + 1] = BB_NCONFIG | BB_DCLK;
++	}
++
++	return write_raw(devc, buf, sizeof(buf));
++}
++
++static int bitbang_configure(struct dev_context *devc, const uint8_t *stream,
++	size_t size)
++{
++	uint8_t pin_state;
++	int ret;
++
++	if (PURGE_FTDI_RX(devc->ftdic) < 0)
++		return SR_ERR_IO;
++	if (ftdi_set_bitmode(devc->ftdic, 0, BITMODE_RESET) < 0 ||
++	    ftdi_set_bitmode(devc->ftdic, BB_OUTPUTS, BITMODE_BITBANG) < 0) {
++		sr_err("Failed to enter bit-bang mode: %s.",
++			ftdi_get_error_string(devc->ftdic));
++		return SR_ERR_IO;
++	}
++
++	pin_state = 0;
++	ret = write_raw(devc, &pin_state, 1);
++	if (ret != SR_OK)
++		return ret;
++	g_usleep(10 * 1000);
++
++	pin_state = BB_NCONFIG;
++	ret = write_raw(devc, &pin_state, 1);
++	if (ret != SR_OK)
++		return ret;
++	if (wait_pins(devc, BB_NSTATUS) != SR_OK) {
++		sr_err("FPGA did not enter configuration mode.");
++		return SR_ERR_TIMEOUT;
++	}
++
++	ret = send_bitstream(devc, stream, size);
++	if (ret != SR_OK)
++		return ret;
++
++	if (wait_pins(devc, BB_CONF_DONE) != SR_OK) {
++		sr_err("FPGA did not accept the configuration.");
++		return SR_ERR_TIMEOUT;
++	}
++
++	/* Cyclone devices need extra DCLK edges to start initialization. */
++	ret = send_extra_clocks(devc);
++	if (ret != SR_OK)
++		return ret;
++
++	if (ftdi_set_bitmode(devc->ftdic, 0, BITMODE_RESET) < 0) {
++		sr_err("Failed to leave bit-bang mode: %s.",
++			ftdi_get_error_string(devc->ftdic));
++		return SR_ERR_IO;
++	}
++
++	return SR_OK;
++}
++
++/*
++ * After a power-on configuration the FPGA was seen to ignore commands
++ * for more than a second, while a reconfiguration answers right away.
++ * Poll with short timeouts, resyncing in between.
++ */
++static int wait_link(struct dev_context *devc)
++{
++	gint64 deadline;
++	uint8_t count;
++
++	deadline = g_get_monotonic_time() + LINK_TIMEOUT_MS * 1000;
++	while (1) {
++		if (reg_read_timeout(devc, REG_INIT_COUNTER, &count, 1,
++		    PROBE_TIMEOUT_MS) == SR_OK)
++			return SR_OK;
++		if (g_get_monotonic_time() > deadline)
++			return SR_ERR_TIMEOUT;
++		sr_dbg("FPGA not answering yet, resyncing.");
++		g_usleep(100 * 1000);
++		logicport_resync(devc, TRUE, 1);
++	}
++}
++
++/*
++ * After configuration, the FPGA runs an init sequence of about 250 ms
++ * during which a counter increments. Acquisitions don't start before it
++ * has finished. Wait for the counter to settle, its final value varies.
++ */
++static int wait_init_done(struct dev_context *devc)
++{
++	gint64 start, now, stable_since;
++	uint8_t count;
++	int last, ret;
++
++	start = g_get_monotonic_time();
++	stable_since = start;
++	last = -1;
++	while (1) {
++		ret = reg_read_u8(devc, REG_INIT_COUNTER, &count);
++		if (ret != SR_OK) {
++			sr_dbg("Failed to read the FPGA init counter (%d).", ret);
++			return ret;
++		}
++		now = g_get_monotonic_time();
++		if (count != last) {
++			last = count;
++			stable_since = now;
++		} else if (count && now - stable_since > 50 * 1000) {
++			break;
++		}
++		if (now - start > 3000 * 1000) {
++			sr_err("FPGA init did not finish (counter %u).", count);
++			return SR_ERR_TIMEOUT;
++		}
++		g_usleep(5 * 1000);
++	}
++	sr_dbg("FPGA init done after %" PRIi64 " ms.", (now - start) / 1000);
++
++	return SR_OK;
++}
++
++static int read_full(struct sr_context *ctx, struct sr_resource *res,
++	uint8_t *buf, size_t len)
++{
++	gssize n;
++
++	while (len) {
++		n = sr_resource_read(ctx, res, buf, len);
++		if (n <= 0)
++			return SR_ERR_IO;
++		buf += n;
++		len -= n;
++	}
++
++	return SR_OK;
++}
++
++static int parse_ccf_header(const char *line, uint32_t *units)
++{
++	gchar **fields;
++	uint32_t check;
++	int i, ret;
++
++	fields = g_strsplit(line, ",", 0);
++	ret = SR_OK;
++	if (g_strv_length(fields) != IMAGE_COUNT + 1)
++		ret = SR_ERR_DATA;
++	check = 0;
++	for (i = 0; ret == SR_OK && i <= IMAGE_COUNT; i++) {
++		units[i] = strtoul(fields[i], NULL, 10) ^ CCF_KEY;
++		if (i < IMAGE_COUNT)
++			check ^= units[i];
++	}
++	if (ret == SR_OK && check != units[IMAGE_COUNT])
++		ret = SR_ERR_DATA;
++	g_strfreev(fields);
++
++	return ret;
++}
++
++/* The stream must start with an Altera RBF header: 16 x 0xff, 0x6a. */
++static gboolean stream_is_rbf(const uint8_t *stream, size_t size)
++{
++	static const uint8_t sync = 0x6a;
++	uint8_t byte;
++	size_t i, k;
++
++	if (size < 17 * 16)
++		return FALSE;
++	for (i = 0; i < 17; i++) {
++		byte = 0;
++		for (k = 0; k < 8; k++)
++			byte |= (stream[(i * 8 + k) * 2] & BB_DATA0) << k;
++		if (byte != (i < 16 ? 0xff : sync))
++			return FALSE;
++	}
++
++	return TRUE;
++}
++
++/* Read one image from LogicPort.ccf, ready to bit-bang. */
++static uint8_t *load_image(struct sr_context *ctx, int image, size_t *size)
++{
++	struct sr_resource res;
++	char line[CCF_HEADER_MAX];
++	uint32_t units[IMAGE_COUNT + 1];
++	uint8_t *stream, skip[4096], tmp;
++	uint64_t offset, total;
++	size_t len, i;
++	int k;
++
++	if (sr_resource_open(ctx, &res, SR_RESOURCE_FIRMWARE, FW_FILE) != SR_OK) {
++		sr_err("Firmware file '%s' not found, see README.devices.",
++			FW_FILE);
++		return NULL;
++	}
++
++	/* Header line, terminated by CR LF. */
++	len = 0;
++	while (len < sizeof(line) - 1) {
++		if (read_full(ctx, &res, (uint8_t *)&line[len], 1) != SR_OK)
++			break;
++		if (line[len++] == '\n')
++			break;
++	}
++	line[len] = '\0';
++	if (len < 2 || line[len - 1] != '\n' ||
++	    parse_ccf_header(line, units) != SR_OK) {
++		sr_err("'%s' is not a LogicPort.ccf file.", FW_FILE);
++		goto err_close;
++	}
++
++	offset = 0;
++	total = 0;
++	for (k = 0; k < IMAGE_COUNT; k++) {
++		if (k < image)
++			offset += (uint64_t)units[k] * 16;
++		total += (uint64_t)units[k] * 16;
++	}
++	*size = (size_t)units[image] * 16;
++	if (len + total != res.size || *size < 2 * CCF_SWAP_BLOCK) {
++		sr_err("'%s' has an unexpected size.", FW_FILE);
++		goto err_close;
++	}
++
++	for (; offset; offset -= len) {
++		len = MIN(offset, sizeof(skip));
++		if (read_full(ctx, &res, skip, len) != SR_OK)
++			goto err_read;
++	}
++	stream = g_try_malloc(*size);
++	if (!stream) {
++		sr_err("Failed to allocate memory for the bitstream.");
++		goto err_close;
++	}
++	if (read_full(ctx, &res, stream, *size) != SR_OK) {
++		g_free(stream);
++		goto err_read;
++	}
++	sr_resource_close(ctx, &res);
++
++	for (i = 0; i < CCF_SWAP_BLOCK; i++) {
++		tmp = stream[i];
++		stream[i] = stream[CCF_SWAP_BLOCK + i];
++		stream[CCF_SWAP_BLOCK + i] = tmp;
++	}
++	if (!stream_is_rbf(stream, *size)) {
++		sr_err("Image %d in '%s' is not a valid bitstream.", image,
++			FW_FILE);
++		g_free(stream);
++		return NULL;
++	}
++
++	return stream;
++
++err_read:
++	sr_err("Failed to read '%s'.", FW_FILE);
++err_close:
++	sr_resource_close(ctx, &res);
++	return NULL;
++}
++
++SR_PRIV int logicport_configure_fpga(struct sr_context *ctx,
++	struct dev_context *devc, int image)
++{
++	const char *step;
++	uint8_t *fw;
++	size_t size;
++	int i, ret;
++
++	if (devc->fpga_image == image)
++		return SR_OK;
++
++	fw = load_image(ctx, image, &size);
++	if (!fw)
++		return SR_ERR;
++
++	sr_info("Configuring FPGA with image '%s'.", image_names[image]);
++	ret = SR_ERR;
++	step = "none";
++	devc->threshold_dac = -1;
++	for (i = 0; i < CONFIG_RETRIES; i++) {
++		if (i > 0) {
++			sr_dbg("Configuration attempt %d failed (%s).", i, step);
++			g_usleep(500 * 1000);
++			/* The image may have loaded, only the link failed. */
++			if (logicport_resync(devc, TRUE, 1) == SR_OK &&
++			    logicport_probe_image(devc) == SR_OK &&
++			    devc->fpga_image == image &&
++			    wait_init_done(devc) == SR_OK) {
++				ret = SR_OK;
++				break;
++			}
++		}
++
++		/*
++		 * A configured FPGA ignores nCONFIG until it is told to
++		 * release its configuration. This stalls the FIFO, so it
++		 * has to be followed by bit-bang configuration right away.
++		 * An unconfigured FPGA won't ack, which is fine.
++		 */
++		if (devc->fpga_image >= 0 &&
++		    reg_write_u8(devc, REG_CONFIG_CTRL, 0x00) != SR_OK)
++			sr_dbg("No ack for 'enable configure'.");
++		devc->fpga_image = -1;
++
++		step = "bit-bang";
++		ret = bitbang_configure(devc, fw, size);
++		if (ret != SR_OK)
++			continue;
++		/* A close/reopen is needed before the resync here. */
++		step = "resync";
++		ret = logicport_resync(devc, TRUE, RESYNC_RETRIES);
++		if (ret != SR_OK)
++			continue;
++		step = "link";
++		ret = wait_link(devc);
++		if (ret != SR_OK)
++			continue;
++		step = "init";
++		ret = wait_init_done(devc);
++		if (ret != SR_OK)
++			continue;
++		step = "image check";
++		ret = logicport_probe_image(devc);
++		if (ret == SR_OK && devc->fpga_image != image)
++			ret = SR_ERR;
++		if (ret == SR_OK)
++			break;
++	}
++	g_free(fw);
++
++	if (ret != SR_OK)
++		sr_err("Failed to configure the FPGA.");
++
++	return ret;
++}
++
++SR_PRIV int logicport_select_image(const struct dev_context *devc)
++{
++	/* State mode samples on the clock edge, without setup/hold shift. */
++	if (devc->external_clock)
++		return IMAGE_STATE_ON;
++	if (devc->rate->ddr)
++		return IMAGE_TIMING_DDR;
++
++	return IMAGE_TIMING_SDR;
++}
++
++/*
++ * Map sigrok trigger stages onto the two hardware trigger levels. Level
++ * matches form a pattern, edge matches an edge mask. With both present
++ * in a stage the level fires on an edge while the pattern is true.
++ */
++SR_PRIV int logicport_convert_trigger(const struct sr_dev_inst *sdi)
++{
++	struct dev_context *devc;
++	struct sr_trigger *trigger;
++	const struct sr_trigger_stage *stage;
++	const struct sr_trigger_match *match;
++	struct logicport_trigger_level *level;
++	const GSList *l, *m;
++	uint64_t bit;
++	int num_stages;
++
++	devc = sdi->priv;
++	memset(devc->trigger, 0, sizeof(devc->trigger));
++	devc->trigger_combine = 0;
++	devc->trigger_used = FALSE;
++
++	trigger = sr_session_trigger_get(sdi->session);
++	if (!trigger || !trigger->stages)
++		return SR_OK;
++
++	num_stages = g_slist_length(trigger->stages);
++	if (num_stages > (int)ARRAY_SIZE(devc->trigger)) {
++		sr_err("Only %zu trigger stages are supported.",
++			ARRAY_SIZE(devc->trigger));
++		return SR_ERR_ARG;
++	}
++
++	for (l = trigger->stages; l; l = l->next) {
++		stage = l->data;
++		level = &devc->trigger[stage->stage];
++		for (m = stage->matches; m; m = m->next) {
++			match = m->data;
++			if (!match->channel->enabled)
++				continue;
++			bit = UINT64_C(1) << match->channel->index;
++			switch (match->match) {
++			case SR_TRIGGER_ZERO:
++				level->pattern_mask |= bit;
++				break;
++			case SR_TRIGGER_ONE:
++				level->pattern_mask |= bit;
++				level->pattern_value |= bit;
++				break;
++			case SR_TRIGGER_RISING:
++				level->rising_mask |= bit;
++				break;
++			case SR_TRIGGER_FALLING:
++				level->falling_mask |= bit;
++				break;
++			case SR_TRIGGER_EDGE:
++				level->rising_mask |= bit;
++				level->falling_mask |= bit;
++				break;
++			default:
++				sr_err("Unsupported trigger match %d.",
++					match->match);
++				return SR_ERR_ARG;
++			}
++		}
++		if (level->pattern_mask)
++			level->condition = COND_PATTERN_TRUE;
++		if (level->rising_mask || level->falling_mask)
++			level->counter_source = COUNTER_SRC_EDGE;
++		if (level->condition || level->counter_source)
++			level->counter_mode = COUNTER_MODE_OCCURRENCE;
++	}
++
++	/* Fire on level A, or on level A followed by level B. */
++	devc->trigger_combine = (num_stages == 1) ? 1 : 5;
++	devc->trigger_used = TRUE;
++
++	return SR_OK;
++}
++
++/* Settings are collected in a list, then written in order. */
++struct regval {
++	uint32_t addr;
++	size_t width;
++	uint64_t value;
++};
++
++struct reg_queue {
++	struct regval regs[48];
++	size_t count;
++};
++
++static void queue_reg(struct reg_queue *q, uint32_t addr, size_t width,
++	uint64_t value)
++{
++	if (q->count < ARRAY_SIZE(q->regs)) {
++		q->regs[q->count].addr = addr;
++		q->regs[q->count].width = width;
++		q->regs[q->count].value = value;
++	}
++	q->count++;
++}
++
++static int write_regs(struct dev_context *devc, const struct reg_queue *q)
++{
++	uint8_t buf[8];
++	size_t i;
++	int ret;
++
++	if (q->count > ARRAY_SIZE(q->regs))
++		return SR_ERR_BUG;
++
++	for (i = 0; i < q->count; i++) {
++		write_u64le(buf, q->regs[i].value);
++		ret = reg_write(devc, q->regs[i].addr, buf, q->regs[i].width);
++		if (ret != SR_OK)
++			return ret;
++	}
++
++	return SR_OK;
++}
++
++static void queue_trigger_level(struct reg_queue *q, uint32_t base,
++	const struct logicport_trigger_level *level)
++{
++	queue_reg(q, base + TRIG_PATTERN_MASK, 5, level->pattern_mask);
++	queue_reg(q, base + TRIG_PATTERN_VALUE, 5, level->pattern_value);
++	queue_reg(q, base + TRIG_RISING_MASK, 5, level->rising_mask);
++	queue_reg(q, base + TRIG_FALLING_MASK, 5, level->falling_mask);
++	queue_reg(q, base + TRIG_CONSECUTIVE, 1, 0);
++	queue_reg(q, base + TRIG_PREQUALIFY, 1, 0);
++	queue_reg(q, base + TRIG_COUNT_LOW, 4, 0);
++	/* Occurrence count minus one: fire on the first event. */
++	queue_reg(q, base + TRIG_COUNT_HIGH, 4, 0);
++	queue_reg(q, base + TRIG_CONDITION, 1, level->condition);
++	queue_reg(q, base + TRIG_COUNTER_SOURCE, 1, level->counter_source);
++	queue_reg(q, base + TRIG_COUNTER_MODE, 1, level->counter_mode);
++}
++
++static uint16_t threshold_dac(double volts, int cal)
++{
++	double v;
++	long dac;
++
++	/* Input divider and DAC transfer function. */
++	v = (volts - 1.315) * -0.4020381098624974 + 1.315;
++	dac = lround((4.559 - v) / 5.875 * 1023) + cal;
++
++	return CLAMP(dac, 0, 1023);
++}
++
++/* Halve, rounding to even on ties. */
++static int half_even(int x)
++{
++	if (!(x & 1))
++		return x / 2;
++
++	return ((x + 1) / 2) % 2 ? (x - 1) / 2 : (x + 1) / 2;
++}
++
++static void buffer_split(const struct dev_context *devc, uint16_t *pre,
++	uint16_t *post)
++{
++	int ratio, pre_depth, post_depth;
++
++	ratio = devc->capture_ratio;
++	pre_depth = ratio * LOGICPORT_MEM_DEPTH / 100 + 1;
++	post_depth = (100 - ratio) * LOGICPORT_MEM_DEPTH / 100 - 1;
++	if (!devc->external_clock && devc->rate->ddr) {
++		pre_depth = half_even(pre_depth + 0x23);
++		post_depth = half_even(MAX(post_depth - 0x1e, 0));
++	} else {
++		pre_depth += 7;
++		post_depth = MAX(post_depth - 7, 0);
++	}
++	*pre = pre_depth;
++	*post = post_depth;
++}
++
++/* Write all acquisition settings, in the order the vendor software uses. */
++SR_PRIV int logicport_program(struct dev_context *devc)
++{
++	struct reg_queue q;
++	uint16_t pre, post, dac;
++	uint8_t mode;
++	int ret;
++
++	q.count = 0;
++
++	if (!devc->external_clock) {
++		queue_reg(&q, REG_PRESCALER, 1, devc->rate->prescaler);
++		queue_reg(&q, REG_STEP, 1, devc->rate->step);
++		mode = CLOCK_MODE_CLK1 | CLOCK_MODE_NO_QUAL;
++	} else {
++		mode = CLOCK_MODE_NO_QUAL;
++		mode |= devc->clock_source ? CLOCK_MODE_CLK2 : CLOCK_MODE_CLK1;
++		if (devc->clock_edge)
++			mode |= CLOCK_MODE_FALLING;
++	}
++
++	queue_reg(&q, REG_CLOCK_MODE, 1, mode);
++	queue_reg(&q, REG_COMPRESSION, 1, 0);
++	/* All channels are always captured, this only steers compression. */
++	queue_reg(&q, REG_COMPRESSION_MASK, 5, LOGICPORT_ALL_CHANNELS);
++	queue_reg(&q, REG_INVERT_MASK, 5, 0);
++	queue_reg(&q, REG_COMPRESSION, 1, devc->rle ? 1 : 0);
++	queue_reg(&q, REG_CHANNEL_CFG, 1, 0);
++
++	queue_reg(&q, REG_RUN, 1, 0);
++	queue_reg(&q, REG_ARM, 1, 1);
++	queue_trigger_level(&q, REG_TRIGGER_LEVEL_A, &devc->trigger[0]);
++	queue_trigger_level(&q, REG_TRIGGER_LEVEL_B, &devc->trigger[1]);
++	queue_reg(&q, REG_TRIGGER_COMBINE, 1, devc->trigger_combine);
++
++	dac = threshold_dac(devc->threshold, devc->threshold_cal);
++	queue_reg(&q, REG_THRESHOLD, 2, dac);
++
++	buffer_split(devc, &pre, &post);
++	queue_reg(&q, REG_PRE_DEPTH, 2, pre);
++	queue_reg(&q, REG_POST_DEPTH, 2, post);
++
++	ret = write_regs(devc, &q);
++	if (ret != SR_OK)
++		return ret;
++
++	if (dac != devc->threshold_dac) {
++		sr_dbg("Waiting for the threshold DAC (%u) to settle.", dac);
++		g_usleep(THRESHOLD_SETTLE_MS * 1000);
++		devc->threshold_dac = dac;
++	}
++
++	return SR_OK;
++}
++
++/*
++ * With compression, memory fills with transitions rather than samples,
++ * so an idle input never completes a capture. Bound the pre-fill and
++ * post-fill phases in time instead, derived from the sample limit.
++ */
++static void setup_fill_limits(struct dev_context *devc)
++{
++	uint64_t pre, post;
++
++	devc->prefill_us = 0;
++	devc->postfill_us = 0;
++	if (!devc->rle || devc->external_clock || !devc->limit_samples)
++		return;
++
++	pre = devc->limit_samples * devc->capture_ratio / 100;
++	post = devc->limit_samples - pre;
++	devc->prefill_us = MAX(pre * 1000000 / devc->rate->samplerate, 1);
++	devc->postfill_us = MAX(post * 1000000 / devc->rate->samplerate, 1);
++}
++
++SR_PRIV int logicport_start(struct dev_context *devc)
++{
++	int ret;
++
++	setup_fill_limits(devc);
++	devc->trigger_seen = 0;
++	devc->prefill_ended = FALSE;
++	devc->postfill_ended = FALSE;
++
++	ret = reg_write_u8(devc, REG_RUN, 1);
++	if (ret == SR_OK)
++		ret = reg_write_u8(devc, REG_ARM, 1);
++	devc->acq_start = g_get_monotonic_time();
++
++	return ret;
++}
++
++static int check_fill_limits(struct dev_context *devc, uint8_t status)
++{
++	gint64 now;
++	int ret;
++
++	if (!devc->prefill_us)
++		return SR_OK;
++
++	now = g_get_monotonic_time();
++	ret = SR_OK;
++	if (!(status & STATUS_PREFILLED) && !devc->prefill_ended &&
++	    now - devc->acq_start >= devc->prefill_us) {
++		sr_dbg("Pre-fill time elapsed.");
++		ret = reg_write_u8(devc, REG_END_PREFILL, 1);
++		devc->prefill_ended = TRUE;
++	}
++	if ((status & STATUS_TRIGGERED) && !devc->trigger_seen)
++		devc->trigger_seen = now;
++	if (devc->trigger_seen && !devc->postfill_ended &&
++	    now - devc->trigger_seen >= devc->postfill_us) {
++		sr_dbg("Post-fill time elapsed.");
++		ret = reg_write_u8(devc, REG_END_POSTFILL, 1);
++		devc->postfill_ended = TRUE;
++	}
++
++	return ret;
++}
++
++SR_PRIV int logicport_halt(struct dev_context *devc)
++{
++	return reg_write_u8(devc, REG_RUN, 0);
++}
++
++/* Feeds expanded samples to the session, applies limit and trigger. */
++struct sample_sink {
++	struct feed_queue_logic *queue;
++	uint64_t skip;
++	uint64_t sent;
++	uint64_t limit;
++	uint64_t ratio;
++	int64_t trigger;
++};
++
++/*
++ * With a sample limit below what was captured, keep the window around
++ * the trigger such that the capture ratio is honoured.
++ */
++static void sink_set_trigger(struct sample_sink *sink, int64_t trigger,
++	uint64_t available)
++{
++	uint64_t pre, skip;
++
++	sink->trigger = trigger;
++	if (trigger < 0 || !sink->limit || available <= sink->limit)
++		return;
++
++	pre = sink->limit * sink->ratio / 100;
++	skip = (uint64_t)trigger > pre ? trigger - pre : 0;
++	sink->skip = MIN(skip, available - sink->limit);
++	sink->trigger -= sink->skip;
++}
++
++static void sink_put(struct sample_sink *sink, uint64_t value, uint64_t count)
++{
++	uint8_t sample[LOGICPORT_UNITSIZE];
++	uint64_t chunk;
++
++	chunk = MIN(count, sink->skip);
++	sink->skip -= chunk;
++	count -= chunk;
++
++	write_u40le(sample, value);
++	while (count && (!sink->limit || sink->sent < sink->limit)) {
++		if (sink->trigger >= 0 && sink->sent == (uint64_t)sink->trigger) {
++			feed_queue_logic_send_trigger(sink->queue);
++			sink->trigger = -1;
++		}
++		chunk = count;
++		if (sink->trigger >= 0)
++			chunk = MIN(chunk, (uint64_t)sink->trigger - sink->sent);
++		if (sink->limit)
++			chunk = MIN(chunk, sink->limit - sink->sent);
++		feed_queue_logic_submit_one(sink->queue, sample, chunk);
++		sink->sent += chunk;
++		count -= chunk;
++	}
++}
++
++/*
++ * Sample memory has 2048 entries of 40 bits: four lanes holding D0-D31
++ * and a flags lane holding CLK1/CLK2. With compression, an entry with
++ * FLAG_COUNT set is a count record instead: the lanes and the low flag
++ * bits form a 35-bit number of sample periods without any transition.
++ */
++static uint64_t data_record(const struct dev_context *devc, size_t row,
++	int clk_shift)
++{
++	uint64_t value;
++	uint8_t flags;
++
++	value = (uint64_t)devc->raw[0][row] |
++		(uint64_t)devc->raw[1][row] << 8 |
++		(uint64_t)devc->raw[2][row] << 16 |
++		(uint64_t)devc->raw[3][row] << 24;
++	flags = devc->raw[4][row] >> clk_shift;
++	if (flags & FLAG_CLK1)
++		value |= UINT64_C(1) << LOGICPORT_CH_CLK1;
++	if (flags & FLAG_CLK2)
++		value |= UINT64_C(1) << LOGICPORT_CH_CLK2;
++
++	return value;
++}
++
++/* Count records hold how many extra sample periods had no transitions. */
++static uint64_t count_record(const struct dev_context *devc, size_t row)
++{
++	return (uint64_t)(devc->raw[4][row] & 0x07) << 32 |
++		(uint64_t)devc->raw[3][row] << 24 |
++		(uint64_t)devc->raw[2][row] << 16 |
++		(uint64_t)devc->raw[1][row] << 8 |
++		(uint64_t)devc->raw[0][row];
++}
++
++static uint64_t total_samples(const struct dev_context *devc, size_t n)
++{
++	uint64_t total;
++	size_t i;
++
++	total = n;
++	for (i = 1; i < n; i++)
++		if (devc->raw[4][i] & FLAG_COUNT)
++			total += count_record(devc, i);
++
++	return total;
++}
++
++static int read_lanes(struct dev_context *devc, uint32_t lanes,
++	uint16_t start, size_t offset, size_t count)
++{
++	int k, ret;
++
++	for (k = 0; k < 4; k++) {
++		ret = reg_read(devc, lanes + k * MEM_LANE_STRIDE + start,
++			&devc->raw[k][offset], count);
++		if (ret != SR_OK)
++			return ret;
++	}
++
++	return reg_read(devc, MEM_FLAGS + start, &devc->raw[4][offset], count);
++}
++
++/* Sample memory is a ring; the trigger position counts entries after it. */
++static int read_sdr(struct dev_context *devc, uint8_t status,
++	struct sample_sink *sink)
++{
++	uint16_t wp, unfilled, trigger_pos, start;
++	uint64_t value, prev, ts, prev_ts, trigger_ts;
++	size_t n, x, i, trigger_idx;
++	uint8_t flags;
++	int ret;
++
++	ret = reg_read_u16(devc, REG_WRITE_PTR, &wp);
++	if (ret != SR_OK)
++		return ret;
++	wp = MIN(wp, LOGICPORT_MEM_DEPTH - 1);
++
++	x = 0;
++	if (!(status & STATUS_WRAPPED)) {
++		ret = reg_read_u16(devc, REG_UNFILLED, &unfilled);
++		if (ret != SR_OK)
++			return ret;
++		x = MIN((size_t)unfilled + 1, LOGICPORT_MEM_DEPTH - 1);
++	}
++	n = LOGICPORT_MEM_DEPTH - x;
++	start = (wp + 1 + x) % LOGICPORT_MEM_DEPTH;
++
++	/* Drop a leading count record, it has no data to repeat. */
++	ret = reg_read_u8(devc, MEM_FLAGS + start, &flags);
++	if (ret != SR_OK)
++		return ret;
++	if ((flags & FLAG_COUNT) && n > 1) {
++		start = (start + 1) % LOGICPORT_MEM_DEPTH;
++		n--;
++	}
++
++	ret = read_lanes(devc, MEM_LANES_A, start, 0, n);
++	if (ret != SR_OK)
++		return ret;
++	ret = reg_read_u16(devc, REG_TRIGGER_POS, &trigger_pos);
++	if (ret != SR_OK)
++		return ret;
++	trigger_pos = MIN(trigger_pos, LOGICPORT_MEM_DEPTH - 1);
++	sr_dbg("SDR readout: wp %u, skip %zu, start %u, n %zu, trigger %u.",
++		wp, x, start, n, trigger_pos);
++
++	/*
++	 * When the trigger fires, the FPGA writes a record (with compression
++	 * the only data record without a transition) TRIGGER_DELAY_SDR samples
++	 * after the match. The trigger position points just past that record.
++	 */
++	trigger_idx = (n + 1 - trigger_pos) % (n + 1);
++	trigger_idx = trigger_idx ? MIN(trigger_idx, n) - 1 : 0;
++	ts = 0;
++	for (i = 1; i <= trigger_idx; i++) {
++		ts++;
++		if (devc->raw[4][i] & FLAG_COUNT)
++			ts += count_record(devc, i);
++	}
++	trigger_ts = ts > TRIGGER_DELAY_SDR ? ts - TRIGGER_DELAY_SDR : 0;
++	sink_set_trigger(sink, devc->trigger_used ? (int64_t)trigger_ts : -1,
++		total_samples(devc, n));
++
++	prev = 0;
++	prev_ts = 0;
++	for (i = 0; i < n; i++) {
++		if (devc->raw[4][i] & FLAG_COUNT) {
++			/* Repeat the last value, including this entry's slot. */
++			ts = prev_ts + 1 + count_record(devc, i);
++			sink_put(sink, prev, ts - prev_ts);
++		} else {
++			value = data_record(devc, i, 0);
++			ts = i ? prev_ts + 1 : 0;
++			sink_put(sink, value, 1);
++			prev = value;
++		}
++		prev_ts = ts;
++	}
++
++	return SR_OK;
++}
++
++/* 500 MHz: two banks of 1024 rows hold the even and odd samples. */
++static int read_ddr(struct dev_context *devc, uint8_t status,
++	struct sample_sink *sink)
++{
++	const size_t bank = LOGICPORT_MEM_DEPTH / 2;
++	uint16_t wp_a, wp_b, unfilled, trigger_pos;
++	size_t n, x, rows, i;
++	int64_t trigger_idx;
++	int ret;
++
++	ret = reg_read_u16(devc, REG_WRITE_PTR, &wp_a);
++	if (ret == SR_OK)
++		ret = reg_read_u16(devc, REG_WRITE_PTR_B, &wp_b);
++	if (ret != SR_OK)
++		return ret;
++	wp_a %= bank;
++	wp_b %= bank;
++
++	x = 0;
++	if (!(status & STATUS_WRAPPED)) {
++		ret = reg_read_u16(devc, REG_UNFILLED, &unfilled);
++		if (ret != SR_OK)
++			return ret;
++		if (unfilled + 1 > bank)
++			x = 2 * (unfilled + 1 - bank);
++	}
++	n = x < LOGICPORT_MEM_DEPTH - 2 ? LOGICPORT_MEM_DEPTH - 1 - x : 1;
++	rows = (n + 1) / 2;
++
++	ret = read_lanes(devc, MEM_LANES_A, (wp_a + 1 + x) % bank, 0, rows);
++	if (ret == SR_OK)
++		ret = read_lanes(devc, MEM_LANES_B, (wp_b + 1 + x) % bank,
++			bank, rows);
++	if (ret == SR_OK)
++		ret = reg_read_u16(devc, REG_TRIGGER_POS, &trigger_pos);
++	if (ret != SR_OK)
++		return ret;
++	sr_dbg("DDR readout: wp %u/%u, skip %zu, n %zu, trigger %u.",
++		wp_a, wp_b, x, n, trigger_pos);
++
++	/* Empirical pipeline delay, accurate to about two samples. */
++	trigger_idx = ((int64_t)n + 1 - trigger_pos) % ((int64_t)n + 1);
++	if (trigger_idx < 0)
++		trigger_idx += n + 1;
++	trigger_idx = CLAMP(trigger_idx - TRIGGER_DELAY_DDR, 0, (int64_t)n - 1);
++	sink_set_trigger(sink, devc->trigger_used ? trigger_idx : -1, n);
++
++	for (i = 0; i < n; i++) {
++		if (i & 1)
++			sink_put(sink, data_record(devc, bank + i / 2,
++				FLAG_DDR_B_SHIFT), 1);
++		else
++			sink_put(sink, data_record(devc, i / 2, 0), 1);
++	}
++
++	return SR_OK;
++}
++
++static int read_samples(const struct sr_dev_inst *sdi, uint8_t status)
+ {
+-	const struct sr_dev_inst *sdi;
+ 	struct dev_context *devc;
++	struct sample_sink sink;
++	int ret;
++
++	devc = sdi->priv;
++
++	memset(&sink, 0, sizeof(sink));
++	sink.queue = feed_queue_logic_alloc(sdi, 4096, LOGICPORT_UNITSIZE);
++	if (!sink.queue)
++		return SR_ERR_MALLOC;
++	sink.limit = devc->limit_samples;
++	sink.ratio = devc->capture_ratio;
++	sink.trigger = -1;
++	if (devc->rle && !sink.limit)
++		sink.limit = LOGICPORT_RLE_DEFAULT_LIMIT;
++
++	if (!devc->external_clock && devc->rate->ddr)
++		ret = read_ddr(devc, status, &sink);
++	else
++		ret = read_sdr(devc, status, &sink);
++	feed_queue_logic_flush(sink.queue);
++	feed_queue_logic_free(sink.queue);
++	sr_dbg("Sent %" PRIu64 " samples.", sink.sent);
++
++	return ret;
++}
++
++/*
++ * Poll the status register until the capture is done, then read out the
++ * sample memory. Captures can't be streamed, the readout happens only
++ * once the whole memory (or the time limited RLE window) is filled.
++ */
++SR_PRIV int logicport_receive_data(int fd, int revents, void *cb_data)
++{
++	struct sr_dev_inst *sdi;
++	struct dev_context *devc;
++	uint8_t status;
+ 
+ 	(void)fd;
++	(void)revents;
+ 
+ 	sdi = cb_data;
+ 	if (!sdi)
+ 		return TRUE;
+ 
+ 	devc = sdi->priv;
+-	if (!devc)
++	if (!devc || !devc->acq_running)
+ 		return TRUE;
+ 
+-	if (revents == G_IO_IN) {
+-		/* TODO */
++	if (reg_read_u8(devc, REG_STATUS, &status) != SR_OK) {
++		sr_err("Failed to read acquisition status.");
++		sr_dev_acquisition_stop(sdi);
++		return TRUE;
++	}
++	if (!(status & STATUS_DONE)) {
++		if (check_fill_limits(devc, status) != SR_OK) {
++			sr_err("Failed to end a fill phase.");
++			sr_dev_acquisition_stop(sdi);
++		}
++		return TRUE;
+ 	}
+ 
++	sr_dbg("Acquisition done, status 0x%02x.", status);
++	devc->acq_running = FALSE;
++
++	if (read_samples(sdi, status) != SR_OK)
++		sr_err("Failed to read sample memory.");
++	sr_dev_acquisition_stop(sdi);
++
+ 	return TRUE;
+ }
+diff --git a/src/hardware/intronix-logicport/protocol.h b/src/hardware/intronix-logicport/protocol.h
+index cc9f3543..342b31a7 100644
+--- a/src/hardware/intronix-logicport/protocol.h
++++ b/src/hardware/intronix-logicport/protocol.h
+@@ -22,14 +22,134 @@
+ 
+ #include <stdint.h>
+ #include <glib.h>
++#include <ftdi.h>
+ #include <libsigrok/libsigrok.h>
+ #include "libsigrok-internal.h"
+ 
+ #define LOG_PREFIX "intronix-logicport"
+ 
++#define LOGICPORT_USB_VENDOR		0x0403
++#define LOGICPORT_USB_PRODUCT		0xdc48
++#define LOGICPORT_USB_DESC		"LogicPort Logic Analyzer"
++
++/* D0..D31, CLK1, CLK2. Bit k of a sample is channel k. */
++#define LOGICPORT_NUM_CHANNELS		34
++#define LOGICPORT_ALL_CHANNELS		((UINT64_C(1) << LOGICPORT_NUM_CHANNELS) - 1)
++#define LOGICPORT_UNITSIZE		5
++#define LOGICPORT_MEM_DEPTH		2048
++
++/* Channel indices of the two clock inputs. */
++#define LOGICPORT_CH_CLK1		32
++#define LOGICPORT_CH_CLK2		33
++
++/* The threshold DAC covers -6 V .. +6 V in 50 mV steps. */
++#define LOGICPORT_THRESHOLD_MIN		-6.0
++#define LOGICPORT_THRESHOLD_MAX		6.0
++#define LOGICPORT_THRESHOLD_STEP	0.05
++
++/* Compression (RLE) is only available up to this samplerate. */
++#define LOGICPORT_RLE_MAX_RATE		SR_MHZ(200)
++
++/* Upper bound for RLE expansion when no sample limit was set. */
++#define LOGICPORT_RLE_DEFAULT_LIMIT	(16 * 1024 * 1024)
++
++/*
++ * FPGA configuration images, one per sampling mode. The loaded image's
++ * index can be read back from the FPGA. In state mode, the image fixes
++ * where data is sampled relative to the external clock edge (2.5ns
++ * before, on, or after it); the "before" images also fix clock and edge.
++ */
++enum logicport_image {
++	IMAGE_STATE_AFTER = 0,
++	IMAGE_STATE_BEFORE_CLK1_RISE = 1,
++	IMAGE_STATE_BEFORE_CLK2_RISE = 2,
++	IMAGE_STATE_BEFORE_CLK1_FALL = 3,
++	IMAGE_STATE_BEFORE_CLK2_FALL = 4,
++	IMAGE_STATE_ON = 5,
++	IMAGE_TIMING_DDR = 6,
++	IMAGE_TIMING_SDR = 7,
++	IMAGE_COUNT,
++};
++
++/* Samplerate table entry: prescaler (c) and 1-2-5 step (d) registers. */
++struct logicport_rate {
++	uint64_t samplerate;
++	gboolean ddr;
++	uint8_t prescaler;
++	uint8_t step;
++};
++
++/*
++ * One of the two hardware trigger levels (A, B). Masks have one bit per
++ * channel. Only patterns and edges are used, sigrok triggers have no
++ * occurrence counts, durations or value ranges.
++ */
++struct logicport_trigger_level {
++	uint64_t pattern_mask;		/* Channels taking part in the pattern. */
++	uint64_t pattern_value;		/* Their required levels. */
++	uint64_t rising_mask;
++	uint64_t falling_mask;
++	uint8_t condition;		/* Pattern true / false / unused. */
++	uint8_t counter_source;		/* Event counted, e.g. edges. */
++	uint8_t counter_mode;		/* How the count is evaluated. */
++};
++
+ struct dev_context {
++	struct ftdi_context *ftdic;
++	uint8_t usb_bus;
++	uint8_t usb_address;
++
++	/* Register protocol state. */
++	uint16_t seq;			/* Expected sequence number of the next ack. */
++	int segment;			/* Selected address segment, -1: unknown. */
++	gboolean io_error;		/* Link out of step, cleared by a resync. */
++	int fpga_image;			/* Loaded image, -1: unknown or none. */
++	int threshold_cal;		/* DAC offset, from the EEPROM. */
++	int threshold_dac;		/* Last DAC value written, -1: unknown. */
++
++	/* User settings. */
++	const struct logicport_rate *rate;
++	uint64_t limit_samples;
++	uint64_t capture_ratio;
++	double threshold;
++	gboolean rle;
++	gboolean external_clock;
++	int clock_source;
++	int clock_edge;
++
++	/* Acquisition state. */
++	gboolean acq_running;
++	/* RLE only: time limits for the pre-/post-trigger fill phases. */
++	gint64 acq_start;
++	gint64 trigger_seen;
++	gint64 prefill_us;
++	gint64 postfill_us;
++	gboolean prefill_ended;
++	gboolean postfill_ended;
++	/* Trigger levels A and B, and how they combine. */
++	gboolean trigger_used;
++	struct logicport_trigger_level trigger[2];
++	uint8_t trigger_combine;
++	/* Sample memory readout: lanes D0-7 .. D24-31, then the flags lane. */
++	uint8_t raw[5][LOGICPORT_MEM_DEPTH];
+ };
+ 
+-SR_PRIV int intronix_logicport_receive_data(int fd, int revents, void *cb_data);
++extern const struct logicport_rate logicport_rates[];
++extern const size_t logicport_rates_count;
++
++SR_PRIV int logicport_open(struct dev_context *devc);
++SR_PRIV void logicport_close(struct dev_context *devc);
++SR_PRIV int logicport_resync(struct dev_context *devc, gboolean reopen,
++	int attempts);
++SR_PRIV int logicport_probe_image(struct dev_context *devc);
++SR_PRIV int logicport_read_calibration(struct dev_context *devc);
++SR_PRIV int logicport_configure_fpga(struct sr_context *ctx,
++	struct dev_context *devc, int image);
++SR_PRIV int logicport_select_image(const struct dev_context *devc);
++SR_PRIV int logicport_convert_trigger(const struct sr_dev_inst *sdi);
++SR_PRIV int logicport_program(struct dev_context *devc);
++SR_PRIV int logicport_start(struct dev_context *devc);
++SR_PRIV int logicport_halt(struct dev_context *devc);
++SR_PRIV int logicport_receive_data(int fd, int revents, void *cb_data);
+ 
+ #endif
+-- 
+2.56.0
+
+
+From 97d6588849b0f2a5488aac050ffac933c45c3e0c Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Sun, 18 Oct 2026 19:35:49 +0200
+Subject: [PATCH 4/6] intronix-logicport: Add frame limit support.
+
+With SR_CONF_LIMIT_FRAMES set, each capture is sent as a frame and the
+device is re-armed until the limit is reached (recurring acquisition).
+---
+ src/hardware/intronix-logicport/api.c      |  8 ++++++++
+ src/hardware/intronix-logicport/protocol.c | 23 +++++++++++++++++++++-
+ src/hardware/intronix-logicport/protocol.h |  2 ++
+ 3 files changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/src/hardware/intronix-logicport/api.c b/src/hardware/intronix-logicport/api.c
+index 7adccb8e..99805f23 100644
+--- a/src/hardware/intronix-logicport/api.c
++++ b/src/hardware/intronix-logicport/api.c
+@@ -46,6 +46,7 @@ static const uint32_t devopts[] = {
+ 	SR_CONF_CONN | SR_CONF_GET,
+ 	SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+ 	SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
++	SR_CONF_LIMIT_FRAMES | SR_CONF_GET | SR_CONF_SET,
+ 	SR_CONF_CAPTURE_RATIO | SR_CONF_GET | SR_CONF_SET,
+ 	SR_CONF_TRIGGER_MATCH | SR_CONF_LIST,
+ 	SR_CONF_VOLTAGE_THRESHOLD | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+@@ -269,6 +270,9 @@ static int config_get(uint32_t key, GVariant **data,
+ 	case SR_CONF_LIMIT_SAMPLES:
+ 		*data = g_variant_new_uint64(devc->limit_samples);
+ 		break;
++	case SR_CONF_LIMIT_FRAMES:
++		*data = g_variant_new_uint64(devc->limit_frames);
++		break;
+ 	case SR_CONF_CAPTURE_RATIO:
+ 		*data = g_variant_new_uint64(devc->capture_ratio);
+ 		break;
+@@ -317,6 +321,9 @@ static int config_set(uint32_t key, GVariant *data,
+ 	case SR_CONF_LIMIT_SAMPLES:
+ 		devc->limit_samples = g_variant_get_uint64(data);
+ 		break;
++	case SR_CONF_LIMIT_FRAMES:
++		devc->limit_frames = g_variant_get_uint64(data);
++		break;
+ 	case SR_CONF_CAPTURE_RATIO:
+ 		ratio = g_variant_get_uint64(data);
+ 		if (ratio > 100)
+@@ -442,6 +449,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
+ 		return ret;
+ 	}
+ 	devc->acq_running = TRUE;
++	devc->frames_done = 0;
+ 	sr_dbg("Acquisition armed.");
+ 
+ 	std_session_send_df_header(sdi);
+diff --git a/src/hardware/intronix-logicport/protocol.c b/src/hardware/intronix-logicport/protocol.c
+index f2b5090d..0902da6b 100644
+--- a/src/hardware/intronix-logicport/protocol.c
++++ b/src/hardware/intronix-logicport/protocol.c
+@@ -1536,6 +1536,7 @@ SR_PRIV int logicport_receive_data(int fd, int revents, void *cb_data)
+ 	struct sr_dev_inst *sdi;
+ 	struct dev_context *devc;
+ 	uint8_t status;
++	int ret;
+ 
+ 	(void)fd;
+ 	(void)revents;
+@@ -1564,8 +1565,28 @@ SR_PRIV int logicport_receive_data(int fd, int revents, void *cb_data)
+ 	sr_dbg("Acquisition done, status 0x%02x.", status);
+ 	devc->acq_running = FALSE;
+ 
+-	if (read_samples(sdi, status) != SR_OK)
++	/* With a frame limit, each capture is a frame, then re-arm. */
++	if (devc->limit_frames)
++		std_session_send_df_frame_begin(sdi);
++	ret = read_samples(sdi, status);
++	if (devc->limit_frames)
++		std_session_send_df_frame_end(sdi);
++	if (ret != SR_OK) {
+ 		sr_err("Failed to read sample memory.");
++		sr_dev_acquisition_stop(sdi);
++		return TRUE;
++	}
++
++	devc->frames_done++;
++	if (devc->frames_done < devc->limit_frames) {
++		if (logicport_start(devc) != SR_OK) {
++			sr_err("Failed to re-arm for the next frame.");
++			sr_dev_acquisition_stop(sdi);
++			return TRUE;
++		}
++		devc->acq_running = TRUE;
++		return TRUE;
++	}
+ 	sr_dev_acquisition_stop(sdi);
+ 
+ 	return TRUE;
+diff --git a/src/hardware/intronix-logicport/protocol.h b/src/hardware/intronix-logicport/protocol.h
+index 342b31a7..a6211ed7 100644
+--- a/src/hardware/intronix-logicport/protocol.h
++++ b/src/hardware/intronix-logicport/protocol.h
+@@ -110,6 +110,7 @@ struct dev_context {
+ 	/* User settings. */
+ 	const struct logicport_rate *rate;
+ 	uint64_t limit_samples;
++	uint64_t limit_frames;
+ 	uint64_t capture_ratio;
+ 	double threshold;
+ 	gboolean rle;
+@@ -119,6 +120,7 @@ struct dev_context {
+ 
+ 	/* Acquisition state. */
+ 	gboolean acq_running;
++	uint64_t frames_done;
+ 	/* RLE only: time limits for the pre-/post-trigger fill phases. */
+ 	gint64 acq_start;
+ 	gint64 trigger_seen;
+-- 
+2.56.0
+
+
+From 8f41e71098a7dc1fce8b4d1da98f150b7aec8da0 Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Sun, 18 Oct 2026 19:35:49 +0200
+Subject: [PATCH 5/6] intronix-logicport: Add udev rule and README.devices
+ entry.
+
+---
+ README.devices             | 5 +++++
+ contrib/60-libsigrok.rules | 3 +++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/README.devices b/README.devices
+index 17f59f62..42041db6 100644
+--- a/README.devices
++++ b/README.devices
+@@ -63,6 +63,11 @@ The following drivers/devices require a firmware upload upon connection:
+    These can be extracted from the vendor's Windows drivers using a tool
+    from our 'sigrok-util' repository/project.
+ 
++ - intronix-logicport: The Intronix LogicPort LA1034 needs the vendor's
++   FPGA bitstream file LogicPort.ccf, unmodified, installed as
++   intronix-logicport.ccf. A tool in our 'sigrok-util' repository/project
++   gets it from the vendor's Windows software or installer.
++
+  - kingst-la2016: The Kingst LA series of logic analyzers needs MCU firmware
+    and FPGA netlists. The 'sigrok-util' repository contains a script to
+    extract these files from the vendor software.
+diff --git a/contrib/60-libsigrok.rules b/contrib/60-libsigrok.rules
+index 71617803..66a765c5 100644
+--- a/contrib/60-libsigrok.rules
++++ b/contrib/60-libsigrok.rules
+@@ -175,6 +175,9 @@ ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", ENV{ID_SIGROK}="1"
+ # ftdi-la (TIAO USB Multi Protocol Adapter (TUMPA))
+ ATTRS{idVendor}=="0403", ATTRS{idProduct}=="8a98", ENV{ID_SIGROK}="1"
+ 
++# Intronix LogicPort LA1034
++ATTRS{idVendor}=="0403", ATTRS{idProduct}=="dc48", ENV{ID_SIGROK}="1"
++
+ # Kecheng KC-330B
+ ATTRS{idVendor}=="1041", ATTRS{idProduct}=="8101", ENV{ID_SIGROK}="1"
+ 
+-- 
+2.56.0
+
+
+From 9692e2494dd387357243c4593ff9d1a426f3e8dc Mon Sep 17 00:00:00 2001
+From: Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
+Date: Mon, 19 Oct 2026 15:36:31 +0200
+Subject: [PATCH 6/6] intronix-logicport: Only compress on enabled channels.
+
+The compression mask register selects which channels can start a new
+RLE entry. It was always set to all channels, so with RLE enabled any
+change on a disabled channel (e.g. a floating input picking up noise)
+used up sample memory. Set it to the enabled channels instead, or to
+all channels when none is enabled.
+
+Measured with a 1 kHz clock on CLK1 and bursts on other inputs, at
+1 MHz with RLE: the capture lasts 0.51 s with only CLK1 enabled, versus
+0.03 s with all channels enabled.
+---
+ src/hardware/intronix-logicport/api.c      | 18 ++++++++++++++++++
+ src/hardware/intronix-logicport/protocol.c |  8 ++++++--
+ src/hardware/intronix-logicport/protocol.h |  2 ++
+ 3 files changed, 26 insertions(+), 2 deletions(-)
+
+diff --git a/src/hardware/intronix-logicport/api.c b/src/hardware/intronix-logicport/api.c
+index 99805f23..41fa73b9 100644
+--- a/src/hardware/intronix-logicport/api.c
++++ b/src/hardware/intronix-logicport/api.c
+@@ -416,12 +416,30 @@ static int prepare(const struct sr_dev_inst *sdi)
+ 	return logicport_program(devc);
+ }
+ 
++/* Bit k set for each enabled channel k; all channels if none is enabled. */
++static uint64_t enabled_channels_mask(const struct sr_dev_inst *sdi)
++{
++	const struct sr_channel *ch;
++	const GSList *l;
++	uint64_t mask;
++
++	mask = 0;
++	for (l = sdi->channels; l; l = l->next) {
++		ch = l->data;
++		if (ch->enabled && ch->index < LOGICPORT_NUM_CHANNELS)
++			mask |= UINT64_C(1) << ch->index;
++	}
++
++	return mask ? mask : LOGICPORT_ALL_CHANNELS;
++}
++
+ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
+ {
+ 	struct dev_context *devc;
+ 	int ret;
+ 
+ 	devc = sdi->priv;
++	devc->compression_mask = enabled_channels_mask(sdi);
+ 
+ 	if (devc->rle && !devc->external_clock &&
+ 	    devc->rate->samplerate > LOGICPORT_RLE_MAX_RATE) {
+diff --git a/src/hardware/intronix-logicport/protocol.c b/src/hardware/intronix-logicport/protocol.c
+index 0902da6b..78eec1b0 100644
+--- a/src/hardware/intronix-logicport/protocol.c
++++ b/src/hardware/intronix-logicport/protocol.c
+@@ -1139,8 +1139,12 @@ SR_PRIV int logicport_program(struct dev_context *devc)
+ 
+ 	queue_reg(&q, REG_CLOCK_MODE, 1, mode);
+ 	queue_reg(&q, REG_COMPRESSION, 1, 0);
+-	/* All channels are always captured, this only steers compression. */
+-	queue_reg(&q, REG_COMPRESSION_MASK, 5, LOGICPORT_ALL_CHANNELS);
++	/*
++	 * All channels are always captured, this only steers compression:
++	 * changes on channels outside the mask don't start a new RLE entry,
++	 * so disabled (e.g. floating) inputs don't fill the sample memory.
++	 */
++	queue_reg(&q, REG_COMPRESSION_MASK, 5, devc->compression_mask);
+ 	queue_reg(&q, REG_INVERT_MASK, 5, 0);
+ 	queue_reg(&q, REG_COMPRESSION, 1, devc->rle ? 1 : 0);
+ 	queue_reg(&q, REG_CHANNEL_CFG, 1, 0);
+diff --git a/src/hardware/intronix-logicport/protocol.h b/src/hardware/intronix-logicport/protocol.h
+index a6211ed7..59fd724f 100644
+--- a/src/hardware/intronix-logicport/protocol.h
++++ b/src/hardware/intronix-logicport/protocol.h
+@@ -120,6 +120,8 @@ struct dev_context {
+ 
+ 	/* Acquisition state. */
+ 	gboolean acq_running;
++	/* Channels RLE compression watches: the enabled ones. */
++	uint64_t compression_mask;
+ 	uint64_t frames_done;
+ 	/* RLE only: time limits for the pre-/post-trigger fill phases. */
+ 	gint64 acq_start;
+-- 
+2.56.0
+

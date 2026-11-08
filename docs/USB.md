@@ -954,6 +954,13 @@ pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
   `hp-59306a` is the smallest example: it never sends. `Port::marked` tells a unit test that a
   model reached its mark. `mark-conn=1` with `--unplug tcp-model` closes a scan's connection and
   makes the next one `tcp_refused`, which is how a bridge with one client behaves.
+  The SCPI shell also takes `split-at=N:T`, `double-at=N:T` and `junk-at=N:T`, for
+  an answer in pieces, twice, or behind junk. Under `OXROK_USB_BACKEND=libusb` the
+  harness drops only the string reads that backend adds outside a re-enumeration.
+  `EMU_ORACLE_ENV` and `EMU_LIBSIGROK` point a run at another oracle, and
+  `EMU_WRITE_MISSING=1` under `--no-oracle` writes a `--no-oracle-only` case's
+  goldens when they're missing. `lcargo fmt --all` doesn't reach model files, which
+  are `#[path]`-included from generated code: run `rustfmt` on a model directly.
 
 The scenario, with `EMU_TMC` only where the model is on USBTMC:
 
