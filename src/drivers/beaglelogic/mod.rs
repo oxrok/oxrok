@@ -181,9 +181,8 @@ fn dial_tcp(host: &str, port: &str) -> Result<Box<dyn Port>> {
     for address in addresses {
         match TcpStream::connect_timeout(&address, CONNECT_TIMEOUT) {
             Ok(stream) => {
-                stream.set_nodelay(true)?;
                 let name = format!("tcp-raw/{host}/{port}");
-                return Ok(Box::new(TcpRaw::from_stream(name, stream)));
+                return Ok(Box::new(TcpRaw::from_stream(name, stream)?));
             }
             Err(e) => last = Some(e),
         }

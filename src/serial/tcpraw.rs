@@ -112,12 +112,6 @@ pub struct TcpRaw {
 }
 
 impl TcpRaw {
-    /// A connection a driver made itself, for a C driver with its own connect and
-    /// its own words for what goes wrong.
-    pub fn from_stream(name: String, stream: TcpStream) -> TcpRaw {
-        TcpRaw { name, stream }
-    }
-
     /// Connects to what `name` says. A commands-and-answers protocol sends
     /// little and waits, so Nagle is off.
     ///
