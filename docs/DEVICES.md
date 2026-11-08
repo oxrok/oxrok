@@ -3689,6 +3689,38 @@ RTM, RTA and RTH commands are C's and unchecked against those scopes: the
 RTB2000 manual has `DIGital<m>:DISPlay` for a channel where C sends
 `:LOGn:STAT`.
 
+### SCPI multimeters (`scpi-dmm`)
+
+Agilent 34405A, 34410A, 34460A; GW Instek GDM8251A, GDM8255A, GDM9060,
+GDM9061; HP 34401A; Keysight 34465A; OWON XDM1041, XDM2041; Siglent SDM3055.
+USBTMC (`conn=usbtmc[/BUS.ADDR]`), raw TCP (`conn=tcp-raw/HOST/PORT`) or a
+serial port (`conn=/dev/ttyACM0[:serialcomm=...]`). A scan with no `conn=`
+finds USBTMC meters only: a meter on a USB serial port (a GDM9061 in its
+USB-CDC mode) needs `conn=`. Emulated (`scpi-dmm`, `scpi-dmm-serial`): 295
+cases on 2026-11-08 (251 full, 6 `--oracle-bug`, 38 `--oracle-differs`),
+gcov 89.9%; the answer forms follow real session logs in libsigrok's commit
+messages (e90551c3, 18426d1c). Never run on hardware.
+
+One reading per round: `*OPC?`, the function query, `*OPC?`, the value.
+Limits are checked after a round, so `--time 1` still gives a reading. A slow
+reading is waited for, with one question out: on USBTMC the request already
+made is read for again (a second request gets a real meter's first answer
+under the old tag, which the 34405A logs show as "invalid bulk in header"),
+and a question given up on clears the device. With only `--samples` a capture
+fails at 30 s with no reading, and after a reading warns at 30 s and fails at
+10 minutes; with `--time` it ends at the limit with a warning and exit 0. A
+trigger delay or a large sample count set at the panel can outlast the 30 s.
+
+A function answer the table doesn't know starts the round again once the line
+is quiet, three times in a row at most; an empty or malformed reading ends the
+capture, where C reads an empty answer as 0. Every close sends `*OPC?` and
+`SYST:LOC`, so the panel is unlocked after `--show`, `--get` and `--set` too,
+as 118da66f meant and C's close skips. `range` (34405A, 34460A, 34465A) is a
+number, or `AUTO`, `MIN`, `MAX`, `DEF` in any case; anything else is refused
+before anything is sent, where C sends it as typed (`10;*RST` resets the
+meter). GW Instek function codes match by how they start (`013` reads as `01`),
+as in C.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 81 of libsigrok's 87 `src/hardware` drivers are
-ported; the 6 still missing are listed below. Native decoder porting is
+crates.io. 82 of libsigrok's 87 `src/hardware` drivers are
+ported; the 5 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 6 libsigrok drivers with no oxrok port. Each needs a device model,
+The 5 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (2)
+### SCPI instruments (1)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -26,7 +26,6 @@ remaining drivers can start there.
 
 | driver | kind | notes |
 |---|---|---|
-| `scpi-dmm` | meter | many SCPI multimeter models |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
@@ -249,7 +248,8 @@ The models are plain Rust with no I/O for this reason; see
   those bytes.
 
 - `Session`'s `End` is sent before the link goes back in its slot, so
-  `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
+  `start()` right after `End` can get `Busy` (`rdtech-dps`'s
+  `a_second_capture_runs_after_the_first` failed once under load, `lecroy-logicstudio`,
   `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`);
   `sysclk-sla5032` has the fixed order.
 - About 20 drivers block in `sink.send` while close joins them; a full
@@ -308,6 +308,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `scpi-dmm` on hardware: a 34401A or 34465A for the wait on one USBTMC
+  request at slow integration times, and a GW Instek or OWON for dialects
+  written from the driver's tables alone.
 
 - `hameg-hmo` on any real HMO or RTB, above all the RTB/RTM/RTA/RTH
   `:LOGn`/`:DIGn` commands and `:PODn:DATA?`: the RTB2000 manual has

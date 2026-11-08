@@ -355,6 +355,12 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- Bytes after an answer in the same read are no answer to anything asked: take
+  the first line and let the line go quiet before the next send.
+- Commit messages can hold real session logs: libsigrok's `scpi-dmm` history has
+  a 34405A's answers, its trailing space and its unanswered `*OPC?`.
+- A setting's text sent as typed can carry a second command (`10;*RST`): refuse
+  anything but the forms the manual lists.
 - When stock C prints nothing for a capture, build C with the one faulty line
   moved and compare against that: it is the only independent witness for the
   values. Keep the build script beside the scenario.

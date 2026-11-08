@@ -131,6 +131,7 @@ Emulator and replay only, never run on hardware:
 | `gwinstek-gds-800` | 64 | 88.9% |
 | `scpi-pps` | 238 | 92.3% |
 | `hameg-hmo` | 195 | 88.1% |
+| `scpi-dmm` | 295 | 89.9% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |

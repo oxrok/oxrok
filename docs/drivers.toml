@@ -1379,17 +1379,26 @@ limits = [
 [drivers.scpi-dmm]
 name = "SCPI DMM (generic)"
 libsigrok = "scpi-dmm"
-ids = []
+ids = ["scpi-dmm"]
 kind = "meter"
-connection = "tcp"
+connection = "usb"
 vendor = ""
-models = []
-status = ["not-ported"]
-emu = []
+models = ["Agilent 34405A", "Agilent 34410A", "Agilent 34460A", "GW Instek GDM8251A", "GW Instek GDM8255A", "GW Instek GDM9060", "GW Instek GDM9061", "HP 34401A", "Keysight 34465A", "OWON XDM1041", "OWON XDM2041", "Siglent SDM3055"]
+status = ["emulated"]
+emu = ["scpi-dmm", "scpi-dmm-serial"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "One reading per round; limits are checked after a round, so `--time 1` still gives a reading.",
+  "A slow reading is waited for with one question out: with only `--samples` it fails at 30 s with no reading, or at 10 minutes after one; with `--time` it ends at the limit with exit 0.",
+  "A function answer it doesn't know starts the round again, three times at most; an empty or malformed reading ends the capture.",
+  "Every close sends `SYST:LOC`, so the panel is unlocked after `--show`, `--get` and `--set`.",
+  "`range` takes a number or AUTO, MIN, MAX, DEF; anything else is refused before it is sent.",
+]
+limits = [
+  "The GW Instek and OWON dialects are written from the driver's tables; no unit of theirs has been tried.",
+  "A scan with no `conn=` finds USBTMC meters only; a USB serial meter needs `conn=`.",
+  "A trigger delay or large sample count set at the panel can outlast the 30 s bound.",
+]
 
 [drivers.scpi-pps]
 name = "SCPI power supplies (generic)"

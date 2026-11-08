@@ -1032,6 +1032,10 @@ Deliberate, and kept small:
 - `hameg-hmo`: a capture's analog samples are printed, where sigrok-cli prints none
   (`sr_analog_init` clears them). `--frames N` gives N frames. A block that pauses
   partway is waited for, where sigrok-cli on a serial line cuts it at 1 s.
+- `scpi-dmm`: a slow reading is waited for, where sigrok-cli ends at the first timeout
+  or, over TCP, waits for ever; an empty answer is no reading, where sigrok-cli reads 0;
+  the close after `--show`, `--get` and `--set` sends `SYST:LOC`; a range that is not a
+  number or AUTO/MIN/MAX/DEF is refused, where sigrok-cli sends it as typed.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
