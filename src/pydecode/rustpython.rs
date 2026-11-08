@@ -371,14 +371,18 @@ fn py_to_item(obj: &PyObjectRef, vm: &VirtualMachine) -> Item {
     if let Some(b) = obj.downcast_ref::<PyBytes>() {
         return Item::Bytes(b.as_bytes().to_vec());
     }
-    // Snapshot lists and tuples: Python decoders keep emitting the same
-    // mutable object (e.g. ieee488's `last_listener`) and later mutate it,
-    // so holding a reference would make the observed value depend on when
-    // the consumer looks at it. A stacked decoder gets an equal list back.
+    // Snapshot lists and plain tuples: Python decoders keep emitting the
+    // same mutable object (e.g. ieee488's `last_listener`) and later
+    // mutate it, so holding a reference would make the observed value
+    // depend on when the consumer looks at it. A stacked decoder gets an
+    // equal list back. A tuple subclass (e.g. microwire's PyPacket
+    // namedtuple) is left as an object: it carries the attributes a
+    // stacked Python decoder reads, and flattening it to a list would
+    // make that decoder fail.
     if let Some(l) = obj.downcast_ref::<PyList>() {
         return Item::List(l.borrow_vec().iter().map(|o| py_to_item(o, vm)).collect());
     }
-    if let Some(t) = obj.downcast_ref::<PyTuple>() {
+    if let Some(t) = obj.downcast_ref_if_exact::<PyTuple>(vm) {
         return Item::List(t.as_slice().iter().map(|o| py_to_item(o, vm)).collect());
     }
     Item::Opaque(Arc::new(RpItem(obj.clone())))

@@ -21,6 +21,7 @@ pub mod avr_pdi;
 pub mod can;
 pub mod cc1101;
 pub mod cec;
+pub mod cfp;
 pub mod counter;
 pub mod dali;
 pub mod dcf77;
@@ -32,6 +33,7 @@ pub mod ds28ea00;
 pub mod dsi;
 pub mod edid;
 pub mod eeprom24xx;
+pub mod eeprom93xx;
 pub mod em4100;
 pub mod em4305;
 pub mod enc28j60;
@@ -74,6 +76,8 @@ pub mod nunchuk;
 pub mod onewire_link;
 pub mod onewire_network;
 pub mod ook;
+pub mod ook_oregon;
+pub mod ook_vis;
 pub mod pan1321;
 pub mod parallel;
 pub mod pca9571;
@@ -104,7 +108,9 @@ pub mod tdm_audio;
 pub mod timing;
 pub mod tlc5620;
 pub mod uart;
+pub mod usb_packet;
 pub mod usb_power_delivery;
+pub mod usb_request;
 pub mod usb_signalling;
 pub mod wiegand;
 pub mod x2444m;
@@ -114,7 +120,7 @@ pub mod z80;
 use crate::decode::DecoderDef;
 
 /// Every decoder in this crate.
-pub static ALL: [&DecoderDef; 105] = [
+pub static ALL: [&DecoderDef; 111] = [
     &ac97::DEF,
     &ade77xx::DEF,
     &adf435x::DEF,
@@ -131,6 +137,7 @@ pub static ALL: [&DecoderDef; 105] = [
     &can::DEF,
     &cc1101::DEF,
     &cec::DEF,
+    &cfp::DEF,
     &counter::DEF,
     &dali::DEF,
     &dcf77::DEF,
@@ -142,6 +149,7 @@ pub static ALL: [&DecoderDef; 105] = [
     &dsi::DEF,
     &edid::DEF,
     &eeprom24xx::DEF,
+    &eeprom93xx::DEF,
     &em4100::DEF,
     &em4305::DEF,
     &enc28j60::DEF,
@@ -184,6 +192,8 @@ pub static ALL: [&DecoderDef; 105] = [
     &onewire_link::DEF,
     &onewire_network::DEF,
     &ook::DEF,
+    &ook_oregon::DEF,
+    &ook_vis::DEF,
     &pan1321::DEF,
     &parallel::DEF,
     &pca9571::DEF,
@@ -214,7 +224,9 @@ pub static ALL: [&DecoderDef; 105] = [
     &timing::DEF,
     &tlc5620::DEF,
     &uart::DEF,
+    &usb_packet::DEF,
     &usb_power_delivery::DEF,
+    &usb_request::DEF,
     &usb_signalling::DEF,
     &wiegand::DEF,
     &x2444m::DEF,
