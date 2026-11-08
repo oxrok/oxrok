@@ -3337,6 +3337,55 @@ memory is ignored and the old one stays, as in C, with a warning. A core
 built with run-length compression (id `idbg`) is not found. Not verified
 on hardware or against OpenOCD.
 
+### BeagleLogic (`beaglelogic`)
+
+BeagleLogic logic analyzer, 8 or 14 channels: ported and emulated over its
+TCP server, `conn=tcp-raw/HOST/5555` (the first field need only start with
+`tcp`). Model `beaglelogic`, on a socket alone (`samplerate=`, `sampleunit=`,
+`triggerflags=`, `bufunitsize=`, `memalloc=`, `version=`, `say=`, `mute=`,
+`late=`, `refuse=`, `hangup=`, `total=`, `free=`, `chunk=`, `paced=`,
+`first=`, `tail=`, `busy=`, `mark=`). 113 cases on 2026-11-08: 60 full on
+stock sigrok-cli, 20 `--oracle-bug`, 24 `--oracle-differs`, 5 library, 4
+oxrok alone. gcov 71.1%: not emulated are `beaglelogic_native.c` and the
+native branches of `api.c`, send and recv errors (the carrier sends no
+RST), and setters no C path calls.
+
+The model is read from the BeagleLogic repository (`tcp-server-go/server.go`,
+`kernel/beaglelogic.c`, master f9dab91a), never run, and no device has been
+on this driver. Its buffers are 4 KiB and 64 KiB, against 4 MiB and tens of
+MiB on a board, to keep streams small.
+
+A board set up with the project's `install.sh` runs the Go server as
+`beaglelogic-tcp.service` on port 5555, so `conn=tcp-raw/127.0.0.1/5555` on
+the board reaches the same module as `/dev/beaglelogic`; a board set up
+without it has no server. TCP is slower than the mapped buffer: in a
+continuous capture the kernel's overrun is only a warning in `dmesg`, and
+the Go server then ends the stream with no word.
+
+Not ported: `/dev/beaglelogic`. It needs the ioctls of `beaglelogic.h:37-61`,
+a read-only `mmap` of the buffer, `poll` and `lseek`, unsafe code or a crate
+for them, and the module or a CUSE fake to test on. A scan with no `conn=`
+says so when the node is there.
+
+`--time` behaves as a sample limit, as the driver has no `limit_msec`, so a
+silent stream fails a `--time` capture at the bound, where other drivers end
+a time limit with a warning.
+
+What the model and the server's source taught:
+- The server answers `OK\r\n` or `ERR\r\n`, serves one connection at a
+  time, and marks no end of a one-shot stream: the client counts `memalloc`
+  bytes. A module never given a `memalloc` sends nothing.
+- The module hands out whole buffers only, so a stream is silent for a
+  buffer's time: 42 ms at 100 MHz and 8 bits, 2.4 days at 10 Hz and 16 bits.
+  The silence bound follows that.
+- The module holds its mutex through a capture and past its close, until its
+  last buffer is out, and refuses every setting meanwhile. So a refused
+  `sampleunit` or `triggerflags` is asked back: the capture goes on when the
+  module holds what was wanted, and fails with the reason when not.
+- `samplerate` keeps a whole divisor of 100 MHz (`coreclockfreq` is 200 MHz,
+  fixed at probe), so 60 MHz runs at 100 MHz. oxrok works out what the module
+  holds and warns, keeping C's wire. This rests on the module's source only.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

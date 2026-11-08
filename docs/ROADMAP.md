@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 70 of libsigrok's 87 `src/hardware` drivers are
-ported; the 17 still missing are listed below. Native decoder porting is
+crates.io. 71 of libsigrok's 87 `src/hardware` drivers are
+ported; the 16 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 17 libsigrok drivers with no oxrok port. Each needs a device model,
+The 16 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (13)
+### SCPI instruments (12)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -38,7 +38,6 @@ remaining drivers can start there.
 | `fluke-45` | meter | Fluke 45 |
 | `hp-3457a` | meter | HP-IB; reached over a TCP bridge, as `hp-59306a` is |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
-| `beaglelogic` | logic analyzer | TCP; no SCPI |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
 GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
@@ -309,6 +308,12 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `beaglelogic`: emulated over its TCP server only. `/dev/beaglelogic` is not
+  ported (ioctls, `mmap`, `poll`; needs unsafe code or a crate, and the kernel
+  module or a CUSE fake to test on). No run on a board: the busy window after
+  a capture, the 100 MHz divisor rule and the server's stream end are read
+  from source.
 
 Hardware checks not yet done. For the emulated USB drivers, a capture
 next to sigrok-cli's, or a recording (`OXROK_USB_RECORD=FILE`), is the

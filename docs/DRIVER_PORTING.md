@@ -355,6 +355,25 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A device that refuses every setting while it finishes its last capture makes
+  a refusal say nothing of the value. Ask the value back before failing; model
+  the window (`busy=T`).
+- A filter that rewrites C's line into oxrok's text also passes an oxrok that
+  prints C's text. Where both refuse in their own words, keep the full case with
+  `--no-output` for the wire, and pin oxrok's words in a `--no-oracle-only
+  --stderr` case.
+- A stream's end (`close`) sent with no start (`get`) before it is a command the
+  device may not survive. Pin it with a stop that lands before the header.
+- A C receive callback that sends what `recv` returned can send a logic packet
+  of length 0: `hex.c` and `bits.c` wrap `length - unitsize` and crash. Get the
+  backtrace with a small `LD_PRELOAD` handler and `addr2line`.
+- `select` in a loop on a closed socket is ready for ever: read every drain for
+  what ends it.
+- Take an answer's times ahead of its reads, on the clock. Read waits capped per
+  read let a stall pass a late answer as on time; keep capped waits for a
+  stream's silence.
+- A chunked or paced stream's length in a `.tx` is the clock's when the tool's
+  `close` ends it: give the case a `total=` that is what the tool reads.
 - A C driver that sends no `SR_DF_HEADER` prints nothing through sigrok-cli
   (`session.c:285-287`) yet exits 0. Run the unchanged driver under
   `tools/oracle-header.c`, which gives sigrok-cli's callback that one header

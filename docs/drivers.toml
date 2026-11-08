@@ -1127,19 +1127,27 @@ behaviour = []
 limits = []
 
 [drivers.beaglelogic]
-name = "Beagle Logic"
+name = "BeagleLogic"
 libsigrok = "beaglelogic"
-ids = []
+ids = ["beaglelogic"]
 kind = "logic-analyzer"
 connection = "tcp"
-vendor = "Beagle"
-models = []
-status = ["not-ported"]
-emu = []
+vendor = "BeagleLogic"
+models = ["BeagleLogic", "BeagleLogic Standalone"]
+status = ["emulated"]
+emu = ["beaglelogic"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "8 or 14 channels over the board's TCP server (conn=tcp-raw/HOST/5555); 10 Hz to 100 MHz, held at a whole divisor of 100 MHz.",
+  "Triggers on the host, with a capture ratio; a limit counts the samples sent.",
+  "A setting refused while the module finishes the last capture is asked back, and the capture goes on when the module holds it.",
+  "Every wait has a bound: 3 s for an answer, and a silent stream's bound follows its buffer's time at the rate.",
+]
+limits = [
+  "The /dev/beaglelogic way in on the board itself is not ported; the TCP server reaches the same module.",
+  "--time is a sample limit here, so a silent stream fails a --time capture at the bound.",
+  "Not run on a real board; the model is read from the BeagleLogic sources.",
+]
 
 [drivers.fluke-45]
 name = "Fluke 45"

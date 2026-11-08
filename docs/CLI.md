@@ -965,6 +965,16 @@ Deliberate, and kept small:
 - `ipdbg-la`: a capture has a header, so sigrok-cli's output path sees it; stock
   libsigrok sends none and sigrok-cli prints nothing. A port in `conn=` must be a
   number, where `getaddrinfo` also takes a service's name.
+- `beaglelogic`: an answer that is no number fails the open; a silent server fails
+  after 3 s on an answer, and a silent stream fails a limited capture (`--samples`,
+  or `--time`, which is a sample limit here) at twice the buffer's time plus 30 s
+  with no sample yet, and at 10 minutes or more after one, with a warning first.
+  A refused `sampleunit` or `triggerflags` is asked back, and the capture goes on
+  when the module holds what was wanted. A closed connection fails the capture.
+  A limit counts samples sent, in whole samples, and a trigger uses the stream's
+  width. `samplerate` reads back what the module keeps, with a warning, and a rate
+  past 32 bits is refused. `limit_samples` reads back what was set after a
+  continuous capture. A port in `conn=` must be a number.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the
