@@ -235,9 +235,11 @@ impl Watch {
     pub fn unusable(&mut self, text: &str, time_limit: bool) -> Step {
         self.unusable += 1;
         if self.unusable < UNUSABLE {
-            return Step::Warn(format!("Unusable answer from the load: '{text}'."));
+            return Step::Warn(format!(
+                "Unusable answer from the load: {text}. Asking the round again on a clean line."
+            ));
         }
-        let text = format!("No usable answer from the load: '{text}'.");
+        let text = format!("No usable answer from the load: {text}.");
         if time_limit && self.samples == 0 { Step::DoneWarning(text) } else { Step::Fail(text) }
     }
 
@@ -478,28 +480,31 @@ mod tests {
     fn junk_fails_quickly_and_only_a_frame_forgives_it() {
         let mut w = Watch::new(Bounds::default());
         assert_eq!(
-            w.unusable("abc", false),
-            Step::Warn("Unusable answer from the load: 'abc'.".to_owned())
+            w.unusable("'abc'", false),
+            Step::Warn(
+                "Unusable answer from the load: 'abc'. Asking the round again on a clean line."
+                    .to_owned()
+            )
         );
         assert!(w.heard().is_none(), "a good voltage in between");
-        assert!(matches!(w.unusable("abc", false), Step::Warn(_)));
+        assert!(matches!(w.unusable("'abc'", false), Step::Warn(_)));
         assert_eq!(
-            w.unusable("abc", false),
+            w.unusable("'abc'", false),
             Step::Fail("No usable answer from the load: 'abc'.".to_owned())
         );
         let mut w = Watch::new(Bounds::default());
-        w.unusable("a", true);
-        w.unusable("a", true);
+        w.unusable("'a'", true);
+        w.unusable("'a'", true);
         assert_eq!(
-            w.unusable("a", true),
+            w.unusable("'a'", true),
             Step::DoneWarning("No usable answer from the load: 'a'.".to_owned())
         );
         let mut w = Watch::new(Bounds::default());
-        w.unusable("a", false);
-        w.unusable("a", false);
+        w.unusable("'a'", false);
+        w.unusable("'a'", false);
         w.sample();
-        assert!(matches!(w.unusable("a", true), Step::Warn(_)));
-        w.unusable("a", true);
-        assert!(matches!(w.unusable("a", true), Step::Fail(_)), "with samples it failed");
+        assert!(matches!(w.unusable("'a'", true), Step::Warn(_)));
+        w.unusable("'a'", true);
+        assert!(matches!(w.unusable("'a'", true), Step::Fail(_)), "with samples it failed");
     }
 }

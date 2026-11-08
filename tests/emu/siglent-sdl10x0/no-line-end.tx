@@ -5,12 +5,14 @@ tcp_close
 tcp_connect
 tcp_out 4d4541533a564f4c543f0a -> 11
 tcp_in 9 -> 31322e303030303030
-tcp_out 4d4541533a435552523f0a -> 11
-tcp_in 8 -> 302e303030303132
+tcp_close
+tcp_connect
 tcp_out 4d4541533a564f4c543f0a -> 11
 tcp_in 9 -> 31322e303031323334
-tcp_out 4d4541533a435552523f0a -> 11
-tcp_in 8 -> 302e303030333333
+tcp_close
+tcp_connect
 tcp_out 4d4541533a564f4c543f0a -> 11
 tcp_in 9 -> 31322e303032343638
+tcp_close
+tcp_connect
 tcp_close

@@ -5,6 +5,8 @@ tcp_close
 tcp_connect
 tcp_out 4d4541533a564f4c543f0a -> 11
 tcp_in 3 -> 31560a
+tcp_close
+tcp_connect
 tcp_out 4d4541533a564f4c543f0a -> 11
 tcp_in 2 -> 350a
 tcp_out 4d4541533a435552523f0a -> 11

@@ -38,6 +38,10 @@ enum Reply {
     Late(u32, &'static str),
     /// Never.
     Silent,
+    /// In pieces as they stand, each after so many looks from the one before.
+    Pieces(&'static [(u32, &'static str)]),
+    /// Now, and again after so many looks.
+    Twice(&'static str, u32),
 }
 
 enum Due {
@@ -96,6 +100,17 @@ impl Wire {
                 self.coming.push_back((Some(Due::Looks(*looks + 1)), bytes));
             }
             Some(Reply::Silent) => {}
+            Some(Reply::Pieces(pieces)) => {
+                for (looks, piece) in *pieces {
+                    self.coming.push_back((Some(Due::Looks(*looks)), piece.as_bytes().to_vec()));
+                }
+            }
+            Some(Reply::Twice(text, looks)) => {
+                self.enqueue(text);
+                let mut bytes = text.as_bytes().to_vec();
+                bytes.push(b'\n');
+                self.coming.push_back((Some(Due::Looks(*looks)), bytes));
+            }
         }
     }
 
@@ -396,7 +411,7 @@ fn each_setting_is_its_line() {
     d.set(&Key::Regulation, &Value::Str("CV".to_owned()), g).unwrap();
     d.set(&Key::Regulation, &Value::Str("RESISTANCE".to_owned()), g).unwrap();
     d.set(&Key::VoltageTarget, &Value::F64(5.125), g).unwrap();
-    d.set(&Key::CurrentLimit, &Value::F64(1.23456), g).unwrap();
+    d.set(&Key::CurrentLimit, &Value::F64(1.235), g).unwrap();
     d.set(&Key::PowerTarget, &Value::F64(250.0), g).unwrap();
     d.set(&Key::ResistanceTarget, &Value::F64(47.5), g).unwrap();
     d.set(&Key::OverPowerProtectionThreshold, &Value::F64(150.0), g).unwrap();
@@ -413,7 +428,7 @@ fn each_setting_is_its_line() {
             ":POW:LEV:IMM 250.000",
             ":RES:LEV:IMM 47.500",
             ":POW:PROT:LEV 150.000",
-            ":CURR:PROT:LEV -0.000",
+            ":CURR:PROT:LEV 0.000",
         ]
     );
 }
@@ -438,22 +453,69 @@ fn what_is_refused_sends_nothing() {
     assert_eq!(lines(&w), Vec::<String>::new());
 }
 
+/// The load refuses in silence and keeps its old setting, so these go nowhere, and a
+/// `-c` with them sends none of its lines.
 #[test]
-fn a_number_off_the_list_goes_out_with_a_warning() {
-    assert_eq!(
-        out_of_range(&Key::VoltageTarget, 200.0, 0.0, 150.0).as_deref(),
-        Some(
-            "voltage_target 200 is outside 0 to 150. It goes out, and a load that refuses it \
-             keeps what it had, with no word."
-        )
-    );
-    assert_eq!(out_of_range(&Key::VoltageTarget, 150.0, 0.0, 150.0), None);
-    assert_eq!(out_of_range(&Key::VoltageTarget, 0.0, 0.0, 150.0), None);
-    assert!(out_of_range(&Key::VoltageTarget, -0.5, 0.0, 150.0).is_some());
+fn a_setpoint_the_load_would_refuse_is_refused_before_anything_goes() {
     let w = wire();
     let mut d = device(&w, FAR);
-    d.set(&Key::VoltageTarget, &Value::F64(200.0), Some("1")).unwrap();
-    assert_eq!(lines(&w), [":VOLT:LEV:IMM 200.000"]);
+    let g = Some("1");
+    for (key, value, why) in [
+        (
+            Key::CurrentLimit,
+            50.0,
+            "current_limit 50 is outside the load's 0 to 30, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::VoltageTarget,
+            150.001,
+            "voltage_target 150.001 is outside the load's 0 to 150, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::PowerTarget,
+            300.5,
+            "power_target 300.5 is outside the load's 0 to 300, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::ResistanceTarget,
+            0.02,
+            "resistance_target 0.02 is outside the load's 0.03 to 10000, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::OverCurrentProtectionThreshold,
+            -0.5,
+            "ocp_threshold -0.5 is outside the load's 0 to 30, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::VoltageTarget,
+            0.0004,
+            "voltage_target 0.0004 has more than three places, and would go out as 0.000",
+        ),
+        (
+            Key::VoltageTarget,
+            -0.0001,
+            "voltage_target -0.0001 is outside the load's 0 to 150, and the load would keep its old setting with no word",
+        ),
+        (
+            Key::CurrentLimit,
+            1.23456,
+            "current_limit 1.23456 has more than three places, and would go out as 1.235",
+        ),
+    ] {
+        let v = Value::F64(value);
+        let e = d.check_set(&key, &v, g).unwrap_err().to_string();
+        assert!(e.ends_with(why), "{e}");
+        assert!(d.set(&key, &v, g).is_err());
+    }
+    assert_eq!(lines(&w), Vec::<String>::new());
+    for (key, value) in
+        [(Key::CurrentLimit, 30.0), (Key::VoltageTarget, 0.001), (Key::PowerTarget, 300.0)]
+    {
+        d.check_set(&key, &Value::F64(value), g).unwrap();
+    }
+    // What a decimal can't hold exactly is still three places.
+    d.set(&Key::CurrentLimit, &Value::F64(0.1 + 0.2), g).unwrap();
+    assert_eq!(lines(&w), [":CURR:LEV:IMM 0.300"]);
 }
 
 #[test]
@@ -1096,4 +1158,121 @@ fn a_limit_set_during_a_capture_counts() {
             break;
         }
     }
+}
+
+/// An answer the stack cut in two is one answer.
+#[test]
+fn an_answer_in_pieces_is_one_answer() {
+    let w = wire();
+    w.lock().unwrap().volts = VecDeque::from([Reply::Pieces(&[(0, "10"), (1, ".5"), (1, "\n")])]);
+    let mut d = device(&w, FAR);
+    limited(&mut d, 2);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(frames(&packets), [(10.5, 0.1), (11.5, 0.2)]);
+    assert_eq!(w.lock().unwrap().discards, 0, "nothing to resync");
+}
+
+/// A copy of an answer would make each current the voltage before it, for good.
+#[test]
+fn a_copy_of_an_answer_resyncs_and_swaps_nothing() {
+    let w = wire();
+    w.lock().unwrap().volts = VecDeque::from([Reply::Twice("10.5", 0)]);
+    let mut d = device(&w, FAR);
+    limited(&mut d, 3);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    let got = frames(&packets);
+    assert_eq!(got.len(), 3);
+    assert!(got.iter().all(|(v, a)| *v >= 10.0 && *a < 1.0), "{got:?}");
+    assert!(w.lock().unwrap().discards > 0);
+}
+
+/// A copy in pieces: the answer's end and the copy's start in one read.
+#[test]
+fn a_line_and_more_resyncs() {
+    let w = wire();
+    w.lock().unwrap().volts = VecDeque::from([Reply::Pieces(&[(0, "10.5\n10"), (1, ".5\n")])]);
+    let mut d = device(&w, FAR);
+    limited(&mut d, 2);
+    let got = frames(&capture(&mut d));
+    assert_eq!(got.len(), 2);
+    assert!(got.iter().all(|(v, a)| *v >= 10.0 && *a < 1.0), "{got:?}");
+}
+
+/// Two readings alike are taken when they come again after a resync.
+#[test]
+fn readings_alike_are_taken() {
+    let w = wire();
+    {
+        let mut wire = w.lock().unwrap();
+        wire.volts = VecDeque::from(vec![Reply::Now("1.5"); 9]);
+        wire.amps = VecDeque::from(vec![Reply::Now("1.5"); 9]);
+    }
+    let mut d = device(&w, FAR);
+    limited(&mut d, 3);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(frames(&packets), [(1.5, 1.5); 3]);
+}
+
+/// Junk, then the real answer late: on TCP the resync is a new connection, which the
+/// late answer can't reach.
+#[test]
+fn junk_then_late_on_tcp_swaps_nothing() {
+    let w = wire();
+    let mut d = device_on(&w, FAR, "tcp-raw/fake/1");
+    w.lock().unwrap().volts = VecDeque::from([Reply::Pieces(&[(0, "abc\n"), (30, "10.5\n")])]);
+    let reopens = w.lock().unwrap().reopens;
+    limited(&mut d, 3);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(frames(&packets), [(11.5, 0.1), (12.5, 0.2), (13.5, 0.3)]);
+    assert_eq!(w.lock().unwrap().reopens, reopens + 1);
+}
+
+/// A get gathers up to the line end too, and junk leaves the line to resync.
+#[test]
+fn a_get_gathers_its_answer_and_junk_resyncs_the_next() {
+    let w = wire();
+    w.lock().unwrap().number = Some("2.6");
+    let d = device(&w, FAR);
+    assert_eq!(d.get(&Key::CurrentLimit, Some("1")).unwrap(), Value::F64(f64::from(2.6_f32)));
+    w.lock().unwrap().number = Some("2.6\n2.7");
+    let e = d.get(&Key::CurrentLimit, Some("1")).unwrap_err().to_string();
+    assert!(e.contains("no usable answer"), "{e}");
+    w.lock().unwrap().number = Some("2.6");
+    w.lock().unwrap().discards = 0;
+    assert_eq!(d.get(&Key::CurrentLimit, Some("1")).unwrap(), Value::F64(f64::from(2.6_f32)));
+    assert!(w.lock().unwrap().discards > 0, "resynced first");
+}
+
+/// A read that fails after a look that found nothing leaves no question marked out.
+#[test]
+fn a_failed_read_leaves_no_question_out() {
+    let w = wire();
+    let mut d = device(&w, FAR);
+    w.lock().unwrap().volts = VecDeque::from([Reply::Silent]);
+    let (tx, rx) = sync_channel(64);
+    d.start(PacketSink::new(tx, 0)).unwrap();
+    let shared = d.shared.clone();
+    until("the question out", move || shared.client().question_out);
+    w.lock().unwrap().read_error = true;
+    let packets = until_end(&rx);
+    assert!(failure(&packets).is_some());
+    w.lock().unwrap().read_error = false;
+    assert_eq!(d.get(&Key::Enabled, Some("1")).unwrap(), Value::Bool(true), "not Busy");
+}
+
+/// A piece and then a read's time of silence is an answer cut short.
+#[test]
+fn a_piece_with_no_line_end_is_junk() {
+    let w = wire();
+    let mut d = device(&w, FAR);
+    w.lock().unwrap().volts = VecDeque::from([Reply::Pieces(&[(0, "10.5")])]);
+    limited(&mut d, 1);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(frames(&packets), [(11.5, 0.1)]);
+    assert!(w.lock().unwrap().discards > 0);
 }

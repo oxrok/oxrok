@@ -12,15 +12,27 @@
 //! A scan asks `*IDN?` and closes. An open and a close send nothing beyond what the
 //! transport does. `--get` asks the load each time, and a setting is a line with no
 //! answer: a value the load refuses goes in its error queue, which C doesn't read and
-//! this doesn't either, as that would be a request C doesn't send. So a number outside
-//! the driver's own list goes out, with a warning here.
+//! this doesn't either, as that would be a request C doesn't send. So a setpoint the
+//! load would refuse is refused here before anything goes out, and a `-c` with one
+//! sends none of its lines: see [`setpoint`].
 //!
 //! A capture asks `MEAS:VOLT?` and `MEAS:CURR?` in turn, one question out at a time,
-//! and a frame is the two. When a limit is met the next question goes out anyway, and
+//! and a frame is the two. An answer is gathered up to its line end, which the guide's
+//! and a real load's have. When a limit is met the next question goes out anyway, and
 //! nobody reads its answer, as in C. So the next thing sent on this connection, by a
-//! client or a second capture, first gets rid of that answer: on TCP by connecting
-//! again, as a new connection can't receive it, and elsewhere by waiting for the line
-//! to go quiet ([`Scpi::forget_question`]), which an answer later than that gets past.
+//! client or a second capture, resyncs the line first ([`Link::resync`]): on TCP by
+//! connecting again, as a new connection can't receive an old answer; on USBTMC by a
+//! device clear; on a serial port by waiting until it has been quiet for twice the
+//! slowest answer yet. So does anything that isn't one answer to the question: junk,
+//! more than a line, or the last answer again (a copy). The round then starts again
+//! from the voltage, so V and I can't trade places.
+//!
+//! What can still go wrong: an answer that is a number but the wrong one (a digit's
+//! damage, which no check sees), a copy of an answer that comes after the next answer
+//! instead of ahead of it, a copy on a load whose two readings came out alike (after
+//! which copies aren't looked for), and on a serial port an answer later than the
+//! quiet. On USBTMC a load that wants its bulk OUT halt cleared after a clear fails
+//! the next write.
 //!
 //! Where this leaves `api.c` and `protocol.c`:
 //!
@@ -29,15 +41,22 @@
 //!   in flight, so its callback sees a timeout with `revents` 0 (`protocol.c:169-173`).
 //! - **Late answers.** On TCP the same callback ends a capture, with exit 0, at any
 //!   answer later than 100 ms. Here there is no re-ask, so a late answer can't pass for
-//!   the next one's: the question stays out and the read goes on. With no sample yet,
+//!   the next one's: the question stays out and the read goes on. On USBTMC the one
+//!   request is waited out ([`Scpi::wait_out_requests`]), as a second one would get the
+//!   first's answer, whose tag is no header for it. With no sample yet,
 //!   10 s of silence fails the capture, or with a time limit warns and exits 0. After
 //!   a sample it warns at 10 s and fails at 10 minutes, and says when the load is back.
 //!   Neither the manual nor C has a pace to go by, so these are choices. What it costs:
 //!   a load that lost a question waits out those 10 minutes.
 //! - **What isn't a number isn't a reading.** `sr_atof_ascii` gives 0 for an empty
 //!   answer and takes `nan`, `inf` and hexadecimal. C ends its capture, with exit 0, on
-//!   what it refuses. Here the line is drained and the round asked again, three times
+//!   what it refuses. Here the line is resynced and the round asked again, three times
 //!   since the last frame, and then the capture fails.
+//! - **An answer in pieces, or twice,** shifts C's readings for good: it takes a short
+//!   read for a whole answer. Here a piece waits for its line end, and a copy resyncs.
+//! - **A setpoint the load would refuse**, or one with more than three places, is
+//!   refused; C sends it, and a `-c` that turns the input on after it does so at the old
+//!   setting.
 //! - **A time limit** that comes with no sample yet looks on for 2 s, where C's check
 //!   ends a capture after a lone voltage, with no reading if a round takes longer.
 //! - **`ocp_threshold` reads a number.** `api.c:265` reads a boolean, so `--get` fails
@@ -58,8 +77,7 @@
 //! it calls enabled is a constant: kept, with its wire.
 //!
 //! What the format can't catch: an answer has no check, so damage to a digit is
-//! another number (`protocol::tests::what_damage_gives_a_wrong_value` counts it), and
-//! on `tcp-raw` an answer the stack cuts in two is two answers, C's rule too.
+//! another number (`protocol::tests::what_damage_gives_a_wrong_value` counts it).
 
 #![forbid(unsafe_code)]
 
@@ -181,29 +199,121 @@ struct Link {
     limit_msec: u64,
     /// A capture's question is out, unanswered after a read's time.
     question_out: bool,
-    /// A capture left a question that nobody will read the answer to.
+    /// What's on the line can't be trusted to answer what's asked next: a question
+    /// was left, or junk came. [`Link::resync`] before the next.
     owed: bool,
     capturing: bool,
+    /// What came of an answer whose line end hasn't.
+    rest: Vec<u8>,
+    /// A capture's last answer as it came: the same text to the next question is a
+    /// copy, and every answer after it would be the one before's.
+    last: Option<String>,
+    /// A copy made the last resync since the last frame: the same again is no copy
+    /// but a load whose readings are alike.
+    copied: bool,
+    /// The two readings came out the same, twice over a resync: no copy check.
+    alike: bool,
+    /// The slowest answer a capture had, which a quiet line must outlast.
+    slowest: Duration,
 }
+
+/// The longest answer taken: a reading is ten characters or so.
+const LONGEST: usize = 64;
+/// The longest an answer can count for in [`Link::slowest`].
+const SLOWEST: Duration = Duration::from_secs(10);
+/// How many times a resync waits for quiet before it gives up and warns.
+const QUIET_TURNS: u32 = 10;
 
 impl Link {
     fn scpi(&mut self) -> Result<&mut Scpi> {
         self.scpi.as_mut().ok_or_else(|| Error::device("device is not open"))
     }
 
-    /// The connection, rid of the answer a capture left behind.
+    /// The connection, resynced first if [`Link::owed`].
     fn clean(&mut self) -> Result<&mut Scpi> {
-        let owed = std::mem::take(&mut self.owed);
+        if self.owed {
+            self.resync()?;
+        }
+        self.scpi()
+    }
+
+    /// Gets rid of whatever is on its way: on TCP by connecting again, as a new
+    /// connection can't receive an old answer; on USBTMC by a device clear; elsewhere
+    /// by waiting until the line has been quiet for longer than the slowest answer yet,
+    /// which an answer later still gets past.
+    fn resync(&mut self) -> Result<()> {
+        self.owed = false;
+        self.rest.clear();
+        self.last = None;
+        let slowest = self.slowest;
         let scpi = self.scpi()?;
-        if owed {
-            if scpi.resource().starts_with("tcp") {
-                let _ = scpi.close();
-                scpi.reopen()?;
-            } else {
-                scpi.forget_question();
+        let quiet = scpi.read_timeout.max(slowest * 2);
+        if scpi.resource().starts_with("tcp") {
+            let _ = scpi.close();
+            return scpi.reopen();
+        }
+        if scpi.clear()? {
+            return Ok(());
+        }
+        for _ in 0..QUIET_TURNS {
+            match scpi.discard(quiet)? {
+                Some(0) | None => return Ok(()),
+                Some(_) => {}
             }
         }
-        Ok(scpi)
+        log::warn!("The load still sends what nobody asked for.");
+        Ok(())
+    }
+
+    /// A whole answer, out of [`Link::rest`]: `Ok(None)` while its line end is to come,
+    /// and `Err` with what came for more than one line or one too long, which nothing
+    /// asked. The guide's answers end in LF, and so do those of the Python driver
+    /// written against a real load.
+    fn answer(&mut self) -> std::result::Result<Option<String>, String> {
+        let Some(end) = self.rest.iter().position(|b| *b == b'\n') else {
+            if self.rest.len() > LONGEST {
+                return Err(String::from_utf8_lossy(&std::mem::take(&mut self.rest)).into_owned());
+            }
+            return Ok(None);
+        };
+        let all = std::mem::take(&mut self.rest);
+        if end + 1 < all.len() {
+            return Err(String::from_utf8_lossy(&all).into_owned());
+        }
+        Ok(Some(answer_text(&all)))
+    }
+
+    /// A client's question and its answer, gathered up to the line end within a
+    /// read's time of silence. Anything else leaves the line to resync.
+    fn exchange(&mut self, command: &str) -> Result<String> {
+        self.clean()?.send(command)?;
+        loop {
+            let polled = self.scpi()?.poll_answer();
+            match polled {
+                Ok(Some(data)) => {
+                    self.rest.extend_from_slice(&data);
+                    match self.answer() {
+                        Ok(Some(text)) => return Ok(text),
+                        Ok(None) => {}
+                        Err(junk) => {
+                            self.owed = true;
+                            return Err(Error::device(format!(
+                                "'{command}': no usable answer: '{}'",
+                                junk.escape_debug()
+                            )));
+                        }
+                    }
+                }
+                Ok(None) => {
+                    self.owed = true;
+                    return Err(Error::Timeout);
+                }
+                Err(e) => {
+                    self.owed = true;
+                    return Err(e);
+                }
+            }
+        }
     }
 }
 
@@ -249,6 +359,13 @@ struct Worker {
     handle: JoinHandle<()>,
 }
 
+/// A set, checked.
+enum Setting {
+    Line(String),
+    LimitSamples(u64),
+    LimitMsec(u64),
+}
+
 /// One load.
 pub struct Sdl10x0Device {
     info: DeviceInfo,
@@ -284,6 +401,11 @@ impl Sdl10x0Device {
                     question_out: false,
                     owed: false,
                     capturing: false,
+                    rest: Vec::new(),
+                    last: None,
+                    copied: false,
+                    alike: false,
+                    slowest: Duration::ZERO,
                 })),
                 clients: Arc::new(AtomicUsize::new(0)),
             },
@@ -319,8 +441,7 @@ impl Sdl10x0Device {
     }
 
     fn ask(&self, query: Query) -> Result<Value> {
-        let text_of =
-            |command: &str| -> Result<String> { self.shared.asker()?.clean()?.get_string(command) };
+        let text_of = |command: &str| -> Result<String> { self.shared.asker()?.exchange(command) };
         Ok(match query {
             Query::Always(value) => Value::Bool(value),
             Query::Text(command) => Value::Str(text_of(command)?),
@@ -340,6 +461,33 @@ impl Sdl10x0Device {
         })
     }
 
+    /// What a set comes to, refused before anything goes out.
+    fn setting(&self, key: &Key, value: &Value) -> Result<Setting> {
+        let bad = || Error::Arg(format!("invalid value for {}", key.id()));
+        Ok(match key {
+            Key::LimitSamples => {
+                Setting::LimitSamples(value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?)
+            }
+            Key::LimitMsec => {
+                Setting::LimitMsec(value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?)
+            }
+            Key::Enabled => {
+                let on = value.as_bool().ok_or_else(bad)?;
+                Setting::Line(if on { ":INPUT ON" } else { ":INPUT OFF" }.to_owned())
+            }
+            Key::Regulation => {
+                let word = value.as_str().and_then(protocol::regulation).ok_or_else(bad)?;
+                Setting::Line(format!(":FUNC {word}"))
+            }
+            other => {
+                let (command, min, max) = protocol::setter(other, self.max_power)
+                    .ok_or_else(|| Error::UnknownKey(other.id().to_owned()))?;
+                let number = value.as_f64().ok_or_else(bad)?;
+                Setting::Line(setpoint(other, command, number, min, max)?)
+            }
+        })
+    }
+
     /// What the worker holds on to, ended.
     fn join(&mut self) {
         if let Some(worker) = self.worker.take() {
@@ -349,17 +497,32 @@ impl Sdl10x0Device {
     }
 }
 
-/// The warning for a number outside what `config_list` gives, which goes out anyway:
-/// the list is the driver's, the load is the judge, and a refusal would go by nobody's
-/// word on the hardware. A load's refusal goes unheard, so this is all that says it.
-fn out_of_range(key: &Key, value: f64, min: f64, max: f64) -> Option<String> {
-    (value < min || value > max).then(|| {
-        format!(
-            "{} {value} is outside {min} to {max}. It goes out, and a load that refuses it \
-             keeps what it had, with no word.",
-            key.id()
-        )
-    })
+/// A setpoint's line, or why it can't go: the load refuses a number outside its range
+/// in silence and keeps what it had, so a `-c` that switched the input on after it
+/// would do so at a setting nobody knows. The ranges are the guide's: 30 A and 150 V
+/// at the top of `IRANGe` and `VRANGe` (PDF 20, 7), the model's wattage, and C's list
+/// for the resistance, which the guide gives none of. A number with more than three
+/// places would go out as another (`0.0004` as `0.000`), so it's refused too.
+fn setpoint(key: &Key, command: &str, value: f64, min: f64, max: f64) -> Result<String> {
+    let id = key.id();
+    if !value.is_finite() {
+        return Err(Error::Arg(format!("{id} takes a number, not {value}")));
+    }
+    if value < min || value > max {
+        return Err(Error::Arg(format!(
+            "{id} {value} is outside the load's {min} to {max}, and the load would keep its \
+             old setting with no word"
+        )));
+    }
+    let thousandths = (value * 1000.0).round();
+    if (thousandths / 1000.0 - value).abs() > 1e-9 * value.abs().max(1.0) {
+        return Err(Error::Arg(format!(
+            "{id} {value} has more than three places, and would go out as {:.3}",
+            thousandths / 1000.0 + 0.0
+        )));
+    }
+    // `-0.0` goes out as 0.
+    Ok(format!("{command} {:.3}", thousandths / 1000.0 + 0.0))
 }
 
 impl Device for Sdl10x0Device {
@@ -412,36 +575,22 @@ impl Device for Sdl10x0Device {
         }
     }
 
+    fn check_set(&self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+        self.check(key, group)?;
+        self.setting(key, value).map(|_| ())
+    }
+
     fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
         self.check(key, group)?;
-        let bad = || Error::Arg(format!("invalid value for {}", key.id()));
-        match key {
-            Key::LimitSamples => {
-                let limit = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
+        match self.setting(key, value)? {
+            Setting::Line(line) => self.send(&line),
+            Setting::LimitSamples(limit) => {
                 self.shared.client().limit_samples = limit;
                 Ok(())
             }
-            Key::LimitMsec => {
-                let limit = value.as_u64().filter(|n| *n > 0).ok_or_else(bad)?;
+            Setting::LimitMsec(limit) => {
                 self.shared.client().limit_msec = limit;
                 Ok(())
-            }
-            Key::Enabled => {
-                let on = value.as_bool().ok_or_else(bad)?;
-                self.send(if on { ":INPUT ON" } else { ":INPUT OFF" })
-            }
-            Key::Regulation => {
-                let word = value.as_str().and_then(protocol::regulation).ok_or_else(bad)?;
-                self.send(&format!(":FUNC {word}"))
-            }
-            other => {
-                let (command, min, max) = protocol::setter(other, self.max_power)
-                    .ok_or_else(|| Error::UnknownKey(other.id().to_owned()))?;
-                let number = value.as_f64().filter(|v| v.is_finite()).ok_or_else(bad)?;
-                if let Some(warning) = out_of_range(other, number, min, max) {
-                    log::warn!("{warning}");
-                }
-                self.send(&format!("{command} {number:.3}"))
             }
         }
     }
@@ -483,6 +632,8 @@ impl Device for Sdl10x0Device {
             self.closed = Some(scpi);
             return Err(e);
         }
+        // One request per question on USBTMC, waited out: see `ask`.
+        scpi.wait_out_requests(true);
         link.scpi = Some(scpi);
         Ok(())
     }
@@ -492,11 +643,13 @@ impl Device for Sdl10x0Device {
         let mut link = self.shared.lock();
         link.capturing = false;
         link.question_out = false;
-        let owed = std::mem::take(&mut link.owed);
+        link.rest.clear();
+        link.last = None;
         if let Some(mut scpi) = link.scpi.take() {
             let _ = scpi.close();
-            if owed && !scpi.resource().starts_with("tcp") {
-                scpi.forget_question();
+            // A new connection can't hear an old answer; a USBTMC device keeps it.
+            if scpi.resource().starts_with("tcp") {
+                link.owed = false;
             }
             self.closed = Some(scpi);
         }
@@ -584,6 +737,12 @@ impl Capture {
         }
         let started = Instant::now();
         let mut watch = Watch::new(self.bounds);
+        {
+            let mut link = self.shared.lock();
+            link.last = None;
+            link.copied = false;
+            link.alike = false;
+        }
         loop {
             let volts = match self.ask(ASK_VOLTAGE, &mut watch, started, stop)? {
                 Asked::Reading(v) => v,
@@ -599,6 +758,7 @@ impl Capture {
                 Asked::Again => continue,
                 Asked::Over => return Ok(()),
             };
+            self.shared.lock().copied = false;
             for packet in frame(volts, amps) {
                 if !sink.send_while(packet, go_on) {
                     return Ok(());
@@ -649,11 +809,27 @@ impl Capture {
         }
     }
 
-    /// One question, and the wait for its answer, which is the only thing it can get:
-    /// nothing else goes out meanwhile that wants one. On a line with no tags a second
-    /// asking would make every later reading the answer to the one before, and tags
-    /// need no second asking either, as a new read asks the device for the same answer.
+    /// One question and its answer, with no question left marked out whatever comes.
     fn ask(
+        &self,
+        question: &str,
+        watch: &mut Watch,
+        started: Instant,
+        stop: &AtomicBool,
+    ) -> Result<Asked> {
+        let asked = self.asking(question, watch, started, stop);
+        self.shared.lock().question_out = false;
+        asked
+    }
+
+    /// One question, and the wait for its answer, which is the only thing it can get:
+    /// nothing else goes out meanwhile that wants one. It's never asked twice: on a line
+    /// with no tags a second asking would make every later reading the answer to the one
+    /// before, and on USBTMC the transport reads for the one request it made. An answer
+    /// is gathered up to its line end. One that isn't a number, comes with more than a
+    /// line, or is the last answer over again (a copy, which would shift all after it)
+    /// resyncs the line, and the round starts again from the voltage.
+    fn asking(
         &self,
         question: &str,
         watch: &mut Watch,
@@ -665,9 +841,9 @@ impl Capture {
         link.clean()?.send(question).inspect_err(|e| {
             log::error!("Asking '{question}' failed: {e}.");
         })?;
+        let asked_at = Instant::now();
         loop {
             if stop.load(Ordering::SeqCst) {
-                link.question_out = false;
                 link.owed = true;
                 return Ok(Asked::Over);
             }
@@ -685,14 +861,22 @@ impl Capture {
                 Ok(data) => data,
                 Err(e) if stop.load(Ordering::SeqCst) => {
                     log::debug!("Read error after a stop: {e}.");
+                    link.owed = true;
                     return Ok(Asked::Over);
                 }
                 Err(e) => {
                     log::error!("Reading the answer to '{question}' failed: {e}.");
+                    link.owed = true;
                     return Err(e);
                 }
             };
             let Some(data) = data else {
+                if !link.rest.is_empty() {
+                    // Silence after a piece: an answer cut short, no answer to wait for.
+                    let cut = String::from_utf8_lossy(&std::mem::take(&mut link.rest)).into_owned();
+                    let why = format!("'{}' with no line end", cut.escape_debug());
+                    return Self::junk(link, watch, &why, limit_msec > 0);
+                }
                 link.question_out = true;
                 drop(link);
                 match watch.empty_read(took, past, limit_msec > 0) {
@@ -713,39 +897,73 @@ impl Capture {
                 link = self.shared.lock();
                 continue;
             };
+            link.rest.extend_from_slice(&data);
+            let text = match link.answer() {
+                // Its line end is still to come: the same question, the same wait.
+                Ok(None) => continue,
+                Ok(Some(text)) => text,
+                Err(junk) => junk,
+            };
             link.question_out = false;
-            if let Some(text) = watch.heard() {
-                log::warn!("{text}");
+            if let Some(line) = watch.heard() {
+                log::warn!("{line}");
             }
-            let text = answer_text(&data);
-            if let Some(value) = protocol::reading(&text) {
+            let reading = protocol::reading(&text);
+            let mut copy = !link.alike
+                && link.last.as_deref() == Some(text.as_str())
+                && reading.is_some_and(|v| v != 0.0);
+            if copy && link.copied {
+                // The same over a clean line: what the load reads, alike.
+                link.alike = true;
+                copy = false;
+            }
+            link.copied |= copy;
+            if let (Some(value), false) = (reading, copy) {
+                link.slowest = link.slowest.max(asked_at.elapsed().min(SLOWEST));
+                link.last = Some(text);
                 return Ok(Asked::Reading(value));
             }
-            // What's left of whatever this was goes before the next question.
-            link.scpi()?.forget_question();
-            drop(link);
-            return match watch.unusable(&text, limit_msec > 0) {
-                Step::Warn(text) => {
-                    log::warn!("{text}");
-                    Ok(Asked::Again)
-                }
-                Step::DoneWarning(text) => {
-                    log::warn!("{text}");
-                    Ok(Asked::Over)
-                }
-                Step::Fail(text) => {
-                    log::error!("{text}");
-                    Err(Error::device(text))
-                }
-                Step::Wait => Ok(Asked::Again),
+            let why = if copy {
+                format!("the same answer twice: '{}'", text.escape_debug())
+            } else {
+                format!("'{}'", text.escape_debug())
             };
+            return Self::junk(link, watch, &why, limit_msec > 0);
+        }
+    }
+
+    /// What came is no answer: the line is resynced, and the round starts over or,
+    /// after too many, the capture ends.
+    fn junk(
+        mut link: MutexGuard<'_, Link>,
+        watch: &mut Watch,
+        why: &str,
+        time_limit: bool,
+    ) -> Result<Asked> {
+        link.question_out = false;
+        link.resync().inspect_err(|e| {
+            log::error!("Resyncing the line failed: {e}.");
+        })?;
+        drop(link);
+        match watch.unusable(why, time_limit) {
+            Step::Warn(text) => {
+                log::warn!("{text}");
+                Ok(Asked::Again)
+            }
+            Step::DoneWarning(text) => {
+                log::warn!("{text}");
+                Ok(Asked::Over)
+            }
+            Step::Fail(text) => {
+                log::error!("{text}");
+                Err(Error::device(text))
+            }
+            Step::Wait => Ok(Asked::Again),
         }
     }
 
     fn over_with_question_out(&self) {
-        let mut link = self.shared.lock();
-        link.question_out = false;
-        link.owed = true;
+        self.shared.lock().owed = true;
     }
 }
 

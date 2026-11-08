@@ -28,6 +28,8 @@ emu_cases() {
     ATOF="sr_atof_ascii gives 0 for nothing and takes nan, inf and hexadecimal, and 1e40 is inf as a float, each a reading with exit 0; oxrok takes what the manual shows as a number, and asks again"
     TCP_BLOCKS="scpi_tcp_raw_read_data has sr_tcp_read_bytes block, and its recv() has no timeout, so sr_scpi_get_string's 1 s never runs and a silent load holds sigrok-cli for ever; oxrok's read has the timeout"
     SIGPIPE="sr_tcp_write_bytes is a plain send() and nothing ignores SIGPIPE: at a load's close C's read gets nothing, and the next question kills sigrok-cli (exit 141); oxrok's capture fails"
+    SETPOINT="config_set prints any number into its line (api.c:315-350), and the load refuses one outside its range in silence, keeping its old setting, or rounds one with more places; oxrok refuses both before anything is sent, so a -c that would turn the input on after one sends nothing"
+    PIECES="scpi_tcp_raw_read_data takes a short read for a whole answer, so an answer in pieces is two, and an answer twice is one too many: from there each current is the voltage before it, with exit 0; oxrok gathers to the line end, and resyncs at a copy or at junk"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, so it dies at the signal; oxrok ends its capture and closes"
 
     emu_case "scan" --keep-header -- -d $U --scan
@@ -65,9 +67,10 @@ emu_cases() {
     emu_case "set resistance_target" --no-output -- -d $T -g 1 -c resistance_target=47.5 --set
     emu_case "set opp_threshold" --no-output -- -d $T -g 1 -c opp_threshold=150 --set
     emu_case "set ocp_threshold" --no-output -- -d $T -g 1 -c ocp_threshold=7.25 --set
-    emu_case "set voltage rounds" --no-output -- -d $T -g 1 -c voltage_target=1.23456 --set
-    emu_case "set voltage out of range" --no-output -- -d $T -g 1 -c voltage_target=200 --set
-    emu_case "says a number is off the list" --stderr --oracle-differs "oxrok warns, as a load's refusal goes unheard; C says nothing" -- -d $T -g 1 -c voltage_target=200 --set
+    emu_case "set voltage rounds" --no-output --expect-fail --oracle-differs "$SETPOINT" -- -d $T -g 1 -c voltage_target=1.23456 --set
+    emu_case "set voltage out of range" --no-output --expect-fail --oracle-differs "$SETPOINT" -- -d $T -g 1 -c voltage_target=200 --set
+    emu_case "set voltage rounds to nothing" --no-output --expect-fail --oracle-differs "$SETPOINT" -- -d $T -g 1 -c voltage_target=0.0004 --set
+    emu_case "an off-list setpoint keeps the input off" --no-output --expect-fail --oracle-differs "$SETPOINT" -- -d $T -g 1 -c current_limit=50:enabled=on --set
     emu_case "set voltage nan" --no-output --expect-fail --oracle-differs "$NAN" -- -d $T -g 1 -c voltage_target=nan --set
     emu_case "set then capture" -- -d $T -g 1 -c current_limit=2.5:regulation=CC --samples 1 -O analog
     emu_case "enabled last" -- -d $T -g 1 -c current_limit=2.5:enabled=on --samples 2 -O analog
@@ -96,7 +99,15 @@ emu_cases() {
     emu_options eol=crlf
     emu_case "crlf" -- -d $T --samples 2 -O analog
     emu_options eol=none
-    emu_case "no line end" -- -d $T --samples 2 -O analog
+    emu_case "no line end" --no-output --oracle-differs "$PIECES" --oxrok-fails "with no line end" -- -d $T --samples 2 -O analog
+    # Answers in pieces, twice, and junk ahead of a late answer: no frame of V and I
+    # traded places.
+    emu_options split-at=3:3
+    emu_case "an answer in two pieces" --oracle-differs "$PIECES" -- -d $T --samples 4 -O analog
+    emu_options double-at=2:1
+    emu_case "an answer twice" --oracle-differs "$PIECES" -- -d $T --samples 4 -O analog
+    emu_options junk-at=4:75
+    emu_case "junk then the answer late" --oracle-differs "$BAD" -- -d $T --samples 4 -O analog
     emu_options volt=abc
     emu_case "volt not a number" --oracle-differs "$BAD" -- -d $T --samples 2 -O analog
     emu_options curr=abc
@@ -185,6 +196,12 @@ emu_cases() {
     emu_case "usbtmc capture time" --oracle-differs "$USB" --filter '5,$d' --tx-filter '28,$d' -- -d $U --time 1000 -O analog
     emu_options late-at=2:5
     emu_case "usbtmc late answer" --oracle-differs "$USB" -- -d $U --samples 1 -O analog
+    emu_options split-at=3:3
+    emu_case "usbtmc answer in two pieces" --oracle-differs "$USB" -- -d $U --samples 4 -O analog
+    emu_options double-at=2:1
+    emu_case "usbtmc answer twice" --oracle-differs "$USB" -- -d $U --samples 4 -O analog
+    emu_options junk-at=4:75
+    emu_case "usbtmc junk then the answer late" --oracle-differs "$USB" -- -d $U --samples 4 -O analog
     emu_options mute-at=2
     emu_case "usbtmc silent capture" --no-output --oracle-differs "$USB" --tx-filter '20,$d' -- -d $U --time 100 -O analog
     # At the one question C asks: the same .tx, and C has no read to fail.
