@@ -1154,17 +1154,24 @@ limits = [
 [drivers.fluke-45]
 name = "Fluke 45"
 libsigrok = "fluke-45"
-ids = []
+ids = ["fluke-45"]
 kind = "meter"
-connection = "tcp"
+connection = "serial"
 vendor = "Fluke"
 models = ["45"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["fluke-45"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "On the meter's RS-232 port with `conn=` a serial port; asks one question at a time and waits for each prompt, so a slow meter or one on an external trigger gets every answer under the right question.",
+  "Sends a device clear (`^C`) at a scan, at a capture's start and when it gives up on a question, so a meter left mid-reading is ready.",
+  "Echo, prompts that never come and readings with no sign or point (`5E-1`) are all handled.",
+  "Overload is +inf or -inf by sign; dB is dBm, dB Power is watts, and MIN, MAX, HOLD, REL and dB go on the primary display (P1) only.",
+]
+limits = [
+  "FORMAT 2 readings (with a unit, `+1.2345E+0 VDC`) are refused; the meter must be in FORMAT 1.",
+  "Not run on a real meter; the model follows the users manual, chapter 5.",
+]
 
 [drivers.gwinstek-gds-800]
 name = "GW Instek GDS-800"

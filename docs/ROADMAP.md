@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 76 of libsigrok's 87 `src/hardware` drivers are
-ported; the 11 still missing are listed below. Native decoder porting is
+crates.io. 77 of libsigrok's 87 `src/hardware` drivers are
+ported; the 10 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 11 libsigrok drivers with no oxrok port. Each needs a device model,
+The 10 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (7)
+### SCPI instruments (6)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -31,7 +31,6 @@ remaining drivers can start there.
 | `gwinstek-gds-800` | scope | GDS-800 series |
 | `hameg-hmo` | scope | HMO series |
 | `lecroy-xstream` | scope | XStream series |
-| `fluke-45` | meter | Fluke 45 |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
 There is no ordering dependency except `hp-3478a`, which waits for the

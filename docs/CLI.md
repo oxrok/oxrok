@@ -1012,6 +1012,12 @@ Deliberate, and kept small:
   output modules get every sample and it warns "Device only sent N samples.". So
   `--samples 100 -t D0=r -w` writes 50 samples with no warning, and `csv:trigger=true`
   writes the trigger row on. `-w` with no `-t` is refused, as it would write nothing.
+- `fluke-45`: oxrok waits for each command's prompt before the next, where sigrok-cli
+  sends on the answer's line end, so a slow meter's answers stay with their questions.
+  Overload is +inf or -inf, where sigrok-cli prints 1 GV; dB Power is in watts, and
+  MIN, MAX, HOLD, REL and dB go on the primary display only. A refused or lost `VAL1?`
+  is no sample, where sigrok-cli crashes. A silent meter fails a sample-limited capture
+  at 30 s, or 10 minutes after a sample, where sigrok-cli waits for ever.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

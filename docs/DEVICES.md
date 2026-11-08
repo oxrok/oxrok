@@ -3555,6 +3555,40 @@ one shows only at the next open. A silent scope with no sample yet fails at
 30 s or three times C's own preparation sleep; after a sample it warns and
 fails at 10 minutes. Each block is begun once.
 
+### Fluke 45 (`fluke-45`)
+
+The Fluke 45 dual display multimeter on RS-232, with SCPI's words and a
+prompt after each command (`=>`, `?>`, `!>`). Channels P1 and P2 are the two
+displays. Give `conn=`, and `serialcomm=` if the line needs setting; only a
+serial port is probed. Ported and emulated on the CDC-ACM shell, model
+`fluke-45` (`func=`, `func2=`, `auto=`, `mod=`, `values=`, `values2=`, `say=`,
+`prompts=apart|together|none`, `idn=`, `latency=`, `trigger=`, `blocked=`,
+and the shell's `echo=raw|line|bare` and `early=discard`), 96 cases on
+2026-11-08, gcov 94.4% of the driver. The model cites the users manual (PN
+855981 rev. 4, chapter 5) by page. Never on hardware; no recording found.
+
+oxrok asks one question at a time and sends the next command only after the
+last one's prompt, as the manual requires (5-11: a command sent earlier is
+discarded); C sends on the answer's line end. So a slow meter, one on an
+external trigger (`VAL1?` on a blank display waits for the next triggered
+reading, 5-26), or one left mid-reading gets every answer under the right
+question: 0 wrong in a sweep of latencies from 0.1 s to 30 s, queueing and
+discarding. A scan, a capture's start and a question given up on send a
+device clear (`^C`, 5-4) and wait for its `=>`. A meter with no prompts, or
+echo on (the factory setting, Table 5-1), still works: an answer with no
+prompt is taken after 1 s, then after 50 ms once two prompts in a row are
+missed.
+
+Labels by the manual: overload (`+1E+9`, `-1E+9`, 5-11) is +inf or -inf; dB
+is dBm, dB Power is watts (5-23); MIN, MAX, HOLD, REL and dB go on the
+primary display only (5-22); AACDC is AC plus DC, REL is relative. FORMAT 2
+readings (`+1.2345E+0 VDC`) are refused: the meter must be in FORMAT 1.
+Readings need no sign or point (`5E-1` reads). Silence: on a sample limit,
+no answer with no sample fails at 30 s and junk at 10 s; after a sample it
+warns at 30 s and fails at 10 minutes; `--time` and `--continuous` only
+warn. Lines have no checksum: a flipped bit that leaves a digit a digit is a
+wrong reading.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

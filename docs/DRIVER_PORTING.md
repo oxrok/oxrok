@@ -355,6 +355,13 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A prompted line (`=>`) is an exchange: answer, then a prompt that says the
+  command is done. Send the next command only after the prompt, and on giving up
+  send a device clear and wait for its prompt, or a late answer lands under the
+  next question. A simulation with every answer alike can't show that: use the
+  real round's order of questions.
+- The manual's factory settings matter: the Fluke 45 ships with echo on, which a
+  driver written for echo off meets first.
 - Read the instrument's programming guide before a model: `siglent-sds`'s had
   the `#9` of digital data in points, not bytes, and a command (`DGST`) not on the
   very models that use it. A model written from the C and a port written from the

@@ -9,7 +9,7 @@ release may change the library API.
 ### Added
 
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
-  `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`.
+  `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request
   315, now part of the oracle.
 - `-w` with no `-t` is refused.
