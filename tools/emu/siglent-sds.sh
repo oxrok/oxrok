@@ -170,7 +170,8 @@ emu_cases() {
     emu_case "scan with no idn to speak of" --no-output -- -d $T --scan
     emu_options mute-at=1
     emu_case "scan silent" --no-output -- -d $U --scan
-    emu_case "scan silent tcp" --no-output --oracle-bug "$TCP_BLOCKS" --oracle-hangs --timeout 4 -- -d $T --scan
+    # oxrok asks twice, 1 s each, which a stalled tool needs more than 4 s for.
+    emu_case "scan silent tcp" --no-output --oracle-bug "$TCP_BLOCKS" --oracle-hangs --timeout 8 -- -d $T --scan
     emu_options silent-at=1
     emu_case "scan answers the second time" --keep-header -- -d $U --scan
     emu_options mute-at=3
