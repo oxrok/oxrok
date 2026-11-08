@@ -21,29 +21,65 @@
 //! with `N` 4 to 6, `SIZE` of the manual's table (1008 to 250008), `RATE` a float
 //! high byte first (libsigrok's comment says so against the manual's words, and the
 //! manual's example agrees with the comment), and each point an `i16`, high byte first.
-//! A volt is `:CHAN<X>:SCAL?` times 10/256 per count. There is no check on any of it:
-//! a damaged point can't be told from a good one, see the test of single bit flips.
+//! A volt is `:CHAN<X>:SCAL?` times 10/256 per count.
 //!
 //! The scope speaks RS-232 with no handshake lines; `serialcomm=` is what its panel is
 //! set to, and with none the port keeps its line.
+//!
+//! # What can't be checked
+//!
+//! No field has a sum. A flipped bit in a point is a wrong point, as in C. The block's
+//! head is safe: of its 112 single-bit flips 64 change no sample and 48 fail, and no
+//! lost byte makes a reading. The scale answer is not, and it scales the whole channel,
+//! with exit 0: of its flips and lost bytes,
+//!
+//! | answer         | flips: wrong, same, failed | lost bytes that are wrong      |
+//! |----------------|----------------------------|--------------------------------|
+//! | `1.00V\n`      | 11, 2, 35                  | 1: `100V`                      |
+//! | `500mV\n`      | 12, 0, 36                  | 3: `50mV` twice, `500V`        |
+//! | `2.000E-03\n`  | 20, 1, 59                  | 3: `2000E-03`, `2.000E03`, `2.000E-0` |
+//!
+//! So a scale off the manual's 1-2-5 steps, 2 mV to 5 V with a 1X probe and so up to
+//! 500 V with its 100X, gets a warning, once per channel in a capture. Of the wrong flips
+//! above it warns of 10 of 11, 10 of 12 and 17 of 20, and of the lost bytes' only of
+//! `2.000E03`: `100V`, `50mV` and the rest are steps too. It is no refusal: the manual doesn't say what the
+//! answer is at another probe factor.
+//!
+//! **The volts' factor is unverified.** C has `SCAL * 10 / 256`, kept here. A real
+//! GDS-2000's owner, in libsigrok's unmerged pull request 121, has `SCAL * probe / 256`
+//! and writes that "the scope is correcting for the probe-scaling itself". The two
+//! agree only at a 10X probe. Should the pull request's be right for a GDS-800 too, every
+//! volt off another probe is out by a constant factor at exit 0, in C and here alike.
+//!
+//! # Waiting
+//!
+//! `:TRIG:MOD 3` is a single trigger, and the manual doesn't say a memory read answers
+//! before one comes. So up to a capture's first `#` there is no bound: 30 s of silence
+//! warns, a line says when it is back, and it waits on. **A dead scope in this state
+//! needs a stop:** a stop and an unplug end the wait, and nothing else does. A `#`
+//! damaged on the line looks the same on a record under 4096 bytes. After that first `#`
+//! a capture has a scope that answers, and 10 minutes of silence ends it, the slowest
+//! sweep being 100 s, at 10 s per division. 4096 bytes with no `#` end it at any time.
+//! See [`Silence`].
 //!
 //! # Against C
 //!
 //! - Points are binary, so a block is read a byte at a time: `scpi_serial_read_data`
 //!   takes a CR off a read ending in LF CR, and the driver's `read_data` adds an LF
 //!   after any short read ending in LF. C gets each such byte doubled, then reads the
-//!   rest of the block as its scale, and 0 V, or ends with "Too many bytes read". The
-//!   lines were right when written: libsigrok's 9ea4018f (2017) stopped stripping
-//!   line ends below the driver. Pull request 121 on libsigrok, from a GDS-2000 owner
-//!   and unmerged, reports the 0 V on a real scope; any trace at 10 counts has the byte.
-//! - C waits for ever for a block. Here 30 s of silence warns and 10 minutes ends the
-//!   capture, since a single trigger may wait and the slowest sweep is 100 s, at 10 s
-//!   per division. 4096 bytes with no `#` end it at once. See [`Silence`].
+//!   rest of the block as its scale, and 0 V, or ends with "Too many bytes read". A trace
+//!   at 10 counts has the byte, and the read must also end on it, so its commit calls the
+//!   failure rare on a real GDS-2000: libsigrok's unmerged pull request 121, commit
+//!   da32bb9d, which reports the 0 V. That commit's author blames libserialport's
+//!   canonical mode. Here the blame is on libsigrok's 9ea4018f (2017), which stopped
+//!   stripping line ends below the driver and whose diff shows it.
+//! - C waits for ever for any block. See "Waiting".
 //! - `SIZE` must be digits and fit: over 250008 C writes past its buffers.
 //! - `:CHAN<X>:SCAL?`'s number must be one, with nothing behind it but `V` or `mV`, and
 //!   above 0, where `strtod` makes 0 V of what it can't read, and exit 0.
 //! - An empty answer to it is read past: the manual has a line feed behind each
-//!   answer, and if a block has one C takes that for its scale, and 0 V.
+//!   answer, and if a block has one C can take that for its scale, and 0 V.
+//! - A start with every channel off is an error here. C arms the scope and ends empty.
 
 #![forbid(unsafe_code)]
 
@@ -177,6 +213,17 @@ struct Shared {
     rate: AtomicU32,
     /// A block was asked for and not read to its end, so more of it may come.
     in_block: AtomicBool,
+    /// What it warned of, for a test to look at.
+    #[cfg(test)]
+    warned: Mutex<Vec<String>>,
+}
+
+impl Shared {
+    fn warn(&self, words: &str) {
+        log::warn!("{words}");
+        #[cfg(test)]
+        self.warned.lock().expect("warned lock").push(words.to_owned());
+    }
 }
 
 /// One scope.
@@ -343,10 +390,10 @@ impl Device for GdsDevice {
             return Err(Error::arg("No channels enabled."));
         }
         if firmware_lacks_memory_read(&self.info.version) {
-            log::warn!(
+            self.shared.warn(&format!(
                 "Firmware {} is older than 2.03, and the manual has :ACQ<X>:MEM? from then on.",
                 self.info.version
-            );
+            ));
         }
         let stop = Arc::new(AtomicBool::new(false));
         let shared = Arc::clone(&self.shared);
@@ -426,6 +473,22 @@ fn number_end(text: &str) -> Option<usize> {
     Some(at)
 }
 
+/// A scale on the manual's steps: 1, 2 or 5 of a power of ten, from its 2 mV to its 5 V
+/// with a 1X probe, and up to 500 V for its 100X.
+fn on_the_steps(scale: f32) -> bool {
+    let scale = f64::from(scale);
+    if !(0.002 * 0.999..=500.0 * 1.001).contains(&scale) {
+        return false;
+    }
+    let step = scale / 10f64.powf(scale.log10().floor());
+    [1.0, 2.0, 5.0, 10.0].iter().any(|s: &f64| (step - s).abs() < s * 1e-3)
+}
+
+/// The warning for a scale off those steps.
+fn off_the_steps(query: &str, text: &str) -> String {
+    format!("{query} said '{text}', which is no step in the manual: the volts may be wrong.")
+}
+
 /// Volts per count, and libsigrok's digits for it.
 fn volts_per_count(scale: f32) -> (f32, i32) {
     let vbit = (f64::from(scale * VERTICAL_DIVISIONS) / 256.0) as f32;
@@ -467,21 +530,24 @@ enum Verdict {
     GiveUp,
 }
 
-/// How long the scope has said nothing that counts. Bytes ahead of a block's `#` don't
-/// count, so a trickle of them can't hold a capture past the limit, and a lot of them
-/// end it sooner.
+/// How long the scope has said nothing that counts. Up to a capture's first `#` that
+/// only warns, as a single trigger may be waiting; after it there is a limit. Bytes ahead
+/// of a `#` don't count, so a trickle of them can't hold a capture past the limit, and
+/// a lot of them end it at any time.
 #[derive(Clone, Copy, Debug)]
 struct Silence {
     since: Instant,
     warned: bool,
     junk: usize,
+    /// A `#` has come in this capture.
+    answered: bool,
     warn_after: Duration,
     limit: Duration,
 }
 
 impl Silence {
     fn new(now: Instant, warn_after: Duration, limit: Duration) -> Silence {
-        Silence { since: now, warned: false, junk: 0, warn_after, limit }
+        Silence { since: now, warned: false, junk: 0, answered: false, warn_after, limit }
     }
 
     /// Something that counts came. True if a warning stands, to say it is over.
@@ -491,11 +557,16 @@ impl Silence {
         std::mem::take(&mut self.warned)
     }
 
+    /// A block's `#` came, and from here on silence has its limit.
+    fn block_began(&mut self) {
+        self.answered = true;
+    }
+
     /// A read found nothing, and `asked` is when it began: a stall ahead of the read
     /// would have left the bytes there to find, so that much was silence.
     fn after_empty_read(&mut self, asked: Instant) -> Verdict {
         let silent = asked.saturating_duration_since(self.since);
-        if silent >= self.limit {
+        if self.answered && silent >= self.limit {
             Verdict::GiveUp
         } else if silent >= self.warn_after && !self.warned {
             self.warned = true;
@@ -506,10 +577,11 @@ impl Silence {
     }
 
     /// Bytes that make nothing, and whether they are enough to end it. They count for
-    /// nothing against the silence, whose limit stands behind them.
+    /// nothing against the silence, whose limit, once it has one, stands behind them.
     fn after_junk(&mut self, asked: Instant) -> Verdict {
         self.junk += 1;
-        if self.junk >= JUNK_LIMIT || asked.saturating_duration_since(self.since) >= self.limit {
+        let silent = asked.saturating_duration_since(self.since);
+        if self.junk >= JUNK_LIMIT || (self.answered && silent >= self.limit) {
             Verdict::GiveUp
         } else {
             Verdict::Wait
@@ -517,10 +589,15 @@ impl Silence {
     }
 
     fn warning(&self) -> String {
-        format!(
-            "No answer from the scope for {} s, still waiting: a single trigger may not have come.",
-            self.warn_after.as_secs_f32()
-        )
+        let seconds = self.warn_after.as_secs_f32();
+        if self.answered {
+            format!("No answer from the scope for {seconds} s, still waiting.")
+        } else {
+            format!(
+                "No answer from the scope for {seconds} s, still waiting: a single trigger may \
+                 not have come. A stop ends this."
+            )
+        }
     }
 
     fn give_up(&self) -> String {
@@ -544,6 +621,7 @@ struct Capture<'a> {
     /// `df_started`: the header and a frame have gone out.
     started: bool,
     size_warned: bool,
+    scale_warned: [bool; ANALOG_CHANNELS],
 }
 
 /// Why a capture leaves a step early with no error: a stop, or nobody listening.
@@ -562,8 +640,18 @@ impl<'a> Capture<'a> {
         times: Times,
     ) -> Capture<'a> {
         let silence = Silence::new(Instant::now(), times.warn, times.limit);
-        let size_warned = false;
-        Capture { scpi, sink, stop, shared, enabled, times, silence, started: false, size_warned }
+        Capture {
+            scpi,
+            sink,
+            stop,
+            shared,
+            enabled,
+            times,
+            silence,
+            started: false,
+            size_warned: false,
+            scale_warned: [false; ANALOG_CHANNELS],
+        }
     }
 
     fn run(&mut self) -> Result<()> {
@@ -608,7 +696,8 @@ impl<'a> Capture<'a> {
                 Ok(Some(0) | None) | Err(_) => return,
                 Ok(Some(_)) => {
                     if began.elapsed() >= self.times.leftover {
-                        log::warn!("The scope is still sending the block a stop left behind.");
+                        self.shared
+                            .warn("The scope is still sending the block a stop left behind.");
                         return;
                     }
                 }
@@ -700,7 +789,8 @@ impl<'a> Capture<'a> {
         let size = parse_size(&field).map_err(|words| Err(Self::refuse(words)))?;
         if !SIZES.contains(&size) && !self.size_warned {
             self.size_warned = true;
-            log::warn!("A block of {size} bytes is no record length in the manual.");
+            self.shared
+                .warn(&format!("A block of {size} bytes is no record length in the manual."));
         }
         let rate = self.read_bytes(4)?;
         let rate = u32::from_be_bytes([rate[0], rate[1], rate[2], rate[3]]);
@@ -712,10 +802,10 @@ impl<'a> Capture<'a> {
         }
         let indicator = self.read_byte()?;
         if usize::from(indicator) != channel + 1 {
-            log::warn!(
+            self.shared.warn(&format!(
                 "The block read for channel {} says it is of channel {indicator}.",
                 channel + 1
-            );
+            ));
         }
         self.read_bytes(3)?;
         self.read_bytes(size - FIELDS)
@@ -732,6 +822,7 @@ impl<'a> Capture<'a> {
             let asked = Instant::now();
             let Some(byte) = self.next_byte(asked)? else { continue };
             if byte == b'#' {
+                self.silence.block_began();
                 self.note_heard();
                 return Ok(());
             }
@@ -743,7 +834,7 @@ impl<'a> Capture<'a> {
 
     fn note_heard(&mut self) {
         if self.silence.heard(Instant::now()) {
-            log::warn!("The scope is answering again.");
+            self.shared.warn("The scope is answering again.");
         }
     }
 
@@ -779,7 +870,7 @@ impl<'a> Capture<'a> {
             Ok(_) | Err(Error::Timeout) => match self.silence.after_empty_read(asked) {
                 Verdict::Wait => Ok(None),
                 Verdict::Warn => {
-                    log::warn!("{}", self.silence.warning());
+                    self.shared.warn(&self.silence.warning());
                     Ok(None)
                 }
                 Verdict::GiveUp => Err(Err(Self::refuse(self.silence.give_up()))),
@@ -823,9 +914,13 @@ impl<'a> Capture<'a> {
                 break;
             }
         }
-        parse_scale(&text).ok_or_else(|| {
+        let Some(scale) = parse_scale(&text) else {
             log::error!("{WORDS}");
-            Err(Error::device(format!("{query} said '{text}', which is no scale.")))
-        })
+            return Err(Err(Error::device(format!("{query} said '{text}', which is no scale."))));
+        };
+        if !on_the_steps(scale) && !std::mem::replace(&mut self.scale_warned[channel], true) {
+            self.shared.warn(&off_the_steps(&query, &text));
+        }
+        Ok(scale)
     }
 }

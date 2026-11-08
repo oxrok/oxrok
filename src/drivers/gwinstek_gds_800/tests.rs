@@ -11,6 +11,10 @@ use std::sync::mpsc::{Receiver, sync_channel};
 const BOUND: Duration = Duration::from_secs(20);
 
 const VOLT: &str = "1.00V\n";
+// Of the flips of each scale answer that give a wrong reading, how many warn.
+const FLIPS_WARNED_V: usize = 10;
+const FLIPS_WARNED_MV: usize = 10;
+const FLIPS_WARNED_NR3: usize = 17;
 
 /// What the fake says, by what it was asked.
 #[derive(Default)]
@@ -24,6 +28,11 @@ struct Scope {
     scale: Vec<u8>,
     /// Nothing passes once this many bytes were read, until a test takes it away.
     hold_after: Option<usize>,
+    /// The read that finds this many bytes read takes this long and finds nothing, once:
+    /// a stall inside a read, with the next byte there for the next one.
+    stall_at: Option<(usize, Duration)>,
+    /// `:ACQ<X>:MEM?` from this one on gets no answer.
+    silent_from: Option<usize>,
     /// Time per byte, as a line at this rate has it.
     byte_time: Option<Duration>,
     /// Bytes appear only this often.
@@ -74,6 +83,14 @@ impl Port for Fake {
         loop {
             {
                 let mut s = self.0.lock().unwrap();
+                if let Some((at, stall)) = s.stall_at
+                    && s.bytes_read == at
+                {
+                    s.stall_at = None;
+                    drop(s);
+                    std::thread::sleep(stall);
+                    return Ok(0);
+                }
                 if s.fail_reads_after.is_some_and(|n| s.bytes_read >= n) {
                     return Err(Error::device("read failed"));
                 }
@@ -126,7 +143,9 @@ impl Port for Fake {
         let text = String::from_utf8_lossy(data).trim().to_owned();
         if text.ends_with(":MEM?") {
             let at = s.block_at.min(s.blocks.len().saturating_sub(1));
-            let block = s.blocks.get(at).cloned().unwrap_or_default();
+            let silent = s.silent_from.is_some_and(|from| s.block_at >= from);
+            let block =
+                if silent { Vec::new() } else { s.blocks.get(at).cloned().unwrap_or_default() };
             s.block_at += 1;
             queue(&mut s, &block);
         } else if text.ends_with(":SCAL?") {
@@ -258,12 +277,38 @@ fn capture(d: &mut GdsDevice) -> Vec<Packet> {
     packets
 }
 
-/// One capture of one channel from `block`, its output and what went on.
+/// A capture with what a stop must end stopped: past `wait` with no End, it stops it.
+fn capture_or_stop(d: &mut GdsDevice, wait: Duration) -> Vec<Packet> {
+    let rx = start(d);
+    let until = Instant::now() + wait;
+    let mut packets = Vec::new();
+    while Instant::now() < until {
+        match rx.recv_timeout(Duration::from_millis(5)) {
+            Ok((_, Packet::End)) => {
+                d.stop().unwrap();
+                return packets;
+            }
+            Ok((_, p)) => packets.push(p),
+            Err(_) => {}
+        }
+    }
+    d.stop().unwrap();
+    packets.extend(to_end(&rx));
+    packets
+}
+
+/// One capture of one channel from `block`, its output and what went on. What keeps
+/// waiting for a first `#` is stopped, which only a damaged `#` should need.
 fn capture_block(block: Vec<u8>) -> (Vec<Packet>, Arc<Mutex<Scope>>) {
     let (mut d, seen) = scope(|s| s.blocks = vec![block]);
     d.enable_channel(1, false).unwrap();
     d.times.limit = Duration::from_millis(100);
-    (capture(&mut d), seen)
+    (capture_or_stop(&mut d, Duration::from_secs(3)), seen)
+}
+
+/// What a device warned of.
+fn warned(d: &GdsDevice) -> Vec<String> {
+    d.shared.warned.lock().unwrap().clone()
 }
 
 #[test]
@@ -489,21 +534,47 @@ fn silence_warns_once_then_gives_up_and_a_word_clears_it() {
     let warn = Duration::from_secs(30);
     let limit = Duration::from_secs(600);
     let mut s = Silence::new(t0, warn, limit);
+    s.block_began();
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(29)), Verdict::Wait);
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(30)), Verdict::Warn);
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(31)), Verdict::Wait, "said once");
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(599)), Verdict::Wait);
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(600)), Verdict::GiveUp);
     assert_eq!(s.give_up(), "No answer from the scope in 600 s.");
-    assert_eq!(
-        s.warning(),
-        "No answer from the scope for 30 s, still waiting: a single trigger may not have come."
-    );
+    assert_eq!(s.warning(), "No answer from the scope for 30 s, still waiting.");
     let t1 = t0 + Duration::from_secs(40);
     assert!(s.heard(t1), "a warning stood");
     assert!(!s.heard(t1), "said once");
     assert_eq!(s.after_empty_read(t1 + Duration::from_secs(29)), Verdict::Wait);
     assert_eq!(s.after_empty_read(t1 + Duration::from_secs(30)), Verdict::Warn, "again");
+}
+
+#[test]
+fn before_a_first_block_silence_has_no_limit() {
+    let t0 = Instant::now();
+    let warn = Duration::from_secs(30);
+    let limit = Duration::from_secs(600);
+    let mut s = Silence::new(t0, warn, limit);
+    assert_eq!(s.after_empty_read(t0 + warn), Verdict::Warn);
+    assert_eq!(s.after_empty_read(t0 + limit), Verdict::Wait, "at the limit");
+    assert_eq!(s.after_empty_read(t0 + limit * 1000), Verdict::Wait, "a week on");
+    assert_eq!(s.after_junk(t0 + limit * 1000), Verdict::Wait, "a stray byte a week on");
+    assert_eq!(
+        s.warning(),
+        "No answer from the scope for 30 s, still waiting: a single trigger may not have \
+         come. A stop ends this."
+    );
+    // The first `#`, however late, and the limit runs from the next thing heard.
+    s.block_began();
+    let t1 = t0 + limit * 1000;
+    assert!(s.heard(t1), "it was warned of");
+    assert_eq!(s.after_empty_read(t1 + limit), Verdict::GiveUp);
+    // Junk's count has no first block to wait for.
+    let mut s = Silence::new(t0, warn, limit);
+    for _ in 0..JUNK_LIMIT - 1 {
+        assert_eq!(s.after_junk(t0), Verdict::Wait);
+    }
+    assert_eq!(s.after_junk(t0), Verdict::GiveUp);
 }
 
 #[test]
@@ -527,24 +598,279 @@ fn junk_ends_a_wait_at_its_count_and_never_resets_the_silence() {
     assert_eq!(s.after_junk(t0), Verdict::GiveUp);
     assert_eq!(s.give_up(), "No usable answer: 4096 bytes and no block.");
 
-    // A trickle of a few bytes does not hold the limit off.
+    // A trickle of a few bytes does not hold the limit off, once it has one.
     let mut s = Silence::new(t0, Duration::from_secs(30), Duration::from_secs(600));
+    s.block_began();
     assert_eq!(s.after_junk(t0 + Duration::from_secs(599)), Verdict::Wait);
     assert_eq!(s.after_empty_read(t0 + Duration::from_secs(600)), Verdict::GiveUp);
     let mut s = Silence::new(t0, Duration::from_secs(30), Duration::from_secs(600));
+    s.block_began();
     assert_eq!(s.after_junk(t0 + Duration::from_secs(600)), Verdict::GiveUp);
 }
 
 #[test]
-fn a_silent_scope_fails_with_no_header() {
+fn a_silent_scope_warns_and_waits_on_past_any_limit_for_a_stop() {
     let (mut d, seen) = scope(|_| {});
     d.enable_channel(1, false).unwrap();
     d.times.warn = Duration::from_millis(5);
+    d.times.limit = Duration::from_millis(10);
+    let rx = start(&mut d);
+    // Well past both, by empty reads and not by a sleep alone.
+    let wait = Instant::now() + BOUND;
+    while seen.lock().unwrap().empty_reads < 200 {
+        assert!(Instant::now() < wait, "no reads");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(rx.try_recv().is_err(), "a first block has no limit");
+    assert_eq!(
+        warned(&d),
+        ["No answer from the scope for 0.005 s, still waiting: a single trigger may not have \
+          come. A stop ends this."],
+        "and one warning"
+    );
+    d.stop().unwrap();
+    assert_eq!(shape(&to_end(&rx)), Vec::<String>::new(), "a stop is no failure, and no header");
+    assert_eq!(sent(&seen).last().map(String::as_str), Some(":ACQ1:MEM?"));
+}
+
+#[test]
+fn a_first_block_that_comes_late_says_so_and_is_a_block() {
+    let (mut d, seen) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.hold_after = Some(0);
+    });
+    d.enable_channel(1, false).unwrap();
+    d.times.warn = Duration::from_millis(5);
+    d.times.limit = Duration::from_millis(10);
+    let rx = start(&mut d);
+    let wait = Instant::now() + BOUND;
+    while warned(&d).is_empty() {
+        assert!(Instant::now() < wait, "no warning");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(30));
+    d.times.limit = Duration::from_secs(1000);
+    // The limit is the thread's copy, so the rest must come with no pause: all at once.
+    seen.lock().unwrap().hold_after = None;
+    let packets = to_end(&rx);
+    d.stop().unwrap();
+    assert_eq!(failure(&packets), None);
+    assert_eq!(samples(&packets).len(), 500);
+    assert_eq!(warned(&d).last().map(String::as_str), Some("The scope is answering again."));
+}
+
+#[test]
+fn after_a_sample_silence_has_its_limit() {
+    let (mut d, _) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.silent_from = Some(1);
+    });
     d.times.limit = Duration::from_millis(40);
     let packets = capture(&mut d);
-    assert_eq!(shape(&packets), ["F"], "no header, as C sends none");
+    assert_eq!(shape(&packets), ["H", "[", "[0]x500", "]", "F"]);
     assert_eq!(failure(&packets).unwrap(), "device error: No answer from the scope in 0.04 s.");
-    assert_eq!(sent(&seen).last().map(String::as_str), Some(":ACQ1:MEM?"));
+}
+
+#[test]
+fn a_stall_inside_a_read_is_no_silence() {
+    let (mut d, _) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.stall_at = Some((100, Duration::from_millis(300)));
+    });
+    d.enable_channel(1, false).unwrap();
+    d.times.limit = Duration::from_millis(200);
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None);
+    assert_eq!(samples(&packets).len(), 500);
+}
+
+#[test]
+fn silence_in_a_block_runs_from_its_last_byte() {
+    // Four pauses, each under the limit and together over it.
+    let (mut d, seen) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.hold_after = Some(20);
+    });
+    d.enable_channel(1, false).unwrap();
+    d.times.limit = Duration::from_secs(2);
+    let rx = start(&mut d);
+    for at in [40, 60, 80, 0] {
+        let wait = Instant::now() + BOUND * 6;
+        loop {
+            assert!(Instant::now() < wait, "no bytes");
+            let s = seen.lock().unwrap();
+            if s.hold_after.is_some_and(|h| s.bytes_read >= h) {
+                break;
+            }
+            drop(s);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        std::thread::sleep(Duration::from_millis(800));
+        seen.lock().unwrap().hold_after = (at > 0).then_some(at);
+    }
+    let packets = to_end(&rx);
+    d.stop().unwrap();
+    assert_eq!(failure(&packets), None);
+    assert_eq!(samples(&packets).len(), 500);
+}
+
+#[test]
+fn silence_starts_again_at_a_blocks_start() {
+    // A first `#` long after the limit, then a pause: the time ahead of it doesn't count.
+    let (mut d, seen) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.hold_after = Some(0);
+    });
+    d.enable_channel(1, false).unwrap();
+    d.times.limit = Duration::from_secs(1);
+    let rx = start(&mut d);
+    std::thread::sleep(Duration::from_millis(1500));
+    seen.lock().unwrap().hold_after = Some(1);
+    let wait = Instant::now() + BOUND * 6;
+    while seen.lock().unwrap().bytes_read < 1 {
+        assert!(Instant::now() < wait, "no #");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    seen.lock().unwrap().hold_after = None;
+    let packets = to_end(&rx);
+    d.stop().unwrap();
+    assert_eq!(failure(&packets), None);
+    assert_eq!(samples(&packets).len(), 500);
+}
+
+#[test]
+fn old_firmware_warns_and_still_asks() {
+    let (mut d, seen) = scope(|s| s.blocks = vec![block_of(&ramp(500), 1)]);
+    "V.2.01".clone_into(&mut d.info.version);
+    d.enable_channel(1, false).unwrap();
+    let packets = capture(&mut d);
+    assert_eq!(samples(&packets).len(), 500, "a warning, no refusal");
+    assert!(sent(&seen).iter().any(|w| w == ":ACQ1:MEM?"));
+    assert_eq!(
+        warned(&d),
+        ["Firmware V.2.01 is older than 2.03, and the manual has :ACQ<X>:MEM? from then on."]
+    );
+}
+
+#[test]
+fn other_warnings_are_said() {
+    let (mut d, _) = scope(|s| s.blocks = vec![block_of(&ramp(500), 2)]);
+    d.enable_channel(1, false).unwrap();
+    capture(&mut d);
+    assert_eq!(warned(&d), ["The block read for channel 1 says it is of channel 2."]);
+
+    let (mut d, _) = scope(|s| s.blocks = vec![block_of(&ramp(499), 1)]);
+    d.enable_channel(1, false).unwrap();
+    d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+    capture(&mut d);
+    assert_eq!(warned(&d), ["A block of 1006 bytes is no record length in the manual."], "once");
+}
+
+#[test]
+fn the_manuals_steps() {
+    for good in [
+        0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0,
+        200.0, 500.0,
+    ] {
+        assert!(on_the_steps(good), "{good}");
+        // As they come from the answers, in single precision.
+        assert!(on_the_steps(parse_scale(&format!("{good}V")).unwrap()), "{good} V");
+    }
+    assert!(on_the_steps(parse_scale("5mV").unwrap()));
+    assert!(on_the_steps(parse_scale("2.000E-03").unwrap()));
+    for bad in [0.001, 0.003, 0.0019, 1.1, 1.5, 3.0, 4.0, 7.0, 25.0, 1000.0, 5000.0] {
+        assert!(!on_the_steps(bad), "{bad}");
+    }
+}
+
+#[test]
+fn a_scale_off_the_steps_warns_once_and_is_used() {
+    let (mut d, _) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.scale = b"3.00V\n".to_vec();
+    });
+    d.enable_channel(1, false).unwrap();
+    d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+    let packets = capture(&mut d);
+    assert_eq!(failure(&packets), None, "a warning, no refusal");
+    assert_eq!(samples(&packets)[1], -99.0 * (3.0 * 10.0f32 / 256.0));
+    assert_eq!(
+        warned(&d),
+        [":CHAN1:SCAL? said '3.00V', which is no step in the manual: the volts may be wrong."]
+    );
+}
+
+/// A capture with `answer` for the scale: wrong, same or failed against a good one.
+fn scale_outcome(answer: &[u8], good: &[f32]) -> (&'static str, bool) {
+    let (mut d, _) = scope(|s| {
+        s.blocks = vec![block_of(&ramp(500), 1)];
+        s.scale = answer.to_vec();
+    });
+    d.enable_channel(1, false).unwrap();
+    d.times.answer = Duration::from_millis(20);
+    let packets = capture(&mut d);
+    let warned = warned(&d).iter().any(|w| w.contains("no step in the manual"));
+    if failure(&packets).is_some() {
+        ("failed", warned)
+    } else if samples(&packets) == good {
+        ("same", warned)
+    } else {
+        ("wrong", warned)
+    }
+}
+
+/// The field that can give wrong readings: all of a channel, by one flip, at exit 0.
+#[test]
+fn every_flip_and_lost_byte_of_a_scale() {
+    // (answer, flips wrong, same, failed, of the wrong how many warn; lost bytes wrong)
+    #[allow(clippy::type_complexity)]
+    let table: [(&[u8], usize, usize, usize, usize, usize); 3] = [
+        (b"1.00V\n", 11, 2, 35, FLIPS_WARNED_V, 1),
+        (b"500mV\n", 12, 0, 36, FLIPS_WARNED_MV, 3),
+        (b"2.000E-03\n", 20, 1, 59, FLIPS_WARNED_NR3, 3),
+    ];
+    for (answer, wrong, same, failed, warn, lost) in table {
+        let (mut d, _) = scope(|s| {
+            s.blocks = vec![block_of(&ramp(500), 1)];
+            s.scale = answer.to_vec();
+        });
+        d.enable_channel(1, false).unwrap();
+        let good = samples(&capture(&mut d));
+        assert_eq!(good.len(), 500);
+        let mut count = [0usize; 3];
+        let mut warned_wrong = 0;
+        for byte in 0..answer.len() {
+            for bit in 0..8 {
+                let mut damaged = answer.to_vec();
+                damaged[byte] ^= 1 << bit;
+                let (outcome, warned) = scale_outcome(&damaged, &good);
+                match outcome {
+                    "wrong" => {
+                        count[0] += 1;
+                        warned_wrong += usize::from(warned);
+                    }
+                    "same" => count[1] += 1,
+                    _ => count[2] += 1,
+                }
+            }
+        }
+        let name = String::from_utf8_lossy(answer);
+        assert_eq!(count, [wrong, same, failed], "{name} flips: wrong, same, failed");
+        assert_eq!(warned_wrong, warn, "{name}: of the wrong ones, those that warn");
+        let (mut lost_wrong, mut lost_warned) = (0, 0);
+        for byte in 0..answer.len() {
+            let mut damaged = answer.to_vec();
+            damaged.remove(byte);
+            let (outcome, warned) = scale_outcome(&damaged, &good);
+            lost_wrong += usize::from(outcome == "wrong");
+            lost_warned += usize::from(outcome == "wrong" && warned);
+        }
+        assert_eq!(lost_wrong, lost, "{name} lost bytes that are wrong");
+        // Only 2.000E03, 2 kV, is off the steps.
+        assert_eq!(lost_warned, usize::from(answer.len() == 10), "{name} lost bytes that warn");
+    }
 }
 
 #[test]

@@ -107,12 +107,16 @@ emu_cases() {
     emu_case "scale no number" --oxrok-fails "no scale" --oracle-differs "$STRTOD" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
     emu_options scale1=0V
     emu_case "scale of nothing" --oxrok-fails "no scale" --oracle-differs "$STRTOD" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
+    # A warning and the volts as said, for what the manual has no step for.
+    OFF="sigrok-cli says nothing of a scale off the manual's 1-2-5 steps; oxrok warns, and both use it"
+    emu_options scale1=3.00V
+    emu_case "scale off the steps" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
+    emu_case "scale off the steps says" --oracle-differs "$OFF" --stderr --filter '/^CH1: /d' -- -d $G -C CH1 --frames 1 -O analog
     emu_options scale1=500mv
     emu_case "scale in lower case mv" --oxrok-fails "no scale" --oracle-differs "$MV" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
 
     # A line feed in a block. scpi_serial.c has kept line ends since 9ea4018f (2017),
     # and the driver still puts back the one it thinks was stripped.
-    LF_END="the manual's words on all answers: protocol.c's next get of :CHAN1:SCAL? reads the line feed as its whole answer, and 0 V: every sample -0.0 V, with exit 0, where oxrok reads past an empty line. Not what a working scope can have sent, see the model"
     LF_LAST="read_data (protocol.c:46-49) adds a line feed after a short read ending in one, so the last read comes to one byte too many: Too many bytes read, no samples, exit 0. oxrok takes a point of 0x0A as a point"
     SIGN="sr_atoi takes a sign, so C reads a block of 100 bytes and the rest as its scale, and 0 V; oxrok refuses what is no size"
     SMALL="C's size below its 8 fields asks for a read of a negative size (protocol.c:215)"
@@ -125,7 +129,10 @@ emu_cases() {
     # "every low byte" above holds C's agreement where no read ends so.
     emu_case "line feeds in a block" --no-oracle-only --filter 1q -- -d $G -C CH1 --frames 1 -O analog
     emu_options end=lf
-    emu_case "line feed behind each block" --oracle-differs "$LF_END" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
+    # Oxrok alone, as C goes with the clock here: it gives 0 V when it reads the line feed
+    # on its own, and the right values when it reads it with the answer behind it, since
+    # strtod passes over white space. 0 V in 15 rounds here, and the review saw the other.
+    emu_case "line feed behind each block" --no-oracle-only --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
     emu_options points=5000 last=0a
     emu_case "line feed at a block's end" --oracle-differs "$LF_LAST" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
     emu_case "lib line feed at a block's end" --libsigrok --stderr -- -d $G -C CH1 --frames 1 -O analog
