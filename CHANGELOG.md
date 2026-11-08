@@ -8,6 +8,11 @@ release may change the library API.
 
 ### Added
 
+- `oxrok mcp`: a Model Context Protocol server over stdio, for LLM agents.
+  Reference tools (`version`, `list_drivers`, `driver_info`, `list_decoders`,
+  `decoder_info`, `list_formats`, `firmware_status`) and a `cli` tool that
+  runs the command line; `--read-only`, `--no-cli`, `--tools` and
+  `--list-tools`. The `oxrok::mcp` module behind the `mcp` feature.
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
   `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
   `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`, `hameg-hmo`, `scpi-dmm`,

@@ -86,10 +86,17 @@ Static binaries, the release archives, `make dist`, notices and
 An MCP server so an agent can scan, capture, measure and decode through
 oxrok: `oxrok mcp` over stdio, and an extended server in oxrok-ui whose
 tools the user picks. [PLAN.mcp.md](../PLAN.mcp.md) has the design, the
-phases and the open decisions. Nothing is built yet.
+phases and the open decisions. Phase 1 is in: the stdio server
+(`src/mcp/`), the tool model and catalog, the reference tools and the
+`cli` pass-through, with `--read-only`, `--no-hardware`, `--no-cli` and
+`--tools` ([MCP.md](MCP.md)). Decisions 1 to 3 of the plan went the
+recommended way: a hand-rolled synchronous protocol layer, the `mcp`
+subcommand, `schemars` for the schemas.
 
-- Phase 1: the stdio server, the tool model and catalog, the reference
-  tools (`list_drivers`, `decoder_info`, ...) and a `cli` pass-through.
+- `driver_info` does not yet report a driver's verification status
+  (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
+  docs are not in the published crate, so the table would have to be
+  generated into the source at build time or kept in `tools/site-data`.
 - Phase 2: the CLI's setup code (driver specs, configs, channels,
   triggers, decoder stacks) moved from `src/cli/` into the library.
 - Phase 3: devices and captures as tools, with a capture store.

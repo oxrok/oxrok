@@ -24,6 +24,8 @@
 //!   binary. Needs Rust 1.96.
 //! - `python`: the same on the system's CPython, through pyo3. With
 //!   both, CPython is used unless `OXROK_PYTHON=rustpython`.
+//! - `mcp` (with `cli`): [`mcp`], the Model Context Protocol server
+//!   behind `oxrok mcp`, so an LLM agent can use oxrok's tools.
 //!
 //! # Installing
 //!
@@ -77,6 +79,8 @@ pub mod ftdi;
 pub mod gpib;
 pub mod hid;
 pub mod lcr;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod modbus;
 pub mod parport;
 #[cfg(any(feature = "python", feature = "rustpython"))]
