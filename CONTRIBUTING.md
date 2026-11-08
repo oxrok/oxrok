@@ -8,6 +8,10 @@
   --all-features` green. CI runs the same on Linux, macOS and Windows,
   with clippy from the current stable Rust and a build on the minimum
   supported version, 1.95.
+  On a pull request the emulator tier and the Python decoder jobs run
+  only for what the change touches (`tools/ci/changes.py`; the
+  `changes` job's summary says why). The `ci:full` label runs
+  everything.
 - Every change that a user can see gets a line in `CHANGELOG.md`.
 - No `unsafe` code. The one exception is `pydecode`, which crosses
   into Python; every block there says why it is sound.

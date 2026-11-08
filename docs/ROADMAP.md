@@ -181,6 +181,20 @@ The models are plain Rust with no I/O for this reason; see
   unlink above the highest submitted seqnum and drop that submit.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
+- CI's Python decoder slices are floored by one test:
+  `decoder_uart_rest::amulet_ascii_regression` runs over four minutes
+  under CPython. Shorten its input or find why it is slow, then retune
+  the slice counts in `ci.yml`. Those slices also re-run the whole
+  `oxrok` suite, most of which the `test` job already runs; a nextest
+  `-E` filter to the decoder tests and the Python-gated code would
+  halve them.
+- `tools/ci/changes.py` balances emulator shards by golden case count,
+  a rough proxy (a 12-minute and a 22-minute shard had 1339 and 1789
+  cases). `diffcli.sh` printing each model's elapsed time would allow
+  real weights. It also treats all of `src/serial`, `src/usb`,
+  `src/cli` and `src/formats` as core; per-file rules (`tcpraw.rs` is
+  used by the TCP drivers only) would narrow the full runs that most
+  driver ports still trigger.
 
 ### CLI and format correctness
 

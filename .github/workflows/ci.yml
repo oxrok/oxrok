@@ -10,6 +10,40 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  # Which slow jobs this run needs (tools/ci/changes.py). A push to main
+  # runs everything. A pull request runs the emulator models of the
+  # drivers, models and shells it changes, and the Python decoder jobs
+  # only when it changes decoder code; core code, shared emulator code,
+  # Cargo.lock, this file and any path the script does not know select
+  # everything. The label `ci:full` selects everything too: add it, then
+  # re-run all jobs. The step summary says what each path selected.
+  # tests/emu_replay.rs replays every model in the test job regardless.
+  changes:
+    name: changes
+    runs-on: ubuntu-latest
+    outputs:
+      emu: ${{ steps.select.outputs.emu }}
+      emu_shards: ${{ steps.select.outputs.emu_shards }}
+      python: ${{ steps.select.outputs.python }}
+    steps:
+      # A pull request checks out its merge commit: the first parent is
+      # the base it merges into, so HEAD^1..HEAD is what it changes.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      # Labels read now, not from the event, so a re-run sees a new one.
+      - id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          labels=
+          if [ "$EVENT" = pull_request ]; then
+            labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '[.[].name] | join(",")')
+          fi
+          python3 -I tools/ci/changes.py --event "$EVENT" --labels "$labels" --base HEAD^1 --head HEAD
+
   check:
     name: fmt and clippy
     runs-on: ubuntu-latest
@@ -20,6 +54,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
+      - run: python3 -I tools/ci/test_changes.py
       - run: cargo clippy --workspace --all-targets --all-features
 
   # Fails on a dependency with a licence deny.toml does not allow, for any
@@ -66,18 +101,50 @@ jobs:
       # rustpython needs 1.96, for its parser.
       - run: cargo check --workspace --features python,libusb
 
+  # The suite under each Python feature, in nextest slices. The longest
+  # single test (decoder_uart_rest's amulet_ascii regression, about four
+  # minutes under CPython) is the floor of a slice; change `of` to
+  # retune.
   python-decoders:
-    name: python decoders
+    name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { feature: python, slice: 1, of: 3 }
+          - { feature: python, slice: 2, of: 3 }
+          - { feature: python, slice: 3, of: 3 }
+          - { feature: rustpython, slice: 1, of: 2 }
+          - { feature: rustpython, slice: 2, of: 2 }
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.feature }}
       - uses: taiki-e/install-action@nextest
-      - run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
-      - run: cargo nextest run -p oxrok --features python --no-fail-fast
+      - if: matrix.feature == 'python'
+        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      - run: >-
+          cargo nextest run -p oxrok --features ${{ matrix.feature }} --no-fail-fast
+          --partition slice:${{ matrix.slice }}/${{ matrix.of }}
+
+  python-clippy:
+    name: python decoders (clippy)
+    needs: changes
+    if: needs.changes.outputs.python == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y python3-dev
       - run: cargo clippy -p oxrok --features python --all-targets
-      - run: cargo nextest run -p oxrok --features rustpython --no-fail-fast
       - run: cargo clippy -p oxrok --features rustpython --all-targets
 
   # The emulator tier (docs/USB.md, "Emulation over USB/IP"): oxrok
@@ -89,8 +156,12 @@ jobs:
   # merge with no emulator run at all; and the probe turns any failure
   # of its apt-get (a mirror down, a package renamed) into that same
   # skip, not into a failure. Check the step summary for the warning.
+  # A pull request that changes no emulated driver or model skips it as
+  # well, by design (the changes job above).
   emulator-probe:
     name: emulator (vhci-hcd probe)
+    needs: changes
+    if: needs.changes.outputs.emu == 'true'
     runs-on: ubuntu-latest
     outputs:
       vhci: ${{ steps.vhci.outputs.vhci }}
@@ -115,13 +186,15 @@ jobs:
 
   emulator:
     name: emulator (oxrok against the goldens, ${{ matrix.shard }})
-    needs: emulator-probe
+    needs: [changes, emulator-probe]
     if: needs.emulator-probe.outputs.vhci == 'true'
-    # One job takes over an hour. A new model joins a shard by itself.
+    # One job takes over an hour. tools/ci/changes.py picks the models
+    # and balances them over up to six jobs by golden case count; a new
+    # model joins a shard by itself.
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        include: ${{ fromJSON(needs.changes.outputs.emu_shards) }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -152,8 +225,8 @@ jobs:
       # No sigrok-cli: full cases run oxrok alone against the committed
       # .out and .tx goldens, oracle-only cases are skipped and counted.
       # The harness runs oxrok-emu under sudo -n.
-      - run: |
-          models=$(ls tools/emu/*.sh | xargs -n1 basename -s .sh |
-            awk -v i=${{ matrix.shard }} 'NR % 6 == i' | paste -sd, -)
-          echo "$models"
-          sh tools/diffcli.sh --no-oracle --emu-model "$models"
+      - env:
+          MODELS: ${{ matrix.models }}
+        run: |
+          echo "$MODELS"
+          sh tools/diffcli.sh --no-oracle --emu-model "$MODELS"
