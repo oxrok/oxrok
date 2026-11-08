@@ -7,27 +7,29 @@
 //! The device, and how sure this is. No recording of a real one was found:
 //! sigrok-dumps has none here, and no firmware source exists outside Siglent.
 //!
-//! - From libsigrok's `siglent-sds`: the commands and the three protocols, the block's
-//!   prefix of 15 bytes on `C1:WF? ALL` and the descriptor's two fields, the `:INR?`
-//!   values, what `SANU?` looks like on each protocol. Those are what C asks and how it
-//!   reads the answer, not what a scope was seen to say.
-//! - From libsigrok pull request 247 (mike42, Matti Eiden, not merged; "works" reported
-//!   on an SDS1104X-E and an SDS1204X-E): `DAT2,#9` and nine digits ahead of `WF? DAT2`,
-//!   and two line feeds after a waveform. So 16 bytes ahead of digital data here, where
-//!   stock C skips 15: this model follows the report, for a query C has never been
-//!   shown to complete.
-//! - From the `LeCroy` descriptor C's two offsets belong to: `WAVEDESC` at the start,
-//!   346 bytes in all, `COMM_ORDER` low first. C looks at none of it but the two fields.
-//! - From memory of Siglent's programming guide, unchecked as it couldn't be fetched
-//!   here: `CHDR` taking the header and the unit off answers, `C1:VDIV?` as `1.00E+00`,
-//!   `TRSE?` as `EDGE,SR,C1,HT,OFF`, one bit per digital sample, low bit first.
-//! - USB ids: `contrib/60-libsigrok.rules`, f4ec:ee38 for the SDS1104X-E and f4ec:ee3a
-//!   for the SDS1052DL+. Which of the two the other models have is a guess.
+//! - From Siglent's "SDS1000-Series & SDS2000X & SDS2000X-E Programming Guide",
+//!   PG01-E02D (pages below are its own): `CHDR OFF` taking the header and the unit off
+//!   answers (p.23); `SANU?` as `7.00E+05pts` on the X-E, `28Mpts` on the SDS1000X and
+//!   SDS2000X and a plain `1600` on the older ones (p.35); `:INR?` reading and clearing
+//!   only bits 0 and 13, so 0, 1, 8192 or 8193 (p.25, p.175-176); `DI:SW` on the X-E
+//!   alone and `DGST` not there (p.74, p.77); `TRMD SINGLE` and `TRMD?` (p.198-199);
+//!   `TRSE?`'s form (p.202); `C1:WF? DAT2` as `DAT2,#9` and the length in bytes, the
+//!   signed codes and `0A 0A` (p.264-265), and `D0:WF? DAT2` with the length in points,
+//!   a bit each, low bit first (p.268).
+//! - From libsigrok's `siglent-sds`: `C1:WF? ALL`, which the guide doesn't have, with a
+//!   prefix of 15 bytes and a `LeCroy` descriptor whose two fields at 36 and 60 are all C
+//!   reads; the frame count at byte 40 of `FPAR?`; and `:TIM:OFFS` and `:TRIG:EDGE:LEV`,
+//!   which aren't in the guide (it has `TRDL`, p.185, and `TRLV`, p.193): a scope likely
+//!   ignores them, and here they go to the error queue with no answer.
+//! - From libsigrok pull request 247 (mike42, Matti Eiden, not merged; used on an
+//!   SDS1104X-E and an SDS1204X-E): an E series on the screen through `TRMD SINGLE`,
+//!   `TRMD?` until `STOP`, and `WF? DAT2`.
+//! - USB ids: `contrib/60-libsigrok.rules` and the guide's examples: f4ec:ee38 for the
+//!   SDS1104X-E, f4ec:ee3a for the SDS1052DL+. Which the other models have is a guess.
 //!
 //! Guesses no test should lean on: the bus speeds, firmware strings and serial numbers;
-//! that `C1:WF? ALL`'s `#9` length counts the descriptor and the samples, not the line
-//! feeds; `FPAR?`, whose only witness is C reading a frame count at byte 40 of it;
-//! that `:TIM:OFFS` and `:TRIG:EDGE:LEV`, which read like Rigol's, do nothing here.
+//! that `C1:WF? ALL`'s `#9` length counts the descriptor and the samples; `FPAR?` beyond
+//! its count; what an X-E does with `D0:WF? DAT2` with the analyzer off.
 //!
 //! Emulation artifacts:
 //!
@@ -44,6 +46,7 @@
 //!   stock C can read to its end;
 //! - `sanu=TEXT`: what `SANU? C1` answers instead;
 //! - `inr=A,B,...`: what `:INR?` plays in turn, once, then as with no option;
+//! - `trmd=N`: `TRMD?` says `SINGLE` N times after `TRMD SINGLE`, then `STOP` (1);
 //! - `trse=TEXT`: what `TRSE?` answers (`EDGE,SR,C1,HT,OFF`);
 //! - `off=1,2`: analog channels off at power on; `la=1`: the logic analyzer on, with
 //!   D0 to D7 on;
@@ -70,7 +73,7 @@ use crate::{Error, Result};
 pub const NAME: &str = "siglent-sds";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Siglent SDS scopes on USBTMC and TCP; model=, depth=, sanu=, inr=, trse=, \
-                         off=, la=, frames=, cut=, prefix=, array=, and the SCPI shell's mute-at=, \
+                         off=, la=, frames=, trmd=, cut=, prefix=, array=, and the SCPI shell's mute-at=, \
                          silent-at=, late-at=, opc-late=, mark-at=, idn=, eol=, stall=, in-stall=, \
                          empty-at=, bad-tag-at=, message=";
 
@@ -149,6 +152,9 @@ pub(super) struct Scope {
     la: bool,
     digital_on: [bool; 16],
     frames: u32,
+    /// `TRMD?` polls of `SINGLE` left before `STOP`; `None` when not in a single shot.
+    single: Option<u32>,
+    trmd: u32,
     cut: usize,
     prefix: String,
     array: Option<u32>,
@@ -203,6 +209,9 @@ impl Scope {
         if self.kind.protocol == Protocol::Eseries {
             return sci(self.depth as f64);
         }
+        if self.kind.protocol == Protocol::NonSpo {
+            return self.depth.to_string();
+        }
         let depth = self.depth as f64;
         if self.depth >= 1_000_000 {
             format!("{:.2}Mpts", depth / 1e6)
@@ -254,8 +263,17 @@ impl Scope {
                 })
             })
             .collect();
-        let mut out = format!("DAT2,#9{:09}", bytes.len()).into_bytes();
+        // The length is in points, not bytes (p.268).
+        let mut out = format!("DAT2,#9{:09}", self.depth).into_bytes();
         out.extend_from_slice(&bytes);
+        out.extend_from_slice(b"\n\n");
+        self.cut_short(out)
+    }
+
+    /// `Cn:WF? DAT2`: the codes alone (p.264-265).
+    fn data(&self, channel: u8) -> Vec<u8> {
+        let mut out = format!("DAT2,#9{:09}", self.depth).into_bytes();
+        out.extend(Scope::wave(channel, self.depth));
         out.extend_from_slice(b"\n\n");
         self.cut_short(out)
     }
@@ -291,7 +309,7 @@ impl Scope {
         let key = format!("C{c}:{name}");
         match name {
             "WF?" => {
-                if m.args != "ALL" {
+                if m.args != "ALL" && m.args != "DAT2" {
                     v.report(format!("{}: asked for what the model doesn't have", m.text));
                     return Answer::Silent;
                 }
@@ -299,7 +317,11 @@ impl Scope {
                     v.report(format!("{}: the channel is off", m.text));
                     return Answer::Silent;
                 }
-                Answer::Bytes(self.waveform(c))
+                if m.args == "ALL" {
+                    Answer::Bytes(self.waveform(c))
+                } else {
+                    Answer::Bytes(self.data(c))
+                }
             }
             "VDIV" => match with_unit(m.args, "V") {
                 Some(volts) => {
@@ -380,6 +402,7 @@ impl Instrument for Scope {
         s
     }
 
+    #[allow(clippy::too_many_lines)]
     fn command(&mut self, m: &Message<'_>, s: &mut Settings, v: &mut Violations) -> Answer {
         let header = m.header.as_str();
         if let Some((c, name)) = channel('C', header)
@@ -417,13 +440,28 @@ impl Instrument for Scope {
                 }
                 self.value(m, if self.la { "ON" } else { "OFF" }, "")
             }
-            "DI:SW" | "DGST" => {
+            "DI:SW" => {
                 if !self.kind.digital {
                     v.report(format!("{}: no analyzer on this model", m.text));
                     return Answer::Silent;
                 }
                 self.la = m.args == "ON";
                 Answer::Done
+            }
+            "TRMD" => {
+                self.single = (m.args == "SINGLE").then_some(self.trmd);
+                Answer::Done
+            }
+            "TRMD?" => {
+                let mode = match &mut self.single {
+                    Some(0) => "STOP",
+                    Some(n) => {
+                        *n -= 1;
+                        "SINGLE"
+                    }
+                    None => "AUTO",
+                };
+                self.value(m, mode, "")
             }
             "SANU?" => {
                 let text = self.sample_points();
@@ -452,7 +490,12 @@ impl Instrument for Scope {
             }
             "FPAR?" => Answer::Bytes(self.frame_parameters()),
             // As C sends them: nothing here says what a real one does with them.
-            "FRAM" | "TIM:OFFS" | "TRIG:EDGE:LEV" => Answer::Done,
+            "FRAM" => Answer::Done,
+            // `DGST` is not on the X-E (p.74), and the others aren't in the guide at all,
+            // and C sends them: an error and nothing done, which no driver looks at.
+            "DGST" | "TIM:OFFS" | "TRIG:EDGE:LEV" => {
+                Answer::Error(-113, "Undefined header".to_owned())
+            }
             _ => {
                 // A source's slope and level, of `EX`, `EX5` or `LINE`.
                 if let Some((source, name)) = header.split_once(':')
@@ -485,6 +528,8 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
         la: false,
         digital_on: [false; 16],
         frames: 2,
+        single: None,
+        trmd: 1,
         cut: 0,
         prefix: "ALL,".to_owned(),
         array: None,
@@ -518,6 +563,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
                 }
             }
             "frames" => scope.frames = number(0..=1000)?,
+            "trmd" => scope.trmd = number(0..=1_000_000)?,
             "cut" => scope.cut = number(0..=LONGEST as u32)? as usize,
             "prefix" => scope.prefix.clone_from(v),
             "array" => scope.array = Some(number(0..=u32::MAX)?),
@@ -625,7 +671,7 @@ mod tests {
     fn digital_data_is_a_bit_per_sample_with_the_longer_prefix() {
         let mut s = on_socket(&[("depth", "16"), ("la", "1")]);
         let block = ask(&mut s, "D0:WF? DAT2\n").0;
-        assert_eq!(&block[..16], b"DAT2,#9000000002");
+        assert_eq!(&block[..16], b"DAT2,#9000000016", "points, not bytes");
         assert_eq!(block.len(), 16 + 2 + 2);
         // A period of 3: three high, three low.
         assert_eq!(block[16], 0b1100_0111);
@@ -640,7 +686,7 @@ mod tests {
         assert_eq!(ask(&mut s, "NOPE\n").1.len(), 1);
         let mut s = on_socket(&[("off", "2")]);
         assert_eq!(ask(&mut s, "C2:WF? ALL\n").1.len(), 1, "off");
-        assert_eq!(ask(&mut s, "C1:WF? DAT2\n").1.len(), 1, "not asked of an analog one");
+        assert_eq!(ask(&mut s, "C1:WF? DAT3\n").1.len(), 1, "no such section");
         let mut s = on_socket(&[]);
         assert_eq!(ask(&mut s, "D0:WF? ALL\n").1.len(), 1, "not asked of a digital one");
         assert_eq!(ask(&mut s, "SANU? C9\n").1.len(), 1);
@@ -673,9 +719,37 @@ mod tests {
         let mut s = on_socket(&[("depth", "14000000"), ("model", "SDS1202X")]);
         ask(&mut s, "CHDR OFF\n");
         assert_eq!(ask(&mut s, "SANU? C1\n").0, b"14.00Mpts\n");
+        let mut s = on_socket(&[("depth", "1600"), ("model", "SDS1202DL")]);
+        ask(&mut s, "CHDR OFF\n");
+        assert_eq!(ask(&mut s, "SANU? C1\n").0, b"1600\n", "p.35's others");
         let mut s = on_socket(&[("sanu", "odd")]);
         ask(&mut s, "CHDR OFF\n");
         assert_eq!(ask(&mut s, "SANU? C1\n").0, b"odd\n");
+    }
+
+    #[test]
+    fn a_single_shot_stops_after_its_polls_and_dat2_is_the_codes() {
+        let mut s = on_socket(&[("depth", "40"), ("trmd", "2")]);
+        ask(&mut s, "CHDR OFF\n");
+        assert_eq!(ask(&mut s, "TRMD?\n").0, b"AUTO\n");
+        ask(&mut s, "TRMD SINGLE\n");
+        assert_eq!(ask(&mut s, "TRMD?\n").0, b"SINGLE\n");
+        assert_eq!(ask(&mut s, "TRMD?\n").0, b"SINGLE\n");
+        assert_eq!(ask(&mut s, "TRMD?\n").0, b"STOP\n");
+        let block = ask(&mut s, "C2:WF? DAT2\n").0;
+        assert_eq!(&block[..16], b"DAT2,#9000000040");
+        assert_eq!(&block[16..56], Scope::wave(2, 40).as_slice());
+        assert_eq!(&block[56..], b"\n\n");
+    }
+
+    #[test]
+    fn what_the_guide_lacks_goes_to_the_error_queue() {
+        let mut s = on_socket(&[]);
+        for line in ["DGST OFF\n", ":TIM:OFFS 0.001\n", ":TRIG:EDGE:LEV 0.5\n"] {
+            let (bytes, flags) = ask(&mut s, line);
+            assert_eq!((bytes, flags), (Vec::new(), Vec::<String>::new()), "{line}");
+        }
+        assert!(ask(&mut s, "SYST:ERR?\n").0.starts_with(b"-113"));
     }
 
     #[test]
