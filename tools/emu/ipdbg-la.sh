@@ -8,48 +8,17 @@ EMU_GCOV=ipdbg-la
 
 # Stock C sends no SR_DF_HEADER: dev_acquisition_start (api.c:240-258) has no
 # std_session_send_df_header, and sigrok-cli's datafeed_in drops every packet before
-# a header (session.c:285-287), so any capture of stock C prints nothing and exits
-# 0. The core's maintainer's branch (danselmi/libsigrok, ipdbg-la-rlc) adds that line.
-# So the captures below compare with a C that gets a header from this preload,
+# a header (session.c:285-287), so any capture of stock C prints nothing and exits 0.
+# The driver's first commit sent one (a4210e18, 2017-05-16), and "ipdbg-la:
+# stop-function pulseview" (b8fa29a1, 2017-09-28) took it out before the merge. The
+# core maintainer's branches put it back, and IPDBG's co-sim CI builds sigrok-cli
+# against one of them (danselmi/libsigrok ipdbg-la-and-awg). So the captures below
+# compare with a C that gets a header from tools/oracle-header.c (emu_header_oracle),
 # ahead of the first packet the driver sends, and with no other change: the driver
 # and the session are as built. "stock" cases pin what stock does.
-ipdbg_oracle() {
-    IPDBG_STOCK_CLI=$SIGROK_CLI
-    [ "$no_oracle" = 1 ] && return
-    printf '%s\n' '#define _GNU_SOURCE' '#include <dlfcn.h>' '#include <stdint.h>' \
-        '#include <sys/time.h>' \
-        'struct packet { uint16_t type; const void *payload; };' \
-        'struct header { int feed_version; struct timeval starttime; };' \
-        'typedef void (*feed)(const void *, const struct packet *, void *);' \
-        'static feed real_cb;' \
-        'static int headed;' \
-        'static void wrapped(const void *sdi, const struct packet *p, void *data) {' \
-        '    if (!headed) {' \
-        '        struct header h = { 1, { 0, 0 } };' \
-        '        struct packet first = { 10000, &h };' \
-        '        gettimeofday(&h.starttime, 0);' \
-        '        headed = 1;' \
-        '        if (p->type != 10000) real_cb(sdi, &first, data);' \
-        '    }' \
-        '    real_cb(sdi, p, data);' \
-        '}' \
-        'int sr_session_datafeed_callback_add(void *s, feed cb, void *data) {' \
-        '    static int (*real)(void *, feed, void *);' \
-        '    if (!real) *(void **)&real = dlsym(RTLD_NEXT, "sr_session_datafeed_callback_add");' \
-        '    real_cb = cb;' \
-        '    return real(s, wrapped, data);' \
-        '}' >"$TMP/ipdbg-header.c"
-    cc -shared -fPIC -o "$TMP/ipdbg-header.so" "$TMP/ipdbg-header.c" -ldl 2>"$TMP/ipdbg-header.err" \
-        || { emu_fail "$EMU_MODEL: could not build the preload (a C compiler?)"; return; }
-    printf '%s\n' '#!/bin/sh' \
-        "LD_PRELOAD=$TMP/ipdbg-header.so\${LD_PRELOAD:+:\$LD_PRELOAD} exec $(command -v "$SIGROK_CLI") \"\$@\"" \
-        >"$TMP/ipdbg-sigrok-cli"
-    chmod +x "$TMP/ipdbg-sigrok-cli"
-    SIGROK_CLI=$TMP/ipdbg-sigrok-cli
-}
 
 emu_cases() {
-    ipdbg_oracle
+    emu_header_oracle
     T=ipdbg-la:conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT
     # A capture's output in few lines, and through --digest the hash of all of it.
     A='1~64!d'
@@ -65,7 +34,7 @@ s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/
     SHIFT="0x01 << addr_width is an int (protocol.c:505): 31 is 18446744071562067968 samples and 32 is 1 on x86. No core has 31 bits (LogicAnalyserMemory.vhd's 2**ADDR_WIDTH is a VHDL integer); oxrok finds no device"
     GONE="ipdbg_la_tcp_receive asks FIONREAD, which is 0 for ever after a close (protocol.c:203), and ipdbg_la_receive_data returns TRUE with its source kept, so a gone device holds sigrok-cli for ever; oxrok's capture fails"
     WAIT_TRIGGER="sigrok-cli's -w keeps samples from its decoders alone (session.c:402-404), and its output module gets them all, where oxrok's -w holds them back from the output too (src/cli/pipeline.rs)"
-    QUIET_LIMIT="config_set takes a limit past the memory with nothing said and no change (api.c:212-213); oxrok does the same and warns"
+    QUIET_LIMIT="a limit over the memory is ignored, and the old one stays (api.c:212); oxrok does the same and warns"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
 
     emu_case "scan" --keep-header -- -d $T --scan
@@ -174,6 +143,14 @@ s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/
     emu_options addr-width=12 pace=512
     emu_case "real pace" --digest --filter "$A" -- -d $T --samples 4096 -O hex
     emu_case "real pace with a limit" -- -d $T --samples 8 -O bits
+    # A dump cut at odd bytes, so pieces end inside samples: the limit's end (byte 16
+    # of 8 samples, 18 of 9) and the delay's (byte 6 of 3 samples, 8 of 4) fall inside
+    # or at the end of a piece of three.
+    emu_options addr-width=4 pace=3
+    emu_case "pieces of three, 8 samples" -- -d $T --samples 8 -O bits
+    emu_case "pieces of three, 9 samples" -- -d $T --samples 9 -O bits
+    emu_options addr-width=4 pace=1
+    emu_case "pieces of one byte" -- -d $T -c captureratio=33 --samples 11 -O bits
     emu_options gap=100:50
     emu_case "a pause inside a dump" -- -d $T --samples 8 -O bits
     emu_options extra=3
@@ -198,8 +175,8 @@ s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/
     emu_options
 
     # A client's stop, which sigrok-cli has no way to ask for.
-    SIGROK_CLI=$IPDBG_STOCK_CLI
-    H=LD_PRELOAD=$TMP/ipdbg-header.so
+    SIGROK_CLI=$EMU_STOCK_CLI
+    H=LD_PRELOAD=$EMU_HEADER
     emu_options never=1
     emu_case "lib stop waiting" --libsigrok --oracle-env "$H" --no-output -- -d $T --continuous -O bits --stop-after-ms 200
     emu_options
@@ -211,5 +188,5 @@ s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/
     emu_case "lib stop inside a silent dump" --libsigrok --oracle-env "$H" --no-output --hangs --timeout 3 -- -d $T --continuous -O bits --stop-after-ms 200
     emu_options
     emu_case "stock capture" --oracle-differs "$NO_HEADER" -- -d $T --samples 8 -O bits
-    SIGROK_CLI=$IPDBG_STOCK_CLI
+    SIGROK_CLI=$EMU_STOCK_CLI
 }

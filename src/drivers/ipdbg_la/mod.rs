@@ -19,9 +19,12 @@
 //!
 //! - **A capture has a header.** `dev_acquisition_start` (`api.c:240-258`) sends none,
 //!   and sigrok-cli drops all that comes before one (`session.c:285-287`), so a capture
-//!   of stock C prints nothing and exits 0. The core's maintainer's branch
-//!   (`danselmi/libsigrok`, `ipdbg-la-rlc`) has it right after the delay, and it goes
-//!   there here.
+//!   of stock C prints nothing and exits 0. The driver's first commit sent one
+//!   (a4210e18, 2017-05-16), and "ipdbg-la: stop-function pulseview" (b8fa29a1,
+//!   2017-09-28) took it out before the merge. The core maintainer's branches
+//!   (`danselmi/libsigrok`, `ipdbg-la-rlc`, `ipdbg-la-and-awg`) have it right after the
+//!   delay, IPDBG's co-sim CI builds sigrok-cli against one of them, and it goes there
+//!   here.
 //! - **A close waits for the server.** That branch's `ipdbg_la_tcp_close` shuts the
 //!   sending side and reads until the peer closes, up to 2 s, as "the IPDBG JTAG host
 //!   in `OpenOCD` serves one connection per core", and stock's next connection is
@@ -35,8 +38,8 @@
 //!   [`protocol::SILENCE_LIMIT`], and a stop waits [`STOP_SILENCE`] for a dump's rest.
 //!   A write after a close kills C with `SIGPIPE`.
 //! - **A wait for the trigger warns** at 30 s. It has no bound, as in C.
-//! - **A limit past the memory warns.** C keeps its limit and says nothing
-//!   (`api.c:212`).
+//! - **A limit over the memory warns.** It is ignored, and the old one stays, as in C
+//!   (`api.c:212`), which says nothing.
 //! - **The device can be opened again.** `dev_close` drops its `conn` (`api.c:172`) so
 //!   that `dev_open` fails after it.
 //! - **`conn=` with one field is no device,** where C crashes (`api.c:51`), and the
