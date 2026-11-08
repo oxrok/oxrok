@@ -233,7 +233,7 @@ impl Scpi {
 
     /// The question a read gave up on has its answer after all, read by asking again
     /// with [`Scpi::get_data`] and no command: nothing is owed, so the next
-    /// [`Scpi::send`] needn't drain the line. (`port/hp-3457a` has the same.)
+    /// [`Scpi::send`] needn't drain the line.
     pub fn answered(&mut self) {
         self.stale = false;
     }
@@ -363,13 +363,6 @@ impl Scpi {
     pub fn get_f64(&mut self, command: &str) -> Result<f64> {
         let s = self.get_string(command)?;
         s.trim().parse().map_err(|_| Error::device(format!("SCPI: not a number: '{s}'")))
-    }
-
-    /// The question a read gave up on has its answer after all, read by asking again
-    /// with [`Scpi::get_data`] and no command: nothing is owed, so the next
-    /// [`Scpi::send`] needn't drain the line.
-    pub fn answered(&mut self) {
-        self.stale = false;
     }
 
     /// Waits for `*OPC?` to answer true: [`Scpi::get_opc_while`] with no stop.
