@@ -24,6 +24,14 @@
 //     fails the way Python's `max(None, 0)` does.
 //   - Timestamps are `int(sample * secs_per_sample)` and the truncated
 //     microsecond part of that float.
+#![allow(
+    clippy::assigning_clones,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_same_then_else,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 //! USB (low-speed/full-speed) transactions and requests.
 

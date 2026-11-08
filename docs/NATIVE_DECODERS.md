@@ -17,9 +17,9 @@ status column says which ones have that proof.
 | Logic-input decoders | 60 |
 | Stacked decoders | 51 |
 | Inputless / unclear | 0 |
-| Native now | 105 (`ac97`, `ade77xx`, `adf435x`, `adns5020`, `am230x`, `amulet_ascii`, `arm_etmv3`, `arm_itm`, `arm_tpiu`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cc1101`, `cec`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `ds2408`, `ds243x`, `ds28ea00`, `dsi`, `edid`, `eeprom24xx`, `em4100`, `em4305`, `enc28j60`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `hdcp`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `jtag_ejtag`, `jtag_stm32`, `lin`, `lm75`, `lpc`, `maple_bus`, `max7219`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `mlx90614`, `modbus`, `morse`, `mrf24j40`, `mxc6225xu`, `nes_gamepad`, `nrf24l01`, `nunchuk`, `onewire_link`, `onewire_network`, `ook`, `pan1321`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rfm12`, `rgb_led_spi`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `sdcard_spi`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `ssi32`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_power_delivery`, `usb_signalling`, `wiegand`, `x2444m`, `xfp`, `z80`) |
-| Native and parity-tested | 105 |
-| Pending | 6 |
+| Native now | 111 (`ac97`, `ade77xx`, `adf435x`, `adns5020`, `am230x`, `amulet_ascii`, `arm_etmv3`, `arm_itm`, `arm_tpiu`, `atsha204a`, `aud`, `avr_isp`, `avr_pdi`, `can`, `cc1101`, `cec`, `cfp`, `counter`, `dali`, `dcf77`, `dmx512`, `ds1307`, `ds2408`, `ds243x`, `ds28ea00`, `dsi`, `edid`, `eeprom24xx`, `eeprom93xx`, `em4100`, `em4305`, `enc28j60`, `flexray`, `gpib`, `graycode`, `guess_bitrate`, `hdcp`, `i2c`, `i2cdemux`, `i2cfilter`, `i2s`, `iec`, `ieee488`, `ir_nec`, `ir_rc5`, `ir_rc6`, `jitter`, `jtag`, `jtag_ejtag`, `jtag_stm32`, `lin`, `lm75`, `lpc`, `maple_bus`, `max7219`, `mcs48`, `mdio`, `microwire`, `midi`, `miller`, `mlx90614`, `modbus`, `morse`, `mrf24j40`, `mxc6225xu`, `nes_gamepad`, `nrf24l01`, `nunchuk`, `onewire_link`, `onewire_network`, `ook`, `ook_oregon`, `ook_vis`, `pan1321`, `parallel`, `pca9571`, `ps2`, `pwm`, `qi`, `rc_encode`, `rfm12`, `rgb_led_spi`, `rgb_led_ws281x`, `rtc8564`, `sda2506`, `sdcard_sd`, `sdcard_spi`, `seven_segment`, `signature`, `spdif`, `spi`, `spiflash`, `ssi32`, `st7735`, `stepper_motor`, `swd`, `swim`, `t55xx`, `tca6408a`, `tdm_audio`, `timing`, `tlc5620`, `uart`, `usb_packet`, `usb_power_delivery`, `usb_request`, `usb_signalling`, `wiegand`, `x2444m`, `xfp`, `z80`) |
+| Native and parity-tested | 111 |
+| Pending | 0 |
 | Exceptions | 1 (documented `swd` divergence) |
 | Marked deprecated by 0.5.3 | 0 |
 
@@ -172,7 +172,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `can` | logic | 1 | native, parity-tested | — |
 | `cc1101` | stacked | 3 | native, parity-tested | — |
 | `cec` | logic | 4 | native, parity-tested | — |
-| `cfp` | stacked | 6 | pending | — |
+| `cfp` | stacked | 6 | native, parity-tested | — |
 | `counter` | logic | 3 | native, parity-tested | — |
 | `dali` | logic | 4 | native, parity-tested | — |
 | `dcf77` | logic | 4 | native, parity-tested | — |
@@ -184,7 +184,7 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `dsi` | logic | 6 | native, parity-tested | — |
 | `edid` | stacked | 2 | native, parity-tested | — |
 | `eeprom24xx` | stacked | 1 | native, parity-tested | — |
-| `eeprom93xx` | stacked | 6 | pending | — |
+| `eeprom93xx` | stacked | 6 | native, parity-tested | — |
 | `em4100` | logic | 5 | native, parity-tested | — |
 | `em4305` | logic | 5 | native, parity-tested | — |
 | `enc28j60` | stacked | 3 | native, parity-tested | — |
@@ -227,8 +227,8 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `onewire_link` | logic | 1 | native, parity-tested | — |
 | `onewire_network` | stacked | 6 | native, parity-tested | — |
 | `ook` | logic | 7 | native, parity-tested | — |
-| `ook_oregon` | stacked | 6 | pending | — |
-| `ook_vis` | stacked | 6 | pending | — |
+| `ook_oregon` | stacked | 6 | native, parity-tested | — |
+| `ook_vis` | stacked | 6 | native, parity-tested | — |
 | `pan1321` | stacked | 5 | native, parity-tested | — |
 | `parallel` | logic | 2 | native, parity-tested | — |
 | `pca9571` | stacked | 1 | native, parity-tested | — |
@@ -259,9 +259,9 @@ Status is `native` + `parity-tested`, `pending`, or `exception`.
 | `timing` | logic | 3 | native, parity-tested | — |
 | `tlc5620` | logic | 7 | native, parity-tested | — |
 | `uart` | logic | pilot | native, parity-tested | pilot |
-| `usb_packet` | stacked | 6 | pending | — |
+| `usb_packet` | stacked | 6 | native, parity-tested | — |
 | `usb_power_delivery` | logic | 1 | native, parity-tested | — |
-| `usb_request` | stacked | 6 | pending | — |
+| `usb_request` | stacked | 6 | native, parity-tested | — |
 | `usb_signalling` | logic | 1 | native, parity-tested | — |
 | `wiegand` | logic | 5 | native, parity-tested | — |
 | `x2444m` | stacked | 4 | native, parity-tested | — |

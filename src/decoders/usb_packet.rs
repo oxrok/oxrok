@@ -21,6 +21,13 @@
 //     "Invalid packet" annotation for the whole packet.
 //   - The packet item is a list `['PACKET', [category, name, fields]]`,
 //     the last field list being built as the fields are decoded.
+#![allow(
+    clippy::derivable_impls,
+    clippy::doc_markdown,
+    clippy::format_push_string,
+    clippy::if_not_else,
+    clippy::too_many_lines
+)]
 
 //! USB (low-speed/full-speed) packet layer over the signalling decoder.
 

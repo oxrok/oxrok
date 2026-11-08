@@ -17,6 +17,12 @@
 //     string in the hex dump, which becomes a space.
 //   - The address binary is a single byte, so an address wider than 8
 //     bits fails the way `bytes([a])` does in Python.
+#![allow(
+    clippy::assigning_clones,
+    clippy::doc_markdown,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 //! 93xx Microwire EEPROM: READ, WRITE, ERASE, WEN, WDS, ERAL and WRAL.
 

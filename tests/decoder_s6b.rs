@@ -101,6 +101,9 @@ mod tests {
 
     #[test]
     fn decoder_info_matches_python() {
+        if !crate::support::python_available() {
+            return;
+        }
         for (id, def) in [
             ("ook_oregon", &ook_oregon::DEF),
             ("ook_vis", &ook_vis::DEF),
@@ -118,6 +121,9 @@ mod tests {
 
     #[test]
     fn ook_oregon_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ook_oregon") {
             return;
         }
@@ -133,6 +139,9 @@ mod tests {
 
     #[test]
     fn ook_oregon_unknown_option_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ook_oregon") {
             return;
         }
@@ -152,6 +161,9 @@ mod tests {
 
     #[test]
     fn ook_vis_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ook_vis") {
             return;
         }
@@ -167,6 +179,9 @@ mod tests {
 
     #[test]
     fn ook_vis_reference_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("ook_vis") {
             return;
         }
@@ -190,6 +205,9 @@ mod tests {
 
     #[test]
     fn usb_packet_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("usb_packet") {
             return;
         }
@@ -217,6 +235,9 @@ mod tests {
 
     #[test]
     fn usb_request_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("usb_request") {
             return;
         }
@@ -245,6 +266,9 @@ mod tests {
 
     #[test]
     fn usb_request_first_ack_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("usb_request") {
             return;
         }
@@ -281,6 +305,9 @@ mod tests {
 
     #[test]
     fn cfp_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("cfp") {
             return;
         }
@@ -296,6 +323,9 @@ mod tests {
 
     #[test]
     fn eeprom93xx_fixture_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("eeprom93xx") {
             return;
         }
@@ -315,6 +345,9 @@ mod tests {
 
     #[test]
     fn eeprom93xx_ascii_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         if !available("eeprom93xx") {
             return;
         }
@@ -364,31 +397,49 @@ mod tests {
 
     #[test]
     fn ook_oregon_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ook_oregon", &ook_oregon::DEF);
     }
 
     #[test]
     fn ook_vis_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("ook_vis", &ook_vis::DEF);
     }
 
     #[test]
     fn usb_packet_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("usb_packet", &usb_packet::DEF);
     }
 
     #[test]
     fn usb_request_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("usb_request", &usb_request::DEF);
     }
 
     #[test]
     fn cfp_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("cfp", &cfp::DEF);
     }
 
     #[test]
     fn eeprom93xx_corpus_parity() {
+        if !crate::support::python_available() {
+            return;
+        }
         corpus("eeprom93xx", &eeprom93xx::DEF);
     }
 }

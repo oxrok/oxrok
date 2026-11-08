@@ -22,6 +22,13 @@
 //   - `hex(checksum)[2:]` of a negative -1 checksum is "x1", which is
 //     what a checksum aborted by a bit error prints.
 //   - `%g` is Python's six significant digit format.
+#![allow(
+    clippy::assigning_clones,
+    clippy::doc_markdown,
+    clippy::if_not_else,
+    clippy::items_after_statements,
+    clippy::manual_range_contains
+)]
 
 //! Oregon Scientific weather sensors on top of the OOK decoder.
 

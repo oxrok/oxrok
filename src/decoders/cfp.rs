@@ -15,6 +15,7 @@
 //     `self.ss`/`self.es` and `putx()` uses those.
 //   - The module identifier is only decoded for 0x8000, and unknown
 //     values are printed as `Reserved`.
+#![allow(clippy::default_constructed_unit_structs, clippy::too_many_lines, clippy::unused_self)]
 
 //! CFP: 100 Gigabit C form-factor pluggable transceiver registers.
 

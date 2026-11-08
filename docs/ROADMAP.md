@@ -1,11 +1,9 @@
 # Roadmap
 
-Status: 2026-11-07. `v0.2.0-alpha.1` is the current release, a pre-release
+Status: 2026-11-08. `v0.2.0-alpha.1` is the current release, a pre-release
 on GitHub and crates.io. 68 of libsigrok's 87 `src/hardware` drivers are
 ported; the 19 still missing are listed below. Native decoder porting is
-no longer roadmap work: 105 ports shipped in the release, and the last
-six (`cfp`, `eeprom93xx`, `ook_oregon`, `ook_vis`, `usb_packet`,
-`usb_request`) are landing after it.
+complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
 the emulator, CLI and hardware-verification gaps listed here. Completed

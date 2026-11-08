@@ -19,6 +19,7 @@
 //   - The byte/nibble and BCD/hex choices are substring tests on the
 //     option text, as in Python, so `Byte - BCD rev` reverses the bits
 //     before the BCD conversion.
+#![allow(clippy::assigning_clones, clippy::doc_markdown)]
 
 //! OOK visualisation: nibble and byte fields, BCD and a reference trace.
 

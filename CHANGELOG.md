@@ -6,6 +6,14 @@ release may change the library API.
 
 ## [Unreleased]
 
+### Added
+
+- Native protocol decoders: the last 17 decoders are ported, so all 111
+  decoders of libsigrokdecode 0.5.3 now run as native Rust. The additions
+  include the SPI device set, the UART trace decoders, the USB packet and
+  request decoders, the 1-Wire network devices, `cfp`, `eeprom93xx` and
+  the OOK Oregon/VIS decoders.
+
 ## [0.2.0-alpha.1] - 2026-11-07
 
 This release is the decoder milestone. 94 of libsigrokdecode 0.5.3's
