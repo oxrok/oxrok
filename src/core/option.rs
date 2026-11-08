@@ -207,6 +207,7 @@ pub fn config_set(
     group: Option<&str>,
 ) -> crate::core::error::Result<()> {
     check_set(&*device, key, value, group)?;
+    device.check_set(key, value, group)?;
     device.set(key, value, group)
 }
 
