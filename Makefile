@@ -9,6 +9,8 @@
 #   make dist                  build and package for the host
 #   make dist TARGET=<triple>  for another target
 #   make dist FEATURES=        without the Python decoders
+#   make sign-cli              build + codesign the release CLI (macOS;
+#                              SIGN_IDENTITY, ad-hoc when empty)
 #   make notices               only the third-party notices, for the target
 #   make notices-all           the same, for every target the release builds
 #   make dist-src              the vendored source tarball of HEAD
@@ -21,9 +23,14 @@
 # vendored crates and the notices, so `make dist` works in it with no
 # network and no cargo-about.
 
+-include local.mk
+
 CARGO    ?= cargo
 # Extra arguments for cargo build; --offline when building a source tarball.
 CARGOFLAGS ?=
+# The codesign identity for `make sign-cli` (from
+# `security find-identity -v -p codesigning`); ad-hoc when empty.
+SIGN_IDENTITY ?=
 FEATURES ?= rustpython
 HOST     := $(shell rustc -vV | sed -n 's/^host: //p')
 VERSION  := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
@@ -92,11 +99,16 @@ SRC_TAR   := $(DIST)/$(SRC_NAME).tar.xz
 SRC_CHECK ?= $(DIST)/src-check
 SRC_CHECK_WRAP ?=
 
-.PHONY: build decoders notices notices-all dist dist-src dist-src-check clean-dist
+.PHONY: build sign-cli decoders notices notices-all dist dist-src dist-src-check clean-dist
 
 build:
 	rustup target add $(TARGET)
 	$(CARGO) build --release --locked $(CARGOFLAGS) --target $(TARGET) $(if $(FEATURES),--features $(FEATURES))
+
+# The release CLI binary, signed the same way the ui .app is (SIGN_IDENTITY,
+# ad-hoc when empty). macOS only: codesign is not available elsewhere.
+sign-cli: build
+	codesign --force --sign $(if $(strip $(SIGN_IDENTITY)),"$(SIGN_IDENTITY)",-) $(BIN)
 
 # Outside target/, which CI caches and prunes.
 $(SRD_DIR)/COPYING:
@@ -123,6 +135,10 @@ notices-all:
 dist: notices build $(if $(FEATURES),decoders)
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)
+	# Sign the built binary before it is staged, so the archive carries the
+	# signature (dist's build can overwrite a prior sign-cli signature).
+	# macOS only; skipped when SIGN_IDENTITY is empty.
+	@if command -v codesign >/dev/null 2>&1 && [ -n "$(SIGN_IDENTITY)" ]; then codesign --force --sign "$(SIGN_IDENTITY)" $(BIN); fi
 	cp $(BIN) README.md LICENSE NOTICE CHANGELOG.md $(STAGE)/
 	cp $(NOTICES) $(STAGE)/$(NOTICES_NAME)
 ifneq (,$(FEATURES))
