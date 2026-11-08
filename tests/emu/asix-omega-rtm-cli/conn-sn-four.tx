@@ -1,0 +1,5 @@
+exec omegartmcli -version stdin=null stdout=pipe stderr=null
+exit 1
+exec omegartmcli -bin -serial 031234 stdin=pipe stdout=pipe stderr=null
+stdin closed
+exit 0
