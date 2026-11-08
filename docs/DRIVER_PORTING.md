@@ -355,6 +355,11 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- When stock C prints nothing for a capture, build C with the one faulty line
+  moved and compare against that: it is the only independent witness for the
+  values. Keep the build script beside the scenario.
+- A read timeout inside a block that has begun is a pause, not its end: give it
+  the block's own bound, or a slow segment cuts a long block.
 - On tcp-raw an answer ends at its line end, or after a read's whole timeout of
   silence; a short read ends nothing (`src/scpi/tcp.rs`). A driver that reads
   with `read_begin`/`read_data` itself must treat a read of 0 with

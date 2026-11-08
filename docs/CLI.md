@@ -1029,6 +1029,9 @@ Deliberate, and kept small:
 - `scpi-pps`: a set point more than 10% outside its output's range is refused before
   any `-c` goes out, and `enabled=on` goes last. An answer cut short on TCP or serial
   is no reading, and the line is found again with `*IDN?`.
+- `hameg-hmo`: a capture's analog samples are printed, where sigrok-cli prints none
+  (`sr_analog_init` clears them). `--frames N` gives N frames. A block that pauses
+  partway is waited for, where sigrok-cli on a serial line cuts it at 1 s.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

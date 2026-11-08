@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 80 of libsigrok's 87 `src/hardware` drivers are
-ported; the 7 still missing are listed below. Native decoder porting is
+crates.io. 81 of libsigrok's 87 `src/hardware` drivers are
+ported; the 6 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 7 libsigrok drivers with no oxrok port. Each needs a device model,
+The 6 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (3)
+### SCPI instruments (2)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -27,7 +27,6 @@ remaining drivers can start there.
 | driver | kind | notes |
 |---|---|---|
 | `scpi-dmm` | meter | many SCPI multimeter models |
-| `hameg-hmo` | scope | HMO series |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
@@ -309,6 +308,11 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `hameg-hmo` on any real HMO or RTB, above all the RTB/RTM/RTA/RTH
+  `:LOGn`/`:DIGn` commands and `:PODn:DATA?`: the RTB2000 manual has
+  `DIGital<m>:DISPlay` for a channel where C sends `:LOGn:STAT`; fix the model
+  and the port once a real RTB answers.
 
 - `scpi-pps`: the answer forms and the HP 66xxB sweep queries against a real
   supply or a recording.

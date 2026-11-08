@@ -3657,6 +3657,38 @@ capture after 180 s (10 minutes after a reading; an HP 66xxB's sweep time
 twice over when longer, read from `SENS:SWE:POIN?` and `TINT?`), or at the
 time limit with a warning.
 
+### Hameg HMO and R&S scopes (`hameg-hmo`)
+
+Hameg HMO and Rohde & Schwarz HMO, RTC, RTB, RTM, RTA and RTH scopes with up
+to 4 analog channels and 2 pods of 8 logic channels, on USBTMC, TCP
+(`tcp-raw`) and serial. Emulated, models `hameg-hmo` (USBTMC and TCP;
+`model=`, `points=`, `points2=`, `set=HEADER=VALUE`, `block-lf=`, `digits=`,
+`cut-at=`, `zero-at=`, `text-at=`, `indefinite-at=`, `odd-at=`,
+`bad-len-at=`, `pause-at=`, `remote=`, and the SCPI shell's) and
+`hameg-hmo-serial` (CDC-ACM): 181 and 14 cases on 2026-11-08, gcov 88.1%.
+Never on hardware; from the C driver and the R&S HMO compact SCPI manual.
+
+Stock C prints no analog sample since 8c381a3 (2020): `protocol.c:1521-1527`
+sets the data and count, then calls `sr_analog_init`, whose memset clears
+them. A build of C with that one call moved gives `-O analog` output
+byte-identical to oxrok's, which is the analog values' one independent
+witness. Also not copied: `--frames N` alone gives one frame (d779dca), a
+compact HMO reads its timebase one entry off and past the table at 50 s
+(a058de0), an RTH's custom threshold and a block of length 0 crash C, a
+20-character trigger pattern loses its closing quote, and a block that
+pauses partway is cut by C on a tty after 1 s.
+
+A capture reads what the scope holds, one block per analog channel and per
+pod, in volts or amperes as the probe says. The channels on at the open are
+captured unless `-C` says otherwise, and the difference goes to the scope
+first, as in C. A block that pauses partway is waited for, up to 30 s with
+no byte; a block that never comes fails at 30 s or two sweeps, and after a
+first block it warns and waits up to 10 minutes. A setting waits for
+`*OPC?`; one that isn't confirmed says the scope may have taken it. The RTB,
+RTM, RTA and RTH commands are C's and unchecked against those scopes: the
+RTB2000 manual has `DIGital<m>:DISPlay` for a channel where C sends
+`:LOGn:STAT`.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

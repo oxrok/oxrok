@@ -1196,19 +1196,28 @@ limits = [
 ]
 
 [drivers.hameg-hmo]
-name = "HAMEG HMO"
+name = "Hameg HMO"
 libsigrok = "hameg-hmo"
-ids = []
+ids = ["hameg-hmo"]
 kind = "scope"
-connection = "tcp"
+connection = "usb"
 vendor = "HAMEG"
-models = []
-status = ["not-ported"]
-emu = []
+models = ["HMO722", "HMO1022", "HMO1522", "HMO2022", "HMO724", "HMO1024", "HMO1524", "HMO2024", "RTC1002", "HMO1002", "HMO1202", "HMO3032", "HMO3042", "HMO3052", "HMO3522", "HMO2524", "HMO3034", "HMO3044", "HMO3054", "HMO3524", "RTB2002", "RTB2004", "RTM3002", "RTM3004", "RTA4004", "RTH1002", "RTH1004"]
+status = ["emulated"]
+emu = ["hameg-hmo", "hameg-hmo-serial"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "SCPI over USBTMC, TCP (`tcp-raw`) and serial, on Hameg and Rohde & Schwarz scopes with up to 4 analog channels and 2 pods of 8 logic channels.",
+  "A capture reads what the scope holds, one block per analog channel and per pod, in volts or amperes as the probe says; the channels on at the open capture unless `-C` says otherwise, and the difference goes to the scope first.",
+  "`--frames N` gives N frames; with `--samples` alone it is one frame, cut to the limit.",
+  "A setting waits for `*OPC?`; one that isn't confirmed says the scope may have taken it, and the state is read again before its next use.",
+  "A block that pauses partway is waited for, up to 30 s with no byte; a capture fails after 30 s with no block (more at slow timebases), and after a first block it warns and waits up to 10 minutes.",
+]
+limits = [
+  "Every answer comes from the driver and an HMO compact manual, not a recording: no real scope has been tried.",
+  "The RTB, RTM, RTA and RTH commands are unchecked against those scopes and may be wrong: the RTB2000 manual shows a channel's display as `DIGital<m>:DISPlay`, where this sends `:LOGn:STAT`.",
+  "No VXI, LXI or GPIB.",
+]
 
 [drivers.hp-3457a]
 name = "HP 3457A"
