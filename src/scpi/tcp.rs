@@ -81,11 +81,11 @@ impl Tcp {
                     }
                     last_look = began.elapsed() >= timeout;
                 }
+                // A read's timeout is `EAGAIN` on Unix and `WSAETIMEDOUT` on Windows. On
+                // Unix `ETIMEDOUT` is keepalive giving up on the peer, which is an end.
                 Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || (cfg!(windows) && e.kind() == std::io::ErrorKind::TimedOut) =>
                 {
                     return Ok(0);
                 }
@@ -103,8 +103,19 @@ fn open(host: &str, port: u16) -> Result<TcpStream> {
         .ok_or_else(|| Error::device(format!("cannot resolve {host}")))?;
     let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(Error::Io)?;
     stream.set_nodelay(true).map_err(Error::Io)?;
+    // An instrument that waits for a trigger may say nothing for hours, so silence
+    // can't tell a dead peer. Keepalive can: probes from a minute of quiet on, ten
+    // seconds apart, end the connection in a few minutes if nothing answers them.
+    let keepalive =
+        socket2::TcpKeepalive::new().with_time(KEEPALIVE_IDLE).with_interval(KEEPALIVE_INTERVAL);
+    socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive).map_err(Error::Io)?;
     Ok(stream)
 }
+
+/// Quiet before the first keepalive probe.
+const KEEPALIVE_IDLE: Duration = Duration::from_secs(60);
+/// Between probes; the system's count of them ends it.
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 impl ScpiTransport for Tcp {
     fn resource(&self) -> &str {
@@ -207,6 +218,13 @@ mod tests {
 
     /// The next connection, or a failure at [`BOUND`], as a blocking accept would
     /// hang a mutant for good.
+    #[test]
+    fn a_connection_probes_a_quiet_peer() {
+        let (tcp, _listener, _peer) = pair(false);
+        let stream = tcp.stream.as_ref().expect("connected");
+        assert!(socket2::SockRef::from(stream).keepalive().unwrap());
+    }
+
     fn accept(listener: &TcpListener) -> TcpStream {
         listener.set_nonblocking(true).unwrap();
         let began = std::time::Instant::now();

@@ -35,6 +35,8 @@ use std::time::{Duration, Instant};
 /// What libsigrok's struct holds, up to `TRIGGER_TIME`, and so the least a descriptor
 /// can be. The manual's is 346 bytes.
 pub const MIN_DESCRIPTOR: usize = 304;
+/// Where `WAVE_SOURCE` is.
+const WAVE_SOURCE: usize = 344;
 
 /// A number from the scope as an exact fraction: `sr_parse_rational`, whose form it
 /// keeps: a sign, digits with a point, an exponent, nothing after. `None` for what
@@ -105,9 +107,7 @@ pub fn trigger_source(answer: &str) -> Option<&str> {
     let mut source = None;
     let mut key = "";
     for (i, field) in answer.split(',').filter(|f| !f.is_empty()).enumerate() {
-        if i == 0 {
-            continue;
-        }
+        // The type comes first, as an even field with no key before it.
         if i % 2 == 1 {
             key = field;
         } else if key == "SR" {
@@ -128,16 +128,77 @@ pub enum Framing {
 
 /// An IEEE 488.2 definite length block, a read at a time.
 ///
-/// `sr_scpi_get_block`'s rules, but for two. A line end left by the block before is
+/// `sr_scpi_get_block`'s rules, but for three. A line end left by the block before is
 /// skipped: the manual ends a block with one, and on a socket it can come in the next
-/// read, which C would refuse as no block. And nothing is allocated from the
-/// announced length, only from what comes.
+/// read, which C would refuse as no block. A short word and a comma may come first, as
+/// `ALL,` does: the X-Stream manual has `<trace>:WaveForm <block>,<waveform_data_block>`
+/// for the answer (WM-RCM-E Rev C, page 240), and with the header off what is left of
+/// that is `ALL,`. The block is framed by its length, so a prefix can't move a value.
+/// And nothing is allocated from the announced length, only from what comes.
 #[derive(Debug, Default)]
 pub struct Framer {
     buffer: Vec<u8>,
+    /// Where the `#` is, once known.
+    hash_at: Option<usize>,
     /// The bytes before the data, and how many of them.
     data_at: usize,
     length: Option<usize>,
+    /// The read that ended the block had a byte after it.
+    rest: bool,
+}
+
+/// Where a block starts after a prefix of up to four letters or digits and a comma.
+enum Start {
+    At(usize),
+    More,
+    No,
+}
+
+fn start(buffer: &[u8]) -> Start {
+    for (i, b) in buffer.iter().enumerate() {
+        match (i, *b) {
+            (0, b'#') => return Start::At(0),
+            (1.., b',') => {
+                return match buffer.get(i + 1) {
+                    Some(b'#') => Start::At(i + 1),
+                    Some(_) => Start::No,
+                    None => Start::More,
+                };
+            }
+            (0..=3, b'A'..=b'Z' | b'0'..=b'9') => {}
+            _ => return Start::No,
+        }
+    }
+    Start::More
+}
+
+/// The length of a block's head, prefix and `#` and digits, and of its data, once all of
+/// the head is there.
+pub fn block_head(buffer: &[u8]) -> Option<(usize, usize)> {
+    let Start::At(at) = start(buffer) else { return None };
+    let digits =
+        usize::from(buffer.get(at + 1)?.checked_sub(b'0').filter(|d| (1..=9).contains(d))?);
+    let text = buffer.get(at + 2..at + 2 + digits)?;
+    if !text.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    Some((at + 2 + digits, text.iter().fold(0usize, |n, b| n * 10 + usize::from(b - b'0'))))
+}
+
+/// Whether what has come could still be the start of a block, the head not whole.
+pub fn may_be_block(buffer: &[u8]) -> bool {
+    match start(buffer) {
+        Start::More => true,
+        Start::No => false,
+        Start::At(at) => {
+            let head = &buffer[at + 1..];
+            match head.first() {
+                None => true,
+                Some(d) if (b'1'..=b'9').contains(d) => head.len() < 1 + usize::from(d - b'0'),
+                Some(_) => false,
+            }
+        }
+    }
 }
 
 impl Framer {
@@ -154,11 +215,18 @@ impl Framer {
         }
         self.buffer.extend_from_slice(bytes);
         if self.length.is_none() {
-            let Some(first) = self.buffer.first() else { return Ok(Framing::More) };
-            if *first != b'#' {
-                return Err(self.no_block());
-            }
-            let Some(count) = self.buffer.get(1) else { return Ok(Framing::More) };
+            let at = match self.hash_at {
+                Some(at) => at,
+                None => match start(&self.buffer) {
+                    Start::At(at) => {
+                        self.hash_at = Some(at);
+                        at
+                    }
+                    Start::More => return Ok(Framing::More),
+                    Start::No => return Err(self.no_block()),
+                },
+            };
+            let Some(count) = self.buffer.get(at + 1) else { return Ok(Framing::More) };
             if !count.is_ascii_digit() {
                 return Err(self.no_block());
             }
@@ -167,10 +235,10 @@ impl Framer {
                 log::error!("unsupported INDEFINITE LENGTH ARBITRARY BLOCK RESPONSE");
                 return Err(Error::device("The scope sent a block of no stated length."));
             }
-            if self.buffer.len() < 2 + digits {
+            if self.buffer.len() < at + 2 + digits {
                 return Ok(Framing::More);
             }
-            let text = &self.buffer[2..2 + digits];
+            let text = &self.buffer[at + 2..at + 2 + digits];
             if !text.iter().all(u8::is_ascii_digit) {
                 return Err(self.no_block());
             }
@@ -178,7 +246,7 @@ impl Framer {
             if length == 0 {
                 return Err(Error::device("The scope sent an empty block."));
             }
-            self.data_at = 2 + digits;
+            self.data_at = at + 2 + digits;
             self.length = Some(length);
         }
         let need = self.data_at + self.length.unwrap_or(0);
@@ -186,9 +254,16 @@ impl Framer {
             return Ok(Framing::More);
         }
         // What comes after is the line end, and only that: one question was out.
+        self.rest = self.buffer.len() > need;
         self.buffer.truncate(need);
         self.buffer.drain(..self.data_at);
         Ok(Framing::Whole(std::mem::take(&mut self.buffer)))
+    }
+
+    /// The block is whole and no byte followed it in its read: its line end may be
+    /// still to come, and would be read as the head of the next answer.
+    pub fn line_end_owed(&self) -> bool {
+        self.length.is_some() && !self.rest
     }
 
     /// Bytes came of a block, so a wait is no wait for an answer any more.
@@ -219,6 +294,9 @@ pub struct Waveform {
     pub mq: Mq,
     /// Their unit.
     pub unit: Unit,
+    /// `WAVE_SOURCE`, channel 1 as 0, where the descriptor has the field: the 2004
+    /// template's last (WM-RCM-E Rev C, page 274), with 9 for unknown.
+    pub source: Option<u16>,
 }
 
 /// A descriptor's field in its byte order.
@@ -263,10 +341,11 @@ pub fn parse_waveform(data: &[u8]) -> Result<Waveform> {
         log::error!("Waveformat template '{text}' not supported.");
         return Err(Error::device(format!("Waveformat template '{text}' not supported.")));
     }
-    // The enum at 34 is 0 or 1, in either order, so its two bytes say which order.
+    // The enum at 34 is 0 (HIFIRST) or 1 (LOFIRST), written in its own order: 0 0 is
+    // big endian and 1 0 little; 0 1 would be LOFIRST written high first.
     let little = match (data[34], data[35]) {
         (1, 0) => true,
-        (0, 0 | 1) => false,
+        (0, 0) => false,
         (a, b) => {
             return Err(Error::device(format!("The scope's COMM_ORDER is {a:#x} {b:#x}.")));
         }
@@ -320,7 +399,8 @@ pub fn parse_waveform(data: &[u8]) -> Result<Waveform> {
         // Default to voltage, as the C's comment has it.
         (Mq::Voltage, Unit::Volt)
     };
-    Ok(Waveform { samples, mq, unit })
+    let source = (descriptor >= WAVE_SOURCE + 2).then(|| fields.u16(WAVE_SOURCE));
+    Ok(Waveform { samples, mq, unit, source })
 }
 
 /// The longest a scope that has answered this capture may keep quiet before the
@@ -422,6 +502,11 @@ impl Silence {
         self.since = now;
         self.awaiting = Awaiting::Rest;
         std::mem::take(&mut self.warned).then(|| "The scope is sending again.".to_owned())
+    }
+
+    /// Whether the question out stands behind an acquisition.
+    pub fn armed(&self) -> bool {
+        self.awaiting == Awaiting::Acquisition
     }
 
     /// A channel's samples came.
@@ -553,6 +638,9 @@ mod tests {
         d[156..160].copy_from_slice(&2.0f32.to_be_bytes());
         d.extend_from_slice(&[0, 3, 0xff, 0xff]);
         assert_eq!(parse_waveform(&d).unwrap().samples, [6.0, -2.0], "big endian");
+        let mut contradiction = d.clone();
+        contradiction[35] = 1;
+        assert!(parse_waveform(&contradiction).unwrap_err().to_string().contains("0x0 0x1"));
         let mut d = wave(&[], 2.0, 0.0, "V");
         d[32] = 0;
         d[116..120].copy_from_slice(&2u32.to_le_bytes());
@@ -562,7 +650,8 @@ mod tests {
 
     #[test]
     fn no_samples_is_a_scope_with_no_acquisition() {
-        assert_eq!(parse_waveform(&wave(&[], 1.0, 0.0, "V")).unwrap().samples, []);
+        let empty = parse_waveform(&wave(&[], 1.0, 0.0, "V")).unwrap().samples;
+        assert_eq!(empty, Vec::<f32>::new());
     }
 
     /// The text of what `parse_waveform` refuses.
@@ -670,14 +759,41 @@ mod tests {
     fn what_is_no_block_says_so() {
         let bad = |b: &[u8]| Framer::default().feed(b).unwrap_err().to_string();
         assert_eq!(
-            bad(b"ALL,#9000"),
-            "device error: The scope's answer is no block: it starts with 'ALL,#9000'."
+            bad(b"ALLXY,#9000"),
+            "device error: The scope's answer is no block: it starts with 'ALLXY,#9000'."
         );
+        assert!(bad(b",#13abc").contains("no block"), "a comma with no word");
+        assert!(bad(b"ALL,x").contains("no block"));
+        assert!(bad(b"al,#13abc").contains("no block"), "upper case, as the scope writes");
+        assert!(bad(b"A L,#1").contains("no block"));
         assert!(bad(b"#x").contains("no block"));
+        assert!(bad(b"x11a").contains("no block"), "what follows would make a block");
         assert!(bad(b"#2a1").contains("no block"));
         assert!(bad(b"#0abc").contains("no stated length"));
         assert!(bad(b"#10").contains("an empty block"));
         assert!(bad(b"#9000000000").contains("an empty block"));
+    }
+
+    #[test]
+    fn a_short_word_and_a_comma_may_come_first() {
+        for head in [&b"ALL,"[..], b"DAT1,", b"X,", b""] {
+            let mut f = Framer::default();
+            let mut block = head.to_vec();
+            block.extend_from_slice(b"#13a,c\n");
+            for b in &block[..block.len() - 3] {
+                assert_eq!(f.feed(&[*b]).unwrap(), Framing::More, "{head:?}");
+            }
+            assert_eq!(f.feed(&block[block.len() - 3..]).unwrap(), Framing::Whole(b"a,c".to_vec()));
+            assert!(!f.line_end_owed(), "the line end came with it");
+        }
+    }
+
+    #[test]
+    fn a_block_with_nothing_after_it_owes_a_line_end() {
+        let mut f = Framer::default();
+        assert_eq!(f.feed(b"#13abc").unwrap(), Framing::Whole(b"abc".to_vec()));
+        assert!(f.line_end_owed());
+        assert!(!Framer::default().line_end_owed(), "no block, nothing owed");
     }
 
     #[test]
@@ -833,6 +949,16 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_of_a_block_starts_the_pause_again() {
+        let t = Instant::now();
+        let mut s = silence(t);
+        s.asked(t, false);
+        s.heard(t + MIN / 2);
+        assert_eq!(s.nothing(t + MIN), Verdict::Wait);
+        assert!(matches!(s.nothing(t + MIN + MIN / 2), Verdict::Fail(_)));
+    }
+
+    #[test]
     fn a_new_question_starts_the_clock() {
         let t = Instant::now();
         let mut s = silence(t);
@@ -847,6 +973,11 @@ mod tests {
         let mut s = Silence::new(t, 1000.0);
         assert_eq!(s.nothing(t + Duration::from_secs(19_999)), Verdict::Wait);
         assert!(matches!(s.nothing(t + Duration::from_secs(20_000)), Verdict::Fail(_)));
+        let mut s = Silence::new(t, 1000.0);
+        s.sample();
+        assert!(matches!(s.nothing(t + Duration::from_secs(20_000)), Verdict::Say(_)));
+        assert_eq!(s.nothing(t + Duration::from_secs(39_999)), Verdict::Wait);
+        assert!(matches!(s.nothing(t + Duration::from_secs(40_000)), Verdict::Fail(_)));
         let mut s = Silence::new(t, 1e-3);
         assert_eq!(s.nothing(t + Duration::from_secs(29)), Verdict::Wait);
         assert!(matches!(s.nothing(t + Duration::from_secs(30)), Verdict::Fail(_)));

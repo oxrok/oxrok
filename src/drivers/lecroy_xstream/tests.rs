@@ -31,6 +31,8 @@ struct Line {
     writes_while_closed: u32,
     /// The send fails from then on.
     broken: bool,
+    /// The last read ended a piece: a short read ends an answer on `tcp-raw`.
+    ended: bool,
 }
 
 struct Fake {
@@ -59,6 +61,7 @@ impl ScpiTransport for Fake {
     }
 
     fn read_begin(&mut self) -> Result<()> {
+        self.line.lock().unwrap().ended = false;
         Ok(())
     }
 
@@ -80,12 +83,13 @@ impl ScpiTransport for Fake {
         front.1.drain(..n);
         if front.1.is_empty() {
             line.coming.pop_front();
+            line.ended = true;
         }
         Ok(n)
     }
 
     fn read_complete(&self) -> bool {
-        self.line.lock().unwrap().coming.is_empty()
+        self.line.lock().unwrap().ended
     }
 
     fn close(&mut self) -> Result<()> {
@@ -128,6 +132,8 @@ fn block(samples: &[i16], gain: f32, unit: &[u8]) -> Vec<u8> {
     d[116..120].copy_from_slice(&(samples.len() as u32).to_le_bytes());
     d[156..160].copy_from_slice(&gain.to_le_bytes());
     d[196..196 + unit.len()].copy_from_slice(unit);
+    // WAVE_SOURCE unknown: a test says when it is a channel.
+    d[344] = 9;
     for s in samples {
         d.extend_from_slice(&s.to_le_bytes());
     }
@@ -459,7 +465,7 @@ fn bytes_that_are_no_block_fail_at_once() {
     bounded(|| {
         let (mut d, line) = device(|q| {
             if q.ends_with(":WAVEFORM?") {
-                return vec![(0, b"ALL,#9000000001x\n".to_vec())];
+                return vec![(0, b"NOPE!,#9000000001x\n".to_vec())];
             }
             plain(q)
         });
@@ -468,7 +474,7 @@ fn bytes_that_are_no_block_fail_at_once() {
         let began = Instant::now();
         let got = packets(&start(&mut d));
         assert!(
-            failure(&got).is_some_and(|w| w.contains("no block: it starts with 'ALL,#9")),
+            failure(&got).is_some_and(|w| w.contains("no block: it starts with 'NOPE!,#9")),
             "{got:?}"
         );
         assert!(began.elapsed() < Duration::from_secs(25));
@@ -510,6 +516,162 @@ fn the_rate_with_no_answer_fails_where_c_would_hang() {
         let got = packets(&start(&mut d));
         assert!(failure(&got).is_some(), "{got:?}");
         assert!(!got.iter().any(|p| matches!(p, Packet::Analog(_))));
+    });
+}
+
+#[test]
+fn answers_with_no_samples_end_at_the_limit() {
+    bounded(|| {
+        let (mut d, _line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                std::thread::sleep(Duration::from_millis(1));
+                return vec![(0, block(&[], 1.0, b"V"))];
+            }
+            plain(q)
+        });
+        d.silence = short;
+        let got = packets(&start(&mut d));
+        assert!(failure(&got).is_some_and(|w| w.contains("no samples in 0 s")), "{got:?}");
+    });
+}
+
+#[test]
+fn the_wait_for_the_next_frame_is_a_wait_for_a_trigger() {
+    bounded(|| {
+        let mut waves = 0;
+        let (mut d, _line) = device(move |q| {
+            if q.ends_with(":WAVEFORM?") {
+                waves += 1;
+                if waves == 2 {
+                    // Past the limit, read by read, each of a millisecond at least.
+                    return vec![(1000, block(&[1], 1.0, b"V"))];
+                }
+            }
+            plain(q)
+        });
+        one_channel(&mut d);
+        d.silence = short;
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None, "{got:?}");
+    });
+}
+
+#[test]
+fn a_whole_block_leaves_nothing_to_settle() {
+    bounded(|| {
+        let (mut d, line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                return vec![(5, block(&[1], 1.0, b"V"))];
+            }
+            plain(q)
+        });
+        one_channel(&mut d);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        line.lock().unwrap().discards = 0;
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None);
+        assert_eq!(line.lock().unwrap().discards, 0, "a block with its line end leaves nothing");
+    });
+}
+
+#[test]
+fn a_new_capture_and_an_empty_block_ask_the_rate_again() {
+    bounded(|| {
+        let mut waves = 0;
+        let (mut d, line) = device(move |q| {
+            if q.ends_with(":WAVEFORM?") {
+                waves += 1;
+                if waves == 2 {
+                    return vec![(0, block(&[], 1.0, b"V"))];
+                }
+            }
+            plain(q)
+        });
+        one_channel(&mut d);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        line.lock().unwrap().writes = WriteLog::default();
+        assert_eq!(failure(&packets(&start(&mut d))), None);
+        assert_eq!(
+            sent(&line),
+            [
+                "C1:WAVEFORM?",
+                "TIME_DIV?",
+                "ARM;WAIT;*OPC",
+                "C1:WAVEFORM?",
+                "ARM;WAIT;*OPC;C1:WAVEFORM?",
+                "TIME_DIV?",
+            ],
+            "after the empty block"
+        );
+        d.stop().unwrap();
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        line.lock().unwrap().writes = WriteLog::default();
+        assert_eq!(failure(&packets(&start(&mut d))), None);
+        assert_eq!(sent(&line), ["C1:WAVEFORM?", "TIME_DIV?"], "a new capture");
+    });
+}
+
+#[test]
+fn a_stop_ahead_of_the_first_read_still_owes_an_answer() {
+    bounded(|| {
+        let line = Arc::new(Mutex::new(Line::default()));
+        let fake = Fake { line: Arc::clone(&line), script: Box::new(plain) };
+        let mut scpi = Scpi::new(Box::new(fake));
+        let capture = Capture {
+            enabled: vec![0],
+            limit_frames: 0,
+            time_div: 1e-3,
+            sample_rate: Arc::new(AtomicU64::new(0)),
+            silence: Silence::new,
+            left_armed: Arc::new(AtomicBool::new(false)),
+            line_end: std::cell::Cell::new(false),
+        };
+        let (tx, _rx) = sync_channel(4);
+        let stop = AtomicBool::new(true);
+        capture.run(&mut scpi, &PacketSink::new(tx, 0), &stop).unwrap();
+        assert_eq!(line.lock().unwrap().discards, 0);
+        scpi.send("X").unwrap();
+        assert!(line.lock().unwrap().discards > 0, "the line was looked at");
+    });
+}
+
+#[test]
+fn a_failed_capture_owes_what_is_left_of_its_answer() {
+    bounded(|| {
+        let (mut d, line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                return vec![(0, b"junk".to_vec())];
+            }
+            plain(q)
+        });
+        let got = packets(&start(&mut d));
+        assert!(failure(&got).is_some());
+        d.stop().unwrap();
+        assert_eq!(line.lock().unwrap().discards, 0);
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        assert!(line.lock().unwrap().discards > 0, "the line was looked at");
+    });
+}
+
+#[test]
+fn a_channel_put_right_once_stays_right() {
+    bounded(|| {
+        let (mut d, line) = device(|q| {
+            if q == "C1:TRACE?" {
+                return vec![(0, b"OFF\n".to_vec())];
+            }
+            plain(q)
+        });
+        d.close().unwrap();
+        d.open().unwrap();
+        one_channel(&mut d);
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        assert_eq!(failure(&packets(&start(&mut d))), None);
+        d.stop().unwrap();
+        line.lock().unwrap().writes = WriteLog::default();
+        assert_eq!(failure(&packets(&start(&mut d))), None);
+        assert!(!sent(&line).iter().any(|w| w.contains("TRACE")), "{:?}", sent(&line));
     });
 }
 
@@ -629,12 +791,17 @@ fn a_read_that_found_nothing_asks_again_and_one_within_a_block_does_not() {
     bounded(|| {
         let begins = Arc::new(Mutex::new(0));
         let whole = block(&[1, 2], 1.0, b"V");
-        let answers = VecDeque::from([Err(Error::Timeout), Err(Error::Timeout), Ok(whole.clone())]);
+        // As USBTMC says no answer, and a header that came wrong: C retries both.
+        let answers = VecDeque::from([
+            Err(Error::device("USBTMC bulk in returned too little data: 0 bytes")),
+            Err(Error::device("USBTMC invalid bulk in header.")),
+            Ok(whole.clone()),
+        ]);
         let fake = Asking { answers, begins: Arc::clone(&begins), current: Vec::new() };
         let mut scpi = Scpi::new(Box::new(fake));
         let mut silence = Silence::new(Instant::now(), 1e-3);
         let stop = AtomicBool::new(false);
-        let Read::Block(got) = read_block(&mut scpi, &mut silence, &stop).unwrap() else {
+        let Read::Block(got, _) = read_block(&mut scpi, &mut silence, &stop).unwrap() else {
             panic!()
         };
         assert_eq!(got.len(), whole.len() - 12, "no head and no line end");
@@ -732,6 +899,11 @@ fn a_setting_refused_by_silence_keeps_the_state_and_says_so() {
         assert_eq!(d.get(&Key::Timebase, None).unwrap(), was, "not what was asked");
         assert!(d.enable_channel(0, false).is_err());
         assert!(d.channels()[0].enabled, "not off: nothing said so");
+        let said = d.said.lock().unwrap().clone();
+        assert_eq!(said.len(), 2, "{said:?}");
+        assert!(said[0].starts_with("'TIME_DIV 1.000000E+00' was not confirmed ("), "{said:?}");
+        assert!(said[0].ends_with("): the scope may have taken it."), "{said:?}");
+        assert!(said[1].starts_with("'C1:TRACE OFF' was not confirmed"), "{said:?}");
     });
 }
 
@@ -828,7 +1000,7 @@ fn an_open_refuses_what_it_cannot_place() {
         ("C2:COUPLING?", "XYZ", "An unknown coupling: 'XYZ'"),
         ("TIME_DIV?", "abc", "A timebase off the table: 'abc'"),
         ("TRIG_SELECT?", "EDGE", "A trigger with no source: 'EDGE'"),
-        ("TRIG_SELECT?", "EDGE,SR,EX", "An unknown trigger source: 'EX'"),
+        ("TRIG_SELECT?", "EDGE,SR,EXT10", "An unknown trigger source: 'EXT10'"),
         ("C1:TRIG_SLOPE?", "WINDOW", "An unknown trigger slope: 'WINDOW'"),
     ] {
         let e = open_with(question, answer).unwrap_err().to_string();
@@ -855,6 +1027,229 @@ fn a_failed_open_leaves_a_device_that_can_open_again() {
     assert_eq!(line.lock().unwrap().closes, 1);
     d.open().unwrap();
     assert_eq!(line.lock().unwrap().opens, 2);
+}
+
+#[test]
+fn the_manuals_sources_open_and_answer_as_they_are() {
+    for source in MANUAL_SOURCES {
+        let line = Arc::new(Mutex::new(Line::default()));
+        let answer = format!("EDGE,SR,{source},HT,OFF\n");
+        let script = move |q: &str| {
+            if q == "TRIG_SELECT?" { vec![(0, answer.clone().into_bytes())] } else { plain(q) }
+        };
+        let fake = Fake { line: Arc::clone(&line), script: Box::new(script) };
+        let mut d = LecroyDevice::new(&HwInfo::default(), Scpi::new(Box::new(fake)), [true; 4]);
+        d.open().unwrap();
+        assert_eq!(d.get(&Key::TriggerSource, None).unwrap(), Value::Str(source.to_owned()));
+        assert!(sent(&line).contains(&format!("{source}:TRIG_SLOPE?")));
+        line.lock().unwrap().writes = WriteLog::default();
+        d.set(&Key::TriggerSlope, &Value::Str("NEG".to_owned()), None).unwrap();
+        assert_eq!(sent(&line)[0], format!("{source}:TRIG_SLOPE NEG"));
+        assert!(
+            d.set(&Key::TriggerSource, &Value::Str(source.to_owned()), None).is_err(),
+            "C's list"
+        );
+    }
+}
+
+#[test]
+fn a_word_ahead_of_the_block_is_taken() {
+    bounded(|| {
+        let (mut d, _line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                let mut b = b"ALL,".to_vec();
+                b.extend_from_slice(&block(&[4], 1.0, b"V"));
+                return vec![(0, b)];
+            }
+            plain(q)
+        });
+        one_channel(&mut d);
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None, "{got:?}");
+        assert!(got.iter().any(|p| matches!(p, Packet::Analog(a) if a.samples == [4.0])));
+    });
+}
+
+/// A block whose line end comes `reads` reads after it, ahead of the next answer.
+fn late_line_end(reads: u32) {
+    bounded(move || {
+        let (mut d, line) = device(move |q| {
+            if q.ends_with(":WAVEFORM?") {
+                let mut b = block(&[10], 2.0, b"V");
+                b.pop();
+                return vec![(0, b), (reads, b"\n".to_vec())];
+            }
+            plain(q)
+        });
+        one_channel(&mut d);
+        d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None, "{got:?}");
+        assert_eq!(d.get(&Key::Samplerate, None).unwrap(), Value::U64(100));
+        // The capture's last line end, owed to the next question.
+        d.stop().unwrap();
+        line.lock().unwrap().discards = 0;
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        assert!(line.lock().unwrap().discards > 0, "a setting after looks at the line first");
+    });
+}
+
+#[test]
+fn a_line_end_10_reads_late_is_no_answer() {
+    late_line_end(10);
+}
+
+#[test]
+fn a_line_end_50_reads_late_is_no_answer() {
+    // Each read that finds nothing takes a millisecond here, and a get gives up after
+    // a second of them: 50 stays clear of that under the sleep shim and stalls. The
+    // emulator has a case at 300 ms.
+    late_line_end(50);
+}
+
+#[test]
+fn an_answer_for_another_channel_is_out_of_step() {
+    bounded(|| {
+        let (mut d, _line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                let mut b = block(&[1], 1.0, b"V");
+                b[11 + 344] = 2;
+                return vec![(0, b)];
+            }
+            plain(q)
+        });
+        let got = packets(&start(&mut d));
+        assert_eq!(
+            failure(&got),
+            Some("device error: The scope answered for C3 where C1 was asked.")
+        );
+        let (mut d, _line) = device(|q| {
+            if q.ends_with(":WAVEFORM?") {
+                let mut b = block(&[1], 1.0, b"V");
+                b[11 + 344] = 9;
+                return vec![(0, b)];
+            }
+            plain(q)
+        });
+        d.set(&Key::LimitFrames, &Value::U64(1), None).unwrap();
+        assert_eq!(failure(&packets(&start(&mut d))), None, "9 is unknown, and taken");
+    });
+}
+
+/// A scope whose second frame's answer comes `late` reads after it was asked, with
+/// samples of 7, where the others are 1.
+fn armed_late(late: u32) -> (LecroyDevice, Arc<Mutex<Line>>) {
+    let mut waves = 0;
+    let (mut d, line) = device(move |q| {
+        if q.ends_with(":WAVEFORM?") {
+            waves += 1;
+            if waves == 2 {
+                return vec![(late, block(&[7], 1.0, b"V"))];
+            }
+            return vec![(0, block(&[1], 1.0, b"V"))];
+        }
+        plain(q)
+    });
+    one_channel(&mut d);
+    (d, line)
+}
+
+/// Stops a capture once its second frame was asked for, armed.
+fn stop_armed(d: &mut LecroyDevice, line: &Arc<Mutex<Line>>) {
+    let rx = start(d);
+    until(&rx, |p| matches!(p, Packet::FrameEnd));
+    while sent(line).iter().filter(|w| w.ends_with(":WAVEFORM?")).count() < 2 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    d.stop().unwrap();
+    assert!(d.left_armed.load(Ordering::SeqCst), "the stop left it armed");
+}
+
+#[test]
+fn after_a_stop_in_an_armed_wait_the_next_capture_drains_first() {
+    bounded(|| {
+        let (mut d, line) = armed_late(200);
+        stop_armed(&mut d, &line);
+        line.lock().unwrap().writes = WriteLog::default();
+        d.set_limit_for_test(1);
+        let got = packets(&start(&mut d));
+        assert_eq!(failure(&got), None, "{got:?}");
+        let samples: Vec<f32> = got
+            .iter()
+            .filter_map(|p| if let Packet::Analog(a) = p { Some(a.samples[0]) } else { None })
+            .collect();
+        assert_eq!(samples, [1.0], "the late 7 was read away");
+        assert_eq!(sent(&line)[..2], ["*OPC?".to_owned(), "C1:WAVEFORM?".to_owned()]);
+        assert!(!d.left_armed.load(Ordering::SeqCst));
+    });
+}
+
+#[test]
+fn after_a_stop_in_an_armed_wait_a_setting_drains_first() {
+    bounded(|| {
+        let (mut d, line) = armed_late(200);
+        stop_armed(&mut d, &line);
+        d.set(&Key::Timebase, &Value::Rational(1, 1), None).unwrap();
+        assert_eq!(d.get(&Key::Timebase, None).unwrap(), Value::Rational(1, 1));
+        assert!(!d.left_armed.load(Ordering::SeqCst), "drained once, and done");
+        line.lock().unwrap().writes = WriteLog::default();
+        d.set(&Key::Timebase, &Value::Rational(2, 1), None).unwrap();
+        assert_eq!(sent(&line), ["TIME_DIV 2.000000E+00", "*OPC?"], "no second drain");
+        let (mut d, line) = armed_late(u32::MAX);
+        stop_armed(&mut d, &line);
+        let e = d.set(&Key::Timebase, &Value::Rational(1, 1), None).unwrap_err();
+        assert!(e.to_string().contains("still in the acquisition"), "{e}");
+        assert!(!sent(&line).iter().any(|w| w.starts_with("TIME_DIV ")), "nothing sent behind it");
+    });
+}
+
+/// A line that answers `*OPC?` with what it was given, then "1", then "NEXT".
+fn drained(before: &'static [u8]) -> String {
+    let line = Arc::new(Mutex::new(Line::default()));
+    let script = move |q: &str| match q {
+        "*OPC?" => vec![(3, before.to_vec()), (0, b"1\n".to_vec())],
+        _ => vec![(0, b"NEXT\n".to_vec())],
+    };
+    let mut scpi = Scpi::new(Box::new(Fake { line, script: Box::new(script) }));
+    assert!(drain_to_opc(&mut scpi, || true).unwrap());
+    scpi.get_string("X?").unwrap()
+}
+
+#[test]
+fn a_drain_reads_to_the_one_and_no_further() {
+    bounded(|| {
+        assert_eq!(drained(b"1.000E-03\n"), "NEXT", "a late text answer first");
+        assert_eq!(drained(b"#14\n1\n\n"), "NEXT", "a block with a 1 in it");
+        assert_eq!(drained(b"ALL,#13ab1\n"), "NEXT", "a block after a word");
+        assert_eq!(drained(b""), "NEXT", "nothing late");
+    });
+}
+
+#[test]
+fn a_close_on_tcp_forgets_an_armed_wait_and_one_on_usb_does_not() {
+    bounded(|| {
+        let (mut d, line) = armed_late(u32::MAX);
+        stop_armed(&mut d, &line);
+        d.close().unwrap();
+        assert!(d.left_armed.load(Ordering::SeqCst), "the fake is no socket");
+    });
+}
+
+#[test]
+fn a_stop_while_draining_ends_and_keeps_the_debt() {
+    bounded(|| {
+        let (mut d, line) = armed_late(u32::MAX);
+        stop_armed(&mut d, &line);
+        let rx = start(&mut d);
+        while !sent(&line).iter().any(|w| w == "*OPC?") {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        d.stop().unwrap();
+        let got = packets(&rx);
+        assert_eq!(failure(&got), None);
+        assert!(d.left_armed.load(Ordering::SeqCst));
+    });
 }
 
 #[test]

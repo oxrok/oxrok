@@ -8,14 +8,28 @@ EMU_FULL=$EMU_DRIVER
 EMU_GCOV=lecroy-xstream
 EMU_GCOV_SHARED="src/scpi/scpi.c src/scpi/scpi_usbtmc_libusb.c src/scpi/scpi_tcp.c src/tcp.c"
 
+# A free that frees nothing, for sigrok-cli alone: libsigrok as it was before 36165cf0
+# freed TRIG_SELECT?'s answer, which is the one free that matters here.
+lecroy_nofree() {
+    LECROY_NOFREE=""
+    [ "$no_oracle" = 1 ] && return
+    printf '%s\n' '#include <stddef.h>' 'void free(void *p) { (void)p; }' >"$TMP/lecroy-nofree.c"
+    cc -shared -fPIC -o "$TMP/lecroy-nofree.so" "$TMP/lecroy-nofree.c" 2>"$TMP/lecroy-nofree.err" \
+        || { emu_fail "$EMU_MODEL: could not build the preload (a C compiler?)"; return; }
+    LECROY_NOFREE="LD_PRELOAD=$TMP/lecroy-nofree.so"
+}
+
 emu_cases() {
+    lecroy_nofree
     U=lecroy-xstream
     T=lecroy-xstream:conn=tcp-raw/127.0.0.1/$EMU_TCP_PORT
-    # protocol.c:439 frees TRIG_SELECT?'s answer and :441 and :446 read the source
-    # from it, so stock C on this glibc opens only an answer whose source lies past
-    # the 32 bytes that free writes into a chunk of that size. No scope is known to
-    # answer so, as `EDGE,SR,C1,HT,OFF` has it at byte 8; pairs can come in any order
-    # (the manual, TRIG_SELECT), and this form is what lets C run at all.
+    # protocol.c:439 frees TRIG_SELECT?'s answer (since 36165cf0, 2021) and :441 and
+    # :446 read the source from it. The answer is a 1024 byte GString, too large for
+    # the tcache, so free puts it in the unsorted bin and writes its first 32 bytes:
+    # two list pointers and the large chunk's two size links. Stock C opens only an
+    # answer whose source lies past those (it fails at byte 30 and works from 32). No
+    # scope is known to answer so, as `EDGE,SR,C1,HT,OFF` has it at byte 8; pairs can
+    # come in any order (WM-RCM-E Rev C, page 229), and this form lets stock C run.
     S="trse=EDGE,HT,OFF,HV,1.000E-09,QL,C2,SR,C1 points=20"
     # protocol.c:580 has strcmp's sense the wrong way round: volts are amperes to C.
     # One-sided: oxrok prints no A here, and the cases named for it keep it.
@@ -25,7 +39,9 @@ s/^A,A,A,A$/V,V,V,V/'
     # the words of oxrok's last line are tests.rs's.
     O='s/^oxrok: err: oxrok::drivers::lecroy_xstream: /sr: lecroy-xstream: /
 s/^(Failed to open device).*$/\1./'
-    UAF="protocol.c:439 frees TRIG_SELECT?'s answer, and :441 reads the source in it, where free has written (with this glibc; a preload whose free does nothing lets it through, by hand): every open fails on a scope's own EDGE,SR,C1,HT,OFF; oxrok reads it"
+    UAF="protocol.c:439 frees TRIG_SELECT?'s answer (36165cf0), and :441 reads the source in it, where free has written list pointers and size links in its first 32 bytes: every open fails on a scope's own EDGE,SR,C1,HT,OFF; oxrok reads it, and the cases with a free that frees nothing compare the two"
+    PREFIX="sr_scpi_get_block wants '#' first (scpi.c:1033), and receive_data retries a block that has ALL, ahead of it for ever; the manual's answer has the word, the 2017 driver read four bytes of it, and PR #33 took that out for a scope that sent none: oxrok takes either"
+    SOURCES="the open fails on a source the manual has and api.c's list lacks (EX, EX10, PA, ETM10); oxrok opens, and answers the source as it is"
     UNITS="protocol.c:580 has strcmp's sense the wrong way round, so a unit of A says volts and anything else amperes: the manual's V is A to C; oxrok goes by the field"
     OFFSET="protocol.c:561 adds VERTICAL_OFFSET, and the manual subtracts it, with a worked example that only comes out so (2.44141e-7 * -1536 - 0.00054 = -0.000915): oxrok subtracts"
     ARRAYS="protocol.c:556 skips the descriptor and the user text and not TRIGTIME or RISTIME, which the manual has ahead of the data, so it gives their doubles as samples: oxrok skips them"
@@ -43,6 +59,11 @@ s/^(Failed to open device).*$/\1./'
     emu_options points=20
     emu_case "a real trigger answer frame" --oracle-bug "$UAF" -- -d $U --frames 1 -O analog
     emu_case "a real trigger answer frame tcp" --oracle-bug "$UAF" -- -d $T --frames 2 -C CH2 -O analog
+    # The same with libsigrok's free undone: a full comparison on a scope's own answer.
+    emu_options
+    emu_case "a real trigger answer show with no free" --oracle-env "$LECROY_NOFREE" --keep-header -- -d $U --show
+    emu_options points=20
+    emu_case "a real trigger answer frames with no free" --oracle-env "$LECROY_NOFREE" --filter "$F" -- -d $T --frames 2 -O analog
 
     emu_options $S
     emu_case "show" --keep-header -- -d $U --show
@@ -173,7 +194,11 @@ $F" -- -d $T --frames 1 -O csv
     emu_options trse=EDGE
     emu_case "trigger with no source" --stderr --expect-fail --filter "$O" -- -d $T --show
     emu_options trse=EDGE,HT,OFF,HV,1.000E-09,QL,C2,SR,EX
-    emu_case "source the driver lacks" --stderr --expect-fail --filter "$O" -- -d $T --show
+    emu_case "source ex" --oracle-bug "$SOURCES" -- -d $T --get triggersource
+    emu_options trse=EDGE,HT,OFF,HV,1.000E-09,QL,C2,SR,ETM10
+    emu_case "source etm10" --no-output --oracle-bug "$SOURCES" -- -d $T --config triggerslope=NEG --set
+    emu_options trse=EDGE,HT,OFF,HV,1.000E-09,QL,C2,SR,EXT10
+    emu_case "source nobody has" --stderr --expect-fail --filter "$O" -- -d $T --show
     emu_options trse=EDGE,HT,OFF,HV,1.000E-09,QL,C2,SR,C3
     emu_case "source c3" -- -d $T --get triggersource
     emu_options $S eol=crlf
@@ -226,14 +251,36 @@ $F" -- -d $T --frames 1 -O csv
     emu_options $S tiny=20
     emu_case "a block too short" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "too short" -- -d $T --frames 1 -O analog
     emu_options $S prefix=ALL,
-    emu_case "a block after a word" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "no block" -- -d $T --frames 1 -O analog
-    emu_options $S head=junk
+    emu_case "a block after a word" --filter "$F" --oracle-bug "$PREFIX" --oracle-hangs --timeout 4 -- -d $T --frames 1 -O analog
+    # C on USB asks again while its first request waits, which the model flags: these
+    # cases are C's for ever, and take the flag off for it.
+    emu_options $S prefix=ALL, one-request=0
+    emu_case "a block after a word usb" --filter "$F" --oracle-bug "$PREFIX" --oracle-hangs --timeout 4 -- -d $U -C CH1 --frames 2 -O analog
+    emu_options $S prefix=ALLXY,
+    emu_case "a block after a long word" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "no block" -- -d $T --frames 1 -O analog
+    # A block's line end late on a socket, about 20 ms and about 300 ms (a tick is 20
+    # ms of wall time on TCP); the next question is TIME_DIV?, whose answer would be
+    # it. tests.rs has it at 10 reads.
+    emu_options $S eol-late=1
+    # Where the line end lands in the log goes with oxrok's pace: on its block, alone,
+    # or ahead of the next answer. So blocks are folded (the output holds their
+    # samples), and a leading line end and the lengths go.
+    LATE_EOL='s/^tcp_in [0-9]+ -> (23|@).*/tcp_in a block/
+s/^tcp_in [0-9]+ -> (0a)?/tcp_in /
+/^tcp_in $/d'
+    emu_case "a line end late" --filter "$F" --tx-filter "$LATE_EOL" -- -d $T -C CH1 --frames 2 -O analog
+    emu_options $S eol-late=15
+    emu_case "a line end later" --filter "$F" --tx-filter "$LATE_EOL" -- -d $T -C CH1 --frames 2 -O analog
+    # An answer for another channel than the one asked for: out of step.
+    emu_options $S wrong-source=2
+    emu_case "an answer for another channel" --oracle-differs "receive_data takes any block for the channel it asked; oxrok checks WAVE_SOURCE (WM-RCM-E Rev C, page 274)" --oxrok-fails "answered for C3 where C2 was asked" -- -d $T --frames 1 -O analog
+    emu_options $S head=junk one-request=0
     emu_case "no block at all" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "no block" -- -d $U --frames 1 -O analog
     emu_options $S head=#0
     emu_case "a block of no length" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "no stated length" -- -d $T --frames 1 -O analog
     emu_options $S head=#9000000000
     emu_case "a block of length 0" --no-output --oracle-bug "$EMPTY" --oxrok-fails "empty block" -- -d $T --frames 1 -O analog
-    emu_options $S cut=1
+    emu_options $S cut=1 one-request=0
     emu_case "a block cut short usb" --no-output --oracle-bug "$RETRIES" --oracle-hangs --timeout 4 --oxrok-fails "came short" -- -d $U --frames 1 -O analog
     emu_options $S claim=100000000
     emu_case "more samples than the block has" --no-output --oracle-bug "$PAST" --oxrok-fails "samples from byte" -- -d $T --frames 1 -O analog

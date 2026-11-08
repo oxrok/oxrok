@@ -17,16 +17,38 @@
 //! asks again with `ARM;WAIT;*OPC` ahead, and between frames it sends that and asks.
 //!
 //! [`protocol`] says what the answers mean, and where this reads them otherwise than
-//! libsigrok does. Two more differences, of the open and of a failure:
+//! libsigrok does. The X-Stream manual is WM-RCM-E Rev C (May 2004); pages are its
+//! printed ones. More differences, of the open and of a capture:
 //!
 //! - `protocol.c:439` frees the answer to `TRIG_SELECT?` and goes on using the source
-//!   in it, so with this `glibc` libsigrok opens no scope that answers
-//!   `EDGE,SR,C1,HT,OFF`. Here the answer stays until it has been read.
+//!   in it. That free came with 36165cf0 (2021, made with no scope at hand); before it
+//!   the answer was never freed, which is how the driver worked for its authors. The
+//!   answer is a 1024 byte `GString`, too large for the tcache, so the free puts it in
+//!   the unsorted bin and writes its first 32 bytes (two list pointers and the large
+//!   chunk's two size links). A source within those, as `EDGE,SR,C1,HT,OFF` has at byte
+//!   8, is lost, and libsigrok opens no such scope. Here the answer is read whole.
+//! - The manual's trigger sources `EX`, `EX10`, `PA` and `ETM10` (page 230) open here,
+//!   and a get answers them. C's list (`EXT`, no `EX`) is kept for what can be set.
 //! - C retries a failed or a bad block for ever (`receive_data` returns `TRUE`, and
 //!   `SR_ERR` is true to a source as well) and on TCP its `recv` blocks. Here a capture
 //!   ends with an error, and [`protocol::Silence`] bounds what can be bounded.
+//! - A block whose `WAVE_SOURCE` (page 274) names another channel than the one asked
+//!   for ends a capture: it is an answer out of step.
+//! - A stop with the scope armed (`ARM;WAIT`) leaves an answer to come. Answers come
+//!   in order, and `WAIT` holds the commands after it, so the next use of the
+//!   connection sends `*OPC?` and reads until it says `1`, dropping what came first.
+//!   A capture waits for that until its stop; a setting or an open for five seconds.
+//!
+//! `TRIG POS 1.0e-3 S`, which `horiz_triggerpos` sends, is C's and in neither manual.
+//! The 2004 manual has `TRIG_DELAY` (page 224), with 0 at the centre on X-Stream as
+//! here, but positive values in percent and negative in seconds where C's are seconds
+//! either way, so they are not the same setting, and C's command is kept.
 //!
 //! `conn=` takes a SCPI resource; without it every USBTMC device is asked `*IDN?`.
+//! USBTMC is the real path. The 2004 manual's network interface is VICP (page 38), and
+//! no documented interface is plain SCPI on a socket, so `tcp-raw` here is unverified
+//! with a real scope.
+//!
 //! What a setting does when a scope doesn't confirm it: the setting is an error, the
 //! state keeps the old value, and a warning says the scope may have taken it.
 
@@ -68,6 +90,8 @@ const NUM_VDIV: i32 = 8;
 const COUPLINGS: [&str; 5] = ["A1M", "D50", "D1M", "GND", "OVL"];
 const SLOPES: [&str; 2] = ["POS", "NEG"];
 const SOURCES: [&str; 6] = ["C1", "C2", "C3", "C4", "LINE", "EXT"];
+/// Sources the manual has beyond C's list, which an open takes.
+const MANUAL_SOURCES: [&str; 4] = ["EX", "EX10", "PA", "ETM10"];
 #[rustfmt::skip]
 const TIMEBASES: [(u64, u64); 42] = [
     (20, 1_000_000_000_000), (50, 1_000_000_000_000), (100, 1_000_000_000_000),
@@ -98,6 +122,8 @@ const READ_TIMEOUT: Duration = Duration::from_secs(1);
 const LINE_END: Duration = Duration::from_millis(5);
 /// What a read of a block takes at a time.
 const READ_CHUNK: usize = 64 * 1024;
+/// How long a setting or an open waits for what a stop left armed.
+const ARMED_SETTLE: Duration = Duration::from_secs(5);
 
 /// The driver.
 pub struct LecroyXstreamDriver;
@@ -174,7 +200,7 @@ struct Settings {
     offset: [f32; CHANNELS],
     coupling: [usize; CHANNELS],
     timebase: usize,
-    source: usize,
+    source: String,
     slope: usize,
     triggerpos: f32,
 }
@@ -195,6 +221,11 @@ pub struct LecroyDevice {
     worker: Option<Worker>,
     /// How a capture's bounds on silence are made: [`Silence::new`] but in a test.
     silence: fn(Instant, f64) -> Silence,
+    /// A stop came with the scope armed, and its answer is still to come.
+    left_armed: Arc<AtomicBool>,
+    /// What [`LecroyDevice::warn`] said, for the tests.
+    #[cfg(test)]
+    said: Mutex<Vec<String>>,
 }
 
 struct Worker {
@@ -216,7 +247,7 @@ fn read_settings(scpi: &mut Scpi) -> Result<Settings> {
         offset: [0.0; CHANNELS],
         coupling: [0; CHANNELS],
         timebase: 0,
-        source: 0,
+        source: String::new(),
         slope: 0,
         triggerpos: 0.0,
     };
@@ -243,8 +274,10 @@ fn read_settings(scpi: &mut Scpi) -> Result<Settings> {
     let answer = scpi.get_string("TRIG_SELECT?")?;
     let source = protocol::trigger_source(&answer)
         .ok_or_else(|| bad("A trigger with no source", &answer))?;
-    settings.source =
-        index_of(&SOURCES, source).ok_or_else(|| bad("An unknown trigger source", source))?;
+    if index_of(&SOURCES, source).is_none() && index_of(&MANUAL_SOURCES, source).is_none() {
+        return Err(bad("An unknown trigger source", source));
+    }
+    source.clone_into(&mut settings.source);
     let answer = scpi.get_string(&format!("{source}:TRIG_SLOPE?"))?;
     settings.slope =
         index_of(&SLOPES, &answer).ok_or_else(|| bad("An unknown trigger slope", &answer))?;
@@ -281,7 +314,7 @@ impl LecroyDevice {
                 offset: [0.0; CHANNELS],
                 coupling: [0; CHANNELS],
                 timebase: 0,
-                source: 0,
+                source: SOURCES[0].to_owned(),
                 slope: 0,
                 triggerpos: 0.0,
             },
@@ -291,7 +324,33 @@ impl LecroyDevice {
             closed: Some(scpi),
             worker: None,
             silence: Silence::new,
+            left_armed: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            said: Mutex::new(Vec::new()),
         }
+    }
+
+    /// A warning, which a test can read back.
+    #[cfg_attr(not(test), expect(clippy::unused_self, reason = "the tests read it back"))]
+    fn warn(&self, text: &str) {
+        log::warn!("{text}");
+        #[cfg(test)]
+        self.said.lock().expect("said lock").push(text.to_owned());
+    }
+
+    /// What a stop left armed, read away within a bound, before anything else is asked.
+    fn settle_armed(&self, scpi: &mut Scpi) -> Result<()> {
+        if !self.left_armed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        let until = Instant::now() + ARMED_SETTLE;
+        if !drain_to_opc(scpi, || Instant::now() < until)? {
+            return Err(Error::device(
+                "The scope is still in the acquisition a stop left waiting for a trigger.",
+            ));
+        }
+        self.left_armed.store(false, Ordering::SeqCst);
+        Ok(())
     }
 
     /// Runs `f` on the open instrument. A capture holds it, so a setting is refused
@@ -299,6 +358,7 @@ impl LecroyDevice {
     fn with_scpi<T>(&self, f: impl FnOnce(&mut Scpi) -> Result<T>) -> Result<T> {
         let mut guard = self.scpi.lock().expect("scpi lock");
         let scpi = guard.as_mut().ok_or(Error::Busy)?;
+        self.settle_armed(scpi)?;
         f(scpi)
     }
 
@@ -313,7 +373,9 @@ impl LecroyDevice {
             Ok(())
         });
         if let Err(e) = &done {
-            log::warn!("'{command}' was not confirmed ({e}): the scope may have taken it.");
+            self.warn(&format!(
+                "'{command}' was not confirmed ({e}): the scope may have taken it."
+            ));
         }
         done
     }
@@ -390,7 +452,7 @@ impl Device for LecroyDevice {
                 let (p, q) = VDIVS[st.vdiv[self.analog_group(group)?]];
                 Value::Rational(p, q)
             }
-            Key::TriggerSource => Value::Str(SOURCES[st.source].to_owned()),
+            Key::TriggerSource => Value::Str(st.source.clone()),
             Key::TriggerSlope => Value::Str(SLOPES[st.slope].to_owned()),
             Key::HorizTriggerpos => Value::F64(f64::from(st.triggerpos)),
             Key::Coupling => {
@@ -427,7 +489,7 @@ impl Device for LecroyDevice {
             Key::TriggerSource => {
                 let i = string(&SOURCES)?;
                 self.setting(&format!("TRIG_SELECT EDGE,SR,{}", SOURCES[i]), 1)?;
-                self.settings.source = i;
+                SOURCES[i].clone_into(&mut self.settings.source);
             }
             Key::Vdiv => {
                 let i = fraction(&VDIVS)?;
@@ -459,7 +521,7 @@ impl Device for LecroyDevice {
             }
             Key::TriggerSlope => {
                 let i = string(&SLOPES)?;
-                let source = SOURCES[self.settings.source];
+                let source = &self.settings.source;
                 self.setting(&format!("{source}:TRIG_SLOPE {}", SLOPES[i]), 1)?;
                 self.settings.slope = i;
             }
@@ -498,7 +560,7 @@ impl Device for LecroyDevice {
             self.closed = Some(scpi);
             return Err(e);
         }
-        match read_settings(&mut scpi) {
+        match self.settle_armed(&mut scpi).and_then(|()| read_settings(&mut scpi)) {
             Ok(settings) => {
                 self.settings = settings;
                 *self.scpi.lock().expect("scpi lock") = Some(scpi);
@@ -515,6 +577,10 @@ impl Device for LecroyDevice {
     fn close(&mut self) -> Result<()> {
         self.stop()?;
         if let Some(mut scpi) = self.scpi.lock().expect("scpi lock").take() {
+            // A new connection can't receive an old answer; a USB device keeps it.
+            if scpi.resource().starts_with("tcp") {
+                self.left_armed.store(false, Ordering::SeqCst);
+            }
             let _ = scpi.close();
             self.closed = Some(scpi);
         }
@@ -533,6 +599,8 @@ impl Device for LecroyDevice {
         // setup_channels: what changed since the open, and its writes before the header.
         let wanted: Vec<bool> = self.channels.iter().map(|c| c.enabled).collect();
         let trace = self.settings.trace;
+        // A stop's armed acquisition is the capture's to wait out, as long as it takes.
+        let left = self.left_armed.swap(false, Ordering::SeqCst);
         let set = self.with_scpi(|scpi| {
             for (i, on) in wanted.iter().enumerate() {
                 if *on != trace[i] {
@@ -559,7 +627,12 @@ impl Device for LecroyDevice {
             time_div: p as f64 / q as f64,
             sample_rate: Arc::clone(&self.sample_rate),
             silence: self.silence,
+            left_armed: Arc::clone(&self.left_armed),
+            line_end: std::cell::Cell::new(false),
         };
+        if left {
+            self.left_armed.store(true, Ordering::SeqCst);
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
         let slot = Arc::clone(&self.scpi);
@@ -567,7 +640,15 @@ impl Device for LecroyDevice {
             .name("lecroy-xstream acquisition".to_owned())
             .spawn(move || {
                 let mut scpi = scpi;
+                // A wait for a trigger outlasts a USBTMC read: the next read waits on
+                // the same request rather than make another, which libsigrok does
+                // and no firmware is known to take.
+                scpi.wait_out_requests(true);
                 let outcome = capture.run(&mut scpi, &sink, &stopped);
+                scpi.wait_out_requests(false);
+                if capture.line_end.get() {
+                    scpi.forget_question();
+                }
                 if let Err(e) = &outcome {
                     log::error!("Acquisition failed: {e}");
                 }
@@ -589,6 +670,13 @@ impl Device for LecroyDevice {
     }
 }
 
+#[cfg(test)]
+impl LecroyDevice {
+    fn set_limit_for_test(&mut self, frames: u64) {
+        self.limit_frames = frames;
+    }
+}
+
 impl Drop for LecroyDevice {
     fn drop(&mut self) {
         let _ = self.stop();
@@ -603,15 +691,20 @@ struct Capture {
     sample_rate: Arc<AtomicU64>,
     /// [`Silence::new`], or a test's bounds.
     silence: fn(Instant, f64) -> Silence,
+    /// The device's: a stop came with the scope armed.
+    left_armed: Arc<AtomicBool>,
+    /// The last block's line end may still come.
+    line_end: std::cell::Cell<bool>,
 }
 
 fn request(channel: usize) -> String {
     format!("C{}:WAVEFORM?", channel + 1)
 }
 
-/// How much the receive of one block came to.
+/// How much the receive of one block came to: the block, and whether its line end may
+/// still come.
 enum Read {
-    Block(Vec<u8>),
+    Block(Vec<u8>, bool),
     Stopped,
 }
 
@@ -619,6 +712,12 @@ impl Capture {
     /// `dev_acquisition_start`'s end and `receive_data`.
     fn run(&self, scpi: &mut Scpi, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let go_on = || !stop.load(Ordering::SeqCst);
+        if self.left_armed.load(Ordering::SeqCst) {
+            if !drain_to_opc(scpi, go_on)? {
+                return Ok(());
+            }
+            self.left_armed.store(false, Ordering::SeqCst);
+        }
         // Close joins this thread, so a full queue no one reads must not hold it.
         if !sink.send_while(Packet::header(), go_on) {
             return Ok(());
@@ -630,10 +729,16 @@ impl Capture {
         silence.asked(Instant::now(), false);
         loop {
             let block = match read_block(scpi, &mut silence, stop) {
-                Ok(Read::Block(block)) => block,
+                Ok(Read::Block(block, line_end)) => {
+                    self.line_end.set(line_end);
+                    block
+                }
                 // A question is out, and its answer can still come.
                 Ok(Read::Stopped) => {
                     scpi.forget_question();
+                    if silence.armed() {
+                        self.left_armed.store(true, Ordering::SeqCst);
+                    }
                     return Ok(());
                 }
                 Err(e) => {
@@ -644,6 +749,15 @@ impl Capture {
             let wave = protocol::parse_waveform(&block)?;
             drop(block);
             let channel = self.enabled[position];
+            if let Some(source) = wave.source.filter(|s| *s <= 3)
+                && usize::from(source) != channel
+            {
+                return Err(Error::device(format!(
+                    "The scope answered for C{} where C{} was asked.",
+                    source + 1,
+                    channel + 1
+                )));
+            }
             if wave.samples.is_empty() {
                 // No data available, we have to acquire data first.
                 self.sample_rate.store(0, Ordering::SeqCst);
@@ -697,7 +811,14 @@ impl Capture {
 
     /// `lecroy_xstream_update_sample_rate`.
     fn update_sample_rate(&self, scpi: &mut Scpi, samples: usize) -> Result<()> {
-        let time_div = scpi.get_f64("TIME_DIV?")?;
+        let mut answer = scpi.get_string("TIME_DIV?")?;
+        // The last block's line end, come late: it was read as an answer of its own.
+        if self.line_end.replace(false) && answer.is_empty() {
+            answer = String::from_utf8_lossy(&scpi.get_data(None)?).into_owned();
+        }
+        let answer = answer.trim();
+        let time_div: f64 =
+            answer.parse().map_err(|_| Error::device(format!("SCPI: not a number: '{answer}'")))?;
         let rate = samples as f64 / (time_div * f64::from(NUM_HDIV));
         if rate.is_finite() && rate > 0.0 {
             self.sample_rate.store(rate as u64, Ordering::SeqCst);
@@ -710,7 +831,7 @@ impl Capture {
 }
 
 /// One block, however it comes, looking at the stop all the while. On USBTMC a read
-/// that found nothing asks again, as `sr_scpi_get_block` called anew does.
+/// that found nothing reads again, under the request already made (see the capture).
 fn read_block(scpi: &mut Scpi, silence: &mut Silence, stop: &AtomicBool) -> Result<Read> {
     let result = read_block_inner(scpi, silence, stop);
     scpi.read_timeout = READ_TIMEOUT;
@@ -733,6 +854,13 @@ fn read_block_inner(scpi: &mut Scpi, silence: &mut Silence, stop: &AtomicBool) -
             Ok(()) => {
                 started = true;
                 scpi.read_data(&mut chunk)
+            }
+            // USBTMC asks with its read, and says "too little data" of no answer and
+            // fails a header that came wrong: C retries both. A gone device is
+            // `Disconnected`, an I/O error or a closed socket, and ends it.
+            Err(Error::Device(why)) if !framer.begun() => {
+                log::debug!("No answer to the read: {why}");
+                Ok(0)
             }
             Err(e) => Err(e),
         };
@@ -770,12 +898,82 @@ fn read_block_inner(scpi: &mut Scpi, silence: &mut Silence, stop: &AtomicBool) -
         }
         if let Framing::Whole(block) = framing {
             // The line end may lie just past a read's edge, and a text answer would
-            // start with it. What's left is that, as one question was out.
-            let _ = scpi.discard(LINE_END);
+            // start with it. A look takes it if it comes at once; if not, it is owed.
+            let owed =
+                framer.line_end_owed() && matches!(scpi.discard(LINE_END), Ok(Some(0)) | Err(_));
             scpi.answered();
-            return Ok(Read::Block(block));
+            return Ok(Read::Block(block, owed));
         }
     }
+}
+
+/// Sends `*OPC?` and reads until an answer says `1`, dropping what came before it:
+/// blocks by their length and text by its lines. `Ok(false)` when `go_on` says no first.
+fn drain_to_opc(scpi: &mut Scpi, go_on: impl Fn() -> bool) -> Result<bool> {
+    log::info!("Reading away the answer of an acquisition a stop left armed.");
+    scpi.send("*OPC?")?;
+    let saved = scpi.read_timeout;
+    scpi.read_timeout = LOOK;
+    let result = drain(scpi, &go_on);
+    scpi.read_timeout = saved;
+    if result.as_ref().is_ok_and(|done| *done) {
+        scpi.answered();
+    } else {
+        scpi.forget_question();
+    }
+    result
+}
+
+fn drain(scpi: &mut Scpi, go_on: &impl Fn() -> bool) -> Result<bool> {
+    let mut chunk = vec![0u8; READ_CHUNK];
+    let mut pending: Vec<u8> = Vec::new();
+    // What is left of a block being dropped.
+    let mut skip = 0usize;
+    let mut started = false;
+    while go_on() {
+        if !started {
+            match scpi.read_begin() {
+                Ok(()) => started = true,
+                Err(Error::Timeout | Error::Device(_)) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        let n = match scpi.read_data(&mut chunk) {
+            Ok(n) => n,
+            Err(Error::Timeout | Error::Device(_)) => 0,
+            Err(e) => return Err(e),
+        };
+        if n == 0 || scpi.read_complete() {
+            started = false;
+        }
+        let mut bytes = &chunk[..n];
+        let dropped = skip.min(bytes.len());
+        skip -= dropped;
+        bytes = &bytes[dropped..];
+        pending.extend_from_slice(bytes);
+        loop {
+            let lead = pending.iter().take_while(|b| matches!(b, b'\n' | b'\r')).count();
+            pending.drain(..lead);
+            if pending.is_empty() {
+                break;
+            }
+            if let Some((head, length)) = protocol::block_head(&pending) {
+                let have = pending.len().min(head + length);
+                skip = head + length - have;
+                pending.drain(..have);
+                continue;
+            }
+            if protocol::may_be_block(&pending) {
+                break;
+            }
+            let Some(end) = pending.iter().position(|b| *b == b'\n') else { break };
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            if String::from_utf8_lossy(&line).trim() == "1" {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
