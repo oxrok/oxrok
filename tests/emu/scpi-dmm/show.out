@@ -1,0 +1,24 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+    serialcomm
+scpi-dmm:conn=usbtmc/BUS.ADDR - Agilent Technologies 34405A 1.0-1.0-1.0 [S/N: EMU0001] with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    conn: usbtmc/BUS.ADDR (current)
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    measured_quantity:  - supported measurements:
+      voltage/dc (current)
+      voltage/ac
+      current/dc
+      current/ac
+      resistance
+      resistance/four_wire
+      continuity
+      capacitance
+      voltage/dc/diode
+      temperature
+      frequency
+    range: auto (current)

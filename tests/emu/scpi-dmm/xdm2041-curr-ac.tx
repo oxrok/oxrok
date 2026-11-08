@@ -1,0 +1,30 @@
+tcp_connect
+tcp_out 2a49444e3f0a -> 6
+tcp_in 33 -> 4f574f4e2c58444d323034312c454d55303030312c312e302d312e302d312e300a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 535953543a4c4f430a -> 9
+tcp_close
+tcp_connect
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 46554e433f0a -> 6
+tcp_in 10 -> 2243555252204143220a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 46554e433f0a -> 6
+tcp_in 10 -> 2243555252204143220a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 4d454153313f0a -> 7
+tcp_in 16 -> 2b322e3530303030303030452d30310a
+tcp_out 2a4f50433f0a -> 6
+tcp_in 2 -> 310a
+tcp_out 535953543a4c4f430a -> 9
+tcp_close

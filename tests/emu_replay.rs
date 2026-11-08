@@ -60,6 +60,7 @@ const RECORDED: [&str; 38] = [
     "lecroy-xstream",
     "scpi-pps",
     "hameg-hmo",
+    "scpi-dmm",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a
