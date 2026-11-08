@@ -1,0 +1,23 @@
+gcov ipdbg-la (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        93.3%  125 of 134
+  protocol.c   93.2%  275 of 295
+  total        93.2%  400 of 429
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 86
+    dev_open: 156, 159
+    config_get: 191-192
+    config_set: 216-217
+    config_list: 233-234
+  protocol.c
+    data_available: 75-76
+    ipdbg_la_tcp_open: 121
+    tcp_send: 167-168, 172
+    ipdbg_la_tcp_receive: 206-207
+    ipdbg_la_convert_trigger: 246
+    ipdbg_la_receive_data: 292, 295, 305-306
+    send_escaping: 372, 376, 379
+    ipdbg_la_get_addrwidth_and_datawidth: 483
+    ipdbg_la_send_reset: 529
+    ipdbg_la_request_id: 538
+    ipdbg_la_send_start: 569

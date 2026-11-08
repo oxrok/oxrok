@@ -110,6 +110,7 @@ pub mod drivers {
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
+    pub mod ipdbg_la;
     pub mod itech_it8500;
     pub mod juntek_jds6600;
     pub mod kecheng_kc_330b;
@@ -168,6 +169,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::center_3xx::Center309Driver));
     registry.register(Box::new(drivers::center_3xx::VoltcraftK204Driver));
     registry.register(Box::new(drivers::itech_it8500::ItechIt8500Driver));
+    registry.register(Box::new(drivers::ipdbg_la::IpdbgLaDriver));
     registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));

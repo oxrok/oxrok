@@ -534,6 +534,25 @@ if [ $emu = 1 ]; then
     else
         echo "note: no USB timeout floor for the oracle (cc failed): $(head -1 "$TMP/usb-floor.err")"
     fi
+    # tools/oracle-header.c, for a C driver that sends no header: a scenario calls
+    # emu_header_oracle in its emu_cases, and its cases from then on run sigrok-cli
+    # with the preload. EMU_STOCK_CLI keeps the real one, for cases on stock C and
+    # for --libsigrok ones (which find libsigrok by sigrok-cli's path: give them
+    # --oracle-env "LD_PRELOAD=$EMU_HEADER"). EMU_HEADER is empty without a compiler.
+    EMU_HEADER=""
+    if cc -shared -fPIC -o "$TMP/oracle-header.so" "$TOOLS/oracle-header.c" -ldl 2>"$TMP/oracle-header.err"; then
+        EMU_HEADER=$TMP/oracle-header.so
+    fi
+    emu_header_oracle() {
+        EMU_STOCK_CLI=$SIGROK_CLI
+        [ "$no_oracle" = 1 ] && return
+        [ -n "$EMU_HEADER" ] || { emu_fail "$EMU_MODEL: no header preload (cc failed: $(head -1 "$TMP/oracle-header.err"))"; return; }
+        printf '%s\n' '#!/bin/sh' \
+            "LD_PRELOAD=$EMU_HEADER\${LD_PRELOAD:+:\$LD_PRELOAD} exec $(command -v "$SIGROK_CLI") \"\$@\"" \
+            >"$TMP/header-sigrok-cli"
+        chmod +x "$TMP/header-sigrok-cli"
+        SIGROK_CLI=$TMP/header-sigrok-cli
+    }
 
     # The state letter of a process (/proc/PID/stat), empty when gone.
     emu_pstate() {
