@@ -12,7 +12,10 @@
 //!   sigrok-cli;
 //! - [`decode`] and [`decoders`]: the protocol decoder runtime and the
 //!   native decoders; [`pydecode`] hosts libsigrokdecode's Python
-//!   decoders when built with the `rustpython` or `python` feature.
+//!   decoders when built with the `rustpython` or `python` feature;
+//! - [`setup`]: a run from sigrok-cli's argument syntaxes (driver specs,
+//!   `-c`, `-C`, `-t`, limits, decoder stacks), shared by the command
+//!   line and the MCP server.
 //!
 //! # Features
 //!
@@ -87,6 +90,7 @@ pub mod parport;
 pub mod pydecode;
 pub mod scpi;
 pub mod serial;
+pub mod setup;
 pub mod spawn;
 pub mod usb;
 
@@ -181,6 +185,17 @@ pub mod drivers {
     pub mod yokogawa_dlm;
     pub mod zeroplus_logic_cube;
     pub mod zketech_ebd_usb;
+}
+
+/// Every decoder this build has: the native ones, then the Python ones
+/// when a Python runtime is built in, the native winning on an id both
+/// have.
+pub fn decoder_registry() -> decode::Registry {
+    let mut r = decode::Registry::new();
+    r.register(&decoders::ALL);
+    #[cfg(any(feature = "python", feature = "rustpython"))]
+    r.register(&pydecode::defs());
+    r
 }
 
 /// Registers every driver.

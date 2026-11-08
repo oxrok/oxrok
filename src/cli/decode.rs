@@ -10,41 +10,25 @@
 
 use crate::cli::args::Args;
 use crate::cli::parse;
-use oxrok::core::{Channel, ChannelKind, Error, Packet, Result};
-use oxrok::decode::{Config, Decoder, DecoderInfo, Output, Registry, Stack};
-use std::collections::HashMap;
+use oxrok::core::{Channel, Error, Packet, Result};
+use oxrok::decode::{DecoderInfo, Output, Registry, Stack};
+use oxrok::setup::decoders::{self as stacks, StackPlan, Visible};
 use std::fmt::Write as _;
 use std::io::Write;
 use std::sync::mpsc::Receiver;
 
 /// Every decoder this binary ships.
 pub fn registry() -> Registry {
-    let mut r = Registry::new();
-    r.register(&oxrok::decoders::ALL);
-    // Python decoders come after the native ones, which win on an id
-    // both have.
-    #[cfg(any(feature = "python", feature = "rustpython"))]
-    r.register(&oxrok::pydecode::defs());
-    r
-}
-
-/// Which annotation classes of a decoder are shown: `None` for all.
-type Visible = HashMap<&'static str, Option<Vec<usize>>>;
-/// An instance waiting for the first logic packet: id, configuration
-/// and constructor.
-type Pending = (String, Config, &'static (dyn Fn() -> Box<dyn Decoder> + Send + Sync));
-/// A chain of pending instances, bottom first.
-type PendingChain = Vec<Pending>;
-
-struct Instance {
-    id: String,
-    info: &'static DecoderInfo,
+    oxrok::decoder_registry()
 }
 
 /// The decoders of one run and what to print.
 #[allow(clippy::struct_excessive_bools)]
 pub struct Decoding {
-    instances: Vec<Instance>,
+    /// The parsed stacks until the first logic packet starts them.
+    plan: Option<StackPlan>,
+    /// The instances, kept after the plan was spent.
+    instances: Vec<(String, &'static DecoderInfo)>,
     stack: Option<Stack>,
     outputs: Option<Receiver<Output>>,
     ann_visible: Visible,
@@ -55,52 +39,11 @@ pub struct Decoding {
     show_class: bool,
     show_abbrev: bool,
     samplerate: u64,
-    pending: Vec<PendingChain>,
     ended: usize,
-}
-
-/// The logic channels' names, each at its bit in a sample: a channel's place in
-/// the device's list says nothing, as a driver may list analog channels first. A
-/// bit no channel has is an empty name, which no value matches. The length is at
-/// least the number of channels, which a decoder's default mapping counts: a
-/// default on a bit no channel has reads 0, as under sigrok-cli.
-fn logic_bit_names(channels: &[Channel]) -> Vec<String> {
-    let logic = || channels.iter().filter(|c| c.kind == ChannelKind::Logic);
-    let bits = logic().map(|c| c.index + 1).max().unwrap_or(0);
-    let mut names = vec![String::new(); bits.max(channels.len())];
-    for c in logic() {
-        names[c.index].clone_from(&c.name);
-    }
-    names
-}
-
-/// A decoder's channel takes a logic channel. sigrok-cli hands it the bit of the
-/// analog channel's index, which may be another channel's or none.
-fn refuse_analog(
-    info: &DecoderInfo,
-    pairs: &[(String, String)],
-    channels: &[Channel],
-) -> Result<()> {
-    for (key, value) in pairs {
-        let is_channel = info
-            .channels
-            .iter()
-            .chain(info.optional_channels.iter())
-            .any(|c| c.id.eq_ignore_ascii_case(key));
-        let named = |kind| channels.iter().any(|c| c.kind == kind && c.name == *value);
-        if is_channel && named(ChannelKind::Analog) && !named(ChannelKind::Logic) {
-            return Err(Error::Arg(format!(
-                "Channel '{value}' is analog: decoder '{}' needs a logic channel for '{key}'.",
-                info.id
-            )));
-        }
-    }
-    Ok(())
 }
 
 impl Decoding {
     /// Parses the decoder flags; `None` without `-P`.
-    #[allow(clippy::too_many_lines)]
     pub fn from_args(
         args: &Args,
         channels: &[Channel],
@@ -109,117 +52,19 @@ impl Decoding {
         if args.decoders.is_empty() {
             return Ok(None);
         }
-        let registry = registry();
-        let names = logic_bit_names(channels);
-        let mut instances = Vec::new();
-        let mut pending = Vec::new();
-        let mut counts: HashMap<&str, usize> = HashMap::new();
-        for spec in &args.decoders {
-            let mut chain: PendingChain = Vec::new();
-            let mut below: Option<&'static DecoderInfo> = None;
-            for part in spec.split(',') {
-                let parsed = parse::generic_args(part, true);
-                let id =
-                    parsed.scope.ok_or_else(|| Error::arg("Invalid decoder specification."))?;
-                let def = registry
-                    .find(&id)
-                    .ok_or_else(|| Error::Arg(format!("Protocol decoder '{id}' not found.")))?;
-                if let Some(b) = below
-                    && !def.info.inputs.iter().any(|i| b.outputs.contains(i))
-                {
-                    // libsigrokdecode runs such a stack anyway; the upper
-                    // decoder then gets items it cannot use.
-                    log::warn!(
-                        "Protocol decoder '{}' does not take the output of '{}'.",
-                        def.info.id,
-                        b.id
-                    );
-                }
-                let pairs: Vec<(String, String)> =
-                    parsed.items.into_iter().map(|(k, v)| (k, v.unwrap_or_default())).collect();
-                let channel_names: &[String] = if below.is_none() { &names } else { &[] };
-                if below.is_none() {
-                    refuse_analog(def.info, &pairs, channels)?;
-                }
-                let config = oxrok::decode::parse_spec(def.info, &pairs, channel_names)?;
-                let n = counts.entry(def.info.id).or_insert(0);
-                *n += 1;
-                let inst_id = format!("{}-{n}", def.info.id);
-                instances.push(Instance { id: inst_id.clone(), info: def.info });
-                chain.push((inst_id, config, def.new));
-                below = Some(def.info);
-            }
-            pending.push(chain);
-        }
-        let mut ann_visible: Visible = HashMap::new();
-        if args.decoder_annotations.is_empty()
-            && args.decoder_binary.is_none()
-            && args.decoder_meta.is_empty()
-        {
-            for i in &instances {
-                ann_visible.insert(i.info.id, None);
-            }
-        }
-        for spec in &args.decoder_annotations {
-            for item in spec.split(',') {
-                let (dec, classes) =
-                    item.split_once('=').map_or((item, None), |(d, c)| (d, Some(c)));
-                let info =
-                    instances.iter().find(|i| i.info.id == dec).map(|i| i.info).ok_or_else(
-                        || Error::Arg(format!("Protocol decoder '{dec}' not found.")),
-                    )?;
-                let Some(classes) = classes else {
-                    ann_visible.insert(info.id, None);
-                    continue;
-                };
-                let mut list = Vec::new();
-                for c in classes.split(':') {
-                    let found = info.ann_classes(c);
-                    if found.is_empty() {
-                        return Err(Error::Arg(format!(
-                            "Annotation class '{c}' not found for decoder '{dec}'."
-                        )));
-                    }
-                    list.extend(found);
-                }
-                ann_visible
-                    .entry(info.id)
-                    .and_modify(|v| {
-                        if let Some(v) = v {
-                            v.extend(list.iter().copied());
-                        }
-                    })
-                    .or_insert(Some(list));
-            }
-        }
-        let binary = match &args.decoder_binary {
-            None => None,
-            Some(spec) => {
-                let (dec, class) = spec
-                    .split_once('=')
-                    .ok_or_else(|| Error::arg("Binary output needs decoder=class."))?;
-                let info =
-                    instances.iter().find(|i| i.info.id == dec).map(|i| i.info).ok_or_else(
-                        || Error::Arg(format!("Protocol decoder '{dec}' not found.")),
-                    )?;
-                let idx = info.binary.iter().position(|b| b.id == class).ok_or_else(|| {
-                    Error::Arg(format!("Binary class '{class}' not found for decoder '{dec}'."))
-                })?;
-                Some((info.id, idx))
-            }
-        };
-        let mut meta_visible = Vec::new();
-        for spec in &args.decoder_meta {
-            for dec in spec.split(',') {
-                let info =
-                    instances.iter().find(|i| i.info.id == dec).map(|i| i.info).ok_or_else(
-                        || Error::Arg(format!("Protocol decoder '{dec}' not found.")),
-                    )?;
-                meta_visible.push(info.id);
-            }
-        }
+        let plan = stacks::parse_stacks(&registry(), &args.decoders, channels)?;
+        let all_by_default = args.decoder_binary.is_none() && args.decoder_meta.is_empty();
+        let ann_visible = stacks::visible_annotations(
+            &plan.instances,
+            &args.decoder_annotations,
+            all_by_default,
+        )?;
+        let binary = stacks::binary_class(&plan.instances, args.decoder_binary.as_deref())?;
+        let meta_visible = stacks::meta_decoders(&plan.instances, &args.decoder_meta)?;
+        let instances = plan.instances.iter().map(|i| (i.id.clone(), i.info)).collect();
         let verbose = args.loglevel > 2;
         Ok(Some(Decoding {
+            plan: Some(plan),
             instances,
             stack: None,
             outputs: None,
@@ -231,18 +76,13 @@ impl Decoding {
             show_class: args.loglevel > 3 || args.decoder_ann_class,
             show_abbrev: args.loglevel > 3,
             samplerate: samplerate.unwrap_or(0),
-            pending,
             ended: 0,
         }))
     }
 
     fn start(&mut self, unit_size: usize) -> Result<()> {
-        let mut stack = Stack::new();
-        for chain in self.pending.drain(..) {
-            let built: Vec<(String, Box<dyn Decoder>, Config)> =
-                chain.into_iter().map(|(id, config, new)| (id, new(), config)).collect();
-            stack.add_chain(built, unit_size, self.samplerate)?;
-        }
+        let Some(plan) = self.plan.take() else { return Ok(()) };
+        let mut stack = plan.build(unit_size, self.samplerate)?;
         self.outputs = stack.outputs();
         self.stack = Some(stack);
         Ok(())
@@ -308,7 +148,7 @@ impl Decoding {
     }
 
     fn info_of(&self, instance: &str) -> Option<&'static DecoderInfo> {
-        self.instances.iter().find(|i| i.id == instance).map(|i| i.info)
+        self.instances.iter().find(|(id, _)| id == instance).map(|(_, info)| *info)
     }
 
     fn print(&self, o: &Output, out: &mut dyn Write) -> Result<()> {
@@ -446,30 +286,4 @@ pub fn decoder_detail(args: &Args) -> Result<()> {
     }
     println!("Documentation:\n{}", d.doc);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mixed() -> Vec<Channel> {
-        vec![
-            Channel::new(4, ChannelKind::Analog, "DSO"),
-            Channel::new(0, ChannelKind::Logic, "0"),
-            Channel::new(1, ChannelKind::Logic, "1"),
-            Channel::new(4, ChannelKind::Logic, "4"),
-        ]
-    }
-
-    #[test]
-    fn a_name_sits_at_its_logic_bit_whatever_the_list_s_order() {
-        assert_eq!(logic_bit_names(&mixed()), ["0", "1", "", "", "4"]);
-    }
-
-    #[test]
-    fn the_names_are_at_least_as_many_as_the_channels() {
-        let channels =
-            [Channel::new(0, ChannelKind::Logic, "D0"), Channel::new(1, ChannelKind::Analog, "A0")];
-        assert_eq!(logic_bit_names(&channels), ["D0", ""]);
-    }
 }

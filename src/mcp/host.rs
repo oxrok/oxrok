@@ -46,7 +46,7 @@ impl Host {
     pub fn new() -> Self {
         let mut registry = Registry::new();
         crate::register_all(&mut registry);
-        Self::with(registry, all_decoders())
+        Self::with(registry, crate::decoder_registry())
     }
 
     /// A host over the given registries.
@@ -93,15 +93,4 @@ impl Host {
     pub fn cli_program(&self) -> Option<&Path> {
         self.cli_program.as_deref()
     }
-}
-
-/// Every decoder this build has: the native ones, then the Python ones
-/// when a Python runtime is built in, the native winning on an id both
-/// have.
-pub fn all_decoders() -> decode::Registry {
-    let mut r = decode::Registry::new();
-    r.register(&crate::decoders::ALL);
-    #[cfg(any(feature = "python", feature = "rustpython"))]
-    r.register(&crate::pydecode::defs());
-    r
 }

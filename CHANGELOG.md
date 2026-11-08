@@ -13,6 +13,10 @@ release may change the library API.
   `decoder_info`, `list_formats`, `firmware_status`) and a `cli` tool that
   runs the command line; `--read-only`, `--no-cli`, `--tools` and
   `--list-tools`. The `oxrok::mcp` module behind the `mcp` feature.
+- `oxrok::setup`: the command line's setup code as a library module (driver
+  specs, `-c` plans, `-C`, `-t`, limits, decoder stacks, `-I`/`-O` specs),
+  shared with the MCP server. `oxrok::decoder_registry()` is every decoder
+  of a build.
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
   `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
   `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`, `hameg-hmo`, `scpi-dmm`,

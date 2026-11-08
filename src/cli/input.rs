@@ -5,11 +5,11 @@
 //! `-i FILE`: session files and input modules.
 
 use crate::cli::args::Args;
-use crate::cli::parse;
 use crate::cli::pipeline::Pipeline;
 use oxrok::core::{Channel, ChannelKind, Error, Key, Packet, Result};
 use oxrok::formats::input::{self, Input, Options};
 use oxrok::formats::sr::{SessionReader, is_session_file};
+use oxrok::setup::select_channel_list as select;
 use std::io::Read;
 use std::path::Path;
 
@@ -36,13 +36,7 @@ fn open_source(args: &Args) -> Result<Source> {
         )
     };
     let (module, options) = if let Some(spec) = &args.input_format {
-        let parsed = parse::generic_args(spec, true);
-        let id = parsed.scope.unwrap_or_default();
-        let m = input::find(&id)
-            .ok_or_else(|| Error::Arg(format!("Error: unknown input module '{id}'.")))?;
-        let options: Options =
-            parsed.items.into_iter().map(|(k, v)| (k, v.unwrap_or_default())).collect();
-        (m, options)
+        oxrok::setup::input_spec(spec)?
     } else {
         // Detect from the first bytes, then replay them.
         let mut head = vec![0u8; 4096];
@@ -125,39 +119,6 @@ fn stream(args: &Args, handler: &mut dyn FnMut(Event) -> bool) -> Result<()> {
             Ok(())
         }
     }
-}
-
-/// Applies `-C` to a channel list: names or numeric ranges.
-fn select(channels: &mut [Channel], spec: &str) -> Result<()> {
-    let names: Vec<String> = channels.iter().map(|c| c.name.clone()).collect();
-    let mut keep = vec![false; channels.len()];
-    for token in spec.split(',') {
-        if let Some((lo, hi)) = token.split_once('-')
-            && let (Ok(b), Ok(e)) = (lo.parse::<usize>(), hi.parse::<usize>())
-        {
-            for n in b..=e {
-                let pos = names
-                    .iter()
-                    .position(|x| *x == n.to_string())
-                    .ok_or_else(|| Error::Arg(format!("unknown channel '{n}'.")))?;
-                keep[pos] = true;
-            }
-            continue;
-        }
-        let (name, rename) = token.split_once('=').map_or((token, None), |(n, r)| (n, Some(r)));
-        let pos = names
-            .iter()
-            .position(|x| x == name)
-            .ok_or_else(|| Error::Arg(format!("unknown channel '{name}'.")))?;
-        keep[pos] = true;
-        if let Some(r) = rename {
-            r.clone_into(&mut channels[pos].name);
-        }
-    }
-    for (c, k) in channels.iter_mut().zip(keep) {
-        c.enabled = k;
-    }
-    Ok(())
 }
 
 /// `-i FILE`: runs the file through the output.
