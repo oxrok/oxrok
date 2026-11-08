@@ -79,9 +79,19 @@ src/mcp/
     device.rs     scan, open, close, describe_device, get_option, set_option
     capture.rs    capture, capture_start/status/stop, list/drop/load/export
     data.rs       capture_logic, capture_analog, measure
-    decode.rs     capture_decode
+    analyzers.rs  add/update/remove/list_analyzers, analyzer_status, _frames,
+                  _summary, _find, _binary, _meta; capture_decode
+src/decode/
+  analyzer.rs     Analyzer: a Stack over a capture, its runner thread, status
+  frames.rs       FrameStore: decoded output kept, indexed, counted
+  radix.rs        Radix, raw values, rendering (moved from oxrok-ui)
 src/cli/mcp.rs    the `oxrok mcp` subcommand: flags → Host → stdio Server
 ```
+
+The analyzer model and radix go in `oxrok::decode`, not in `mcp`, because
+they are not MCP-specific: the UI's decoder thread and frame store can
+move onto them later, and the two servers then report the same frames
+with the same text.
 
 A separate `oxrok-mcp` crate was considered and rejected for now: the
 tools reach into `core`, `formats`, `decode` and `pydecode`, and oxrok-ui
@@ -255,14 +265,114 @@ not fit, and the tool result says so.
 | `measure` | on one logic channel over a range: frequency, period, duty, high/low time stats, edge count; on an analog one: Vpp, mean, RMS, frequency by zero crossing. The UI's `engine::measure` has these; the oxrok side gets its own small, shared implementation so both agree |
 | `find` | the first/next edge, pulse wider than, or level change after `t` on a channel: how an agent walks a trace without reading it |
 
-### Decode [Decode, read-only]
+### Analyzers [Decode]
 
-| tool | what it answers |
+An analyzer is a decoder stack bound to a capture whose output is kept,
+so an agent can decode once and then page, search, count and walk the
+results. It is what the UI's Analyzers panel is, without the display
+parts (colour, lanes, visible rows, bubbles): those stay in the UI.
+Radix stays in, because it changes what the agent reads.
+
+#### What exists, what is new
+
+`decode::Stack` already runs chains (`i2c,eeprom24xx`) on their own
+threads and delivers `Output::{Annotation, Binary, Meta, End}` with
+sample positions; `decode::parse_spec` and the decoder `Registry` (native
+and Python) already parse options and channels. The CLI prints that
+output and forgets it. New:
+
+- **`decode::FrameStore`**, ported from oxrok-ui's `decode/frames.rs`:
+  grows only, indexed by start sample overall and per row, with the
+  class→row mapping (`class_rows`: a class's first row, or a row of its
+  own), per-class and per-row counts kept as frames arrive, the error
+  flag (`is_error_class`), the raw value of each annotation (below), the
+  binary and meta items, and its own byte count for the memory budget.
+- **`decode::Analyzer`**: `{id, capture_id, spec, radix, stack,
+  store, status, progress, generation}` and a runner thread that feeds
+  the capture's logic data to the `Stack` in chunks and drains its
+  outputs into the store. Status is `Running`, `Complete` or
+  `Error(text)`; progress is samples fed over samples known.
+- **The CLI's `Decoding` setup** (chain building, bit→name mapping,
+  analog refusal, instance numbering, `-A`/`-B`/`-M` resolution) moves
+  from `src/cli/decode.rs` into the library in Phase 2, so an analyzer
+  and `-P` build a stack the same way.
+
+Decoders cannot seek. Changing a decoder option or channel rebuilds the
+`Stack` and decodes from sample 0; the generation goes up, and a client
+paging with an older generation is told its offsets are stale. On a
+capture still running (`capture_start`), the runner feeds packets as
+they arrive and the frames appear during the capture.
+
+Several Python analyzers take turns on RustPython's one VM: correct, not
+parallel. Native decoders run in parallel.
+
+#### Radix
+
+The UI has five: `native` (the decoder's own text), `hex`, `dec`, `bin`,
+`ascii`, and three ways a decoder can support them (its
+`radix_support`):
+
+- **`format_option`**: the decoder has a `format` option (`uart`), and
+  the radix is passed to it. Changing it means decoding again.
+- **`raw_values`**: the decoder has binary output; each annotation gets
+  the raw value of the binary item with the same start whose class maps
+  to it (`attach_binary`, `binary_target`; I²C's address annotation and
+  its binary item end at different samples, so the start is the key),
+  and its text's trailing hex number is rewritten in the radix
+  (`apply_radix`, `format_int`, `format_bytes`, `ascii_char`).
+- **`native_only`**: no format option, no binary output; text as is.
+
+That code moves from oxrok-ui's `decode/mod.rs` and `decode/format.rs`
+into `oxrok::decode::radix`, unchanged in behaviour, with its tests.
+
+For an agent, two choices beyond the UI's:
+
+- **The raw value is always returned** as numbers, `value` and `bits`,
+  next to `text`, whenever the decoder gave one. An agent comparing
+  addresses or summing bytes should not parse `0x50` back out of a
+  string, and filters can match on it (`value: 80`).
+- **Radix is chosen per request, not only per analyzer.** The store
+  keeps the decoder's texts and the raw values, and renders at read
+  time, so `analyzer_frames {radix: "ascii"}` and then `{radix: "hex"}`
+  cost nothing. The analyzer's own radix is the default. The exception
+  is `format_option` decoders without binary output, where the text
+  comes from the decoder: there, `update_analyzer {radix}` decodes again
+  and a per-request radix that differs is refused with that reason.
+  Where a decoder has both, as `uart` does, the analyzer prefers raw
+  values, so its radix is free per request.
+
+The default radix is the UI's: `ascii` for `uart`, `native` otherwise.
+`decoder_info` and `list_analyzers` report each decoder's
+`radix_support`, so the agent knows before asking. Binary output
+(`analyzer_binary`) renders with `format_bytes` in the same radixes.
+
+#### Tools
+
+| tool | what it does |
 |---|---|
-| `capture_decode` | `capture_id`, `stack` in `-P` syntax (`i2c:scl=D0:sda=D1,eeprom24xx`), `annotations` (`-A` syntax), `rows`, range, `offset`/`limit`; returns `[{t0, t1, decoder, row, class, text}]` plus the count, and binary output on request |
+| `add_analyzer` | `capture_id`; either `stack` in `-P` syntax (`i2c:scl=D0:sda=D1,eeprom24xx`) or structured `[{decoder, channels: {role: channel}, options}]`, bottom first; optional `radix` and `name`. Validates as the UI does (required roles assigned, at least one channel, no channel twice, logic channels only) and returns `analyzer_id`, the instance ids, each instance's `radix_support`, and the status |
+| `update_analyzer` | new options, channels or radix; decodes again when it must and says so; returns the new generation |
+| `remove_analyzer` / `list_analyzers` | `list` gives each analyzer's capture, stack, radix, status, progress, generation and frame count |
+| `analyzer_status` | status, progress, generation, error; `wait` up to a timeout for `Complete` or `Error`, with progress notifications while it waits |
+| `analyzer_frames` | frames as `{ss, es, t0, t1, instance, row, class, text, value, bits, error}`; filters: `instance`, `rows`, `classes` (`-A` names), `from`/`to`, `text` (substring on the rendered text), `value`, `errors_only`; `radix`; `all_texts` for the decoder's shorter variants too; `offset`/`limit`/`generation` |
+| `analyzer_summary` | per instance, per row and per class: counts, error count, first and last frame; the answer to "were there NACKs?" in one call |
+| `analyzer_find` | the frame `at` a time, or the `next`/`prev` from one, on a row and optionally matching `text`/`value`: walking frames as `find` walks edges |
+| `analyzer_binary` | one instance's binary class (`-B`) over a range: written to a file under `--allow-paths`, or returned rendered in a radix or as base64, capped |
+| `analyzer_meta` | one instance's meta output (`-M`), paged |
+| `capture_decode` | the one-shot form: adds an analyzer, waits, returns one page of `analyzer_frames` and the summary, and removes it unless `keep: true` |
 
-Runs on the native decoders or the Python ones exactly as `-P` does, over
-the capture's logic data, with the same instance and option parsing.
+Times are in seconds from the capture's samplerate, with the sample
+numbers next to them; frames on a capture without a samplerate have
+samples only.
+
+#### Later: an analyzer trigger
+
+`capture_start {stop_when: {analyzer, text | value | class}}` stops a
+capture when a matching frame appears, as the UI's Analyzer Trigger card
+does. It works when decoding keeps up with the device. A buffered device
+(the LogicPort) delivers its data at the end of a capture, so there it
+is "capture again until a frame matches", the UI's `Bench::capture`
+pattern, with a round limit.
 
 ### Server flags
 
@@ -280,8 +390,9 @@ doc check are generated from.
 
 The `instructions` sent at `initialize` are a short text for the model:
 the workflow (`scan` → `open` → `set_option samplerate` → `capture` →
-`measure`/`capture_decode`), the id syntaxes, and "prefer `transitions`
-and `measure` to `samples`".
+`measure`/`add_analyzer` → `analyzer_summary` → `analyzer_frames`), the
+id syntaxes, "prefer `transitions` and `measure` to `samples`", and
+"read `value`, not the text, when comparing decoded numbers".
 
 ## The CLI side
 
@@ -353,7 +464,19 @@ let catalog = core
 The UI implements `CaptureSource` over its sessions, so `capture_logic`,
 `capture_analog`, `measure`, `find` and `capture_decode` from the library
 work on the session the user is looking at, with `capture_id` being the
-session id. It does not include `scan`/`open`/`capture`: its worker owns
+session id.
+
+The library's analyzer tools are not in the UI catalog as they are: in
+the UI an analyzer is something the user sees, in the panel and on the
+trace, so the agent's analyzers should be the user's. The `ui_` analyzer
+tools below take the same arguments and return the same frame shape
+(`text`, `value`, `bits`, radix per request), over the session's own
+analyzers. Until the UI's decoder thread moves onto `decode::Analyzer`,
+they map onto its `Analyzer`, `TaskSpec` and `FrameStore`; after, they
+are thin wrappers. Two differences remain: a UI analyzer is one decoder,
+not a stack (`TaskSpec` has one `decoder`), so `ui_add_analyzer` refuses
+a stack until the UI gains them; and colour, lanes and visible rows get
+the UI's defaults, which the user can change. It does not include `scan`/`open`/`capture`: its worker owns
 the devices, and the UI tools below do the equivalent through it, where
 the user can see it happen.
 
@@ -370,8 +493,9 @@ apart):
 | `ui_get_view` / `ui_set_view` | the visible window; zoom to a range or around `t` |
 | `ui_markers` / `ui_add_marker` / `ui_remove_marker` | timing markers and pairs |
 | `ui_measurements` | the range measurements the user has placed, with their metrics |
-| `ui_analyzers` / `ui_add_analyzer` / `ui_remove_analyzer` | the Analyzers panel |
-| `ui_analyzer_frames` | the data table of one analyzer, paginated, with the same filter as the UI |
+| `ui_analyzers` / `ui_add_analyzer` / `ui_update_analyzer` / `ui_remove_analyzer` | the Analyzers panel: the library's `list`/`add`/`update`/`remove_analyzer` arguments, one decoder each; `update` can set the radix the panel shows |
+| `ui_analyzer_status` / `ui_analyzer_frames` / `ui_analyzer_summary` / `ui_analyzer_find` | as the library's, over the session's analyzers; `frames` also takes the data table's search text |
+| `ui_show_frame` | zooms the view to a frame and optionally drops a marker on it: how the agent shows the user what it found |
 | `ui_screenshot` | the capture view as PNG, returned as image content; optional range to show first |
 | `ui_save` / `ui_open_file` | `.oxrok` files; export through the library's `export_capture` |
 | `ui_run_command` / `ui_list_commands` | the command registry (`app::commands`), so every palette action is reachable without a tool each |
@@ -413,6 +537,16 @@ clients. A status line shows connected clients and the last call.
 - Every tool's `input_schema` is validated against the args struct (a
   round trip of the example in its description), and `--list-tools` is
   diffed against `docs/MCP.md` in CI, the way the drivers table is kept.
+- Analyzers: on a demo capture and on the `.sr` fixtures the decoder
+  tests already use, `analyzer_frames` must give the same annotations,
+  in the same order, as `-P ... --protocol-decoder-samplenum` on the
+  same input; a stacked chain; `update_analyzer` bumping the generation
+  and a stale page refused; `remove_analyzer` while running joins its
+  thread; a decoder that fails ends `Error` with its text.
+- Radix: the UI's `format.rs` tests move with the code; per-request
+  radix on a `raw_values` decoder (`i2c`) and on `uart`; the refusal on
+  a `format_option`-only decoder; `value`/`bits` present where the
+  binary output gives them, absent where not.
 - Catalog tests: `select`, `only` with an unknown name, `merge` with a
   duplicate, `read_only`, `list_changed` after a swap.
 - Protocol tests: a client that offers an unknown protocol version, a
@@ -462,22 +596,34 @@ what makes the next one honest.
 `capture_summary`, `capture_logic`, `capture_analog`, `measure`, `find`.
 Close on every exit. Replay-backed tests.
 
-### Phase 4: decode and the asynchronous capture
+### Phase 4: analyzers
 
-`capture_decode` over native and Python decoders. `capture_start`,
-`capture_status`, `capture_stop`, progress notifications, cancellation.
-The memory budget and eviction. `--read-only`, `--no-hardware`,
-`--tools`, `--allow-paths`.
+`decode::radix` moved from oxrok-ui with its tests; `decode::FrameStore`
+and `decode::Analyzer` with the runner thread; the analyzer tools and
+`capture_decode` over native and Python decoders. Checked against `-P`
+output on the same inputs.
 
-### Phase 5: the UI server
+### Phase 5: the asynchronous capture
+
+`capture_start`, `capture_status`, `capture_stop`, progress
+notifications, cancellation; analyzers fed while a capture runs. The
+memory budget (captures and frames) and eviction. `--read-only`,
+`--no-hardware`, `--tools`, `--allow-paths`.
+
+### Phase 6: the UI server
 
 The socket listener and `--mcp-stdio` shim in oxrok-ui. `CaptureSource`
-over the session store. The `ui_` tools, in the order of the table (the
-read-only ones first, then capture, then view and markers, then
-screenshots and commands). The Settings panel with the checklist and
-persisted selection. Kittest coverage.
+over the session store. oxrok-ui's radix code replaced by
+`oxrok::decode::radix`. The `ui_` tools, in the order of the table (the
+read-only ones first, then capture, then analyzers, then view and
+markers, then screenshots and commands). The Settings panel with the
+checklist and persisted selection. Kittest coverage.
 
-### Phase 6: later
+### Phase 7: later
+
+- The UI's decoder thread and `FrameStore` moved onto
+  `decode::Analyzer`, and stacked analyzers in the UI.
+- The analyzer trigger (`stop_when`) on `capture_start`.
 
 - Streamable HTTP through `rmcp`, as a feature, when a remote client is
   wanted. The `Catalog` becomes an `rmcp::ServerHandler`.
@@ -518,3 +664,16 @@ persisted selection. Kittest coverage.
 8. **Should `capture` without a limit be allowed (continuous until
    `capture_stop`)?** (open) Recommended: only through `capture_start`,
    never through the synchronous `capture`.
+9. **Where the analyzer model and radix live.** (open) Recommended:
+   `oxrok::decode`, so the UI can adopt them and the two servers agree.
+   The alternative, `oxrok::mcp` only, is quicker and leaves two copies
+   of the radix rules.
+10. **Should the UI expose the library's analyzer tools as well as its
+    own?** (open) Recommended: no; the agent's analyzers are the user's
+    analyzers in the panel. A library analyzer on a UI session would be
+    invisible to the user.
+11. **`raw_values` over `format_option` for decoders that have both
+    (`uart`).** (open) Recommended: yes in the MCP, so radix is free per
+    request; the UI keeps passing `format` to the decoder until it
+    adopts the shared code. The texts can differ slightly (the decoder's
+    own ASCII escaping against `ascii_char`), which the radix tests pin.

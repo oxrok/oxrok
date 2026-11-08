@@ -83,6 +83,24 @@ are the fallbacks. Prologix adapters over serial are an oxrok extra.
 Static binaries, the release archives, `make dist`, notices and
 `cargo publish` already work.
 
+## MCP server
+
+An MCP server so an agent can scan, capture, measure and decode through
+oxrok: `oxrok mcp` over stdio, and an extended server in oxrok-ui whose
+tools the user picks. [PLAN.mcp.md](../PLAN.mcp.md) has the design, the
+phases and the open decisions. Nothing is built yet.
+
+- Phase 1: the stdio server, the tool model and catalog, the reference
+  tools (`list_drivers`, `decoder_info`, ...) and a `cli` pass-through.
+- Phase 2: the CLI's setup code (driver specs, configs, channels,
+  triggers, decoder stacks) moved from `src/cli/` into the library.
+- Phase 3: devices and captures as tools, with a capture store.
+- Phase 4: analyzers: `decode::FrameStore`, `decode::Analyzer` and the
+  radix rules moved from oxrok-ui, so decoded output is kept, paged,
+  searched and returned with raw values.
+- Phase 5: asynchronous captures, the memory budget, the safety flags.
+- Phase 6: the UI server over a local socket, with a per-tool checklist.
+
 ## Pico backend
 
 Replace the C++ roles in `hil/pico-hidcable` with Rust `DeviceModel`s on
