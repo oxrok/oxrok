@@ -45,9 +45,6 @@ pub fn number(text: &str) -> Option<f64> {
     if !(first.is_ascii_digit() || first == '.') {
         return None;
     }
-    if digits.contains(['x', 'X', 'i', 'I', 'n', 'N']) {
-        return None;
-    }
     text.parse().ok().filter(|v: &f64| v.is_finite())
 }
 
