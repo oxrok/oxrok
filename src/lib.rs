@@ -97,6 +97,7 @@ pub mod drivers {
     pub mod demo;
     pub mod devantech_eth008;
     pub mod dreamsourcelab_dslogic;
+    pub mod fluke_45;
     pub mod fluke_dmm;
     pub mod ftdi_la;
     pub mod fx2lafw;
@@ -169,6 +170,7 @@ pub fn register_all(registry: &mut core::Registry) {
     drivers::mic_985xx::register_all(registry);
     registry.register(Box::new(drivers::juntek_jds6600::JdsDriver));
     registry.register(Box::new(drivers::korad_kaxxxxp::KoradDriver));
+    registry.register(Box::new(drivers::fluke_45::Fluke45Driver));
     registry.register(Box::new(drivers::fluke_dmm::FlukeDriver));
     registry.register(Box::new(drivers::agilent_dmm::AgilentDmmDriver));
     registry.register(Box::new(drivers::atten_pps3xxx::AttenPpsDriver));
