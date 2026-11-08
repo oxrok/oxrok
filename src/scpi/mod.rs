@@ -85,6 +85,18 @@ pub trait ScpiTransport: Send {
     fn clear(&mut self) -> Result<bool> {
         Ok(false)
     }
+    /// What a read brought past the end of the answer it ended, which the next
+    /// answer would begin with, taken now: for a driver that finds an answer's end
+    /// itself and wants the bytes as they came. Only tcp-raw keeps such bytes.
+    fn take_pending(&mut self) -> Vec<u8> {
+        Vec::new()
+    }
+    /// After a block that ended at its length, whether its line end has come, taken
+    /// with it if so. `None` where a block's line end comes with the block, as a
+    /// USBTMC message's does: only tcp-raw ends a block at its length.
+    fn take_line_end(&mut self) -> Option<bool> {
+        None
+    }
     /// After a read's timeout, whether the next read waits for the answer to the
     /// request already made (on), or makes a new request (off, as libsigrok does,
     /// and the default). Only USBTMC has requests.
@@ -290,7 +302,16 @@ impl Scpi {
                 break;
             }
         }
+        // As it came: a driver that finds an answer's end itself sees a second line
+        // that came with the first, where the transport would keep it for the next.
+        out.extend(self.transport.take_pending());
         Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// After a block that ended at its length, whether its line end has come, taken
+    /// with it if so: see [`ScpiTransport::take_line_end`].
+    pub fn take_line_end(&mut self) -> Option<bool> {
+        self.transport.take_line_end()
     }
 
     /// Whether answers say which request they answer, as USBTMC's do.

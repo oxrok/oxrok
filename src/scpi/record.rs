@@ -293,6 +293,17 @@ impl ScpiTransport for Recorder {
         self.inner.wait_out_requests(on);
     }
 
+    /// No step in a fixture, as a discard has none: a replay keeps no bytes past an
+    /// answer.
+    fn take_pending(&mut self) -> Vec<u8> {
+        self.inner.take_pending()
+    }
+
+    /// No step in a fixture: a replayed block comes with its line end.
+    fn take_line_end(&mut self) -> Option<bool> {
+        self.inner.take_line_end()
+    }
+
     fn close(&mut self) -> Result<()> {
         self.inner.close()
     }

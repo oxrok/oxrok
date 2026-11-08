@@ -994,7 +994,10 @@ impl Acquisition {
             // whole, so a byte is gone and the last sample is the line end. On `tcp-raw`
             // the line end may only be late, and then it begins the next answer: that a
             // byte is lost there is only a warning, as nothing tells the two apart.
-            if answer.after == header.bytes {
+            // tcp-raw ends a block at its length and keeps a line end that came for
+            // the next answer: one that came is taken here.
+            let line_end = !self.usbtmc && scpi.take_line_end() == Some(true);
+            if answer.after == header.bytes && !line_end {
                 if self.usbtmc {
                     return fail("A block with no line end: a byte of it is lost.");
                 }
