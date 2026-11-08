@@ -962,6 +962,9 @@ Deliberate, and kept small:
 - `hp-59306a`: a setting fails if the connection has closed within 100 ms of the command ("It may
   not have reached the device, and where its relays lie is not known"), even if the device took
   it first. A later close passes.
+- `ipdbg-la`: a capture has a header, so sigrok-cli's output path sees it; stock
+  libsigrok sends none and sigrok-cli prints nothing. A port in `conn=` must be a
+  number, where `getaddrinfo` also takes a service's name.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

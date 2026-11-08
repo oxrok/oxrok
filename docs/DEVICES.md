@@ -3302,6 +3302,41 @@ to send one. One says to send a remote command, `$`, first and allow a delay aft
 oxrok sends no `$` and waits for nothing, so what a real unit does with this is unknown. Model:
 `emu/src/models/hp-59306a.rs`, 52 cases on TCP alone.
 
+### IPDBG logic analyzer (`ipdbg-la`)
+
+The IPDBG logic analyzer core in an FPGA, reached over JTAG through an
+IPDBG server such as OpenOCD's, on TCP: `-d ipdbg-la:conn=tcp-raw/127.0.0.1/4242`,
+the port a number. Emulated from the core's HDL and READMEs (IPDBG master):
+`emu/src/models/ipdbg-la.rs`, on TCP alone. 125 cases on 2026-11-08 (101
+full, 7 `--oracle-bug`, 8 `--oracle-differs`, 5 library, 1 oxrok alone,
+plus odd-byte splits of a dump), gcov 93.2%; not reached: a failed connect
+at open, socket errors, the default arms of `config_*`, NULL and malloc
+checks, and a trigger on a disabled channel, which sigrok-cli refuses
+first.
+
+Stock libsigrok sends no `SR_DF_HEADER`, and sigrok-cli drops every packet
+before one (`session.c:285-287`), so a stock capture prints nothing and
+exits 0. The driver sent one when it was added (a4210e18, 2017-05-16); "stop-
+function pulseview" (b8fa29a1, 2017-09-28) took it out before the merge,
+so as merged it has never worked through sigrok-cli. IPDBG's own co-sim
+CI builds sigrok-cli against the core maintainer's libsigrok branch, which
+sends one. The capture cases compare against C run under
+`tools/oracle-header.c`, a preload that hands sigrok-cli that one header
+before the driver's first packet and changes nothing else; three cases pin
+stock C's empty output. oxrok sends the header where the maintainer's
+branch does.
+
+A capture reads the core's whole memory and keeps the limit's samples,
+with the capture ratio's share before the trigger (the trigger is sample
+`delay`, as the co-sim expects). The trigger wait has no time limit and
+warns after 30 s; a dump that stops for 600 s fails, a closed connection
+fails at once, and a stop waits up to 5 s for the rest of a dump, then
+resets the core. A close waits up to 2 s for the server to close too, as
+OpenOCD's IPDBG server takes one connection per core. A limit over the
+memory is ignored and the old one stays, as in C, with a warning. A core
+built with run-length compression (id `idbg`) is not found. Not verified
+on hardware or against OpenOCD.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

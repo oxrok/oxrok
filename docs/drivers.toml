@@ -1253,17 +1253,25 @@ limits = []
 [drivers.ipdbg-la]
 name = "IPDBG LA"
 libsigrok = "ipdbg-la"
-ids = []
+ids = ["ipdbg-la"]
 kind = "logic-analyzer"
 connection = "tcp"
-vendor = ""
-models = []
-status = ["not-ported"]
-emu = []
+vendor = "IPDBG"
+models = ["IPDBG logic analyzer core"]
+status = ["emulated"]
+emu = ["ipdbg-la"]
 evidence = []
-reason = "SCPI over TCP; can start on the SCPI foundation."
-behaviour = []
-limits = []
+behaviour = [
+  "Reached through an IPDBG server such as OpenOCD's: conn=tcp-raw/HOST/PORT, the port a number.",
+  "A capture reads the core's whole memory and keeps the limit's samples, with the capture ratio's share before the trigger.",
+  "Waits for the trigger with no time limit, with a warning after 30 s; a stop ends the wait and resets the core.",
+  "A close waits up to 2 s for the server to close too, as a server may take one connection at a time.",
+]
+limits = [
+  "A dump that stops for 600 s fails the capture; a close of the connection fails it at once.",
+  "No run-length compression: a core built with it (id idbg) is not found.",
+  "A limit above the core's memory is ignored with a warning, and the old limit stays.",
+]
 
 [drivers.lecroy-xstream]
 name = "LeCroy X-Stream"

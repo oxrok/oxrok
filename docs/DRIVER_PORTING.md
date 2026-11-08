@@ -355,6 +355,17 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A C driver that sends no `SR_DF_HEADER` prints nothing through sigrok-cli
+  (`session.c:285-287`) yet exits 0. Run the unchanged driver under
+  `tools/oracle-header.c`, which gives sigrok-cli's callback that one header
+  before the first packet; count those cases apart, and pin stock with an
+  `--oracle-differs` case whose `.oracle` is empty. Read the driver's history:
+  `ipdbg-la` had a header and lost it before the merge.
+- A socket read with a 1 ms timeout waits about 4 ms on Linux, so a C count of
+  1 ms tries can't be ported as a count of socket reads. Bound it by the clock,
+  with the time taken ahead of each read.
+- A test server that sleeps fails under the SLOW=12 shim when the code under
+  test waits on a socket timeout: wait by `Instant` without sleeping.
 - A device that never answers leaves a write's success as all a setting knows, and a bridge with
   one client accepts a second and closes it. A short look at the line after a command finds that
   close, with nothing on the wire. It is wrong both ways: say what still passes and what fails

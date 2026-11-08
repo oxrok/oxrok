@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 69 of libsigrok's 87 `src/hardware` drivers are
-ported; the 18 still missing are listed below. Native decoder porting is
+crates.io. 70 of libsigrok's 87 `src/hardware` drivers are
+ported; the 17 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 18 libsigrok drivers with no oxrok port. Each needs a device model,
+The 17 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (14)
+### SCPI instruments (13)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -39,7 +39,6 @@ remaining drivers can start there.
 | `hp-3457a` | meter | HP-IB; reached over a TCP bridge, as `hp-59306a` is |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 | `beaglelogic` | logic analyzer | TCP; no SCPI |
-| `ipdbg-la` | logic analyzer | TCP; no SCPI |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
 GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
@@ -222,6 +221,21 @@ The models are plain Rust with no I/O for this reason; see
   differs there too.
 
 ### Driver behaviour
+
+- `ipdbg-la`: run-length compression (core id `idbg`, commands 0x10 and 0x60),
+  as on the core maintainer's libsigrok branch; check it against a real core
+  behind OpenOCD, including OpenOCD's one connection per core.
+- SIGINT doesn't end a run whose stdout is blocked: the `ctrlc` handler only
+  sets a flag (`src/cli/run.rs`) while the main thread waits in the write.
+  `oxrok --continuous -O binary | (sleep 8; ...)` then SIGINT: still running
+  after 10 s, and the driver's `close` never goes out.
+- csv invents a value for an enabled channel that sends nothing: `fluke-45`
+  with P2 enabled and silent, `--samples 3 -O csv:header=false:time=false`,
+  prints `1.0001,0`, a 0 nobody measured. Leave the cell empty, with a case.
+- `-O analog:digits=spec` is accepted and ignored: `src/formats/output/analog.rs`
+  never reads it. sigrok-cli prints `0.1 A` where oxrok prints `0.12 V`.
+- A VICP transport (LeCroy's network interface, TCP port 1861, 8-byte headers,
+  per the X-Stream Remote Control Manual WM-RCM-E Rev C), for `lecroy-xstream`.
 
 - `Scpi::get_block` (`src/scpi/mod.rs`) returns `Ok` with a cut block when
   a read ends in LF on a serial transport, or on a short `tcp-raw` read:

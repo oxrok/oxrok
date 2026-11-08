@@ -119,6 +119,7 @@ Emulator and replay only, never run on hardware:
 | `testo` | 70 | 91.3% |
 | `tondaj-sl-814` | 59 | 90.8% |
 | `hp-59306a` | 52 | 84.0% |
+| `ipdbg-la` | 125 | 93.2% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |
