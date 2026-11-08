@@ -51,6 +51,9 @@
 //! - `desc-len=N`: what the descriptor says of its own length;
 //! - `tiny=N`: the block holds only N bytes of the descriptor;
 //! - `trace=BITS`: which channels are on, as `1100` (default all);
+//! - `eol-late=T`: a block's line end comes T ticks after it, as a socket's peer can
+//!   send it;
+//! - `wrong-source=N`: the Nth `WAVEFORM?` says another channel in `WAVE_SOURCE`;
 //! - `trace-later=BITS`: the channels on from the fifth `TRACE?` on, the scan having
 //!   asked four, as a scope someone changed between a scan and an open;
 //! - `vdiv=`, `tdiv=`, `coupling=`, `trse=`, `slope=`, `trdl=`, `opos=`: what those
@@ -73,7 +76,7 @@ pub const NAME: &str = "lecroy-xstream";
 pub const ABOUT: &str = "LeCroy X-Stream scopes on USBTMC and TCP; points=, empty=, sweep=, \
                          vertunit=, offset=, template=, comm-order=, comm-type=, usertext=, \
                          trigtime=, ristime=, prefix=, no-eol=, claim=, cut=, head=, head-at=, \
-                         desc-len=, tiny=, trace=, trace-later=, vdiv=, tdiv=, coupling=, trse=, slope=, \
+                         desc-len=, tiny=, eol-late=, wrong-source=, trace=, trace-later=, vdiv=, tdiv=, coupling=, trse=, slope=, \
                          trdl=, opos=, and the SCPI shell's mute-at=, silent-at=, late-at=, \
                          opc-late=, mark-at=, idn=, eol=, stall=, in-stall=, empty-at=, \
                          bad-tag-at=, message=";
@@ -114,6 +117,8 @@ struct Shape {
     head_at: u32,
     desc_len: Option<u32>,
     tiny: Option<usize>,
+    eol_late: u32,
+    wrong_source: Option<u32>,
 }
 
 /// What stands in at power on, from the options.
@@ -193,6 +198,12 @@ impl Scope {
         self.put(&mut d, 160, &shape.offset.to_le_bytes());
         self.put(&mut d, 172, &16u16.to_le_bytes());
         self.put(&mut d, 176, &1e-9f32.to_le_bytes());
+        // WAVE_SOURCE, the 2004 template's last field: channel 1 is 0.
+        let mut source = u16::from(channel) - 1;
+        if shape.wrong_source == Some(self.reads) {
+            source = (source + 1) % 4;
+        }
+        self.put(&mut d, 344, &source.to_le_bytes());
         let unit = shape.vertunit.as_bytes();
         d[196..196 + unit.len().min(47)].copy_from_slice(&unit[..unit.len().min(47)]);
         d[244] = b'S';
@@ -262,6 +273,11 @@ impl Scope {
             }
             out
         };
+        if shape.eol_late > 0 && bytes.last() == Some(&b'\n') && shape.head.is_none() {
+            let mut bytes = bytes;
+            bytes.pop();
+            return Answer::BytesApart(vec![bytes, b"\n".to_vec()]);
+        }
         if late > 0 { Answer::BytesAfter(late, bytes) } else { Answer::Bytes(bytes) }
     }
 }
@@ -293,7 +309,7 @@ impl Instrument for Scope {
             s.set(&format!("C{c}:OFFSET"), p.opos.clone());
             s.set(&format!("C{c}:COUPLING"), p.coupling.clone());
         }
-        for source in ["C1", "C2", "C3", "C4", "LINE", "EXT"] {
+        for source in ["C1", "C2", "C3", "C4", "LINE", "EXT", "EX", "EX10", "PA", "ETM10"] {
             s.set(&format!("{source}:TRIG_SLOPE"), p.slope.clone());
         }
         s
@@ -338,6 +354,8 @@ impl Instrument for Scope {
 /// The scope and the shell's options, whichever carrier they go on.
 pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config)> {
     let mut config = scpi::Config::default();
+    // Nothing says what the firmware does with a request while one waits.
+    config.option("one-request", "1")?;
     let mut shape = Shape {
         points: 200,
         vertunit: "V".to_owned(),
@@ -356,6 +374,8 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
         head_at: 1,
         desc_len: None,
         tiny: None,
+        eol_late: 0,
+        wrong_source: None,
     };
     let mut power = Power {
         trace: vec![true; 4],
@@ -396,6 +416,12 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
             "head" => shape.head = Some(v.clone()),
             "head-at" => shape.head_at = bytes(1..=MOST_BYTES)?,
             "desc-len" => shape.desc_len = Some(bytes(0..=u32::MAX)?),
+            "eol-late" => {
+                // The line end goes as a second piece, the shell's line gap after.
+                shape.eol_late = bytes(1..=1 << 16)?;
+                config.option("line-gap", v)?;
+            }
+            "wrong-source" => shape.wrong_source = Some(bytes(1..=MOST_BYTES)?),
             "tiny" => shape.tiny = Some(bytes(0..=DESCRIPTOR as u32)? as usize),
             "trace" => power.trace = v.chars().map(|c| c == '1').collect(),
             "trace-later" => power.trace_later = Some(v.chars().map(|c| c == '1').collect()),
@@ -490,6 +516,7 @@ mod tests {
         assert_eq!(f32_at(&block, 160), 0.25);
         assert_eq!(block[11 + 196], b'V');
         assert_eq!(block[11 + 197], 0);
+        assert_eq!(block[11 + 344], 1, "WAVE_SOURCE of C2");
     }
 
     #[test]
@@ -558,6 +585,21 @@ mod tests {
         ask(&mut s, "TRIG_SELECT EDGE,SR,C2\n");
         assert_eq!(ask(&mut s, "C2:TRIG_SLOPE?\n").0, b"POS\n");
         assert_eq!(ask(&mut s, "TRIG POS 1.000000e-03 S\n").1, Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_line_end_can_come_late_and_a_source_be_wrong() {
+        let mut s = on_socket(&[("eol-late", "2"), ("wrong-source", "1")]);
+        ready(&mut s);
+        let block = ask(&mut s, "C1:WAVEFORM?\n").0;
+        assert_ne!(block.last(), Some(&b'\n'));
+        assert_eq!(block[11 + 344], 1, "C2's");
+        let mut port = Port::default();
+        s.tick(&mut port);
+        assert_eq!(port.sent().len(), 0);
+        s.tick(&mut port);
+        assert_eq!(port.sent().concat(), b"\n");
+        assert_eq!(ask(&mut s, "C1:WAVEFORM?\n").0[11 + 344], 0);
     }
 
     #[test]

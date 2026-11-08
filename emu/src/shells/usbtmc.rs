@@ -21,7 +21,7 @@
 //! (`docs/USB.md`, "Writing a SCPI model").
 //!
 //! The options, all off by default ([`Faults`]): `stall=caps|ren|llo|local`,
-//! `in-stall=N`, `empty-at=N`, `bad-tag-at=N`, `message=N`.
+//! `in-stall=N`, `empty-at=N`, `bad-tag-at=N`, `message=N`, `one-request=1`.
 
 use crate::descriptor::{self, DeviceDescriptor};
 use crate::model::{
@@ -128,6 +128,7 @@ pub struct Faults {
     empty_at: Option<u32>,
     bad_tag_at: Option<u32>,
     message: Option<usize>,
+    one_request: bool,
 }
 
 impl Faults {
@@ -136,7 +137,9 @@ impl Faults {
     /// until a bus reset; `empty-at=N` sends an empty transfer before the Nth
     /// answer, as a DS1054Z can; `bad-tag-at=N` puts a wrong `bTag` on the Nth;
     /// `message=N` cuts an answer into messages of N bytes, with `EOM` on the
-    /// last, so that the host requests each.
+    /// last, so that the host requests each; `one-request=1` flags a request while
+    /// another waits for its answer, for a model whose firmware is not known to take
+    /// one.
     ///
     /// # Errors
     ///
@@ -155,6 +158,7 @@ impl Faults {
             "empty-at" => self.empty_at = Some(number(1..=1 << 24)?),
             "bad-tag-at" => self.bad_tag_at = Some(number(1..=1 << 24)?),
             "message" => self.message = Some(number(1..=1 << 24)? as usize),
+            "one-request" => self.one_request = number(0..=1)? == 1,
             _ => return Ok(false),
         }
         Ok(true)
@@ -171,6 +175,8 @@ pub struct Usbtmc<M> {
     messages: M,
     /// `bTag` and `TransferSize` of the request not yet answered.
     request: Option<(u8, u32)>,
+    /// The `bTag` of a request no answer and no message has followed yet.
+    unanswered: Option<u8>,
     /// What is left of the answer being sent, for further messages.
     answer: Vec<u8>,
     /// What is left of the message on the wire, for further transfers.
@@ -192,6 +198,7 @@ impl<M: Messages> Usbtmc<M> {
             faults,
             messages,
             request: None,
+            unanswered: None,
             answer: Vec::new(),
             sending: Vec::new(),
             answers: 0,
@@ -240,7 +247,14 @@ impl<M: Messages> Usbtmc<M> {
                         data[8]
                     ));
                 }
+                if let Some(waiting) = self.unanswered.filter(|_| self.faults.one_request) {
+                    v.report(format!(
+                        "REQUEST_DEV_DEP_MSG_IN with bTag {tag} while bTag {waiting} waits for \
+                         its answer"
+                    ));
+                }
                 self.request = Some((tag, size));
+                self.unanswered = Some(tag);
                 Reply::ack()
             }
             other => {
@@ -273,9 +287,11 @@ impl<M: Messages> Usbtmc<M> {
         {
             v.report(format!("DEV_DEP_MSG_OUT of {size} bytes in {} is padded badly", data.len()));
         }
-        // What was on its way is no longer wanted.
+        // What was on its way is no longer wanted, and a tool that gave up on an
+        // answer has moved on.
         self.sending.clear();
         self.answer.clear();
+        self.unanswered = None;
         self.messages.message(&body[..size], v);
         Reply::ack()
     }
@@ -309,6 +325,7 @@ impl<M: Messages> Usbtmc<M> {
             return Reply::Data(Vec::new());
         }
         self.request = None;
+        self.unanswered = None;
         let cap = self.faults.message.unwrap_or(usize::MAX).min(size as usize);
         let n = self.answer.len().min(cap);
         let eom = n == self.answer.len();
@@ -355,6 +372,7 @@ impl<M: Messages> Usbtmc<M> {
         self.sending.clear();
         self.answer.clear();
         self.request = None;
+        self.unanswered = None;
     }
 }
 
@@ -697,6 +715,28 @@ mod tests {
         let m = h.read().unwrap();
         assert_eq!(m[1], 3, "the tag of the last request");
         assert!(h.v.is_empty());
+    }
+
+    #[test]
+    fn one_request_flags_a_request_while_one_waits() {
+        let mut h = host(&[("one-request", "1")]);
+        h.tmc.messages.silent = true;
+        h.request();
+        h.send(b"y\n");
+        h.request();
+        assert!(h.v.is_empty(), "a message between: the tool gave up on the first");
+        let mut h = host(&[("one-request", "1")]);
+        h.tmc.messages.silent = true;
+        h.request();
+        assert_eq!(h.offer(64), Reply::Nak);
+        assert!(h.v.is_empty());
+        h.request();
+        assert_eq!(h.v.drain().len(), 1, "the second while the first waits");
+        h.tmc.messages.silent = false;
+        h.send(b"x\n");
+        h.read().unwrap();
+        h.request();
+        assert!(h.v.is_empty(), "the first was answered");
     }
 
     #[test]
