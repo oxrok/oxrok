@@ -8,7 +8,8 @@ release may change the library API.
 
 ### Added
 
-- Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server).
+- Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
+  `hp-3457a`.
 - A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
   which fails a `--strict` run.
 

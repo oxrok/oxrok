@@ -121,6 +121,7 @@ Emulator and replay only, never run on hardware:
 | `hp-59306a` | 52 | 84.0% |
 | `ipdbg-la` | 125 | 93.2% |
 | `beaglelogic` | 113 | 71.1% |
+| `hp-3457a` | 103 | 94.8% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |

@@ -3386,6 +3386,41 @@ What the model and the server's source taught:
   fixed at probe), so 60 MHz runs at 100 MHz. oxrok works out what the module
   holds and warns, keeping C's wire. This rests on the module's source only.
 
+### HP 3457A (`hp-3457a`)
+
+HP 3457A multimeter: ported and emulated on TCP alone. A real one has
+HP-IB, which oxrok does not, so `conn=` names something that stands
+between, and only `tcp-raw/HOST/PORT` is tested; nothing is probed without
+`conn=`. Model `hp-3457a` (`id=`, `rev=`, `opt=`, `card=`, `readings=`,
+`hires=`, `ranges=`, `plcs=`, `chans=`, `plc=`, `real-rate=`, `left-rear=`,
+`split=`, `chan-skew=`, and the SCPI shell's faults), 103 cases on
+2026-11-08: 78 full, 14 `--oracle-differs`, 9 `--oracle-bug`, 2 library.
+gcov 94.8% of the driver. Never on hardware. No manual could be read
+(ManualsLib's pages give headings only), so the number format, CR LF, and
+what a preset selects (1 PLC, DCV, the front terminals) are guesses in the
+model.
+
+`ID?` shows whether the line ends its answers; if it does, every answer
+waits for its line end, and a fragment is no answer. Ahead of each question
+the line is looked at, and bytes nobody asked for are dropped with a
+warning and the measurement starts again, so one extra answer costs at most
+one sample. A question is never sent twice: a reading at 100 PLC takes
+seconds, and a second trigger earns an error and an answer too many. On a
+sample limit a capture fails at 60 s with no sample, and after one warns at
+60 s and fails at 10 minutes; with no limit it warns once. A scan or open
+waits 30 s for an answer, and a question it gave up on is waited out ahead
+of the next for 10 s. `TERM` goes at the first capture after each open.
+
+Differences from C: rear terminals get no `SLIST` (`api.c:385`); a quantity
+with other flags goes out (`protocol.c:117`); `NPLC NAN` does not; a failed
+`NPLC?` leaves the time unknown; empty, hexadecimal, inf and nan answers
+are no number; a stop ends the capture where C segfaults (`api.c:406`); a
+refused start is a refusal where C aborts; `REV?` that is no number is
+version 0.0; an answer in two pieces is one answer, where C takes each
+piece for an answer and, cut inside a number, blocks for good. Of the
+single-bit flips of a reading, 30 of 104 give a wrong value, and 8 of 13
+lost bytes.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with three patches, in

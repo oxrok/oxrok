@@ -1197,17 +1197,24 @@ limits = []
 [drivers.hp-3457a]
 name = "HP 3457A"
 libsigrok = "hp-3457a"
-ids = []
+ids = ["hp-3457a"]
 kind = "meter"
 connection = "tcp"
 vendor = "HP"
 models = ["3457A"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hp-3457a"]
 evidence = []
-reason = "SCPI over TCP; needs get_uint8v, which the SCPI helper does not have yet."
-behaviour = []
-limits = []
+behaviour = [
+  "A multimeter on HP-IB, reached through a TCP bridge named by `conn=`; no bridge has been tried, and nothing is probed without `conn=`.",
+  "`measured_quantity` picks DC or AC volts or amps, 2- or 4-wire ohms, or frequency; with none set, samples carry no unit.",
+  "From `nplc=10` each reading gains its high-resolution digits; the meter's own choice of time is read back.",
+  "A rear card's channels are scanned in turn with a check every ninth sample; front and rear can't be captured together.",
+  "Each question waits for its answer and is never sent twice; bytes nobody asked for are dropped with a warning, and that measurement starts again.",
+]
+limits = [
+  "A silent meter fails a sample limit after 60 s with no sample, or 10 minutes after one; with no limit it warns once.",
+]
 
 [drivers.hp-3478a]
 name = "HP 3478A"

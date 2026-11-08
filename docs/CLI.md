@@ -975,6 +975,12 @@ Deliberate, and kept small:
   width. `samplerate` reads back what the module keeps, with a warning, and a rate
   past 32 bits is refused. `limit_samples` reads back what was set after a
   continuous capture. A port in `conn=` must be a number.
+- `hp-3457a`: where sigrok-cli waits for ever on a silent meter over TCP, a capture
+  fails on a sample limit (60 s with no sample yet, 10 minutes after one) and warns once
+  with no limit. An answer in pieces is one answer; bytes nobody asked for are dropped
+  with a warning. `--get nplc` fails when the meter did not say its time. A stop ends a
+  capture, where sigrok-cli segfaults. Every capture after an open selects its
+  terminals.
 - fluke-dmm: a 199B's readings carry AC, DC and diode (`1.5 V DC`),
   where sigrok-cli prints `1.5 V`: `fluke-190.c:171` sends no flags.
 - fluke-dmm: a line of 255 bytes or more with no CR is dropped and the

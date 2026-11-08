@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 71 of libsigrok's 87 `src/hardware` drivers are
-ported; the 16 still missing are listed below. Native decoder porting is
+crates.io. 72 of libsigrok's 87 `src/hardware` drivers are
+ported; the 15 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,12 +13,12 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 16 libsigrok drivers with no oxrok port. Each needs a device model,
+The 15 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### SCPI instruments (12)
+### SCPI instruments (11)
 
 The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
 serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
@@ -36,7 +36,6 @@ remaining drivers can start there.
 | `lecroy-xstream` | scope | XStream series |
 | `yokogawa-dlm` | scope | DLM series |
 | `fluke-45` | meter | Fluke 45 |
-| `hp-3457a` | meter | HP-IB; reached over a TCP bridge, as `hp-59306a` is |
 | `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
 
 There is no ordering dependency except `hp-3478a`, which waits for the
@@ -221,6 +220,9 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Driver behaviour
 
+- `hp-3457a`'s look at the line before each question, which catches an extra
+  answer, has no counterpart on USBTMC.
+
 - `ipdbg-la`: run-length compression (core id `idbg`, commands 0x10 and 0x60),
   as on the core maintainer's libsigrok branch; check it against a real core
   behind OpenOCD, including OpenOCD's one connection per core.
@@ -308,6 +310,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `hp-3457a` and `hp-59306a` behind a TCP bridge with real HP-IB: untried.
+  For the 3457A, whether a measurement holds up `ID?`, and what `PRESET`
+  does to the terminals and the function.
 
 - `beaglelogic`: emulated over its TCP server only. `/dev/beaglelogic` is not
   ported (ioctls, `mmap`, `poll`; needs unsafe code or a crate, and the kernel

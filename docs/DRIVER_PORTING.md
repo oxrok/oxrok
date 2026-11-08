@@ -355,6 +355,14 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A short read ends a `tcp-raw` response, so half a number is a number. Learn
+  from the first answer whether the line ends its answers, and if it does, wait
+  for the end.
+- On a protocol that answers only what is asked, a look at the line before each
+  question catches the extra answer a late one leaves, which nothing else would.
+- A probe test that releases pieces by the clock breaks under SLOW=12 and stalls:
+  release by reads, and give a silent case its own short bound.
+- `pkill -f PATTERN` matches the shell running it: kill by pid.
 - A device that refuses every setting while it finishes its last capture makes
   a refusal say nothing of the value. Ask the value back before failing; model
   the window (`busy=T`).
