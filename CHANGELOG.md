@@ -6,6 +6,18 @@ release may change the library API.
 
 ## [Unreleased]
 
+### Added
+
+- Drivers: `hp-59306a`.
+- A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
+  which fails a `--strict` run.
+
+### Fixed
+
+- SCPI over TCP: a stop and continue of the process (Ctrl-Z, `fg`) during
+  a read no longer fails an open or a capture, and no longer cuts an
+  answer that arrived during the stop.
+
 ## [0.2.0] - 2026-11-08
 
 The first stable release. All 111 decoders of libsigrokdecode 0.5.3 now
@@ -62,9 +74,7 @@ rounding.
 - Firmware dependencies: drivers declare the firmware and bitstream files
   they need, and `--list-firmware` prints them as JSON.
 - Drivers: `center-3xx`, `colead-slm`, `gmc-mh-1x-2x`, `mic-985xx`, `teleinfo`,
-  `tondaj-sl-814`, `hp-59306a`.
-- A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
-  which fails a `--strict` run.
+  `tondaj-sl-814`.
 - Emulated: `rigol-ds` on USBTMC, TCP and a serial port.
 
 ### Changed
