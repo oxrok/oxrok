@@ -1638,6 +1638,9 @@ EOF
         # host's core pattern and limit. libsigrok may have written its
         # "sr: " first. The exit status has shown it failed.
         sed -i -E '/timeout: the monitored command dumped core$/d; ${/^sr: *$/d;}' "$TMP/a.err"
+        # glibc's words for a heap check that aborts depend on its version and on the
+        # heap's layout, not on the driver: one line says one happened.
+        sed -i -E 's/^(double free or corruption|free\(\): |malloc\(\): |malloc_consolidate\(\): |corrupted |munmap_chunk\(\): |realloc\(\): ).*$/glibc: a heap check failed/' "$TMP/a.err"
         # The core's line on a refused start, for a driver whose connection
         # id is the address that changes with each attach (greatfet).
         sed -i -E 's|( device (usbtmc/)?)[0-9]+\.[0-9]+( acquisition\.)$|\1BUS.ADDR\3|' "$TMP/a.err"
