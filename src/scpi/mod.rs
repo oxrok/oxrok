@@ -81,6 +81,16 @@ pub trait ScpiTransport: Send {
         let _ = timeout;
         Ok(None)
     }
+    /// A device clear: USBTMC's `INITIATE_CLEAR`. False where there's none.
+    fn clear(&mut self) -> Result<bool> {
+        Ok(false)
+    }
+    /// After a read's timeout, whether the next read waits for the answer to the
+    /// request already made (on), or makes a new request (off, as libsigrok does,
+    /// and the default). Only USBTMC has requests.
+    fn wait_out_requests(&mut self, on: bool) {
+        let _ = on;
+    }
 }
 
 /// The identification an instrument gives for `*IDN?`.
@@ -221,21 +231,62 @@ impl Scpi {
         self.transport.read_complete()
     }
 
+    /// The question a read gave up on has its answer after all, read by asking again
+    /// with [`Scpi::get_data`] and no command: nothing is owed, so the next
+    /// [`Scpi::send`] needn't drain the line. (`port/hp-3457a` has the same.)
+    pub fn answered(&mut self) {
+        self.stale = false;
+    }
+
     /// One look for the answer to a question already sent, for a driver that keeps
-    /// its own count of what is out: `None` when nothing came in a read's timeout, and
-    /// either way nothing counts as stale, as the question is still the only one out.
+    /// its own count of what is out and finds an answer's end itself: what came in a
+    /// read's timeout, `None` for nothing, and what came of an answer cut off by the
+    /// timeout too, which the next look goes on from. Nothing counts as stale.
     pub fn poll_answer(&mut self) -> Result<Option<Vec<u8>>> {
-        match self.get_data(None) {
-            Ok(data) => {
-                self.stale = false;
-                Ok(Some(data))
-            }
-            Err(Error::Timeout) => {
-                self.stale = false;
-                Ok(None)
-            }
-            Err(e) => Err(e),
+        self.answered();
+        match self.transport.read_begin() {
+            Ok(()) => {}
+            Err(Error::Timeout) => return Ok(None),
+            Err(e) => return Err(e),
         }
+        let mut out = Vec::new();
+        let mut deadline = Instant::now() + self.read_timeout;
+        let mut chunk = [0u8; CHUNK];
+        while !self.transport.read_complete() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let n = match self.transport.read_data(&mut chunk, left.max(Duration::from_millis(1))) {
+                Ok(n) => n,
+                Err(Error::Timeout) => 0,
+                Err(e) => return Err(e),
+            };
+            if n > 0 {
+                out.extend_from_slice(&chunk[..n]);
+                deadline = Instant::now() + self.read_timeout;
+            } else if Instant::now() >= deadline {
+                break;
+            }
+        }
+        Ok((!out.is_empty()).then_some(out))
+    }
+
+    /// Whether answers say which request they answer, as USBTMC's do.
+    pub fn tags_answers(&self) -> bool {
+        self.transport.tags_answers()
+    }
+
+    /// A device clear, where the transport has one: what the instrument holds of
+    /// input and output goes, answers to questions asked before it among them. False
+    /// where there's no such thing, as on a socket or a serial port.
+    pub fn clear(&mut self) -> Result<bool> {
+        self.stale = false;
+        self.transport.clear()
+    }
+
+    /// Asks the transport to wait out a request already made rather than make
+    /// another after a timeout, where the two differ (USBTMC): see
+    /// [`ScpiTransport::wait_out_requests`].
+    pub fn wait_out_requests(&mut self, on: bool) {
+        self.transport.wait_out_requests(on);
     }
 
     /// A question went out and nobody will read its answer: the next [`Scpi::send`]
