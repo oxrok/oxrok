@@ -1,0 +1,1 @@
+Failed to set device option 'voltage_target': invalid argument: voltage_target can't be NaN.

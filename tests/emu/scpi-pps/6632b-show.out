@@ -1,0 +1,12 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - HP 6632B 01.02.03 [S/N: EMU0001] with 2 channels: V1 I1
+Channel groups:
+    1: channels V1 I1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

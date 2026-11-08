@@ -1,0 +1,12 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - EA Elektro-Automatik GmbH & Co. KG PS 2084-05B 01.02.03 [S/N: EMU0001] with 3 channels: V1 I1 P1
+Channel groups:
+    1: channels V1 I1 P1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

@@ -1,0 +1,14 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - BK 9130 01.02.03 [S/N: EMU0001] with 9 channels: V1 I1 P1 V2 I2 P2 V3 I3 P3
+Channel groups:
+    1: channels V1 I1 P1
+    2: channels V2 I2 P2
+    3: channels V3 I3 P3
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

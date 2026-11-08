@@ -145,6 +145,7 @@ pub mod drivers {
     pub mod rohde_schwarz_sme_0x;
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
+    pub mod scpi_pps;
     pub mod serial_dmm;
     pub mod serial_lcr;
     pub mod siglent_sdl10x0;
@@ -207,6 +208,8 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rigol_dg::RigolDgDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::lecroy_xstream::LecroyXstreamDriver));
+    registry.register(Box::new(drivers::scpi_pps::ScpiPpsDriver));
+    registry.register(Box::new(drivers::scpi_pps::HpibPpsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
     registry.register(Box::new(drivers::siglent_sdl10x0::SiglentSdl10x0Driver));

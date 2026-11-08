@@ -1,0 +1,16 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - OWON SPE6103 01.02.03 [S/N: EMU0001] with 3 channels: V1 I1 P1
+Channel groups:
+    1: channels V1 I1 P1
+Supported configuration options on channel group 1:
+    enabled: on (current), off
+    voltage: 12.001000 (current)
+    voltage_target: 0.010000, 60.000000, 0.010000
+    current: 1.502000 (current)
+    current_limit: 0.001000, 10.000000, 0.001000
+    ovp_threshold: 60.000000 (current)
+    ocp_threshold: 10.000000 (current)

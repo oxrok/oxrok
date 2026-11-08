@@ -1,0 +1,14 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Philips PM2813/11 01.02.03 [S/N: EMU0001] with 6 channels: V1 I1 V2 I2 V3 I3
+Channel groups:
+    1: channels V1 I1
+    2: channels V2 I2
+    3: channels V3 I3
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

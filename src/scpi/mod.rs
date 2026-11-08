@@ -119,6 +119,10 @@ pub struct Scpi {
     stale: bool,
     /// What the last channel selection named: `actual_channel_name`.
     channel: Option<String>,
+    /// The last read gave up with part of an answer, whose tail is still to come.
+    cut: bool,
+    /// The last answer had no line end: on a line with no tags, one ended by silence.
+    unended: bool,
 }
 
 /// How many answers `*OPC?` gets.
@@ -140,6 +144,8 @@ impl Scpi {
             opc_silence: OPC_SILENCE,
             stale: false,
             channel: None,
+            cut: false,
+            unended: false,
         }
     }
 
@@ -335,12 +341,19 @@ impl Scpi {
             if n > 0 {
                 out.extend_from_slice(&chunk[..n]);
                 deadline = Instant::now() + self.read_timeout;
+            } else if self.transport.read_complete() {
+                // Silence ended what had begun, as tcp-raw has an answer with no line
+                // end: whole, with no line end to say so ([`Scpi::out_of_step`]).
+                break;
             } else if Instant::now() >= deadline {
                 log::debug!("Timed out waiting for the SCPI response.");
                 self.stale = true;
+                self.cut = !out.is_empty();
                 return Err(Error::Timeout);
             }
         }
+        self.cut = false;
+        self.unended = out.last() != Some(&b'\n');
         Ok(out)
     }
 
@@ -356,6 +369,42 @@ impl Scpi {
         let text = String::from_utf8_lossy(&data).into_owned();
         log::debug!("SCPI response: {}", text.chars().take(70).collect::<String>());
         Ok(text)
+    }
+
+    /// After a question that timed out, whether reading on can still find its answer
+    /// whole, with nothing else to take for it: a line with no tags, and none of the
+    /// answer read and dropped. On USBTMC a read is a new request, and C asks again.
+    pub fn owes_answer(&self) -> bool {
+        !self.transport.tags_answers() && !self.cut
+    }
+
+    /// Whether the line may be out of step: on a line with no tags, the last read gave
+    /// up on part of an answer, or the last answer had no line end, which silence ended.
+    /// Its tail may come as an answer of its own. An instrument that ends no answer with
+    /// a line feed is always so.
+    pub fn out_of_step(&self) -> bool {
+        !self.transport.tags_answers() && (self.cut || self.unended)
+    }
+
+    /// Reads on for the answer to the question out, as [`Scpi::get_opc_while`] does, as
+    /// text without the line ending. See [`Scpi::owes_answer`].
+    pub fn late_answer(&mut self) -> Result<String> {
+        let mut data = self.get_data(None)?;
+        // The one question out has its answer.
+        self.stale = false;
+        if data.last() == Some(&b'\n') {
+            data.pop();
+        }
+        if data.last() == Some(&b'\r') {
+            data.pop();
+        }
+        Ok(String::from_utf8_lossy(&data).into_owned())
+    }
+
+    /// Forgets the last channel selection, so the next [`Scpi::cmd`] selects: for a
+    /// close, as an operator may change the channel after it.
+    pub fn forget_channel(&mut self) {
+        self.channel = None;
     }
 
     /// The response to `command` as a boolean: `1`/`0`, `ON`/`OFF`,
@@ -451,7 +500,9 @@ impl Scpi {
     }
 
     /// Selects a channel if it isn't the one selected, as `sr_scpi_cmd` does: the
-    /// name is remembered before the send, and a close forgets nothing.
+    /// name is remembered before the send, and a close forgets nothing. A send that
+    /// failed leaves it not known, so the next one selects again, where C's next
+    /// `sr_scpi_cmd` hangs on the mutex that path leaves locked (`scpi.c:1324-1325`).
     fn select_channel<T: PartialEq>(
         &mut self,
         table: &[(T, &str)],
@@ -463,7 +514,11 @@ impl Scpi {
             return Ok(());
         }
         self.channel = Some(name.to_owned());
-        self.send(&render(template, &[CmdArg::Str(name)]))
+        let sent = self.send(&render(template, &[CmdArg::Str(name)]));
+        if sent.is_err() {
+            self.channel = None;
+        }
+        sent
     }
 
     /// `sr_scpi_cmd`: `command` from `table` with `args`, after selecting `channel`

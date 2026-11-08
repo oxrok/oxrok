@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::scpi_pps: voltage_target 32 is past the 0 to 30 output 1 lists: the instrument may refuse it, and no answer would say so.

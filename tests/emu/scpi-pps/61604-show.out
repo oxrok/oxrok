@@ -1,0 +1,12 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Chroma 61604 01.02.03 [S/N: EMU0001] with 4 channels: V1 I1 P1 F1
+Channel groups:
+    1: channels V1 I1 P1 F1
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)

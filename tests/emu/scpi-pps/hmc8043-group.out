@@ -1,0 +1,22 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Rohde&Schwarz HMC8043 01.02.03 [S/N: EMU0001] with 6 channels: V1 I1 V2 I2 V3 I3
+Channel groups:
+    1: channels V1 I1
+    2: channels V2 I2
+    3: channels V3 I3
+Supported configuration options on channel group 1:
+    ovp_enabled: on, off (current)
+    ovp_active: on, off (current)
+    ovp_threshold: 32.050000 (current)
+    ocp_enabled: on, off (current)
+    ocp_active: on, off (current)
+    ocp_delay: 0.010000 (current), 10.000000, 0.001000
+    voltage: 12.001000 (current)
+    voltage_target: 0.000000, 32.050000, 0.001000
+    current: 1.502000 (current)
+    current_limit: 0.001000, 3.000000, 0.001000
+    enabled: on (current), off

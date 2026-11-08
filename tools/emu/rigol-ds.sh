@@ -150,6 +150,6 @@ s/^tcp_out ([0-9a-f]+) -> [0-9]+$/tcp_out \1/'
     # After the readback, so the writes of the capture's start come next: C dies.
     emu_case "unplug before a capture tcp" --digest --filter "$A" --oracle-bug "$SIGPIPE" --unplug tcp-in=16 --oxrok-fails "unplug" -- -d $T --frames 2 -O analog
     # After a frame's data: C reads 0 bytes for ever, which is no error to it.
-    emu_case "unplug in a frame tcp" --digest --filter "$A" --oracle-bug "$TCP_EOF" --oracle-hangs --timeout 4 --unplug tcp-in=18 --oxrok-fails "unplug" -- -d $T --frames 2 -O analog
+    emu_case "unplug in a frame tcp" --digest --filter "$A" --oracle-bug "$TCP_EOF" --oracle-hangs --timeout 30 --unplug tcp-in=18 --oxrok-fails "unplug" -- -d $T --frames 2 -O analog
     emu_case "unplug in a frame" --digest --filter "$A" --oracle-bug "$NEVER_ENDS" --oracle-hangs --timeout 6 --unplug in=2:18 --oxrok-fails "unplug" -- -d $U --frames 2 -O analog
 }

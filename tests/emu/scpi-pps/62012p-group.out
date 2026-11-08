@@ -1,0 +1,16 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Chroma 62012P-80-60 01.02.03 [S/N: EMU0001] with 3 channels: V1 I1 P1
+Channel groups:
+    1: channels V1 I1 P1
+Supported configuration options on channel group 1:
+    ovp_threshold: 80.000000 (current)
+    ocp_threshold: 60.000000 (current)
+    voltage: 12.001000 (current)
+    voltage_target: 0.000000, 80.000000, 0.010000
+    current: 1.502000 (current)
+    current_limit: 0.000000, 60.000000, 0.010000
+    enabled: on (current), off

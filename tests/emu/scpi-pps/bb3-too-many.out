@@ -1,0 +1,17 @@
+Driver functions:
+    Power supply
+Scan options:
+    conn
+    serialcomm
+scpi-pps - Envox BB3 r3b3 01.02.03 [S/N: EMU0001] with 18 channels: V1 I1 P1 V2 I2 P2 V3 I3 P3 V4 I4 P4 V5 I5 P5 V6 I6 P6
+Channel groups:
+    1: channels V1 I1 P1
+    2: channels V2 I2 P2
+    3: channels V3 I3 P3
+    4: channels V4 I4 P4
+    5: channels V5 I5 P5
+    6: channels V6 I6 P6
+Supported configuration options across all channel groups:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
