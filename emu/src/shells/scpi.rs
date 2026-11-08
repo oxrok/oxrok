@@ -440,17 +440,18 @@ impl<I: Instrument> Engine<I> {
             self.echoed.extend_from_slice(data);
         }
         for b in data {
-            if *b < b' ' && !matches!(*b, b'\n' | b'\r' | b'\t') {
-                if let Some(answer) = self.instrument.control(*b) {
-                    self.line.clear();
-                    self.answers.clear();
-                    let (bytes, rest, _) = self.lines_of(answer);
-                    for bytes in std::iter::once(bytes).chain(rest).filter(|b| !b.is_empty()) {
-                        let ticks = if self.answers.is_empty() { 0 } else { self.config.line_gap };
-                        self.answers.push_back(Waiting { bytes, ticks });
-                    }
-                    continue;
+            if *b < b' '
+                && !matches!(*b, b'\n' | b'\r' | b'\t')
+                && let Some(answer) = self.instrument.control(*b)
+            {
+                self.line.clear();
+                self.answers.clear();
+                let (bytes, rest, _) = self.lines_of(answer);
+                for bytes in std::iter::once(bytes).chain(rest).filter(|b| !b.is_empty()) {
+                    let ticks = if self.answers.is_empty() { 0 } else { self.config.line_gap };
+                    self.answers.push_back(Waiting { bytes, ticks });
                 }
+                continue;
             }
             if *b == b'\n' {
                 let line = std::mem::take(&mut self.line);
@@ -643,7 +644,9 @@ impl<I: Instrument> Engine<I> {
             self.answers.push_back(Waiting { bytes, ticks: later });
         } else {
             let again = match self.config.double_at {
-                Some((at, later)) if at == n => Some(Waiting { bytes: bytes.clone(), ticks: later }),
+                Some((at, later)) if at == n => {
+                    Some(Waiting { bytes: bytes.clone(), ticks: later })
+                }
                 _ => None,
             };
             self.answers.push_back(Waiting { bytes, ticks });
