@@ -1,0 +1,17 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+hameg-hmo - HAMEG HMO3054 05.886 [S/N: EMU0001] with 20 channels: CH1 D0 CH2 D1 CH3 D2 CH4 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    CH3: channel CH3
+    CH4: channel CH4
+    POD1: channels D0 D1 D2 D3 D4 D5 D6 D7
+    POD2: channels D8 D9 D10 D11 D12 D13 D14 D15
+Supported configuration options on channel group POD2:
+    logic_threshold: TTL (current), ECL, CMOS, USER1, USER2
+    logic_threshold_custom: 

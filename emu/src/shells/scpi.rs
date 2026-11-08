@@ -114,6 +114,10 @@ pub enum Answer {
     /// Pieces of bytes, `line-gap=` ticks apart, as [`Answer::Apart`] has lines: a
     /// block, and its line end that a socket's peer sends late.
     BytesApart(Vec<Vec<u8>>),
+    /// These bytes, the second part this many ticks after the first: an answer that
+    /// stops partway. On TCP and CDC-ACM it is one stream with a pause; on USBTMC each
+    /// part is a message of its own.
+    Paused(Vec<u8>, u32, Vec<u8>),
     /// Done, and nothing to say: a setting.
     Done,
     /// Heard, and no answer ever, with no error.
@@ -599,6 +603,11 @@ impl<I: Instrument> Engine<I> {
                 let first = pieces.next().unwrap_or_default();
                 return (first, pieces.collect(), Some(0));
             }
+            // conclude takes its pause off first; here it is only bytes.
+            Answer::Paused(mut head, _, tail) => {
+                head.extend(tail);
+                return (head, Vec::new(), None);
+            }
             Answer::Error(code, text) => {
                 self.error(code, &text);
                 return (Vec::new(), Vec::new(), None);
@@ -613,6 +622,11 @@ impl<I: Instrument> Engine<I> {
     }
 
     fn conclude(&mut self, m: &Message<'_>, answer: Answer, v: &mut Violations) {
+        // A pause inside an answer: its first part goes as any answer, its rest after.
+        let (answer, paused) = match answer {
+            Answer::Paused(head, ticks, tail) => (Answer::Bytes(head), Some((ticks, tail))),
+            other => (other, None),
+        };
         if answer == Answer::Unknown {
             v.report(format!("{}: the instrument has no such command", m.text));
             self.error(-113, "Undefined header");
@@ -666,6 +680,9 @@ impl<I: Instrument> Engine<I> {
         }
         for bytes in rest {
             self.answers.push_back(Waiting { bytes, ticks: self.config.line_gap });
+        }
+        if let Some((ticks, bytes)) = paused {
+            self.answers.push_back(Waiting { bytes, ticks: ticks.max(1) });
         }
     }
 

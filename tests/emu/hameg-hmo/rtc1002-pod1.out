@@ -1,0 +1,14 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+hameg-hmo - Rohde&Schwarz RTC1002 05.886 [S/N: EMU0001] with 10 channels: CH1 D0 CH2 D1 D2 D3 D4 D5 D6 D7
+Channel groups:
+    CH1: channel CH1
+    CH2: channel CH2
+    POD1: channels D0 D1 D2 D3 D4 D5 D6 D7
+Supported configuration options on channel group POD1:
+    logic_threshold: TTL (current), ECL, CMOS, USER1, USER2
+    logic_threshold_custom: 
