@@ -1,0 +1,11 @@
+Driver functions:
+    Oscilloscope
+Scan options:
+    conn
+    serialcomm
+gwinstek-gds-800 - GW GDS-820 V.2.03 [S/N: P920130] with 2 channels: CH1 CH2
+Channel groups:
+    : channels CH1 CH2
+Supported configuration options across all channel groups:
+    limit_frames: 1 (current)
+    samplerate

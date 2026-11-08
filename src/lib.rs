@@ -103,6 +103,7 @@ pub mod drivers {
     pub mod fx2lafw;
     pub mod gmc_mh_1x_2x;
     pub mod greatfet;
+    pub mod gwinstek_gds_800;
     pub mod gwinstek_gpd;
     pub mod gwinstek_psp;
     pub mod hantek_4032l;
@@ -188,6 +189,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::gmc_mh_1x_2x::GmcRs232Driver));
     registry.register(Box::new(drivers::gmc_mh_1x_2x::GmcBd232Driver));
     registry.register(Box::new(drivers::teleinfo::TeleinfoDriver));
+    registry.register(Box::new(drivers::gwinstek_gds_800::GwinstekGds800Driver));
     registry.register(Box::new(drivers::gwinstek_gpd::GpdDriver));
     registry.register(Box::new(drivers::bkprecision_1856d::Bkprecision1856dDriver));
     registry.register(Box::new(drivers::motech_lps_30x::MotechLps301Driver));
