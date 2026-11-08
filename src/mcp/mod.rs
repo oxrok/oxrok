@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod capture;
 pub mod catalog;
 pub mod host;
 pub mod jsonrpc;
@@ -30,6 +31,7 @@ pub mod protocol;
 pub mod tool;
 pub mod tools;
 
+pub use capture::{Capture, CaptureStore};
 pub use catalog::{Catalog, CatalogError};
 pub use host::{Host, Limits};
 pub use protocol::{PROTOCOL_VERSIONS, Server, ServerInfo};
@@ -49,10 +51,24 @@ decoder ids (`i2c`, `uart`) and output modules (`bits`, `csv`, `vcd`).
 
 Start with `version` and `list_drivers`; `driver_info`, `decoder_info` and \
 `list_formats` answer the details before a run, and `firmware_status` says \
-which firmware files were found. `cli` runs the oxrok command line with \
-sigrok-cli arguments, one per element: `{\"args\": [\"-d\", \"demo\", \
-\"--samples\", \"100\", \"-O\", \"bits\"]}`. Keep its outputs small: a sample \
-limit, `-O bits` or `-O csv`, and a decoder (`-P i2c`) in place of raw samples. \
-The `demo` driver needs no hardware. Hardware and the files on disk are shared \
-with the person at the bench: say what a command will do before it changes a \
-setting on a supply or a load.";
+which firmware files were found.
+
+The workflow on a device: `scan` (a driver spec such as `demo:logic_channels=4` \
+or `fx2lafw`) -> `open` by `device_id` -> `describe_device` for the options -> \
+`set_option` (`samplerate` `1m`) and `enable_channels` -> `capture` with a \
+limit (`samples` `1k`, `time` `10ms`) and optional `triggers` (`D0=r`) -> read \
+the summary it returns, then `measure` (frequency, duty, pulse widths), `find` \
+(the next edge or pulse) and `capture_logic` (transitions, paged) on the \
+`capture_id`; `capture_analog` reduces an analog channel to buckets. Prefer \
+`measure`, `find` and transitions to `form: samples`. `export_capture` writes a \
+`.sr` for PulseView; `load_capture` reads one back. The `demo` driver needs no \
+hardware and makes patterns (`channel_group=Logic:pattern=walking-one`).
+
+`cli` runs the oxrok command line with sigrok-cli arguments, one per element: \
+`{\"args\": [\"-d\", \"demo\", \"--samples\", \"100\", \"-O\", \"bits\"]}`; use \
+it for what the tools do not cover (`-P i2c` decoding, `-L`). Keep its outputs \
+small. It cannot run on a device this server has open.
+
+Hardware and the files on disk are shared with the person at the bench: say \
+what a call will do before it changes a setting on a supply or a load, and \
+`close` what you opened when done.";

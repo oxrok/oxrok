@@ -83,6 +83,14 @@ pub fn tool(host: &Arc<Host>) -> Arc<dyn Tool> {
             if args.args.first().is_some_and(|a| a == "mcp") {
                 return Err(ToolError::invalid_args("The cli tool does not start another server."));
             }
+            if let Some(driver) = driver_arg(&args.args)
+                && h.open_drivers().iter().any(|d| d == driver)
+            {
+                return Err(ToolError::new(format!(
+                    "A {driver} device is open on this server; use the device tools on its \
+                     handle, or `close` it first. Two owners of one device do not work."
+                )));
+            }
             let limits = h.limits();
             let timeout = args.timeout.map_or(limits.cli_timeout, Duration::from_secs_f64);
             let max_bytes = args.max_bytes.unwrap_or(limits.cli_max_bytes);
@@ -98,6 +106,21 @@ pub fn tool(host: &Arc<Host>) -> Arc<dyn Tool> {
             })))
         },
     )
+}
+
+/// The driver id of a `-d`/`--driver` argument, when there is one.
+fn driver_arg(args: &[String]) -> Option<&str> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let spec = match a.as_str() {
+            "-d" | "--driver" => it.next()?.as_str(),
+            s if s.starts_with("--driver=") => &s["--driver=".len()..],
+            s if s.starts_with("-d") && s.len() > 2 => &s[2..],
+            _ => continue,
+        };
+        return Some(spec.split(':').next().unwrap_or(spec));
+    }
+    None
 }
 
 /// Runs `program` with `args`, stdin closed, for at most `timeout`, keeping
@@ -174,6 +197,17 @@ fn read_capped(mut r: impl Read, max: usize) -> (Vec<u8>, bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_the_driver_argument() {
+        let s = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(driver_arg(&s(&["-d", "demo:logic_channels=2", "--scan"])), Some("demo"));
+        assert_eq!(driver_arg(&s(&["--driver", "fx2lafw"])), Some("fx2lafw"));
+        assert_eq!(driver_arg(&s(&["--driver=fx2lafw:conn=1.4"])), Some("fx2lafw"));
+        assert_eq!(driver_arg(&s(&["-ddemo"])), Some("demo"));
+        assert_eq!(driver_arg(&s(&["-L"])), None);
+        assert_eq!(driver_arg(&s(&["-d"])), None);
+    }
 
     #[test]
     fn caps_what_it_keeps() {

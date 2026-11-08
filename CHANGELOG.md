@@ -13,6 +13,12 @@ release may change the library API.
   `decoder_info`, `list_formats`, `firmware_status`) and a `cli` tool that
   runs the command line; `--read-only`, `--no-cli`, `--tools` and
   `--list-tools`. The `oxrok::mcp` module behind the `mcp` feature.
+  Device tools (`scan`, `open`, `close`, `describe_device`, `get_option`,
+  `set_option`, `enable_channels`), captures into a store (`capture`,
+  `capture_summary`, `list_captures`, `drop_capture`, `load_capture`,
+  `export_capture`) and the data tools over them (`capture_logic`,
+  `capture_analog`, `measure`, `find`); `--no-hardware`, `--drivers`,
+  `--allow-path` and `--max-memory`.
 - `oxrok::setup`: the command line's setup code as a library module (driver
   specs, `-c` plans, `-C`, `-t`, limits, decoder stacks, `-I`/`-O` specs),
   shared with the MCP server. `oxrok::decoder_registry()` is every decoder

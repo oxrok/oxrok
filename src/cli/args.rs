@@ -172,9 +172,21 @@ pub struct McpArgs {
     #[arg(long, value_name = "NAMES", value_delimiter = ',')]
     pub tools: Vec<String>,
 
-    /// How long the `cli` tool waits for a command (seconds, or with a unit: 30s, 2m)
+    /// How long the `cli` tool and a `capture` may run (seconds, or with a unit: 30s, 2m)
     #[arg(long, value_name = "TIME", default_value = "60s")]
     pub timeout: String,
+
+    /// Let only these drivers be scanned and opened, comma separated
+    #[arg(long, value_name = "IDS", value_delimiter = ',')]
+    pub drivers: Vec<String>,
+
+    /// The memory captures may take before the oldest are dropped (with a suffix: 512M, 2G)
+    #[arg(long, value_name = "SIZE", default_value = "512M")]
+    pub max_memory: String,
+
+    /// A directory files may be read from and written to; repeatable. The working directory otherwise
+    #[arg(long = "allow-path", value_name = "DIR")]
+    pub allow_paths: Vec<PathBuf>,
 
     /// Print the tools the server would offer and exit
     #[arg(long)]

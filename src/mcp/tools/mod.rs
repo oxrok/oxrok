@@ -2,17 +2,24 @@
 
 //! The library's tools, and the catalog of all of them.
 
+pub mod capture;
 pub mod catalog;
 pub mod cli;
+pub mod data;
+pub mod device;
 
 use super::Host;
 use std::sync::Arc;
 
-/// Every tool the library has, over `host`: the reference tools and the
-/// `cli` pass-through. A server narrows it from here.
+/// Every tool the library has, over `host`: the reference tools, the
+/// `cli` pass-through, the device, capture and data tools. A server
+/// narrows it from here.
 pub fn catalog(host: &Arc<Host>) -> super::Catalog {
     let mut tools = catalog::tools(host);
     tools.push(cli::tool(host));
+    tools.extend(device::tools(host));
+    tools.extend(capture::tools(host));
+    tools.extend(data::tools(host));
     super::Catalog::from_tools(tools).expect("the library's tool names are distinct")
 }
 

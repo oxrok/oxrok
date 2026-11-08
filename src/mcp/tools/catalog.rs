@@ -236,7 +236,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
 }
 
 /// `Logic analyzer` as `logic-analyzer`.
-fn class_id(class: DeviceClass) -> String {
+pub(crate) fn class_id(class: DeviceClass) -> String {
     class.name().to_lowercase().replace(' ', "-")
 }
 
@@ -245,7 +245,7 @@ fn class_matches(class: DeviceClass, wanted: &str) -> bool {
 }
 
 /// `RationalPeriod` as `rational_period`.
-fn kind_id(kind: ValueKind) -> String {
+pub(crate) fn kind_id(kind: ValueKind) -> String {
     snake(&format!("{kind:?}"))
 }
 

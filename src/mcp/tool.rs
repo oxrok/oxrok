@@ -257,7 +257,12 @@ impl std::error::Error for ToolError {}
 
 impl From<crate::core::Error> for ToolError {
     fn from(e: crate::core::Error) -> Self {
-        Self::new(e.to_string())
+        // An argument error is worded for the person already; the other
+        // kinds say what they are.
+        match e {
+            crate::core::Error::Arg(message) => Self::new(message),
+            other => Self::new(other.to_string()),
+        }
     }
 }
 

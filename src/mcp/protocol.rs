@@ -49,7 +49,16 @@ impl ServerInfo {
     }
 }
 
-type Inflight = Arc<Mutex<HashMap<Id, Arc<AtomicBool>>>>;
+/// The requests being handled, and the cancellations that arrived
+/// before their request was registered (the reader is ahead of the
+/// handler).
+#[derive(Default)]
+struct InflightState {
+    running: HashMap<Id, Arc<AtomicBool>>,
+    early: std::collections::HashSet<Id>,
+}
+
+type Inflight = Arc<Mutex<InflightState>>;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -192,11 +201,15 @@ impl Server {
             .ok_or_else(|| RpcError::invalid_params(format!("Unknown tool '{}'.", p.name)))?;
         let args = p.arguments.unwrap_or_else(|| json!({}));
         let token = p.meta.and_then(|m| m.get("progressToken").cloned());
-        let cancelled = Arc::new(AtomicBool::new(false));
-        lock(inflight).insert(id.clone(), cancelled.clone());
+        let cancelled = {
+            let mut state = lock(inflight);
+            let flag = Arc::new(AtomicBool::new(state.early.remove(id)));
+            state.running.insert(id.clone(), flag.clone());
+            flag
+        };
         let mut cx = Call::new(sink.clone(), token, cancelled, self.log_level.clone());
         let outcome = catch_unwind(AssertUnwindSafe(|| tool.call(args, &mut cx)));
-        lock(inflight).remove(id);
+        lock(inflight).running.remove(id);
         match outcome {
             Ok(Ok(result)) => Ok(result.to_json()),
             Ok(Err(e)) if e.invalid_args => Err(RpcError::invalid_params(e.message)),
@@ -234,10 +247,16 @@ fn read_loop<R: Read>(
                 sink.send(&jsonrpc::response(&id, json!({})))?;
             }
             Ok(Message::Notification { method, params }) if method == "notifications/cancelled" => {
-                let id =
+                let id: Option<Id> =
                     params.get("requestId").cloned().and_then(|v| serde_json::from_value(v).ok());
-                if let Some(flag) = id.and_then(|id: Id| lock(inflight).get(&id).cloned()) {
-                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                if let Some(id) = id {
+                    let mut state = lock(inflight);
+                    match state.running.get(&id) {
+                        Some(flag) => flag.store(true, std::sync::atomic::Ordering::Relaxed),
+                        None => {
+                            state.early.insert(id);
+                        }
+                    }
                 }
             }
             Ok(message) => {

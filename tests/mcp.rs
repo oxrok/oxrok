@@ -116,7 +116,7 @@ fn list_tools(flags: &[&str]) -> (String, bool) {
     (String::from_utf8_lossy(text).into_owned(), out.status.success())
 }
 
-const ALL_TOOLS: [&str; 8] = [
+const ALL_TOOLS: [&str; 25] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -125,7 +125,51 @@ const ALL_TOOLS: [&str; 8] = [
     "list_formats",
     "firmware_status",
     "cli",
+    "scan",
+    "open",
+    "close",
+    "describe_device",
+    "get_option",
+    "set_option",
+    "enable_channels",
+    "capture",
+    "list_captures",
+    "drop_capture",
+    "capture_summary",
+    "load_capture",
+    "export_capture",
+    "capture_logic",
+    "capture_analog",
+    "measure",
+    "find",
 ];
+
+/// The tools that change nothing.
+const READ_ONLY: [&str; 16] = [
+    "version",
+    "list_drivers",
+    "driver_info",
+    "list_decoders",
+    "decoder_info",
+    "list_formats",
+    "firmware_status",
+    "scan",
+    "describe_device",
+    "get_option",
+    "list_captures",
+    "capture_summary",
+    "capture_logic",
+    "capture_analog",
+    "measure",
+    "find",
+];
+
+/// The tools that open or drive hardware.
+const HARDWARE: [&str; 3] = ["open", "set_option", "capture"];
+
+fn without<'a>(all: &[&'a str], drop: &[&str]) -> Vec<&'a str> {
+    all.iter().copied().filter(|t| !drop.contains(t)).collect()
+}
 
 #[test]
 fn initializes_lists_and_ends_on_eof() {
@@ -245,6 +289,69 @@ fn the_cli_tool_runs_the_binary() {
 }
 
 #[test]
+#[allow(clippy::many_single_char_names)]
+fn the_demo_device_over_the_pipe() {
+    let dir = std::env::temp_dir().join(format!("oxrok-mcp-pipe-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut c = Client::start(&["--allow-path", dir.to_str().unwrap(), "--drivers", "demo"]);
+    c.initialize();
+    let s = c.call("scan", json!({"driver": "demo:logic_channels=4:analog_channels=1"}));
+    assert_eq!(s["count"], 1);
+    assert_eq!(s["devices"][0]["device_id"], "demo");
+    let o = c.call("open", json!({"device_id": "demo"}));
+    let handle = o["handle"].as_u64().unwrap();
+    assert_eq!(o["driver"], "demo");
+    let r = c.call("set_option", json!({"handle": handle, "key": "samplerate", "value": "1m"}));
+    assert_eq!(r["text"], "1 MHz");
+    c.call(
+        "set_option",
+        json!({"handle": handle, "key": "pattern", "value": "walking-one", "group": "Logic"}),
+    );
+    // A driver this server has open is not for the cli tool.
+    let e =
+        c.ok("tools/call", json!({"name": "cli", "arguments": {"args": ["-d", "demo", "--scan"]}}));
+    assert_eq!(e["isError"], true);
+    assert!(e["content"][0]["text"].as_str().unwrap().contains("open on this server"));
+    // Another driver is not allowed at all.
+    let e = c.ok("tools/call", json!({"name": "scan", "arguments": {"driver": "fx2lafw"}}));
+    assert_eq!(e["isError"], true);
+
+    let cap = c.call("capture", json!({"handle": handle, "samples": "1k", "triggers": "D0=r"}));
+    let id = cap["capture_id"].as_u64().unwrap();
+    assert_eq!(cap["samplerate"], 1_000_000);
+    assert_eq!(cap["samples"], 1000);
+    assert_eq!(cap["logic"].as_array().unwrap().len(), 4);
+    assert_eq!(cap["logic"][0]["duty"], 0.2);
+    assert_eq!(cap["timed_out"], false);
+    let m = c.call("measure", json!({"capture_id": id, "channel": "D0"}));
+    assert_eq!(m["frequency"], 200_000.0);
+    assert_eq!(m["duty"], 0.2);
+    let f = c.call("find", json!({"capture_id": id, "channel": "D1", "what": "rising"}));
+    assert_eq!(f["found"], true);
+    let l = c.call("capture_logic", json!({"capture_id": id, "channels": ["D0"], "limit": 3}));
+    assert_eq!(l["channels"][0]["transitions"].as_array().unwrap().len(), 3);
+    assert_eq!(l["channels"][0]["truncated"], true);
+    let a = c.call("capture_analog", json!({"capture_id": id, "channel": "A0", "buckets": 5}));
+    assert_eq!(a["buckets"].as_array().unwrap().len(), 5);
+    assert_eq!(a["unit"], "V");
+
+    let path = dir.join("demo.sr");
+    let e = c.call("export_capture", json!({"capture_id": id, "path": path}));
+    assert!(e["bytes"].as_u64().unwrap() > 0);
+    let back = c.call("load_capture", json!({"path": path}));
+    assert_eq!(back["samples"], 1000);
+    assert_eq!(back["logic"][0]["duty"], 0.2);
+    let e = c.ok("tools/call", json!({"name": "export_capture", "arguments": {"capture_id": id, "path": "/tmp/elsewhere.sr"}}));
+    assert_eq!(e["isError"], true);
+    let list = c.call("list_captures", json!({}));
+    assert_eq!(list["count"], 2);
+    c.call("drop_capture", json!({"capture_id": id}));
+    assert_eq!(c.call("close", json!({"handle": handle}))["closed"], handle);
+    c.finish();
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn bad_calls_are_protocol_errors() {
     let mut c = Client::start(&[]);
     c.initialize();
@@ -270,9 +377,16 @@ fn flags_narrow_the_catalog() {
         text.lines().map(|l| l.split_whitespace().next().unwrap().to_owned()).collect()
     };
     assert_eq!(names(&[]), ALL_TOOLS);
-    assert_eq!(names(&["--no-cli"]), &ALL_TOOLS[..7]);
-    assert_eq!(names(&["--read-only"]), &ALL_TOOLS[..7]);
-    assert_eq!(names(&["--no-hardware"]), ALL_TOOLS);
+    assert_eq!(names(&["--no-cli"]), without(&ALL_TOOLS, &["cli"]));
+    assert_eq!(
+        names(&["--read-only"]),
+        READ_ONLY.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>()
+    );
+    assert_eq!(names(&["--no-hardware"]), without(&ALL_TOOLS, &HARDWARE));
+    assert_eq!(
+        names(&["--no-hardware", "--no-cli"]),
+        without(&ALL_TOOLS, &["cli", "open", "set_option", "capture"])
+    );
     assert_eq!(names(&["--tools", "cli,version"]), ["version", "cli"]);
     let (text, ok) = list_tools(&["--tools", "version,nope"]);
     assert!(!ok);

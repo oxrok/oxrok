@@ -3,6 +3,7 @@
 //! `oxrok mcp`: the MCP server over stdio.
 
 use crate::cli::args::McpArgs;
+use oxrok::core::util::parse_sizestring;
 use oxrok::core::{Error, Result};
 use oxrok::mcp::{Catalog, Host, Limits, Server, ServerInfo, Tag, tools};
 use std::sync::Arc;
@@ -11,8 +12,21 @@ use std::time::Duration;
 /// Builds the catalog the flags ask for and serves it, or lists it.
 pub fn run(args: &McpArgs) -> Result<()> {
     let timeout = parse_time(&args.timeout)?;
-    let host =
-        Arc::new(Host::new().with_limits(Limits { cli_timeout: timeout, ..Limits::default() }));
+    let max_memory = parse_sizestring(&args.max_memory)
+        .map_err(|_| Error::Arg(format!("Invalid size '{}'.", args.max_memory)))?;
+    let mut limits = Limits {
+        cli_timeout: timeout,
+        capture_timeout: timeout,
+        max_memory: usize::try_from(max_memory).unwrap_or(usize::MAX),
+        ..Limits::default()
+    };
+    if !args.drivers.is_empty() {
+        limits.drivers = Some(args.drivers.clone());
+    }
+    if !args.allow_paths.is_empty() {
+        limits.allow_paths.clone_from(&args.allow_paths);
+    }
+    let host = Arc::new(Host::new().with_limits(limits));
     let catalog = select(tools::catalog(&host), args)?;
     if args.list_tools {
         if args.json {
@@ -35,11 +49,18 @@ pub fn run(args: &McpArgs) -> Result<()> {
         })?);
     }
     let server = Server::new(info, catalog);
+    // Ctrl-C closes what is open before the process goes, as EOF does.
+    let on_exit = host.clone();
+    let _ = ctrlc::set_handler(move || {
+        on_exit.close_all();
+        std::process::exit(130);
+    });
     log::info!(
         "oxrok mcp serving {} tools on stdio.",
         server.catalog().read().map_or(0, |c| c.len())
     );
     server.serve_stdio()?;
+    host.close_all();
     Ok(())
 }
 

@@ -94,13 +94,15 @@ recommended way: a hand-rolled synchronous protocol layer, the `mcp`
 subcommand, `schemars` for the schemas. Phase 2 is in too: the CLI's
 setup code (driver specs, `-c` plans, `-C`, `-t`, limits, decoder
 stacks, `-I`/`-O` specs) lives in `oxrok::setup` and `src/cli/` calls
-it.
+it. Phase 3 too: the device tools (`scan`, `open`, `describe_device`,
+`set_option`, ...), the synchronous `capture` into a store with a byte
+budget, `load_capture`/`export_capture` under `--allow-path`, and the
+data tools (`capture_logic`, `capture_analog`, `measure`, `find`).
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
   docs are not in the published crate, so the table would have to be
   generated into the source at build time or kept in `tools/site-data`.
-- Phase 3: devices and captures as tools, with a capture store.
 - Phase 4: analyzers: `decode::FrameStore`, `decode::Analyzer` and the
   radix rules moved from oxrok-ui, so decoded output is kept, paged,
   searched and returned with raw values.
