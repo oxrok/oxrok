@@ -379,4 +379,64 @@ mod stops {
             );
         }
     }
+
+    /// One line from oxrok, without its end.
+    fn line(stream: &mut TcpStream) -> String {
+        let mut out = Vec::new();
+        let mut byte = [0u8; 1];
+        while byte[0] != b'\n' {
+            stream.read_exact(&mut byte).expect("a line");
+            out.push(byte[0]);
+        }
+        out.pop();
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Reads oxrok's lines up to and including `last`.
+    fn until(stream: &mut TcpStream, last: &str) {
+        while line(stream) != last {}
+    }
+
+    /// An hp-3457a whose answers have no line end, so that only a short wait after a
+    /// piece says where an answer ends. A stop within that wait, with the rest of the
+    /// answer sent during the stop and the stop outlasting the wait, must not end the
+    /// answer at the piece: the look at the socket after the stop finds the rest. Else
+    /// the piece is a reading of 1.2 and the rest comes with nothing asked.
+    #[test]
+    fn a_stop_past_a_short_wait_still_reads_what_came_during_it() {
+        for _ in 0..3 {
+            let (child, listener) = start("hp-3457a", &["--samples", "2", "-O", "analog"]);
+            let mut scan = accept(&listener);
+            until(&mut scan, "ID?");
+            scan.write_all(b"HP3457A").expect("the id");
+            until(&mut scan, "REV?");
+            scan.write_all(b"2,8").expect("the revision");
+            until(&mut scan, "OPT?");
+            scan.write_all(b"-1").expect("no card");
+            let mut open = accept(&listener);
+            until(&mut open, "NPLC?");
+            open.write_all(b"+1.0E+00").expect("the time");
+            until(&mut open, "TRIG SGL");
+            open.write_all(b"+1.2").expect("a piece");
+            // Inside the driver's 50 ms for the rest, and out of it during the stop.
+            std::thread::sleep(Duration::from_millis(30));
+            signal("-STOP", child.id());
+            std::thread::sleep(Duration::from_millis(20));
+            open.write_all(b"5E+00").expect("the rest");
+            std::thread::sleep(Duration::from_millis(300));
+            signal("-CONT", child.id());
+            for (asked, answer) in
+                [("RANGE?", "+3.0E+01"), ("?", "+2.5E+00"), ("RANGE?", "+3.0E+01")]
+            {
+                until(&mut open, asked);
+                open.write_all(answer.as_bytes()).expect("an answer");
+            }
+            let out = finish(child);
+            let said = String::from_utf8_lossy(&out.stdout);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert!(out.status.success(), "{err}");
+            assert_eq!(said.lines().collect::<Vec<_>>(), ["Front: 1.250000 ", "Front: 2.500000 "]);
+            assert_eq!(err, "");
+        }
+    }
 }

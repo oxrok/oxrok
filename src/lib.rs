@@ -107,6 +107,7 @@ pub mod drivers {
     pub mod hantek_4032l;
     pub mod hantek_6xxx;
     pub mod hantek_dso;
+    pub mod hp_3457a;
     pub mod hp_59306a;
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
@@ -231,4 +232,5 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::pce_322a::Pce322aDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));
     registry.register(Box::new(drivers::sysclk_sla5032::Sla5032Driver));
+    registry.register(Box::new(drivers::hp_3457a::Hp3457aDriver));
 }
