@@ -1,0 +1,1 @@
+Failed to set device option 'output_frequency': invalid argument: output_frequency 100000000 Hz is outside 0.000001 to 60000000, and the instrument would set the nearest limit instead: not sent.

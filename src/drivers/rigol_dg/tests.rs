@@ -87,6 +87,13 @@ impl Line {
             "SOUR1:FREQ?" | "SOUR1:VOLT?" | "SOUR1:VOLT:OFFS?" | "SOUR1:PHAS?" => {
                 b"2.000000E+00\n".to_vec()
             }
+            // Limits, the model's stand-ins.
+            q if q.ends_with(":VOLT? MIN") => b"2.000000E-03\n".to_vec(),
+            q if q.ends_with(":VOLT? MAX") => b"1.000000E+01\n".to_vec(),
+            q if q.ends_with(":VOLT:OFFS? MIN") => b"-2.500000E+00\n".to_vec(),
+            q if q.ends_with(":VOLT:OFFS? MAX") => b"2.500000E+00\n".to_vec(),
+            q if q.ends_with(":DCYC? MIN") => b"1.000000E+01\n".to_vec(),
+            q if q.ends_with(":DCYC? MAX") => b"9.000000E+01\n".to_vec(),
             other => panic!("the fake has no answer to {other}"),
         }
     }
@@ -165,7 +172,7 @@ impl ScpiTransport for Fake {
             line.tick();
         }
         let text = String::from_utf8_lossy(data).trim_end().to_owned();
-        if !text.ends_with('?') {
+        if !text.contains('?') {
             return Ok(());
         }
         let said = line.script.get_mut(text.as_str()).and_then(VecDeque::pop_front);
@@ -477,13 +484,11 @@ fn an_mso_says_its_values_one_by_one_and_keeps_what_it_can() {
 /// Each key's bytes, after the state and an `*OPC?`.
 #[test]
 fn a_setting_sends_this() {
-    let cases: [(Key, Value, &str); 7] = [
+    let cases: [(Key, Value, &str); 5] = [
         (Key::Enabled, Value::Bool(true), "OUTP1:STATE ON"),
         (Key::Enabled, Value::Bool(false), "OUTP1:STATE OFF"),
-        (Key::PatternMode, Value::from("square"), "SOUR1:APPL:SQU"),
+        (Key::PatternMode, Value::from("square"), "SOUR1:FUNC SQU"),
         (Key::OutputFrequency, Value::F64(2000.5), "SOUR1:FREQ 2000.500000"),
-        (Key::Amplitude, Value::F64(1.5), "SOUR1:VOLT 1.500000"),
-        (Key::Offset, Value::F64(-0.25), "SOUR1:VOLT:OFFS -0.250000"),
         (Key::Phase, Value::F64(90.0), "SOUR1:PHAS 90.000000"),
     ];
     for (key, value, sent) in cases {
@@ -491,6 +496,82 @@ fn a_setting_sends_this() {
         device.set(&key, &value, Some("1")).unwrap();
         assert_eq!(fake.all_writes(), ["*OPC?", "SOUR1:APPL?", "*OPC?", sent], "{sent}");
     }
+    // What moves with the load asks the instrument's limits just before.
+    for (key, value, query, sent) in [
+        (Key::Amplitude, 1.5, "SOUR1:VOLT?", "SOUR1:VOLT 1.500000"),
+        (Key::Offset, -0.25, "SOUR1:VOLT:OFFS?", "SOUR1:VOLT:OFFS -0.250000"),
+    ] {
+        let (mut device, fake) = device("DG1062Z");
+        device.set(&key, &Value::F64(value), Some("1")).unwrap();
+        let min = format!("{query} MIN");
+        let max = format!("{query} MAX");
+        assert_eq!(
+            fake.all_writes(),
+            ["*OPC?", "SOUR1:APPL?", "*OPC?", "*OPC?", &min, "*OPC?", &max, sent],
+            "{sent}"
+        );
+    }
+}
+
+/// A value the instrument would clamp is refused, and no setting goes out.
+#[test]
+fn a_value_the_instrument_would_clamp_is_not_sent() {
+    for (wave, key, value, word) in [
+        (
+            "SIN",
+            Key::OutputFrequency,
+            70e6,
+            "output_frequency 70000000 Hz is outside 0.000001 to 60000000",
+        ),
+        ("SIN", Key::OutputFrequency, 0.0, "output_frequency 0 Hz is outside"),
+        ("SIN", Key::Phase, 361.0, "phase 361 degrees is outside 0 to 360"),
+        ("SIN", Key::Amplitude, 50.0, "amplitude 50 Vpp is outside 0.002 to 10"),
+        ("SIN", Key::Amplitude, 0.001, "amplitude 0.001 Vpp is outside"),
+        ("SIN", Key::Offset, 3.0, "offset 3 V is outside -2.5 to 2.5"),
+        ("PULSE", Key::DutyCycle, 100.0, "output_duty_cycle 100 % is outside 0.001 to 99.999"),
+        ("PULSE", Key::DutyCycle, 95.0, "output_duty_cycle 95 % is outside 10 to 90"),
+        ("SQU", Key::DutyCycle, 5.0, "output_duty_cycle 5 % is outside 10 to 90"),
+    ] {
+        let (mut device, fake) = device("DG1062Z");
+        let answer: &'static str = Box::leak(format!("\"{wave},1,1,1,1\"").into_boxed_str());
+        fake.script("SOUR1:APPL?", &[Say::Text(answer)]);
+        let e = device.set(&key, &Value::F64(value), Some("1")).unwrap_err();
+        assert!(matches!(e, Error::Arg(_)), "{e:?}");
+        assert!(e.to_string().contains(word), "{e}");
+        assert!(e.to_string().contains("not sent"), "{e}");
+        let writes = fake.all_writes();
+        assert!(!writes.iter().any(|w| !w.contains('?')), "a setting went out: {writes:?}");
+    }
+}
+
+/// Limits that don't come: the value goes, with a word that the instrument clamps.
+#[test]
+fn limits_that_do_not_come_let_the_value_go() {
+    let (mut device, fake) = device("DG1062Z");
+    fake.script("SOUR1:VOLT? MIN", &[Say::Silent]);
+    device.set(&Key::Amplitude, &Value::F64(50.0), Some("1")).unwrap();
+    assert_eq!(fake.count("SOUR1:VOLT 50.000000"), 1);
+    let (mut device, fake) = self::device("DG1062Z");
+    fake.script("SOUR1:VOLT:OFFS? MAX", &[Say::Text("abc")]);
+    device.set(&Key::Offset, &Value::F64(3.0), Some("1")).unwrap();
+    assert_eq!(fake.count("SOUR1:VOLT:OFFS 3.000000"), 1);
+    // An MSO5000's way of asking isn't known: nothing is asked.
+    let (mut device, fake) = self::device("MSO5074");
+    device.set(&Key::Amplitude, &Value::F64(50.0), Some("1")).unwrap();
+    assert!(!fake.all_writes().iter().any(|w| w.contains("MAX") || w.contains("MIN")));
+    assert_eq!(fake.count("SOUR1:VOLT 50.000000"), 1);
+}
+
+/// A pattern keeps the amplitude: `FUNC`, not a bare `APPL`, which would take 5 Vpp.
+#[test]
+fn a_pattern_is_func_on_both_tables() {
+    let (mut device, fake) = device("DG1062Z");
+    device.set(&Key::PatternMode, &Value::from("DC"), Some("2")).unwrap();
+    assert_eq!(fake.commands(), ["SOUR2:APPL?", "SOUR2:FUNC DC"]);
+    assert!(!fake.all_writes().iter().any(|w| w.contains("APPL:")));
+    let (mut device, fake) = self::device("MSO5074");
+    device.set(&Key::PatternMode, &Value::from("Sinc"), Some("1")).unwrap();
+    assert_eq!(fake.count("SOUR1:FUNC SINC"), 1);
 }
 
 #[test]
@@ -498,11 +579,27 @@ fn a_set_of_a_duty_cycle_goes_by_the_waveform() {
     let (mut device, fake) = device("DG1062Z");
     fake.script("SOUR2:APPL?", &[Say::Text("\"SQU,1,1,1,1\"")]);
     device.set(&Key::DutyCycle, &Value::F64(25.0), Some("2")).unwrap();
-    assert_eq!(fake.commands(), ["SOUR2:APPL?", "SOUR2:FUNC:SQU:DCYC 25.000000"]);
+    assert_eq!(
+        fake.commands(),
+        [
+            "SOUR2:APPL?",
+            "SOUR2:FUNC:SQU:DCYC? MIN",
+            "SOUR2:FUNC:SQU:DCYC? MAX",
+            "SOUR2:FUNC:SQU:DCYC 25.000000"
+        ]
+    );
     fake.line().written = WriteLog::default();
     fake.script("SOUR2:APPL?", &[Say::Text("\"PULSE,1,1,1,1\"")]);
     device.set(&Key::DutyCycle, &Value::F64(75.0), Some("2")).unwrap();
-    assert_eq!(fake.commands(), ["SOUR2:APPL?", "SOUR2:FUNC:PULS:DCYC 75.000000"]);
+    assert_eq!(
+        fake.commands(),
+        [
+            "SOUR2:APPL?",
+            "SOUR2:FUNC:PULS:DCYC? MIN",
+            "SOUR2:FUNC:PULS:DCYC? MAX",
+            "SOUR2:FUNC:PULS:DCYC 75.000000"
+        ]
+    );
     let (mut device, fake) = self::device("MSO5074");
     fake.script("SOUR1:FUNC?", &[Say::Text("PULS")]);
     device.set(&Key::DutyCycle, &Value::F64(75.0), Some("1")).unwrap();
@@ -1199,10 +1296,20 @@ fn a_set_in_a_capture_goes_between_rounds() {
         let values = frequencies(&got);
         assert!(values.windows(2).all(|w| w[1] == w[0] + 1.0), "{values:?}");
         let writes = fake.all_writes();
+        // The whole setting goes between two rounds: no counter's question inside it.
         let at = writes.iter().position(|w| w == "SOUR1:VOLT 1.250000").unwrap();
-        assert_eq!(writes[at - 1], "*OPC?");
-        assert_eq!(writes[at - 2], "SOUR1:APPL?");
-        assert_eq!(writes[at - 3], "*OPC?");
+        assert_eq!(
+            writes[at - 7..at],
+            [
+                "*OPC?",
+                "SOUR1:APPL?",
+                "*OPC?",
+                "*OPC?",
+                "SOUR1:VOLT? MIN",
+                "*OPC?",
+                "SOUR1:VOLT? MAX"
+            ]
+        );
     });
 }
 

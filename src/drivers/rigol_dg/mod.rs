@@ -11,11 +11,14 @@
 //! A scan asks `*IDN?`, then on a DG `*OPC?` and `SYST:KLOC:STATE OFF`, which frees
 //! its front panel, and closes. An open sends nothing, and a close the same two as the
 //! scan. Each `--get` and each `-c` asks the instrument first, with an `*OPC?` before
-//! every query: a value is never held here. A setting has no answer, so one the
-//! instrument refuses goes to its error queue, which nothing reads: outside the
-//! table's range for the waveform it goes out as in C, with a warning. And
-//! `pattern=` is an `APPL:x` with no values, which by the DG1000Z's guide takes the
-//! defaults: 1 kHz and 5 Vpp, on an output that may be on.
+//! every query: a value is never held here. A setting has no answer, and the
+//! instrument sets a value out of range to the nearest limit and says nothing (the
+//! DG1000Z guide, p.2-97, 2-155, 2-182, 2-185): such a value is refused here before it
+//! goes out. Frequency, phase and a pulse's duty cycle go by the table; amplitude,
+//! offset and a duty cycle by what `X? MIN` and `X? MAX` say just before, as they move
+//! with the load and the frequency. Where those don't answer, and on an MSO5000, whose
+//! way of asking isn't known, the value goes with a warning. `pattern=` is
+//! `SOURn:FUNC x`, which keeps what is valid for the new waveform.
 //!
 //! A capture has nothing of the generator in it. It runs the frequency counter, turning
 //! it on if `COUN:STAT?` doesn't say `RUN` and off again at the end, and asks
@@ -46,6 +49,14 @@
 //! - A NaN or an infinity is refused, and nothing goes out: C sends `SOUR1:VOLT nan`.
 //! - A setting stays a double, as in the driver. sigrok-cli's `strtof` narrows it
 //!   first, so 123456789 Hz goes out from sigrok-cli as 123456792.000000.
+//! - `pattern=` is `SOURn:FUNC x` on a DG, where C's `SOURn:APPL:x` with no values
+//!   takes 1 kHz, 5 Vpp, 0 V and 0 degrees on what may be a live output.
+//! - A value out of range is refused, and amplitude, offset and duty cycle ask the
+//!   instrument's limits first: C sends it, and the instrument clamps it.
+//! - A frame's values are `f32`, as every analog packet here: a counter's ten digits
+//!   come to seven or so. C sends doubles.
+//! - A counter that is off answers zeros, which are a reading here as in C: a counter
+//!   that didn't go on looks like no signal.
 //!
 //! Kept as in C, with a word on it:
 //!
@@ -372,35 +383,72 @@ impl<'v> Setting<'v> {
             }
             Setting::Number(number) => number,
         };
-        let (opt, command, range): (u8, Cmd, Option<([f64; 2], &str)>) = match key {
-            Key::OutputFrequency => (
-                protocol::WFO_FREQUENCY,
-                Cmd::SetFrequency,
-                Some(([waveform.freq_min, waveform.freq_max], "Hz")),
-            ),
-            Key::Amplitude => (protocol::WFO_AMPLITUDE, Cmd::SetAmplitude, None),
-            Key::Offset => (protocol::WFO_OFFSET, Cmd::SetOffset, None),
-            Key::Phase => (
-                protocol::WFO_PHASE,
-                Cmd::SetPhase,
-                Some(([spec.phase[0], spec.phase[1]], "degrees")),
-            ),
-            _ => {
-                let command = match waveform.user_name {
-                    "Square" => Cmd::SetDutySquare,
-                    "Pulse" => Cmd::SetDutyPulse,
+        // What the waveform takes, a table's range if there is one, the query that says
+        // the instrument's limits where they move with the load and the frequency, and
+        // the unit.
+        let (opt, command, table, asked, unit): (u8, Cmd, Option<[f64; 2]>, Option<Cmd>, &str) =
+            match key {
+                Key::OutputFrequency => (
+                    protocol::WFO_FREQUENCY,
+                    Cmd::SetFrequency,
+                    Some([waveform.freq_min, waveform.freq_max]),
+                    None,
+                    "Hz",
+                ),
+                Key::Amplitude => (
+                    protocol::WFO_AMPLITUDE,
+                    Cmd::SetAmplitude,
+                    None,
+                    Some(Cmd::GetAmplitude),
+                    "Vpp",
+                ),
+                Key::Offset => {
+                    (protocol::WFO_OFFSET, Cmd::SetOffset, None, Some(Cmd::GetOffset), "V")
+                }
+                Key::Phase => (
+                    protocol::WFO_PHASE,
+                    Cmd::SetPhase,
+                    Some([spec.phase[0], spec.phase[1]]),
+                    None,
+                    "degrees",
+                ),
+                _ => match waveform.user_name {
+                    "Square" => (
+                        protocol::WFO_DUTY_CYCLE,
+                        Cmd::SetDutySquare,
+                        None,
+                        Some(Cmd::GetDutySquare),
+                        "%",
+                    ),
+                    "Pulse" => (
+                        protocol::WFO_DUTY_CYCLE,
+                        Cmd::SetDutyPulse,
+                        Some(protocol::PULSE_DUTY),
+                        Some(Cmd::GetDutyPulse),
+                        "%",
+                    ),
                     other => return Err(not_on(key, other)),
-                };
-                (protocol::WFO_DUTY_CYCLE, command, Some(([0.0, 100.0], "%")))
-            }
-        };
+                },
+            };
         if waveform.opts & opt == 0 {
             return Err(not_on(key, waveform.user_name));
         }
-        if let Some((range, unit)) = range
-            && let Some(warning) = protocol::range_warning(key.id(), number, range, unit)
-        {
-            log::warn!("{warning}");
+        let refuse = |range: [f64; 2]| -> Result<()> {
+            match protocol::out_of_range(key.id(), number, range, unit) {
+                Some(why) => Err(Error::Arg(why)),
+                None => Ok(()),
+            }
+        };
+        if let Some(range) = table {
+            refuse(range)?;
+        }
+        // An MSO5000's way of asking for its limits isn't known: its value goes with the
+        // word, as the instrument's clamp is all that stands there.
+        if let Some(query) = asked {
+            match spec.has_counter.then(|| link.limits(query, group)).flatten() {
+                Some(range) => refuse(range)?,
+                None => log::warn!("{}", protocol::limits_unknown(key.id())),
+            }
         }
         link.tell(command, group, Some(CmdArg::Float(number)))
     }

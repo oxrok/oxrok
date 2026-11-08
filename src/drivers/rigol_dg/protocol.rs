@@ -76,14 +76,18 @@ pub enum Cmd {
     CounterMeasure,
 }
 
-/// `cmdset_dg1000z`, without what no code reads.
+/// `cmdset_dg1000z`, without what no code reads, and with `FUNC` to set a waveform where
+/// C sends `APPL:x`: with no values that takes 1 kHz, 5 Vpp, 0 V and 0 degrees (the
+/// DG1000Z guide, p.1-5 and its `APPL` entries), on an output that may be on, where
+/// `FUNC` keeps what is valid for the new waveform (p.2-97, 2-109). The DG800's and
+/// DG900's guides were not to be had: they take it too, on C's one table.
 const CMDSET_DG1000Z: &[(Cmd, &str)] = &[
     (Cmd::SetupLocal, "SYST:KLOC:STATE OFF"),
     (Cmd::GetEnabled, "OUTP%s:STATE?"),
     (Cmd::SetEnable, "OUTP%s:STATE ON"),
     (Cmd::SetDisable, "OUTP%s:STATE OFF"),
     (Cmd::GetSource, "SOUR%s:APPL?"),
-    (Cmd::SetSource, "SOUR%s:APPL:%s"),
+    (Cmd::SetSource, "SOUR%s:FUNC %s"),
     (Cmd::GetFrequency, "SOUR%s:FREQ?"),
     (Cmd::SetFrequency, "SOUR%s:FREQ %f"),
     (Cmd::GetAmplitude, "SOUR%s:VOLT?"),
@@ -404,18 +408,30 @@ pub fn parse_measure(answer: &str) -> Option<Measure> {
     Some(out)
 }
 
-/// What a value out of what the waveform takes earns, as the instrument's refusal goes
-/// to a queue nothing reads: a word, and C's wire. `key` for the message.
-pub fn range_warning(key: &str, value: f64, range: [f64; 2], unit: &str) -> Option<String> {
+/// Why a value outside `range` isn't sent: the instrument would set the nearest limit
+/// in its place and say nothing (the DG1000Z guide, p.2-97, 2-155, 2-182, 2-185).
+pub fn out_of_range(key: &str, value: f64, range: [f64; 2], unit: &str) -> Option<String> {
     if value >= range[0] && value <= range[1] {
         return None;
     }
     Some(format!(
-        "{key} {value} {unit} is outside {} to {}: the instrument may refuse it, and nothing \
-         would say so.",
+        "{key} {value} {unit} is outside {} to {}, and the instrument would set the nearest \
+         limit instead: not sent",
         range[0], range[1]
     ))
 }
+
+/// The warning where the limits are not to be had, as nothing then stands between a
+/// value and the instrument's clamp.
+pub fn limits_unknown(key: &str) -> String {
+    format!(
+        "The instrument's limits for {key} are not known here: a value outside them is set to \
+         the nearest limit."
+    )
+}
+
+/// The pulse duty cycle the guide gives (p.2-106); a short period narrows it further.
+pub const PULSE_DUTY: [f64; 2] = [0.001, 99.999];
 
 /// How long `*OPC?` may go unanswered once one has gone unanswered: the instrument
 /// isn't answering, and a close should not take [`Scpi::get_opc`]'s 30 s more than once.
@@ -488,6 +504,25 @@ impl Link {
     pub fn ask(&mut self, command: Cmd, group: &str) -> Result<String> {
         let channel = Some((Cmd::SelectChannel, group));
         self.scpi.cmd_resp(self.spec.cmdset, channel, &command, &[CmdArg::Str(group)])
+    }
+
+    /// What `command`, a query, says of its limits: `X? MIN` and `X? MAX`, each after an
+    /// `*OPC?`. `None` where either is not a number or doesn't come.
+    pub fn limits(&mut self, command: Cmd, group: &str) -> Option<[f64; 2]> {
+        let template = scpi::cmd_get(self.spec.cmdset, &command)?;
+        let query = scpi::render(template, &[CmdArg::Str(group)]);
+        let mut out = [0.0; 2];
+        for (slot, which) in out.iter_mut().zip(["MIN", "MAX"]) {
+            self.opc();
+            match self.scpi.get_string(&format!("{query} {which}")) {
+                Ok(answer) => *slot = parse_number(&clean(&answer))?,
+                Err(e) => {
+                    log::debug!("{query} {which}: {e}.");
+                    return None;
+                }
+            }
+        }
+        Some(out)
     }
 
     /// `sr_scpi_cmd` on a channel, with what the command takes after its name.
@@ -972,14 +1007,22 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_range_warning_says_so() {
-        assert_eq!(range_warning("output_frequency", 5.0, [0.0, 10.0], "Hz"), None);
-        assert_eq!(range_warning("output_frequency", 10.0, [0.0, 10.0], "Hz"), None);
+    fn out_of_range_says_why() {
+        assert_eq!(out_of_range("output_frequency", 5.0, [0.0, 10.0], "Hz"), None);
+        assert_eq!(out_of_range("output_frequency", 10.0, [0.0, 10.0], "Hz"), None);
+        assert_eq!(out_of_range("output_frequency", 0.0, [0.0, 10.0], "Hz"), None);
         assert_eq!(
-            range_warning("phase", 400.0, [0.0, 360.0], "degrees").unwrap(),
-            "phase 400 degrees is outside 0 to 360: the instrument may refuse it, and nothing \
-             would say so."
+            out_of_range("phase", 400.0, [0.0, 360.0], "degrees").unwrap(),
+            "phase 400 degrees is outside 0 to 360, and the instrument would set the nearest \
+             limit instead: not sent"
         );
+        assert!(out_of_range("phase", -0.5, [0.0, 360.0], "degrees").is_some());
+        assert_eq!(
+            limits_unknown("amplitude"),
+            "The instrument's limits for amplitude are not known here: a value outside them is \
+             set to the nearest limit."
+        );
+        assert_eq!(PULSE_DUTY, [0.001, 99.999]);
     }
 
     const NONE: Limits = Limits { samples: 0, msec: 0 };

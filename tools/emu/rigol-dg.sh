@@ -20,11 +20,14 @@ emu_cases() {
     TCP_LATE="C's read has no timeout over TCP (scpi_tcp_raw_read_data) and waits; oxrok's read gives up at 1 s, drops the late answer at its next send and asks again: a reading lost, none shifted"
     UNREF="g_variant_unref(data) with data still NULL (protocol.c:93 after a failed read) is a GLib critical, and sigrok-cli's logger exits at one, ahead of what the read's comment means to ignore and of the close; oxrok goes on and says no value"
     NO_LIMIT="protocol.c:287-288 jumps past the limit check on a short answer, so a stream of them never ends a capture; oxrok ends it"
-    STRTOF="sigrok-cli reads a value in single precision (session.c:570), so 123456789 goes out as 123456792.000000, where the driver keeps a double; oxrok sends what was asked"
+    STRTOF="sigrok-cli reads a value in single precision (session.c:570), so 12345678.9 goes out as 12345679.000000, where the driver keeps a double; oxrok sends what was asked"
     NOT_FINITE="sigrok-cli's strtof takes it, and it goes out as a word (scpi_send_variadic) to a live output, where the driver has no check; oxrok refuses it and sends nothing"
     NO_VALUE="sigrok-cli takes what is no value (session.c's opt_to_gvar, strtof) and sends 0 to a live output; oxrok refuses it and sends nothing"
     ENABLED_LAST="sigrok-cli turns the output on first, as -c comes; oxrok sets it last, by choice, docs/CLI.md"
     SAYS_NOTHING="C says nothing where oxrok warns; pinned for oxrok's words"
+    FUNC_NOT_APPL="api.c:717-720 sends SOURn:APPL:x with no values, which by the DG1000Z guide (p.1-5) takes 1 kHz, 5 Vpp, 0 V and 0 degrees on what may be a live output; oxrok sends SOURn:FUNC x, which keeps what is valid for the new waveform (p.2-97, 2-109)"
+    ASKS_LIMITS="the generator clamps a value out of its limits with no error (guide p.2-182, 2-185, 2-110, 2-106), which C sends unchecked (api.c:731-771); oxrok asks X? MIN and X? MAX first and refuses what lies outside"
+    CLAMPED="the generator would set the nearest limit in its place with no error (guide p.2-97, 2-155, 2-106), and C sends it (api.c:722-771); oxrok refuses it and nothing goes out"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, so the signal kills it mid capture; oxrok stops, turns the counter off and closes"
     # sigrok-cli doesn't close after a refused start (session.c:896-901) and oxrok does:
     # what follows the stop's COUN:STAT OFF goes.
@@ -69,32 +72,43 @@ emu_cases() {
     emu_options
     emu_case "set enabled on" --no-output -- -d $T -g 1 --config enabled=on --set
     emu_case "set enabled off" --no-output -- -d $U -g 2 --config enabled=off --set
-    emu_case "set pattern" --no-output -- -d $T -g 1 --config pattern=Square --set
-    emu_case "set pattern in any case" --no-output -- -d $T -g 1 --config pattern=pULSE --set
+    emu_case "set pattern" --no-output --oracle-differs "$FUNC_NOT_APPL" -- -d $T -g 1 --config pattern=Square --set
+    emu_case "set pattern in any case" --no-output --oracle-differs "$FUNC_NOT_APPL" -- -d $T -g 1 --config pattern=pULSE --set
+    # A pattern keeps what was set: C's APPL puts 5 Vpp back, as the guide says.
+    emu_options amplitude=1
+    emu_case "a pattern keeps the amplitude" --oracle-differs "$FUNC_NOT_APPL" -- -d $T -g 1 --config pattern=Square --get amplitude
+    emu_options
     emu_case "set pattern unknown" --no-output --expect-fail -- -d $T -g 1 --config pattern=Triangle --set
     emu_case "set frequency" --no-output -- -d $T -g 1 --config output_frequency=2000.5 --set
-    emu_case "set amplitude" --no-output -- -d $T -g 2 --config amplitude=1.5 --set
-    emu_case "set offset" --no-output -- -d $T -g 1 --config offset=-0.25 --set
+    emu_case "set amplitude" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 2 --config amplitude=1.5 --set
+    emu_case "set offset" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 1 --config offset=-0.25 --set
     emu_case "set phase" --no-output -- -d $T -g 1 --config phase=90 --set
     emu_case "set duty on a sine" --no-output --expect-fail -- -d $T -g 1 --config output_duty_cycle=25 --set
     emu_options wave=SQU wave2=PULSE
-    emu_case "set duty on a square" --no-output -- -d $T -g 1 --config output_duty_cycle=25 --set
-    emu_case "set duty on a pulse" --no-output -- -d $T -g 2 --config output_duty_cycle=75 --set
+    emu_case "set duty on a square" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 1 --config output_duty_cycle=25 --set
+    emu_case "set duty on a pulse" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 2 --config output_duty_cycle=75 --set
+    emu_case "set pulse duty out of range" --no-output --expect-fail --oracle-differs "$CLAMPED" -- -d $T -g 2 --config output_duty_cycle=100 --set
     emu_options wave=NOISE wave2=DC
     emu_case "set frequency on noise" --no-output --expect-fail -- -d $T -g 1 --config output_frequency=1000 --set
     emu_case "set phase on noise" --no-output --expect-fail -- -d $T -g 1 --config phase=10 --set
     emu_case "set amplitude on dc" --no-output --expect-fail -- -d $T -g 2 --config amplitude=1 --set
-    emu_case "set offset on dc" --no-output -- -d $T -g 2 --config offset=1 --set
+    emu_case "set offset on dc" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 2 --config offset=1 --set
     emu_options
     # Refused by the unit, in its queue: neither tool reads it.
-    emu_case "set frequency the unit refuses" --no-output -- -d $T -g 1 --config output_frequency=100000000 --set
-    emu_case "set frequency out of range says so" --oracle-differs "$SAYS_NOTHING" --stderr -- -d $T -g 1 --config output_frequency=100000000 --set
-    emu_case "set in double precision" --no-output --oracle-differs "$STRTOF" -- -d $T -g 1 --config output_frequency=123456789 --set
+    emu_case "set frequency out of range" --no-output --expect-fail --oracle-differs "$CLAMPED" -- -d $T -g 1 --config output_frequency=100000000 --set
+    emu_case "set frequency out of range says why" --expect-fail --oracle-differs "$SAYS_NOTHING" --stderr -- -d $T -g 1 --config output_frequency=100000000 --set
+    emu_case "set phase out of range" --no-output --expect-fail --oracle-differs "$CLAMPED" -- -d $T -g 1 --config phase=400 --set
+    emu_case "set amplitude above the instrument's" --no-output --expect-fail --oracle-differs "$ASKS_LIMITS" -- -d $T -g 1 --config amplitude=50 --set
+    emu_case "set offset above the instrument's" --no-output --expect-fail --oracle-differs "$ASKS_LIMITS" -- -d $T -g 1 --config offset=4 --set
+    emu_options limits=silent
+    emu_case "set amplitude with no limits to be had" --oracle-differs "$SAYS_NOTHING" --stderr -- -d $U -g 1 --config amplitude=1 --set
+    emu_options
+    emu_case "set in double precision" --no-output --oracle-differs "$STRTOF" -- -d $T -g 1 --config output_frequency=12345678.9 --set
     emu_case "set a NaN" --no-output --expect-fail --oracle-differs "$NOT_FINITE" -- -d $T -g 1 --config amplitude=nan --set
     emu_case "set an infinity" --no-output --expect-fail --oracle-differs "$NOT_FINITE" -- -d $T -g 1 --config offset=inf --set
     emu_case "set no number" --no-output --expect-fail --oracle-differs "$NO_VALUE" -- -d $T -g 1 --config amplitude=abc --set
-    emu_case "set enabled goes last" --no-output --oracle-differs "$ENABLED_LAST" -- -d $T -g 1 --config enabled=on --config amplitude=1 --set
-    emu_case "set several in order" --no-output -- -d $T -g 1 --config output_frequency=2000 --config amplitude=1 --config enabled=on --set
+    emu_case "set enabled goes last" --no-output --oracle-differs "$ENABLED_LAST and $ASKS_LIMITS" -- -d $T -g 1 --config enabled=on --config amplitude=1 --set
+    emu_case "set several in order" --no-output --oracle-differs "$ASKS_LIMITS" -- -d $T -g 1 --config output_frequency=2000 --config amplitude=1 --config enabled=on --set
 
     # A capture.
     emu_case "two frames" --record -- -d $U --samples 2 -O analog
@@ -163,6 +177,7 @@ $FOLD_T
     emu_case "mso capture with no key for it" --no-output --expect-fail -- -d $T --samples 1 -O analog
     emu_options model=MSO5074 wave=PULS
     emu_case "mso get duty on a pulse" -- -d $T -g 1 --get output_duty_cycle
+    emu_case "mso set amplitude says it clamps" --oracle-differs "$SAYS_NOTHING" --stderr -- -d $T -g 1 --config amplitude=1 --set
     emu_case "mso set duty on a pulse" --no-output -- -d $T -g 1 --config output_duty_cycle=30 --set
     emu_options model=MSO5074 wave=SQU
     emu_case "mso get duty on a square" --no-output --expect-fail -- -d $T -g 1 --get output_duty_cycle
