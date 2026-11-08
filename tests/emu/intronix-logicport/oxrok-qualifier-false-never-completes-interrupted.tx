@@ -215,3 +215,5 @@ bulk_in 81 4096 -> 3160c2004410
 bulk_out 02 c200000000 -> 5
 bulk_in 81 4096 -> 3160c2004510
 interrupt
+bulk_out 02 c10300000000 -> 6
+bulk_in 81 4096 -> 3160c1SEQ

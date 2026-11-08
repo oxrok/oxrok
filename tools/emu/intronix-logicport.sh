@@ -62,6 +62,16 @@ check = 0
 for u in units:
     check ^= u
 fields = [u ^ KEY for u in units] + [check ^ KEY]
+if spoil == "rbf-files":      # the per-image files, oxrok's fallback
+    os.makedirs(out, exist_ok=True)
+    for i, name in enumerate(names):
+        stream = bytearray(images[i])
+        stream[0:4096], stream[4096:8192] = stream[4096:8192], stream[0:4096]
+        rbf = bytes(sum((stream[(b * 8 + k) * 2] & 1) << k for k in range(8))
+                    for b in range(len(stream) // 16))
+        with open(os.path.join(out, f"intronix-logicport-{name}.rbf"), "wb") as f:
+            f.write(rbf)
+    sys.exit(0)
 if spoil == "check":
     fields[8] ^= 1
 head = ",".join(map(str, fields)).encode() + b"\r\n"
@@ -155,6 +165,9 @@ s/^(bulk_in 81 [0-9]+ -> 3160c[123])[0-9a-f]{4}/\1SEQ/'
     done
     emu_case "trigger 500M" --tx-filter "$T" --digest --filter '6,$d' -- -d $D -c samplerate=500M -C CLK1 --samples 2047 -t CLK1=r -O bits
     emu_case "trigger 500M ratio 25" --tx-filter "$T" --digest --filter '6,$d' -- -d $D -c samplerate=500M:captureratio=25 -C CLK1 --samples 2047 -t CLK1=r -O bits
+    for ratio in 3 7; do
+        emu_case "trigger 500M ratio $ratio" --tx-filter "$T" --digest --filter '6,$d' -- -d $D -c samplerate=500M:captureratio=$ratio -C CLK1 --samples 2047 -t CLK1=r -O bits
+    done
     emu_case "trigger on a channel left out" --tx-filter "$T" --stderr --expect-fail --filter "$L" -- -d $D -c samplerate=1M -C CLK1 --samples 16 -t D0=r -O bits
     # Bench stimuli, in time: the D0 pulse train of the "trigger" section.
     lp_options d=0 seq=1:5000,0:5000 seq-repeat=30 clk=0
@@ -202,6 +215,10 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     emu_case "calibration +003" --tx-filter "$T" -- -d $D -c samplerate=1M -C CLK1 --samples 8 -O bits
     lp_options cal=none
     emu_case "no calibration" --tx-filter "$T" -- -d $D -c samplerate=1M -C CLK1 --samples 8 -O bits
+    lp_options cal=-100
+    emu_case "calibration -100 at -6 V" --tx-filter "$T" -- -d $D -c samplerate=1M:voltage_threshold=-6.0--6.0 -C CLK1 --samples 8 -O bits
+    lp_options cal=+999
+    emu_case "calibration +999 at 6 V" --tx-filter "$T" -- -d $D -c samplerate=1M:voltage_threshold=6.0-6.0 -C CLK1 --samples 8 -O bits
     lp_options stall=read-eeprom
     emu_case "eeprom stalls" --tx-filter "$T" -- -d $D -c samplerate=1M -C CLK1 --samples 8 -O bits
     lp_options
@@ -230,6 +247,9 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     lp_options image=none init-steps=8
     emu_case "init counter counts" --tx-filter "$U" --timeout 20 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options image=none poweron-silent=3
+    # wait_link's 3 s is wall time, as in C: under stops of 400 ms the
+    # deadline moves against the silent resyncs and one pair of lines
+    # changes places; the upload still succeeds.
     emu_case "ignores commands after power on" --tx-filter "$U" --timeout 30 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options
 
@@ -238,13 +258,13 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     lp_options image=none wrong-image=6
     emu_case "the wrong image loads" --tx-filter "$U" --no-output --expect-fail --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options image=none nstatus-stuck=1
-    emu_case "nstatus stays low" --tx-filter "$W" --oracle-bug "protocol.c:380-399: libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --stderr --expect-fail --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
+    emu_case "nstatus stays low" --tx-filter "$W" --oracle-bug "protocol.c:624-636: a failed bitbang_configure returns without BITMODE_RESET, and libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --stderr --expect-fail --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options image=none conf-done-stuck=1
-    emu_case "conf_done low once, the retry works" --tx-filter "$W" --oracle-bug "protocol.c:380-399: libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
+    emu_case "conf_done low once, the retry works" --tx-filter "$W" --oracle-bug "protocol.c:624-636: a failed bitbang_configure returns without BITMODE_RESET, and libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options image=none conf-done-stuck=100
-    emu_case "conf_done stays low" --tx-filter "$W" --oracle-bug "protocol.c:380-399: libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --stderr --expect-fail --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
+    emu_case "conf_done stays low" --tx-filter "$W" --oracle-bug "protocol.c:624-636: a failed bitbang_configure returns without BITMODE_RESET, and libftdi keeps its bit-bang flag across a close, so a reopen after a failed upload asks 4 x 460800 Bd, which it refuses, and every retry fails" --stderr --expect-fail --timeout 40 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options image=none init-stuck=1
-    emu_case "init counter stuck, and both go on" --tx-filter "$U" --timeout 50 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
+    emu_case "init counter stuck" --tx-filter "$U" --oracle-differs "api.c:455-462: the retry after a failed configuration resyncs, finds the image id and captures on an FPGA whose init never finished" --expect-fail --stderr --timeout 50 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     lp_options
 
     # A link that stops or lies, past the upload.
@@ -274,7 +294,11 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     emu_case "no answer to the next frame" --tx-filter "$S" --oxrok-fails "timeout" --timeout 20 -- -d $D -c samplerate=10M -C CLK1 --samples 16 --frames 2 -O bits
     lp_options d=0 clk=0
     emu_case "a trigger that never comes, interrupted" --oracle-bug "sigrok-cli has no SIGINT handler" --tx-filter "$T
-/^interrupt\$/q" --interrupt in=1:70 --no-output --timeout 10 -- -d $D -c samplerate=1M -C D0 --samples 16 -t D0=r -O bits
+/^interrupt\$/,\${
+/^interrupt\$/b
+/^bulk_out 02 c10300000000 /{n;s/^(bulk_in 81 [0-9]+ -> 3160c1)[0-9a-f]{4}\$/\1SEQ/;q;}
+d
+}" --interrupt in=1:70 --no-output --timeout 10 -- -d $D -c samplerate=1M -C D0 --samples 16 -t D0=r -O bits
     lp_options
 
     # Firmware.
@@ -303,7 +327,8 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     for n in 1 5 17; do
         emu_case "oxrok count r*$n" $O "$T" -- -d $D -c samplerate=1M -C D0 --samples 200 -t "D0=r*$n" -O bits
     done
-    # A level with a count: the pattern becoming true, not its samples.
+    # A level with a count: the pattern becoming true, not its samples. No
+    # check of hil/oxrok-hil covers it; it rests on protocol.rs's notes.
     emu_case "oxrok count of a level" $O "$T" -- -d $D -c samplerate=1M -C D0 --samples 200 -t "D0=1*2" -O bits
     # consecutive: six rises, D1 high except on the third.
     lp_options d=0 seq=0:20000,2:5000,3:5000,2:5000,3:5000,0:5000,1:5000,2:5000,3:5000,2:5000,3:5000,2:5000,3:5000,0:20000 clk=0
@@ -337,7 +362,11 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     emu_case "oxrok qualifier active-low" $O "$T" -- -d $D -c external_clock=on:clock_qualifier=active-low -C CLK1,CLK2 --samples 16 -O bits
     lp_options clk=100000 d=0 image=5
     emu_case "oxrok qualifier false never completes, interrupted" $O "$T
-/^interrupt\$/q" --interrupt in=1:70 --no-output --timeout 10 -- -d $D -c external_clock=on:clock_qualifier=active-high -C CLK1,CLK2 --samples 16 -O bits
+/^interrupt\$/,\${
+/^interrupt\$/b
+/^bulk_out 02 c10300000000 /{n;s/^(bulk_in 81 [0-9]+ -> 3160c1)[0-9a-f]{4}\$/\1SEQ/;q;}
+d
+}" --interrupt in=1:70 --no-output --timeout 10 -- -d $D -c external_clock=on:clock_qualifier=active-high -C CLK1,CLK2 --samples 16 -O bits
     # sample point: a change of image, and a clock inverted makes the edge the other one.
     for pe in "before rising" "before falling" "after rising"; do
         set -- $pe
@@ -348,7 +377,7 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     emu_case "oxrok sample point before inverted clock" $O "$U" --timeout 20 -- -d $D -c external_clock=on:sample_point=before:invert=CLK1 -C CLK1 --samples 16 -O bits
     # freq: the input's frequency to 10 Hz, the second reading after a select.
     lp_options image=none clk=1000000
-    emu_case "oxrok show on a cold device uploads" $O "$U" --keep-header --filter 's/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/' --timeout 20 -- -d $D --show
+    emu_case "show on a cold device" --tx-filter "$U" --oracle-differs "oxrok's show measures the frequency, which uploads on a cold device" --keep-header --filter 's/conn: [0-9]+\.[0-9]+/conn: BUS.ADDR/' --timeout 20 -- -d $D --show
     lp_options clk=1000000
     emu_case "oxrok frequency on CLK1" $O "$T" -- -d $D -c frequency_channel=CLK1 --get frequency
     emu_case "oxrok frequency on D0" $O "$T" -- -d $D -c frequency_channel=D0 --get frequency
@@ -360,6 +389,9 @@ s/^sr: intronix-logicport: RLE/RLE/" -- -d $D -c samplerate=250M:rle=on -C CLK1 
     SIGROK_FIRMWARE_DIR=$M/missing
     lp_options image=none
     emu_case "oxrok no firmware words" $O "$U" --stderr --expect-fail --timeout 20 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
+    lp_ccf "$M/rbf-files" rbf-files
+    SIGROK_FIRMWARE_DIR=$M/rbf-files
+    emu_case "oxrok rbf files" $O "$U" --timeout 20 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits
     for spoil in text short rbf; do
         SIGROK_FIRMWARE_DIR=$M/$spoil
         emu_case "oxrok firmware $spoil words" $O "$U" --stderr --expect-fail --timeout 20 -- -d $D -c samplerate=1M -C CLK1 --samples 16 -O bits

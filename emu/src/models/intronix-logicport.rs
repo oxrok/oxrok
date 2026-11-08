@@ -46,8 +46,10 @@
 //! - The sample memory [rec]: a ring of 2048 rows of 40 bits, reads wrap
 //!   within a lane; bit 0 of the flags is set on data rows from the marked
 //!   row on (the drivers ignore it); the marked row is 7 samples after the
-//!   match; a run of L samples is a data row and, for L >= 2, a count row
-//!   holding L - 2; the marked row is a data row even without a transition.
+//!   match; a run of L samples is a data row and a count row holding L - 2
+//!   (the recording has L = 5, 3 and 2; for L = 1 a data row alone is
+//!   [c]/[guess], from the drivers' readout); the marked row is a data row
+//!   even without a transition.
 //!   Without compression `post + 1` rows follow the marked row, with
 //!   compression `post`. The trigger position register is the number of
 //!   rows after the marked row, plus 1.
@@ -73,7 +75,7 @@
 //! The FPGA's upload: nCONFIG low releases a configuration only after the
 //! `0x100000` write [c]; bits go in on DCLK rising, LSB first [c]; the
 //! stream must start with the RBF header [c]. The model takes two kinds of
-//! bitstream. A stand-in (`tools/emu-firmware.sh`) is checked block by block
+//! bitstream. A stand-in (`lp_ccf` in `tools/emu/intronix-logicport.sh`) is checked block by block
 //! and its length exactly, so a reordered or cut upload leaves `CONF_DONE` low
 //! with nSTATUS low, as a CRC error does ([guess]; a stand-in cannot show
 //! what the real parts do). A real image is told by a digest of its first
@@ -199,7 +201,7 @@ const REAL_HEADS: [u64; 8] = [
     0x4142_3a5a_ec7d_6a90,
     0xd1ed_1019_4f2a_6333,
 ];
-/// A stand-in image's RBF bytes (`tools/emu-firmware.sh`): small, each its
+/// A stand-in image's RBF bytes (`lp_ccf` in the scenario): small, each its
 /// own, for three or more of the drivers' 10000 byte chunks in the upload.
 pub fn standin_size(image: usize) -> usize {
     3000 + 16 * image
@@ -752,7 +754,8 @@ impl Fpga {
         };
         if fire {
             c.fired = true;
-            // A duration's mark lands a sample late [hil, and the driver's
+            // A duration's mark lands a sample late [rs; hil checks the
+            // marker where the driver puts it, so this follows the driver's
             // comment: "measured on the bench at 1 MHz"].
             let late = u32::from(r.levels.iter().any(|l| l.mode == 2));
             c.marker_left = 7 + late;
@@ -851,7 +854,8 @@ impl Fpga {
                 }
             }
             if ddr {
-                // Even samples in bank A, odd in bank B [c: read_ddr].
+                // Even samples in bank A, odd in bank B: the readout of
+                // [c: read_ddr], not anything recorded.
                 let row = (c.samples as usize / 2) % BANK;
                 let clk = Self::data_flags(s, c.marked);
                 if c.samples & 1 == 0 {

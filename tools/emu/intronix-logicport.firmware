@@ -1,0 +1,6 @@
+# Bitstream stand-in for the intronix-logicport model (emu/src/models/intronix-logicport.rs):
+# a LogicPort.ccf of eight made-up images of 3000 + 16 n bytes, as the
+# model expects them. A plain stand-in has no header: lp_ccf in
+# tools/emu/intronix-logicport.sh writes the real form over it before
+# its cases. The size is that file's, not the vendor's.
+intronix-logicport.ccf 391241
