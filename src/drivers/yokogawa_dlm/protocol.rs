@@ -186,8 +186,8 @@ pub fn length(text: &str) -> Option<u32> {
 ///   table's neighbours are a factor of 2 apart at least, so 1% only takes rounding.
 /// - No `E`, or a significand of ten bytes or more, is no value here. There C reads
 ///   past the end, or writes past `ss` (`protocol.c:336-337`).
-/// - An exponent is a sign and up to three digits, read as they are. C takes three
-///   bytes, so `1.000E-003` is 1 s there, and an empty one is 0, so `2.000E` is 2 s.
+/// - An exponent is a sign and digits, read as they are. C takes three bytes, so
+///   `1.000E-003` is 1 s there, and an empty one is 0, so `2.000E` is 2 s.
 /// - A positive exponent is positive. C drops the sign (`abs(e)`, `protocol.c:345`), so
 ///   `2.000E+03` reads there as `2.000E-03`: 2 kV a division is 2 mV.
 pub fn scaled_index(value: &str, table: &[(u64, u64)]) -> Option<usize> {
@@ -196,15 +196,12 @@ pub fn scaled_index(value: &str, table: &[(u64, u64)]) -> Option<usize> {
     if significand.is_empty()
         || significand.len() >= 10
         || digits.is_empty()
-        || digits.len() > 3
         || !digits.bytes().all(|b| b.is_ascii_digit())
     {
         return None;
     }
+    // What is no number, or is 0, negative or infinite, is within 1% of no entry.
     let v: f64 = value.parse().ok()?;
-    if !(v.is_finite() && v > 0.0) {
-        return None;
-    }
     table.iter().position(|&(p, q)| {
         let entry = p as f64 / q as f64;
         ((v - entry) / entry).abs() <= 0.01
