@@ -192,6 +192,8 @@ impl Watch {
         self.judge(self.silent + self.unusable, bound, "No answer from the instrument")
     }
 
+    /// The warning says the time that set it off and not the time gone, which a stall
+    /// in the last read would make any number.
     fn judge(&mut self, gone: Duration, bound: Duration, what: &str) -> Verdict {
         let seconds = |d: Duration| d.as_secs_f32().round();
         if gone >= bound && !self.time_limited {
@@ -199,7 +201,10 @@ impl Watch {
         }
         if gone >= self.warn_after && !self.warned {
             self.warned = true;
-            return Verdict::Warn(format!("{what} for {} s, still asking.", seconds(gone)));
+            return Verdict::Warn(format!(
+                "{what} for {} s, still asking.",
+                seconds(self.warn_after)
+            ));
         }
         Verdict::Go
     }
