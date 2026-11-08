@@ -301,7 +301,25 @@ fn load_info(vm: &VirtualMachine, module: &str) -> std::result::Result<DecoderIn
     }
 }
 
+/// The stack the interpreter is made and the decoders are loaded on.
+const SCAN_STACK: usize = 16 << 20;
+
 pub(super) fn scan(dir: &Path, names: Vec<String>) -> Result<Vec<&'static DecoderDef>> {
+    // RustPython bounds recursion by the native stack left. Its start,
+    // and the imports of some decoders, need more than the 2 MiB of a
+    // test thread in a debug build: there the start fails with
+    // "essential initialization failed", and those decoders go missing.
+    // Do both on a thread of its own, whatever thread asks.
+    let dir = dir.to_owned();
+    std::thread::Builder::new()
+        .name("rustpython-scan".into())
+        .stack_size(SCAN_STACK)
+        .spawn(move || scan_here(&dir, names))?
+        .join()
+        .unwrap_or_else(|_| Err(Error::device("rustpython: the decoder scan panicked")))
+}
+
+fn scan_here(dir: &Path, names: Vec<String>) -> Result<Vec<&'static DecoderDef>> {
     root(dir)?;
     let mut defs = Vec::new();
     with_vm(|vm| {
@@ -616,7 +634,7 @@ mod tests {
     fn wide_integers_cross_into_python_and_back_intact() {
         // The interpreter's start needs more stack than a test thread has
         // in a debug build.
-        let t = std::thread::Builder::new().stack_size(16 << 20).spawn(|| {
+        let t = std::thread::Builder::new().stack_size(super::SCAN_STACK).spawn(|| {
             interpreter().enter(|vm| {
                 // 2^152 - 1, the largest 152 bit SPI word.
                 let item = Item::BigUint(vec![0xff; 19]);
