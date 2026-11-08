@@ -13,8 +13,16 @@
 //!   (1.31 ms to over 10 s); `COUN:STAT?` is `RUN`, `STOP`, `SINGLE` or `OFF`;
 //!   `OUTPn:STATE?` is `ON` or `OFF`; `*OPC?` is `1`.
 //! - An `APPL:x` with no values takes the guide's defaults, 1 kHz, 5 Vpp, 0 V and
-//!   0 degrees: the guide's "Default" column, read for a value left out, and no
-//!   run on a unit.
+//!   0 degrees (p.1-5, "If the parameter is omitted, the instrument will set the
+//!   parameter to its default", and each `APPL` entry's Default column). `FUNC x`
+//!   changes the waveform alone: what is valid for the new one stays, and a frequency
+//!   that isn't goes to the new waveform's top (p.2-97, 2-109).
+//! - A value out of range is clamped to the limit, with no error (p.2-97 FREQ, 2-155
+//!   PHAS, 2-182 VOLT, 2-185 VOLT:OFFS), and `X? MIN` and `X? MAX` say the limits.
+//!   The frequency's are Table 2-1's (C's table), the phase's 0 to 360, the pulse
+//!   duty's 0.001 to 99.999 % (p.2-106). The rest depend on the load and the
+//!   frequency, so the model's are stand-ins: amplitude 2 mVpp (the guide's least) to
+//!   10 Vpp, offset within 5 V less half the amplitude, square duty 0.01 to 99.99 %.
 //! - The DG800 and DG900: as the DG1000Z, by the C driver's one table of commands.
 //!   Their manual was not to be had.
 //! - The MSO5000's generator: only what libsigrok's table sends. Numbers as the
@@ -22,17 +30,13 @@
 //!
 //! Guesses, from memory and from no source, which no test should lean on:
 //!
-//! - The ids 1ab1:0642, 0643 and 0644 for the series, and 1ab1:0515 from
-//!   `rigol-ds`'s table for the MSO5000. All on one id per series, and the series'
-//!   name for its strings, so that a `model=` of the same series needs no re-attach;
-//!   a real one has its model there.
+//! - The series' strings: a real one has its model there. One id per series, from
+//!   libsigrok's `contrib/60-libsigrok.rules` (1ab1:0642 DG1000Z, 0643 DG800 and
+//!   DG900, 0515 MSO5000), so that a `model=` of one series needs no re-attach.
 //! - The firmware strings, serial numbers and bus speeds. Whether a real one takes
 //!   remote control (`remote=1`).
-//!
-//! What the model refuses: a number out of the waveform's range or a NaN gets `-222`
-//! in the queue and changes nothing, which is a guess at what a unit does, and no
-//! tool reads the queue. A set of a key on a waveform that lacks it goes unflagged:
-//! `-221` likewise.
+//! - What isn't a number, such as `nan` from sigrok-cli, gets `-104` in the queue and
+//!   changes nothing. The MSO5000's limits answer as a DG's.
 //!
 //! Emulation artifacts:
 //!
@@ -53,6 +57,8 @@
 //! - `say=QUERY=TEXT`: what a query answers, always, with `~` for a space, as options
 //!   are cut at spaces; `eol` still goes after it;
 //! - `play=A;B;C`: what `COUN:MEAS?` answers, each once, and then its readings;
+//! - `amplitude=V`: channel 1's amplitude at first;
+//! - `limits=silent`: no answer to `X? MIN` and `X? MAX`, with no error;
 //! - `remote=1`: says it takes remote control (`RL1`).
 //!
 //! The pedantic checks: only the commands the model has; a channel it lacks.
@@ -168,9 +174,9 @@ const KINDS: &[Kind] = &[
     kind("DG822", "DG800", 0x0643, 2, &DG820),
     kind("DG831", "DG800", 0x0643, 1, &DG830),
     kind("DG832", "DG800", 0x0643, 2, &DG830),
-    kind("DG952", "DG900", 0x0644, 2, &DG952),
-    kind("DG972", "DG900", 0x0644, 2, &DG972),
-    kind("DG992", "DG900", 0x0644, 2, &DG992),
+    kind("DG952", "DG900", 0x0643, 2, &DG952),
+    kind("DG972", "DG900", 0x0643, 2, &DG972),
+    kind("DG992", "DG900", 0x0643, 2, &DG992),
     mso("MSO5354"),
     mso("MSO5204"),
     mso("MSO5104"),
@@ -178,6 +184,17 @@ const KINDS: &[Kind] = &[
     mso("MSO5074"),
     mso("MSO5072"),
 ];
+
+/// A value a channel has a limit on.
+#[derive(Clone, Copy, Debug)]
+enum Value {
+    Frequency,
+    Amplitude,
+    Offset,
+    Phase,
+    DutySquare,
+    DutyPulse,
+}
 
 /// One channel's state.
 #[derive(Clone, Debug)]
@@ -233,6 +250,8 @@ pub(super) struct Generator {
     /// `play=`: the next `COUN:MEAS?`.
     play: VecDeque<String>,
     readings: u32,
+    /// `limits=silent`.
+    silent_limits: bool,
 }
 
 impl Generator {
@@ -273,93 +292,122 @@ impl Generator {
         }
     }
 
-    /// What a channel's number comes to. `Done` or the refusal.
-    fn set_number(
-        &mut self,
-        channel: usize,
-        m: &Message<'_>,
-        set: impl Fn(&mut Channel, f64, &Wave) -> bool,
-    ) -> Answer {
-        let Ok(value) = m.args.parse::<f64>() else {
-            return Answer::Error(-222, "Data out of range".to_owned());
-        };
-        let state = &mut self.channels[channel];
-        let wave = self.kind.waves[state.wave];
-        if value.is_finite() && set(state, value, &wave) {
-            Answer::Done
-        } else {
-            Answer::Error(-222, "Data out of range".to_owned())
+    /// The least and the most a value of `what` takes on `channel` now.
+    fn limits(&self, channel: usize, what: Value) -> (f64, f64) {
+        let state = &self.channels[channel];
+        let wave = &self.kind.waves[state.wave];
+        match what {
+            Value::Frequency => (wave.freq_min, wave.freq_max),
+            Value::Amplitude => (0.002, 10.0),
+            Value::Offset => {
+                let room = 5.0 - state.amplitude / 2.0;
+                (-room, room)
+            }
+            Value::Phase => (0.0, 360.0),
+            Value::DutySquare => (0.01, 99.99),
+            Value::DutyPulse => (0.001, 99.999),
         }
     }
 
+    fn value(&self, channel: usize, what: Value) -> f64 {
+        let state = &self.channels[channel];
+        match what {
+            Value::Frequency => state.frequency,
+            Value::Amplitude => state.amplitude,
+            Value::Offset => state.offset,
+            Value::Phase => state.phase,
+            Value::DutySquare => state.duty_square,
+            Value::DutyPulse => state.duty_pulse,
+        }
+    }
+
+    /// `X?`, `X? MIN` and `X? MAX`.
+    fn ask_value(&self, channel: usize, what: Value, m: &Message<'_>) -> Answer {
+        let (least, most) = self.limits(channel, what);
+        let value = match m.args.to_ascii_uppercase().as_str() {
+            "" => self.value(channel, what),
+            "MIN" | "MINIMUM" | "MAX" | "MAXIMUM" if self.silent_limits => return Answer::Silent,
+            "MIN" | "MINIMUM" => least,
+            "MAX" | "MAXIMUM" => most,
+            _ => return Answer::Unknown,
+        };
+        Answer::Text(sci(value, 6))
+    }
+
+    /// A value set: clamped to its limits, as the guide has it, with no error.
+    fn set_value(&mut self, channel: usize, what: Value, m: &Message<'_>) -> Answer {
+        let (least, most) = self.limits(channel, what);
+        let value = match m.args.to_ascii_uppercase().as_str() {
+            "MIN" | "MINIMUM" => least,
+            "MAX" | "MAXIMUM" => most,
+            text => match text.parse::<f64>() {
+                Ok(v) if v.is_finite() => v.clamp(least, most),
+                _ => return Answer::Error(-104, "Data type error".to_owned()),
+            },
+        };
+        let state = &mut self.channels[channel];
+        match what {
+            Value::Frequency => state.frequency = value,
+            Value::Amplitude => state.amplitude = value,
+            Value::Offset => state.offset = value,
+            Value::Phase => state.phase = value,
+            Value::DutySquare => state.duty_square = value,
+            Value::DutyPulse => state.duty_pulse = value,
+        }
+        Answer::Done
+    }
+
     fn source(&mut self, channel: usize, rest: &str, m: &Message<'_>) -> Answer {
+        let mso = self.kind.is_mso;
+        let what = match rest.trim_end_matches('?') {
+            ":FREQ" => Some(Value::Frequency),
+            ":VOLT" => Some(Value::Amplitude),
+            ":VOLT:OFFS" => Some(Value::Offset),
+            ":PHAS" => Some(Value::Phase),
+            ":FUNC:SQU:DCYC" if !mso => Some(Value::DutySquare),
+            ":FUNC:PULS:DCYC" if !mso => Some(Value::DutyPulse),
+            ":PULS:DCYC" if mso => Some(Value::DutyPulse),
+            _ => None,
+        };
+        if let Some(what) = what {
+            return if rest.ends_with('?') {
+                self.ask_value(channel, what, m)
+            } else {
+                self.set_value(channel, what, m)
+            };
+        }
         let state = &self.channels[channel];
         match rest {
-            ":APPL?" if !self.kind.is_mso => Answer::Text(self.apply(state)),
-            ":FUNC?" if self.kind.is_mso => {
-                Answer::Text(self.kind.waves[state.wave].name.to_owned())
-            }
-            ":FUNC" if self.kind.is_mso => self.set_wave(channel, m.args),
-            ":FREQ?" => Answer::Text(sci(state.frequency, 6)),
-            ":VOLT?" => Answer::Text(sci(state.amplitude, 6)),
-            ":VOLT:OFFS?" => Answer::Text(sci(state.offset, 6)),
-            ":PHAS?" => Answer::Text(sci(state.phase, 6)),
-            ":FUNC:SQU:DCYC?" if !self.kind.is_mso => Answer::Text(sci(state.duty_square, 6)),
-            ":FUNC:PULS:DCYC?" if !self.kind.is_mso => Answer::Text(sci(state.duty_pulse, 6)),
-            ":PULS:DCYC?" if self.kind.is_mso => Answer::Text(sci(state.duty_pulse, 6)),
-            ":FREQ" => self.set_number(channel, m, |c, v, w| {
-                let good = v >= w.freq_min && v <= w.freq_max;
-                if good {
-                    c.frequency = v;
-                }
-                good
-            }),
-            ":VOLT" => self.set_number(channel, m, |c, v, _| {
-                c.amplitude = v;
-                true
-            }),
-            ":VOLT:OFFS" => self.set_number(channel, m, |c, v, _| {
-                c.offset = v;
-                true
-            }),
-            ":PHAS" => self.set_number(channel, m, |c, v, _| {
-                let good = (0.0..=360.0).contains(&v);
-                if good {
-                    c.phase = v;
-                }
-                good
-            }),
-            ":FUNC:SQU:DCYC" if !self.kind.is_mso => self.set_number(channel, m, |c, v, _| {
-                let good = (0.0..=100.0).contains(&v);
-                if good {
-                    c.duty_square = v;
-                }
-                good
-            }),
-            ":FUNC:PULS:DCYC" | ":PULS:DCYC" => self.set_number(channel, m, |c, v, _| {
-                let good = (0.0..=100.0).contains(&v);
-                if good {
-                    c.duty_pulse = v;
-                }
-                good
-            }),
+            ":APPL?" if !mso => Answer::Text(self.apply(state)),
+            ":FUNC?" => Answer::Text(self.kind.waves[state.wave].name.to_owned()),
+            ":FUNC" => self.set_wave(channel, m.args, false),
             _ => match rest.strip_prefix(":APPL:") {
-                Some(name) if !self.kind.is_mso => self.set_wave(channel, name),
+                Some(name) if !mso => self.set_wave(channel, name, true),
                 _ => Answer::Unknown,
             },
         }
     }
 
-    /// `APPL:x` or `FUNC x`, with the guide's defaults for what it leaves out.
-    fn set_wave(&mut self, channel: usize, name: &str) -> Answer {
+    /// `APPL:x`, with the guide's defaults for what it leaves out, or `FUNC x`, which
+    /// keeps what is valid for the new waveform and moves a frequency that isn't to the
+    /// new waveform's top.
+    fn set_wave(&mut self, channel: usize, name: &str, defaults: bool) -> Answer {
         let Some(wave) = self.kind.waves.iter().position(|w| w.name.eq_ignore_ascii_case(name))
         else {
             return Answer::Unknown;
         };
         let state = &mut self.channels[channel];
-        let output = state.output;
-        *state = Channel::new(wave);
-        state.output = output;
+        if defaults {
+            let output = state.output;
+            *state = Channel::new(wave);
+            state.output = output;
+        } else {
+            state.wave = wave;
+            let new = &self.kind.waves[wave];
+            if new.frequency && !(new.freq_min..=new.freq_max).contains(&state.frequency) {
+                state.frequency = new.freq_max;
+            }
+        }
         Answer::Done
     }
 
@@ -436,6 +484,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Generator, scpi::Co
     let mut kind = &KINDS[0];
     let (mut counter, mut wave1, mut wave2) = ("OFF".to_owned(), None, None);
     let mut output2 = false;
+    let (mut amplitude, mut silent_limits) = (None, false);
     let (mut say, mut play) = (Vec::new(), VecDeque::new());
     for (k, v) in options {
         if config.option(k, v)? {
@@ -460,6 +509,13 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Generator, scpi::Co
             }
             "play" => play.extend(v.split(';').map(str::to_owned)),
             "remote" => {}
+            "amplitude" => {
+                amplitude = Some(
+                    v.parse::<f64>()
+                        .map_err(|_| Error::Invalid(format!("amplitude={v}: a number")))?,
+                );
+            }
+            "limits" if v == "silent" => silent_limits = true,
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
     }
@@ -471,12 +527,14 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Generator, scpi::Co
             .ok_or_else(|| Error::Invalid(format!("wave={name}: a {} has no such", kind.name)))
     };
     let mut channels = vec![Channel::new(position(wave1)?)];
+    if let Some(amplitude) = amplitude {
+        channels[0].amplitude = amplitude;
+    }
     if kind.channels > 1 {
         channels.push(Channel::new(position(wave2)?));
         channels[1].output = output2;
     }
-    let generator =
-        Generator { kind, channels, counter, say, play, readings: 0 };
+let generator = Generator { kind, channels, counter, say, play, readings: 0, silent_limits };
     Ok((generator, config))
 }
 
@@ -562,13 +620,54 @@ mod tests {
     }
 
     #[test]
-    fn what_a_channel_refuses_changes_nothing() {
+    fn a_value_out_of_range_is_clamped_with_no_error() {
         let mut g = generator(&[]);
-        for line in ["SOUR1:FREQ 1e12", "SOUR1:FREQ nan", "SOUR1:FREQ abc", "SOUR1:PHAS 400"] {
-            assert!(matches!(ask(&mut g, line).0, Answer::Error(-222, _)), "{line}");
+        assert_eq!(ask(&mut g, "SOUR1:FREQ 1e12").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:FREQ?"), "6.000000E+07", "the DG1062Z's top");
+        assert_eq!(ask(&mut g, "SOUR1:PHAS 400").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:PHAS?"), "3.600000E+02");
+        assert_eq!(ask(&mut g, "SOUR1:VOLT 50").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:VOLT?"), "1.000000E+01");
+        assert_eq!(ask(&mut g, "SOUR1:VOLT:OFFS -9").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:VOLT:OFFS?"), "-0.000000E+00", "5 V less half of 10 Vpp");
+        assert_eq!(ask(&mut g, "SOUR1:FUNC:PULS:DCYC 100").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:FUNC:PULS:DCYC?"), "9.999900E+01");
+        assert_eq!(ask(&mut g, "SOUR1:FREQ MIN").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:FREQ?"), "1.000000E-06");
+        // What is no number changes nothing.
+        for line in ["SOUR1:FREQ nan", "SOUR1:FREQ abc", "SOUR1:VOLT inf"] {
+            assert!(matches!(ask(&mut g, line).0, Answer::Error(-104, _)), "{line}");
         }
+        assert_eq!(text(&mut g, "SOUR1:FREQ?"), "1.000000E-06");
+    }
+
+    #[test]
+    fn the_limits_are_asked_and_may_go_unanswered() {
+        let mut g = generator(&[("amplitude", "2")]);
+        assert_eq!(text(&mut g, "SOUR1:VOLT? MAX"), "1.000000E+01");
+        assert_eq!(text(&mut g, "SOUR1:VOLT? MIN"), "2.000000E-03");
+        assert_eq!(text(&mut g, "SOUR1:VOLT:OFFS? MAX"), "4.000000E+00");
+        assert_eq!(text(&mut g, "SOUR1:VOLT:OFFS? MIN"), "-4.000000E+00");
+        assert_eq!(text(&mut g, "SOUR1:FUNC:SQU:DCYC? MAX"), "9.999000E+01");
+        assert_eq!(text(&mut g, "SOUR1:FREQ? MAXIMUM"), "6.000000E+07");
+        assert_eq!(ask(&mut g, "SOUR1:VOLT? HUGE").0, Answer::Unknown);
+        let mut g = generator(&[("limits", "silent")]);
+        assert_eq!(ask(&mut g, "SOUR1:VOLT? MAX"), (Answer::Silent, 0));
+        assert_eq!(text(&mut g, "SOUR1:VOLT?"), "5.000000E+00");
+    }
+
+    #[test]
+    fn func_keeps_what_is_valid_and_apply_takes_the_defaults() {
+        let mut g = generator(&[]);
+        ask(&mut g, "SOUR1:VOLT 1");
+        ask(&mut g, "SOUR1:FREQ 4e7");
+        assert_eq!(ask(&mut g, "SOUR1:FUNC SQU").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:FUNC?"), "SQU");
+        assert_eq!(text(&mut g, "SOUR1:VOLT?"), "1.000000E+00");
+        assert_eq!(text(&mut g, "SOUR1:FREQ?"), "2.500000E+07", "the square's top");
+        assert_eq!(ask(&mut g, "SOUR1:APPL:SIN").0, Answer::Done);
+        assert_eq!(text(&mut g, "SOUR1:VOLT?"), "5.000000E+00");
         assert_eq!(text(&mut g, "SOUR1:FREQ?"), "1.000000E+03");
-        assert_eq!(text(&mut g, "SOUR1:PHAS?"), "0.000000E+00");
     }
 
     #[test]
@@ -623,8 +722,8 @@ mod tests {
         assert_eq!(ask(&mut g, "SYST:KLOC:STATE OFF").0, Answer::Unknown);
         assert_eq!(ask(&mut g, "OUTP1:STATE?").0, Answer::Unknown);
         let mut g = generator(&[]);
-        assert_eq!(ask(&mut g, "SOUR1:FUNC?").0, Answer::Unknown);
         assert_eq!(ask(&mut g, "SOUR1:PULS:DCYC?").0, Answer::Unknown);
+        assert_eq!(ask(&mut g, "SOUR1:FUNC SINC").0, Answer::Unknown, "a DG has no SINC");
     }
 
     #[test]
