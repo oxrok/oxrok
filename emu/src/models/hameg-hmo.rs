@@ -15,12 +15,17 @@
 //!   word alone. No recording of any of these scopes was found (the oracle's tree has
 //!   none), and no answer was compared with a real one. `tests/emu/hameg-hmo/` shows the C
 //!   driver and the port agree about this model, not that either agrees with a scope.
-//! - The commit that added these models calls the RTB2000, RTM3000 and RTA4000
-//!   "untested" (aac3063, b720f16), so the C's second dialect, `:LOG%d:STAT` for a
-//!   channel and for a pod, `:DIG%d:TECH`, is itself a reading of a manual. A real
-//!   RTB's answer to `:LOG0:STAT?` is unknown. This model takes what C sends: one
-//!   value per `LOGn:STAT`, so `LOG1:STAT` is D1's and pod 1's at once, as the C's
-//!   table has it.
+//! - **The RTB, RTM, RTA and RTH commands are C's, unchecked against any of those
+//!   scopes, and may be wrong.** The commit that added the first three calls them
+//!   "untested" (aac3063, b720f16). The R&S RTB2000 user manual (version 11, 1333.1611.02,
+//!   its text decoded from the PDF's glyphs by hand) has `LOGic<p>:STATe` "switches the
+//!   logic pod on or off", `LOGic<p>:DATA?`, `DIGital<m>:TECHnology TTL | ECL | CMOS |
+//!   MANual` and `DIGital<m>:THReshold`, and for one channel `DIGital<m>:DISPlay`, not
+//!   `LOGic<m>:STATe`. So C's `:LOG0:STAT?` to `:LOG15:STAT?` for the channels name no
+//!   command there, and a real RTB would most likely leave them unanswered, which fails
+//!   C's open. The suffix ranges did not come out of the PDF. This model takes what C
+//!   sends all the same: one value per `LOGn:STAT`, so `LOG1:STAT` is D1's and pod 1's
+//!   at once. Nothing was read for the RTM, RTA or RTH.
 //! - USB id 0aad:0118 is one of the three that `contrib/60-libsigrok.rules` gives "HMO
 //!   series ... VCP/USBTMC mode". Which of them is USBTMC is a guess, and using it for
 //!   the other series too is a choice, as a change of id costs 5.5 s a case.
@@ -49,7 +54,8 @@
 //! - counted in data reads, from 1: `cut-at=N`, half of what the block announces;
 //!   `zero-at=N`, `#10`; `junk-at=N`, a line of text; `indefinite-at=N`, `#0`;
 //!   `odd-at=N`, a block one byte longer than a whole number of samples;
-//!   `bad-len-at=N`, a block whose length is no number.
+//!   `bad-len-at=N`, a block whose length is no number; `pause-at=N:T`, a block that
+//!   stops after 10 bytes for T ticks (on TCP, 20 ms each) and then goes on.
 //!
 //! The pedantic checks: a setting out of the model's tables; a timebase or vertical
 //! scale not in the table of this model; a read of a channel or pod that is off; a read
@@ -70,7 +76,7 @@ pub const NAME: &str = "hameg-hmo";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "Hameg and R&S HMO, RTB, RTM, RTA, RTH scopes on USBTMC and TCP; model=, \
                          points=, points2=, set=HEADER=VALUE, block-lf=, digits=, cut-at=, \
-                         zero-at=, junk-at=, indefinite-at=, odd-at=, bad-len-at=, remote=, and \
+                         zero-at=, junk-at=, indefinite-at=, odd-at=, bad-len-at=, pause-at=, remote=, and \
                          the SCPI shell's options";
 
 const HAMEG: &str = "HAMEG";
@@ -157,6 +163,8 @@ struct DataFaults {
     indefinite_at: Option<u32>,
     odd_at: Option<u32>,
     bad_len_at: Option<u32>,
+    /// The Nth read's block stops after 10 bytes for this many ticks.
+    pause_at: Option<(u32, u32)>,
 }
 
 /// A scope.
@@ -223,6 +231,13 @@ impl Scope {
             let mut out = block(digits, data, b"");
             out.truncate(out.len() - data.len() / 2);
             return Answer::Bytes(out);
+        }
+        if let Some((nth, ticks)) = f.pause_at
+            && nth == self.reads
+        {
+            let mut whole = block(digits, data, end);
+            let tail = whole.split_off(10.min(whole.len()));
+            return Answer::Paused(whole, ticks, tail);
         }
         if f.odd_at == at {
             let mut long = data.to_vec();
@@ -465,6 +480,13 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Scope, scpi::Config
             "indefinite-at" => faults.indefinite_at = Some(number(1..=1 << 24)?),
             "odd-at" => faults.odd_at = Some(number(1..=1 << 24)?),
             "bad-len-at" => faults.bad_len_at = Some(number(1..=1 << 24)?),
+            "pause-at" => {
+                let (nth, ticks) = v
+                    .split_once(':')
+                    .ok_or_else(|| Error::Invalid(format!("pause-at={v}: as in 1:150")))?;
+                let count = |t: &str| parse_number(k, t, 1..=1 << 24);
+                faults.pause_at = Some((count(nth)?, count(ticks)?));
+            }
             "remote" => remote = number(0..=1)? == 1,
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
         }
@@ -731,6 +753,19 @@ mod tests {
         let block = clean(&mut s, on);
         assert_eq!(&block[..11], b"#9000000016");
         assert_eq!(block.len(), 11 + 16);
+    }
+
+    #[test]
+    fn a_block_can_stop_partway() {
+        let mut s = on_socket(&[("points", "4"), ("pause-at", "1:3")]);
+        let on = ":CHAN1:STAT 1;:FORM REAL,32;:CHAN1:DATA?";
+        let head = clean(&mut s, on);
+        assert_eq!((&head[..4], head.len()), (&b"#216"[..], 10), "10 bytes, then a pause");
+        let mut port = Port::default();
+        for _ in 0..3 {
+            s.tick(&mut port);
+        }
+        assert_eq!(port.sent().concat().len(), 4 + 16 + 1 - 10, "the rest after 3 ticks");
     }
 
     #[test]

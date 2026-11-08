@@ -108,6 +108,10 @@ pub enum Answer {
     /// [`Answer::Apart`], its first line this many ticks on: a measurement that waits
     /// for a trigger, or a slow instrument. What comes on meanwhile waits behind it.
     After(u32, Vec<String>),
+    /// These bytes, the second part this many ticks after the first: an answer that
+    /// stops partway. On TCP and CDC-ACM it is one stream with a pause; on USBTMC each
+    /// part is a message of its own.
+    Paused(Vec<u8>, u32, Vec<u8>),
     /// Done, and nothing to say: a setting.
     Done,
     /// Heard, and no answer ever, with no error.
@@ -587,6 +591,11 @@ impl<I: Instrument> Engine<I> {
             Answer::After(ticks, lines) => (lines, Some(ticks)),
             Answer::Text(text) => return (with_eol(text), Vec::new(), None),
             Answer::Bytes(bytes) => return (bytes, Vec::new(), None),
+            // conclude takes its pause off first; here it is only bytes.
+            Answer::Paused(mut head, _, tail) => {
+                head.extend(tail);
+                return (head, Vec::new(), None);
+            }
             Answer::Error(code, text) => {
                 self.error(code, &text);
                 return (Vec::new(), Vec::new(), None);
@@ -601,6 +610,11 @@ impl<I: Instrument> Engine<I> {
     }
 
     fn conclude(&mut self, m: &Message<'_>, answer: Answer, v: &mut Violations) {
+        // A pause inside an answer: its first part goes as any answer, its rest after.
+        let (answer, paused) = match answer {
+            Answer::Paused(head, ticks, tail) => (Answer::Bytes(head), Some((ticks, tail))),
+            other => (other, None),
+        };
         if answer == Answer::Unknown {
             v.report(format!("{}: the instrument has no such command", m.text));
             self.error(-113, "Undefined header");
@@ -654,6 +668,9 @@ impl<I: Instrument> Engine<I> {
         }
         for bytes in rest {
             self.answers.push_back(Waiting { bytes, ticks: self.config.line_gap });
+        }
+        if let Some((ticks, bytes)) = paused {
+            self.answers.push_back(Waiting { bytes, ticks: ticks.max(1) });
         }
     }
 
