@@ -364,11 +364,14 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_options length=16
     emu_options
 
-    # Empty blocks: C frees the buffer it goes on using.
+    # Empty blocks: C frees the buffer it goes on using ($UAF). C crashed in each of
+    # 19 runs (15 and 4, with GLIBC_TUNABLES=glibc.malloc.perturb=165), but its last
+    # lines (realloc(): invalid pointer, a segmentation fault) came as the heap had it,
+    # 6 of 15 runs otherwise than the first: oxrok alone, by hand-kept goldens.
     emu_options length=16 running=1
-    emu_case "scope running" --oracle-bug "$UAF" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 -- -d $T -C 1 $F -O analog
+    emu_case "scope running" --no-oracle-only -- -d $T -C 1 $F -O analog
     emu_options length=16 running=stuck
-    emu_case "scope stuck running" --no-output --oracle-bug "$UAF" --oracle-env GLIBC_TUNABLES=glibc.malloc.perturb=165 --oxrok-fails "only empty" --tx-filter "$STUCK" --timeout 25 -- -d $T -C 1 $F -O analog
+    emu_case "scope stuck running" --no-output --no-oracle-only --oxrok-fails "only empty" --tx-filter "$STUCK" --timeout 25 -- -d $T -C 1 $F -O analog
     emu_options
 
     # An answer of exactly reads' sizes, on TCP: the short read never comes. 4096 in all.

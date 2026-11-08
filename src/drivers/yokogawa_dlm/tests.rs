@@ -1034,16 +1034,18 @@ fn a_line_end_ahead_of_a_header_is_malformed_otherwise() {
     );
 }
 
-/// `:WAVEFORM:SEND?` is answered at the bus's real pace: a byte every read.
+/// `:WAVEFORM:SEND?` is answered at a slow pace: a byte every twelve reads, so the whole
+/// takes longer than the bound, which each byte starts over. Each gap stays well under
+/// it, for a host stopped 400 ms between two reads.
 #[test]
 fn a_slow_block_at_a_real_pace_keeps_the_bound_off() {
     bounded(|| {
         let (mut d, line) = device_on("710110", Carrier::TcpRaw, |l| {
             l.samples = 64;
-            l.piece = Some((1, 3));
+            l.piece = Some((1, 12));
         });
-        d.bounds.first = Duration::from_millis(40);
-        d.bounds.warn = Duration::from_millis(40);
+        d.bounds.first = Duration::from_millis(500);
+        d.bounds.warn = Duration::from_millis(500);
         d.open().unwrap();
         forget_writes(&line);
         let packets = capture(&mut d);
