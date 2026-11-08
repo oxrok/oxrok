@@ -15,7 +15,9 @@
 //!   fast" error, which is why a trigger with a measurement under way is flagged.
 //! - **Guesses, which no test should lean on:** the form of a number
 //!   (`+1.234567E+00`), the line end (CR LF), that a preset selects 1 PLC (`plc=`
-//!   changes it), that a `NPLC` goes up to the next of the six times, the `REV?`
+//!   changes it), that a preset selects the front terminals (`left-rear=1` is the other
+//!   reading), that a preset selects DCV (on which a port's `Voltage` label rests when
+//!   no quantity is set), that a `NPLC` goes up to the next of the six times, the `REV?`
 //!   answer, what a `SLIST` with a leading comma does (taken as a list).
 //! - **`real-rate=1`** paces a measurement by arithmetic: twice the PLCs for the
 //!   auto zero, at 50 Hz, so 4 s at 100 PLC. Autorange and a card's relays would add
@@ -36,6 +38,11 @@
 //!   turn, each list played once and then the table's. `_` is a space;
 //! - `plc=N`: what a preset selects;
 //! - `real-rate=1`: above;
+//! - `left-rear=1`: the terminals are at the rear from an earlier run, as the harness
+//!   replaces the model before each tool, and a preset leaves them;
+//! - `split=AT:TICKS:FROM`: from answer number FROM on, each comes in two pieces, TICKS
+//!   apart, cut AT bytes in, or that many from its end when AT is negative. It stands
+//!   for what a bridge might do, and no bridge has been seen to;
 //! - `chan-skew=N`: `CHAN?` answers N more than the channel it is on.
 //!
 //! The pedantic checks: what the meter has no command for, an argument no command
@@ -57,7 +64,7 @@ use crate::{Error, Result};
 pub const NAME: &str = "hp-3457a";
 /// One line for `oxrok-emu list`.
 pub const ABOUT: &str = "HP 3457A multimeter on TCP alone; id=, rev=, opt=, card=, readings=, \
-                         hires=, ranges=, plcs=, chans=, plc=, real-rate=, chan-skew=, and the SCPI \
+                         hires=, ranges=, plcs=, chans=, plc=, real-rate=, left-rear=, split=, chan-skew=, and the SCPI \
                          shell's mute-at=, silent-at=, late-at=, mark-at=, eol=";
 
 /// The integration times, in power line cycles.
@@ -79,6 +86,7 @@ struct Function {
     range: f64,
 }
 
+#[allow(clippy::unreadable_literal)]
 const FUNCTIONS: [Function; 9] = [
     Function { command: "DCV", reading: 1.234567, range: 30.0 },
     Function { command: "ACV", reading: 2.345678, range: 30.0 },
@@ -115,11 +123,14 @@ impl Played {
 
 /// The meter.
 #[derive(Debug)]
+// Each flag is a switch on the meter, not a state of one machine.
+#[allow(clippy::struct_excessive_bools)]
 struct Meter {
     id: String,
     rev: String,
     opt: String,
     preset_plc: f64,
+    keeps_terminals: bool,
     plc: f64,
     function: &'static Function,
     rear: bool,
@@ -153,7 +164,7 @@ impl Meter {
     fn preset(&mut self) {
         self.set_plc(self.preset_plc);
         self.function = &FUNCTIONS[0];
-        self.rear = false;
+        self.rear = self.rear && self.keeps_terminals;
         self.list.clear();
         self.place = 0;
         self.advance = false;
@@ -278,13 +289,42 @@ struct OnSocket {
     engine: Engine<Meter>,
     pace: Arc<AtomicU32>,
     line: Vec<u8>,
-    held: VecDeque<(u32, Vec<u8>)>,
+    /// What is to go, when its ticks are out, and whether it is a measurement's.
+    held: VecDeque<(u32, Vec<u8>, bool)>,
+    split: Option<Split>,
+    answers: u32,
+}
+
+/// `split=`.
+#[derive(Clone, Copy, Debug)]
+struct Split {
+    at: i32,
+    ticks: u32,
+    from: u32,
+}
+
+impl OnSocket {
+    /// Queues an answer, in two pieces if `split=` says so.
+    fn hold(&mut self, ticks: u32, bytes: Vec<u8>, measuring: bool) {
+        self.answers += 1;
+        let cut = self.split.filter(|s| self.answers >= s.from).and_then(|s| {
+            let at = if s.at < 0 { bytes.len() as i32 + s.at } else { s.at };
+            usize::try_from(at).ok().filter(|at| *at > 0 && *at < bytes.len()).map(|at| (at, s.ticks))
+        });
+        match cut {
+            Some((at, gap)) => {
+                self.held.push_back((ticks, bytes[..at].to_vec(), measuring));
+                self.held.push_back((gap, bytes[at..].to_vec(), false));
+            }
+            None => self.held.push_back((ticks, bytes, measuring)),
+        }
+    }
 }
 
 impl OnSocket {
     fn out(&mut self, port: &mut Port) {
-        while self.held.front().is_some_and(|(ticks, _)| *ticks == 0) {
-            if let Some((_, bytes)) = self.held.pop_front() {
+        while self.held.front().is_some_and(|(ticks, ..)| *ticks == 0) {
+            if let Some((_, bytes, _)) = self.held.pop_front() {
                 port.send(&bytes);
             }
         }
@@ -297,7 +337,7 @@ impl OnSocket {
         let text = String::from_utf8_lossy(line);
         let text = text.trim();
         let trigger = text == "?" || text.eq_ignore_ascii_case("TRIG SGL");
-        if trigger && !self.held.is_empty() {
+        if trigger && self.held.iter().any(|(_, _, measuring)| *measuring) {
             port.violation(format!("{text}: a trigger with a measurement under way"));
         }
         let mut with_end = line.to_vec();
@@ -305,7 +345,7 @@ impl OnSocket {
         self.engine.message(&with_end, port.violations());
         let ticks = if trigger { self.pace.load(Ordering::SeqCst) } else { 0 };
         while let Some(bytes) = self.engine.answer() {
-            self.held.push_back((ticks, bytes));
+            self.hold(ticks, bytes, trigger && ticks > 0);
         }
     }
 }
@@ -326,9 +366,9 @@ impl Stream for OnSocket {
     fn tick(&mut self, port: &mut Port) {
         self.engine.tick();
         while let Some(bytes) = self.engine.answer() {
-            self.held.push_back((0, bytes));
+            self.hold(0, bytes, false);
         }
-        if let Some((ticks, _)) = self.held.front_mut() {
+        if let Some((ticks, ..)) = self.held.front_mut() {
             *ticks = ticks.saturating_sub(1);
         }
         self.out(port);
@@ -341,14 +381,28 @@ impl Stream for OnSocket {
     }
 }
 
-fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config, Arc<AtomicU32>)> {
+fn parse_split(value: &str) -> Result<Split> {
+    let bad = || Error::Invalid(format!("split={value}: as in 5:10:4 or -1:10:4"));
+    let mut fields = value.split(':');
+    let mut field = || fields.next().ok_or_else(bad);
+    let at = field()?.parse().map_err(|_| bad())?;
+    let ticks = field()?.parse().map_err(|_| bad())?;
+    let from = field()?.parse().map_err(|_| bad())?;
+    Ok(Split { at, ticks, from })
+}
+
+fn parts(
+    options: &[(String, String)],
+) -> Result<(Meter, scpi::Config, Arc<AtomicU32>, Option<Split>)> {
     let mut config = scpi::Config::default().with_eol(b"\r\n");
+    let mut split = None;
     let pace = Arc::new(AtomicU32::new(0));
     let mut meter = Meter {
         id: "HP3457A".to_owned(),
         rev: "2.0,8.0".to_owned(),
         opt: "-1".to_owned(),
         preset_plc: 1.0,
+        keeps_terminals: false,
         plc: 1.0,
         function: &FUNCTIONS[0],
         rear: false,
@@ -391,6 +445,11 @@ fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config, Arc<Atomi
                     .filter(|p| PLCS.contains(p))
                     .ok_or_else(|| Error::Invalid(format!("plc={v}: one of {PLCS:?}")))?;
             }
+            "left-rear" => {
+                meter.rear = parse_number(k, v, 0..=1)? == 1;
+                meter.keeps_terminals = meter.rear;
+            }
+            "split" => split = Some(parse_split(v)?),
             "real-rate" => meter.real_rate = parse_number(k, v, 0..=1)? == 1,
             "chan-skew" => meter.chan_skew = i64::from(parse_number(k, v, 0..=99)?),
             _ => return Err(Error::Invalid(format!("{NAME} has no option {k}"))),
@@ -398,7 +457,7 @@ fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config, Arc<Atomi
     }
     let plc = meter.preset_plc;
     meter.set_plc(plc);
-    Ok((meter, config, pace))
+    Ok((meter, config, pace, split))
 }
 
 /// `oxrok-emu serve` needs a device; `EMU_TCP=only` attaches none.
@@ -409,12 +468,14 @@ pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>> {
 
 /// The meter on a socket.
 pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
-    let (meter, config, pace) = parts(options)?;
+    let (meter, config, pace, split) = parts(options)?;
     Ok(Box::new(OnSocket {
         engine: Engine::new(meter, config),
         pace,
         line: Vec::new(),
         held: VecDeque::new(),
+        split,
+        answers: 0,
     }))
 }
 
@@ -603,6 +664,40 @@ mod tests {
         r.stream.closed();
         assert_eq!(r.ticks(40), "");
         assert_eq!(r.ask("NPLC?"), "+1.000000E+01\r\n");
+    }
+
+    #[test]
+    fn terminals_left_at_the_rear_outlive_a_preset() {
+        let mut r = Rig::new(&[("left-rear", "1")]);
+        r.ask("PRESET");
+        assert_eq!(r.ask("?"), "+1.012346E+02\r\n");
+        r.ask("TERM FRONT");
+        r.ask("PRESET");
+        assert_eq!(r.ask("?"), "+2.234567E+00\r\n");
+    }
+
+    #[test]
+    fn an_answer_goes_in_two_pieces_from_its_turn() {
+        let mut r = Rig::new(&[("split", "5:10:2")]);
+        assert_eq!(r.ask("ID?"), "HP3457A\r\n");
+        assert_eq!(r.ask("?"), "+1.23");
+        assert_eq!(r.ticks(9), "");
+        assert_eq!(r.ticks(1), "4567E+00\r\n");
+        let mut r = Rig::new(&[("split", "-1:3:1")]);
+        assert_eq!(r.ask("ID?"), "HP3457A\r");
+        assert_eq!(r.ask("RANGE?"), "");
+        assert_eq!(r.ticks(3), "\n+3.000000E+01\r");
+        assert_eq!(r.ticks(3), "\n");
+        assert!(parse_split("5:10").is_err());
+        assert!(parse_split("x:1:1").is_err());
+    }
+
+    #[test]
+    fn a_trigger_behind_a_piece_is_no_trigger_too_soon() {
+        let mut r = Rig::new(&[("split", "5:10:1")]);
+        assert_eq!(r.ask("?"), "+1.23");
+        let (heard, flagged) = r.say("?");
+        assert_eq!((heard.as_str(), flagged.len()), ("", 0));
     }
 
     #[test]
