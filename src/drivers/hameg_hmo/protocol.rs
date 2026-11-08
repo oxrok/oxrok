@@ -415,15 +415,21 @@ pub enum BlockRead {
 
 /// Reads one answer as a block, with no question asked: `sr_scpi_get_block(scpi, NULL)`.
 ///
+/// A block that has begun ends with its length, at the end of a USBTMC message, after
+/// [`Bounds::first`] with no byte, or at [`too_slow`]. A read's timeout inside it is a
+/// pause, waited out: C over `tcp-raw` waits for the rest. C on a serial port hands on
+/// what it has after 1 s, and here a cut block on one waits the bound first.
+///
 /// `read_complete` isn't trusted for an end: on `tcp-raw` any short read says it, and
 /// a block arrives in many. A USBTMC message that ended short comes out as an error on
 /// the next read, with `read_complete` true. A read past that on USBTMC goes no further
 /// than this function, as the error is of the message's end.
 pub fn read_block(
     scpi: &mut Scpi,
-    limit: Duration,
+    bounds: &Bounds,
     go_on: &impl Fn() -> bool,
 ) -> Result<BlockRead> {
+    let limit = bounds.limit;
     match scpi.read_begin() {
         Ok(()) => {}
         Err(Error::Timeout) => return Ok(BlockRead::Silent),
@@ -439,10 +445,14 @@ pub fn read_block(
     // Where the block's bytes start, past any line end before it.
     let mut skip = 0;
     let mut block: Option<(usize, usize)> = None;
+    let mut last_byte = began;
     loop {
         if !go_on() {
             return Ok(BlockRead::Stopped);
         }
+        // Ahead of the read, so that a stall can't pass for a pause in the block.
+        let before = Instant::now();
+        let mut ended = false;
         let read = scpi.read_data(&mut chunk);
         let n = match read {
             Ok(n) => n,
@@ -450,20 +460,35 @@ pub fn read_block(
             Err(e @ (Error::Disconnected | Error::Io(_))) => return Err(e),
             Err(e) if scpi.read_complete() => {
                 log::debug!("Reading a block: {e}");
+                ended = true;
                 0
             }
             Err(e) => return Err(e),
         };
         if n == 0 {
-            return Ok(match block {
+            match block {
+                // A pause inside a block that has begun is no end of it: C over
+                // tcp-raw waits for the rest, and a scope may stop for a while.
+                Some((head, len))
+                    if !ended && before.saturating_duration_since(last_byte) < bounds.first =>
+                {
+                    let have = buf.len() - skip - head;
+                    if too_slow(began.elapsed(), have, limit) {
+                        log::warn!("The block comes too slowly: {have} of {len} bytes.");
+                        buf.drain(..skip + head);
+                        return Ok(BlockRead::Short { data: buf, announced: len });
+                    }
+                    continue;
+                }
                 Some((head, len)) => {
                     buf.drain(..skip + head);
-                    BlockRead::Short { data: buf, announced: len }
+                    return Ok(BlockRead::Short { data: buf, announced: len });
                 }
-                None if buf.is_empty() => BlockRead::Silent,
-                None => BlockRead::Junk,
-            });
+                None if buf.is_empty() => return Ok(BlockRead::Silent),
+                None => return Ok(BlockRead::Junk),
+            }
         }
+        last_byte = Instant::now();
         buf.extend_from_slice(&chunk[..n]);
         if block.is_none() {
             while matches!(buf.get(skip), Some(b'\r' | b'\n')) {

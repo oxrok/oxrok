@@ -964,7 +964,9 @@ fn after_a_block_silence_warns_and_goes_on() {
         })
     });
     d.open().unwrap();
-    d.bounds = Some(Bounds { first: ms(5), warn: ms(5), limit: ms(600_000), junk: ms(600_000) });
+    // A margin for slow runners: the first block must be read before the first bound.
+    d.bounds =
+        Some(Bounds { first: ms(500), warn: ms(500), limit: ms(600_000), junk: ms(600_000) });
     d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
     bounded(move || {
         let rx = start(&mut d);
@@ -972,7 +974,7 @@ fn after_a_block_silence_warns_and_goes_on() {
         until("the second request", || {
             sent(&wire).iter().filter(|q| q.ends_with("DATA?")).count() >= 2
         });
-        std::thread::sleep(ms(50));
+        std::thread::sleep(ms(800));
         assert!(!d.worker.as_ref().unwrap().handle.is_finished(), "it ended at the first bound");
         {
             let mut w = wire.lock().unwrap();
@@ -1043,6 +1045,52 @@ fn junk_then_a_block_is_a_block() {
     });
 }
 
+/// A block that pauses partway, for many reads' timeouts, is still one block.
+#[test]
+fn a_pause_inside_a_block_is_waited_out() {
+    let (mut d, _) = scope("HMO1002", |q| {
+        q.ends_with("DATA?").then(|| {
+            let Piece::Bytes(all) = float_block(&[1.0, 2.0, 3.0, 4.0]).remove(0) else {
+                unreachable!()
+            };
+            let mut out = vec![Piece::Bytes(all[..10].to_vec())];
+            out.extend(std::iter::repeat_n(Piece::Gap, 50));
+            out.push(Piece::Bytes(all[10..].to_vec()));
+            out
+        })
+    });
+    d.open().unwrap();
+    bounded_capture(d, |_, p| {
+        let Packet::Analog(a) = &p[2] else { panic!("{:?}", p[2]) };
+        assert_eq!(a.samples, [1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(failure(p), None);
+    });
+}
+
+/// The same on the clock: a pause of 300 ms inside a bound of 20 s, wide enough for a
+/// sleep twelve times as long under the shim.
+#[test]
+fn a_pause_inside_a_block_on_the_clock() {
+    let (mut d, wire) = scope("HMO1002", |q| {
+        q.ends_with("DATA?").then(|| {
+            let Piece::Bytes(all) = float_block(&[5.0, 6.0]).remove(0) else { unreachable!() };
+            vec![Piece::Bytes(all[..6].to_vec()), Piece::Hold, Piece::Bytes(all[6..].to_vec())]
+        })
+    });
+    d.open().unwrap();
+    d.bounds = Some(Bounds { first: ms(20_000), ..FAR });
+    bounded(move || {
+        let rx = start(&mut d);
+        until("the pause", || matches!(wire.lock().unwrap().coming.front(), Some(Piece::Hold)));
+        std::thread::sleep(ms(300));
+        wire.lock().unwrap().released = true;
+        let p = drain(&rx);
+        let Packet::Analog(a) = &p[2] else { panic!("{:?}", p[2]) };
+        assert_eq!(a.samples, [5.0, 6.0]);
+        d.close().unwrap();
+    });
+}
+
 #[test]
 fn a_block_cut_short_is_handed_on_and_the_next_stays_in_step() {
     let n = Arc::new(Mutex::new(0));
@@ -1060,6 +1108,8 @@ fn a_block_cut_short_is_handed_on_and_the_next_stays_in_step() {
         })
     });
     d.open().unwrap();
+    // How long a block may pause before what came is all there is.
+    d.bounds = Some(Bounds { first: ms(100), ..FAR });
     d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
     bounded_capture(d, |_, p| {
         let got: Vec<Vec<f32>> = p

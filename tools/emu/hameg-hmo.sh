@@ -36,6 +36,9 @@ emu_cases() {
     CUT_USB="a USBTMC message that ends ahead of the block's length: the next read is past EOM, an error, so sr_scpi_get_block drops all it has (scpi.c) and hmo_receive_data asks again for ever; oxrok hands on what came, as C does on a timeout, and goes on"
     CUT_TCP="a block that ends ahead of its length over tcp-raw: recv() has no timeout (scpi_tcp.c), so sigrok-cli waits for the rest for ever; oxrok hands on what came and goes on"
     ZERO="sr_scpi_get_block returns SR_OK with no array at a length of 0 (scpi.c), and protocol.c:1521 reads data->data through it: sigrok-cli dies; oxrok goes on with an empty block"
+    PATTERN_CUT="api.c:385 formats the pattern command into MAX_COMMAND_SIZE, 128 bytes (protocol.h:34): 107 bytes of it come before the pattern, so a pattern of 20 leaves no room for its closing quote, and C sends ':TRIG:A:PATT:SOUR \"10101010101010101010' with exit 0; oxrok sends the quote"
+    # A block that stops partway, as a scope may: C over tcp-raw waits for the rest, and
+    # so does oxrok, up to its bound with no byte.
     RTH_CRASH="on an RTH, with USER2 in its table and the second dialect, api.c:500-502 gives ':DIG%d:THR %s' the arguments (idx, 2, float_str), so %s reads 2 as a pointer: sigrok-cli dies; oxrok sends the level"
 
     # While nothing comes on USBTMC, a request goes for each read's second, so how many
@@ -87,9 +90,9 @@ x'
     emu_case "set trigger slope" --no-output -- -d $T --config triggerslope=NEG --set
     emu_case "set trigger pattern" --no-output -- -d $T --config triggerpattern=10X --set
     emu_case "set trigger pattern too long" --no-output --expect-fail -- -d $T --config triggerpattern=101010101010101010101 --set
-    # C's 128 bytes end before the closing quote: 107, 20, and the quote. The filter takes
-    # oxrok's away for the comparison, and a unit test pins that it goes.
-    emu_case "set trigger pattern at its longest" --no-output --tx-filter 's/(3130)220a2a4f50433f0a -> 135$/\10a2a4f50433f0a -> 134/' -- -d $T --config triggerpattern=10101010101010101010 --set
+    # C's 128 bytes end before the closing quote: 107, 20, and the quote. oxrok's .tx keeps
+    # the quote; C's line is only in a run (its .oracle is its empty stdout).
+    emu_case "set trigger pattern at its longest" --no-output --oracle-differs "$PATTERN_CUT" -- -d $T --config triggerpattern=10101010101010101010 --set
     emu_case "set high resolution on" --no-output -- -d $T --config highresolution=on --set
     emu_case "set high resolution off" --no-output -- -d $T --config highresolution=off --set
     emu_case "set peak detection on" --no-output -- -d $T --config peakdetection=on --set
@@ -218,6 +221,9 @@ x'
     emu_options late-at=51:5
     emu_case "block late" --no-output --filter "$A" -- -d $T --frames 1 -O bits
     emu_case "block late usb" --no-output --filter "$A" -- -d $U --frames 1 -O bits
+    # 150 ticks of 20 ms on TCP.
+    emu_options pause-at=1:150
+    emu_case "a block that pauses 3 s tcp" --filter "$A" -- -d $T -C D0 --frames 1 -O bits
     emu_options odd-at=2
     emu_case "a byte over in the second channel" --no-output --filter "$A" -- -d $T --frames 1 -O bits
 
@@ -234,7 +240,8 @@ x'
     emu_case "no rate at the start" --no-output --expect-fail -- -d $U -C CH1 --frames 1 -O bits
     emu_options cut-at=1
     emu_case "block cut usb" --filter "$A" --oracle-bug "$CUT_USB" --oracle-hangs --timeout 6 -- -d $U -C D0 --frames 1 -O bits
-    emu_case "block cut tcp" --filter "$A" --oracle-bug "$CUT_TCP" --oracle-hangs --timeout 6 -- -d $T -C D0 --frames 1 -O bits
+    # oxrok waits the 30 s of its bound with no byte inside a block, then hands on what came.
+    emu_case "block cut tcp" --filter "$A" --oracle-bug "$CUT_TCP" --oracle-hangs --timeout 45 -- -d $T -C D0 --frames 1 -O bits
     emu_options zero-at=1
     emu_case "empty block" --filter "$A" --oracle-bug "$ZERO" -- -d $T -C CH1,D0 --frames 1 -O bits
     emu_options junk-at=1

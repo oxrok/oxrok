@@ -776,7 +776,7 @@ impl Capture {
         loop {
             // Ahead of the read: an answer that lies ready wins over any stall.
             let before = Instant::now();
-            let junk = match protocol::read_block(scpi, self.bounds.limit, &go_on)? {
+            let junk = match protocol::read_block(scpi, &self.bounds, &go_on)? {
                 BlockRead::Stopped => return Ok(None),
                 BlockRead::Whole(data) => {
                     if data.is_empty() {

@@ -29,8 +29,14 @@ emu_cases() {
     emu_case "pod" --filter "$A" -- -d $D -C D0 --frames 1 -O bits
     emu_options block-lf=0
     emu_case "no line end after a block" --no-output --filter "$A" -- -d $D --frames 1 -O bits
+    # oxrok waits 30 s with no byte inside a block before it hands on what came, which
+    # is what C hands on after 1 s.
     emu_options cut-at=1
-    emu_case "block cut" --filter "$A" -- -d $D -C D0 --frames 1 -O bits
+    emu_case "block cut" --timeout 60 --filter "$A" -- -d $D -C D0 --frames 1 -O bits
+    PAUSED="scpi_serial_read_data returns what it has at sr_scpi_get_block's 1 s timeout, and get_block hands that on as the block (scpi.c), so a block that stops partway for longer is cut, and its rest is read as the next answer; oxrok waits for the rest"
+    # 150 ticks: about 3 s, as the host offers reads.
+    emu_options pause-at=1:150
+    emu_case "a block that pauses" --oracle-differs "$PAUSED" -- -d $D -C D0 --frames 1 -O bits
     emu_options late-at=31:10
     emu_case "block late" --filter "$A" -- -d $D -C D0 --frames 1 -O bits
     emu_options silent-at=3

@@ -15,7 +15,9 @@
 pub enum Dialect {
     /// `hameg_scpi_dialect`: `:PODn:...`.
     Pod,
-    /// `rohde_schwarz_log_not_pod_scpi_dialect`: `:LOGn:...` and `:DIGn:...`.
+    /// `rohde_schwarz_log_not_pod_scpi_dialect`: `:LOGn:...` and `:DIGn:...`. C's, and
+    /// unchecked: the RTB2000 manual shows a channel's state as `DIGital<m>:DISPlay`, where
+    /// this sends `:LOGn:STAT` for it (see the `hameg-hmo` model's notes).
     Log,
 }
 
