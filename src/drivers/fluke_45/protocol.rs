@@ -891,6 +891,15 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_forgets_what_was_heard_before_it() {
+        let t = Instant::now();
+        let mut w = Watch::new(Timing::default(), limits(true, 0), t);
+        w.heard(&Step::Good);
+        w.delivered(t + secs(1));
+        assert_eq!(w.check(t + secs(601)), Next::GiveUp(GiveUp::NoAnswer(secs(600))));
+    }
+
+    #[test]
     fn a_time_limit_or_none_warns_and_clears_once_a_period() {
         let t = Instant::now();
         for l in [limits(false, 500), limits(false, 0)] {

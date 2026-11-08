@@ -70,6 +70,8 @@ struct State {
     mods: &'static str,
     prompt: &'static [u8],
     clear_answered: bool,
+    /// On a device clear, these bytes at once and its prompt this long after.
+    clear_late: Option<(Vec<u8>, Duration)>,
     values: Vec<&'static str>,
     values2: Vec<&'static str>,
     next: usize,
@@ -271,7 +273,11 @@ impl Port for Fake {
             if s.echo == Echo::Raw {
                 s.arrive(data);
             }
-            if s.clear_answered {
+            if let Some((ahead, late)) = s.clear_late.take() {
+                s.arrive(&ahead);
+                let prompt = s.prompt;
+                s.arrive_after(prompt, late);
+            } else if s.clear_answered {
                 let prompt = s.prompt;
                 s.arrive(prompt);
             }
@@ -852,6 +858,58 @@ fn a_question_given_up_on_is_cleared_before_the_next() {
         assert_eq!(writes[..5], [CLEAR, "FUNC1?", "AUTO?", "VAL1?", CLEAR]);
         assert_eq!(writes[5], "FUNC2?", "the round goes on, as from a failed FUNC1? in C");
         assert_eq!(got.packets[0].samples, [2.0]);
+    });
+}
+
+/// A late answer on its way as the clear goes, ahead of the clear's prompt: only
+/// `=>` ends a clear, so nothing is asked until the meter is ready.
+#[test]
+fn a_clear_ends_on_its_prompt_alone() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.with(|s| {
+            s.clear_late = Some((b"+9.9999E+0\r\n".to_vec(), Duration::from_millis(300)));
+            s.discard = true;
+        });
+        let mut d = device(&fake);
+        limit(&mut d, 1);
+        let rx = start(&mut d);
+        assert_eq!(values(&rx), [1.0]);
+        assert_eq!(fake.with(|s| s.early), 0, "FUNC1? went ahead of the clear's prompt");
+        assert_eq!(fake.writes()[..2], [CLEAR, "FUNC1?"]);
+    });
+}
+
+/// `FUNC1?` given up on: the round goes to the second display after the clear, with
+/// no `AUTO?` for a function it never had, as from a failed `FUNC1?` in C.
+#[test]
+fn a_function_given_up_on_asks_no_auto() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.say(1, Say::Silent);
+        let timing = Timing { give_up: Duration::from_millis(300), ..QUICK };
+        let mut d = device_with(&fake, timing);
+        d.set(&Key::LimitMsec, &Value::U64(1000), None).unwrap();
+        let rx = start(&mut d);
+        assert_eq!(seen(&rx).failed, None);
+        assert_eq!(fake.writes()[..4], [CLEAR, "FUNC1?", CLEAR, "FUNC2?"]);
+    });
+}
+
+/// An answer held for its prompt is not given up on at a scan's bound, shorter here
+/// than [`PROMPT_WAIT`]: it is taken when the prompt is late.
+#[test]
+fn a_held_answer_outlasts_a_bound() {
+    bounded(|| {
+        let fake = Fake::new();
+        fake.say_only(1, "FLUKE, 45, 7654321, 1.6 D1.6");
+        let mut link = Link::new(scpi(&fake));
+        let go_on = || true;
+        let bound = Some(Duration::from_millis(200));
+        let asked = link.query("*IDN?", Kind::Id, &mut None, bound, &go_on).unwrap();
+        let id = "FLUKE, 45, 7654321, 1.6 D1.6".to_owned();
+        assert_eq!(asked, Asked::Reply(Reply::Answer(id)));
+        assert_eq!(fake.writes(), ["*IDN?"], "no clear");
     });
 }
 
