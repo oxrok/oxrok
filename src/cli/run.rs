@@ -258,6 +258,11 @@ pub fn starts_without_limit(registry: &Registry, args: &Args) -> bool {
 /// A capture run: `--samples`, `--time`, `--frames` or `--continuous`.
 #[allow(clippy::too_many_lines)]
 pub fn session(registry: &Registry, args: &Args) -> Result<()> {
+    // `-w` holds back every sample before the trigger: with no trigger
+    // nothing would be written at all.
+    if args.wait_trigger && args.triggers.is_none() {
+        return Err(Error::Arg("-w waits for a trigger: give one with -t.".into()));
+    }
     let mut device = pick_device(registry, args)?;
     // `-c` reaches the device before the rest, as in sigrok-cli, except what
     // switches an output on: that waits until the rest of the command line

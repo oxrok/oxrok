@@ -1,0 +1,3 @@
+oxrok: err: oxrok::drivers::logicport::protocol: Failed to configure the FPGA.
+oxrok: err: oxrok::drivers::logicport: Acquisition failed: device error: unexpected FPGA image id 0x42.
+capture failed: device error: unexpected FPGA image id 0x42

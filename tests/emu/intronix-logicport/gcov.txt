@@ -1,0 +1,56 @@
+gcov intronix-logicport (libsigrok unknown): executable lines reached
+  api.c        91.4%  234 of 256
+  protocol.c   92.2%  706 of 766
+  total        92.0%  940 of 1022
+never reached, by function (line ranges hold no reached line):
+  api.c
+    conn_matches: 98
+    scan_device: 113-115, 117
+    scan: 171, 176-178, 186, 190
+    dev_open: 211-212
+    dev_close: 243
+    config_get: 260, 294-295
+    config_set: 330, 359-360
+    config_list: 394-395
+    dev_acquisition_start: 453
+  protocol.c
+    write_raw: 247-248
+    send_cmd: 263
+    logicport_open: 382-384
+    resync_once: 439, 452, 456
+    logicport_resync: 475
+    wait_pins: 557
+    send_bitstream: 577, 580
+    bitbang_configure: 617, 623, 631, 641, 644-646
+    wait_init_done: 692-693
+    read_full: 721
+    stream_is_rbf: 760
+    load_image: 793, 820, 824-825, 828-829, 847-848
+    logicport_configure_fpga: 882-883, 895, 906
+    logicport_convert_trigger: 968-970, 979, 999-1002
+    write_regs: 1050
+    read_sdr: 1378, 1385, 1394, 1405
+    read_ddr: 1460, 1466-1470, 1482, 1489
+    read_samples: 1515, 1520
+    logicport_receive_data: 1550, 1554, 1587-1589
+gcov shared sources (libsigrok unknown): executable lines the session reached
+  src/usb.c   19.7%  45 of 229
+  total       19.7%  45 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: 334-350, 360, 369
+    sr_usb_find: 405-406, 414-415, 423-425, 429
+    sr_usb_open: never called (449-491)
+    sr_usb_close: never called (494-499)
+    usb_source_add: never called (501-516)
+    usb_source_remove: never called (519-521)
+    usb_get_port_path: never called (524-560)
+    usb_match_manuf_prod: never called (570-604)

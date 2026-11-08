@@ -1,0 +1,8 @@
+oxrok: err: oxrok::drivers::logicport::protocol: FPGA init did not finish (counter 0).
+oxrok: err: oxrok::drivers::logicport::protocol: FPGA init did not finish (counter 0).
+oxrok: err: oxrok::drivers::logicport::protocol: FPGA init did not finish (counter 0).
+oxrok: err: oxrok::drivers::logicport::protocol: FPGA init did not finish (counter 0).
+oxrok: err: oxrok::drivers::logicport::protocol: FPGA init did not finish (counter 0).
+oxrok: err: oxrok::drivers::logicport::protocol: Failed to configure the FPGA.
+oxrok: err: oxrok::drivers::logicport: Acquisition failed: timeout.
+capture failed: timeout

@@ -1,0 +1,9 @@
+sr: intronix-logicport: FPGA did not enter configuration mode.
+sr: intronix-logicport: Failed to set FTDI baudrate (-1): Unsupported baudrate. Note: bitbang baudrates are automatically multiplied by 4.
+sr: intronix-logicport: Failed to configure the FPGA.
+sr: intronix-logicport: Failed to set FTDI baudrate (-1): Unsupported baudrate. Note: bitbang baudrates are automatically multiplied by 4.
+sr: intronix-logicport: Failed to configure the FPGA.
+sr: intronix-logicport: Failed to start acquisition.
+sr: session: Could not start intronix-logicport device BUS.ADDR acquisition.
+sr: session: Cannot remove non-existing event source ADDR.
+Failed to start session.

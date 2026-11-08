@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::logicport: Acquisition failed: firmware file not found: intronix-logicport.ccf (or intronix-logicport-timing-sdr.rbf; get it with sigrok-fwextract-intronix-logicport, see docs/DEVICES.md).
+capture failed: firmware file not found: intronix-logicport.ccf (or intronix-logicport-timing-sdr.rbf; get it with sigrok-fwextract-intronix-logicport, see docs/DEVICES.md)
