@@ -27,8 +27,9 @@
 //!
 //! What's a guess, which no test should lean on:
 //!
-//! - f4ec:1621 is from memory: Siglent's vendor id, and a product id nothing here
-//!   checks. The vendor id puts it on both of `scpi_usbtmc_libusb.c`'s tables, whose
+//! - f4ec:1621 is from memory and unverified: Siglent's vendor id, and a product id
+//!   no source found has (sigrok's `60-libsigrok.rules` lists f4ec:ee38 and ee3a only,
+//!   so a real load would get no udev rule from it), and nothing here checks. The vendor id puts it on both of `scpi_usbtmc_libusb.c`'s tables, whose
 //!   comments say "all Siglent SDS": no remote control, and a USB reset at each open.
 //!   The high speed, the serial number and the firmware of the other models.
 //! - That a load refuses an out of range number with an error in its queue and keeps
@@ -67,7 +68,8 @@ pub const NAME: &str = "siglent-sdl10x0";
 pub const ABOUT: &str = "Siglent SDL1000X electronic loads on USBTMC and TCP; model=, name=, \
                          firmware=, serial=, volt=, curr=, func=, input=, ocp-state=, opp-state=, ocp-level=, \
                          opp-level=, volt-level=, and the SCPI shell's mute-at=, silent-at=, \
-                         late-at=, pace=, mark-at=, idn=, eol=, stall=, in-stall=, empty-at=, \
+                         late-at=, pace=, split-at=, double-at=, junk-at=, mark-at=, idn=, eol=, \
+                         stall=, in-stall=, empty-at=, \
                          bad-tag-at=, message=";
 
 const VENDOR: &str = "Siglent Technologies";
