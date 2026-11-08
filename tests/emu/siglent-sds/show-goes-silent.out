@@ -1,0 +1,7 @@
+Driver functions:
+    Oscilloscope
+    Logic analyzer
+Scan options:
+    conn
+    serialcomm
+siglent-sds - Siglent SDS1104X-E 7.6.1.15 [S/N: SDSEMU0001] with 20 channels: CH1 D0 CH2 D1 CH3 D2 CH4 D3 D4 D5 D6 D7 D8 D9 D10 D11 D12 D13 D14 D15
