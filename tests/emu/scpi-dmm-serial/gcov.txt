@@ -1,7 +1,7 @@
 gcov scpi-dmm (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
   api.c        79.0%  158 of 200
-  protocol.c   56.7%  245 of 432
-  total        63.8%  403 of 632
+  protocol.c   57.6%  249 of 432
+  total        64.4%  407 of 632
 never reached, by function (line ranges hold no reached line):
   api.c
     is_compatible: 324, 332
@@ -21,8 +21,8 @@ never reached, by function (line ranges hold no reached line):
     scpi_dmm_set_range_from_text: never called (219-249)
     scpi_dmm_get_range_text_list: never called (252-269)
     scpi_dmm_get_meas_agilent: 307-308, 311, 313-314, 332-339, 350, 361, 363, 368, 393, 397, 402-403, 406, 409, 411, 415, 429, 431, 437, 479-481, 490-510
-    scpi_dmm_get_meas_gwinstek: 550-551, 554, 556-557, 568, 572, 577-578, 581, 586, 588, 592, 606, 608, 614, 625, 629-638, 657-662, 671-672, 685-687, 692-712
-    scpi_dmm_receive_data: 737, 741, 750, 778-779, 783, 785, 798-799
+    scpi_dmm_get_meas_gwinstek: 550-551, 554, 556-557, 568, 577-578, 581, 586, 588, 592, 606, 608, 614, 625, 629-638, 657-662, 671-672, 685-687, 692-712
+    scpi_dmm_receive_data: 737, 741, 750, 778-779, 783
 gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
   src/scpi/scpi.c          40.8%  207 of 507
   src/scpi/scpi_serial.c   70.2%  59 of 84

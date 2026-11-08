@@ -10,4 +10,3 @@ tcp_out 2a4f50433f0a -> 6
 tcp_in 2 -> 310a
 tcp_out 434f4e463a535441543a46554e433f0a -> 16
 tcp_in 2 -> 310a
-tcp_close

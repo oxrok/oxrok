@@ -27,7 +27,7 @@
 //! memory gives for a 34405A); serial numbers and firmware; the ladder of ranges, and
 //! `-222` and `-224` for what it refuses; the values read, as a stand-in.
 //!
-//! Emulation artifacts: a reading is ready at once unless `pace=` says otherwise, and
+//! Emulation artifacts: a reading is ready at once unless `reading-pace=` says otherwise, and
 //! changes by one step per reading. `CONF:` always takes effect. `INIT` is only a flag.
 //!
 //! Options, besides the shell's ([`scpi::Config::option`]):
@@ -42,12 +42,15 @@
 //!   option's value can't hold;
 //! - `rate=TEXT`: what `SENS:DET:RATE?` says, `Slow` by default;
 //! - `range=TEXT`, `auto=TEXT`: what `:RANGE?` and `:RANGE:AUTO?` say;
-//! - `pace=T`: each reading waits T ticks;
+//! - `reading-pace=T`: each reading waits T ticks;
 //! - `opc-pace=T`: the first `*OPC?` after `INIT` waits T ticks;
 //! - `opc=1`, `opc=0`: it has `*OPC?`, or says nothing to one; by its dialect otherwise.
 //!
 //! The pedantic checks: only what the dialect has; a function that isn't its own; a
-//! range on a function that has none; a reading ahead of `INIT` where it needs one.
+//! range on a function that has none; a reading ahead of `INIT` where it needs one. On
+//! USBTMC the shell's `one-request=1` is on by default: a second request while one is
+//! unanswered is flagged. `one-request=0` turns it off, for C, which asks again after a
+//! timeout.
 
 use crate::model::{DeviceModel, Violations};
 use crate::options::parse_number;
@@ -61,7 +64,7 @@ use std::collections::VecDeque;
 pub const NAME: &str = "scpi-dmm";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "SCPI multimeters on USBTMC and TCP; model=, func=, manual=, readings=, \
-                         functions=, say=, rate=, range=, auto=, pace=, opc-pace=, opc=, and the SCPI \
+                         functions=, say=, rate=, range=, auto=, reading-pace=, opc-pace=, opc=, and the SCPI \
                          shell's mute-at=, silent-at=, late-at=, opc-late=, mark-at=, idn=, eol=, \
                          stall=, in-stall=, empty-at=, bad-tag-at=, message=";
 
@@ -371,6 +374,13 @@ impl Instrument for Meter {
                 }
             },
             "SYST:LOC" if self.dialect_is(&[Agilent, Gw8200, Gw906x, Owon]) => Answer::Done,
+            // As the IEEE 488.2 common command has it, which a range of `10;*RST` sends.
+            "*RST" => {
+                self.function = self.kind.functions.iter().position(|x| x.setup == "VOLT:DC").unwrap_or(0);
+                self.fixed = None;
+                self.initiated = false;
+                Answer::Done
+            }
             "SYST:REM" if self.dialect_is(&[Gw8200, Gw906x, Owon]) => Answer::Done,
             "INIT" if self.dialect_is(&[Agilent, Hp, Gw906x]) => {
                 self.initiated = true;
@@ -417,6 +427,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config
     let (mut pace, mut opc_pace) = (0, None);
     let mut say = None;
     let list = |v: &str| v.split('|').map(|t| t.replace('_', " ")).collect::<VecDeque<_>>();
+    config.option("one-request", "1")?;
     for (k, v) in options {
         if config.option(k, v)? {
             continue;
@@ -437,7 +448,7 @@ pub(super) fn parts(options: &[(String, String)]) -> Result<(Meter, scpi::Config
             "rate" => rate.clone_from(v),
             "range" => range_text = Some(v.clone()),
             "auto" => auto_text = Some(v.clone()),
-            "pace" => pace = number(0..=10_000)?,
+            "reading-pace" => pace = number(0..=10_000)?,
             "opc-pace" => opc_pace = Some(number(1..=10_000)?),
             "opc" => opc = Some(number(0..=1)? == 1),
             other => return Err(Error::Invalid(format!("{NAME} has no option {other}"))),
@@ -655,7 +666,7 @@ mod tests {
 
     #[test]
     fn a_reading_keeps_its_pace_and_so_does_the_first_opc() {
-        let mut s = on_socket(&[("pace", "2")]);
+        let mut s = on_socket(&[("reading-pace", "2")]);
         says(&mut s, "INIT\n");
         assert_eq!(says(&mut s, "FETCH?\n"), "", "it takes its time");
         let mut port = Port::default();

@@ -1,0 +1,1 @@
+Failed to set device option 'range': invalid argument: a range is a number or AUTO, MIN, MAX or DEF, not '10;*RST'.

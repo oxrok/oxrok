@@ -8,5 +8,7 @@ tcp_close
 tcp_connect
 tcp_out 2a4f50433f0a -> 6
 tcp_in 2 -> 310a
-tcp_out 434f4e463a44494f440a -> 10
+tcp_out 434f4e463a44494f440a2a4f50433f0a -> 16
+tcp_in 2 -> 310a
+tcp_out 535953543a4c4f430a -> 9
 tcp_close

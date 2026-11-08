@@ -145,6 +145,7 @@ pub mod drivers {
     pub mod rohde_schwarz_sme_0x;
     pub mod saleae_logic16;
     pub mod saleae_logic_pro;
+    pub mod scpi_dmm;
     pub mod scpi_pps;
     pub mod serial_dmm;
     pub mod serial_lcr;
@@ -221,6 +222,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::fx2lafw::Fx2lafwDriver));
     registry.register(Box::new(drivers::saleae_logic16::Logic16Driver));
     registry.register(Box::new(drivers::saleae_logic_pro::LogicProDriver));
+    registry.register(Box::new(drivers::scpi_dmm::ScpiDmmDriver));
     registry.register(Box::new(drivers::ftdi_la::FtdiLaDriver));
     registry.register(Box::new(drivers::testo::TestoDriver));
     registry.register(Box::new(drivers::icstation_usbrelay::IcstationUsbrelayDriver));
