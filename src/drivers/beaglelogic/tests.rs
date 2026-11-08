@@ -83,6 +83,7 @@ struct Server {
     unit: u32,
     memalloc: u32,
     bufunitsize: u32,
+    flags: u32,
     stream: Vec<Part>,
     flood: Flood,
     /// After a `close`, on the same connection: a slow module's last read.
@@ -111,6 +112,7 @@ impl Default for Server {
             unit: 1,
             memalloc: 65536,
             bufunitsize: 4096,
+            flags: 0,
             stream: Vec::new(),
             flood: Flood::default(),
             tail: None,
@@ -139,6 +141,7 @@ impl Server {
             ("sampleunit", None) => self.unit.to_string(),
             ("memalloc", None) => self.memalloc.to_string(),
             ("bufunitsize", None) => self.bufunitsize.to_string(),
+            ("triggerflags", None) => self.flags.to_string(),
             ("sampleunit", Some(v)) => {
                 self.unit = v.parse().unwrap();
                 "OK".to_owned()
@@ -147,7 +150,10 @@ impl Server {
                 self.samplerate = v.parse().unwrap();
                 "OK".to_owned()
             }
-            ("triggerflags", Some(_)) => "OK".to_owned(),
+            ("triggerflags", Some(v)) => {
+                self.flags = v.parse().unwrap();
+                "OK".to_owned()
+            }
             ("get", None) => {
                 self.started = Some(Instant::now());
                 self.parts = self.stream.iter().cloned().collect();
@@ -732,7 +738,7 @@ fn a_limit_makes_the_stream_one_shot_if_the_device_takes_it() {
         let mut d = opened(&s);
         reply(&s, "triggerflags 0", Reply::Say("ERR".to_owned()));
         let e = d.set(&Key::LimitSamples, &Value::U64(7), None).unwrap_err().to_string();
-        assert!(e.contains("The device refused 'triggerflags 0'"), "{e}");
+        assert!(e.contains("The device refused 'triggerflags 0' and holds 1: "), "{e}");
         assert_eq!(d.get(&Key::LimitSamples, None).unwrap(), Value::U64(10_000_000));
         assert!(!d.settings.oneshot);
         s.lock().unwrap().replies.clear();
@@ -837,7 +843,8 @@ fn a_refused_width_is_a_refused_start_and_the_stream_never_starts() {
         reply(&s, "sampleunit 0", Reply::Say("ERR".to_owned()));
         let mut d = opened(&s);
         let e = d.start(PacketSink::new(sync_channel(64).0, 0)).unwrap_err().to_string();
-        assert!(e.contains("The device refused 'sampleunit 0'"), "{e}");
+        assert!(e.contains("The device refused 'sampleunit 0' and holds 1: "), "{e}");
+        assert_eq!(written(&s)[5..], ["sampleunit 0", "sampleunit"]);
         assert!(!written(&s).contains(&"get".to_owned()));
     });
 }
@@ -1096,6 +1103,101 @@ fn a_set_and_a_start_in_a_capture_are_busy_and_stay_off_the_wire() {
     });
 }
 
+#[test]
+fn a_refused_width_the_module_already_holds_goes_on() {
+    bounded(|| {
+        let s = server();
+        s.lock().unwrap().unit = 0;
+        reply(&s, "sampleunit 0", Reply::Say("ERR".to_owned()));
+        stream(&s, vec![at_once(counter(100))]);
+        let mut d = opened(&s);
+        d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        let p = until_end(&start(&mut d));
+        assert_eq!(samples(&p), counter(8));
+        assert_eq!(failure(&p), None);
+        let w = written(&s);
+        let at = w.iter().position(|x| x == "sampleunit 0").unwrap();
+        assert_eq!(w[at..at + 3], ["sampleunit 0", "sampleunit", "get"]);
+    });
+}
+
+#[test]
+fn a_refused_limit_the_module_already_holds_goes_on() {
+    bounded(|| {
+        let s = server();
+        reply(&s, "triggerflags 0", Reply::Say("ERR".to_owned()));
+        let mut d = opened(&s);
+        // The open's continuous stream was taken; now the module refuses one-shot.
+        assert!(d.set(&Key::LimitSamples, &Value::U64(7), None).is_err());
+        s.lock().unwrap().flags = 0;
+        d.set(&Key::LimitSamples, &Value::U64(7), None).unwrap();
+        assert!(d.settings.oneshot);
+        assert_eq!(written(&s).last().unwrap(), "triggerflags");
+    });
+}
+
+#[test]
+fn an_open_refused_its_continuous_stream_takes_what_the_module_holds() {
+    bounded(|| {
+        for (held, oneshot) in [(0, true), (1, false)] {
+            let s = server();
+            s.lock().unwrap().flags = held;
+            reply(&s, "triggerflags 1", Reply::Say("ERR".to_owned()));
+            let d = opened(&s);
+            assert_eq!(d.settings.oneshot, oneshot, "{held}");
+            assert_eq!(written(&s).last().unwrap(), "triggerflags");
+        }
+    });
+}
+
+#[test]
+fn channel_8_alone_is_16_bits() {
+    bounded(|| {
+        let s = server();
+        stream(&s, vec![at_once(counter(100))]);
+        let mut d = opened(&s);
+        d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+        for pos in 0..14 {
+            d.enable_channel(pos, pos == 8).unwrap();
+        }
+        let p = until_end(&start(&mut d));
+        assert!(written(&s).contains(&"sampleunit 0".to_owned()));
+        assert_eq!(samples(&p), counter(8));
+    });
+}
+
+#[test]
+fn a_stop_ahead_of_the_header_sends_neither_get_nor_close() {
+    bounded(|| {
+        let s = server();
+        let mut d = opened(&s);
+        // A queue of one that is full: the header can't go until the stop.
+        let (tx, rx) = sync_channel(1);
+        tx.send((0, Packet::Trigger)).unwrap();
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        d.stop().unwrap();
+        d.close().unwrap();
+        let w = written(&s);
+        assert!(!w.contains(&"get".to_owned()), "{w:?}");
+        assert!(!w.contains(&"close".to_owned()), "{w:?}");
+        drop(rx);
+    });
+}
+
+#[test]
+fn a_node_with_no_conn_is_said() {
+    let dir = std::env::temp_dir().join(format!("beaglelogic-node-{}", std::process::id()));
+    std::fs::write(&dir, b"").unwrap();
+    let note = native_note(&dir);
+    std::fs::remove_file(&dir).unwrap();
+    let note = note.unwrap();
+    assert!(note.ends_with(
+        " is here, and only the TCP way in is ported: run the board's TCP server, and \
+         conn=tcp-raw/127.0.0.1/5555."
+    ));
+    assert_eq!(native_note(&dir), None);
+}
+
 // A second capture.
 
 #[test]
@@ -1288,6 +1390,8 @@ fn a_flood_of_a_consumer_gone_ends_with_no_failure() {
         s.lock().unwrap().flood = Flood(1024);
         let mut d = opened(&s);
         let rx = start(&mut d);
+        // Gone in the stream, after `get`.
+        while !matches!(rx.recv_timeout(BOUND).unwrap(), (_, Packet::Logic(_))) {}
         drop(rx);
         // Nobody listens, so the thread ends, and a close gets the link.
         let deadline = Instant::now() + BOUND;

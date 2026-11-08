@@ -562,6 +562,20 @@ impl Link {
         if is_ok(&answer) { Ok(()) } else { Err(Error::device(refused_message(&line))) }
     }
 
+    /// A setting, and when it is refused, what the module holds: `None` when it took
+    /// the value, else the value it keeps. The module refuses every setting while it
+    /// finishes a capture (its mutex is held until the last buffer is out, which can be
+    /// a buffer's time after a `close`), so a refusal alone says nothing of the value.
+    pub fn set_checked(&mut self, command: &str, value: u32) -> Result<Option<u32>> {
+        match self.set(command, value) {
+            Ok(()) => Ok(None),
+            Err(Error::Device(text)) if text == refused_message(&format!("{command} {value}")) => {
+                self.ask_number(command).map(Some)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
     /// `beaglelogic_tcp_drain`: what has come goes, until the line has been quiet for
     /// a moment. C's has no end at a closed connection, as `select` keeps saying
     /// there's something to read and `recv` keeps saying 0. This one also has an end
@@ -625,6 +639,30 @@ fn no_number_message(command: &str, answer: &str) -> String {
 /// What a refused setting says.
 pub fn refused_message(line: &str) -> String {
     format!("The device refused '{line}'")
+}
+
+/// What a refused setting that the module already holds says.
+pub fn kept_message(command: &str, value: u32) -> String {
+    format!(
+        "The device refused '{command} {value}' and already holds it: it refuses settings \
+         while it finishes a capture's last buffer"
+    )
+}
+
+/// What a refused setting that the module doesn't hold says.
+pub fn held_message(command: &str, value: u32, held: u32) -> String {
+    format!(
+        "The device refused '{command} {value}' and holds {held}: it refuses settings while \
+         it finishes a capture's last buffer, for up to a buffer's time, so try again"
+    )
+}
+
+/// What an open says when the module keeps its one-shot stream.
+pub fn oneshot_kept_message() -> String {
+    "The device refused 'triggerflags 1' and holds 0: it refuses settings while it \
+     finishes a capture's last buffer, and a capture with no limit stops at the end of the \
+     device's buffer"
+        .to_owned()
 }
 
 /// What a start says when the rate leaves a long wait.
@@ -987,6 +1025,20 @@ mod tests {
             "At this rate and buffer size the device sends nothing for 4194 s at a time."
         );
         assert!(NO_BUFFERS.starts_with("The device has no buffer (memalloc is 0)"));
+        assert_eq!(
+            kept_message("sampleunit", 0),
+            "The device refused 'sampleunit 0' and already holds it: it refuses settings while \
+             it finishes a capture's last buffer"
+        );
+        assert_eq!(
+            held_message("sampleunit", 0, 1),
+            "The device refused 'sampleunit 0' and holds 1: it refuses settings while it \
+             finishes a capture's last buffer, for up to a buffer's time, so try again"
+        );
+        assert!(oneshot_kept_message().ends_with("stops at the end of the device's buffer"));
+        // C's select in beaglelogic_tcp_drain. What a drain misses can't answer a
+        // command, as the next one connects again, so no exchange shows this.
+        assert_eq!(DRAIN_QUIET, Duration::from_millis(25));
     }
 
     #[test]

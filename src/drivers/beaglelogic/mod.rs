@@ -17,9 +17,12 @@
 //!
 //! C has a second way in, `/dev/beaglelogic` on the board itself: ioctls, a mapped
 //! buffer and `poll`. That isn't ported, as nothing could test it, so a scan with no
-//! `conn=` finds nothing and says so if the node is there. The server runs on the
-//! same board, so `conn=tcp-raw/127.0.0.1/5555` reaches the same capture there. See
-//! `docs/DEVICES.md` for what the native way in needs.
+//! `conn=` finds nothing and says so if the node is there. A board set up with the
+//! project's `install.sh` runs the Go server as `beaglelogic-tcp.service` on port 5555,
+//! so `conn=tcp-raw/127.0.0.1/5555` reaches the same module there; a board set up
+//! without it has no server. TCP is slower than the mapped buffer: in a continuous
+//! capture the kernel's overrun is only a warning in `dmesg`, and the Go server then
+//! ends the stream in silence. See `docs/DEVICES.md` for what the native way in needs.
 //!
 //! A scan connects, asks `version` and closes. An open connects again, reads four
 //! settings and asks for a continuous stream, which a limit turns to one-shot. A start
@@ -33,13 +36,25 @@
 //! - **Silence.** Every wait has a bound, where C's `recv` blocks for good. An answer
 //!   gets [`protocol::NO_ANSWER`], and a stream a bound from its pace: see
 //!   [`protocol::Bounds`] and [`protocol::Quiet`].
-//! - **Refused settings.** A refused `sampleunit` fails the start. C ignores it and
-//!   reads 8 bits as 16, with exit 0. A refused or failed set leaves the value as it
+//! - **Refused settings.** The module refuses every setting while it finishes a
+//!   capture, which can be a buffer's time after one ended. So a refused `sampleunit`,
+//!   or `triggerflags` for a limit or at the open, is asked back: a capture goes on if
+//!   the module holds what was wanted, with a warning, and fails saying why if not. C
+//!   ignores a refused `sampleunit` and reads 8 bits as 16 with exit 0, and fails a
+//!   limit on a refused `triggerflags`. A refused or failed set leaves the value as it
 //!   was, where C keeps what was asked.
-//! - **A rate the module rounds.** The module keeps a whole divisor of 100 MHz, so
-//!   60 MHz is 100 MHz. C reports what was asked, so every time in the output is wrong,
-//!   with exit 0; here the warning says so and the value is the module's. A rate past
-//!   32 bits is refused, where C's cast sends something else.
+//! - **`--time` is a sample limit** here, as the CLI sets `limit_samples` from it for a
+//!   driver with no `limit_msec`. So a stream that stays silent fails a `--time`
+//!   capture at the bound, as it does `--samples`, where rule elsewhere would end it
+//!   with a warning.
+//! - **A rate the module rounds.** The module keeps a whole divisor of 100 MHz
+//!   (`coreclockfreq` is 200 MHz, fixed at probe), so 60 MHz is 100 MHz. C reports what
+//!   was asked, so every time in the output is wrong, with exit 0; here the warning
+//!   says so and the value is the module's rule, worked out here rather than asked
+//!   back, which keeps C's wire. A rate past 32 bits is refused, where C's cast sends
+//!   something else.
+//! - **`limit_samples` after a continuous capture** reads back what it was. C reads
+//!   back `UINT64_MAX`, as it keeps a continuous capture's no-limit in the same field.
 //! - **Triggers and limits:** see [`protocol::Acquire`].
 //! - **A closed connection** ends the capture as failed. C sends End, then spins for
 //!   good in its drain, and SIGPIPE kills it if it has a command to send.
@@ -252,7 +267,13 @@ impl BeagleLogicDevice {
             log::warn!("Insufficient buffer space has been allocated.");
             log::warn!("{}", protocol::truncated_message(buffersize, unit));
         }
-        self.idle_link()?.set("triggerflags", 0)?;
+        match self.idle_link()?.set_checked("triggerflags", 0)? {
+            None => {}
+            Some(0) => log::warn!("{}.", protocol::kept_message("triggerflags", 0)),
+            Some(held) => {
+                return Err(Error::device(protocol::held_message("triggerflags", 0, held)));
+            }
+        }
         self.settings.limit_samples = limit;
         self.settings.oneshot = true;
         Ok(())
@@ -399,10 +420,26 @@ impl Device for BeagleLogicDevice {
             self.dial = Some(link.into_dial());
             return Err(e);
         }
-        if let Err(e) = link.set("triggerflags", 1) {
-            log::warn!("Asking for a continuous stream failed: {e}.");
-        }
-        settings.oneshot = false;
+        settings.oneshot = match link.set_checked("triggerflags", 1) {
+            Ok(None) => false,
+            Ok(Some(1)) => {
+                log::warn!("{}.", protocol::kept_message("triggerflags", 1));
+                false
+            }
+            // A capture with no limit then ends with the module's buffer.
+            Ok(Some(0)) => {
+                log::warn!("{}.", protocol::oneshot_kept_message());
+                true
+            }
+            Ok(Some(held)) => {
+                log::warn!("The answer to 'triggerflags' is neither 0 nor 1: {held}.");
+                false
+            }
+            Err(e) => {
+                log::warn!("Asking for a continuous stream failed: {e}.");
+                false
+            }
+        };
         self.settings = settings;
         self.link = Some(link);
         Ok(())
@@ -432,7 +469,19 @@ impl Device for BeagleLogicDevice {
         let wide = self.channels.iter().any(|ch| ch.index >= 8 && ch.enabled);
         let unit = if wide { Unit::Sixteen } else { Unit::Eight };
         let link = self.idle_link()?;
-        link.set("sampleunit", unit.number())?;
+        match link.set_checked("sampleunit", unit.number())? {
+            None => {}
+            Some(held) if held == unit.number() => {
+                log::warn!("{}.", protocol::kept_message("sampleunit", held));
+            }
+            Some(held) => {
+                return Err(Error::device(protocol::held_message(
+                    "sampleunit",
+                    unit.number(),
+                    held,
+                )));
+            }
+        }
         self.settings.unit = unit;
         let Settings { samplerate, buffersize, bufunitsize, limit_samples, oneshot, .. } =
             self.settings;
@@ -453,6 +502,7 @@ impl Device for BeagleLogicDevice {
             ),
             bounds: self.bounds.unwrap_or_else(|| Bounds::for_buffer(buffer)),
             limited: oneshot,
+            asked: false,
         };
         let Some(mut link) = self.link.take() else {
             return Err(Error::device("device is not open"));
@@ -511,6 +561,8 @@ struct Capture {
     acquire: Acquire,
     bounds: Bounds,
     limited: bool,
+    /// Whether `get` went out, which a `close` needs.
+    asked: bool,
 }
 
 impl Capture {
@@ -519,7 +571,8 @@ impl Capture {
     /// connection's end there's no one to tell.
     fn run(mut self, link: &mut Link, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
         let outcome = self.stream(link, sink, stop);
-        if link.is_connected() {
+        // A `close` with no `get` kills `tcp-server-node`.
+        if self.asked && link.is_connected() {
             let closing = link.send("close").and_then(|()| link.drain());
             if let Err(e) = closing {
                 log::debug!("The close of a capture failed: {e}.");
@@ -539,6 +592,7 @@ impl Capture {
         if link.drain()? {
             return Err(protocol::closed_error());
         }
+        self.asked = true;
         link.send("get")?;
         let slice = link.times.slice;
         let mut quiet = Quiet::new(self.bounds, self.limited, slice.saturating_mul(2));
@@ -612,11 +666,8 @@ impl Driver for BeagleLogicDriver {
             }
         }
         let Some(conn) = conn else {
-            if std::path::Path::new(DEV_NODE).exists() {
-                log::warn!(
-                    "{DEV_NODE} is here, and only the TCP way in is ported: run the board's TCP \
-                     server, and conn=tcp-raw/127.0.0.1/5555."
-                );
+            if let Some(text) = native_note(std::path::Path::new(DEV_NODE)) {
+                log::warn!("{text}");
             }
             return Ok(Vec::new());
         };
@@ -630,6 +681,17 @@ impl Driver for BeagleLogicDriver {
         let dial: Dial = Box::new(move || dial_tcp(&host, &port));
         Ok(scan_with(dial, count).map(|d| Box::new(d) as Box<dyn Device>).into_iter().collect())
     }
+}
+
+/// What a scan with no `conn=` says of a node it can't use.
+fn native_note(node: &std::path::Path) -> Option<String> {
+    node.exists().then(|| {
+        format!(
+            "{} is here, and only the TCP way in is ported: run the board's TCP server, and \
+             conn=tcp-raw/127.0.0.1/5555.",
+            node.display()
+        )
+    })
 }
 
 /// The scan's probe: a connection for `version` alone, closed after it however it went.

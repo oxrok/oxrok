@@ -17,4 +17,6 @@ tcp_out 74726967676572666c61677320300a -> 15
 tcp_in 4 -> 4f4b0d0a
 tcp_out 73616d706c65756e697420300a -> 13
 tcp_in 5 -> 4552520d0a
+tcp_out 73616d706c65756e69740a -> 11
+tcp_in 3 -> 310d0a
 tcp_close

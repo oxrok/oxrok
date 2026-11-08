@@ -36,7 +36,8 @@ s/^oxrok: warn: oxrok::cli::pipeline: //'
     STL_WIDTH="soft_trigger_logic_new takes its width from all channels, enabled or not (soft-trigger.c:53), so 8 bits on a 14 channel device step two bytes at a time and the trigger lands at half its place (protocol.c:168-171); oxrok uses the stream's width"
     WAIT_COUNTS="protocol.c:180 adds a read to bytes_read when the trigger has not fired, so what is thrown away counts for the limit: too few samples, or none, with exit 0; oxrok counts what it sends"
     WIDTH="dev_acquisition_start ignores a refused sampleunit (api.c:329), and C reads the module's 8 bits as 16, with exit 0; oxrok refuses the start"
-    TF_WARN="dev_open ignores a refused triggerflags (api.c:180) with no word; oxrok goes on too, and warns"
+    TF_WARN="dev_open ignores a refused triggerflags (api.c:180) with no word; oxrok asks what the module holds, takes that, and warns"
+    KEPT="api.c:275 fails a limit on a refused triggerflags, and sigrok-cli stops with 'Failed to configure sample limit.'; the module refuses every setting while it finishes a capture, so oxrok asks what it holds, and goes on when that is what was asked"
     UNFIRED="C ends with nothing and says nothing; oxrok does as well, and warns"
     NO_BUFFERS="with no buffers the module's open fails and the server sends nothing (kernel/beaglelogic.c:563), and C's poll has no end; oxrok warns at the start and has a bound"
     SLOW="C says nothing of a rate whose buffer takes minutes to fill; oxrok warns at the start"
@@ -76,7 +77,8 @@ $CAUSE" -- -d beaglelogic:conn=tcp-raw/127.0.0.1/no-such-service --scan
     emu_options mute=version
     emu_case "silent at version" --oracle-bug "$SILENT" --oracle-hangs --timeout 5 --stderr --filter "$L" -- -d $T --scan
 
-    # Settings.
+    # Settings. Where both refuse in their own words, the full case holds the wire and
+    # a case of oxrok's alone its words: a filter would let either wording through.
     emu_options
     emu_case "get samplerate" -- -d $T --get samplerate
     emu_case "get limit_samples" -- -d $T --get limit_samples
@@ -87,18 +89,20 @@ $CAUSE" -- -d beaglelogic:conn=tcp-raw/127.0.0.1/no-such-service --scan
     emu_case "set captureratio" --no-output -- -d $T --config captureratio=50 --set
     emu_case "set limit_samples" --no-output -- -d $T --config limit_samples=100 --set
     emu_case "set a limit beyond the buffer" --stderr --filter "$L" -- -d $T --config limit_samples=5M --set
-    emu_case "set captureratio over 100" --stderr --expect-fail --filter "$L
-s/^(Failed to set device option 'captureratio': invalid argument)[.]\$/\1: it must be 0..100./" -- -d $T --config captureratio=101 --set
-    emu_case "set limit 0" --stderr --expect-fail --filter "$L
-s/^(Failed to set device option 'limit_samples': invalid argument)[.]\$/\1: it cannot be 0./" -- -d $T --config limit_samples=0 --set
+    emu_case "set captureratio over 100" --no-output --expect-fail -- -d $T --config captureratio=101 --set
+    emu_case "set captureratio over 100 in oxrok's words" --no-oracle-only --stderr --expect-fail -- -d $T --config captureratio=101 --set
+    emu_case "set limit 0" --no-output --expect-fail -- -d $T --config limit_samples=0 --set
+    emu_case "set limit 0 in oxrok's words" --no-oracle-only --stderr --expect-fail -- -d $T --config limit_samples=0 --set
     emu_case "set logic_channels" --stderr --expect-fail -- -d $T --config logic_channels=4 --set
-    emu_case "set samplerate over the top" --stderr --expect-fail --filter "s/^(Failed to set device option 'samplerate'): generic.unspecified error[.]\$/\1: device error: The device refused 'samplerate 101000000'./" -- -d $T --config samplerate=101M --set
+    emu_case "set samplerate over the top" --no-output --expect-fail -- -d $T --config samplerate=101M --set
+    emu_case "set samplerate over the top in oxrok's words" --no-oracle-only --stderr --expect-fail -- -d $T --config samplerate=101M --set
     emu_options refuse=samplerate
-    emu_case "set samplerate refused" --stderr --expect-fail --filter "s/^(Failed to set device option 'samplerate'): generic.unspecified error[.]\$/\1: device error: The device refused 'samplerate 1000000'./" -- -d $T --config samplerate=1M --set
+    emu_case "set samplerate refused" --no-output --expect-fail -- -d $T --config samplerate=1M --set
+    emu_case "set samplerate refused in oxrok's words" --no-oracle-only --stderr --expect-fail -- -d $T --config samplerate=1M --set
     emu_options refuse=triggerflags
-    emu_case "open ignores a refused triggerflags" -- -d $T --get samplerate
+    emu_case "open ignores a refused triggerflags" --oracle-differs "$TF_WARN" -- -d $T --get samplerate
     emu_case "open warns of a refused triggerflags" --oracle-differs "$TF_WARN" --stderr --filter "$L" -- -d $T --get samplerate
-    emu_case "limit refused" --no-output --expect-fail -- -d $T --samples 8 --output-file /dev/null
+    emu_case "limit refused" --oracle-bug "$KEPT" -- -d $T $D
     emu_options hangup=triggerflags+
     emu_case "open ignores a close at triggerflags" -- -d $T --get samplerate
 
@@ -134,6 +138,7 @@ s/^(Failed to set device option 'limit_samples': invalid argument)[.]\$/\1: it c
     emu_case "capture one sample" -- -d $T --samples 1 -O bits
     emu_case "capture 8 bits" --keep-header -- -d $T -C $C8 $D
     emu_case "capture one channel past 8" --keep-header -- -d $T -C P8_20 $D
+    emu_case "capture channel 8 alone" --keep-header -- -d $T -C P8_27 $D
     emu_case "capture 8 channels" --keep-header -- -d $T:logic_channels=8 $D
     emu_case "capture the whole buffer" --digest --filter "$Z" -- -d $T --samples 32768 -O hex
     emu_case "capture the whole buffer 8 bits" --digest --filter "$Z" -- -d $T -C $C8 --samples 65536 -O hex
@@ -200,6 +205,14 @@ s/^(Failed to set device option 'limit_samples': invalid argument)[.]\$/\1: it c
     # The same wire from oxrok, whose --continuous has no any-key stop.
     emu_options free=1 mark=8192
     emu_case "interrupt a stream" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous --output-file /dev/null
+    # No limit to take a share of, so no pre-trigger samples. C takes a share of
+    # UINT64_MAX, whose int is negative at 50 (-171798693), so it has none either, and the
+    # two agree here by that: other ratios give another number. The first 64 samples are
+    # the trigger's.
+    emu_options free=1 mark=8192
+    emu_case "continuous trigger with a ratio" --oracle-bug "$SIGINT" --interrupt tcp-model --filter '15,$d' --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous -c captureratio=50 -t P8_29=r -O bits
+    emu_options free=1
+    emu_case "lib continuous trigger with a ratio" --libsigrok --filter '15,$d' --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous -c captureratio=50 -t P8_29=r --stop-after 64 -O bits
     emu_options mark=65536
     emu_case "interrupt a capture with a limit left" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output -- -d $T --samples 40000 --output-file /dev/null
 
@@ -217,6 +230,15 @@ s/^(Failed to set device option 'limit_samples': invalid argument)[.]\$/\1: it c
     # The module keeps 8 bits, and C reads them as 16.
     emu_options refuse=sampleunit
     emu_case "sampleunit refused" --oracle-differs "$WIDTH" --expect-fail --stderr -- -d $T $D
+
+    # A module still finishing the last capture refuses every setting until its last
+    # buffer is out, and a get waits for it. C fails the limit, and ignores the width.
+    emu_options busy=25 sampleunit=0
+    emu_case "busy at the start with the width held" --oracle-bug "$KEPT" --keep-header --stderr --filter "$L" -- -d $T $D
+    emu_options busy=25 sampleunit=1
+    emu_case "busy at the start with another width" --oracle-differs "$WIDTH" --expect-fail --stderr --filter "$L" -- -d $T --continuous
+    emu_options busy=25 sampleunit=0 triggerflags=1 free=1 mark=8192
+    emu_case "busy at the start continuous" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous --output-file /dev/null
 
     # An unplug: the server closes, and what asks next finds it.
     emu_options
