@@ -1,0 +1,59 @@
+Driver functions:
+    Logic analyzer
+    Oscilloscope
+Scan options:
+    conn
+yokogawa-dlm - Yokogawa DL9505L F1.00 [S/N: EMU0001] with 20 channels: 1 2 3 4 A0 A1 A2 A3 A4 A5 A6 A7 B0 B1 B2 B3 B4 B5 B6 B7
+Channel groups:
+    1: channel 1
+    2: channel 2
+    3: channel 3
+    4: channel 4
+    POD0: channels A0 A1 A2 A3 A4 A5 A6 A7
+    POD1: channels B0 B1 B2 B3 B4 B5 B6 B7
+    POD2: No channels
+    POD3: No channels
+Supported configuration options across all channel groups:
+    limit_frames: 
+    samplerate
+    timebase - supported values:
+      1 ns
+      2 ns
+      5 ns
+      10 ns
+      20 ns
+      50 ns
+      100 ns
+      200 ns
+      500 ns
+      1 us
+      2 us
+      5 us
+      10 us
+      20 us
+      50 us
+      100 us
+      200 us
+      500 us
+      1 ms (current)
+      2 ms
+      5 ms
+      10 ms
+      20 ms
+      50 ms
+      100 ms
+      200 ms
+      500 ms
+      1 s
+      2 s
+      5 s
+      10 s
+      20 s
+      50 s
+      100 s
+      200 s
+      500 s
+    num_hdiv
+    horiz_triggerpos: 0.500000 (current)
+    triggersource: 1 (current), 2, 3, 4, LINE, EXT, BIT1, BIT2, BIT3, BIT4, BIT5, BIT6, BIT7, BIT8
+    triggerslope: r (current), f

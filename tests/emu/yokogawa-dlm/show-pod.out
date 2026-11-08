@@ -1,0 +1,13 @@
+Driver functions:
+    Logic analyzer
+    Oscilloscope
+Scan options:
+    conn
+yokogawa-dlm - Yokogawa DLM2024 F1.00 [S/N: EMU0001] with 12 channels: 1 2 3 4 D0 D1 D2 D3 D4 D5 D6 D7
+Channel groups:
+    1: channel 1
+    2: channel 2
+    3: channel 3
+    4: channel 4
+    POD0: channels D0 D1 D2 D3 D4 D5 D6 D7
+Supported configuration options on channel group POD0:

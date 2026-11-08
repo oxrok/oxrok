@@ -233,6 +233,14 @@ pub trait Device: Send {
         self.close()
     }
 
+    /// [`Device::channels`] is already the order a listing shows, by the numbers the C
+    /// driver gives them, where [`Channel::index`] is another thing: `yokogawa-dlm`'s C
+    /// numbers logic from 32, and here a logic channel's index is its bit. By default a
+    /// listing sorts by index, as `sr_dev_inst_channels_get`'s users see them.
+    fn channels_listed_as_they_are(&self) -> bool {
+        false
+    }
+
     /// What the device's trigger can do beyond level and edge stages.
     /// The default is nothing beyond them, with any number of stages.
     fn trigger_features(&self) -> TriggerFeatures {

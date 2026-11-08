@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 /// The drivers with an emulator model: each must have a recording.
 const RECORDED: [&str; 33] = [
+const RECORDED: [&str; 31] = [
     "asix-sigma",
     "chronovu-la",
     "fx2lafw",
@@ -55,6 +56,7 @@ const RECORDED: [&str; 33] = [
     "intronix-logicport",
     "rigol-dg",
     "siglent-sdl10x0",
+    "yokogawa-dlm",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a
