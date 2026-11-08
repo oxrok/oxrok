@@ -290,7 +290,12 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
     emu_case "no memory key time" --digest --filter '$=; d' --timeout 120 -- -d $O --time 2s -O hex
     emu_case "no memory key trigger" --oracle-differs "$MEMORY_BUG" --digest --filter '$=; d' --timeout 120 -- -d $O -c captureratio=50 --samples 300000 -t 4=1 -O hex
     emu_options meta=${NAME}20000000402100006000
-    emu_case "64 channels capture" -- -d $O --samples 8 -O hex
+    # With the oracle built with libsigrok PR 315 (2026-11-08), sigrok-cli frees the
+    # hex output's options twice at the end of this capture (sr_output_free ->
+    # g_slist_free_full -> g_variant_unref, from a preloaded backtrace) and dies of
+    # SIGSEGV after it has captured; the same layout-dependent fault in a clean build of
+    # the same tree. Nothing of the OLS driver or oxrok is in that path.
+    emu_case "64 channels capture" --oracle-bug "sigrok-cli dies of SIGSEGV in sr_output_free (g_variant_unref of the hex output's options) after the capture, with libsigrok PR 315 in the build" -- -d $O --samples 8 -O hex
     emu_options
 
     # What the device does wrong.
