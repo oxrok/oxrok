@@ -1,0 +1,3 @@
+sr: gpio: Error opening /sys/class/gpio/gpio486/value: Permission denied
+sr: baylibre-acme: Error setting power-off state: gpio: 486
+Failed to set device option 'power_off': input/output error.

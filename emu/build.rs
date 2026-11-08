@@ -15,7 +15,7 @@
 //! table and the `build` dispatch from the `NAME`, `ABOUT` and `build`
 //! each module exports, and the `log_rules` dispatch from the modules
 //! with a line that starts `pub fn log_rules(`, and likewise the
-//! `build_tcp` dispatch. A new model is a new
+//! `build_tcp` and `build_sysfs` dispatches. A new model is a new
 //! file and nothing else, so models written in parallel never touch a
 //! shared list.
 
@@ -138,6 +138,7 @@ fn main() {
     out.push_str("    let _ = (name, options);\n    crate::txlog::Rules::default()\n}\n");
 
     out.push_str(&build_tcp_dispatch(&models));
+    out.push_str(&build_sysfs_dispatch(&models));
 
     let dest = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("models.rs");
     // Rewritten only when it changes, so an unrelated build script run
@@ -171,6 +172,34 @@ fn build_tcp_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
     }
     out.push_str(
         "    let _ = options;\n    Err(Error::Invalid(format!(\"{name} is not a model on TCP\")))\n}\n",
+    );
+    out
+}
+
+/// The `build_sysfs` dispatch, from the modules with a line that starts
+/// `pub fn build_sysfs(`.
+fn build_sysfs_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "\n/// The model `name` as a tree of files, built with `options`.\n\
+         ///\n\
+         /// # Errors\n\
+         ///\n\
+         /// When the model has no `build_sysfs`, or it rejects an option.\n\
+         pub fn build_sysfs(\n    name: &str,\n    options: &[(String, String)],\n) -> Result<Box<dyn crate::shells::sysfs::Tree>> {\n",
+    );
+    for (id, (_, path)) in models {
+        let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if source.lines().any(|l| l.starts_with("pub fn build_sysfs(")) {
+            writeln!(
+                out,
+                "    if name == {id}::NAME {{\n        return {id}::build_sysfs(options);\n    }}"
+            )
+            .unwrap();
+        }
+    }
+    out.push_str(
+        "    let _ = options;\n    Err(Error::Invalid(format!(\"{name} is not a model on sysfs\")))\n}\n",
     );
     out
 }

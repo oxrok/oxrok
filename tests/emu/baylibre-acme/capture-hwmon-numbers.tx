@@ -1,0 +1,43 @@
+sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0040/hwmon
+sysfs_get class/gpio/gpio487/value -> "1\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0041/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0051/eeprom -> @256:deed16ecbe73f03c6039bd66defd4389f7de4b08d375b0e68f83f61b64788ded
+sysfs_put class/hwmon/hwmon4/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0044/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0045/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0042/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004c/name -> "tmp435\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-004c/hwmon
+sysfs_get class/gpio/gpio479/value -> "0\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0043/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0049/name -> "tmp435\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0046/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004f/name -> "tmp435\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004b/name -> "tmp435\n"
+sysfs_open class/hwmon/hwmon3/power1_input
+sysfs_open class/hwmon/hwmon3/curr1_input
+sysfs_open class/hwmon/hwmon3/in1_input
+sysfs_open class/hwmon/hwmon4/power1_input
+sysfs_open class/hwmon/hwmon4/curr1_input
+sysfs_open class/hwmon/hwmon4/in1_input
+sysfs_open class/hwmon/hwmon5/temp1_input
+sysfs_open class/hwmon/hwmon5/temp2_input
+sysfs_read class/hwmon/hwmon3/power1_input -> "1925000\n"
+sysfs_read class/hwmon/hwmon3/curr1_input -> "388\n"
+sysfs_read class/hwmon/hwmon3/in1_input -> "4975\n"
+sysfs_read class/hwmon/hwmon4/power1_input -> "971875\n"
+sysfs_read class/hwmon/hwmon4/curr1_input -> "195\n"
+sysfs_read class/hwmon/hwmon4/in1_input -> "4989\n"
+sysfs_read class/hwmon/hwmon5/temp1_input -> "25000\n"
+sysfs_read class/hwmon/hwmon5/temp2_input -> "40250\n"
+sysfs_close class/hwmon/hwmon3/power1_input
+sysfs_close class/hwmon/hwmon3/curr1_input
+sysfs_close class/hwmon/hwmon3/in1_input
+sysfs_close class/hwmon/hwmon4/power1_input
+sysfs_close class/hwmon/hwmon4/curr1_input
+sysfs_close class/hwmon/hwmon4/in1_input
+sysfs_close class/hwmon/hwmon5/temp1_input
+sysfs_close class/hwmon/hwmon5/temp2_input

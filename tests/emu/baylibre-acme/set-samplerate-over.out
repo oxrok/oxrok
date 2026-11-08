@@ -1,0 +1,2 @@
+sr: baylibre-acme: Maximum sample rate is 500
+Failed to set device option 'samplerate': invalid samplerate.

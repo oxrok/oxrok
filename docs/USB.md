@@ -1043,6 +1043,51 @@ What the first model taught:
   driver, through a crash too.
 - `REQUEST_DEV_DEP_MSG_IN` asks for `INT32_MAX`.
 
+### A model with no device: sysfs files
+
+Some drivers reach no device at all: `baylibre-acme` reads and writes the
+kernel's own files at hard-coded paths (hwmon, `/sys/class/gpio`, an EEPROM).
+Its model is a tree of files, `emu/src/shells/sysfs.rs`: a model implements
+`sysfs::Tree` and exports `pub fn build_sysfs(options)` beside a `build` that
+returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
+`DIR`, attaches nothing, and prints a `READY` line with no device.
+
+- **The hook.** A scenario sets `EMU_SYSFS=1`, and the harness serves the tree in
+  `EMU_SYSFS_DIR`. `EMU_WRAP`, in any scenario, is a command and its words that
+  each tool runs under, inside `timeout` and any `env`, with the tool's own
+  arguments after it. For a tree it is `sh $TOOLS/emu-ns.sh
+  $EMU_SYSFS_DIR/class:/sys/class --`: `tools/emu-ns.sh SRC:DST... -- CMD`
+  binds each SRC over its DST in a user and mount namespace of the command's own
+  (`unshare -Urm`), then executes the command with the same process id, so
+  `timeout`, an interrupt and gcov's counts reach it as ever. A session whose
+  `EMU_WRAP` cannot run `true` fails at its start and says why, so a host where
+  unprivileged user namespaces are off shows at once.
+- **Permissions as on a machine.** The server runs as root and the tree is
+  root's. In the tools' namespace root is not mapped, so the tools, root there,
+  meet the files as a user does: a mode decides. An attribute of mode 0444 can't
+  be opened for writing (EACCES), and no file can be created.
+- **The log** comes from inotify: `sysfs_get PATH -> TEXT` for a file opened and
+  closed with no write, `sysfs_put PATH TEXT -> ok|ERRNO` for one written, with
+  the errno the kernel's store would give when the model refuses it,
+  `sysfs_dir PATH` for a directory listed, and for a paced file (a measurement)
+  `sysfs_open`, one `sysfs_read PATH -> TEXT` for each read(2) that returned data,
+  and `sysfs_close`. A failed open makes no event and no line; stat(2) and
+  `g_file_test` make none either. `Tree::listed` leaves out listings that are a
+  library's, not the driver's (libudev lists `class` for libusb in sigrok-cli).
+- **Pace.** After each read of a paced file the model may give it its next value,
+  written in place, so a tool that keeps the file open sees a live meter, and what
+  a capture reads depends on how many reads it made. `Tree::tick` comes every
+  5 ms, for values that follow the clock. `--unplug sysfs-read=N` and
+  `--interrupt sysfs-read=N` fire after the Nth paced read.
+- **What it can't show.** A refused write is put back after the tool's close: the
+  tool can't see the refusal (on a real attribute write(2) fails), and a read
+  right after the write can still see what was written, so a case reads such a
+  file in another run. A model puts `/dev/full` behind a file for a write that
+  fails at the tool. A read error on an open attribute (EIO, or ENODEV for a
+  removed device) shows only as a directory in the file's place (EISDIR) or a file
+  emptied. A carrier held up longer than a sample period lets a read see the old
+  value again.
+
 ### Writing a device model
 
 Do no slow work inside a reply: the host's timeout is running, and a

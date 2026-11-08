@@ -106,6 +106,23 @@ pub fn factory_with_tcp<W: Write + Send + 'static>(
     })
 }
 
+/// [`factory`], with the model's tree going to `carrier`, so a `reset` or a new
+/// set of options gives each tool a fresh tree.
+#[cfg(target_os = "linux")]
+pub fn factory_with_sysfs<W: Write + Send + 'static>(
+    name: &str,
+    log: Arc<Mutex<TxLog<W>>>,
+    carrier: crate::shells::sysfs::Carrier,
+) -> ModelFactory {
+    let name = name.to_owned();
+    Box::new(move |options: &[(String, String)]| {
+        let model = models::build(&name, options)?;
+        carrier.install(models::build_sysfs(&name, options)?)?;
+        log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
+        Ok(model)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use vusb::bus::Bus;

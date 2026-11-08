@@ -1,0 +1,1 @@
+sr: gpio: Error opening /sys/class/gpio/gpio499/direction: No such file or directory

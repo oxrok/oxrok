@@ -1,0 +1,2 @@
+sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0040/hwmon

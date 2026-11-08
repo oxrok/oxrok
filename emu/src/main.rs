@@ -36,6 +36,10 @@
 //! port is on a line `TCP port=N` on standard output, before anything else, and
 //! without `--attach` a `READY` line with no device follows it.
 //!
+//! With `--sysfs DIR` (Linux) the model is a tree of files in `DIR` instead
+//! (`shells::sysfs`), which the tools see in a mount namespace; nothing is
+//! attached, and a `READY` line with no device says the tree is there.
+//!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
 //! with `--all` every attached port. A running session's port carries
@@ -122,6 +126,10 @@ struct Serve {
     /// one), and prints `TCP port=N`.
     #[arg(long, value_name = "ADDRESS")]
     tcp: Option<String>,
+    /// Serves the model's `build_sysfs` as a tree of files in this directory,
+    /// emptied first and removed at the end, and attaches nothing (Linux).
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["attach", "tcp"])]
+    sysfs: Option<PathBuf>,
     /// Ends the session once this process is gone (Linux).
     #[arg(long, value_name = "PID")]
     while_alive: Option<u32>,
@@ -242,6 +250,87 @@ fn finish_process(stopper: &Stopper) -> ! {
     });
 }
 
+#[cfg(target_os = "linux")]
+type SysfsCarrier = oxrok_emu::shells::sysfs::Carrier;
+/// No tree off Linux: `--sysfs` is refused there.
+#[cfg(not(target_os = "linux"))]
+#[derive(Clone)]
+enum SysfsCarrier {}
+
+/// The tree of `--sysfs`, when asked for.
+#[cfg(target_os = "linux")]
+fn sysfs_carrier(
+    args: &Serve,
+    log: &Arc<Mutex<TxLog<Box<dyn Write + Send>>>>,
+) -> Result<Option<SysfsCarrier>> {
+    let Some(dir) = &args.sysfs else { return Ok(None) };
+    let lines: Arc<Mutex<dyn tcp::Log>> = log.clone();
+    SysfsCarrier::new(dir, lines).map(Some)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysfs_carrier(
+    args: &Serve,
+    _log: &Arc<Mutex<TxLog<Box<dyn Write + Send>>>>,
+) -> Result<Option<SysfsCarrier>> {
+    match args.sysfs {
+        Some(_) => Err(Error::Invalid("--sysfs is for Linux".into())),
+        None => Ok(None),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sysfs_factory(
+    model: &str,
+    log: &Arc<Mutex<TxLog<Box<dyn Write + Send>>>>,
+    tree: &SysfsCarrier,
+) -> vusb::session::ModelFactory {
+    txlog::factory_with_sysfs(model, Arc::clone(log), tree.clone())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysfs_factory(
+    _model: &str,
+    _log: &Arc<Mutex<TxLog<Box<dyn Write + Send>>>>,
+    tree: &SysfsCarrier,
+) -> vusb::session::ModelFactory {
+    match *tree {}
+}
+
+#[cfg(target_os = "linux")]
+fn sysfs_commands(tree: Option<&SysfsCarrier>, builder: Builder) -> Builder {
+    match tree {
+        Some(tree) => tree.commands(builder),
+        None => builder,
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysfs_commands(_tree: &Option<SysfsCarrier>, builder: Builder) -> Builder {
+    builder
+}
+
+/// The tree goes with the session.
+#[cfg(target_os = "linux")]
+fn sysfs_stop(tree: Option<&SysfsCarrier>) {
+    if let Some(tree) = tree {
+        tree.stop();
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysfs_stop(_tree: Option<&SysfsCarrier>) {}
+
+#[cfg(target_os = "linux")]
+fn sysfs_violations(tree: Option<&SysfsCarrier>) -> usize {
+    tree.map_or(0, SysfsCarrier::violations)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sysfs_violations(_tree: Option<&SysfsCarrier>) -> usize {
+    0
+}
+
 fn serve(args: &Serve) -> Result<u8> {
     let out: Box<dyn Write + Send> = match &args.log {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
@@ -255,9 +344,13 @@ fn serve(args: &Serve) -> Result<u8> {
         }
         None => None,
     };
-    let factory = match &carrier {
-        Some(carrier) => txlog::factory_with_tcp(&args.model, Arc::clone(&log), carrier.clone()),
-        None => txlog::factory(&args.model, Arc::clone(&log)),
+    let tree = sysfs_carrier(args, &log)?;
+    let factory = match (&carrier, &tree) {
+        (Some(carrier), _) => {
+            txlog::factory_with_tcp(&args.model, Arc::clone(&log), carrier.clone())
+        }
+        (None, Some(tree)) => sysfs_factory(&args.model, &log, tree),
+        (None, None) => txlog::factory(&args.model, Arc::clone(&log)),
     };
     let observer: SharedObserver = log;
     let mut builder = Builder::new(factory)
@@ -271,6 +364,7 @@ fn serve(args: &Serve) -> Result<u8> {
     if let Some(carrier) = &carrier {
         builder = carrier.commands(builder);
     }
+    builder = sysfs_commands(tree.as_ref(), builder);
     if let Some(control) = &args.control {
         builder = builder.control_with(Address::parse(control), ListenOptions::default());
     }
@@ -285,22 +379,34 @@ fn serve(args: &Serve) -> Result<u8> {
             println!("READY port= busid= usb= usbfs= nodes=");
         }
     }
+    if args.sysfs.is_some() {
+        println!("READY port= busid= usb= usbfs= nodes=");
+    }
     let stopper = session.stopper();
+    let ending = tree.clone();
     if let Some(pid) = args.while_alive {
         let stopper = stopper.clone();
+        let ending = ending.clone();
         let alive = PathBuf::from(format!("/proc/{pid}"));
         thread::spawn(move || {
             while alive.exists() {
                 thread::sleep(Duration::from_secs(1));
             }
             eprintln!("oxrok-emu: process {pid} is gone; ending the session");
+            sysfs_stop(ending.as_ref());
             finish_process(&stopper);
         });
     }
-    ctrlc::set_handler(move || finish_process(&stopper))
-        .map_err(|e| Error::Other(format!("signal handler: {e}")))?;
+    ctrlc::set_handler(move || {
+        sysfs_stop(ending.as_ref());
+        finish_process(&stopper)
+    })
+    .map_err(|e| Error::Other(format!("signal handler: {e}")))?;
     let report = session.run()?;
-    let violations = report.violations + carrier.as_ref().map_or(0, tcp::Carrier::violations);
+    sysfs_stop(tree.as_ref());
+    let violations = report.violations
+        + carrier.as_ref().map_or(0, tcp::Carrier::violations)
+        + sysfs_violations(tree.as_ref());
     println!("violations: {violations}");
     Ok(if violations == 0 { 0 } else { 2 })
 }

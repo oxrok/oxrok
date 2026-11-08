@@ -1,0 +1,24 @@
+sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0044/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0044/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0054/eeprom -> @256:8f1a69944249fc40354a37325d0b4198ae555ae52b2c7123f1e1abbbf0e1e916
+sysfs_put class/hwmon/hwmon0/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0045/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0045/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0055/eeprom -> @256:c4012c8a6d25b612c0fa908796b030c7cd5986fcf92347a7c89923da7666ea77
+sysfs_put class/hwmon/hwmon1/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0042/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0042/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0052/eeprom -> @256:9efd399ef6fec97694b5bf2fa4575feafa61cdb4f8e687c8f92fc28a6ec9efda
+sysfs_put class/hwmon/hwmon2/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0043/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0043/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0053/eeprom -> @256:8602f4eb0971dfc2dfe46fd57096792ef3d408fffcc423a916749ea4d27505c8
+sysfs_put class/hwmon/hwmon3/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0046/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0046/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0056/eeprom -> @256:16a47d71e72d1631f2fa52952bf9777f26fe359dda968b8895bb9f79c7b1877d
+sysfs_put class/hwmon/hwmon4/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004b/name -> "tmp435\n"
