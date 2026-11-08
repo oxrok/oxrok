@@ -54,6 +54,7 @@ const RECORDED: [&str; 31] = [
     "rigol-ds",
     "intronix-logicport",
     "rigol-dg",
+    "siglent-sdl10x0",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a

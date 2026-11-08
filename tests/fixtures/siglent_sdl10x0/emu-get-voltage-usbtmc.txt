@@ -1,0 +1,29 @@
+# oxrok usb fixture 1
+# emu siglent-sdl10x0: get voltage usbtmc
+# arg: -d
+# arg: siglent-sdl10x0
+# arg: -g
+# arg: 1
+# arg: --get
+# arg: voltage
+device vid=f4ec pid=1621 version=0100 manufacturer="Siglent Technologies" product="SDL1020X-E" serial="EMU0001" interfaces=0:fe:03:01
+interfaces -> 00fe0301020102000282020002
+claim 0 -> ok
+reset -> ok
+claim 0 -> ok
+ctl_in 21 07 0000 0000 24 -> 0100000100{9}01000800{8}
+bulk_out 01 0101fe0006000000010000002a49444e3f0a0000 -> 20
+bulk_out 01 0202fd00ffffff7f00{4} -> 12
+bulk_in 82 2048 -> 0202fd0037000000010000005369676c656e7420546563686e6f6c6f676965732c53444c31303230582d452c53444c32454d55303030312c312e30312e30312e32350a00
+release 0 -> ok
+# oxrok usb fixture 1
+device vid=f4ec pid=1621 version=0100 manufacturer="Siglent Technologies" product="SDL1020X-E" serial="EMU0001" interfaces=0:fe:03:01
+interfaces -> 00fe0301020102000282020002
+claim 0 -> ok
+reset -> ok
+claim 0 -> ok
+ctl_in 21 07 0000 0000 24 -> 0100000100{9}01000800{8}
+bulk_out 01 0103fc000e000000010000004d4541533a564f4c546167653f0a0000 -> 28
+bulk_out 01 0204fb00ffffff7f00{4} -> 12
+bulk_in 82 2048 -> 0204fb000a0000000100000031322e30{6}0a0000
+release 0 -> ok

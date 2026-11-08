@@ -1,0 +1,24 @@
+Driver functions:
+    Electronic load
+Scan options:
+    conn
+siglent-sdl10x0 - Siglent Technologies SDL1020X-E 1.01.01.25 [S/N: SDL2EMU0001] with 1 channel: 1
+Channel groups:
+    1: channel 1
+Supported configuration options on channel group 1:
+    enabled: on, off (current)
+    regulation: CURRENT (current), VOLTAGE, POWER, RESISTANCE
+    voltage: 12.000000 (current)
+    voltage_target: 0.000000, 150.000000, 0.001000
+    current: 0.000012 (current)
+    current_limit: 0.000000, 30.000000, 0.001000
+    power: 0.003996 (current)
+    power_target: 0.000000, 200.000000, 0.001000
+    resistance: 36039.742188 (current)
+    resistance_target: 0.030000, 10000.000000, 0.010000
+    opp_enabled: on (current), off
+    opp_active: on (current), off
+    opp_threshold: 200.000000 (current)
+    ocp_enabled: on (current), off
+    ocp_active: on, off (current)
+    ocp_threshold: 

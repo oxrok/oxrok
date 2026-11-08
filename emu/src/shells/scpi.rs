@@ -22,6 +22,13 @@
 //!   - `late-at=N:T`: the Nth answer waits T ticks, and what comes on in the
 //!     meantime waits behind it, so a host that gave up reads it as the answer
 //!     to its next question;
+//!   - `pace=T`: every answer waits T ticks, for a device's own rate;
+//!   - `split-at=N:T`: the Nth answer goes in two halves, the second T ticks after
+//!     the first (two sends on TCP, two messages on USBTMC);
+//!   - `double-at=N:T`: the Nth answer goes again T ticks after, ahead of what
+//!     comes on in the meantime;
+//!   - `junk-at=N:T`: the Nth answer is `abc` at once, and the real one T ticks
+//!     after;
 //!   - `opc-late=N`: the first N `*OPC?` answer `0`;
 //!   - `mark-at=N`: the event point (`--unplug model`, `--unplug tcp-model`), once
 //!     the Nth query was answered;
@@ -182,6 +189,10 @@ pub struct Config {
     mute_at: Option<u32>,
     silent_at: Option<u32>,
     late_at: Option<(u32, u32)>,
+    pace: u32,
+    split_at: Option<(u32, u32)>,
+    double_at: Option<(u32, u32)>,
+    junk_at: Option<(u32, u32)>,
     opc_late: u32,
     mark_at: Option<u32>,
     idn: Option<String>,
@@ -198,6 +209,10 @@ impl Default for Config {
             mute_at: None,
             silent_at: None,
             late_at: None,
+            pace: 0,
+            split_at: None,
+            double_at: None,
+            junk_at: None,
             opc_late: 0,
             mark_at: None,
             idn: None,
@@ -230,12 +245,19 @@ impl Config {
         match key {
             "mute-at" => self.mute_at = Some(count(value)?),
             "silent-at" => self.silent_at = Some(count(value)?),
-            "late-at" => {
+            "late-at" | "split-at" | "double-at" | "junk-at" => {
                 let (nth, ticks) = value
                     .split_once(':')
-                    .ok_or_else(|| Error::Invalid(format!("late-at={value}: as in 2:40")))?;
-                self.late_at = Some((count(nth)?, count(ticks)?));
+                    .ok_or_else(|| Error::Invalid(format!("{key}={value}: as in 2:40")))?;
+                let at = Some((count(nth)?, count(ticks)?));
+                match key {
+                    "late-at" => self.late_at = at,
+                    "split-at" => self.split_at = at,
+                    "junk-at" => self.junk_at = at,
+                    _ => self.double_at = at,
+                }
             }
+            "pace" => self.pace = parse_number(key, value, 0..=1 << 24)?,
             "opc-late" => self.opc_late = parse_number(key, value, 0..=1 << 24)?,
             "mark-at" => self.mark_at = Some(count(value)?),
             "idn" => self.idn = Some(value.to_owned()),
@@ -482,9 +504,33 @@ impl<I: Instrument> Engine<I> {
         }
         let ticks = match self.config.late_at {
             Some((at, ticks)) if at == n => ticks,
-            _ => 0,
+            _ => self.config.pace,
+        };
+        if let Some((at, later)) = self.config.split_at
+            && at == n
+            && bytes.len() > 1
+        {
+            let tail = bytes[bytes.len() / 2..].to_vec();
+            let head = bytes[..bytes.len() / 2].to_vec();
+            self.answers.push_back(Waiting { bytes: head, ticks });
+            self.answers.push_back(Waiting { bytes: tail, ticks: later });
+            return;
+        }
+        if let Some((at, later)) = self.config.junk_at
+            && at == n
+        {
+            let mut junk = b"abc".to_vec();
+            junk.extend_from_slice(&self.config.eol);
+            self.answers.push_back(Waiting { bytes: junk, ticks });
+            self.answers.push_back(Waiting { bytes, ticks: later });
+            return;
+        }
+        let again = match self.config.double_at {
+            Some((at, later)) if at == n => Some(Waiting { bytes: bytes.clone(), ticks: later }),
+            _ => None,
         };
         self.answers.push_back(Waiting { bytes, ticks });
+        self.answers.extend(again);
     }
 
     /// The next answer that is due.
@@ -866,10 +912,48 @@ mod tests {
     }
 
     #[test]
+    fn a_pace_holds_every_answer_and_a_late_one_goes_by_its_own() {
+        let mut r = Rig::new(&[("pace", "2"), ("late-at", "2:3")]);
+        for ticks in [2, 3, 2] {
+            assert!(r.ask("*OPC?\n").is_none());
+            for _ in 1..ticks {
+                r.e.pass_time();
+                assert!(r.e.take().is_none());
+            }
+            r.e.pass_time();
+            assert_eq!(r.e.take().unwrap(), b"1\n");
+        }
+    }
+
+    #[test]
+    fn a_split_answer_comes_in_two_and_a_double_one_twice() {
+        let mut r = Rig::new(&[("split-at", "1:2"), ("double-at", "2:1")]);
+        assert_eq!(r.ask("*IDN?\n").unwrap(), "Acme,B");
+        r.e.pass_time();
+        assert!(r.e.take().is_none());
+        r.e.pass_time();
+        assert_eq!(r.e.take().unwrap(), b"1,1,2\n");
+        assert_eq!(r.ask("*OPC?\n").unwrap(), "1\n");
+        r.send("*OPC?\n");
+        r.e.pass_time();
+        assert_eq!(r.e.take().unwrap(), b"1\n", "the copy, ahead of the next answer");
+        assert_eq!(r.e.take().unwrap(), b"1\n");
+        assert!(r.e.take().is_none());
+        let mut r = Rig::new(&[("junk-at", "1:1")]);
+        assert_eq!(r.ask("*OPC?\n").unwrap(), "abc\n");
+        r.e.pass_time();
+        assert_eq!(r.e.take().unwrap(), b"1\n");
+    }
+
+    #[test]
     fn options_refuse_what_they_cannot_use() {
         let mut c = Config::default();
         assert!(c.option("mute-at", "0").is_err());
         assert!(c.option("late-at", "2").is_err());
+        assert!(c.option("pace", "x").is_err());
+        assert!(c.option("split-at", "1").is_err());
+        assert!(c.option("double-at", "0:1").is_err());
+        assert!(c.option("junk-at", "x:1").is_err());
         assert!(c.option("eol", "cr").is_err());
         assert!(c.option("framing", "other").is_err());
         assert!(!c.option("no-such", "1").unwrap());

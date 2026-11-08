@@ -144,6 +144,7 @@ pub mod drivers {
     pub mod saleae_logic_pro;
     pub mod serial_dmm;
     pub mod serial_lcr;
+    pub mod siglent_sdl10x0;
     pub mod sysclk_lwla;
     pub mod sysclk_sla5032;
     pub mod teleinfo;
@@ -200,6 +201,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
+    registry.register(Box::new(drivers::siglent_sdl10x0::SiglentSdl10x0Driver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
     registry.register(Box::new(drivers::rdtech_tc::RdtechTcDriver));
     registry.register(Box::new(drivers::dcttech_usbrelay::UsbRelayDriver));

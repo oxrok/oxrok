@@ -247,6 +247,15 @@ pub trait Device: Send {
         }
     }
 
+    /// Whether the device would take `value` for `key`, asked of every `-c` before
+    /// any of them goes out, and by [`crate::core::config_set`] before the set, so
+    /// that a refusal leaves the device as it was. By default all goes; a driver
+    /// whose setting is a line the device can refuse in silence checks here.
+    fn check_set(&self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+        let _ = (key, value, group);
+        Ok(())
+    }
+
     /// Whether a capture with `trigger` can start at all, asked before the
     /// output is opened: a refusal here leaves an existing output file
     /// alone. [`Device::start`] may refuse later for other reasons.

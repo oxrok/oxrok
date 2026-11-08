@@ -284,6 +284,15 @@ impl ScpiTransport for Recorder {
         self.inner.tags_answers()
     }
 
+    /// No step in a fixture, as a purge has none: a replay has nothing to clear.
+    fn clear(&mut self) -> Result<bool> {
+        self.inner.clear()
+    }
+
+    fn wait_out_requests(&mut self, on: bool) {
+        self.inner.wait_out_requests(on);
+    }
+
     fn close(&mut self) -> Result<()> {
         self.inner.close()
     }
