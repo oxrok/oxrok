@@ -1,0 +1,16 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+rigol-dg - Rigol Technologies MSO5074 00.03.07 [S/N: MSO50000000000001] with 2 channels: CH1 CH2
+Channel groups:
+    1: channel CH1
+    2: channel CH2
+Supported configuration options on channel group 1:
+    enabled: on, off (current)
+    pattern: Sine (current), Square, Ramp, Pulse, Arb, Noise, DC, Sinc, ExpRise, ExpFall, ECG, Gauss, Lorentz, Haversin
+    output_frequency: 0.100000, 25000000.000000, 0.100000
+    amplitude: 5.000000 (current)
+    offset: 0.000000 (current)
+    phase: 0.000000 (current), 360.000000, 0.100000
+    output_duty_cycle: 

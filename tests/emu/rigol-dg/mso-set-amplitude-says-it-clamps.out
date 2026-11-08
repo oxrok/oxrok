@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::rigol_dg: The instrument's limits for amplitude are not known here: a value outside them is set to the nearest limit.

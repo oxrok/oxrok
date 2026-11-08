@@ -1,0 +1,2 @@
+oxrok: warn: oxrok::drivers::rigol_dg: No answer from the counter: asking again.
+oxrok: warn: oxrok::drivers::rigol_dg: The counter answers again.

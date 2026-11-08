@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::rigol_dg: A DG812 can't run channel 2 and the counter together, by libsigrok's notes: channel 2 is left as it is.

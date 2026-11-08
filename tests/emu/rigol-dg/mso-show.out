@@ -1,0 +1,9 @@
+Driver functions:
+    Signal generator
+Scan options:
+    conn
+rigol-dg - Rigol Technologies MSO5074 00.03.07 [S/N: MSO50000000000001] with 2 channels: CH1 CH2
+Channel groups:
+    1: channel CH1
+    2: channel CH2
+Supported configuration options across all channel groups:

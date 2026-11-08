@@ -1,0 +1,2 @@
+sr: scpi_usbtmc: USBTMC bulk in transfer error: LIBUSB_ERROR_TIMEOUT.
+g_variant_unref: assertion 'value != NULL' failed

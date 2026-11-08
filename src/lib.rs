@@ -137,6 +137,7 @@ pub mod drivers {
     pub mod rdtech_dps;
     pub mod rdtech_tc;
     pub mod rdtech_um;
+    pub mod rigol_dg;
     pub mod rigol_ds;
     pub mod rohde_schwarz_sme_0x;
     pub mod saleae_logic16;
@@ -195,6 +196,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
     registry.register(Box::new(drivers::norma_dmm::NormaDmmDriver));
     registry.register(Box::new(drivers::norma_dmm::SiemensB102xDriver));
+    registry.register(Box::new(drivers::rigol_dg::RigolDgDriver));
     registry.register(Box::new(drivers::rigol_ds::RigolDsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));

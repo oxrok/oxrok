@@ -53,6 +53,7 @@ const RECORDED: [&str; 31] = [
     "uni-t-ut32x",
     "rigol-ds",
     "intronix-logicport",
+    "rigol-dg",
 ];
 
 /// How long one replay may take; a driver that waits for ever on a
