@@ -6,6 +6,16 @@ release may change the library API.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+The first stable release. All 111 decoders of libsigrokdecode 0.5.3 now
+have native Rust implementations; the Python host stays available, but a
+native decoder wins on an id collision. Since `0.2.0-alpha.1`, the last
+17 decoders are the SPI device set, the UART trace decoders, the USB
+packet and request decoders, the 1-Wire network devices, `cfp`,
+`eeprom93xx` and the OOK Oregon/VIS decoders. There are no library API
+changes beyond the additions already described in `0.2.0-alpha.1`.
+
 ### Added
 
 - Native protocol decoders: the last 17 decoders are ported, so all 111
@@ -13,6 +23,14 @@ release may change the library API.
   include the SPI device set, the UART trace decoders, the USB packet and
   request decoders, the 1-Wire network devices, `cfp`, `eeprom93xx` and
   the OOK Oregon/VIS decoders.
+
+### Known issues
+
+- A few timing-sensitive CI tests can fail on loaded runners and pass on
+  rerun: `appa_55ii::tests::the_end_comes_after_the_port_is_back`
+  (macOS/Windows), `formats_cli::csv_matches_sigrok_cli` (macOS) and
+  `tcp_raw_cli::nothing_listening_is_no_device`. They are not in the
+  decoder or release paths.
 
 ## [0.2.0-alpha.1] - 2026-11-07
 

@@ -1,6 +1,6 @@
 # Native decoder checklist
 
-Status: 2026-11-07. Reference: libsigrokdecode 0.5.3, the 111
+Status: 2026-11-08. Reference: libsigrokdecode 0.5.3, the 111
 `decoders/*/pd.py` directories installed by Homebrew, which match the
 `libsigrokdecode-0.5.3` tag exactly (`common/` is not a decoder).
 

@@ -161,7 +161,7 @@ and command lines for real devices in [docs/DEVICES.md](docs/DEVICES.md).
 With Rust 1.95 or newer:
 
 ```sh
-cargo install oxrok --version 0.2.0-alpha.1 --locked
+cargo install oxrok --version 0.2.0 --locked
 ```
 
 The version is needed: with only pre-releases published, cargo finds nothing
