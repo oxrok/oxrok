@@ -1,5 +1,5 @@
 # An HP 3478A multimeter behind an NI GPIB-USB-HS (emu/src/models/hp-3478a.rs), which
-# the kernel's ni_usb_gpib carries to /dev/gpib0, as on a real bench. Sourced by
+# the kernel's ni_usb_gpib carries to a /dev/gpibN, as on a real bench. Sourced by
 # tools/diffcli.sh --emu; see docs/USB.md, "A model behind a kernel subsystem".
 #
 # libsigrok reaches GPIB through linux-gpib's libgpib, which the oracle is built
@@ -13,28 +13,44 @@ EMU_GCOV=hp-3478a
 # The adapter's interface is the kernel's: keep it bound for oxrok's runs.
 EMU_KEEP_BOUND=ni_usb_gpib
 
-# What linux-gpib's gpib_config does at a plug, once per attach: the board's type,
-# online, REN, system control and IFC. In a log section of its own.
+# A kernel without the gpib subsystem's NI driver (before 6.13 it was not in
+# mainline at all) has no board to carry the model: skipped by name.
+modinfo ni_usb_gpib >/dev/null 2>&1 \
+    || EMU_SKIP="kernel $(uname -r) has no ni_usb_gpib, so no GPIB board to carry the model"
+
+# What linux-gpib's gpib_config does at a plug, once per attach: a free board's
+# type, online, REN, system control and IFC, in a log section of its own. The
+# board is the one oxrok-emu took before, or the first with no type, never a
+# machine's own (emu/src/gpib_config.rs); the cases name it as EMU_GPIB_MINOR. A
+# board that does not come up fails the cases that follow.
 emu_attached() {
     emu_cmd "section gpib-config $EMU_BUSID" >/dev/null || return 1
     sudo -n udevadm settle -t 5 || echo "note: hp-3478a: udev has not settled" >&2
-    sudo -n "$EMU" gpib-config --minor 0 --busid "$EMU_BUSID" >&2
+    _hpm=$(sudo -n "$EMU" gpib-config --busid "$EMU_BUSID") || return 1
+    EMU_GPIB_MINOR=${_hpm#GPIB minor=}
+    case "$EMU_GPIB_MINOR" in
+        [0-9] | 1[0-4]) ;;
+        *) echo "hp-3478a: gpib-config said '$_hpm'" >&2; return 1 ;;
+    esac
+    [ -c "/dev/gpib$EMU_GPIB_MINOR" ] || { echo "hp-3478a: no /dev/gpib$EMU_GPIB_MINOR" >&2; return 1; }
+}
+# At the session's end the board goes offline and its node's mode back.
+emu_detaching() {
+    sudo -n "$EMU" gpib-config --release >/dev/null
 }
 
+# The kernel keeps its interrupt monitor across cases: whether a case's first status
+# read is followed by a re-arm (WAIT_REQUEST 0x300) depends on how the case before
+# it ended, not on this one. That one line goes from the head of every .tx.
+MON='1,2{/^ctl_in 40 21 0300 /d}'
 hp() {
     _hpn=$1
     shift
-    emu_case "$_hpn" --no-oracle-only "$@"
+    emu_case "$_hpn" --no-oracle-only --tx-filter "$MON" "$@"
 }
 
 emu_cases() {
-    # A kernel without the gpib subsystem's NI driver (before 6.13 it was not in
-    # mainline at all) has no board to carry the model: no case can run.
-    if ! modinfo ni_usb_gpib >/dev/null 2>&1; then
-        echo "note: hp-3478a: kernel $(uname -r) has no ni_usb_gpib; its cases are skipped" >&2
-        return 0
-    fi
-    D=hp-3478a:conn=gpib/0/23
+    D=hp-3478a:conn=gpib/${EMU_GPIB_MINOR:-0}/23
     hp "scan" --keep-header -- -d $D --scan
     hp "show" --keep-header -- -d $D --show
     hp "get measured_quantity" -- -d $D --get measured_quantity
@@ -42,7 +58,7 @@ emu_cases() {
     hp "get digits" -- -d $D --get digits
     hp "scan with no conn" --no-output -- -d hp-3478a --scan
     hp "scan libgpib names" --stderr -- -d hp-3478a:conn=libgpib/hp3478a --scan
-    hp "scan no such board" --no-output -- -d hp-3478a:conn=gpib/5/23 --scan
+    hp "scan no such board" --no-output -- -d hp-3478a:conn=gpib/15/23 --scan
     hp "capture" -- -d $D --samples 3
     hp "capture analog" -- -d $D --samples 2 -O analog
 
@@ -109,11 +125,20 @@ emu_cases() {
     emu_options mute-status=4
     hp "status not answered in a capture" --oxrok-fails "timeout" -- -d $D --samples 3
     emu_options mute-poll=3
-    hp "poll not answered" --oxrok-fails "serial poll of address 23 got no answer" -- -d $D --samples 3
+    # The model answers at once with the adapter's timeout, where the kernel's serial
+    # poll of a real mute meter would give its timeout itself: either words pass.
+    hp "poll not answered" --oxrok-fails "timeout|no answer" -- -d $D --samples 3
     emu_options mute-read=2
     hp "reading not answered" --oxrok-fails "timeout" -- -d $D --samples 3
     emu_options cut-read=2
     hp "reading cut short" --oxrok-fails "timeout" -- -d $D --samples 3
+    # A board a program before left in an end of string mode on 0x17, the binary
+    # status's second byte: a read that kept it would end the status there. oxrok
+    # clears it before each read, as libgpib's ibrd does.
+    [ "$EMU_DRY" = 1 ] || sudo -n "$EMU" gpib-config --minor "${EMU_GPIB_MINOR:-0}" --eos 23 \
+        || echo "hp-3478a: could not leave the board in an end of string mode" >&2
+    emu_options
+    hp "a board left in an eos mode" -- -d $D --samples 2
     emu_options junk-at=2
     hp "reading no number" --oxrok-fails "no number" -- -d $D --samples 3
     emu_options overload-at=2
@@ -127,6 +152,7 @@ emu_cases() {
     # poll, a reading more) goes, up to the T1 of the end, and the output keeps the
     # two readings the mark guarantees.
     INT_TX='/^interrupt$/,/^bulk_out 02 0dfdfffc0000080054310a/{/^interrupt$/b;/54310a/b;d}'
-    hp "interrupt" --interrupt model --tx-filter "$INT_TX" --filter '3,$d' -- -d $D --continuous
+    hp "interrupt" --interrupt model --tx-filter "$MON
+$INT_TX" --filter '3,$d' -- -d $D --continuous
     emu_options
 }

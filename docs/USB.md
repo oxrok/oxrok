@@ -1153,21 +1153,46 @@ between, as on a bench. Two generic hooks of `tools/diffcli.sh` make that work:
 - `emu_attached`, a function the scenario may define: it runs after each attach the
   server reports (`READY`, `REPLUGGED`, `RENUMERATED`), with `EMU_BUSID` and the rest
   naming the new attach. It does what the device needs as root, in a log section of
-  its own (`emu_cmd "section ..."`), so its traffic is in no case's transactions. A
-  failure is printed, and the cases then fail on their own.
+  its own (`emu_cmd "section ..."`), so its traffic is in no case's transactions. When
+  it fails, each case after it fails at once, naming the hook, until an attach whose
+  hook succeeds.
+- `emu_detaching`, likewise: it runs at the session's end, before the detach, to give
+  back what `emu_attached` took.
+- `EMU_SKIP="REASON"`, set when the scenario is sourced (`hp-3478a` sets it when
+  `modinfo ni_usb_gpib` fails): the model is skipped by name, with a `SKIP` line and,
+  on GitHub, a `::warning::` and a line in `$GITHUB_STEP_SUMMARY`, as the vhci-hcd
+  probe does. A `--no-oracle` run whose only models were skipped so does not fail for
+  running no case. A plain run (no `--no-oracle`) says `SKIP` for a model all of whose
+  cases are `--no-oracle-only`, and counts them as skipped, rather than passing with
+  nothing run.
 
 A GPIB board must be brought online, which needs `CAP_SYS_ADMIN`: linux-gpib's
 `gpib_config` does it, and the testers need not have it. `sudo oxrok-emu gpib-config
---minor 0 --busid BUSID` does the same (`emu/src/gpib_config.rs`): offline, board type
-`ni_usb_b`, address 0, the emulated interface's device path, online, then REN, system
-control and IFC, and the node made world accessible. `tools/emu/hp-3478a.sh` runs it from
-`emu_attached`, so an unplug case's replug comes back online too.
+--busid BUSID` does the same (`emu/src/gpib_config.rs`): offline, board type `ni_usb_b`,
+address 0, the emulated interface's device path, online, then REN, system control and
+IFC, and the node made world accessible. It prints `GPIB minor=N`. The board is one it
+took before (marked in `/run/oxrok-emu-gpib`, with the node's mode before) or the first
+of `/dev/gpib0` to `/dev/gpib14` with no board type at all, so a machine's own boards
+are never taken; minor 15 stays unconfigured for a case to name. `--release` takes each
+marked board offline and puts its node's mode back; `--minor N --eos BYTE` leaves a
+board in an end of string mode, as a program before might have.
+`tools/emu/hp-3478a.sh` runs it from `emu_attached` (so an unplug case's replug comes
+back online too) and `emu_detaching`, and names the board in `conn=` as
+`gpib/$EMU_GPIB_MINOR/23`.
 
 The oracle has no libgpib, so every case is `--no-oracle-only` and its goldens are
 oxrok's, written with `EMU_WRITE_MISSING=1` and read against the C source and the
 instrument's manual. What the kernel itself does (its status and line reads around
 each transfer, the interrupt monitor) is in every `.tx`, so a case also pins how
 `ni_usb_gpib` drives the adapter: a kernel that changes that changes the goldens.
+
+What the model can't show: time. A read or serial poll the meter doesn't answer gets
+the adapter's timeout error at once, where a real adapter waits out the timeout the
+request names, and the kernel's serial poll of a mute meter then says `ETIMEDOUT`
+where the model's instant answer gives `EIO`. The adapter's timeout is a code that
+`ni_usb_timeout_code` rounds up to the next of its steps (1, 3, 10, 30 ...), so a 1.01 s
+timeout is T3s on a real one. oxrok's transport waits out a timeout the board ended
+early, so its own waits hold on the model too.
 
 ### Writing a device model
 

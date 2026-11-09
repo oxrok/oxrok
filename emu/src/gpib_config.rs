@@ -11,9 +11,16 @@
 //! `configure_board`: offline, `CFCBOARDTYPE`, `IBPAD`, `IBSAD`, the device path,
 //! online, then with the board's lock `IBSRE`, `IBRSC` and `IBSIC`, as its defaults
 //! do (remote enable, system controller, interface clear). The device path is the
-//! emulated interface's, so a real adapter on the machine is never taken. Then the
-//! node is made world readable and writable, as `--open-devices` does for the USB
-//! nodes, so the tools run as a user.
+//! emulated interface's, so the board takes no other adapter. Then the node is made
+//! world readable and writable, as `--open-devices` does for the USB nodes, so the
+//! tools run as a user.
+//!
+//! A machine's own boards are left alone. The board taken is one this command took
+//! before (a marker in [`MARKS`] names it, with the node's mode before), or else the
+//! first of minors 0 to 14 with no board type at all (`IBBOARD_INFO` answers
+//! `ENODEV`). Minor 15 is never taken: a case can name it as a board that is not
+//! configured. `--release` takes each marked board offline, puts its node's mode
+//! back and drops the marker, at a session's end.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -24,6 +31,13 @@ use rustix::ioctl::{Opcode, Updater, ioctl, opcode};
 
 /// `GPIB_CODE` of `gpib_ioctl.h`.
 const GPIB_CODE: u8 = 160;
+
+/// Where the boards this command took are marked, one file per minor holding the
+/// node's mode before, in octal.
+pub const MARKS: &str = "/run/oxrok-emu-gpib";
+
+/// The minors a session may take; 15 stays unconfigured for the cases.
+const MINORS: std::ops::Range<u32> = 0..15;
 
 #[repr(C)]
 struct BoardType {
@@ -54,15 +68,41 @@ struct DevicePath {
     path: [u8; 0x1000],
 }
 
+#[repr(C)]
+struct Eos {
+    eos: i32,
+    eos_flags: i32,
+}
+
+/// `struct gpib_board_info_ioctl`, its bit fields as one word.
+#[repr(C)]
+#[derive(Default)]
+struct BoardInfo {
+    pad: u32,
+    sad: i32,
+    parallel_poll_configuration: i32,
+    autopolling: i32,
+    is_system_controller: i32,
+    t1_delay: u32,
+    bits: u32,
+}
+
 const IBSIC: Opcode = opcode::write::<u32>(GPIB_CODE, 9);
 const IBSRE: Opcode = opcode::write::<i32>(GPIB_CODE, 10);
 const IBPAD: Opcode = opcode::write::<Pad>(GPIB_CODE, 15);
 const IBSAD: Opcode = opcode::write::<Sad>(GPIB_CODE, 16);
+const IBEOS: Opcode = opcode::write::<Eos>(GPIB_CODE, 19);
 const CFCBOARDTYPE: Opcode = opcode::write::<BoardType>(GPIB_CODE, 24);
 const IBMUTEX: Opcode = opcode::write::<i32>(GPIB_CODE, 26);
+const IBBOARD_INFO: Opcode = opcode::read::<BoardInfo>(GPIB_CODE, 29);
 const IBRSC: Opcode = opcode::write::<i32>(GPIB_CODE, 34);
 const IBONL: Opcode = opcode::write::<OnlineCmd>(GPIB_CODE, 39);
 const IBSELECT_DEVICE_PATH: Opcode = opcode::write::<DevicePath>(GPIB_CODE, 43);
+
+/// `REOS | BIN` of `gpib.h`.
+const REOS_BIN: i32 = 0x0400 | 0x1000;
+/// `ENODEV`.
+const ENODEV: i32 = 19;
 
 /// One ioctl whose argument the kernel reads, and maybe writes back.
 ///
@@ -76,25 +116,61 @@ unsafe fn call<const OP: Opcode, T>(board: &File, what: &str, value: &mut T) -> 
         .map_err(|e| io::Error::new(io::Error::from(e).kind(), format!("{what}: {e}")))
 }
 
-/// Configures board `minor` as an `ni_usb_b` on the USB device `busid`'s first
-/// interface, or only takes it offline.
+fn node(minor: u32) -> String {
+    format!("/dev/gpib{minor}")
+}
+
+fn open(minor: u32) -> io::Result<File> {
+    let node = node(minor);
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&node)
+        .map_err(|e| io::Error::new(e.kind(), format!("{node}: {e} (is gpib_common loaded?)")))
+}
+
+fn mark(minor: u32) -> String {
+    format!("{MARKS}/{minor}")
+}
+
+/// Whether board `minor` has no board type, so belongs to nobody.
+fn unconfigured(minor: u32) -> bool {
+    let Ok(board) = open(minor) else { return false };
+    let mut info = BoardInfo::default();
+    // SAFETY: IBBOARD_INFO fills a gpib_board_info_ioctl.
+    let r = unsafe { ioctl(&board, Updater::<IBBOARD_INFO, BoardInfo>::new(&mut info)) };
+    matches!(r, Err(e) if e.raw_os_error() == ENODEV)
+}
+
+/// The board to take: one marked as this command's, or the first with no type.
+fn choose() -> io::Result<u32> {
+    if let Some(m) = MINORS.clone().find(|m| Path::new(&mark(*m)).exists()) {
+        return Ok(m);
+    }
+    MINORS.clone().find(|m| unconfigured(*m)).ok_or_else(|| {
+        io::Error::other("no unconfigured GPIB board among /dev/gpib0 to /dev/gpib14")
+    })
+}
+
+/// Configures a board as an `ni_usb_b` on the USB device `busid`'s first interface,
+/// marks it, and returns its minor.
 ///
 /// # Errors
 ///
-/// When the node, the interface or an ioctl fails, naming which.
-pub fn configure(minor: u32, busid: Option<&str>, offline: bool) -> io::Result<()> {
-    let node = format!("/dev/gpib{minor}");
-    let board =
-        OpenOptions::new().read(true).write(true).open(&node).map_err(|e| {
-            io::Error::new(e.kind(), format!("{node}: {e} (is gpib_common loaded?)"))
-        })?;
+/// When no board is free, or the node, the interface or an ioctl fails, naming which.
+pub fn configure(busid: Option<&str>) -> io::Result<u32> {
+    let minor = choose()?;
+    let node = node(minor);
+    let board = open(minor)?;
+    if !Path::new(&mark(minor)).exists() {
+        let mode = std::fs::metadata(&node)?.permissions().mode() & 0o7777;
+        std::fs::create_dir_all(MARKS)?;
+        std::fs::write(mark(minor), format!("{mode:o}\n"))?;
+    }
     let mut off = OnlineCmd { init_data_ptr: 0, init_data_length: 0, online: 0 };
     // SAFETY: each opcode below is paired with its own struct.
     unsafe {
         call::<IBONL, _>(&board, "IBONL 0", &mut off)?;
-        if offline {
-            return Ok(());
-        }
         let mut kind = BoardType { name: [0; 100] };
         kind.name[..8].copy_from_slice(b"ni_usb_b");
         call::<CFCBOARDTYPE, _>(
@@ -121,7 +197,57 @@ pub fn configure(minor: u32, busid: Option<&str>, offline: bool) -> io::Result<(
         call::<IBMUTEX, _>(&board, "IBMUTEX 0", &mut 0i32)?;
         controlled?;
     }
-    std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o666))
+    std::fs::set_permissions(&node, std::fs::Permissions::from_mode(0o666))?;
+    Ok(minor)
+}
+
+/// Leaves board `minor` in an end of string mode on `byte`, 8-bit compare, as a
+/// program before might have: what a tool's reads must clear.
+///
+/// # Errors
+///
+/// When the node or an ioctl fails.
+pub fn set_eos(minor: u32, byte: u8) -> io::Result<()> {
+    let board = open(minor)?;
+    // SAFETY: each opcode below is paired with its own struct.
+    unsafe {
+        call::<IBMUTEX, _>(&board, "IBMUTEX 1", &mut 1i32)?;
+        let mut eos = Eos { eos: i32::from(byte), eos_flags: REOS_BIN };
+        let set = call::<IBEOS, _>(&board, "IBEOS", &mut eos);
+        call::<IBMUTEX, _>(&board, "IBMUTEX 0", &mut 0i32)?;
+        set
+    }
+}
+
+/// Takes each board this command took offline, puts its node's mode back and drops
+/// its marker. Returns how many.
+///
+/// # Errors
+///
+/// When a marker can't be read or an ioctl fails; the other boards are still done.
+pub fn release() -> io::Result<u32> {
+    let mut done = 0;
+    let mut first_error = None;
+    for minor in MINORS {
+        let Ok(text) = std::fs::read_to_string(mark(minor)) else { continue };
+        let r = (|| {
+            let mode = u32::from_str_radix(text.trim(), 8)
+                .map_err(|_| io::Error::other(format!("{}: no mode", mark(minor))))?;
+            let board = open(minor)?;
+            let mut off = OnlineCmd { init_data_ptr: 0, init_data_length: 0, online: 0 };
+            // SAFETY: IBONL takes a gpib_online_ioctl.
+            unsafe { call::<IBONL, _>(&board, "IBONL 0", &mut off)? };
+            std::fs::set_permissions(node(minor), std::fs::Permissions::from_mode(mode))?;
+            std::fs::remove_file(mark(minor))
+        })();
+        match r {
+            Ok(()) => done += 1,
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
+    }
+    first_error.map_or(Ok(done), Err)
 }
 
 /// The kobject path the kernel compares (`gpib_match_device_path`): the interface's

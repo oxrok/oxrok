@@ -53,7 +53,7 @@
 //! Options: `pad=N` the meter's address (23), `board-pad=N` the adapter's own (0, as
 //! `gpib_config` sets with no `pad`), `absent=1` nothing on the bus at all,
 //! `every=N` polls per reading (0: none ever), `init=CODES` codes the meter takes
-//! at power on (`F3R2N4`), `rear=1` the rear terminals, `hz=50` the line, `cal=1`
+//! at power on (`F3R2N4`), `dac=N` the DAC's setting in the status's fifth byte (33), `rear=1` the rear terminals, `hz=50` the line, `cal=1`
 //! the CAL RAM switch, `error=HEX` the error register, `power-on-srq=1` the rear
 //! switch that requests service at power on, and the faults, each numbered from 1:
 //! `mute-poll=N` (the Nth serial poll is not answered), `mute-read=N` (the Nth
@@ -87,7 +87,7 @@ pub const NAME: &str = "hp-3478a";
 /// What `oxrok-emu list` says about it.
 pub const ABOUT: &str = "HP 3478A multimeter behind an NI GPIB-USB-HS (3923:709b) for the \
                          kernel's ni_usb_gpib; pad=N board-pad=N absent=1 every=N init=CODES \
-                         rear=1 hz=50 cal=1 error=HEX power-on-srq=1, faults mute-poll=N \
+                         dac=N rear=1 hz=50 cal=1 error=HEX power-on-srq=1, faults mute-poll=N \
                          mute-read=N mute-status=N cut-read=N junk-at=N overload-at=N \
                          short-status=N mark-at=N";
 
@@ -116,6 +116,9 @@ const COMMAND: u8 = 0x0c;
 const WRITE: u8 = 0x0d;
 const IBSIC: u8 = 0x0f;
 const READ_DATA_START: u8 = 0x34;
+// The end of string mode's high byte in a read request (gpib.h: REOS, BIN).
+const REOS: u8 = 0x04;
+const BIN: u8 = 0x10;
 const READ_DATA_END: u8 = 0x35;
 const IBRD_DATA: u8 = 0x36;
 const IBRD_STATUS: u8 = 0x38;
@@ -601,6 +604,7 @@ impl Hp3478a {
                     }
                 }
                 "cal" => m.meter.cal = flag(k, v)?,
+                "dac" => m.meter.dac = number(k, v, 0..=63)? as u8,
                 "error" => {
                     m.meter.error = u8::from_str_radix(v, 16)
                         .ok()
@@ -1048,7 +1052,14 @@ impl Hp3478a {
         } else {
             Self::check_end(data, 17, "read", v);
         }
-        if data.get(1..3) != Some(&[0, 0]) {
+        // An end of string mode the board was left in (REOS, BIN): the adapter ends
+        // the read at that byte too. libgpib clears it before each read (iblcleos).
+        let mode = data.get(1).copied().unwrap_or(0);
+        let eos = (mode & REOS != 0).then(|| {
+            let mask = if mode & BIN != 0 { 0xff } else { 0x7f };
+            (data.get(2).copied().unwrap_or(0) & mask, mask)
+        });
+        if mode != 0 || data.get(2) != Some(&0) {
             v.report("a read with an end of string mode: the driver's reads end on EOI alone");
         }
         if self.atn {
@@ -1059,7 +1070,7 @@ impl Hp3478a {
         } else if self.absent || !self.meter_talks {
             (Vec::new(), TIMEOUT_ERROR, false)
         } else {
-            self.read_bytes(n)
+            self.read_bytes(n, eos)
         };
         let mut out = Vec::new();
         for block in bytes.chunks(15) {
@@ -1077,7 +1088,7 @@ impl Hp3478a {
     }
 
     /// Up to `n` of what the meter sends, the error code and whether EOI came.
-    fn read_bytes(&mut self, n: usize) -> (Vec<u8>, u8, bool) {
+    fn read_bytes(&mut self, n: usize, eos: Option<(u8, u8)>) -> (Vec<u8>, u8, bool) {
         if self.sending.is_empty() {
             match self.talk() {
                 Some((bytes, eoi)) => {
@@ -1087,9 +1098,16 @@ impl Hp3478a {
                 None => return (Vec::new(), TIMEOUT_ERROR, false),
             }
         }
-        let take = n.min(self.sending.len());
+        let mut take = n.min(self.sending.len());
+        let mut at_eos = false;
+        if let Some((char, mask)) = eos
+            && let Some(i) = self.sending.iter().take(take).position(|b| b & mask == char)
+        {
+            take = i + 1;
+            at_eos = true;
+        }
         let bytes: Vec<u8> = self.sending.drain(..take).collect();
-        let end = self.sending.is_empty() && self.sending_eoi;
+        let end = at_eos || (self.sending.is_empty() && self.sending_eoi);
         (bytes, 0, end)
     }
 
@@ -1456,6 +1474,32 @@ mod tests {
         let (data, _, end) = receive(&mut m, 1024, &mut v);
         assert_eq!((data.as_slice(), end), (b"9257E+0\r\n".as_slice(), true), "the rest");
         assert!(v.is_empty(), "{:?}", v.drain());
+    }
+
+    #[test]
+    fn a_board_left_in_reos_ends_a_read_at_the_eos_byte() {
+        let mut m = Hp3478a::from_options(&opts(&[("dac", "10")])).unwrap();
+        let mut v = Violations::default();
+        assert_eq!(send(&mut m, "B\n", &mut v), 0);
+        ask(&mut m, &simple(IBCAC, 1), &mut v);
+        ask(&mut m, &command(&[UNL, 0x20, MTA_23]), &mut v);
+        ask(&mut m, &simple(IBGTS, 0), &mut v);
+        let mut request = read(1024);
+        request[1] = REOS;
+        request[2] = b'\n';
+        let (data, _, ibsta, end) = parse_read(&ask(&mut m, &request, &mut v), 1024);
+        assert_eq!((data, end), (vec![0x2d, 0x17, 0, 0, 10], true), "ends at the DAC's 10");
+        assert_eq!(ibsta & END, END);
+        assert_eq!(v.drain().len(), 1, "flagged: libgpib clears it");
+        // With the byte not last, the rest waits for the next read.
+        let mut m = Hp3478a::from_options(&opts(&[("error", "0a")])).unwrap();
+        send(&mut m, "B\n", &mut v);
+        ask(&mut m, &simple(IBCAC, 1), &mut v);
+        ask(&mut m, &command(&[UNL, 0x20, MTA_23]), &mut v);
+        ask(&mut m, &simple(IBGTS, 0), &mut v);
+        let (data, _, _, end) = parse_read(&ask(&mut m, &request, &mut v), 1024);
+        assert_eq!((data.len(), end), (4, true), "cut at the error byte");
+        assert_eq!(receive(&mut m, 1024, &mut v).0, [33]);
     }
 
     #[test]

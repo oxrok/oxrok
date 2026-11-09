@@ -154,7 +154,13 @@
 # REPLUGGED, RENUMERATED), once EMU_BUSID and the rest name it; it runs what the
 # device needs as root, in a log section of its own (emu_cmd "section ...") so
 # that its traffic is in no case's transactions, and a failure is reported, not
-# fatal: the cases then fail on their own.
+# fatal: each case after it fails at once, naming the hook. emu_detaching, if
+# the scenario defines it, runs at the session's end before the detach, to give
+# back what emu_attached took. A scenario that sets EMU_SKIP="REASON" when it is
+# sourced (a kernel module missing) is skipped by name: a SKIP line, and on
+# GitHub a warning and a line in the step summary; a --no-oracle run whose only
+# models were skipped so does not fail for running no case. A plain run says SKIP
+# for a model all of whose cases are --no-oracle-only.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -235,6 +241,7 @@ fi
 pass=0
 fail=0
 skipped=0
+skipped_models=0
 
 # Drops the lines that name the tool: the version line and the META
 # lines sigrok-cli prints for file inputs.
@@ -744,7 +751,11 @@ if [ $emu = 1 ]; then
         # The scenario's hook, once per batch of attaches (see the head of
         # this file). Its own commands come back here with nothing new.
         if [ -s "$TMP/emu.attach" ] && [ "$EMU_DRY" = 0 ]; then
-            emu_attached || echo "$EMU_MODEL: the scenario's emu_attached failed" >&2
+            EMU_ATTACH_FAILED=0
+            if ! emu_attached; then
+                echo "$EMU_MODEL: the scenario's emu_attached failed" >&2
+                EMU_ATTACH_FAILED=1
+            fi
         fi
     }
     emu_start() {
@@ -828,6 +839,7 @@ if [ $emu = 1 ]; then
     # waiting), so the session never waits on it for ever. The detach
     # traffic gets a section of its own.
     emu_stop() {
+        emu_detaching || echo "$EMU_MODEL: the scenario's emu_detaching failed" >&2
         if [ "${EMU_DEAD:-0}" = 0 ]; then
             emu_cmd "section detach" >/dev/null 2>&1 && emu_cmd detach >/dev/null 2>&1
         fi
@@ -1353,7 +1365,10 @@ EOF
             *" $slug "*) emu_fail "$name: another case of $EMU_MODEL has the file name $slug"; return ;;
         esac
         emu_slugs="$emu_slugs $slug"
-        [ $no_oracle_only = 0 ] || [ $no_oracle = 1 ] || return
+        if [ $no_oracle_only = 1 ] && [ $no_oracle = 0 ]; then
+            [ "$EMU_DRY" != 1 ] || emu_dry_noo=$((emu_dry_noo + 1))
+            return
+        fi
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
         # A library case is the runner's alone, whatever oxrok has,
         # unless it says --oxrok.
@@ -1362,6 +1377,9 @@ EOF
             if [ $libsig_full = 1 ]; then label="$mode, library"; else mode=oracle; tools=a; label=library; fi
         elif [ $libsig_full = 1 ]; then
             emu_fail "$name: --oxrok goes with --libsigrok"; return
+        fi
+        if [ "$EMU_DRY" != 1 ] && [ "${EMU_ATTACH_FAILED:-0}" = 1 ]; then
+            emu_fail "$name: the scenario's emu_attached failed for this attach [$*]"; return
         fi
         if [ "$EMU_DRY" = 1 ]; then
             # A case of a driver EMU_FULL lists counts as full even when
@@ -1925,6 +1943,18 @@ EOF
         return $gst
     }
 
+    # A model whose scenario can't run here, by name: on standard output, and on
+    # GitHub as a warning and in the step summary, as the vhci-hcd probe does.
+    emu_skip_model() {
+        skipped_models=$((skipped_models + 1))
+        echo "SKIP $EMU_MODEL: $1"
+        if [ -n "${GITHUB_ACTIONS:-}" ]; then
+            echo "::warning title=emulator model skipped::$EMU_MODEL: $1"
+        fi
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "skipped: emulator model $EMU_MODEL: $1" >>"$GITHUB_STEP_SUMMARY"
+        fi
+    }
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
@@ -1932,20 +1962,42 @@ EOF
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
         emu_attached() { :; }
-        EMU_KEEP_BOUND=""
+        emu_detaching() { :; }
+        EMU_KEEP_BOUND=""; EMU_SKIP=""; EMU_ATTACH_FAILED=0
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }
         if [ -n "$emu_models" ]; then
             case " $emu_models " in *" $EMU_MODEL "*) ;; *) continue ;; esac
         fi
         found="$found $EMU_MODEL"
+        if [ -n "$EMU_SKIP" ]; then
+            emu_skip_model "$EMU_SKIP"
+            continue
+        fi
         # --no-oracle: a model without a full case is not attached; its
         # cases are counted by running the scenario with emu_case and
         # emu_cmd doing nothing else (in a subshell, no device named).
+        if [ $no_oracle = 0 ]; then
+            # A plain run drops --no-oracle-only cases: a model with no other
+            # says so by name rather than passing with nothing run.
+            noo=$(
+                set +u
+                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_dry_noo=0; emu_slugs=""
+                EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
+                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
+                emu_cases >/dev/null 2>&1 8<&-
+                echo "$((emu_dry_full + emu_dry_oracle)) $emu_dry_noo"
+            )
+            if [ "${noo%% *}" = 0 ] && [ "${noo#* }" != 0 ]; then
+                skipped=$((skipped + ${noo#* }))
+                emu_skip_model "all ${noo#* } cases are --no-oracle-only: run it with --no-oracle"
+                continue
+            fi
+        fi
         if [ $no_oracle = 1 ]; then
             dry=$(
                 set +u
-                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_slugs=""
+                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_dry_noo=0; emu_slugs=""
                 EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
                 EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
                 emu_cases >/dev/null 2>&1 8<&-
@@ -1970,8 +2022,13 @@ fi
 
 if [ $no_oracle = 1 ]; then
     # Nothing compared is no evidence: a run that skipped every case fails.
-    [ $((pass + fail)) != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
-    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)"
+    # A model skipped by name (EMU_SKIP) has said why, on GitHub too.
+    [ $((pass + fail)) != 0 ] || [ $skipped_models != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
+    by_name=""
+    [ $skipped_models = 0 ] || by_name=", $skipped_models models skipped by name"
+    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)$by_name"
+elif [ $skipped != 0 ] || [ $skipped_models != 0 ]; then
+    echo "$pass passed, $fail failed, $skipped skipped"
 else
     echo "$pass passed, $fail failed"
 fi
