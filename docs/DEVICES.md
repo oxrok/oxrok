@@ -3804,6 +3804,33 @@ manual and quick reference, and linux-gpib's userspace. The `.tx` goldens
 pin how `ni_usb_gpib` drives the adapter. A kernel without `ni_usb_gpib`
 skips the model by name with a warning. Never run on hardware.
 
+### Hung-Chang DSO-2100 (`hung-chang-dso-2100`)
+
+Linux only. The scope is on a parallel port reached through `ppdev`, as
+libieee1284 reaches it, so a USB cable that the kernel's `uss720` serves
+works like a built-in port. `conn=parportN` names the port as
+`/proc/sys/dev/parport` does, and is required. One channel at a time, A or B
+(`-C A`). A frame is 1000 samples; `buffersize` adds steps up to 10238, the
+last six reading both ADCs in turn. A frame limit of 0 is one frame. A vdiv
+is matched by value, so `1000mV` is 1 V and `0.5V` is 500 mV.
+
+The trigger poll runs every 8 ms with no bound while the scope answers
+"armed". After the trigger the mailbox reads 0 while the scope fills its
+buffer. The capture fails once the silence outlasts the larger of 600 polls
+and twice the fill time of 10240 samples at the rate plus a second (1405
+polls at 2 kHz, 128125 at 20 Hz), counted afresh in each frame, or at once
+when the port goes away. Each claim waits 20 ms for `uss720`'s unwaited
+register read. libsigrok sends every block with a sample count of
+4294967295, so sigrok-cli prints no sample from this scope; oxrok sends the
+real count, and its samples are checked against the model and unit tests.
+
+Emulated by model `hung-chang-dso-2100`, a USS720 cable (`050d:0002`) with
+the scope behind its lines (options `scope=absent`, `trigger=N|never`,
+`busy=N`, `silent-after=N`, `bad-sig=N`, `odd-state=N`, `fill=N|rate`,
+`mark=armed|sample`): 86 cases on 2026-11-09, gcov 83.2%. Every oracle case
+runs sigrok-cli with a 20 ms settle after each claim, timing only. Never run
+on hardware.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

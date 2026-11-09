@@ -60,9 +60,10 @@
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses
-//! into Python; `gpib`, whose ioctls on `/dev/gpibN` are unsafe calls; and
-//! `spawn`, which marks inherited descriptors close-on-exec by their numbers
-//! before a driver starts a program.
+//! into Python; `gpib` and `parport`, whose ioctls on `/dev/gpibN` and
+//! `/dev/parportN` are unsafe calls; and `spawn`, which marks inherited
+//! descriptors close-on-exec by their numbers before a driver starts a
+//! program.
 
 pub mod core;
 pub mod decode;

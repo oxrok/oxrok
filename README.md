@@ -134,6 +134,7 @@ Emulator and replay only, never run on hardware:
 | `scpi-dmm` | 295 | 89.9% |
 | `baylibre-acme` | 91 | 90.7% |
 | `asix-omega-rtm-cli` | 71 | 87.9% |
+| `hung-chang-dso-2100` | 86 | 83.2% |
 | `uni-t-dmm` raw USB | 78 | 97.4% |
 | `uni-t-ut181a` | 201 | 90.1% |
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |

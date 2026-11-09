@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 85 of libsigrok's 87 `src/hardware` drivers are
-ported; the 2 still missing are listed below. Native decoder porting is
+crates.io. 86 of libsigrok's 87 `src/hardware` drivers are
+ported; the 1 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,17 +13,13 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 2 libsigrok drivers with no oxrok port. Each needs a device model,
+The 1 libsigrok driver with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
 
-### Odd transports (2)
+### Odd transports (1)
 
-- `hung-chang-dso-2100`: parallel port. Model a USB adapter with an
-  in-tree driver (Belkin USS-720) so `/dev/parport0` and the
-  `/proc/sys/dev/parport` entries exist, or use CUSE or an
-  `LD_PRELOAD` of `libieee1284`.
 - `mooshimeter-dmm`: BLE GATT through BlueZ. An ESP32 BLE peripheral
   serving the Mooshimeter's characteristics is the practical model. The
   driver has no `bt/`, `bt/notify`, `ble122` or `cc254x` path at all, so
@@ -132,6 +128,16 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Harness and CI
 
+- `uss720` keeps a detached cable's parport number (one per emulator
+  session on kernel 7.2.x), so after 8 sessions on a tester libieee1284
+  finds no ppdev and the `hung-chang-dso-2100` oracle stops; the harness
+  fails such a session and says so. Unloading `parport` doesn't help (the
+  new `parport0` collides in sysfs); only a reboot does. Testers need a
+  reboot between batches, or the harness a way to reset the numbering.
+- Pulling a `uss720` cable while the port is claimed crashed usbtester3's
+  kernel, and usbtester3 did not come back from its reboot: no unplug case
+  for `hung-chang-dso-2100` until that is understood.
+
 - No record/replay path for a driver that runs a program
   (`asix-omega-rtm-cli`): its logic runs in CI only through the emulator's
   stand-in and unit tests.
@@ -142,6 +148,8 @@ The models are plain Rust with no I/O for this reason; see
   same-length rewrite is one write(2) a reader could catch mid-copy. A FUSE
   tree, or fanotify permission events, would make a store's errno, -ENODEV
   reads of a removed device and sysfs's 4096-byte attribute size reachable.
+  Reads already wait for the carrier (fanotify permission events, as root),
+  so a read's value depends only on the reads and writes before it.
 
 - The emulator CI job skips when the hosted kernel has no `vhci-hcd`,
   and branch protection counts a skipped required job as satisfied. A
@@ -338,6 +346,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `hung-chang-dso-2100` on a scope and a real cable: the line decoding, the
+  waveform, the interleaved timing and the post-trigger fill time are the
+  model's reading of C, and sigrok-cli prints no sample to compare with.
 
 - `hp-3478a` on a real meter and adapter: the reading rate, the 4.5 and 3.5
   digit readings, `F7`'s range code, and a real adapter's timeouts (the

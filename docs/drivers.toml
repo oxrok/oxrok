@@ -1302,17 +1302,24 @@ limits = []
 [drivers.hung-chang-dso-2100]
 name = "Hung Chang DSO-2100"
 libsigrok = "hung-chang-dso-2100"
-ids = []
+ids = ["hung-chang-dso-2100"]
 kind = "scope"
 connection = "none"
 vendor = "Hung Chang"
 models = ["DSO-2100"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hung-chang-dso-2100"]
 evidence = []
-reason = "Parallel port; the kernel drives a USB adapter for it, so a model of the adapter is the path."
-behaviour = []
-limits = []
+behaviour = [
+  "Linux only: a parallel port through ppdev, named by `conn=parportN`; a uss720 USB cable works as a built-in port does.",
+  "One channel at a time; a frame is 1000 samples, and buffersize up to 10238 reads further steps, the last ones from both ADCs in turn.",
+  "Polls the trigger every 8 ms; a mailbox that stays silent past twice the buffer's fill time at the rate (at least 600 polls), or a port that goes away, ends the capture with an error.",
+  "A readout with a bad signature is read again, up to 4 times; then the capture fails.",
+]
+limits = [
+  "Verified only against an emulated USS720 cable, not on a scope.",
+  "Pulling a uss720 cable while the port is claimed crashed a test kernel once (7.2.14).",
+]
 
 [drivers.ipdbg-la]
 name = "IPDBG LA"
