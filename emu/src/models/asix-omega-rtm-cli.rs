@@ -47,10 +47,23 @@
 //! stdin, as C's author saw, with "Gracefully closing..." and status 0;
 //! `eof=ignore` takes the source's reading, where only the next write ends it.
 //!
+//! What the stand-in leaves out of the source: the decoder skips the first
+//! in-sync vector and, after a FIFO overflow, resyncs with no mark in the stream
+//! (`omegartmcliU.pas:389-397`, `435-449`), so a real stream can lose time with no
+//! sign; and without `-serial` the program opens the `Omega.Serial` its settings
+//! hold, the last one used (`OmegaU.pas:1166`), not simply the first OMEGA found.
+//!
 //! What is the stand-in's own: the samples (a Gray code count, see [`chunk`]); the
 //! device's serial, `A6031234`; and wall time, which drives a stand-in where nothing
 //! else does. Free running, it writes as fast as the pipe takes it, so its pace is
 //! the host's reads; `pace=real` writes the bursts at the times their stamps say.
+//! `stamp=1` at the real pace is 6 bytes each 10 ns, 600 MB/s, far beyond what the
+//! OMEGA's FT2232H carries (some 40 MB/s): the device would overflow its FIFO long
+//! before, so such a case is the host's limit, not a device's.
+//!
+//! An `LD_PRELOAD` the tool was run with (the oracle's shims, under sigrok-cli only)
+//! would reach the stand-in too; it runs itself again without it, so both tools
+//! meet the same program.
 //!
 //! The transaction log. Each run of the stand-in appends to the file
 //! `EMU_STANDIN_LOG` names (`tools/diffcli.sh` makes one for each tool's run):
@@ -171,7 +184,8 @@ pub struct Options {
     pub ignore_eof: bool,
     /// The longest the stand-in waits for an end that may never come.
     pub hang_max: Duration,
-    /// After this many chunks, a touch of the server's socket.
+    /// After this many chunks, a touch of the server's socket; 0 is before the
+    /// first byte (and `-version`'s hang).
     pub mark: Option<u64>,
 }
 
@@ -489,6 +503,17 @@ fn exec_line(argv: &[String], fds: usize) -> String {
 /// The stand-in: runs as the program would with `raw` (`argv[0]` first) and
 /// returns the exit status. A signal ends it as it would end the program.
 pub fn standin(raw: &[OsString]) -> u8 {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("LD_PRELOAD").is_some() {
+        use std::os::unix::process::CommandExt as _;
+        let e = std::process::Command::new("/proc/self/exe")
+            .arg0(raw.first().cloned().unwrap_or_default())
+            .args(raw.iter().skip(1))
+            .env_remove("LD_PRELOAD")
+            .exec();
+        eprintln!("{STANDIN} (oxrok-emu stand-in): cannot run again without LD_PRELOAD: {e}");
+        return 2;
+    }
     let fds = extra_fds();
     let log = Log::open();
     let argv: Vec<String> = raw.iter().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -534,6 +559,9 @@ fn version(o: &Options, log: &Log) -> u8 {
     let _ = out.flush();
     drop(out);
     if o.version_hang {
+        if o.mark == Some(0) {
+            touch();
+        }
         return hang(&Options { exit: o.version_exit, ..o.clone() }, log);
     }
     o.version_exit
@@ -610,6 +638,9 @@ fn bin(o: &Options, serial: Option<&str>, log: &Log) -> u8 {
     }
     let stdin = watch_stdin(log);
     let ended = || stdin.closed.load(Ordering::SeqCst) && !o.ignore_eof;
+    if o.mark == Some(0) {
+        touch();
+    }
     thread::sleep(o.start);
     let mut out = io::stdout().lock();
     let mut i = 0u64;
@@ -656,6 +687,7 @@ fn bin(o: &Options, serial: Option<&str>, log: &Log) -> u8 {
         }
         sent += burst.len() as u64;
         if let Some(m) = o.mark
+            && m > 0
             && first <= m
             && m < i
         {

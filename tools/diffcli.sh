@@ -522,7 +522,10 @@ if [ $emu = 1 ]; then
     # EMU_STANDIN: the links that make oxrok-emu a model's stand-in program,
     # in a directory the tools find first on PATH (see the head of this file).
     EMU_STANDIN_DIR=$TMP/standin
-    EMU_ABS=$(cd "$(dirname "$EMU")" && pwd)/$(basename "$EMU")
+    case "$EMU" in
+        */*) EMU_ABS=$(cd "$(dirname "$EMU")" && pwd)/$(basename "$EMU") ;;
+        *) EMU_ABS=$(command -v "$EMU") || EMU_ABS=$EMU ;;
+    esac
     export EMU_STANDIN_DIR
     emu_fail() { fail=$((fail + 1)); echo "FAIL $*"; }
     EMU_DRY=0

@@ -1119,8 +1119,12 @@ The scenario sets `EMU_STANDIN=NAME` (several, space separated), with
 - The stand-in holds a shared lock on the file while it runs. After each run the
   harness waits up to 2 s for every stand-in to end, then copies the file; one
   still running gets `standin: still running 2 s after the tool ended`, which is
-  how a program the tool left behind shows. A `timeout` that ends a tool sends
-  its signal to the tool's process group, which ends a stand-in still in it.
+  how a program the tool left behind shows. A `timeout` that ends sigrok-cli
+  sends its signal to its process group, which ends a stand-in still in it; oxrok
+  starts the program in a group of its own, so there the stand-in ends only by
+  oxrok's close.
+- An `LD_PRELOAD` given to one tool (the oracle's shims, sigrok-cli only) would
+  reach the stand-in too: the stand-in runs itself again without it.
 - Options go in the environment, as the tool, not the server, starts the
   stand-in: `emu_standin KEY=VALUE...` sets `EMU_STANDIN_OPTIONS` for the cases
   that follow, and `emu_standin` alone clears it. The stand-in checks them when it
