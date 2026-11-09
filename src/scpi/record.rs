@@ -13,7 +13,8 @@
 //!
 //! Text is quoted with `\n`, `\r`, `\"`, `\\` and `\xHH` escapes; a
 //! response that is mostly binary is `hex`. `partial` is a response
-//! the transport never completed (a timeout), `-` an empty one.
+//! the transport never completed (a timeout), `-` an empty one. `spoll HH` is a
+//! GPIB serial poll and its byte.
 
 use crate::core::{Error, Result};
 use crate::scpi::ScpiTransport;
@@ -35,6 +36,8 @@ pub enum Step {
         /// Whether the transport reported the response complete.
         complete: bool,
     },
+    /// A GPIB serial poll and the byte it got.
+    SerialPoll(u8),
 }
 
 /// A recorded session.
@@ -150,6 +153,9 @@ impl Fixture {
                     let kind = if *complete { "response" } else { "partial" };
                     let _ = writeln!(s, "{kind} {}", data_text(data));
                 }
+                Step::SerialPoll(b) => {
+                    let _ = writeln!(s, "spoll {b:02x}");
+                }
             }
         }
         s
@@ -179,6 +185,9 @@ impl Fixture {
                     data: parse_data(rest).map_err(|e| bad(&e))?,
                     complete: kind == "response",
                 }),
+                "spoll" => f.steps.push(Step::SerialPoll(
+                    u8::from_str_radix(rest.trim(), 16).map_err(|_| bad("bad serial poll byte"))?,
+                )),
                 other => return Err(bad(&format!("unknown line {other}"))),
             }
         }
@@ -311,6 +320,13 @@ impl ScpiTransport for Recorder {
     fn reopen(&mut self) -> Result<()> {
         self.inner.reopen()
     }
+
+    fn serial_poll(&mut self) -> Result<u8> {
+        self.finish_response(false);
+        let byte = self.inner.serial_poll()?;
+        self.fixture.lock().expect("fixture lock").steps.push(Step::SerialPoll(byte));
+        Ok(byte)
+    }
 }
 
 /// A transport that answers from a fixture.
@@ -396,6 +412,21 @@ impl ScpiTransport for Replay {
             None => false,
         }
     }
+
+    fn serial_poll(&mut self) -> Result<u8> {
+        self.current = None;
+        match self.fixture.steps.get(self.pos) {
+            Some(Step::SerialPoll(b)) => {
+                self.pos += 1;
+                Ok(*b)
+            }
+            Some(other) => Err(Error::Device(format!(
+                "replay: step {} expected {other:?}, got a serial poll",
+                self.pos + 1
+            ))),
+            None => Err(Error::device("replay: past the end of the recording at a serial poll")),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -412,9 +443,11 @@ mod tests {
                 Step::Send(b":WAV:DATA?\n".to_vec()),
                 Step::Response { data: vec![0x23, 0x00, 0xff, 0x80, 0x01], complete: false },
                 Step::Response { data: Vec::new(), complete: true },
+                Step::SerialPoll(0x41),
             ],
         };
         let text = f.to_text();
+        assert!(text.contains("spoll 41"));
         assert!(text.contains("response \"Rigol \\\"X\\\",1\\r\\n\""));
         assert!(text.contains("partial hex 2300ff8001"));
         assert!(text.contains("response -"));

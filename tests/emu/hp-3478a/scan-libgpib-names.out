@@ -1,0 +1,1 @@
+oxrok: warn: oxrok::drivers::hp_3478a: not supported: 'libgpib/hp3478a' names a device in linux-gpib's gpib.conf, which oxrok does not read: give its address as gpib/MINOR/PAD[/SAD]

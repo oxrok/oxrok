@@ -23,6 +23,8 @@
 //! - `tcp-raw/HOST/PORT`: SCPI over a plain TCP socket;
 //! - `tcp-rigol/HOST/PORT`: Rigol's variant with a length prefix on
 //!   every response chunk;
+//! - `gpib/MINOR/PAD[/SAD]`: a device on a GPIB board of Linux's `gpib`
+//!   subsystem ([`gpib`]), with [`Scpi::serial_poll`];
 //! - anything else: a serial port, with `serialcomm=` for the line
 //!   parameters.
 //!
@@ -31,6 +33,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod gpib;
 pub mod record;
 pub mod serial;
 pub mod tcp;
@@ -102,6 +105,10 @@ pub trait ScpiTransport: Send {
     /// and the default). Only USBTMC has requests.
     fn wait_out_requests(&mut self, on: bool) {
         let _ = on;
+    }
+    /// The instrument's serial poll byte, `sr_scpi_gpib_spoll`: GPIB alone has one.
+    fn serial_poll(&mut self) -> Result<u8> {
+        Err(Error::not_supported(format!("{}: a serial poll needs GPIB", self.resource())))
     }
 }
 
@@ -325,6 +332,11 @@ impl Scpi {
     pub fn clear(&mut self) -> Result<bool> {
         self.stale = false;
         self.transport.clear()
+    }
+
+    /// The serial poll byte, on GPIB; see [`ScpiTransport::serial_poll`].
+    pub fn serial_poll(&mut self) -> Result<u8> {
+        self.transport.serial_poll()
     }
 
     /// Asks the transport to wait out a request already made rather than make
@@ -791,6 +803,8 @@ pub enum Resource {
     TcpRigol(String, u16),
     /// A serial port path.
     Serial(String),
+    /// A device on a GPIB board of the kernel's `gpib` subsystem.
+    Gpib(crate::gpib::Address),
 }
 
 impl Resource {
@@ -814,7 +828,16 @@ impl Resource {
                 });
             }
         }
-        if conn.starts_with("vxi/") || conn.starts_with("visa/") || conn.starts_with("libgpib/") {
+        if let Some(rest) = conn.strip_prefix("gpib/") {
+            return crate::gpib::Address::parse(rest).map(Resource::Gpib).ok_or_else(bad);
+        }
+        if conn.starts_with("libgpib/") {
+            return Err(Error::not_supported(format!(
+                "'{conn}' names a device in linux-gpib's gpib.conf, which oxrok does not read: \
+                 give its address as gpib/MINOR/PAD[/SAD]"
+            )));
+        }
+        if conn.starts_with("vxi/") || conn.starts_with("visa/") {
             return Err(Error::not_supported(format!("SCPI transport of '{conn}' not available")));
         }
         if conn.is_empty() {
@@ -831,6 +854,7 @@ impl Resource {
             Resource::TcpRaw(h, p) => format!("tcp-raw/{h}/{p}"),
             Resource::TcpRigol(h, p) => format!("tcp-rigol/{h}/{p}"),
             Resource::Serial(p) => p.clone(),
+            Resource::Gpib(a) => format!("gpib/{a}"),
         }
     }
 }
@@ -859,6 +883,7 @@ pub fn open(resource: &Resource, serialcomm: Option<&str>) -> Result<Scpi> {
             let params = crate::serial::Params::parse(serialcomm.unwrap_or("115200/8n1"))?;
             Box::new(serial::Serial::open(path, params)?)
         }
+        Resource::Gpib(address) => Box::new(gpib::Gpib::open(*address)?),
     };
     Ok(Scpi::new(recording(transport)))
 }
@@ -1382,6 +1407,36 @@ mod tests {
         );
         assert!(Resource::parse("tcp-raw/host").is_err());
         assert!(Resource::parse("vxi/host").is_err());
+        let gpib = Resource::parse("gpib/0/23").unwrap();
+        assert_eq!(gpib, Resource::Gpib(crate::gpib::Address { minor: 0, pad: 23, sad: None }));
+        assert_eq!(gpib.to_conn(), "gpib/0/23");
+        assert!(Resource::parse("gpib/0").is_err());
+        let e = Resource::parse("libgpib/hp3478a").unwrap_err().to_string();
+        assert!(e.contains("give its address as gpib/MINOR/PAD"), "{e}");
+    }
+
+    #[test]
+    fn a_serial_poll_needs_gpib() {
+        struct Line;
+        impl ScpiTransport for Line {
+            fn resource(&self) -> &'static str {
+                "usbtmc/1.5"
+            }
+            fn send(&mut self, _: &[u8]) -> Result<()> {
+                Ok(())
+            }
+            fn read_begin(&mut self) -> Result<()> {
+                Ok(())
+            }
+            fn read_data(&mut self, _: &mut [u8], _: Duration) -> Result<usize> {
+                Ok(0)
+            }
+            fn read_complete(&self) -> bool {
+                true
+            }
+        }
+        let e = Scpi::new(Box::new(Line)).serial_poll().unwrap_err().to_string();
+        assert!(e.contains("usbtmc/1.5: a serial poll needs GPIB"), "{e}");
     }
 
     #[test]
