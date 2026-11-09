@@ -1248,6 +1248,65 @@ where the model's instant answer gives `EIO`. The adapter's timeout is a code th
 timeout is T3s on a real one. oxrok's transport waits out a timeout the board ended
 early, so its own waits hold on the model too.
 
+### A Bluetooth LE model
+
+libsigrok's `bt/bt_bluez.c` and oxrok's `src/bt` open an L2CAP socket on the ATT
+fixed channel to an address and leave the link to the kernel: no D-Bus, and
+bluetoothd must not run, as it would claim the controller and connect a GATT
+client of its own (`tools/diffcli.sh` refuses a session while it does). So the boundary a BLE device stands behind is the kernel's HCI, and the
+model is the controller as well: `emu/src/shells/ble.rs` answers the kernel's
+`hci_vhci` (`/dev/vhci`) as an LE only 4.0 controller with one peripheral on its
+air, as BlueZ's `emulator/btdev.c` does, and serves that peripheral's GATT table.
+`oxrok-emu serve MODEL --ble` creates the controller, brings it up (the
+`HCIDEVUP` of `hciconfig hciN up`; without it the kernel powers a new controller
+off 2 s after its setup, as no bluetoothd claims it) and prints `BLE hci=hciN
+addr=ADDRESS`, then a `READY` line with no device. Closing `/dev/vhci` removes it.
+Root is needed for that, not for the tools: an L2CAP socket to an LE address is
+any user's.
+
+- A model exports `pub fn build_ble(options) -> Result<Box<dyn Peripheral>>`
+  beside its `build`, which returns a `NoUsb`: its address, its advertising data,
+  its attribute table, and what a write to one of its characteristics does
+  (`Peripheral::written`), with `Port::notify` for what it sends.
+  `Peripheral::tick` comes every 20 ms of wall time while a host is connected: a
+  BLE device streams on its own clock.
+- The scenario sets `EMU_BLE=1`, and the cases name the peripheral by the address
+  the model fixes, so no output needs rewriting. A reset drops the link in silence.
+- The log: `ble_connect`, `att_write HANDLE VALUE -> ok`, `att_notify HANDLE
+  VALUE`, `att_req PDU -> PDU` for discovery and reads, `ble_disconnect host|device
+  REASON`. The HCI traffic is the kernel's and is not logged (`-v` puts it on
+  standard error). `sync` waits up to 8 s for the host to drop the link, which the
+  kernel does 2 s after the last socket closes, so each tool's disconnect lands in
+  its own section; a case costs about 2 s per tool for it.
+- `--unplug ble-notify=N` (after the peripheral's Nth notification since the
+  case's reset) and `ble-model` (`Port::mark`) drop the link as a supervision
+  timeout does and keep the peripheral off the air until a `replug` or a reset;
+  `--interrupt` takes the same points.
+- The controller answers the commands an LE only controller gets from the
+  kernel's init and its LE connection setup (scan, create connection, read remote
+  features, disconnect), acknowledges each ACL packet at once, and reassembles
+  L2CAP frames. A command it does not know is refused, "unknown command", and
+  written to standard error. A connection to an address nobody advertises waits
+  for the kernel's cancel, 40 s later (`L2CAP_CONN_TIMEOUT`).
+
+- Neither the server nor the tools need a user namespace or any descriptor
+  they inherit: the controller is a file the server opens as root, and the
+  tools open an L2CAP socket of their own. A host without `hci_vhci` skips the
+  model (`EMU_SKIP`).
+- A device's own habits stay the model's reading where no oracle can check
+  them: for the Mooshimeter, which messages a reading brings and in what order,
+  its period of DEPTH / RATE, and the buffers' full scale.
+- What a later BLE model must know: a CCCD write turns notifications on by bit 0
+  only, so indications (bit 1, which libsigrok's `ble122` path writes as 0x0003)
+  are not sent; the ATT MTU is 23 with no Exchange MTU of the host's own and no
+  fragmentation; Write Requests sent before the last one's response (libsigrok
+  pipelines them) are answered in turn, not flagged.
+
+What it can't show: radio timing (connection events, a slow link, retransmission:
+each PDU arrives whole at once), pairing and encryption, more than one link, and a
+controller that is not LE only. The kernel's own retry of a connection that fails
+to be established makes such a case cost its 40 s.
+
 ### Writing a device model
 
 Do no slow work inside a reply: the host's timeout is running, and a

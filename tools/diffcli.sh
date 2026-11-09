@@ -175,6 +175,14 @@
 # finds no ppdev (it opens /dev/parport0 to 7 only): such a session fails
 # at its start, saying so, unless it is --no-oracle. Unloading parport then does not help (the old
 # ports stay in sysfs and the new parport0 collides); a reboot does.
+# A scenario that sets EMU_BLE=1 serves its model as a Bluetooth LE peripheral
+# behind a virtual HCI controller (--ble, its build_ble, emu/src/shells/ble.rs),
+# with nothing attached over USB/IP: the server creates the controller on
+# /dev/vhci (hci_vhci) and brings it up, and the tools reach the peripheral
+# through the kernel by its address, which the model fixes, so the outputs need
+# no rewriting. bluetoothd must not run: a session refuses to start while it
+# does. --unplug ble-notify=N and ble-model drop the link. A scenario sets
+# EMU_SKIP when the kernel has no hci_vhci.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -804,6 +812,15 @@ if [ $emu = 1 ]; then
         [ "$EMU_TCP" != only ] || emu_how=""
         [ -z "$EMU_TCP" ] || emu_how="$emu_how --tcp 127.0.0.1:0"
         [ "$EMU_SYSFS" != 1 ] || emu_how="--sysfs $EMU_SYSFS_DIR"
+        if [ "$EMU_BLE" = 1 ]; then
+            # bluetoothd would claim the controller and connect a GATT client of
+            # its own to the peripheral, in the cases' transactions.
+            if pgrep -x bluetoothd >/dev/null 2>&1; then
+                echo "$EMU_MODEL: bluetoothd is running; it would take the virtual controller (stop it for the session)" >&2
+                return 1
+            fi
+            emu_how="--ble"
+        fi
         # shellcheck disable=SC2086
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 $emu_how \
             --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" --while-alive $$ \
@@ -2043,7 +2060,7 @@ EOF
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_BLE=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
         EMU_ORACLE_PPCLAIM_SETTLE_MS=""; EMU_PARPORT=""; EMU_PARPORT_NAME=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }

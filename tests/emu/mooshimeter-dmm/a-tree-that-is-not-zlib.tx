@@ -1,0 +1,6 @@
+ble_connect
+att_write 0016 0100 -> ok
+att_write 0012 0001 -> ok
+att_notify 0015 000118006e6f742061207a6c6962207374726561
+att_notify 0015 016d20617420616c6c
+ble_disconnect host 13
