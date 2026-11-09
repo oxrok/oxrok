@@ -1,0 +1,3 @@
+sr: output/csv: Untested configuration: large frame content.
+sr: output/csv: Resulting CSV output data may be incomplete or incorrect.
+../glib/gmem.c:106: failed to allocate 17179869180 bytes

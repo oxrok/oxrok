@@ -60,8 +60,13 @@
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses
-//! into Python.
+//! into Python; `gpib` and `parport`, whose ioctls on `/dev/gpibN` and
+//! `/dev/parportN` are unsafe calls; `spawn`, which marks inherited
+//! descriptors close-on-exec by their numbers before a driver starts a
+//! program; and `bt`, whose L2CAP address (`sockaddr_l2`) is built in one
+//! unsafe block.
 
+pub mod bt;
 pub mod core;
 pub mod decode;
 pub mod decoders;
@@ -69,13 +74,16 @@ pub mod dmm;
 pub mod ezusb;
 pub mod formats;
 pub mod ftdi;
+pub mod gpib;
 pub mod hid;
 pub mod lcr;
 pub mod modbus;
+pub mod parport;
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub mod pydecode;
 pub mod scpi;
 pub mod serial;
+pub mod spawn;
 pub mod usb;
 
 /// The device drivers, one module per family.
@@ -114,7 +122,9 @@ pub mod drivers {
     pub mod hantek_6xxx;
     pub mod hantek_dso;
     pub mod hp_3457a;
+    pub mod hp_3478a;
     pub mod hp_59306a;
+    pub mod hung_chang_dso_2100;
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
@@ -135,6 +145,7 @@ pub mod drivers {
     pub mod maynuo_m97;
     pub mod mic_985xx;
     pub mod microchip_pickit2;
+    pub mod mooshimeter_dmm;
     pub mod motech_lps_30x;
     pub mod norma_dmm;
     pub mod ols;
@@ -209,6 +220,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
+    registry.register(Box::new(drivers::mooshimeter_dmm::MooshimeterDriver));
     registry.register(Box::new(drivers::norma_dmm::NormaDmmDriver));
     registry.register(Box::new(drivers::norma_dmm::SiemensB102xDriver));
     registry.register(Box::new(drivers::rigol_dg::RigolDgDriver));
@@ -219,6 +231,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::scpi_pps::HpibPpsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
+    registry.register(Box::new(drivers::hung_chang_dso_2100::HungChangDso2100Driver));
     registry.register(Box::new(drivers::siglent_sdl10x0::SiglentSdl10x0Driver));
     registry.register(Box::new(drivers::siglent_sds::SiglentSdsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
@@ -261,4 +274,5 @@ pub fn register_all(registry: &mut core::Registry) {
     // Linux alone has the files it reads, as libsigrok builds it there alone.
     #[cfg(target_os = "linux")]
     registry.register(Box::new(drivers::baylibre_acme::BaylibreAcmeDriver::default()));
+    registry.register(Box::new(drivers::hp_3478a::Hp3478aDriver));
 }

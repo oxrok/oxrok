@@ -17,9 +17,12 @@
 //! - [`sysfs`]: a tree of files instead of a device, for what libsigrok reaches
 //!   through the kernel's own files (hwmon, GPIOs), on the session's log and
 //!   control socket.
+//! - [`ble`]: a Bluetooth LE peripheral behind a virtual HCI controller
+//!   (`hci_vhci`), on the session's log and control socket.
 
 pub use vusb::shells::{ftdi, hid};
 
+pub mod ble;
 pub mod cdc;
 pub mod ezusb;
 pub mod hidcable;

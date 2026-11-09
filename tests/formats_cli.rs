@@ -198,7 +198,13 @@ fn csv_matches_sigrok_cli() {
         "-O",
         "csv:time=true:dedup=true:header=false",
     ]);
-    assert_eq!(out, "microseconds,logic,logic,logic,logic\n0,1,1,1,1\n25,1,1,1,1\n");
+    // dedup keeps the first and last row of each packet, as libsigrok's does,
+    // and the demo paces its packets by the clock, so the rows between the
+    // first and the last depend on the run.
+    let rows: Vec<&str> = out.lines().collect();
+    assert_eq!(rows[..2], ["microseconds,logic,logic,logic,logic", "0,1,1,1,1"], "{out}");
+    assert_eq!(rows.last(), Some(&"25,1,1,1,1"), "{out}");
+    assert!(rows[1..].iter().all(|r| r.ends_with(",1,1,1,1")), "{out}");
     let args: Vec<&str> = W1
         .iter()
         .copied()

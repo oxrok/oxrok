@@ -3783,6 +3783,93 @@ program exited 0. Silence warns at 5 s and fails at 30 s: the program writes
 every 100 ms, so longer silence is the program wedged after a USB error. A
 sample limit is exact.
 
+### HP 3478A (`hp-3478a`)
+
+A multimeter on HP-IB, reached through Linux's `gpib` subsystem (kernel 6.13
+and later): `conn=gpib/MINOR/PAD`, for example `gpib/0/23`; nothing is
+probed without `conn=`. The board must be online first (`gpib_config`; on a
+tester, `oxrok-emu gpib-config`, which takes a free board and gives it back).
+libsigrok's `libgpib/NAME` names from `gpib.conf` are refused with a hint.
+`measured_quantity`, `range` and `digits` read the meter's binary status, and
+a setting goes out only when the status says it changes something. A capture
+polls the meter every 100 ms by serial poll and takes a reading when one is
+ready, labelled with the range and digits the status gives; an overload is
+infinity. Each read clears the board's end-of-string mode first, as libgpib
+does, so a board left in one doesn't cut a binary status.
+
+Differences from libsigrok: a short or malformed status, or a reading not in
+the meter's 11-character form (operating manual, output format), fails the
+capture; a meter with no reading ready fails after 30 s, or warns at 30 s and
+fails at 10 minutes after a first reading; a time limit ends a capture with
+no reading; `digits` takes 3.5, 4.5 and 5.5 only; a failed `T1` or status at
+the start fails it; settings, gets and the range list are refused during a
+capture. Extended ohms (`F7`) take any range code, which is inferred.
+
+Emulated by model `hp-3478a`, the meter behind an NI GPIB-USB-HS that the
+kernel's own `ni_usb_gpib` drives: 66 `--no-oracle-only` cases on
+2026-11-09. The oracle has no libgpib, so there is no comparison with
+sigrok-cli and no gcov; the goldens were checked against the C source, HP's
+manual and quick reference, and linux-gpib's userspace. The `.tx` goldens
+pin how `ni_usb_gpib` drives the adapter. A kernel without `ni_usb_gpib`
+skips the model by name with a warning. Never run on hardware.
+
+### Hung-Chang DSO-2100 (`hung-chang-dso-2100`)
+
+Linux only. The scope is on a parallel port reached through `ppdev`, as
+libieee1284 reaches it, so a USB cable that the kernel's `uss720` serves
+works like a built-in port. `conn=parportN` names the port as
+`/proc/sys/dev/parport` does, and is required. One channel at a time, A or B
+(`-C A`). A frame is 1000 samples; `buffersize` adds steps up to 10238, the
+last six reading both ADCs in turn. A frame limit of 0 is one frame. A vdiv
+is matched by value, so `1000mV` is 1 V and `0.5V` is 500 mV.
+
+The trigger poll runs every 8 ms with no bound while the scope answers
+"armed". After the trigger the mailbox reads 0 while the scope fills its
+buffer. The capture fails once the silence outlasts the larger of 600 polls
+and twice the fill time of 10240 samples at the rate plus a second (1405
+polls at 2 kHz, 128125 at 20 Hz), counted afresh in each frame, or at once
+when the port goes away. Each claim waits 20 ms for `uss720`'s unwaited
+register read. libsigrok sends every block with a sample count of
+4294967295, so sigrok-cli prints no sample from this scope; oxrok sends the
+real count, and its samples are checked against the model and unit tests.
+
+Emulated by model `hung-chang-dso-2100`, a USS720 cable (`050d:0002`) with
+the scope behind its lines (options `scope=absent`, `trigger=N|never`,
+`busy=N`, `silent-after=N`, `bad-sig=N`, `odd-state=N`, `fill=N|rate`,
+`mark=armed|sample`): 86 cases on 2026-11-09, gcov 83.2%. Every oracle case
+runs sigrok-cli with a 20 ms settle after each claim, timing only. Never run
+on hardware.
+
+### Mooshimeter (`mooshimeter-dmm`)
+
+Bluetooth LE, Linux only. `conn=` is the meter's address: with dashes on the
+CLI (`-d mooshimeter-dmm:conn=D0-5F-B8-4D-00-01`, since the CLI splits at
+`:`), with colons from a library, or dense. oxrok opens an L2CAP ATT socket
+and the kernel makes the link: no root is needed, the controller must be up,
+and bluetoothd may run alongside. `channel_config` is `CH1[,CH2]`, each
+`MODE[;RANGE[;ANALYSIS]]`: CH1 takes Current/A, Temperature/T/K,
+Resistance/Ohm/W/R, Diode/D, Aux/LV; CH2 Voltage/V and the same others. One
+channel at a time takes the shared input; a range of 0 or none autoranges;
+the analysis is Mean/DC, RMS/AC or Buffer/Samples. P (real power) is off by
+default.
+
+Differences from libsigrok: K on CH2's temperature, as on CH1 and in the
+vendor's app; buffers scaled by `BUF_LSB2NATIVE` and the scale read again
+after an autorange; a time limit that ends on time; a lost notification (on
+the ninth held past the gap), a dropped link, or silence under a sample
+limit fails the capture; readings ahead of the handshake are dropped; P alone
+on a meter without `REAL_PWR` is refused; a 20 s connect timeout.
+
+Emulated by model `mooshimeter-dmm`: a whole LE controller on the kernel's
+`/dev/vhci` (`hci_vhci`) with the meter as its one peripheral, served by
+`oxrok-emu serve mooshimeter-dmm --ble`; bluetoothd must not run during a
+session. 95 cases on 2026-11-09 (80 full, 7 `--oracle-differs`, 8
+`--oracle-bug`). The tree's serialization, its CRC, the byte order and the
+keep-alive follow the vendor's Python API and Android app; the message order
+per reading, the DEPTH/RATE period and the buffers' full scale are the
+model's own reading, which the oracle can't check. Never run on a real
+meter.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

@@ -147,6 +147,43 @@
 # tool ended`. The stand-in's options go in EMU_STANDIN_OPTIONS (emu_standin), as
 # the tool, not the server, starts it.
 #
+# A model a kernel driver carries to the tools (a GPIB adapter under the gpib
+# subsystem) needs that driver kept and set up. EMU_KEEP_BOUND names the kernel
+# drivers emu_unbind leaves bound to the device's vendor interfaces. A scenario
+# may define emu_attached, run after each attach the server reports (READY,
+# REPLUGGED, RENUMERATED), once EMU_BUSID and the rest name it; it runs what the
+# device needs as root, in a log section of its own (emu_cmd "section ...") so
+# that its traffic is in no case's transactions, and a failure is reported, not
+# fatal: each case after it fails at once, naming the hook. emu_detaching, if
+# the scenario defines it, runs at the session's end before the detach, to give
+# back what emu_attached took. A scenario that sets EMU_SKIP="REASON" when it is
+# sourced (a kernel module missing) is skipped by name: a SKIP line, and on
+# GitHub a warning and a line in the step summary; a --no-oracle run whose only
+# models were skipped so does not fail for running no case. A plain run says SKIP
+# for a model all of whose cases are --no-oracle-only.
+#
+# A scenario that sets EMU_PARPORT=1 is a model of a USB to parallel port
+# cable that the kernel's uss720 drives, with ppdev making it /dev/parportN,
+# so a tool reaches it through libieee1284 or its own ppdev ioctls (emu_parport):
+# at each attach ppdev is loaded, uss720 bound to the device in place of
+# whatever took its printer interface (usblp), the node opened to all, and
+# EMU_PARPORT_NAME set to the port's name (parportN, for conn=); the outputs
+# say parportN. The scenario keeps uss720 bound with EMU_KEEP_BOUND, as
+# neither tool detaches it.
+# A detached cable keeps its port number taken (seen on kernel 7.2.14), so
+# each session's port is the next one, and from parport8 on libieee1284
+# finds no ppdev (it opens /dev/parport0 to 7 only): such a session fails
+# at its start, saying so, unless it is --no-oracle. Unloading parport then does not help (the old
+# ports stay in sysfs and the new parport0 collides); a reboot does.
+# A scenario that sets EMU_BLE=1 serves its model as a Bluetooth LE peripheral
+# behind a virtual HCI controller (--ble, its build_ble, emu/src/shells/ble.rs),
+# with nothing attached over USB/IP: the server creates the controller on
+# /dev/vhci (hci_vhci) and brings it up, and the tools reach the peripheral
+# through the kernel by its address, which the model fixes, so the outputs need
+# no rewriting. bluetoothd must not run: a session refuses to start while it
+# does. --unplug ble-notify=N and ble-model drop the link. A scenario sets
+# EMU_SKIP when the kernel has no hci_vhci.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -159,6 +196,12 @@
 # libsigrok runner with no libusb bulk timeout under N ms
 # (tools/oracle-usb-floor.c), for a C driver whose timeouts are shorter than
 # what the host can hold a transfer up for. oxrok runs as it is.
+#
+# A scenario that sets EMU_ORACLE_PPCLAIM_SETTLE_MS=N runs sigrok-cli and the
+# libsigrok runner with a sleep of N ms after each ppdev PPCLAIM
+# (tools/oracle-ppclaim-settle.c), for uss720's claim, whose unwaited read
+# can undo libieee1284's next PPDATADIR. oxrok runs as it is. A preload that
+# does not compile fails such a session, outside --no-oracle.
 
 set -u
 # Another oracle's environment and build tree, for a model whose driver is
@@ -226,6 +269,7 @@ fi
 pass=0
 fail=0
 skipped=0
+skipped_models=0
 
 # Drops the lines that name the tool: the version line and the META
 # lines sigrok-cli prints for file inputs.
@@ -569,6 +613,16 @@ if [ $emu = 1 ]; then
     else
         echo "note: no USB timeout floor for the oracle (cc failed): $(head -1 "$TMP/usb-floor.err")"
     fi
+    # EMU_ORACLE_PPCLAIM_SETTLE_MS, in a scenario: the oracle sleeps after each
+    # PPCLAIM (tools/oracle-ppclaim-settle.c).
+    EMU_PPCLAIM_SETTLE=""
+    if cc -shared -fPIC -o "$TMP/ppclaim-settle.so" "$TOOLS/oracle-ppclaim-settle.c" -ldl 2>"$TMP/ppclaim-settle.err"; then
+        EMU_PPCLAIM_SETTLE=$TMP/ppclaim-settle.so
+    else
+        # A scenario that needs it fails its session (emu_start), as its
+        # oracle's transactions would vary from run to run.
+        EMU_PPCLAIM_SETTLE_ERR=$(head -1 "$TMP/ppclaim-settle.err")
+    fi
     # tools/oracle-header.c, for a C driver that sends no header: a scenario calls
     # emu_header_oracle in its emu_cases, and its cases from then on run sigrok-cli
     # with the preload. EMU_STOCK_CLI keeps the real one, for cases on stock C and
@@ -732,6 +786,16 @@ if [ $emu = 1 ]; then
             | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
         EMU_SEEN=$total
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
+        if [ "$EMU_PARPORT" = 1 ] && [ -s "$TMP/emu.attach" ]; then emu_parport || return 1; fi
+        # The scenario's hook, once per batch of attaches (see the head of
+        # this file). Its own commands come back here with nothing new.
+        if [ -s "$TMP/emu.attach" ] && [ "$EMU_DRY" = 0 ]; then
+            EMU_ATTACH_FAILED=0
+            if ! emu_attached; then
+                echo "$EMU_MODEL: the scenario's emu_attached failed" >&2
+                EMU_ATTACH_FAILED=1
+            fi
+        fi
     }
     emu_start() {
         rm -rf "$EMU_STANDIN_DIR"
@@ -743,11 +807,23 @@ if [ $emu = 1 ]; then
         [ "$EMU_TMC" != 1 ] || emu_tmc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
+        # Before any return: emu_stop's detach runs emu_track, which reads it,
+        # and an unset one under set -u ends the whole run (exit 2).
+        EMU_SEEN=0
         EMU_TCP_PORT=""
         emu_how="--attach --open-devices"
         [ "$EMU_TCP" != only ] || emu_how=""
         [ -z "$EMU_TCP" ] || emu_how="$emu_how --tcp 127.0.0.1:0"
         [ "$EMU_SYSFS" != 1 ] || emu_how="--sysfs $EMU_SYSFS_DIR"
+        if [ "$EMU_BLE" = 1 ]; then
+            # bluetoothd would claim the controller and connect a GATT client of
+            # its own to the peripheral, in the cases' transactions.
+            if pgrep -x bluetoothd >/dev/null 2>&1; then
+                echo "$EMU_MODEL: bluetoothd is running; it would take the virtual controller (stop it for the session)" >&2
+                return 1
+            fi
+            emu_how="--ble"
+        fi
         # shellcheck disable=SC2086
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 $emu_how \
             --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" --while-alive $$ \
@@ -769,6 +845,13 @@ if [ $emu = 1 ]; then
             EMU_TCP_PORT=$(sed -n 's/^TCP port=//p' "$TMP/emu.out")
             export EMU_TCP_PORT
             printf 's#(tcp-[a-z]+/127[.]0[.]0[.]1/)%s([^0-9]|$)#\\1PORT\\2#g\n' "$EMU_TCP_PORT" >>"$TMP/emu.sed"
+        fi
+        if [ -n "$EMU_ORACLE_PPCLAIM_SETTLE_MS" ] && [ -z "$EMU_PPCLAIM_SETTLE" ] && [ $no_oracle = 0 ]; then
+            echo "$EMU_MODEL: no PPCLAIM settle for the oracle, tools/oracle-ppclaim-settle.c did not compile: ${EMU_PPCLAIM_SETTLE_ERR:-}" >&2
+            return 1
+        fi
+        if [ "$EMU_PARPORT" = 1 ] && [ -z "$EMU_PARPORT_NAME" ]; then
+            return 1
         fi
         if [ "$EMU_CDC" = 1 ]; then
             case "$EMU_TTY" in
@@ -808,12 +891,56 @@ if [ $emu = 1 ]; then
             printf 's#conn=%s([^0-9]|$)#conn=BUS.ADDR\\1#g\n' "$(echo "$EMU_USB" | sed 's/[.]/\\./g')" >>"$TMP/emu.sed"
         fi
     }
+    # EMU_PARPORT=1, at each attach: the port uss720 and ppdev make of the
+    # device, open to all, named in EMU_PARPORT_NAME (see the head of this file).
+    emu_parport() {
+        EMU_PARPORT_NAME=""
+        export EMU_PARPORT_NAME
+        [ -n "$EMU_BUSID" ] || return 0
+        sudo -n modprobe ppdev 2>/dev/null
+        sudo -n modprobe uss720 2>/dev/null
+        pp_dev=/sys/bus/usb/devices/$EMU_BUSID
+        for intf in "$pp_dev":*; do
+            [ -e "$intf" ] || continue
+            if [ -e "$intf/driver" ]; then
+                drv=$(basename "$(readlink "$intf/driver")")
+                [ "$drv" != uss720 ] || continue
+                printf '%s' "$(basename "$intf")" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null
+            fi
+            printf '%s' "$(basename "$intf")" | sudo -n tee /sys/bus/usb/drivers/uss720/bind >/dev/null 2>&1
+        done
+        pp_i=0
+        while [ $pp_i -lt 100 ]; do
+            for n in "$pp_dev"/ppdev/parport*; do
+                [ -e "$n" ] || continue
+                EMU_PARPORT_NAME=$(basename "$n")
+            done
+            [ -z "$EMU_PARPORT_NAME" ] || [ ! -e "/dev/$EMU_PARPORT_NAME" ] || break
+            EMU_PARPORT_NAME=""
+            sleep 0.05
+            pp_i=$((pp_i + 1))
+        done
+        if [ -z "$EMU_PARPORT_NAME" ]; then
+            echo "$EMU_MODEL: the device got no /dev/parportN; are the kernel's uss720 and ppdev there?" >&2
+            sudo -n dmesg | grep -E 'uss720|parport' | tail -3 >&2
+            return 1
+        fi
+        case "$no_oracle:$EMU_PARPORT_NAME" in
+            1:* | *:parport[0-7]) ;;
+            *)
+                echo "$EMU_MODEL: the cable is $EMU_PARPORT_NAME: libieee1284 looks for ppdev at /dev/parport0 to 7 only, so sigrok-cli would find nothing. The kernel keeps a detached cable's number; reboot the machine." >&2
+                return 1 ;;
+        esac
+        sudo -n chmod 0666 "/dev/$EMU_PARPORT_NAME" || return 1
+        printf 's#%s([^0-9]|$)#parportN\\1#g\n' "$EMU_PARPORT_NAME" >>"$TMP/emu.sed"
+    }
     # Detaches and ends the emulator, whatever state it is in: a
     # server that does not end after the detach is terminated, then
     # killed (a stopped one too, which a TERM alone would leave
     # waiting), so the session never waits on it for ever. The detach
     # traffic gets a section of its own.
     emu_stop() {
+        emu_detaching || echo "$EMU_MODEL: the scenario's emu_detaching failed" >&2
         if [ "${EMU_DEAD:-0}" = 0 ]; then
             emu_cmd "section detach" >/dev/null 2>&1 && emu_cmd detach >/dev/null 2>&1
         fi
@@ -889,6 +1016,7 @@ if [ $emu = 1 ]; then
             [ -e "$intf/driver" ] || continue
             drv=$(basename "$(readlink "$intf/driver")")
             [ "$drv" != usbfs ] || continue
+            case " ${EMU_KEEP_BOUND:-} " in *" $drv "*) continue ;; esac
             [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = "$un_class" ] || continue
             intf=$(basename "$intf")
             emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
@@ -1338,7 +1466,10 @@ EOF
             *" $slug "*) emu_fail "$name: another case of $EMU_MODEL has the file name $slug"; return ;;
         esac
         emu_slugs="$emu_slugs $slug"
-        [ $no_oracle_only = 0 ] || [ $no_oracle = 1 ] || return
+        if [ $no_oracle_only = 1 ] && [ $no_oracle = 0 ]; then
+            [ "$EMU_DRY" != 1 ] || emu_dry_noo=$((emu_dry_noo + 1))
+            return
+        fi
         case "$OXROK_DRIVERS" in *" $driver "*) mode=full; tools="a b" ;; *) mode=oracle; tools=a ;; esac
         # A library case is the runner's alone, whatever oxrok has,
         # unless it says --oxrok.
@@ -1347,6 +1478,9 @@ EOF
             if [ $libsig_full = 1 ]; then label="$mode, library"; else mode=oracle; tools=a; label=library; fi
         elif [ $libsig_full = 1 ]; then
             emu_fail "$name: --oxrok goes with --libsigrok"; return
+        fi
+        if [ "$EMU_DRY" != 1 ] && [ "${EMU_ATTACH_FAILED:-0}" = 1 ]; then
+            emu_fail "$name: the scenario's emu_attached failed for this attach [$*]"; return
         fi
         if [ "$EMU_DRY" = 1 ]; then
             # A case of a driver EMU_FULL lists counts as full even when
@@ -1444,6 +1578,10 @@ EOF
             if [ -n "$EMU_ORACLE_USB_FLOOR_MS" ] && [ $t = a ] && [ -n "$EMU_USB_FLOOR" ]; then
                 preload="$preload${preload:+ }$EMU_USB_FLOOR"
                 set -- env EMU_ORACLE_USB_FLOOR_MS="$EMU_ORACLE_USB_FLOOR_MS" "$@"
+            fi
+            if [ -n "$EMU_ORACLE_PPCLAIM_SETTLE_MS" ] && [ $t = a ] && [ -n "$EMU_PPCLAIM_SETTLE" ]; then
+                preload="$preload${preload:+ }$EMU_PPCLAIM_SETTLE"
+                set -- env EMU_ORACLE_PPCLAIM_SETTLE_MS="$EMU_ORACLE_PPCLAIM_SETTLE_MS" "$@"
             fi
             if [ -n "$preload" ]; then
                 set -- env LD_PRELOAD="$preload" "$@"
@@ -1910,27 +2048,64 @@ EOF
         return $gst
     }
 
+    # A model whose scenario can't run here, by name: on standard output, and on
+    # GitHub as a warning and in the step summary, as the vhci-hcd probe does.
+    emu_skip_model() {
+        skipped_models=$((skipped_models + 1))
+        echo "SKIP $EMU_MODEL: $1"
+        if [ -n "${GITHUB_ACTIONS:-}" ]; then
+            echo "::warning title=emulator model skipped::$EMU_MODEL: $1"
+        fi
+        if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            echo "skipped: emulator model $EMU_MODEL: $1" >>"$GITHUB_STEP_SUMMARY"
+        fi
+    }
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_BLE=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
+        EMU_ORACLE_PPCLAIM_SETTLE_MS=""; EMU_PARPORT=""; EMU_PARPORT_NAME=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
+        emu_attached() { :; }
+        emu_detaching() { :; }
+        EMU_KEEP_BOUND=""; EMU_SKIP=""; EMU_ATTACH_FAILED=0
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }
         if [ -n "$emu_models" ]; then
             case " $emu_models " in *" $EMU_MODEL "*) ;; *) continue ;; esac
         fi
         found="$found $EMU_MODEL"
+        if [ -n "$EMU_SKIP" ]; then
+            emu_skip_model "$EMU_SKIP"
+            continue
+        fi
         # --no-oracle: a model without a full case is not attached; its
         # cases are counted by running the scenario with emu_case and
         # emu_cmd doing nothing else (in a subshell, no device named).
+        if [ $no_oracle = 0 ]; then
+            # A plain run drops --no-oracle-only cases: a model with no other
+            # says so by name rather than passing with nothing run.
+            noo=$(
+                set +u
+                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_dry_noo=0; emu_slugs=""
+                EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
+                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
+                emu_cases >/dev/null 2>&1 8<&-
+                echo "$((emu_dry_full + emu_dry_oracle)) $emu_dry_noo"
+            )
+            if [ "${noo%% *}" = 0 ] && [ "${noo#* }" != 0 ]; then
+                skipped=$((skipped + ${noo#* }))
+                emu_skip_model "all ${noo#* } cases are --no-oracle-only: run it with --no-oracle"
+                continue
+            fi
+        fi
         if [ $no_oracle = 1 ]; then
             dry=$(
                 set +u
-                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_slugs=""
+                EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_dry_noo=0; emu_slugs=""
                 EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
-                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
+                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""; EMU_PARPORT_NAME=parport0
                 emu_cases >/dev/null 2>&1 8<&-
                 echo "$emu_dry_full $emu_dry_oracle"
             )
@@ -1953,8 +2128,13 @@ fi
 
 if [ $no_oracle = 1 ]; then
     # Nothing compared is no evidence: a run that skipped every case fails.
-    [ $((pass + fail)) != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
-    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)"
+    # A model skipped by name (EMU_SKIP) has said why, on GitHub too.
+    [ $((pass + fail)) != 0 ] || [ $skipped_models != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
+    by_name=""
+    [ $skipped_models = 0 ] || by_name=", $skipped_models models skipped by name"
+    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)$by_name"
+elif [ $skipped != 0 ] || [ $skipped_models != 0 ]; then
+    echo "$pass passed, $fail failed, $skipped skipped"
 else
     echo "$pass passed, $fail failed"
 fi

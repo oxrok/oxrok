@@ -12,7 +12,10 @@ release may change the library API.
   `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
   `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`, `hameg-hmo`, `scpi-dmm`,
   `baylibre-acme` (on an emulated sysfs tree in a user namespace),
-  `asix-omega-rtm-cli` (through the vendor's program, emulated by a stand-in).
+  `asix-omega-rtm-cli` (through the vendor's program, emulated by a stand-in),
+  `hp-3478a` (over a new GPIB transport, `conn=gpib/MINOR/PAD`),
+  `hung-chang-dso-2100` (on a parallel port through ppdev),
+  `mooshimeter-dmm` (over Bluetooth LE). Every libsigrok driver is now ported.
 - SCPI over TCP: an answer ends at its line end, not at a short read, and the
   sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request

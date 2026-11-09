@@ -17,7 +17,7 @@ use vusb::observer::{Notice, Observer, Outcome, Transfer};
 use vusb::session::ModelFactory;
 
 use crate::models;
-use crate::shells::tcp;
+use crate::shells::{ble, tcp};
 
 /// The log, with its comments on standard error too when verbose.
 #[derive(Debug)]
@@ -118,6 +118,22 @@ pub fn factory_with_sysfs<W: Write + Send + 'static>(
     Box::new(move |options: &[(String, String)]| {
         let model = models::build(&name, options)?;
         carrier.install(models::build_sysfs(&name, options)?)?;
+        log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
+        Ok(model)
+    })
+}
+
+/// [`factory`], with the model's peripheral going to `carrier`. So a `reset` or
+/// a new set of options gives each tool a fresh device, from power on.
+pub fn factory_with_ble<W: Write + Send + 'static>(
+    name: &str,
+    log: Arc<Mutex<TxLog<W>>>,
+    carrier: ble::Carrier,
+) -> ModelFactory {
+    let name = name.to_owned();
+    Box::new(move |options: &[(String, String)]| {
+        let model = models::build(&name, options)?;
+        carrier.install(models::build_ble(&name, options)?);
         log.lock().expect("log lock").set_rules(models::log_rules(&name, options));
         Ok(model)
     })

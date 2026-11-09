@@ -1,0 +1,56 @@
+ble_connect
+att_write 0016 0100 -> ok
+att_write 0012 0001 -> ok
+att_notify 0015 0001a801789cc5525b6ee3300c6424bfe22cf628
+att_notify 0015 0181ed34417f658b7604589221d146fbe5fbdf62
+att_notify 0015 0229a7bb8b9ea03fe40892383324017e41aeb435
+att_notify 0015 034ee6f910865b0775460111ceb5366a723e9219
+att_notify 0015 04405e96a1df370cd17807e7cc298b9057642cee
+att_notify 0015 052b0d905dfec2dd46b8e4bda27d035104ecbd27
+att_notify 0015 060185f3c1aa19a08a4fb358af31416597d9b849
+att_notify 0015 078a2c28c21264dbdd0164776f38de1b8e59db1c
+att_notify 0015 08a97ba5b7577a4f49e41a177a6620583388c71b
+att_notify 0015 09a4ffefc7ff0788928299260c12a41f47802232
+att_notify 0015 0ad3ccb4f5e01d19b7fa35f2dbd94f8514ec29ab
+att_notify 0015 0b8c230c1b8b944524457c2dcbc5cfb33681398d
+att_notify 0015 0c1bbdcc72e3347eb073747a4f96212fddde7f12
+att_notify 0015 0dc644c18d53f6ffab8299231277542b52cc363c
+att_notify 0015 0edb4a94562d4bb20de5b086808e4e20dae48bd0
+att_notify 0015 0f2e279037f67f2ae25305d4ac212837e16e4054
+att_notify 0015 10caa9f9339a2821b3a81c170c36f1f6eb3862e0
+att_notify 0015 11b6b3fa15e1f28f57f20d57e0b8f70bcfe57742
+att_notify 0015 1273ec3ba7c86c7828eabe29dafc4c6a42c10d4d
+att_notify 0015 134378343fa24b7cb148decdf563df7888cdb585
+att_notify 0015 14146f69cc579e781d902949b9017328d29e5c59
+att_notify 0015 156b99c081aa031df0fc8207aebff071c8b5e155
+att_notify 0015 163cbd2afe01c2bd8d85
+att_write 0012 01803e4ab6b1 -> ok
+att_notify 0015 17003e4ab6b1
+att_write 0012 028b00 -> ok
+att_notify 0015 180b00
+att_write 0012 038900 -> ok
+att_notify 0015 190900
+att_write 0012 048a01 -> ok
+att_notify 0015 1a0a01
+att_write 0012 059c18 -> ok
+att_notify 0015 1b1c18
+att_write 0012 06a418 -> ok
+att_notify 0015 1c2418
+att_write 0012 079600 -> ok
+att_notify 0015 1d1600
+att_write 0012 089700 -> ok
+att_notify 0015 1e1700
+att_write 0012 099800 -> ok
+att_notify 0015 1f1800
+att_write 0012 0a9e00 -> ok
+att_notify 0015 201e00
+att_write 0012 0b9f00 -> ok
+att_notify 0015 211f00
+att_write 0012 0ca000 -> ok
+att_notify 0015 222000
+att_write 0012 0d8b02 -> ok
+att_notify 0015 230b02
+att_notify 0015 24190000803e2100004841
+att_write 0012 0e8b00 -> ok
+att_notify 0015 250b00
+ble_disconnect host 13

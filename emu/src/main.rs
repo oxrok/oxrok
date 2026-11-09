@@ -43,6 +43,14 @@
 //! With `--sysfs DIR` (Linux) the model is a tree of files in `DIR` instead
 //! (`shells::sysfs`), which the tools see in a mount namespace; nothing is
 //! attached, and a `READY` line with no device says the tree is there.
+//! With `--ble` the model is a Bluetooth LE peripheral (`shells::ble`) behind a
+//! virtual HCI controller this process creates on `/dev/vhci`: a line `BLE
+//! hci=hciN addr=ADDRESS` names the controller and the peripheral, and a `READY`
+//! line with no device follows it. Nothing is attached over USB/IP.
+//!
+//! `gpib-config` brings a free GPIB board online on an emulated NI adapter, as
+//! linux-gpib's `gpib_config` would, for a model behind the kernel's `ni_usb_gpib`,
+//! and says which (`GPIB minor=N`); `--release` gives the boards it took back.
 //!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
@@ -51,6 +59,9 @@
 //! (`/tmp/oxrok-emu.lock`, `--lock PATH`) and refuses while another
 //! session holds it; a session cleaning up under its own lock says so
 //! with `--locked`, and `--force` cleans up regardless.
+
+#[cfg(target_os = "linux")]
+mod gpib_config;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -62,7 +73,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use oxrok_emu::models;
-use oxrok_emu::shells::tcp;
+use oxrok_emu::shells::{ble, tcp};
 use oxrok_emu::txlog::{self, TxLog};
 use serde_json::Value;
 use vusb::attach::vhci;
@@ -99,9 +110,29 @@ enum Command {
         #[arg(long, conflicts_with = "locked")]
         force: bool,
     },
+    /// Brings GPIB board MINOR online as an NI USB adapter, as linux-gpib's
+    /// `gpib_config` would (Linux, root).
+    #[cfg(target_os = "linux")]
+    GpibConfig {
+        /// The USB device whose first interface the board takes (the READY line's
+        /// busid); any free adapter without it. Prints `GPIB minor=N`.
+        #[arg(long)]
+        busid: Option<String>,
+        /// Instead, leaves board MINOR in an end of string mode on BYTE (8-bit),
+        /// as a program before might have.
+        #[arg(long, value_name = "BYTE", requires = "minor", conflicts_with_all = ["busid", "release"])]
+        eos: Option<u8>,
+        /// The board for --eos.
+        #[arg(long)]
+        minor: Option<u32>,
+        /// Instead, takes each board it took offline and puts its node's mode back.
+        #[arg(long, conflicts_with = "busid")]
+        release: bool,
+    },
 }
 
 #[derive(Parser)]
+#[allow(clippy::struct_excessive_bools)]
 struct Serve {
     /// The model (see `list`).
     model: String,
@@ -134,6 +165,11 @@ struct Serve {
     /// emptied first and removed at the end, and attaches nothing (Linux).
     #[arg(long, value_name = "DIR", conflicts_with_all = ["attach", "tcp"])]
     sysfs: Option<PathBuf>,
+    /// Serves the model's `build_ble` as a Bluetooth LE peripheral behind a
+    /// virtual HCI controller (`/dev/vhci`, Linux, root), and prints
+    /// `BLE hci=hciN addr=ADDRESS`.
+    #[arg(long, conflicts_with_all = ["tcp", "attach", "sysfs"])]
+    ble: bool,
     /// Ends the session once this process is gone (Linux).
     #[arg(long, value_name = "PID")]
     while_alive: Option<u32>,
@@ -171,6 +207,15 @@ fn main() -> ExitCode {
             locked_cleanup(all, &lock, locked || force).map(|()| 0)
         }
         Command::Serve(args) => serve(&args),
+        #[cfg(target_os = "linux")]
+        Command::GpibConfig { busid, eos, minor, release } => {
+            let done = match (eos, minor) {
+                (Some(byte), Some(minor)) => gpib_config::set_eos(minor, byte),
+                _ if release => gpib_config::release().map(|n| println!("GPIB released={n}")),
+                _ => gpib_config::configure(busid.as_deref()).map(|m| println!("GPIB minor={m}")),
+            };
+            done.map(|()| 0).map_err(Error::Io)
+        }
     };
     match outcome {
         Ok(0) => ExitCode::SUCCESS,
@@ -320,7 +365,7 @@ fn sysfs_commands(tree: Option<&SysfsCarrier>, builder: Builder) -> Builder {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn sysfs_commands(_tree: &Option<SysfsCarrier>, builder: Builder) -> Builder {
+fn sysfs_commands(_tree: Option<&SysfsCarrier>, builder: Builder) -> Builder {
     builder
 }
 
@@ -359,12 +404,21 @@ fn serve(args: &Serve) -> Result<u8> {
         None => None,
     };
     let tree = sysfs_carrier(args, &log)?;
-    let factory = match (&carrier, &tree) {
-        (Some(carrier), _) => {
+    let radio = if args.ble {
+        let lines: Arc<Mutex<dyn tcp::Log>> = log.clone();
+        Some(ble::Carrier::open(lines, args.verbose, hci_up)?)
+    } else {
+        None
+    };
+    let factory = match (&carrier, &tree, &radio) {
+        (Some(carrier), _, _) => {
             txlog::factory_with_tcp(&args.model, Arc::clone(&log), carrier.clone())
         }
-        (None, Some(tree)) => sysfs_factory(&args.model, &log, tree),
-        (None, None) => txlog::factory(&args.model, Arc::clone(&log)),
+        (None, Some(tree), _) => sysfs_factory(&args.model, &log, tree),
+        (None, None, Some(radio)) => {
+            txlog::factory_with_ble(&args.model, Arc::clone(&log), radio.clone())
+        }
+        (None, None, None) => txlog::factory(&args.model, Arc::clone(&log)),
     };
     let observer: SharedObserver = log;
     let mut builder = Builder::new(factory)
@@ -379,6 +433,9 @@ fn serve(args: &Serve) -> Result<u8> {
         builder = carrier.commands(builder);
     }
     builder = sysfs_commands(tree.as_ref(), builder);
+    if let Some(radio) = &radio {
+        builder = radio.commands(builder);
+    }
     if let Some(control) = &args.control {
         builder = builder.control_with(Address::parse(control), ListenOptions::default());
     }
@@ -393,7 +450,12 @@ fn serve(args: &Serve) -> Result<u8> {
             println!("READY port= busid= usb= usbfs= nodes=");
         }
     }
-    if args.sysfs.is_some() {
+    if let Some(radio) = &radio {
+        let addr = radio.address().unwrap_or_default();
+        let text: Vec<String> = addr.iter().map(|b| format!("{b:02X}")).collect();
+        println!("BLE hci=hci{} addr={}", radio.index(), text.join(":"));
+    }
+    if args.sysfs.is_some() || radio.is_some() {
         println!("READY port= busid= usb= usbfs= nodes=");
     }
     let stopper = session.stopper();
@@ -420,7 +482,43 @@ fn serve(args: &Serve) -> Result<u8> {
     sysfs_stop(tree.as_ref());
     let violations = report.violations
         + carrier.as_ref().map_or(0, tcp::Carrier::violations)
-        + sysfs_violations(tree.as_ref());
+        + sysfs_violations(tree.as_ref())
+        + radio.as_ref().map_or(0, ble::Carrier::violations);
     println!("violations: {violations}");
     Ok(if violations == 0 { 0 } else { 2 })
+}
+
+/// Brings HCI controller `index` up: the `HCIDEVUP` of `hciconfig hciN up`.
+/// Without it the kernel powers a new controller off again 2 s after its
+/// setup, as no bluetoothd claims it. An `EALREADY` is a controller up already.
+#[cfg(target_os = "linux")]
+#[allow(unsafe_code)]
+fn hci_up(index: u16) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+
+    use rustix::net::{AddressFamily, Protocol, RawProtocol, SocketFlags, SocketType, socket_with};
+    /// `_IOW('H', 201, int)`.
+    const HCIDEVUP: libc::Ioctl = 0x4004_48c9;
+    /// `BTPROTO_HCI`.
+    const HCI: RawProtocol = RawProtocol::new(1).expect("nonzero");
+    let socket = socket_with(
+        AddressFamily::BLUETOOTH,
+        SocketType::RAW,
+        SocketFlags::CLOEXEC,
+        Some(Protocol::from_raw(HCI)),
+    )?;
+    // SAFETY: HCIDEVUP takes the device index as an int, by value: no pointer.
+    let r = unsafe { libc::ioctl(socket.as_raw_fd(), HCIDEVUP, libc::c_int::from(index)) };
+    if r < 0 {
+        let e = io::Error::last_os_error();
+        if e.raw_os_error() != Some(libc::EALREADY) {
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn hci_up(_index: u16) -> io::Result<()> {
+    Err(io::Error::new(io::ErrorKind::Unsupported, "a virtual HCI controller is Linux only"))
 }

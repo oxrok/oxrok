@@ -1,60 +1,52 @@
 # Roadmap
 
-Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 84 of libsigrok's 87 `src/hardware` drivers are
-ported; the 3 still missing are listed below. Native decoder porting is
+Status: 2026-11-09. `v0.2.0` is the current stable release, on GitHub and
+crates.io. All 87 of libsigrok's `src/hardware` drivers are
+ported. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
-The work that remains is driver ports, packaging, the Pico backend, and
+The work that remains is transports, packaging, the Pico backend, and
 the emulator, CLI and hardware-verification gaps listed here. Completed
 phases and per-batch history have been removed; the evidence per driver
 is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 [NATIVE_DECODERS.md](NATIVE_DECODERS.md).
 
-## Driver ports still open
+## Transports
 
-The 3 libsigrok drivers with no oxrok port. Each needs a device model,
-scenario cases and a `--hw` path like the ported ones. No USB
-logic-analyzer port remains: every one is ported, has a replay fixture,
-and needs hardware runs rather than code.
+No USB logic-analyzer driver needs code: every one is ported, has a replay
+fixture, and needs hardware runs.
 
-### SCPI instruments (1)
+### Bluetooth
 
-The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
-serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
-remaining drivers can start there.
+`mooshimeter-dmm` runs over `src/bt` (an L2CAP ATT socket) and the BLE
+shell (`emu/src/shells/ble.rs`, a controller on `hci_vhci`). Open:
 
-| driver | kind | notes |
-|---|---|---|
-| `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
-
-There is no ordering dependency except `hp-3478a`, which waits for the
-GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
-MSO5000, Agilent DSO1000) also remain unverified on hardware; see
-[Open verification](#open-verification).
-
-### Odd transports (2)
-
-- `hung-chang-dso-2100`: parallel port. Model a USB adapter with an
-  in-tree driver (Belkin USS-720) so `/dev/parport0` and the
-  `/proc/sys/dev/parport` entries exist, or use CUSE or an
-  `LD_PRELOAD` of `libieee1284`.
-- `mooshimeter-dmm`: BLE GATT through BlueZ. An ESP32 BLE peripheral
-  serving the Mooshimeter's characteristics is the practical model. The
-  driver has no `bt/`, `bt/notify`, `ble122` or `cc254x` path at all, so
-  the BLE units of `atorch` are unreachable too; RFCOMM goes through
-  `/dev/rfcommN`.
+- `atorch`'s BLE units (libsigrok's `serial_bt.c`: `bt/ble122`,
+  `bt/cc254x`, `bt/notify`) can go over `src/bt` and the BLE shell. They
+  need a `Port` on a notify/write characteristic pair, CCCD indications in
+  the shell (`ble122` writes 0x0003), and an ATT MTU above 23 with
+  fragmentation if a unit asks for one. RFCOMM (`bt/rfcomm`) is still open:
+  the shell has no BR/EDR.
+- The BLE model is skipped by name where the kernel has no `hci_vhci`
+  (presumably GitHub's hosted runners), so CI gives it no coverage; a
+  self-hosted runner with `hci_vhci` and no bluetoothd would run it.
 
 ### GPIB
 
-GPIB sits under the SCPI layer, so every GPIB instrument's driver logic
-can be tested over `tcp-raw` with the same SCPI model; only `hp-3478a`
-has no other port. The transport itself is open: linux-gpib is in
-`drivers/staging/gpib` (6.13 and later) with `lpvo_usb_gpib`,
-`agilent_82357a` and `ni_usb_gpib`, and a model of one of those USB
-adapters gives a real `/dev/gpib0`. `uss720` and the three GPIB modules
-load on Fedora 44 / kernel 7.2.14. CUSE and an `LD_PRELOAD` of `libgpib`
-are the fallbacks. Prologix adapters over serial are an oxrok extra.
+`hp-3478a` runs over `src/gpib` (`conn=gpib/MINOR/PAD`) on the kernel's
+`gpib` subsystem; only `ni_usb_b` is modelled. Open:
+
+- `libgpib/NAME` resources, read from `/etc/gpib.conf` as libgpib's
+  `ibfind` does.
+- `agilent_82357a` and `lpvo_usb_gpib` models.
+- Other SCPI drivers over `conn=gpib/...`: the transport is shared, but no
+  case covers one.
+- A CI runner without `ni_usb_gpib` skips the model by name with a warning
+  and runs none of its cases.
+- Waiting on SRQ (`IBWAIT`) instead of the 100 ms serial poll.
+- usbtester4 has minor 0 left configured by an early `gpib-config` with no
+  marker: take it offline by hand (or reboot).
+- Prologix adapters over serial remain an oxrok extra.
 
 ## Upstream pull requests
 
@@ -162,6 +154,16 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Harness and CI
 
+- `uss720` keeps a detached cable's parport number (one per emulator
+  session on kernel 7.2.x), so after 8 sessions on a tester libieee1284
+  finds no ppdev and the `hung-chang-dso-2100` oracle stops; the harness
+  fails such a session and says so. Unloading `parport` doesn't help (the
+  new `parport0` collides in sysfs); only a reboot does. Testers need a
+  reboot between batches, or the harness a way to reset the numbering.
+- Pulling a `uss720` cable while the port is claimed crashed usbtester3's
+  kernel, and usbtester3 did not come back from its reboot: no unplug case
+  for `hung-chang-dso-2100` until that is understood.
+
 - No record/replay path for a driver that runs a program
   (`asix-omega-rtm-cli`): its logic runs in CI only through the emulator's
   stand-in and unit tests.
@@ -172,6 +174,8 @@ The models are plain Rust with no I/O for this reason; see
   same-length rewrite is one write(2) a reader could catch mid-copy. A FUSE
   tree, or fanotify permission events, would make a store's errno, -ENODEV
   reads of a removed device and sysfs's 4096-byte attribute size reachable.
+  Reads already wait for the carrier (fanotify permission events, as root),
+  so a read's value depends only on the reads and writes before it.
 
 - The emulator CI job skips when the hosted kernel has no `vhci-hcd`,
   and branch protection counts a skipped required job as satisfied. A
@@ -368,6 +372,19 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `mooshimeter-dmm` on a real meter: the per-reading message order, the
+  DEPTH/RATE period and the buffers' full scale are the model's reading of
+  the vendor's code; radio timing, pairing and more than one link are not
+  modelled.
+
+- `hung-chang-dso-2100` on a scope and a real cable: the line decoding, the
+  waveform, the interleaved timing and the post-trigger fill time are the
+  model's reading of C, and sigrok-cli prints no sample to compare with.
+
+- `hp-3478a` on a real meter and adapter: the reading rate, the 4.5 and 3.5
+  digit readings, `F7`'s range code, and a real adapter's timeouts (the
+  kernel rounds them up to the adapter's next step).
 
 - `asix-omega-rtm-cli` with a real OMEGA and ASIX's `omegartmcli`, natively
   and under wine: the program's real timing, its stdin behaviour under wine,

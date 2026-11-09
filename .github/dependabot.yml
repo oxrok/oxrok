@@ -8,6 +8,10 @@ updates:
     groups:
       cargo:
         patterns: ["*"]
+    ignore:
+      # Pinned for RustPython 0.6.0 (Cargo.toml): moved by hand with RustPython.
+      - dependency-name: "malachite-bigint"
+      - dependency-name: "rustpython-ruff_*"
     labels: [deps]
     open-pull-requests-limit: 5
   - package-ecosystem: github-actions

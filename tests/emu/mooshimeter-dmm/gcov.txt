@@ -1,0 +1,85 @@
+gcov mooshimeter-dmm (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        86.2%  494 of 573
+  protocol.c   77.6%  597 of 769
+  total        81.3%  1091 of 1342
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 97, 116
+    configure_channel1_current: 234, 239
+    configure_channel1_temperature: 272, 277
+    configure_channel1_auxv: 309, 314, 319
+    configure_channel1_resistance: 351, 356, 361
+    configure_channel1_diode: 393, 398, 403
+    configure_channel2_voltage: 436, 441
+    configure_channel2_temperature: 474, 479
+    autorange_channel2_auxv: never called (496-501)
+    configure_channel2_auxv: 511, 516, 521, 524-525
+    configure_channel2_resistance: 553, 558, 563
+    configure_channel2_diode: 595, 600, 605, 611-612
+    apply_channel_config: 656, 671, 677, 683, 689, 695-700, 709, 714, 718, 746, 755, 764, 769, 774, 779, 788, 793-797
+    dev_open: 826, 831, 836, 841, 845, 849, 853, 857, 861
+    config_get: 901, 908, 911-917
+    config_list: 958, 970, 978-979
+  protocol.c
+    lookup_tree_path: 285
+    lookup_chooser_index: 312
+    update_tree_data: 322-326, 332-337, 340, 344-359, 363
+    incoming_frame: 396, 431
+    consume_packets: 451-453
+    notify_cb: 468
+    write_frame: 481
+    set_tree_integer: 513-516, 523-527, 533-551
+    get_tree_integer: 561-564, 573-579
+    tree_diagnostic_updated: 587-588, 592-593
+    chX_value_update: 619
+    chX_buffer_update: 676, 680, 682, 686, 690, 692, 695, 717-722, 728-732, 739
+    ch1_buffer_lsb2native_update: never called (793-800)
+    ch2_buffer_lsb2native_update: never called (803-810)
+    deserialize_tree: 883, 889, 905, 911, 931
+    wait_for_update: 952, 961
+    install_update_handlers: 980, 988, 996, 1004, 1012, 1020, 1028, 1036
+    startup_run: 1091, 1094, 1100
+    startup_send_tree_crc: 1127-1129
+    startup_tree_updated: 1193-1196, 1200, 1223-1225
+    mooshimeter_dmm_open: 1258, 1266, 1270, 1274, 1289
+    mooshimeter_dmm_set_chooser: 1324-1325, 1330-1331
+    mooshimeter_dmm_set_integer: 1350-1351
+    select_next_largest_in_tree: 1373-1374, 1377-1378, 1384, 1395
+    mooshimeter_dmm_set_larger_number: 1421-1422, 1427-1428
+    mooshimeter_dmm_set_autorange: 1449-1450, 1455-1456
+    mooshimeter_dmm_get_chosen_number: 1480-1481, 1486-1487, 1492
+    mooshimeter_dmm_get_available_number_choices: 1508-1509
+    mooshimeter_dmm_poll: 1532
+    mooshimeter_dmm_heartbeat: 1555, 1558, 1562-1563
+gcov shared sources (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines the session reached
+  src/bt/bt_bluez.c   35.9%  188 of 524
+  total               35.9%  188 of 524
+never reached, by function (line ranges hold no reached line):
+  src/bt/bt_bluez.c
+    sr_bt_mac_text_to_bytes: 172, 174, 193
+    sr_bt_adapter_get_address: never called (205-221)
+    sr_bt_desc_new: 264
+    sr_bt_desc_free: 275
+    sr_bt_config_cb_scan: never called (281-290)
+    sr_bt_config_cb_data: 297
+    sr_bt_config_addr_local: never called (305-326)
+    sr_bt_config_addr_remote: 335, 338-339, 348
+    sr_bt_config_rfcomm: never called (353-360)
+    sr_bt_config_notify: 370
+    sr_bt_desc_open: never called (381-413)
+    sr_bt_desc_close: 419
+    sr_bt_scan_prep: never called (434-489)
+    sr_bt_scan_post: never called (492-516)
+    sr_bt_scan_proc: never called (519-540)
+    sr_bt_scan_le: never called (543-611)
+    sr_bt_scan_bt: never called (614-653)
+    sr_bt_connect_ble: 667, 669, 674-675, 683, 691-692, 729-746
+    sr_bt_connect_rfcomm: never called (789-837)
+    sr_bt_check_socket_usable: 855, 857, 864, 869-874
+    sr_bt_start_notify: 886, 890, 895
+    sr_bt_check_notify: 915, 929-930, 940-943, 963, 970-995, 1000-1012, 1017, 1019, 1024-1027
+    sr_bt_write: 1040, 1042, 1045, 1052
+    sr_bt_write_type: never called (1055-1073)
+    sr_bt_write_type_handle: never called (1076-1079)
+    sr_bt_write_type_handle_bytes: 1093, 1095, 1098, 1106, 1109, 1111
+    sr_bt_read: 1132, 1134, 1137, 1144, 1148

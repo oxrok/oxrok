@@ -1079,9 +1079,16 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   library's, not the driver's (libudev lists `class` for libusb in sigrok-cli).
 - **Pace.** After each read of a paced file the model may give it its next value,
   written in place, so a tool that keeps the file open sees a live meter, and what
-  a capture reads depends on how many reads it made. `Tree::tick` comes every
-  5 ms, for values that follow the clock. `--unplug sysfs-read=N` and
-  `--interrupt sysfs-read=N` fire after the Nth paced read.
+  a capture reads depends on how many reads it made, never on how late the
+  carrier is: the server (root) puts a fanotify permission mark on each paced
+  file, so a read(2) waits until the carrier has taken in all that came before
+  it (the last read's next value, a write's new setting, an armed unplug). Run as
+  a user, the carrier has no such marks, says so on standard error, and paces
+  after the fact. `Tree::tick` comes every 5 ms, for values that follow the
+  clock. `--unplug sysfs-read=N` and `--interrupt sysfs-read=N` fire after the
+  Nth paced read, and the next read sees the unplug. What a tool reads is then
+  fixed by its reads; how many frames it sends still depends on its own pace, as
+  a driver that catches up on missed ticks (`baylibre-acme`) repeats values.
 - **What it can't show.** A value of another length from `Tree::tick` waits for
   the file's next read, since a rewrite is a write and a cut a reader could fall
   between. A refused write is put back after the tool's close: the
@@ -1090,8 +1097,7 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   file in another run. A model puts `/dev/full` behind a file for a write that
   fails at the tool. A read error on an open attribute (EIO, or ENODEV for a
   removed device) shows only as a directory in the file's place (EISDIR) or a file
-  emptied. A carrier held up longer than a sample period lets a read see the old
-  value again.
+  emptied.
 
 ### A program as the model
 
@@ -1138,6 +1144,168 @@ The scenario sets `EMU_STANDIN=NAME` (several, space separated), with
 What it can't show: the real program's timing beyond what its source says, how
 wine treats the pipes, and a stand-in killed by a signal says nothing (no `exit`
 line), so a kill shows only as a missing line.
+
+### A model behind a kernel parallel port
+
+`hung-chang-dso-2100` drives a parallel port through libieee1284, which on
+Linux uses `ppdev` (`/dev/parportN`, `/proc/sys/dev/parport`). Its model is a
+USB device all the same: a Belkin F5U002 cable with a USS720 chip (`050d:0002`,
+three alternate settings of one interface), which the kernel's `uss720` makes a
+parallel port. Both tools then go through the kernel unchanged, and each
+`ppdev` ioctl that touches the lines is a USS720 register request on the wire
+(`c0 03` to read the register block, `40 04` to write one register), so the
+transactions compare as for any USB model. The scope sits behind the
+emulated port: the model decodes the control lines it is set to.
+
+A scenario sets `EMU_PARPORT=1`. At each attach the harness loads `ppdev`
+and `uss720`, binds `uss720` to the device in place of whatever took its
+printer interface (`usblp`), waits for `/dev/parportN` under the device in
+sysfs, makes it readable and writable by all, and exports its name as
+`EMU_PARPORT_NAME` (`conn=$EMU_PARPORT_NAME`); outputs say `parportN`.
+The scenario sets `EMU_KEEP_BOUND=uss720`, as neither tool detaches it. The port's
+number depends on what the kernel had before, so cases always use the variable.
+
+`uss720` ends a claim with a register read it does not wait for, and its
+late answer overwrites the driver's copy of the control register: a
+`PPDATADIR` right after `PPCLAIM` is then lost from the next `PPWCONTROL`
+(the direction bit gone, the latch read instead of the lines). libieee1284
+does not wait, and about one run in eight of the oracle met it. oxrok
+waits 20 ms after each claim (`parport::CLAIM_SETTLE`), and a scenario
+that sets `EMU_ORACLE_PPCLAIM_SETTLE_MS=N` gives sigrok-cli and the
+libsigrok runner a preload that sleeps N ms after each successful
+`PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else;
+if it does not compile, such a session fails outside `--no-oracle`. A
+waited read after the claim would be an exact barrier, but it is a
+request libieee1284 does not send, so the two tools' transactions would
+differ.
+
+The kernel (7.2.14) keeps a detached cable's port number: each session's
+port is the next one, and from `parport8` on libieee1284 finds no `ppdev`
+at all (it opens `/dev/parport0` to `7` only) and sigrok-cli finds no
+device. Such a session fails at its start, saying so, unless it is
+`--no-oracle`; a reboot gives the numbers back. Unloading `parport` does
+not: the old ports stay in sysfs, and the next `parport0` collides with
+one (`kobject_add_internal failed for parport0 with -EEXIST`, `uss720:
+could not register parport`) until the reboot.
+
+Pulling such a cable while a tool holds the port claimed took a tester's
+kernel down on 2026-11-09 (nothing reached its journal, and it rebooted by
+itself), so no case unplugs one; the port's going away is tested in the
+driver's unit tests.
+
+### A model behind a kernel subsystem: GPIB
+
+Some drivers reach a device through a kernel driver that is not a plain class node:
+`hp-3478a` talks to `/dev/gpibN`, the kernel's `gpib` subsystem, which drives an NI
+GPIB-USB-HS through `ni_usb_gpib`. The model is then the USB adapter with the
+instrument behind it (`emu/src/models/hp-3478a.rs`), and the kernel driver stays in
+between, as on a bench. Two generic hooks of `tools/diffcli.sh` make that work:
+
+- `EMU_KEEP_BOUND="DRV..."`: kernel drivers that `emu_unbind` leaves bound to the
+  device's vendor interfaces, where it would otherwise unbind them before each
+  `--no-oracle` run.
+- `emu_attached`, a function the scenario may define: it runs after each attach the
+  server reports (`READY`, `REPLUGGED`, `RENUMERATED`), with `EMU_BUSID` and the rest
+  naming the new attach. It does what the device needs as root, in a log section of
+  its own (`emu_cmd "section ..."`), so its traffic is in no case's transactions. When
+  it fails, each case after it fails at once, naming the hook, until an attach whose
+  hook succeeds.
+- `emu_detaching`, likewise: it runs at the session's end, before the detach, to give
+  back what `emu_attached` took.
+- `EMU_SKIP="REASON"`, set when the scenario is sourced (`hp-3478a` sets it when
+  `modinfo ni_usb_gpib` fails): the model is skipped by name, with a `SKIP` line and,
+  on GitHub, a `::warning::` and a line in `$GITHUB_STEP_SUMMARY`, as the vhci-hcd
+  probe does. A `--no-oracle` run whose only models were skipped so does not fail for
+  running no case. A plain run (no `--no-oracle`) says `SKIP` for a model all of whose
+  cases are `--no-oracle-only`, and counts them as skipped, rather than passing with
+  nothing run.
+
+A GPIB board must be brought online, which needs `CAP_SYS_ADMIN`: linux-gpib's
+`gpib_config` does it, and the testers need not have it. `sudo oxrok-emu gpib-config
+--busid BUSID` does the same (`emu/src/gpib_config.rs`): offline, board type `ni_usb_b`,
+address 0, the emulated interface's device path, online, then REN, system control and
+IFC, and the node made world accessible. It prints `GPIB minor=N`. The board is one it
+took before (marked in `/run/oxrok-emu-gpib`, with the node's mode before) or the first
+of `/dev/gpib0` to `/dev/gpib14` with no board type at all, so a machine's own boards
+are never taken; minor 15 stays unconfigured for a case to name. `--release` takes each
+marked board offline and puts its node's mode back; `--minor N --eos BYTE` leaves a
+board in an end of string mode, as a program before might have.
+`tools/emu/hp-3478a.sh` runs it from `emu_attached` (so an unplug case's replug comes
+back online too) and `emu_detaching`, and names the board in `conn=` as
+`gpib/$EMU_GPIB_MINOR/23`.
+
+The oracle has no libgpib, so every case is `--no-oracle-only` and its goldens are
+oxrok's, written with `EMU_WRITE_MISSING=1` and read against the C source and the
+instrument's manual. What the kernel itself does (its status and line reads around
+each transfer, the interrupt monitor) is in every `.tx`, so a case also pins how
+`ni_usb_gpib` drives the adapter: a kernel that changes that changes the goldens.
+
+What the model can't show: time. A read or serial poll the meter doesn't answer gets
+the adapter's timeout error at once, where a real adapter waits out the timeout the
+request names, and the kernel's serial poll of a mute meter then says `ETIMEDOUT`
+where the model's instant answer gives `EIO`. The adapter's timeout is a code that
+`ni_usb_timeout_code` rounds up to the next of its steps (1, 3, 10, 30 ...), so a 1.01 s
+timeout is T3s on a real one. oxrok's transport waits out a timeout the board ended
+early, so its own waits hold on the model too.
+
+### A Bluetooth LE model
+
+libsigrok's `bt/bt_bluez.c` and oxrok's `src/bt` open an L2CAP socket on the ATT
+fixed channel to an address and leave the link to the kernel: no D-Bus, and
+bluetoothd must not run, as it would claim the controller and connect a GATT
+client of its own (`tools/diffcli.sh` refuses a session while it does). So the boundary a BLE device stands behind is the kernel's HCI, and the
+model is the controller as well: `emu/src/shells/ble.rs` answers the kernel's
+`hci_vhci` (`/dev/vhci`) as an LE only 4.0 controller with one peripheral on its
+air, as BlueZ's `emulator/btdev.c` does, and serves that peripheral's GATT table.
+`oxrok-emu serve MODEL --ble` creates the controller, brings it up (the
+`HCIDEVUP` of `hciconfig hciN up`; without it the kernel powers a new controller
+off 2 s after its setup, as no bluetoothd claims it) and prints `BLE hci=hciN
+addr=ADDRESS`, then a `READY` line with no device. Closing `/dev/vhci` removes it.
+Root is needed for that, not for the tools: an L2CAP socket to an LE address is
+any user's.
+
+- A model exports `pub fn build_ble(options) -> Result<Box<dyn Peripheral>>`
+  beside its `build`, which returns a `NoUsb`: its address, its advertising data,
+  its attribute table, and what a write to one of its characteristics does
+  (`Peripheral::written`), with `Port::notify` for what it sends.
+  `Peripheral::tick` comes every 20 ms of wall time while a host is connected: a
+  BLE device streams on its own clock.
+- The scenario sets `EMU_BLE=1`, and the cases name the peripheral by the address
+  the model fixes, so no output needs rewriting. A reset drops the link in silence.
+- The log: `ble_connect`, `att_write HANDLE VALUE -> ok`, `att_notify HANDLE
+  VALUE`, `att_req PDU -> PDU` for discovery and reads, `ble_disconnect host|device
+  REASON`. The HCI traffic is the kernel's and is not logged (`-v` puts it on
+  standard error). `sync` waits up to 8 s for the host to drop the link, which the
+  kernel does 2 s after the last socket closes, so each tool's disconnect lands in
+  its own section; a case costs about 2 s per tool for it.
+- `--unplug ble-notify=N` (after the peripheral's Nth notification since the
+  case's reset) and `ble-model` (`Port::mark`) drop the link as a supervision
+  timeout does and keep the peripheral off the air until a `replug` or a reset;
+  `--interrupt` takes the same points.
+- The controller answers the commands an LE only controller gets from the
+  kernel's init and its LE connection setup (scan, create connection, read remote
+  features, disconnect), acknowledges each ACL packet at once, and reassembles
+  L2CAP frames. A command it does not know is refused, "unknown command", and
+  written to standard error. A connection to an address nobody advertises waits
+  for the kernel's cancel, 40 s later (`L2CAP_CONN_TIMEOUT`).
+
+- Neither the server nor the tools need a user namespace or any descriptor
+  they inherit: the controller is a file the server opens as root, and the
+  tools open an L2CAP socket of their own. A host without `hci_vhci` skips the
+  model (`EMU_SKIP`).
+- A device's own habits stay the model's reading where no oracle can check
+  them: for the Mooshimeter, which messages a reading brings and in what order,
+  its period of DEPTH / RATE, and the buffers' full scale.
+- What a later BLE model must know: a CCCD write turns notifications on by bit 0
+  only, so indications (bit 1, which libsigrok's `ble122` path writes as 0x0003)
+  are not sent; the ATT MTU is 23 with no Exchange MTU of the host's own and no
+  fragmentation; Write Requests sent before the last one's response (libsigrok
+  pipelines them) are answered in turn, not flagged.
+
+What it can't show: radio timing (connection events, a slow link, retransmission:
+each PDU arrives whole at once), pairing and encryption, more than one link, and a
+controller that is not LE only. The kernel's own retry of a connection that fails
+to be established makes such a case cost its 40 s.
 
 ### Writing a device model
 

@@ -1,0 +1,4 @@
+ble_connect
+att_write 0016 0100 -> ok
+att_write 0012 0001 -> ok
+ble_disconnect device 13

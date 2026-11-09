@@ -1,0 +1,22 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+mooshimeter-dmm - Mooshim Engineering Mooshimeter with 3 channels: CH1 CH2 P
+Supported configuration options:
+    continuous: on, off
+    limit_time: 
+    avg_samples:  - supported values:
+      32
+      64 (current)
+      128
+      256
+    samplerate - supported samplerates:
+      125 Hz (current)
+      250 Hz
+      500 Hz
+      1 kHz
+      2 kHz
+      4 kHz
+      8 kHz
+    channel_config: 

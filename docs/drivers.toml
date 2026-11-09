@@ -1260,17 +1260,25 @@ limits = [
 [drivers.hp-3478a]
 name = "HP 3478A"
 libsigrok = "hp-3478a"
-ids = []
+ids = ["hp-3478a"]
 kind = "meter"
-connection = "tcp"
+connection = "gpib"
 vendor = "HP"
 models = ["3478A"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hp-3478a"]
 evidence = []
-reason = "GPIB only; the only instrument with no other port. Needs the GPIB work first, and is not in the oracle build for want of libgpib."
-behaviour = []
-limits = []
+behaviour = [
+  "A multimeter on HP-IB through Linux's gpib subsystem: `conn=gpib/MINOR/PAD`, the board brought online beforehand; nothing is probed without `conn=`.",
+  "`measured_quantity`, `range` and `digits` read the meter's binary status, and a setting goes out only when the status says it changes something.",
+  "A capture polls the meter every 100 ms by serial poll and takes a reading when one is ready, labelled with the range and digits the status gives.",
+  "An overload reads as infinity; a reading or status not in the meter's form fails the capture.",
+]
+limits = [
+  "Linux only, and only with the kernel's gpib modules (6.13 and later); `libgpib/NAME` from gpib.conf is not read.",
+  "A meter with no reading ready fails a capture after 30 s, or warns at 30 s and fails at 10 minutes once it has given one.",
+  "Emulated only: no real 3478A or adapter has been tried.",
+]
 
 [drivers.hp-59306a]
 name = "HP 59306A"
@@ -1294,17 +1302,24 @@ limits = []
 [drivers.hung-chang-dso-2100]
 name = "Hung Chang DSO-2100"
 libsigrok = "hung-chang-dso-2100"
-ids = []
+ids = ["hung-chang-dso-2100"]
 kind = "scope"
 connection = "none"
 vendor = "Hung Chang"
 models = ["DSO-2100"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hung-chang-dso-2100"]
 evidence = []
-reason = "Parallel port; the kernel drives a USB adapter for it, so a model of the adapter is the path."
-behaviour = []
-limits = []
+behaviour = [
+  "Linux only: a parallel port through ppdev, named by `conn=parportN`; a uss720 USB cable works as a built-in port does.",
+  "One channel at a time; a frame is 1000 samples, and buffersize up to 10238 reads further steps, the last ones from both ADCs in turn.",
+  "Polls the trigger every 8 ms; a mailbox that stays silent past twice the buffer's fill time at the rate (at least 600 polls), or a port that goes away, ends the capture with an error.",
+  "A readout with a bad signature is read again, up to 4 times; then the capture fails.",
+]
+limits = [
+  "Verified only against an emulated USS720 cable, not on a scope.",
+  "Pulling a uss720 cable while the port is claimed crashed a test kernel once (7.2.14).",
+]
 
 [drivers.ipdbg-la]
 name = "IPDBG LA"
@@ -1355,17 +1370,24 @@ limits = [
 [drivers.mooshimeter-dmm]
 name = "Mooshimeter DMM"
 libsigrok = "mooshimeter-dmm"
-ids = []
+ids = ["mooshimeter-dmm"]
 kind = "meter"
-connection = "none"
-vendor = "Mooshimeter"
-models = []
-status = ["not-ported"]
-emu = []
+connection = "bluetooth"
+vendor = "Mooshim Engineering"
+models = ["Mooshimeter"]
+status = ["emulated"]
+emu = ["mooshimeter-dmm"]
 evidence = []
-reason = "Bluetooth LE (GATT through BlueZ); the bench ESP32 as a BLE peripheral is the practical path."
-behaviour = []
-limits = []
+behaviour = [
+  "Bluetooth LE on Linux through the kernel's L2CAP socket: no root, the controller up.",
+  "conn= is the meter's address, with dashes on the command line (D0-5F-B8-4D-00-01).",
+  "channel_config picks each channel's input, range and analysis; one channel at a time takes the shared input.",
+  "Buffer analysis sends every sample at the meter's own scale; temperatures are in kelvin on both channels.",
+]
+limits = [
+  "Not run on a real meter; verified against sigrok-cli on an emulated one.",
+  "A lost notification, a dropped link, or a silent meter under a sample limit ends the capture with an error.",
+]
 
 [drivers.rigol-dg]
 name = "Rigol DG"

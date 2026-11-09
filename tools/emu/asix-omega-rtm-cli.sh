@@ -153,6 +153,16 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
     emu_standin bytes=600 then=hang hang-max=20000
     emu_case "a wrapper's program hangs" --oracle-differs "$ORPHAN" --digest --filter "$A" -- -d $D --time 300 -O hex
     unset OMEGARTMCLI
+    # Descriptors the tool was handed beyond the three, as a CI runner hands two:
+    # glib's spawn closes them in the program, and oxrok's must too. EMU_WRAP for
+    # these cases alone.
+    F=$EMU_STANDIN_DIR/with-fds
+    printf '#!/bin/sh\nexec "$@" 3</dev/null 4</dev/null\n' >"$F" && chmod +x "$F"
+    emu_standin
+    EMU_WRAP=$F
+    emu_case "descriptors beyond the three" -- -d $D --samples 4 -O bits
+    emu_case "descriptors beyond the three at a scan" --keep-header -- -d $D --scan
+    EMU_WRAP=""
     # The time limit starts after the first chunk (api.c:375): a program slower to
     # start than the limit still gives its samples.
     emu_standin start=1500 bytes=1800 then=quiet piece=600 gap=50

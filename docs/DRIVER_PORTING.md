@@ -355,6 +355,13 @@ would have cost a user a long afternoon.
 - CI's macOS runner sleeps run long, by about six times: a 15 ms read took
   100. Wait on a deadline as well as a count of tries, and in a unit test
   leave wide margins or don't pin an exact count of requests in a window.
+- A BLE driver's boundary is the kernel's HCI, so the model is a whole
+  controller on `/dev/vhci`, and bluetoothd must not run during the session.
+  sigrok-cli splits `-d` and `--config` at `:`. A tree or protocol handshake
+  should switch state inside the message loop, as later bytes in the same
+  packet depend on it.
+- A driver that starts a program must close what it inherited, as glib's
+  spawn does: a CI runner hands the tool extra descriptors a desktop doesn't.
 - Bytes after an answer in the same read are no answer to anything asked: take
   the first line and let the line go quiet before the next send.
 - Commit messages can hold real session logs: libsigrok's `scpi-dmm` history has
