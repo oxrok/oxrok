@@ -1145,6 +1145,54 @@ What it can't show: the real program's timing beyond what its source says, how
 wine treats the pipes, and a stand-in killed by a signal says nothing (no `exit`
 line), so a kill shows only as a missing line.
 
+### A model behind a kernel parallel port
+
+`hung-chang-dso-2100` drives a parallel port through libieee1284, which on
+Linux uses `ppdev` (`/dev/parportN`, `/proc/sys/dev/parport`). Its model is a
+USB device all the same: a Belkin F5U002 cable with a USS720 chip (`050d:0002`,
+three alternate settings of one interface), which the kernel's `uss720` makes a
+parallel port. Both tools then go through the kernel unchanged, and each
+`ppdev` ioctl that touches the lines is a USS720 register request on the wire
+(`c0 03` to read the register block, `40 04` to write one register), so the
+transactions compare as for any USB model. The scope sits behind the
+emulated port: the model decodes the control lines it is set to.
+
+A scenario sets `EMU_PARPORT=1`. At each attach the harness loads `ppdev`
+and `uss720`, binds `uss720` to the device in place of whatever took its
+printer interface (`usblp`), waits for `/dev/parportN` under the device in
+sysfs, makes it readable and writable by all, and exports its name as
+`EMU_PARPORT_NAME` (`conn=$EMU_PARPORT_NAME`); outputs say `parportN`.
+The scenario sets `EMU_KEEP_BOUND=uss720`, as neither tool detaches it. The port's
+number depends on what the kernel had before, so cases always use the variable.
+
+`uss720` ends a claim with a register read it does not wait for, and its
+late answer overwrites the driver's copy of the control register: a
+`PPDATADIR` right after `PPCLAIM` is then lost from the next `PPWCONTROL`
+(the direction bit gone, the latch read instead of the lines). libieee1284
+does not wait, and about one run in eight of the oracle met it. oxrok
+waits 20 ms after each claim (`parport::CLAIM_SETTLE`), and a scenario
+that sets `EMU_ORACLE_PPCLAIM_SETTLE_MS=N` gives sigrok-cli and the
+libsigrok runner a preload that sleeps N ms after each successful
+`PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else;
+if it does not compile, such a session fails outside `--no-oracle`. A
+waited read after the claim would be an exact barrier, but it is a
+request libieee1284 does not send, so the two tools' transactions would
+differ.
+
+The kernel (7.2.14) keeps a detached cable's port number: each session's
+port is the next one, and from `parport8` on libieee1284 finds no `ppdev`
+at all (it opens `/dev/parport0` to `7` only) and sigrok-cli finds no
+device. Such a session fails at its start, saying so, unless it is
+`--no-oracle`; a reboot gives the numbers back. Unloading `parport` does
+not: the old ports stay in sysfs, and the next `parport0` collides with
+one (`kobject_add_internal failed for parport0 with -EEXIST`, `uss720:
+could not register parport`) until the reboot.
+
+Pulling such a cable while a tool holds the port claimed took a tester's
+kernel down on 2026-11-09 (nothing reached its journal, and it rebooted by
+itself), so no case unplugs one; the port's going away is tested in the
+driver's unit tests.
+
 ### A model behind a kernel subsystem: GPIB
 
 Some drivers reach a device through a kernel driver that is not a plain class node:

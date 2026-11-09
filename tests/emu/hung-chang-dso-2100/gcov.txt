@@ -1,0 +1,18 @@
+gcov hung-chang-dso-2100 (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        75.4%  236 of 313
+  protocol.c   96.7%  176 of 182
+  total        83.2%  412 of 495
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan_port: 114-115, 119-121, 125-126
+    scan: 198
+    dev_open: 246, 249, 252, 255, 259, 263-269
+    config_get: 307, 312, 320, 322, 325-338
+    config_set: 365, 370, 375, 380, 382, 384, 389, 391, 396, 402-403
+    config_channel_set: 416, 425
+    config_commit: 437-448, 455
+    config_list: 473, 475-486, 509-514
+  protocol.c
+    hung_chang_dso_2100_check_id: 191
+    hung_chang_dso_2100_move_to: 276-277, 293
+    hung_chang_dso_2100_poll: 426, 429
