@@ -205,7 +205,42 @@ fn silence_warns_fails_and_says_when_back() {
     let mut real = Silence::new(t0);
     assert_eq!(real.empty(s(4999)), Verdict::Wait);
     assert!(matches!(real.empty(s(5000)), Verdict::Warn(_)));
-    assert!(matches!(real.empty(s(600_000)), Verdict::Fail(_)));
+    assert_eq!(real.empty(s(29_999)), Verdict::Wait);
+    assert!(matches!(real.empty(s(30_000)), Verdict::Fail(_)));
+}
+
+/// The bounds the docs and the emulator cases count on.
+#[test]
+fn the_bounds_are_thirty_seconds() {
+    assert_eq!(START_WAIT, Duration::from_secs(30));
+    assert_eq!(VERSION_WAIT, Duration::from_secs(30));
+    assert_eq!(protocol::SILENCE_WARN, Duration::from_secs(5));
+    assert_eq!(protocol::SILENCE_LIMIT, Duration::from_secs(30));
+    assert_eq!(child::CLOSE_GRACE, Duration::from_secs(2));
+}
+
+#[test]
+fn a_run_fills_as_one_sample_at_a_time_would() {
+    let mut q = Queue::default();
+    let mut got = Vec::new();
+    for (sample, n) in [([1u8, 2u8], 0u64), ([3, 4], 1), ([5, 6], 2), ([7, 8], 65534), ([9, 10], 3)]
+    {
+        assert!(q.push(sample, n, &mut |v| {
+            got.extend(v);
+            true
+        }));
+    }
+    q.flush(&mut |v| {
+        got.extend(v);
+        true
+    });
+    let mut want = Vec::new();
+    for (sample, n) in [([3u8, 4u8], 1usize), ([5, 6], 2), ([7, 8], 65534), ([9, 10], 3)] {
+        for _ in 0..n {
+            want.extend_from_slice(&sample);
+        }
+    }
+    assert_eq!(got, want);
 }
 
 /// A program's stream from a script, in a test.
@@ -233,6 +268,10 @@ impl Fake {
 impl Stream for Fake {
     fn read(&mut self, timeout: Duration) -> Got {
         if let Some(g) = self.script.pop_front() {
+            // A scripted nothing takes the read's whole wait, as a pipe's would.
+            if g == Got::Nothing {
+                std::thread::sleep(timeout);
+            }
             return g;
         }
         if let Some(d) = &self.endless {
@@ -514,8 +553,9 @@ fn a_start_fails_on_an_end_before_the_first_chunk() {
     let (mut fake, closed) = Fake::new(vec![Got::Data(vec![1, 2, 3]), Got::End(None)]);
     fake.exit = Some(Exit { success: false, text: "exit status: 1".into() });
     let (mut d, args) = device(None, vec![fake]);
-    let (tx, _rx) = mpsc::sync_channel(64);
-    let e = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
+    let sent = start_and_collect(&mut d).unwrap();
+    assert!(!sent.header, "a header before the first chunk");
+    let e = sent.failed.expect("failed");
     assert!(e.contains("ended before its first chunk, at 3 of 6 bytes (exit status: 1)"), "{e}");
     assert!(closed.load(Ordering::SeqCst));
     assert_eq!(*args.lock().unwrap(), [["-bin"]]);
@@ -526,10 +566,41 @@ fn a_start_fails_on_a_silent_program_at_the_bound() {
     let (fake, closed) = Fake::new(Vec::new());
     let (mut d, _) = device(None, vec![fake]);
     d.set_start_wait(Duration::from_millis(30));
-    let (tx, _rx) = mpsc::sync_channel(64);
-    let e = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
-    assert!(e.contains("No first chunk"), "{e}");
+    let sent = start_and_collect(&mut d).unwrap();
+    assert!(sent.failed.expect("failed").contains("No first chunk"));
     assert!(closed.load(Ordering::SeqCst));
+}
+
+/// A stop while the program is still on its way to its first chunk: C's start
+/// blocks there, here the stop gets through at once.
+#[test]
+fn a_stop_reaches_the_wait_for_the_first_chunk() {
+    let (fake, closed) = Fake::new(Vec::new());
+    let (mut d, _) = device(None, vec![fake]);
+    let (tx, rx) = mpsc::sync_channel(64);
+    d.start(PacketSink::new(tx, 0)).unwrap();
+    std::thread::sleep(Duration::from_millis(30));
+    let began = Instant::now();
+    d.stop().unwrap();
+    assert!(began.elapsed() < Duration::from_secs(5));
+    assert!(closed.load(Ordering::SeqCst));
+    let sent = collect(&rx);
+    assert!(!sent.header && sent.failed.is_none(), "{sent:?}");
+}
+
+/// The time limit starts once the first chunk is in, as C's
+/// `sr_sw_limits_acquisition_start` after `omega_rtm_cli_open`: a program slower
+/// to start than the limit still gives its samples.
+#[test]
+fn the_time_limit_starts_after_the_first_chunk() {
+    let mut script: Vec<Got> = std::iter::repeat_with(|| Got::Nothing).take(15).collect();
+    script.push(Got::Data(FIRST.to_vec()));
+    script.push(data(&[chunk(1, 1, 3)]));
+    let (fake, _) = Fake::new(script);
+    let (mut d, _) = device(None, vec![fake]);
+    d.set(&Key::LimitMsec, &Value::U64(100), None).unwrap();
+    let sent = start_and_collect(&mut d).unwrap();
+    assert_eq!((sent.samples, sent.failed), (vec![1, 3], None));
 }
 
 #[test]
@@ -670,6 +741,27 @@ mod process {
         assert!(cfg!(not(target_os = "linux")) || gone(pid));
     }
 
+    /// A wrapper that doesn't `exec` (`omegartmcli` a script that runs wine): the
+    /// kill takes the program it runs too.
+    #[test]
+    fn a_kill_takes_what_a_wrapper_runs() {
+        let mut c = sh("sleep 30 </dev/null >/dev/null & echo $!; wait; true");
+        let mut line = Vec::new();
+        while !line.ends_with(b"\n") {
+            match c.read(Duration::from_secs(5)) {
+                Got::Data(d) => line.extend(d),
+                other => panic!("{other:?}"),
+            }
+        }
+        let inner: u32 = String::from_utf8(line).unwrap().trim().parse().unwrap();
+        assert_eq!(Box::new(c).close(), Ended::Killed);
+        let began = Instant::now();
+        while !gone(inner) {
+            assert!(began.elapsed() < Duration::from_secs(5), "the wrapped program lives on");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn a_dropped_program_is_ended_too() {
         let c = sh("exec sleep 30");
@@ -708,7 +800,11 @@ mod process {
     /// `run_version` of a script: `sh -c SCRIPT -version`, the script's `$0` is
     /// `-version`.
     fn run_version_of(sh: &OsString, script: &str) -> Vec<u8> {
-        let dir = std::env::temp_dir().join(format!("oxrok-asix-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "oxrok-asix-{}-{}",
+            std::process::id(),
+            script.len()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join(format!("p{}", script.len()));
         std::fs::write(&exe, format!("#!{}\n{script}\n", sh.to_string_lossy())).unwrap();
@@ -730,6 +826,19 @@ mod process {
             }
         }
         run_version(exe, bound)
+    }
+
+    /// `-version` stays in oxrok's process group: an oxrok a terminal's Ctrl-C ends
+    /// during a scan, before it has a handler, takes the program along.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn version_runs_in_our_group() {
+        let sh = OsString::from("/bin/sh");
+        let out =
+            run_version_of(&sh, "read -r a b c d e rest < /proc/$$/stat; echo \"Version $e\"");
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        let ours = stat[stat.rfind(')').unwrap() + 2..].split(' ').nth(2).unwrap().to_owned();
+        assert_eq!(protocol::parse_version(&out), Some(ours));
     }
 
     #[test]

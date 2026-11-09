@@ -19,22 +19,28 @@
 //!
 //! What differs from C:
 //!
-//! - **The program is ended for sure.** C closes its pipes and leaves it: never
-//!   waited for, a zombie until sigrok-cli exits, and never killed, so one that
+//! - **The program is ended for sure.** C closes its pipes and leaves it: glib's
+//!   spawn hands it to init, which reaps it, but nothing kills it, so one that
 //!   doesn't end (the program after a USB error waits for data that never comes,
 //!   and looks at neither pipe) outlives sigrok-cli. Here a close waits
-//!   [`child::CLOSE_GRACE`] for it, kills it, and always reaps it. It runs in a
-//!   process group of its own, so a terminal's Ctrl-C ends oxrok's capture, which
-//!   then ends the program, as a client's stop does.
+//!   [`child::CLOSE_GRACE`] for it, kills its process group (a wrapper script and
+//!   the program under it), and always reaps it. It runs in that group of its own,
+//!   so a terminal's Ctrl-C ends oxrok's capture, which then ends the program, as
+//!   a client's stop does. `-version` stays in oxrok's group.
+//! - **The first chunk is awaited on the capture's thread,** so a stop reaches the
+//!   wait; C waits inside its start, where nothing can stop it. The time limit
+//!   starts once it is in, as in C (`api.c:375`). A program that ends or says
+//!   nothing before it fails the capture rather than the start.
 //! - **A stream that ends ends the capture.** C's source asks for `G_IO_IN` and
 //!   `G_IO_ERR` (`api.c:369`), a closed pipe gives `G_IO_HUP`, which
-//!   `omega_rtm_cli_receive_data` ignores, so sigrok-cli spins at full speed until its time limit, and with a
-//!   sample limit for ever. Here the end of the stream ends the capture: with a
+//!   `omega_rtm_cli_receive_data` ignores, so sigrok-cli spins at full speed until
+//!   its time limit, and with a sample limit for ever. Here the end of the stream ends the capture: with a
 //!   warning when the program exited with status 0 (its own end), and failed for
 //!   any other status or a signal.
 //! - **Bounds where C waits for ever:** the `-version` run ([`VERSION_WAIT`]), the
 //!   first chunk ([`START_WAIT`]), and a silent program ([`protocol::SILENCE_WARN`]
-//!   for a warning, [`protocol::SILENCE_LIMIT`] for a failure).
+//!   for a warning, [`protocol::SILENCE_LIMIT`] for a failure: its bursts come every
+//!   100 ms, and one silent that long is wedged after a USB error).
 //! - **The first chunk can come in pieces.** C's `omega_rtm_cli_open` makes one
 //!   `read()` of 6 bytes and fails the start on fewer (`protocol.c:97-106`). The
 //!   program writes whole chunks, so this matters for a pipe that cuts them.
@@ -232,72 +238,103 @@ impl AsixOmegaRtmCliDevice {
         }
     }
 
-    /// `omega_rtm_cli_open`: the program started and its first chunk read. What
-    /// came after the chunk in the same reads comes back too.
-    fn open_stream(&self) -> Result<Opened> {
+    /// The program started, as `omega_rtm_cli_open` starts it; its first chunk is
+    /// [`first_chunk`]'s, on the worker.
+    fn spawn(&self) -> Result<Box<dyn Stream>> {
         let mut args = vec!["-bin"];
         if let Some(s) = &self.serial {
             args.extend(["-serial", s.as_str()]);
         }
         log::debug!("Starting vendor application");
-        let mut stream = match (self.opener)(&args) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Cannot execute RTM CLI process: {e}");
-                log::error!("Vendor application start failed.");
-                return Err(Error::Io(e));
-            }
-        };
-        let began = Instant::now();
-        let mut got = Vec::new();
-        while got.len() < CHUNK {
-            if began.elapsed() >= self.start_wait {
-                let text = format!(
-                    "No first chunk from the vendor application within {} s.",
-                    self.start_wait.as_secs()
-                );
-                log::error!("{text}");
-                close_logged(stream);
-                return Err(Error::device(text));
-            }
-            match stream.read(POLL) {
-                Got::Data(d) => {
-                    log::debug!("Read from vendor application, ret {}", d.len());
-                    got.extend_from_slice(&d);
-                }
-                Got::Nothing => {}
-                Got::End(why) => {
-                    let status = stream.exited(EXIT_WAIT);
-                    let text = format!(
-                        "The vendor application ended before its first chunk, at {} of {CHUNK} \
-                         bytes{}.",
-                        got.len(),
-                        how_it_ended(why.as_deref(), status.as_ref())
-                    );
-                    log::error!("{text}");
-                    close_logged(stream);
-                    return Err(Error::device(text));
-                }
-            }
-        }
-        let mut first = [0u8; CHUNK];
-        first.copy_from_slice(&got[..CHUNK]);
-        log::debug!(
-            "stamp {}, samples {:x} {:x}",
-            u16::from_le_bytes([first[0], first[1]]),
-            u16::from_le_bytes([first[2], first[3]]),
-            u16::from_le_bytes([first[4], first[5]])
-        );
-        let rest = got.split_off(CHUNK);
-        Ok(Opened { stream, first, rest })
+        (self.opener)(&args).map_err(|e| {
+            log::error!("Cannot execute RTM CLI process: {e}");
+            log::error!("Vendor application start failed.");
+            Error::Io(e)
+        })
     }
 }
 
-/// A started program: its stream, its first chunk, and what came after that.
-struct Opened {
-    stream: Box<dyn Stream>,
-    first: [u8; CHUNK],
-    rest: Vec<u8>,
+/// What the wait for the first chunk came to.
+#[derive(Debug)]
+pub enum First {
+    /// The chunk, and what came after it in the same reads.
+    Chunk([u8; CHUNK], Vec<u8>),
+    /// A stop came first.
+    Stopped,
+    /// The program ended or said nothing for `wait`.
+    Failed(Error),
+}
+
+/// The rest of `omega_rtm_cli_open`: its first chunk, within `wait`, where C's
+/// one `read()` has no bound and takes no fewer than 6 bytes. A stop ends it.
+pub fn first_chunk(stream: &mut dyn Stream, wait: Duration, stop: &AtomicBool) -> First {
+    let began = Instant::now();
+    let mut got = Vec::new();
+    while got.len() < CHUNK {
+        if stop.load(Ordering::SeqCst) {
+            return First::Stopped;
+        }
+        if began.elapsed() >= wait {
+            let text =
+                format!("No first chunk from the vendor application within {} s.", wait.as_secs());
+            log::error!("{text}");
+            return First::Failed(Error::device(text));
+        }
+        match stream.read(POLL) {
+            Got::Data(d) => {
+                log::debug!("Read from vendor application, ret {}", d.len());
+                got.extend_from_slice(&d);
+            }
+            Got::Nothing => {}
+            Got::End(why) => {
+                let status = stream.exited(EXIT_WAIT);
+                let text = format!(
+                    "The vendor application ended before its first chunk, at {} of {CHUNK} \
+                     bytes{}.",
+                    got.len(),
+                    how_it_ended(why.as_deref(), status.as_ref())
+                );
+                log::error!("{text}");
+                return First::Failed(Error::device(text));
+            }
+        }
+    }
+    let mut first = [0u8; CHUNK];
+    first.copy_from_slice(&got[..CHUNK]);
+    log::debug!(
+        "stamp {}, samples {:x} {:x}",
+        u16::from_le_bytes([first[0], first[1]]),
+        u16::from_le_bytes([first[2], first[3]]),
+        u16::from_le_bytes([first[4], first[5]])
+    );
+    First::Chunk(first, got.split_off(CHUNK))
+}
+
+/// The worker: the first chunk, then the capture, whose time limit starts after
+/// it, as `sr_sw_limits_acquisition_start` comes after `omega_rtm_cli_open` in C
+/// (`api.c:375`).
+fn work(
+    mut stream: Box<dyn Stream>,
+    plan: (u64, Option<Duration>, Duration),
+    sink: &PacketSink,
+    stop: &AtomicBool,
+) {
+    let (limit_samples, limit, wait) = plan;
+    let outcome = match first_chunk(stream.as_mut(), wait, stop) {
+        First::Chunk(first, rest) => {
+            let capture = Capture {
+                decoder: Decoder::new(first, limit_samples),
+                limit,
+                began: Instant::now(),
+                silence: Silence::new(Instant::now()),
+            };
+            return capture.run(stream, &rest, sink, stop);
+        }
+        First::Stopped => Ok(()),
+        First::Failed(e) => Err(e),
+    };
+    close_logged(stream);
+    sink.end_while(outcome, || !stop.load(Ordering::SeqCst));
 }
 
 /// `: exit status: 1`, `: signal: 9 (SIGKILL)`, a read's error, or nothing.
@@ -417,18 +454,16 @@ impl Device for AsixOmegaRtmCliDevice {
             }
             self.end_worker();
         }
-        let Opened { stream, first, rest } = self.open_stream()?;
-        let capture = Capture {
-            decoder: Decoder::new(first, self.limit_samples),
-            limit: (self.limit_msec > 0).then(|| Duration::from_millis(self.limit_msec)),
-            began: Instant::now(),
-            silence: Silence::new(Instant::now()),
-        };
+        // C waits for the first chunk inside its start (`omega_rtm_cli_open`), with
+        // no bound; here the worker waits for it, so that a stop reaches the wait.
+        let stream = self.spawn()?;
+        let limit = (self.limit_msec > 0).then(|| Duration::from_millis(self.limit_msec));
+        let plan = (self.limit_samples, limit, self.start_wait);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         let handle = std::thread::Builder::new()
             .name("asix-omega-rtm-cli acquisition".into())
-            .spawn(move || capture.run(stream, &rest, &sink, &stop2))
+            .spawn(move || work(stream, plan, &sink, &stop2))
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
         Ok(())

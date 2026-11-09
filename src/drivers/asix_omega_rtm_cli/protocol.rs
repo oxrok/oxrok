@@ -34,7 +34,10 @@ pub const FEED_QUEUE_DEPTH: usize = 256 * 1024;
 /// chunk each 32768 ticks.
 pub const SILENCE_WARN: Duration = Duration::from_secs(5);
 /// How long the program may say nothing, after a warning, before the capture fails.
-pub const SILENCE_LIMIT: Duration = Duration::from_secs(600);
+/// Its pace leaves no long silence (bursts each 100 ms, `omegartmcliU.pas`'s
+/// `Decode2Flush`, and an idle input is still a chunk each 328 us); the one way
+/// it goes quiet is wedged, after a USB error, where it never speaks again.
+pub const SILENCE_LIMIT: Duration = Duration::from_secs(30);
 
 /// What `conn=` asks for.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -100,10 +103,7 @@ impl Queue {
         while left > 0 {
             let room = FEED_QUEUE_DEPTH - self.buf.len() / 2;
             let n = left.min(room as u64) as usize;
-            self.buf.reserve(n * 2);
-            for _ in 0..n {
-                self.buf.extend_from_slice(&sample);
-            }
+            fill(&mut self.buf, sample, n);
             left -= n as u64;
             if self.buf.len() / 2 == FEED_QUEUE_DEPTH && !self.flush(send) {
                 return false;
@@ -118,6 +118,24 @@ impl Queue {
             return true;
         }
         send(std::mem::take(&mut self.buf))
+    }
+}
+
+/// Appends `n` copies of `sample` to `buf`, by doubling copies: a run of 65534
+/// repeats is a few `memcpy`s, not a loop over samples.
+fn fill(buf: &mut Vec<u8>, sample: [u8; 2], n: usize) {
+    if n == 0 {
+        return;
+    }
+    let start = buf.len();
+    let total = n * 2;
+    buf.resize(start + total, 0);
+    buf[start..start + 2].copy_from_slice(&sample);
+    let mut done = 2;
+    while done < total {
+        let k = done.min(total - done);
+        buf.copy_within(start..start + k, start + done);
+        done += k;
     }
 }
 

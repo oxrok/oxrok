@@ -10,11 +10,13 @@
 //! for sure.
 //!
 //! C's `omega_rtm_cli_close` closes the child's stdin and stdout and calls
-//! `g_spawn_close_pid`, which does nothing on Unix: the child is never waited for
-//! (a zombie until sigrok-cli exits) and never killed (a program that doesn't end
-//! by itself outlives sigrok-cli). Here a close shuts stdin, lets the reader drop
-//! stdout at its next read, gives the program [`CLOSE_GRACE`] to end, then kills
-//! it, and always waits for it. A dropped [`Child`] does the same.
+//! `g_spawn_close_pid`, which does nothing on Unix. glib spawned it through an
+//! intermediate child (no `G_SPAWN_DO_NOT_REAP_CHILD`), so init reaps it, but
+//! nothing kills it: a program that doesn't end by itself outlives sigrok-cli.
+//! Here a close shuts stdin, lets the reader drop stdout at its next read, gives
+//! the program [`CLOSE_GRACE`] to end, then kills its whole process group (a
+//! wrapper script and the program it runs), and always waits for it. A dropped
+//! [`Child`] does the same.
 
 use std::ffi::OsString;
 use std::io::{self, Read};
@@ -45,18 +47,35 @@ pub fn program() -> OsString {
     }
 }
 
-/// A `Command` for the program: its own process group on Unix, so a terminal's
-/// Ctrl-C reaches oxrok, which ends the capture and then the program, and not the
-/// program first.
-fn command(exe: &OsString, args: &[&str]) -> Command {
+/// A `Command` for the program. With `own_group`, in a process group of its own
+/// on Unix, so a terminal's Ctrl-C reaches oxrok, which ends the capture and then
+/// the program, and a kill reaches whatever a wrapper started. `-version` stays
+/// in oxrok's group, so that an oxrok ended by a signal before it has a handler
+/// (during a scan) takes it along.
+fn command(exe: &OsString, args: &[&str], own_group: bool) -> Command {
     let mut cmd = Command::new(exe);
     cmd.args(args);
     #[cfg(unix)]
-    {
+    if own_group {
         use std::os::unix::process::CommandExt as _;
         cmd.process_group(0);
     }
+    #[cfg(not(unix))]
+    let _ = own_group;
     cmd
+}
+
+/// Kills `child` and everything in its process group (it leads one, see
+/// [`command`]): a wrapper that doesn't `exec` leaves the program its child.
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = rustix::process::Pid::from_child(child);
+        if rustix::process::kill_process_group(pid, rustix::process::Signal::KILL).is_ok() {
+            return;
+        }
+    }
+    let _ = child.kill();
 }
 
 /// How a `-version` run failed.
@@ -78,7 +97,7 @@ pub enum VersionError {
 ///
 /// No program, one that can't run, or one still running after `bound`.
 pub fn run_version(exe: &OsString, bound: Duration) -> Result<Vec<u8>, VersionError> {
-    let mut child = command(exe, &["-version"])
+    let mut child = command(exe, &["-version"], false)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -195,7 +214,7 @@ impl Child {
     ///
     /// The program can't be run.
     pub fn spawn(exe: &OsString, args: &[&str]) -> io::Result<Child> {
-        let mut child = command(exe, args)
+        let mut child = command(exe, args, true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -207,7 +226,7 @@ impl Child {
             .name("omegartmcli reader".into())
             .spawn(move || read_all(stdout, &tx));
         if let Err(e) = spawned {
-            let _ = child.kill();
+            kill_group(&mut child);
             let _ = child.wait();
             return Err(e);
         }
@@ -234,7 +253,7 @@ impl Child {
             "The vendor application was still running {} s after its pipes closed: killed.",
             CLOSE_GRACE.as_secs()
         );
-        let _ = self.process.kill();
+        kill_group(&mut self.process);
         let _ = self.process.wait();
         Ended::Killed
     }
