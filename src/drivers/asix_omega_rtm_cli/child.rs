@@ -53,6 +53,9 @@ pub fn program() -> OsString {
 /// in oxrok's group, so that an oxrok ended by a signal before it has a handler
 /// (during a scan) takes it along.
 fn command(exe: &OsString, args: &[&str], own_group: bool) -> Command {
+    // glib's spawn closes every descriptor above 2 in the child; here they are
+    // marked close-on-exec, so the program gets the same three.
+    crate::spawn::close_inherited_fds();
     let mut cmd = Command::new(exe);
     cmd.args(args);
     #[cfg(unix)]
