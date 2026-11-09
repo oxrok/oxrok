@@ -60,9 +60,12 @@ limit (`samples` `1k`, `time` `10ms`) and optional `triggers` (`D0=r`) -> read \
 the summary it returns, then `measure` (frequency, duty, pulse widths), `find` \
 (the next edge or pulse) and `capture_logic` (transitions, paged) on the \
 `capture_id`; `capture_analog` reduces an analog channel to buckets. Prefer \
-`measure`, `find` and transitions to `form: samples`. `export_capture` writes a \
-`.sr` for PulseView; `load_capture` reads one back. The `demo` driver needs no \
-hardware and makes patterns (`channel_group=Logic:pattern=walking-one`).
+`measure`, `find` and transitions to `form: samples`. For a long or an open-ended \
+run, `capture_start` (no limit means until `capture_stop`) returns at once; \
+`capture_status {wait}` follows it, the data tools and `add_analyzer` work on it \
+while it runs, and `capture_stop` ends it. `export_capture` writes a `.sr` for \
+PulseView; `load_capture` reads one back. The `demo` driver needs no hardware \
+and makes patterns (`channel_group=Logic:pattern=walking-one`).
 
 `cli` runs the oxrok command line with sigrok-cli arguments, one per element: \
 `{\"args\": [\"-d\", \"demo\", \"--samples\", \"100\", \"-O\", \"bits\"]}`; use \

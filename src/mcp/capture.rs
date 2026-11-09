@@ -44,6 +44,13 @@ pub struct Capture {
     pub frames: u64,
     /// Why the acquisition failed, when it did; what came before is good.
     pub failed: Option<String>,
+    /// Whether the acquisition is still going: the data grows.
+    pub running: bool,
+    /// Why the acquisition ended before its limit, when it did:
+    /// `capture_stop`, `timeout`, `cancelled`, `memory budget`, ...
+    pub stopped: Option<String>,
+    /// The captures evicted from the store to make room for this one.
+    pub evicted: Vec<u64>,
     /// When it was made.
     pub created: SystemTime,
 }
@@ -63,6 +70,9 @@ impl Capture {
             trigger_at: None,
             frames: 0,
             failed: None,
+            running: false,
+            stopped: None,
+            evicted: Vec::new(),
             created: SystemTime::now(),
         }
     }
@@ -233,6 +243,9 @@ impl Capture {
             "trigger": self.trigger_at.map(|s| json!({"sample": s, "t": self.time(s)})),
             "frames": self.frames,
             "failed": self.failed,
+            "running": self.running,
+            "stopped": self.stopped,
+            "evicted": self.evicted,
             "bytes": self.bytes(),
             "logic": logic,
             "analog": analog,
@@ -250,6 +263,9 @@ impl Capture {
             "analog_samples": self.analog_channels().map(|c| self.analog_samples(c.index)).max(),
             "bytes": self.bytes(),
             "failed": self.failed,
+            "running": self.running,
+            "stopped": self.stopped,
+            "evicted": self.evicted,
         })
     }
 }
@@ -520,7 +536,8 @@ pub fn find(capture: &Capture, index: usize, from: u64, what: Find) -> Option<(u
 }
 
 /// The captures a host keeps, under a byte budget: when a new one does
-/// not fit, the oldest go.
+/// not fit, the oldest go. A running capture is never evicted; it is
+/// stopped instead when it grows past the budget alone.
 pub struct CaptureStore {
     captures: VecDeque<Capture>,
     next_id: u64,
@@ -538,6 +555,11 @@ impl CaptureStore {
         self.captures.iter().map(Capture::bytes).sum()
     }
 
+    /// The budget.
+    pub fn budget(&self) -> usize {
+        self.budget
+    }
+
     /// Adds a capture, giving it its id; returns the id and the ids
     /// evicted to make room. A capture larger than the whole budget is
     /// kept alone.
@@ -545,19 +567,41 @@ impl CaptureStore {
         let id = self.next_id;
         self.next_id += 1;
         capture.id = id;
+        let evicted = self.make_room(capture.bytes(), id);
+        capture.evicted.clone_from(&evicted);
+        self.captures.push_back(capture);
+        (id, evicted)
+    }
+
+    /// Evicts the oldest finished captures, other than `keep`, until
+    /// `extra` more bytes fit; returns the ids evicted. What is left may
+    /// still not fit when only running captures remain.
+    pub fn make_room(&mut self, extra: usize, keep: u64) -> Vec<u64> {
         let mut evicted = Vec::new();
-        while !self.captures.is_empty() && self.used() + capture.bytes() > self.budget {
-            if let Some(old) = self.captures.pop_front() {
+        while self.used() + extra > self.budget {
+            let Some(pos) = self.captures.iter().position(|c| !c.running && c.id != keep) else {
+                break;
+            };
+            if let Some(old) = self.captures.remove(pos) {
                 evicted.push(old.id);
             }
         }
-        self.captures.push_back(capture);
-        (id, evicted)
+        evicted
+    }
+
+    /// Whether the store holds more than its budget.
+    pub fn over_budget(&self) -> bool {
+        self.used() > self.budget
     }
 
     /// The capture with `id`.
     pub fn get(&self, id: u64) -> Option<&Capture> {
         self.captures.iter().find(|c| c.id == id)
+    }
+
+    /// The capture with `id`, to feed.
+    pub fn get_mut(&mut self, id: u64) -> Option<&mut Capture> {
+        self.captures.iter_mut().find(|c| c.id == id)
     }
 
     /// Removes the capture with `id`.

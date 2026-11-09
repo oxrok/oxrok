@@ -25,7 +25,7 @@ pub mod info;
 pub mod radix;
 pub mod stream;
 
-pub use analyzer::{Analyzer, InstanceInfo, Status as AnalyzerStatus};
+pub use analyzer::{Analyzer, InstanceInfo, Poll, Source, Status as AnalyzerStatus};
 pub use frames::{Frame, FrameStore, MetaItem, RawBinary};
 pub use info::{AnnClass, AnnRow, BinClass, ChannelDesc, DecoderInfo, OptionDesc, OptionValue};
 pub use radix::{Radix, RadixSupport};

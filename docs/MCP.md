@@ -15,8 +15,9 @@ What is served today:
 - the device tools: `scan`, `open`, `close`, `describe_device`,
   `get_option`, `set_option`, `enable_channels`;
 - the capture tools: `capture` (synchronous, with a limit and a
-  timeout), `list_captures`, `drop_capture`, `capture_summary`,
-  `load_capture`, `export_capture`;
+  timeout), `capture_start`/`capture_status`/`capture_stop` (a run the
+  agent follows, open-ended without a limit), `list_captures`,
+  `drop_capture`, `capture_summary`, `load_capture`, `export_capture`;
 - the data tools over a capture in the store: `capture_logic`
   (transitions, runs or samples, paged), `capture_analog` (buckets),
   `measure` and `find`;
@@ -27,8 +28,18 @@ What is served today:
   `analyzer_summary`, `analyzer_find`, `analyzer_binary`,
   `analyzer_meta`, and the one-shot `capture_decode`.
 
-The asynchronous capture (`capture_start`/`capture_status`/
-`capture_stop`) comes next.
+Every acquisition runs on a thread of its own and feeds its capture in
+the store packet by packet. `capture` waits for it; `capture_start`
+returns at once, and the capture grows while the agent does other
+things: `capture_status {wait}` follows it with progress
+notifications, `capture_summary`, `measure`, `find` and `capture_logic`
+answer on what has come so far, `add_analyzer` decodes it as it comes,
+and `capture_stop` ends it and frees the device. Without a limit a
+started capture runs until it is stopped, or until it alone outgrows
+the memory budget (`--max-memory`), which stops it and says so in
+`stopped`; finished captures are evicted first, oldest first, and a
+running one never is. The budget covers the analyzers' frames too: an
+analyzer that fills what is left ends in an error that says so.
 
 The workflow the instructions give the model: `scan` → `open` →
 `describe_device` → `set_option` / `enable_channels` → `capture` →
@@ -124,7 +135,8 @@ build's own tables and the firmware directories; they touch no device.
 `scan` finds devices without opening them (it does probe serial ports
 when no driver is given). `open` claims a device and may upload its
 firmware; `set_option` changes a setting, which on a supply or a load
-is a live output; `capture` runs an acquisition. `cli` runs the `oxrok`
+is a live output; `capture` and `capture_start` run an acquisition.
+`cli` runs the `oxrok`
 executable as a subprocess with the arguments the model gives, which is
 everything the command line can do; it refuses `-d` on a driver with a
 device open on the server, so a device never has two owners. Its output
@@ -136,12 +148,13 @@ captures but not touch the bench.
 
 Open devices are closed when the client disconnects (EOF on stdin), on
 Ctrl-C, and when `close` is called; a capture holds its device until it
-ends, and a call on that handle meanwhile gets "busy".
+ends or `capture_stop` ends it, and a call on that handle meanwhile gets
+"busy". Running captures are stopped when the client disconnects.
 
 Every tool carries MCP's annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can
-ask before the ones that act. `cli`, `open`, `set_option` and `capture`
-are destructive; `export_capture` writes a file; the rest change at most
+ask before the ones that act. `cli`, `open`, `set_option`, `capture`
+and `capture_start` are destructive; `export_capture` writes a file; the rest change at most
 the server's own state.
 
 ## Protocol
@@ -167,8 +180,9 @@ has a reader thread and a handler thread.
 `Catalog`, `Host` (the registries, the limits, the open devices by
 handle, the `CaptureStore` and the analyzers), `Capture` (the data and
 the statistics over it) and `Server`. `oxrok::decode::{Analyzer,
-FrameStore, Radix}` are the decoder-stack runner, the frame store and
-the radix rules, usable without the MCP. `oxrok::mcp::tools::catalog(&host)` is the
+FrameStore, Radix}` are the decoder-stack runner (over a complete
+capture or a `Source::Live` one that is still growing), the frame store
+and the radix rules, usable without the MCP. `oxrok::mcp::tools::catalog(&host)` is the
 library's catalog; `Catalog::select`, `only`, `without`, `read_only`,
 `merge` and `prefixed` narrow or extend it; `Server::serve(reader,
 writer)` runs the protocol over any pair of streams. A tool is a
@@ -372,26 +386,70 @@ Example: `{"channels":["D0","D1=sda"],"handle":1}`
 
 Capture. Tags: capture, hardware. Acts on hardware or runs commands.
 
-Runs one acquisition on an open device and keeps it in the store: applies `config`, sets the limit (`samples`, `time` or `frames`), arms `triggers`, runs until the limit or the timeout, and returns the `capture_id` with the summary (`capture_summary`). The data stays on the server: read it with `capture_logic`, `measure`, `find` and `capture_analog`, or write it with `export_capture`.
+Runs one acquisition on an open device and keeps it in the store: applies `config`, sets the limit (`samples`, `time` or `frames`), arms `triggers`, runs until the limit or the timeout, and returns the `capture_id` with the summary (`capture_summary`). The data stays on the server: read it with `capture_logic`, `measure`, `find` and `capture_analog`, or write it with `export_capture`. For a long or an open-ended run use `capture_start`.
 
 Arguments:
 
 - `config` (array of string): Options applied first, as `-c` takes them: `samplerate=1m`, `channel_group=Logic:pattern=walking-one`.
 - `frames` (string): How many frames (oscilloscope sweeps).
 - `handle` (integer, required): The handle `open` returned.
-- `samples` (string): How many samples, with a size suffix: `1k`, `2m`. One of `samples`, `time` or `frames` is needed.
+- `samples` (string): How many samples, with a size suffix: `1k`, `2m`. `capture` needs one of `samples`, `time` or `frames`; `capture_start` without one runs until `capture_stop`.
 - `time` (string): How long, in ms or with a unit: `10ms`, `2s`.
-- `timeout` (number): Give up after this many seconds, keeping what came. The server's limit otherwise.
+- `timeout` (number): Give up after this many seconds, keeping what came. `capture` takes the server's limit otherwise; `capture_start` has none.
 - `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages.
 - `wait_trigger` (boolean): Keep only the samples from the trigger on.
 
 Example: `{"config":["samplerate=1m"],"handle":1,"samples":"1k"}`
 
+### `capture_start`
+
+Start a capture. Tags: capture, hardware. Acts on hardware or runs commands.
+
+Starts an acquisition like `capture` and returns at once with the `capture_id`; without a limit it runs until `capture_stop`. The capture grows in the store meanwhile: `capture_status` follows it (`wait` for it to end), and the data tools and `add_analyzer` work on what has come so far. A run that outgrows the memory budget is stopped. The device is busy until the capture ends.
+
+Arguments:
+
+- `config` (array of string): Options applied first, as `-c` takes them: `samplerate=1m`, `channel_group=Logic:pattern=walking-one`.
+- `frames` (string): How many frames (oscilloscope sweeps).
+- `handle` (integer, required): The handle `open` returned.
+- `samples` (string): How many samples, with a size suffix: `1k`, `2m`. `capture` needs one of `samples`, `time` or `frames`; `capture_start` without one runs until `capture_stop`.
+- `time` (string): How long, in ms or with a unit: `10ms`, `2s`.
+- `timeout` (number): Give up after this many seconds, keeping what came. `capture` takes the server's limit otherwise; `capture_start` has none.
+- `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages.
+- `wait_trigger` (boolean): Keep only the samples from the trigger on.
+
+Example: `{"config":["samplerate=1m"],"handle":1}`
+
+### `capture_status`
+
+Capture status. Tags: capture. Read-only.
+
+Whether a capture is still running, its samples, bytes and duration so far, the trigger, and why it ended when it did (`stopped`: `capture_stop`, `timeout`, `memory budget`; `failed` for a device error). With `wait`, waits up to that many seconds for it to end, sending progress meanwhile.
+
+Arguments:
+
+- `capture_id` (integer, required): The id `capture_start` returned.
+- `wait` (number): Wait up to this many seconds for the capture to end first, reporting progress meanwhile.
+
+Example: `{"capture_id":1,"wait":5}`
+
+### `capture_stop`
+
+Stop a capture. Tags: capture. Changes the server's state.
+
+Ends a running capture, waits for the device to stop, and returns the summary of what came; the device is free again. A capture that has ended already just gives its summary.
+
+Arguments:
+
+- `capture_id` (integer, required): The id `capture` or `load_capture` returned.
+
+Example: `{"capture_id":1}`
+
 ### `list_captures`
 
 List captures. Tags: capture. Read-only.
 
-The captures in the store: id, source, channels, sample count, rate and size, oldest first, with the memory used and the budget.
+The captures in the store: id, source, channels, sample count, rate, size and whether it is still running, oldest first, with the memory used by captures and by analyzer frames, and the budget.
 
 No arguments.
 
@@ -401,7 +459,7 @@ Example: `{}`
 
 Drop a capture. Tags: capture. Changes the server's state.
 
-Removes a capture from the store and frees its memory, with the analyzers over it.
+Removes a capture from the store and frees its memory, with the analyzers over it; a running one is stopped first.
 
 Arguments:
 
@@ -413,7 +471,7 @@ Example: `{"capture_id":1}`
 
 Capture summary. Tags: capture. Read-only.
 
-A capture at a glance: rate, sample count, duration, trigger position, and per logic channel its transitions, duty cycle, first and last level and shortest pulse; per analog channel min, max, mean and RMS with the unit. Read this before asking for data.
+A capture at a glance: rate, sample count, duration, trigger position, and per logic channel its transitions, duty cycle, first and last level and shortest pulse; per analog channel min, max, mean and RMS with the unit. Read this before asking for data. On a running capture, what has come so far.
 
 Arguments:
 
@@ -439,7 +497,7 @@ Example: `{"path":"capture.sr"}`
 
 Export a capture. Tags: capture. Acts on hardware or runs commands.
 
-Writes a capture to a file with an output module (`srzip` for a `.sr` PulseView can open, `csv`, `vcd`, `bits`, ...) under the server's allowed directories. Returns the path and size, never the bytes.
+Writes a capture to a file with an output module (`srzip` for a `.sr` PulseView can open, `csv`, `vcd`, `bits`, ...) under the server's allowed directories. Returns the path and size, never the bytes. A running capture is written as it stands.
 
 Arguments:
 

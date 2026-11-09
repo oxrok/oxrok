@@ -5,11 +5,12 @@
 //! and walks the frames.
 
 use super::capture::no_capture;
-use crate::decode::analyzer::Status;
+use crate::decode::analyzer::{Poll, Source, Status};
 use crate::decode::frames::Frame;
 use crate::decode::radix::{self, Radix, RadixSupport};
 use crate::decode::{Analyzer, InstanceInfo};
 use crate::mcp::Host;
+use crate::mcp::capture::CaptureStore;
 use crate::mcp::host::AnalyzerEntry;
 use crate::mcp::tool::{Annotations, Call, Tag, Tool, ToolError, ToolResult, ToolSpec, function};
 use schemars::JsonSchema;
@@ -17,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// One decoder of a structured stack.
@@ -894,11 +895,28 @@ fn build(
     spec: &str,
     radix: Option<&str>,
 ) -> Result<(String, Analyzer), ToolError> {
-    let (channels, logic, unit_size, samplerate) = {
+    let (channels, source, unit_size, samplerate) = {
         let store = host.captures();
         let c = store.get(capture_id).ok_or_else(|| no_capture(capture_id))?;
-        (c.channels.clone(), c.logic.clone(), c.unit_size, c.samplerate.unwrap_or(0))
+        let source = if c.running {
+            if c.unit_size == 0 {
+                return Err(ToolError::new(format!(
+                    "Capture {capture_id} has no samples yet; add the analyzer once \
+                     `capture_status` shows some."
+                )));
+            }
+            live_source(host.capture_store(), capture_id)
+        } else {
+            Source::Bytes(c.logic.clone())
+        };
+        (c.channels.clone(), source, c.unit_size, c.samplerate.unwrap_or(0))
     };
+    let max_bytes = host.memory_left();
+    if max_bytes == 0 {
+        return Err(ToolError::new(
+            "The memory budget is full; drop captures or analyzers, or raise --max-memory.",
+        ));
+    }
     let bottom_id =
         spec.split(',').next().unwrap_or_default().split(':').next().unwrap_or_default();
     let bottom = host
@@ -932,8 +950,27 @@ fn build(
         }
     }
     let plan = crate::setup::parse_stacks(host.decoders(), &[spec.clone()], &channels)?;
-    let analyzer = Analyzer::start(plan, radix, true, logic, unit_size.max(1), samplerate);
+    let analyzer =
+        Analyzer::start(plan, radix, true, source, unit_size.max(1), samplerate, max_bytes);
     Ok((spec, analyzer))
+}
+
+/// The bytes of a running capture as they come: each poll copies what
+/// arrived after `fed` samples, up to a chunk, and says when the capture
+/// has ended and all of it was handed over. A capture dropped meanwhile
+/// ends the source too.
+fn live_source(store: Arc<Mutex<CaptureStore>>, capture_id: u64) -> Source {
+    const CHUNK: usize = 1 << 20;
+    Source::Live(Box::new(move |fed: u64| {
+        let store = store.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(c) = store.get(capture_id) else {
+            return Poll { data: Vec::new(), done: true };
+        };
+        let unit = c.unit_size.max(1);
+        let from = (fed as usize).saturating_mul(unit).min(c.logic.len());
+        let to = from.saturating_add(CHUNK).min(c.logic.len());
+        Poll { data: c.logic[from..to].to_vec(), done: !c.running && to == c.logic.len() }
+    }))
 }
 
 /// Waits for the decode, reporting progress, until done, the timeout or

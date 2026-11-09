@@ -22,10 +22,16 @@ release may change the library API.
   capture whose frames are kept, paged, searched and counted, with raw
   values and a radix per request (`add_analyzer`, `analyzer_frames`,
   `analyzer_summary`, `analyzer_find`, `analyzer_binary`, `analyzer_meta`,
-  `capture_decode`, ...).
+  `capture_decode`, ...). Captures run on their own thread and grow in
+  the store: `capture_start`, `capture_status` (with `wait` and progress)
+  and `capture_stop`, open-ended without a limit; the data tools and
+  analyzers work on a running capture; the memory budget covers captures
+  and frames, stops a run that outgrows it and evicts finished captures
+  first.
 - `oxrok::decode::{Radix, FrameStore, Analyzer}`: the radix rules and the
   frame store from oxrok-ui, and a runner that keeps a stack's output per
-  instance.
+  instance, over a complete capture or a live one (`Source::Live`), under
+  a byte budget for its frames.
 - `oxrok::setup`: the command line's setup code as a library module (driver
   specs, `-c` plans, `-C`, `-t`, limits, decoder stacks, `-I`/`-O` specs),
   shared with the MCP server. `oxrok::decoder_registry()` is every decoder

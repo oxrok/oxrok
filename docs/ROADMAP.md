@@ -101,14 +101,21 @@ data tools (`capture_logic`, `capture_analog`, `measure`, `find`).
 Phase 4 too: `decode::radix`, `decode::FrameStore` and
 `decode::Analyzer` (the UI's code moved, with raw values and the binary
 and meta items added) and the analyzer tools with `capture_decode`.
-oxrok-ui still has its own copies of the radix and frame-store code;
-moving it onto `oxrok::decode` is the UI side's work (Phase 6).
+Phase 5 too: every acquisition on its own thread feeding the store,
+`capture_start`/`capture_status`/`capture_stop`, analyzers over a
+running capture (`decode::Source::Live`), and the memory budget over
+captures and frames. oxrok-ui still has its own copies of the radix and
+frame-store code; moving it onto `oxrok::decode` is the UI side's work
+(Phase 6).
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
   docs are not in the published crate, so the table would have to be
   generated into the source at build time or kept in `tools/site-data`.
-- Phase 5: asynchronous captures, the memory budget, the safety flags.
+- A driver whose acquisition ends on its limit is only stopped (its
+  thread joined) by the MCP run thread; the CLI runs one capture per
+  process and never needed it. `Session::run` could stop the devices
+  itself when every `End` came, so every caller gets an idle device.
 - Phase 6: the UI server over a local socket, with a per-tool checklist.
 
 ## Pico backend

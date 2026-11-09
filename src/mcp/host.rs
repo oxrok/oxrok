@@ -16,7 +16,9 @@ use crate::decode;
 use crate::decode::Analyzer;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 /// Bounds the tools keep.
@@ -129,6 +131,86 @@ struct Analyzers {
     list: Vec<AnalyzerEntry>,
 }
 
+/// A capture in progress: its stop flag, why it was stopped, and its
+/// thread, kept by capture id so `capture_stop`, `drop_capture` and
+/// [`Host::close_all`] can end it. The thread feeds the capture in the
+/// store and gives the device back when it ends.
+pub struct CaptureRun {
+    /// The capture being fed.
+    pub capture_id: u64,
+    /// The device's handle.
+    pub handle: u64,
+    stop: AtomicBool,
+    done: AtomicBool,
+    timed_out: AtomicBool,
+    reason: Mutex<Option<String>>,
+    thread: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl CaptureRun {
+    /// A run that has not started.
+    pub fn new(capture_id: u64, handle: u64) -> Arc<Self> {
+        Arc::new(Self {
+            capture_id,
+            handle,
+            stop: AtomicBool::new(false),
+            done: AtomicBool::new(false),
+            timed_out: AtomicBool::new(false),
+            reason: Mutex::new(None),
+            thread: Mutex::new(None),
+        })
+    }
+
+    /// Asks the run to end, for `reason`; the first reason stands.
+    pub fn stop(&self, reason: &str) {
+        lock(&self.reason).get_or_insert_with(|| reason.to_owned());
+        self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a stop was asked for.
+    pub fn stopping(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+
+    /// Why it was stopped, once it was.
+    pub fn reason(&self) -> Option<String> {
+        lock(&self.reason).clone()
+    }
+
+    /// Stops for the timeout.
+    pub fn time_out(&self) {
+        self.timed_out.store(true, Ordering::SeqCst);
+        self.stop("timeout");
+    }
+
+    /// Whether the timeout ended it.
+    pub fn timed_out(&self) -> bool {
+        self.timed_out.load(Ordering::SeqCst)
+    }
+
+    /// Keeps the thread, to join.
+    pub fn set_thread(&self, thread: JoinHandle<()>) {
+        *lock(&self.thread) = Some(thread);
+    }
+
+    /// The thread's last word: the capture is fed and the device back.
+    pub fn finish(&self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether the thread has finished.
+    pub fn is_done(&self) -> bool {
+        self.done.load(Ordering::SeqCst)
+    }
+
+    /// Waits for the thread, once.
+    pub fn join(&self) {
+        if let Some(h) = lock(&self.thread).take() {
+            let _ = h.join();
+        }
+    }
+}
+
 /// What the tools work on.
 pub struct Host {
     registry: Registry,
@@ -136,8 +218,9 @@ pub struct Host {
     limits: Limits,
     cli_program: Option<PathBuf>,
     devices: Mutex<Devices>,
-    captures: Mutex<CaptureStore>,
+    captures: Arc<Mutex<CaptureStore>>,
     analyzers: Mutex<Analyzers>,
+    runs: Mutex<HashMap<u64, Arc<CaptureRun>>>,
 }
 
 impl Default for Host {
@@ -161,18 +244,19 @@ impl Host {
         Self {
             registry,
             decoders,
-            captures: Mutex::new(CaptureStore::new(limits.max_memory)),
+            captures: Arc::new(Mutex::new(CaptureStore::new(limits.max_memory))),
             limits,
             cli_program: std::env::current_exe().ok(),
             devices: Mutex::new(Devices::default()),
             analyzers: Mutex::new(Analyzers::default()),
+            runs: Mutex::new(HashMap::new()),
         }
     }
 
     /// Sets the limits.
     #[must_use]
     pub fn with_limits(mut self, limits: Limits) -> Self {
-        self.captures = Mutex::new(CaptureStore::new(limits.max_memory));
+        self.captures = Arc::new(Mutex::new(CaptureStore::new(limits.max_memory)));
         self.limits = limits;
         self
     }
@@ -208,6 +292,63 @@ impl Host {
     /// The captures.
     pub fn captures(&self) -> MutexGuard<'_, CaptureStore> {
         lock(&self.captures)
+    }
+
+    /// The store itself, for a thread that feeds or follows a capture
+    /// without holding the host.
+    pub fn capture_store(&self) -> Arc<Mutex<CaptureStore>> {
+        self.captures.clone()
+    }
+
+    /// The bytes the analyzers' frames hold.
+    pub fn analyzer_bytes(&self) -> usize {
+        lock(&self.analyzers).list.iter().map(|a| a.analyzer.memory_bytes()).sum()
+    }
+
+    /// What is left of the memory budget for a new analyzer's frames.
+    pub fn memory_left(&self) -> usize {
+        self.limits.max_memory.saturating_sub(self.captures().used() + self.analyzer_bytes())
+    }
+
+    /// Keeps a capture run while its thread goes.
+    pub fn add_run(&self, run: Arc<CaptureRun>) {
+        lock(&self.runs).insert(run.capture_id, run);
+    }
+
+    /// The run feeding capture `capture_id`, while one does.
+    pub fn run(&self, capture_id: u64) -> Option<Arc<CaptureRun>> {
+        lock(&self.runs).get(&capture_id).cloned()
+    }
+
+    /// Stops the run of `capture_id` for `reason`, waits for its thread
+    /// and forgets it; `None` when no run is going.
+    pub fn stop_run(&self, capture_id: u64, reason: &str) -> Option<Arc<CaptureRun>> {
+        let run = lock(&self.runs).remove(&capture_id)?;
+        run.stop(reason);
+        run.join();
+        Some(run)
+    }
+
+    /// Forgets a run whose thread has finished, joining it; `None` when
+    /// none has, or it is still going.
+    pub fn reap_run(&self, capture_id: u64) -> Option<Arc<CaptureRun>> {
+        let mut runs = lock(&self.runs);
+        if !runs.get(&capture_id)?.is_done() {
+            return None;
+        }
+        let run = runs.remove(&capture_id)?;
+        drop(runs);
+        run.join();
+        Some(run)
+    }
+
+    /// Stops every run, waiting for the threads.
+    pub fn stop_all_runs(&self, reason: &str) {
+        let runs: Vec<Arc<CaptureRun>> = lock(&self.runs).drain().map(|(_, r)| r).collect();
+        for run in runs {
+            run.stop(reason);
+            run.join();
+        }
     }
 
     /// Keeps a started analyzer; returns its id.
@@ -487,8 +628,10 @@ impl Host {
             .collect()
     }
 
-    /// Closes every open device and forgets the scan.
+    /// Stops every running capture, closes every open device and
+    /// forgets the scan.
     pub fn close_all(&self) {
+        self.stop_all_runs("server closing");
         let mut devices = lock(&self.devices);
         devices.scanned.clear();
         for (_, slot) in devices.open.drain() {

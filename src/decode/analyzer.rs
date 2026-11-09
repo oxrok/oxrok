@@ -80,11 +80,39 @@ impl InstanceInfo {
     }
 }
 
+/// What one poll of a live source gives.
+#[derive(Debug, Default)]
+pub struct Poll {
+    /// The bytes after the ones handed over so far; empty when nothing
+    /// new has come.
+    pub data: Vec<u8>,
+    /// Whether the source has ended: no more bytes follow `data`.
+    pub done: bool,
+}
+
+/// Where the logic bytes come from.
+pub enum Source {
+    /// A capture that is complete.
+    Bytes(Vec<u8>),
+    /// A capture still running: asked for the bytes from the given
+    /// sample on, until it says it is done. A poll with no data and no
+    /// end is tried again after a short sleep.
+    Live(Box<dyn FnMut(u64) -> Poll + Send>),
+}
+
+impl From<Vec<u8>> for Source {
+    fn from(bytes: Vec<u8>) -> Self {
+        Source::Bytes(bytes)
+    }
+}
+
 struct Shared {
     stores: Vec<Mutex<FrameStore>>,
     status: Mutex<Status>,
     fed: AtomicU64,
+    total: AtomicU64,
     stop: AtomicBool,
+    max_bytes: usize,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -97,7 +125,6 @@ pub struct Analyzer {
     thread: Mutex<Option<JoinHandle<()>>>,
     instances: Vec<InstanceInfo>,
     radix: Radix,
-    total: u64,
     samplerate: u64,
 }
 
@@ -106,18 +133,22 @@ pub struct Analyzer {
 const CHUNK_SAMPLES: usize = 65_536;
 
 impl Analyzer {
-    /// Starts `plan` over `logic` (`unit_size` bytes per sample, at
+    /// Starts `plan` over `source` (`unit_size` bytes per sample, at
     /// `samplerate`, 0 when unknown). `radix` is the analyzer's own;
     /// `prefer_raw` is decision 11 of the plan: a decoder with both a
     /// `format` option and binary output renders through its raw values.
+    /// The run ends in an error once its frames hold more than
+    /// `max_bytes`.
     pub fn start(
         plan: StackPlan,
         radix: Radix,
         prefer_raw: bool,
-        logic: Vec<u8>,
+        source: impl Into<Source>,
         unit_size: usize,
         samplerate: u64,
+        max_bytes: usize,
     ) -> Self {
+        let source = source.into();
         let instances: Vec<InstanceInfo> = plan
             .instances
             .iter()
@@ -127,20 +158,25 @@ impl Analyzer {
             .iter()
             .map(|i| Mutex::new(FrameStore::with_value_classes(i.value_classes())))
             .collect();
+        let unit = unit_size.max(1);
+        let total = match &source {
+            Source::Bytes(logic) => (logic.len() / unit) as u64,
+            Source::Live(_) => 0,
+        };
         let shared = Arc::new(Shared {
             stores,
             status: Mutex::new(Status::Running),
             fed: AtomicU64::new(0),
+            total: AtomicU64::new(total),
             stop: AtomicBool::new(false),
+            max_bytes,
         });
-        let unit = unit_size.max(1);
-        let total = (logic.len() / unit) as u64;
         let runner = {
             let shared = shared.clone();
             let instances = instances.clone();
             std::thread::Builder::new()
                 .name("analyzer".to_owned())
-                .spawn(move || run(&shared, &instances, plan, &logic, unit, samplerate))
+                .spawn(move || run(&shared, &instances, plan, source, unit, samplerate))
         };
         let thread = match runner {
             Ok(h) => Some(h),
@@ -149,7 +185,7 @@ impl Analyzer {
                 None
             }
         };
-        Self { shared, thread: Mutex::new(thread), instances, radix, total, samplerate }
+        Self { shared, thread: Mutex::new(thread), instances, radix, samplerate }
     }
 
     /// The instances, bottom first per chain.
@@ -172,9 +208,10 @@ impl Analyzer {
         lock(&self.shared.status).clone()
     }
 
-    /// Samples fed and samples in all.
+    /// Samples fed and samples known so far: the capture's size, or what
+    /// a live source has given up to now.
     pub fn progress(&self) -> (u64, u64) {
-        (self.shared.fed.load(Ordering::Relaxed), self.total)
+        (self.shared.fed.load(Ordering::Relaxed), self.shared.total.load(Ordering::Relaxed))
     }
 
     /// The analyzer's own radix.
@@ -227,11 +264,12 @@ impl Drop for Analyzer {
 }
 
 /// The decode, on the analyzer's thread.
+#[allow(clippy::too_many_lines)]
 fn run(
     shared: &Shared,
     instances: &[InstanceInfo],
     plan: StackPlan,
-    logic: &[u8],
+    source: Source,
     unit: usize,
     samplerate: u64,
 ) {
@@ -286,26 +324,83 @@ fn run(
             }
         }
     };
-    for chunk in logic.chunks(CHUNK_SAMPLES * unit) {
-        if shared.stop.load(Ordering::Relaxed) {
-            break;
+    let over_budget = || {
+        let used: usize = shared.stores.iter().map(|s| lock(s).memory_bytes()).sum();
+        used > shared.max_bytes
+    };
+    // Feeds the bytes in chunks, draining the outputs between them;
+    // false once the run should end.
+    let mut feed = |bytes: &[u8]| -> bool {
+        for chunk in bytes.chunks(CHUNK_SAMPLES * unit) {
+            if shared.stop.load(Ordering::Relaxed) {
+                return false;
+            }
+            stack.feed(chunk);
+            shared.fed.fetch_add((chunk.len() / unit) as u64, Ordering::Relaxed);
+            while let Ok(o) = rx.try_recv() {
+                handle(o);
+            }
+            if over_budget() {
+                return false;
+            }
         }
-        stack.feed(chunk);
-        shared.fed.fetch_add((chunk.len() / unit) as u64, Ordering::Relaxed);
-        while let Ok(o) = rx.try_recv() {
-            handle(o);
+        true
+    };
+    let mut budget_hit = false;
+    match source {
+        Source::Bytes(logic) => {
+            if !feed(&logic) {
+                budget_hit = over_budget();
+            }
         }
+        Source::Live(mut poll) => loop {
+            if shared.stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let Poll { data, done } = poll(shared.fed.load(Ordering::Relaxed));
+            let have = shared.fed.load(Ordering::Relaxed) + (data.len() / unit) as u64;
+            shared.total.fetch_max(have, Ordering::Relaxed);
+            if data.is_empty() {
+                if done {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            if !feed(&data) {
+                budget_hit = over_budget();
+                break;
+            }
+        },
     }
     stack.end();
     // `recv` ends when every decoder thread is gone, so a thread that
-    // died without its End cannot hang the drain.
+    // died without its End cannot hang the drain. Past the budget, the
+    // rest is drained and dropped.
+    let mut n = 0u32;
     while let Ok(o) = rx.recv() {
+        if budget_hit {
+            continue;
+        }
         handle(o);
+        n += 1;
+        if n.is_multiple_of(256) && over_budget() {
+            budget_hit = true;
+        }
+    }
+    if !budget_hit && over_budget() {
+        budget_hit = true;
     }
     stack.join();
     let stopped = shared.stop.load(Ordering::Relaxed);
     *lock(&shared.status) = if !errors.is_empty() {
         Status::Error(errors.join("; "))
+    } else if budget_hit {
+        Status::Error(format!(
+            "the memory budget is full after {} frames; drop captures or analyzers, or raise \
+             --max-memory",
+            shared.stores.iter().map(|s| lock(s).len()).sum::<usize>()
+        ))
     } else if stopped {
         Status::Error("stopped".to_owned())
     } else {
@@ -368,7 +463,7 @@ mod tests {
     #[test]
     fn decodes_and_keeps_frames_with_values() {
         let plan = uart_plan("uart:rx=D0:baudrate=100");
-        let a = Analyzer::start(plan, Radix::Ascii, true, uart_bytes(b"Hi"), 1, 1000);
+        let a = Analyzer::start(plan, Radix::Ascii, true, uart_bytes(b"Hi"), 1, 1000, usize::MAX);
         let status = a.wait_until(Instant::now() + Duration::from_secs(10), || true);
         assert_eq!(status, Status::Complete);
         assert_eq!(a.progress().0, a.progress().1);
@@ -406,7 +501,7 @@ mod tests {
         let plan =
             parse_stacks(&registry(), &["i2c:scl=D0:sda=D1,eeprom24xx".to_owned()], &channels)
                 .unwrap();
-        let a = Analyzer::start(plan, Radix::Native, true, vec![3u8; 100], 1, 1000);
+        let a = Analyzer::start(plan, Radix::Native, true, vec![3u8; 100], 1, 1000, usize::MAX);
         assert_eq!(
             a.wait_until(Instant::now() + Duration::from_secs(10), || true),
             Status::Complete
@@ -419,13 +514,49 @@ mod tests {
     #[test]
     fn a_bad_option_is_an_error_and_stop_joins() {
         let plan = uart_plan("uart:rx=D0:baudrate=0");
-        let a = Analyzer::start(plan, Radix::Native, true, uart_bytes(b"x"), 1, 1000);
+        let a = Analyzer::start(plan, Radix::Native, true, uart_bytes(b"x"), 1, 1000, usize::MAX);
         let status = a.wait_until(Instant::now() + Duration::from_secs(10), || true);
         assert!(matches!(status, Status::Error(_)), "{status:?}");
         let plan = uart_plan("uart:rx=D0:baudrate=100");
-        let a = Analyzer::start(plan, Radix::Native, true, uart_bytes(b"x"), 1, 1000);
+        let a = Analyzer::start(plan, Radix::Native, true, uart_bytes(b"x"), 1, 1000, usize::MAX);
         a.stop();
         assert!(a.is_done());
         assert_eq!(item_text(&Item::List(vec![Item::Int(1), Item::Str("a".into())])), "[1, a]");
+    }
+
+    #[test]
+    fn a_live_source_is_decoded_as_it_comes() {
+        let bytes = uart_bytes(b"Hi");
+        let total = bytes.len() as u64;
+        let half = bytes.len() / 2;
+        let polls = Arc::new(Mutex::new(0u32));
+        let counter = polls.clone();
+        let source = Source::Live(Box::new(move |fed: u64| {
+            *lock(&counter) += 1;
+            let fed = fed as usize;
+            // The first half, then nothing for a while, then the rest.
+            match *lock(&counter) {
+                1 => Poll { data: bytes[..half].to_vec(), done: false },
+                2 | 3 => Poll { data: Vec::new(), done: false },
+                _ => Poll { data: bytes[fed..].to_vec(), done: true },
+            }
+        }));
+        let plan = uart_plan("uart:rx=D0:baudrate=100");
+        let a = Analyzer::start(plan, Radix::Ascii, true, source, 1, 1000, usize::MAX);
+        let status = a.wait_until(Instant::now() + Duration::from_secs(10), || true);
+        assert_eq!(status, Status::Complete);
+        assert_eq!(a.progress(), (total, total));
+        assert!(*lock(&polls) >= 4);
+        let (i, inst) = a.instance("uart-1").unwrap();
+        let data_class = inst.class_index("rx-data").unwrap();
+        assert_eq!(a.store(i).class_count(data_class), 2);
+    }
+
+    #[test]
+    fn the_frame_budget_ends_the_run() {
+        let plan = uart_plan("uart:rx=D0:baudrate=100");
+        let a = Analyzer::start(plan, Radix::Native, true, uart_bytes(b"Hello"), 1, 1000, 1);
+        let status = a.wait_until(Instant::now() + Duration::from_secs(10), || true);
+        assert!(matches!(&status, Status::Error(e) if e.contains("memory budget")), "{status:?}");
     }
 }

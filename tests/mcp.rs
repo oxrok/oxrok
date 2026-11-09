@@ -116,7 +116,7 @@ fn list_tools(flags: &[&str]) -> (String, bool) {
     (String::from_utf8_lossy(text).into_owned(), out.status.success())
 }
 
-const ALL_TOOLS: [&str; 36] = [
+const ALL_TOOLS: [&str; 39] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -133,6 +133,9 @@ const ALL_TOOLS: [&str; 36] = [
     "set_option",
     "enable_channels",
     "capture",
+    "capture_start",
+    "capture_status",
+    "capture_stop",
     "list_captures",
     "drop_capture",
     "capture_summary",
@@ -156,7 +159,7 @@ const ALL_TOOLS: [&str; 36] = [
 ];
 
 /// The tools that change nothing.
-const READ_ONLY: [&str; 23] = [
+const READ_ONLY: [&str; 24] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -167,6 +170,7 @@ const READ_ONLY: [&str; 23] = [
     "scan",
     "describe_device",
     "get_option",
+    "capture_status",
     "list_captures",
     "capture_summary",
     "capture_logic",
@@ -183,7 +187,7 @@ const READ_ONLY: [&str; 23] = [
 ];
 
 /// The tools that open or drive hardware.
-const HARDWARE: [&str; 3] = ["open", "set_option", "capture"];
+const HARDWARE: [&str; 4] = ["open", "set_option", "capture", "capture_start"];
 
 fn without<'a>(all: &[&'a str], drop: &[&str]) -> Vec<&'a str> {
     all.iter().copied().filter(|t| !drop.contains(t)).collect()
@@ -369,6 +373,43 @@ fn the_demo_device_over_the_pipe() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A capture started without a limit runs until stopped; an analyzer
+/// added meanwhile follows it and completes when it ends.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn a_running_capture_is_followed_by_an_analyzer() {
+    let mut c = Client::start(&["--drivers", "demo"]);
+    c.initialize();
+    c.call("scan", json!({"driver": "demo:logic_channels=2"}));
+    let o = c.call("open", json!({"device_id": "demo"}));
+    let handle = o["handle"].as_u64().unwrap();
+    c.call("set_option", json!({"handle": handle, "key": "samplerate", "value": "100k"}));
+    let s = c.call("capture_start", json!({"handle": handle}));
+    let id = s["capture_id"].as_u64().unwrap();
+    assert_eq!(s["continuous"], true);
+    // The device is busy until the capture ends.
+    let e = c.ok("tools/call", json!({"name": "close", "arguments": {"handle": handle}}));
+    assert_eq!(e["isError"], true);
+    let st = c.call("capture_status", json!({"capture_id": id, "wait": 0.3}));
+    assert_eq!(st["running"], true);
+    assert!(st["samples"].as_u64().unwrap() > 0, "{st}");
+    let a = c.call("add_analyzer", json!({"capture_id": id, "stack": "i2c:scl=D0:sda=D1"}));
+    let aid = a["analyzer_id"].as_u64().unwrap();
+    assert_eq!(a["status"], "running");
+    let st = c.call("analyzer_status", json!({"analyzer_id": aid, "wait": 0.3}));
+    assert_eq!(st["status"], "running");
+    let stopped = c.call("capture_stop", json!({"capture_id": id}));
+    assert_eq!(stopped["stopped"], "capture_stop");
+    let samples = stopped["samples"].as_u64().unwrap();
+    let st = c.call("analyzer_status", json!({"analyzer_id": aid, "wait": 10}));
+    assert_eq!(st["status"], "complete", "{st}");
+    assert_eq!(st["progress"]["samples"], samples);
+    let l = c.call("list_captures", json!({}));
+    assert_eq!(l["running"], 0);
+    assert_eq!(c.call("close", json!({"handle": handle}))["closed"], handle);
+    c.finish();
+}
+
 /// The frames an analyzer keeps are the annotations `-P` prints on the
 /// same input: same instances, classes, sample ranges and texts. The CLI
 /// prints in emission order and the store in start order, so the lines
@@ -475,7 +516,7 @@ fn flags_narrow_the_catalog() {
     assert_eq!(names(&["--no-hardware"]), without(&ALL_TOOLS, &HARDWARE));
     assert_eq!(
         names(&["--no-hardware", "--no-cli"]),
-        without(&ALL_TOOLS, &["cli", "open", "set_option", "capture"])
+        without(&ALL_TOOLS, &["cli", "open", "set_option", "capture", "capture_start"])
     );
     assert_eq!(names(&["--tools", "cli,version"]), ["version", "cli"]);
     let (text, ok) = list_tools(&["--tools", "version,nope"]);
