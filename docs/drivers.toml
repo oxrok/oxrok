@@ -1114,19 +1114,28 @@ behaviour = []
 limits = []
 
 [drivers.baylibre-acme]
-name = "Baylibre ACME"
+name = "BayLibre ACME"
 libsigrok = "baylibre-acme"
-ids = []
-kind = "logic-analyzer"
+ids = ["baylibre-acme"]
+kind = "meter"
 connection = "none"
-vendor = "Baylibre"
-models = []
-status = ["not-ported"]
-emu = []
+vendor = "BayLibre"
+models = ["ACME"]
+status = ["emulated"]
+emu = ["baylibre-acme"]
 evidence = []
-reason = "Reads hard-coded /sys paths (sysfs and iio); a fake tree in a user namespace is the model."
-behaviour = []
-limits = []
+behaviour = [
+  "Linux only: reads the kernel's hwmon files of the cape's ina226 power probes (W, A, V) and tmp435 temperature probes (°C), one channel group per probe.",
+  "probe_factor sets a power probe's shunt in mΩ; power_off switches a probe's power where it has a switch, exporting its GPIO first when needed.",
+  "A switch that is an input refuses its value, and is then made an output with its level through its direction.",
+  "Samples every enabled channel at samplerate (1-500 Hz, 10 by default), the first sample one period after the start; a capture that falls behind repeats the last values and never passes limit_samples.",
+  "A value file that can't be read or holds no number drops its channel with an error; a capture with no channel left fails.",
+]
+limits = [
+  "Verified only against an emulated sysfs tree in a user namespace, not on a cape.",
+  "Uses the fixed GPIO numbers 474-511 of the legacy sysfs GPIO interface, which current kernels number differently or lack.",
+  "Without root the attributes can't be written and a revision B EEPROM can't be read.",
+]
 
 [drivers.beaglelogic]
 name = "BeagleLogic"

@@ -3721,6 +3721,36 @@ before anything is sent, where C sends it as typed (`10;*RST` resets the
 meter). GW Instek function codes match by how they start (`013` reads as `01`),
 as in C.
 
+### BayLibre ACME (`baylibre-acme`)
+
+Linux only. The cape's probes are the kernel's devices: ina226 power monitors
+(ina2xx driver) and tmp435 thermometers (tmp401 driver), declared at
+libsigrok's I2C addresses on bus 1, plus the GPIOs of the legacy sysfs
+interface. oxrok reads and writes the same files at the same paths as
+libsigrok. The groups are `Probe_N`. A power probe has `probe_factor` (its
+shunt in mΩ, written to `shunt_resistor` in µΩ). A probe with a power switch
+has `power_off`. Setting `samplerate` writes 1000 / rate ms to every probe's
+`update_interval`. A revision B probe's EEPROM sets its shunt at the scan;
+revision B probes are numbered by address.
+
+The GPIO numbers are fixed at 474-511, as on the BeagleBone kernels of 2015.
+A current kernel numbers GPIO chips from 512, and may have no
+`/sys/class/gpio` at all; there `power_off` fails. A power switch that is an
+input refuses its `value`, and oxrok then sets its `direction` to `high` or
+`low`, making it an output with its level. As a non-root user the attributes
+can't be written (`probe_factor` and `power_off` fail, and `samplerate`'s
+interval write is skipped silently, as in libsigrok), and a revision B EEPROM
+(mode 0600) can't be read, so the probe counts as revision A.
+
+Captures sample every enabled channel at each tick, the first one period
+after the start; a capture that falls behind repeats the last values and
+never passes the sample limit. A value file that can't be read, reads
+nothing or holds junk drops its channel with an error, and a capture with no
+channel left fails. Emulated by model `baylibre-acme`, a sysfs tree served
+by `oxrok-emu serve baylibre-acme --sysfs DIR` and bind-mounted for each
+tool in a user namespace: 91 cases on 2026-11-09, gcov 90.7%. Units follow
+the kernel's ina2xx and tmp401 drivers. Never run on a cape.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

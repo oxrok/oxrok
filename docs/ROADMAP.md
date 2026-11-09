@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 82 of libsigrok's 87 `src/hardware` drivers are
-ported; the 5 still missing are listed below. Native decoder porting is
+crates.io. 83 of libsigrok's 87 `src/hardware` drivers are
+ported; the 4 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,7 +13,7 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 5 libsigrok drivers with no oxrok port. Each needs a device model,
+The 4 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
@@ -33,12 +33,10 @@ GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
 MSO5000, Agilent DSO1000) also remain unverified on hardware; see
 [Open verification](#open-verification).
 
-### Odd transports (4)
+### Odd transports (3)
 
 - `asix-omega-rtm-cli`: runs the vendor's CLI and reads its stream. The
   model is a stand-in executable on `PATH`.
-- `baylibre-acme`: reads hard-coded sysfs and IIO paths. A fake tree
-  bind-mounted in a user namespace (`unshare -Urm`) is enough.
 - `hung-chang-dso-2100`: parallel port. Model a USB adapter with an
   in-tree driver (Belkin USS-720) so `/dev/parport0` and the
   `/proc/sys/dev/parport` entries exist, or use CUSE or an
@@ -144,6 +142,13 @@ The models are plain Rust with no I/O for this reason; see
   `cem-dt-885x` session lost after an interrupt's close.
 
 ### Harness and CI
+
+- sysfs carrier, synchronous stores: `oxrok-emu --sysfs` sees a write only
+  after the tool closes the file, so a store the model refuses never fails at
+  the tool, and a read right after can still see the refused value. A
+  same-length rewrite is one write(2) a reader could catch mid-copy. A FUSE
+  tree, or fanotify permission events, would make a store's errno, -ENODEV
+  reads of a removed device and sysfs's 4096-byte attribute size reachable.
 
 - The emulator CI job skips when the hosted kernel has no `vhci-hcd`,
   and branch protection counts a skipped required job as satisfied. A
@@ -340,6 +345,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `baylibre-acme` on an ACME cape, and on current kernels: the fixed GPIO
+  numbers 474-511 and the legacy `/sys/class/gpio` don't exist there; the
+  GPIO character device would be needed.
 
 - `scpi-dmm` on hardware: a 34401A or 34465A for the wait on one USBTMC
   request at slow integration times, and a GW Instek or OWON for dialects
