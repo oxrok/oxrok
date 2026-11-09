@@ -111,6 +111,10 @@ impl Driver for SerialDmmDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        crate::serial::hid::Chip::claims(&crate::serial::hid::Chip::ALL)
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         let mut serialcomm = self.0.serialcomm.to_owned();

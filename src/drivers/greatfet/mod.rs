@@ -135,6 +135,10 @@ impl Driver for GreatfetDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(ID, "Great Scott Gadgets", "GreatFET One")]
+    }
+
     /// `scan()`: `conn=` takes `sr_usb_find()`'s forms, of any device as
     /// in the C, or `sn=TEXT`, part of the USB serial number string. Each
     /// board must answer its serial number and version.

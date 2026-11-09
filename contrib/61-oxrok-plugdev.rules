@@ -1,0 +1,11 @@
+# Access to the devices 60-oxrok.rules tags, for the members of group
+# plugdev (systems without logind). Install this file or
+# 61-oxrok-uaccess.rules, not both.
+#
+# This file is part of oxrok, GPL-3.0-or-later.
+
+ACTION!="add|change", GOTO="oxrok_rules_plugdev_end"
+
+ENV{ID_OXROK}=="1", MODE="660", GROUP="plugdev"
+
+LABEL="oxrok_rules_plugdev_end"

@@ -248,6 +248,10 @@ impl Driver for Fx2lafwDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        PROFILES.iter().map(|p| crate::core::UsbClaim::id(p.id, p.vendor, p.model)).collect()
+    }
+
     fn firmware(&self) -> Vec<FirmwareDependency> {
         vec![
             FirmwareDependency::upload(

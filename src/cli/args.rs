@@ -36,6 +36,10 @@ pub struct Args {
     #[arg(long = "list-firmware", hide = true)]
     pub list_firmware: bool,
 
+    /// Print udev rules for the USB devices the drivers open (Linux; contrib/60-oxrok.rules)
+    #[arg(long = "udev-rules")]
+    pub udev_rules: bool,
+
     /// Set loglevel (0-5, default 2)
     #[arg(short = 'l', long, default_value_t = 2, value_name = "LEVEL")]
     pub loglevel: u8,

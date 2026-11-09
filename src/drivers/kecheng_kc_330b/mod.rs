@@ -132,6 +132,10 @@ impl Driver for Kc330bDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(protocol::VENDOR, protocol::PRODUCT, "Kecheng", "KC-330B")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

@@ -54,7 +54,11 @@ use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
     Packet, PacketSink, Result, Value, ValueList,
 };
-use crate::usb::{Transport, UsbDeviceInfo, split_conn};
+use crate::usb::{Transport, UsbDeviceInfo, UsbId, split_conn};
+
+/// The loggers' USB id (a `SiLabs` F321 behind `10c4:0002`), for the
+/// udev rules; the scan opens what `conn=` names.
+pub const ID: UsbId = UsbId { vendor: 0x10c4, product: 0x0002 };
 use protocol::{Decoder, EP_IN, INTERFACE, LOG_READ, LOG_TIMEOUT, Link, LogFormat, Profile};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -92,6 +96,10 @@ impl Driver for LascarDriver {
 
     fn classes(&self) -> &'static [DeviceClass] {
         &CLASSES
+    }
+
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(ID, "Lascar", "EasyLog EL-USB")]
     }
 
     /// `scan()`: nothing without `conn=`, and only what a block identifies.

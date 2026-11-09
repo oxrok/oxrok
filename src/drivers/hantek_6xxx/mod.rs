@@ -98,6 +98,19 @@ impl Driver for Hantek6xxxDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        let mut claims: Vec<_> = protocol::PROFILES
+            .iter()
+            .map(|p| crate::core::UsbClaim::id(p.orig, p.vendor, p.model))
+            .collect();
+        claims.push(crate::core::UsbClaim::id(
+            protocol::FIRMWARE_ID,
+            "sigrok",
+            "fx2lafw DSO (a 6022 family device with its firmware running)",
+        ));
+        claims
+    }
+
     fn firmware(&self) -> Vec<FirmwareDependency> {
         vec![
             FirmwareDependency::upload(

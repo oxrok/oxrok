@@ -99,7 +99,7 @@ SRC_TAR   := $(DIST)/$(SRC_NAME).tar.xz
 SRC_CHECK ?= $(DIST)/src-check
 SRC_CHECK_WRAP ?=
 
-.PHONY: build sign-cli decoders notices notices-all dist dist-src dist-src-check clean-dist
+.PHONY: build sign-cli decoders notices notices-all dist dist-src dist-src-check clean-dist udev-rules
 
 build:
 	rustup target add $(TARGET)
@@ -185,3 +185,8 @@ dist-src-check:
 
 clean-dist:
 	rm -rf $(DIST) build
+
+# The udev rules, from the drivers; tests/udev_rules.rs fails when the
+# committed file is behind.
+udev-rules:
+	$(CARGO) run -q --bin oxrok -- --udev-rules > contrib/60-oxrok.rules

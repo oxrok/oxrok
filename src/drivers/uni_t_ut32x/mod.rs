@@ -100,6 +100,10 @@ impl Driver for Ut32xDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        crate::serial::hid::Chip::claims(&[crate::serial::hid::Chip::Ch9325])
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         let mut serialcomm = DEFAULT_SERIALCOMM.to_owned();

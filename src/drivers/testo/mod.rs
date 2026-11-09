@@ -40,7 +40,11 @@ use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
     PacketSink, Result, Value, ValueList,
 };
-use crate::usb::{Transport, UsbDeviceInfo, libusb_error_name, split_conn};
+use crate::usb::{Transport, UsbDeviceInfo, UsbId, libusb_error_name, split_conn};
+
+/// The meters' USB id (`128d:0003`), for the udev rules: the scan goes by
+/// the manufacturer and product strings instead.
+pub const ID: UsbId = UsbId { vendor: 0x128d, product: 0x0003 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -76,6 +80,10 @@ impl Driver for TestoDriver {
 
     fn classes(&self) -> &'static [DeviceClass] {
         &CLASSES
+    }
+
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(ID, "Testo", "435, 635, 735")]
     }
 
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {

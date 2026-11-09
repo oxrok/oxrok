@@ -124,6 +124,17 @@ impl Driver for LogicStudioDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![
+            crate::core::UsbClaim::id(
+                ID_LACK_FIRMWARE,
+                "LeCroy",
+                "LogicStudio 16 (without firmware)",
+            ),
+            crate::core::UsbClaim::id(ID_HAVE_FIRMWARE, "LeCroy", "LogicStudio 16"),
+        ]
+    }
+
     fn ends_captures_itself(&self) -> bool {
         true
     }

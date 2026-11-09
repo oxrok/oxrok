@@ -92,6 +92,10 @@ impl Driver for ScanaPlusDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(VENDOR_ID, PRODUCT_ID, "IKALOGIC", "ScanaPLUS (an FT232H)")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         if let Some((key, _)) = options.first() {
             return Err(Error::UnknownKey(key.id().to_owned()));

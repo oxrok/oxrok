@@ -71,8 +71,6 @@ skills and `track.py` are in
 
 ## Packaging and release
 
-- Linux udev rules. The README and [USB.md](USB.md) both say a device is
-  root-only without one, and no rules ship yet.
 - A Homebrew formula or tap.
 - An AUR `PKGBUILD`.
 - A stable release. Every published version so far is a pre-release, so

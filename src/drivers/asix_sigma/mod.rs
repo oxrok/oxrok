@@ -210,6 +210,13 @@ impl Driver for AsixSigmaDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![
+            crate::core::UsbClaim::ids(VENDOR, PRODUCT_SIGMA, "ASIX", "SIGMA"),
+            crate::core::UsbClaim::ids(VENDOR, PRODUCT_OMEGA, "ASIX", "OMEGA"),
+        ]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         let mut probe_names = None;

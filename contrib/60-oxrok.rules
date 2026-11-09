@@ -1,0 +1,254 @@
+# udev rules for the USB devices oxrok's drivers open themselves.
+#
+# Generated from the drivers by `oxrok --udev-rules`; `make udev-rules`
+# writes contrib/60-oxrok.rules. Do not edit by hand: change the
+# driver's `usb_claims` and regenerate.
+#
+# These rules grant nothing: they tag the devices with ID_OXROK=1. One of
+# 61-oxrok-uaccess.rules (the seated user, through logind) and
+# 61-oxrok-plugdev.rules (group plugdev) grants the access; install
+# this file and one of the two in /etc/udev/rules.d/.
+#
+# Not here: serial ports behind a USB cable, which the tty's group
+# (dialout or uucp) covers.
+#
+# This file is part of oxrok, GPL-3.0-or-later.
+
+ACTION!="add|change", GOTO="oxrok_rules_end"
+SUBSYSTEM!="usb|usbmisc|usb_device|hidraw", GOTO="oxrok_rules_end"
+
+# USBTMC (USB488) instruments, by interface class: gwinstek-gds-800, hameg-hmo, hp-59306a, lecroy-xstream, rigol-dg, rigol-ds, rohde-schwarz-sme-0x, scpi-dmm, scpi-pps, siglent-sdl10x0, siglent-sds, yokogawa-dlm
+ENV{ID_USB_INTERFACES}=="*:fe0301:*", ENV{ID_OXROK}="1"
+
+# ChronoVu LA8, LA16 (old ids) (chronovu-la); FTDI FT232R (ftdi-la)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ENV{ID_OXROK}="1"
+
+# FTDI FT2232H (ftdi-la); Saanlima Pipistrello (an FT2232H) (p-ols)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6010", ENV{ID_OXROK}="1"
+
+# FTDI FT4232H (ftdi-la)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6011", ENV{ID_OXROK}="1"
+
+# FTDI FT232H (ftdi-la); IKALOGIC ScanaPLUS (an FT232H) (ikalogic-scanaplus)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6014", ENV{ID_OXROK}="1"
+
+# ChronoVu LA8, LA16 (chronovu-la)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="8867", ENV{ID_OXROK}="1"
+
+# FTDI FT2232H-TUMPA (ftdi-la)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="8a98", ENV{ID_OXROK}="1"
+
+# Intronix LogicPort LA1034 (intronix-logicport)
+ATTRS{idVendor}=="0403", ATTRS{idProduct}=="dc48", ENV{ID_OXROK}="1"
+
+# Voltcraft DSO2020 (hantek-6xxx)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="2020", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2090 (hantek-dso)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="2090", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2150 (hantek-dso)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="2150", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2250 (hantek-dso)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="2250", ENV{ID_OXROK}="1"
+
+# Hantek DSO-5200 (hantek-dso)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="5200", ENV{ID_OXROK}="1"
+
+# Hantek DSO-5200A (hantek-dso)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="520a", ENV{ID_OXROK}="1"
+
+# Hantek 6022BE (hantek-6xxx)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="6022", ENV{ID_OXROK}="1"
+
+# Hantek 6022BL (hantek-6xxx)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="602a", ENV{ID_OXROK}="1"
+
+# Cypress FX2 (fx2lafw)
+ATTRS{idVendor}=="04b4", ATTRS{idProduct}=="8613", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2090 (hantek-dso)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="2090", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2150 (hantek-dso)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="2150", ENV{ID_OXROK}="1"
+
+# Hantek DSO-2250 (hantek-dso)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="2250", ENV{ID_OXROK}="1"
+
+# Hantek 4032L (hantek-4032l)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="4032", ENV{ID_OXROK}="1"
+
+# Hantek DSO-5200 (hantek-dso)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="5200", ENV{ID_OXROK}="1"
+
+# Hantek DSO-5200A (hantek-dso)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="520a", ENV{ID_OXROK}="1"
+
+# Hantek 6022BE (hantek-6xxx)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="6022", ENV{ID_OXROK}="1"
+
+# Hantek 6022BL (hantek-6xxx)
+ATTRS{idVendor}=="04b5", ATTRS{idProduct}=="602a", ENV{ID_OXROK}="1"
+
+# Microchip PICkit2 (microchip-pickit2)
+ATTRS{idVendor}=="04d8", ATTRS{idProduct}=="0033", ENV{ID_OXROK}="1"
+
+# UNI-T UT-D04 cable (WCH CH9325 or Hoitek HE2325U) (bbcgm-2010, brymen-bm25x, brymen-bm52x and 94 more)
+ATTRS{idVendor}=="04fa", ATTRS{idProduct}=="2490", ENV{ID_OXROK}="1"
+
+# LeCroy LogicStudio 16 (without firmware) (lecroy-logicstudio)
+ATTRS{idVendor}=="05ff", ATTRS{idProduct}=="a001", ENV{ID_OXROK}="1"
+
+# LeCroy LogicStudio 16 (lecroy-logicstudio)
+ATTRS{idVendor}=="05ff", ATTRS{idProduct}=="a002", ENV{ID_OXROK}="1"
+
+# Brymen BU-86X adapter (bbcgm-2010, brymen-bm25x, brymen-bm52x and 66 more)
+ATTRS{idVendor}=="0820", ATTRS{idProduct}=="0001", ENV{ID_OXROK}="1"
+
+# CWAV USBee ZX (fx2lafw)
+ATTRS{idVendor}=="08a9", ATTRS{idProduct}=="0005", ENV{ID_OXROK}="1"
+
+# CWAV USBee SX (fx2lafw)
+ATTRS{idVendor}=="08a9", ATTRS{idProduct}=="0009", ENV{ID_OXROK}="1"
+
+# CWAV USBee AX (fx2lafw)
+ATTRS{idVendor}=="08a9", ATTRS{idProduct}=="0014", ENV{ID_OXROK}="1"
+
+# CWAV USBee DX (fx2lafw)
+ATTRS{idVendor}=="08a9", ATTRS{idProduct}=="0015", ENV{ID_OXROK}="1"
+
+# Saleae Logic (fx2lafw)
+ATTRS{idVendor}=="0925", ATTRS{idProduct}=="3881", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-16128U (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7002", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-16032U (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7007", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(16064) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7009", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(16128) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="700a", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(32128) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="700b", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(321000) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="700c", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(322000) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="700d", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(16032) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="700e", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(162000) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7016", ENV{ID_OXROK}="1"
+
+# ZEROPLUS LAP-C(16128+) (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7025", ENV{ID_OXROK}="1"
+
+# ZEROPLUS Logian-16L (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7060", ENV{ID_OXROK}="1"
+
+# ZEROPLUS Logian-16L (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7064", ENV{ID_OXROK}="1"
+
+# ZEROPLUS AKIP-9101 (zeroplus-logic-cube)
+ATTRS{idVendor}=="0c12", ATTRS{idProduct}=="7100", ENV{ID_OXROK}="1"
+
+# Kecheng KC-330B (kecheng-kc-330b)
+ATTRS{idVendor}=="1041", ATTRS{idProduct}=="8101", ENV{ID_OXROK}="1"
+
+# Lascar EasyLog EL-USB (lascar-el-usb)
+ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="0002", ENV{ID_OXROK}="1"
+
+# UNI-T UT-D09 cable (SiLabs CP2110) (bbcgm-2010, brymen-bm25x, brymen-bm52x and 66 more)
+ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea80", ENV{ID_OXROK}="1"
+
+# Victor 70C/86C cable (bbcgm-2010, brymen-bm25x, brymen-bm52x and 66 more)
+ATTRS{idVendor}=="1244", ATTRS{idProduct}=="d237", ENV{ID_OXROK}="1"
+
+# Testo 435, 635, 735 (testo)
+ATTRS{idVendor}=="128d", ATTRS{idProduct}=="0003", ENV{ID_OXROK}="1"
+
+# dcttech USBRelay (HID) (dcttech-usbrelay)
+ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05df", ENV{ID_OXROK}="1"
+
+# Braintechnology USB-LPS (fx2lafw)
+ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="0498", ENV{ID_OXROK}="1"
+
+# UNI-T UT-D04 cable (WCH CH9325 or Hoitek HE2325U) (bbcgm-2010, brymen-bm25x, brymen-bm52x and 94 more)
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="e008", ENV{ID_OXROK}="1"
+
+# sigrok FX2 LA (8ch) (fx2lafw)
+ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="608c", ENV{ID_OXROK}="1"
+
+# sigrok FX2 LA (16ch) (fx2lafw)
+ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="608d", ENV{ID_OXROK}="1"
+
+# sigrok fx2lafw DSO (a 6022 family device with its firmware running) (hantek-6xxx)
+ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="608e", ENV{ID_OXROK}="1"
+
+# sigrok usb-c-grok (fx2lafw)
+ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="608f", ENV{ID_OXROK}="1"
+
+# Great Scott Gadgets GreatFET One (greatfet)
+ATTRS{idVendor}=="1d50", ATTRS{idProduct}=="60e6", ENV{ID_OXROK}="1"
+
+# IKALOGIC Scanalogic-2 (ikalogic-scanalogic2)
+ATTRS{idVendor}=="20a0", ATTRS{idProduct}=="4123", ENV{ID_OXROK}="1"
+
+# Saleae Logic16 (saleae-logic16)
+ATTRS{idVendor}=="21a9", ATTRS{idProduct}=="1001", ENV{ID_OXROK}="1"
+
+# Saleae Logic Pro 16 (saleae-logic-pro)
+ATTRS{idVendor}=="21a9", ATTRS{idProduct}=="1006", ENV{ID_OXROK}="1"
+
+# Sysclk LWLA1016 (sysclk-lwla)
+ATTRS{idVendor}=="2961", ATTRS{idProduct}=="6688", ENV{ID_OXROK}="1"
+
+# Sysclk LWLA1034 (sysclk-lwla)
+ATTRS{idVendor}=="2961", ATTRS{idProduct}=="6689", ENV{ID_OXROK}="1"
+
+# Sysclk SLA5032 (sysclk-sla5032)
+ATTRS{idVendor}=="2961", ATTRS{idProduct}=="66b0", ENV{ID_OXROK}="1"
+
+# DreamSourceLab DSLogic (dreamsourcelab-dslogic)
+ATTRS{idVendor}=="2a0e", ATTRS{idProduct}=="0001", ENV{ID_OXROK}="1"
+
+# DreamSourceLab DSCope (dreamsourcelab-dslogic)
+ATTRS{idVendor}=="2a0e", ATTRS{idProduct}=="0002", ENV{ID_OXROK}="1"
+
+# DreamSourceLab DSLogic Pro (dreamsourcelab-dslogic)
+ATTRS{idVendor}=="2a0e", ATTRS{idProduct}=="0003", ENV{ID_OXROK}="1"
+
+# DreamSourceLab DSLogic Plus (dreamsourcelab-dslogic)
+ATTRS{idVendor}=="2a0e", ATTRS{idProduct}=="0020", ENV{ID_OXROK}="1"
+
+# DreamSourceLab DSLogic Basic (dreamsourcelab-dslogic)
+ATTRS{idVendor}=="2a0e", ATTRS{idProduct}=="0021", ENV{ID_OXROK}="1"
+
+# Kingst LA2016, LA1016 (kingst-la2016)
+ATTRS{idVendor}=="77a1", ATTRS{idProduct}=="01a2", ENV{ID_OXROK}="1"
+
+# Sainsmart DDS120 (hantek-6xxx)
+ATTRS{idVendor}=="8102", ATTRS{idProduct}=="8102", ENV{ID_OXROK}="1"
+
+# ASIX SIGMA (asix-sigma)
+ATTRS{idVendor}=="a600", ATTRS{idProduct}=="a000", ENV{ID_OXROK}="1"
+
+# ASIX OMEGA (asix-sigma)
+ATTRS{idVendor}=="a600", ATTRS{idProduct}=="a004", ENV{ID_OXROK}="1"
+
+# YiXingDianZi MDSO (hantek-6xxx)
+ATTRS{idVendor}=="d4a2", ATTRS{idProduct}=="5660", ENV{ID_OXROK}="1"
+
+# Instrustar ISDS205B (hantek-6xxx)
+ATTRS{idVendor}=="d4a2", ATTRS{idProduct}=="5661", ENV{ID_OXROK}="1"
+
+LABEL="oxrok_rules_end"

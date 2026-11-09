@@ -104,6 +104,13 @@ impl Driver for ZeroplusDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        protocol::PROFILES
+            .iter()
+            .map(|p| crate::core::UsbClaim::ids(protocol::VENDOR, p.pid, "ZEROPLUS", p.name))
+            .collect()
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {
