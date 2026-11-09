@@ -477,6 +477,36 @@ fn wait_trigger_starts_the_output_at_the_trigger() {
     assert_eq!(waited.lines().collect::<Vec<_>>(), want);
 }
 
+/// The software trigger's extras on the counting pattern: the row of the
+/// trigger for value ranges and the or/and combines.
+#[test]
+fn soft_trigger_ranges_and_combines() {
+    let row = |t: &str| {
+        let (out, err, ok) = oxrok(&[
+            "-d",
+            DEMO4,
+            "-g",
+            "Logic",
+            "-c",
+            "pattern=incremental",
+            "--samples",
+            "12",
+            "-t",
+            t,
+            "-O",
+            "csv:header=false:trigger=true",
+        ]);
+        assert!(ok, "{t}: {err}");
+        // The title, then a row per sample.
+        out.lines().position(|l| l.ends_with(",1")).map(|at| at - 1)
+    };
+    assert_eq!(row("D0-D2=3..5"), Some(3));
+    assert_eq!(row("D0-D2=!0..5"), Some(6));
+    // D0 first rises at 1, D1 at 2.
+    assert_eq!(row("D0=r|D1=r"), Some(1));
+    assert_eq!(row("D0=r&D1=r"), Some(2));
+}
+
 /// With no trigger, `-w` would write nothing at all: refused.
 #[test]
 fn wait_trigger_needs_a_trigger() {

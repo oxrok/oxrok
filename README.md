@@ -543,7 +543,7 @@ rejects what a device cannot do:
 
 The LogicPort runs all of these in its FPGA, with two stages, which is what
 the hardware offers. The software trigger behind the demo and fx2lafw
-devices takes counts and durations. These forms, and the LogicPort's clock
+devices takes all of them. These forms, and the LogicPort's clock
 qualifier, setup and hold sampling points, input inversion and frequency
 counter, are not in sigrok; see [docs/CLI.md](docs/CLI.md) and
 [docs/DEVICES.md](docs/DEVICES.md).

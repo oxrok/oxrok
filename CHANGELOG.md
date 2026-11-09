@@ -74,6 +74,11 @@ release may change the library API.
   sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request
   315, now part of the oracle.
+- The software trigger (`SoftTrigger`) takes value ranges and the two
+  stage or/and combines, so the devices it runs on take every `-t` extra.
+  `fx2lafw` uses it for triggers beyond level and edge stages, which
+  still run libsigrok's soft trigger sample for sample, and now takes
+  counts, durations, ranges and or/and.
 - `-w` with no `-t` is refused.
 - A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
   which fails a `--strict` run.

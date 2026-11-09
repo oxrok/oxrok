@@ -54,8 +54,8 @@ Deliberate, and kept small:
     in any order. Exactly two stages.
 
   Counts, durations and ranges belong to the stage their token is in.
-  The demo and fx2lafw devices (software trigger) take counts and
-  durations; the LogicPort takes all of them with two stages, see
+  The devices with a software trigger (demo, fx2lafw) take all of them,
+  as does the LogicPort with two stages, see
   `docs/DEVICES.md`. sigrok-cli rejects these forms. `>`, `;`, `|` and
   `&` need quoting in a shell.
 - `rigol-ds` converts `horiz_triggerpos` to seconds with the number
