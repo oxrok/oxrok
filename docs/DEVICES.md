@@ -3831,6 +3831,36 @@ the scope behind its lines (options `scope=absent`, `trigger=N|never`,
 runs sigrok-cli with a 20 ms settle after each claim, timing only. Never run
 on hardware.
 
+### Mooshimeter (`mooshimeter-dmm`)
+
+Bluetooth LE, Linux only. `conn=` is the meter's address: with dashes on the
+CLI (`-d mooshimeter-dmm:conn=D0-5F-B8-4D-00-01`, since the CLI splits at
+`:`), with colons from a library, or dense. oxrok opens an L2CAP ATT socket
+and the kernel makes the link: no root is needed, the controller must be up,
+and bluetoothd may run alongside. `channel_config` is `CH1[,CH2]`, each
+`MODE[;RANGE[;ANALYSIS]]`: CH1 takes Current/A, Temperature/T/K,
+Resistance/Ohm/W/R, Diode/D, Aux/LV; CH2 Voltage/V and the same others. One
+channel at a time takes the shared input; a range of 0 or none autoranges;
+the analysis is Mean/DC, RMS/AC or Buffer/Samples. P (real power) is off by
+default.
+
+Differences from libsigrok: K on CH2's temperature, as on CH1 and in the
+vendor's app; buffers scaled by `BUF_LSB2NATIVE` and the scale read again
+after an autorange; a time limit that ends on time; a lost notification (on
+the ninth held past the gap), a dropped link, or silence under a sample
+limit fails the capture; readings ahead of the handshake are dropped; P alone
+on a meter without `REAL_PWR` is refused; a 20 s connect timeout.
+
+Emulated by model `mooshimeter-dmm`: a whole LE controller on the kernel's
+`/dev/vhci` (`hci_vhci`) with the meter as its one peripheral, served by
+`oxrok-emu serve mooshimeter-dmm --ble`; bluetoothd must not run during a
+session. 95 cases on 2026-11-09 (80 full, 7 `--oracle-differs`, 8
+`--oracle-bug`). The tree's serialization, its CRC, the byte order and the
+keep-alive follow the vendor's Python API and Android app; the message order
+per reading, the DEPTH/RATE period and the buffers' full scale are the
+model's own reading, which the oracle can't check. Never run on a real
+meter.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

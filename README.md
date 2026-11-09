@@ -21,11 +21,11 @@ mind, and read the table below for what has met which kind of evidence.
 
 Early, and most of it has never touched the device it drives.
 
-On 2026-11-06 `src/lib.rs` has 63 driver modules, with 164 driver
-ids (`oxrok -L`; most ids are multimeters). 62 of the modules are
-counterparts of libsigrok's 87 `src/hardware` directories, and one, the
-LogicPort, is not in libsigrok. More are being ported:
-[docs/ROADMAP.md](docs/ROADMAP.md) has the current state.
+On 2026-11-09 `src/drivers` has 88 driver modules, with 193 driver
+ids (`oxrok -L`; most ids are multimeters). 87 of the modules are
+counterparts of all of libsigrok's 87 `src/hardware` directories, and one,
+the LogicPort, is not in libsigrok. What remains is in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 Also there: the `bits`, `hex`, `ascii`, `analog`, `csv`, `vcd`, `binary`,
 `srzip` and `null` outputs; `.sr`, VCD and binary inputs (no CSV input yet, see

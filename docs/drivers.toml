@@ -1370,17 +1370,24 @@ limits = [
 [drivers.mooshimeter-dmm]
 name = "Mooshimeter DMM"
 libsigrok = "mooshimeter-dmm"
-ids = []
+ids = ["mooshimeter-dmm"]
 kind = "meter"
-connection = "none"
-vendor = "Mooshimeter"
-models = []
-status = ["not-ported"]
-emu = []
+connection = "bluetooth"
+vendor = "Mooshim Engineering"
+models = ["Mooshimeter"]
+status = ["emulated"]
+emu = ["mooshimeter-dmm"]
 evidence = []
-reason = "Bluetooth LE (GATT through BlueZ); the bench ESP32 as a BLE peripheral is the practical path."
-behaviour = []
-limits = []
+behaviour = [
+  "Bluetooth LE on Linux through the kernel's L2CAP socket: no root, the controller up.",
+  "conn= is the meter's address, with dashes on the command line (D0-5F-B8-4D-00-01).",
+  "channel_config picks each channel's input, range and analysis; one channel at a time takes the shared input.",
+  "Buffer analysis sends every sample at the meter's own scale; temperatures are in kelvin on both channels.",
+]
+limits = [
+  "Not run on a real meter; verified against sigrok-cli on an emulated one.",
+  "A lost notification, a dropped link, or a silent meter under a sample limit ends the capture with an error.",
+]
 
 [drivers.rigol-dg]
 name = "Rigol DG"

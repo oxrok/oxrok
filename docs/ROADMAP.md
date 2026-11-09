@@ -1,30 +1,35 @@
 # Roadmap
 
-Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 86 of libsigrok's 87 `src/hardware` drivers are
-ported; the 1 still missing are listed below. Native decoder porting is
+Status: 2026-11-09. `v0.2.0` is the current stable release, on GitHub and
+crates.io. All 87 of libsigrok's `src/hardware` drivers are
+ported. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
-The work that remains is driver ports, packaging, the Pico backend, and
+The work that remains is transports, packaging, the Pico backend, and
 the emulator, CLI and hardware-verification gaps listed here. Completed
 phases and per-batch history have been removed; the evidence per driver
 is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 [NATIVE_DECODERS.md](NATIVE_DECODERS.md).
 
-## Driver ports still open
+## Transports
 
-The 1 libsigrok driver with no oxrok port. Each needs a device model,
-scenario cases and a `--hw` path like the ported ones. No USB
-logic-analyzer port remains: every one is ported, has a replay fixture,
-and needs hardware runs rather than code.
+No USB logic-analyzer driver needs code: every one is ported, has a replay
+fixture, and needs hardware runs.
 
-### Odd transports (1)
+### Bluetooth
 
-- `mooshimeter-dmm`: BLE GATT through BlueZ. An ESP32 BLE peripheral
-  serving the Mooshimeter's characteristics is the practical model. The
-  driver has no `bt/`, `bt/notify`, `ble122` or `cc254x` path at all, so
-  the BLE units of `atorch` are unreachable too; RFCOMM goes through
-  `/dev/rfcommN`.
+`mooshimeter-dmm` runs over `src/bt` (an L2CAP ATT socket) and the BLE
+shell (`emu/src/shells/ble.rs`, a controller on `hci_vhci`). Open:
+
+- `atorch`'s BLE units (libsigrok's `serial_bt.c`: `bt/ble122`,
+  `bt/cc254x`, `bt/notify`) can go over `src/bt` and the BLE shell. They
+  need a `Port` on a notify/write characteristic pair, CCCD indications in
+  the shell (`ble122` writes 0x0003), and an ATT MTU above 23 with
+  fragmentation if a unit asks for one. RFCOMM (`bt/rfcomm`) is still open:
+  the shell has no BR/EDR.
+- The BLE model is skipped by name where the kernel has no `hci_vhci`
+  (presumably GitHub's hosted runners), so CI gives it no coverage; a
+  self-hosted runner with `hci_vhci` and no bluetoothd would run it.
 
 ### GPIB
 
@@ -346,6 +351,11 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `mooshimeter-dmm` on a real meter: the per-reading message order, the
+  DEPTH/RATE period and the buffers' full scale are the model's reading of
+  the vendor's code; radio timing, pairing and more than one link are not
+  modelled.
 
 - `hung-chang-dso-2100` on a scope and a real cable: the line decoding, the
   waveform, the interleaved timing and the post-trigger fill time are the
