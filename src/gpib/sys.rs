@@ -52,6 +52,13 @@ struct SerialPoll {
     padding: [u8; 3],
 }
 
+/// `struct gpib_eos_ioctl`.
+#[repr(C)]
+struct Eos {
+    eos: i32,
+    eos_flags: i32,
+}
+
 /// `struct gpib_board_info_ioctl`, its bit fields as one word.
 #[repr(C)]
 #[derive(Default)]
@@ -71,6 +78,7 @@ const IBCMD: Opcode = opcode::read_write::<ReadWrite>(GPIB_CODE, 102);
 const IBOPENDEV: Opcode = opcode::read_write::<OpenDev>(GPIB_CODE, 3);
 const IBCLOSEDEV: Opcode = opcode::write::<CloseDev>(GPIB_CODE, 4);
 const IBTMO: Opcode = opcode::write::<u32>(GPIB_CODE, 17);
+const IBEOS: Opcode = opcode::write::<Eos>(GPIB_CODE, 19);
 const IBRSP: Opcode = opcode::read_write::<SerialPoll>(GPIB_CODE, 18);
 const IBMUTEX: Opcode = opcode::write::<i32>(GPIB_CODE, 26);
 const IBBOARD_INFO: Opcode = opcode::read::<BoardInfo>(GPIB_CODE, 29);
@@ -157,41 +165,61 @@ impl Board {
             .map_err(|e| errno_error(e, "timeout", self.address))
     }
 
-    /// `IBRD`, `IBWRT` or `IBCMD` on `data`, its count done and its end flag.
-    fn transfer<const OP: Opcode>(
+    /// `IBRD`, `IBWRT` or `IBCMD` on the buffer at `buffer_ptr`, `len` bytes long:
+    /// its count done and its end flag.
+    ///
+    /// # Safety
+    ///
+    /// `OP` is `IBRD`, `IBWRT` or `IBCMD`, and `buffer_ptr` points at `len` bytes
+    /// valid for the call, writable for `IBRD`.
+    unsafe fn transfer<const OP: Opcode>(
         &self,
-        data: *mut u8,
+        buffer_ptr: u64,
         len: usize,
         end: bool,
         what: &str,
     ) -> (usize, bool, Result<()>) {
         let mut rw = ReadWrite {
-            buffer_ptr: data as u64,
+            buffer_ptr,
             requested_transfer_count: u32::try_from(len).unwrap_or(u32::MAX),
             end: i32::from(end),
             handle: self.handle,
             ..ReadWrite::default()
         };
-        // SAFETY: the opcodes this is called with take a gpib_read_write_ioctl, and
-        // `data` is valid for `len` bytes, read or written, for the call (the callers
-        // pass a slice's pointer and length).
+        // SAFETY: the opcode takes a gpib_read_write_ioctl, and the caller vouches
+        // for the buffer.
         let r = unsafe { call::<OP, _>(&self.file, &mut rw) };
         let done = (rw.completed_transfer_count as usize).min(len);
         (done, rw.end != 0, r.map_err(|e| errno_error(e, what, self.address)))
     }
 
-    fn command(&self, bytes: &[u8]) -> Result<()> {
-        let mut bytes = bytes.to_vec();
+    /// `IBWRT` or `IBCMD` of `data`, which the kernel only reads.
+    fn send<const OP: Opcode>(&self, data: &[u8], end: bool, what: &str) -> Result<()> {
+        // SAFETY: IBWRT and IBCMD copy from the buffer and never write it, and the
+        // slice is valid for its length for the call.
         let (done, _, r) =
-            self.transfer::<IBCMD>(bytes.as_mut_ptr(), bytes.len(), false, "command");
+            unsafe { self.transfer::<OP>(data.as_ptr() as u64, data.len(), end, what) };
         r?;
-        if done < bytes.len() {
+        if done < data.len() {
             return Err(Error::device(format!(
-                "GPIB: {done} of {} command bytes went out",
-                bytes.len()
+                "GPIB: {what}: {done} of {} bytes went out",
+                data.len()
             )));
         }
         Ok(())
+    }
+
+    fn command(&self, bytes: &[u8]) -> Result<()> {
+        self.send::<IBCMD>(bytes, false, "command")
+    }
+
+    /// `iblcleos`: no end of string mode, so a read ends at EOI alone, whatever an
+    /// earlier program left set. A binary answer can hold any byte.
+    fn clear_eos(&self) -> Result<()> {
+        let mut eos = Eos { eos: 0, eos_flags: 0 };
+        // SAFETY: IBEOS takes a gpib_eos_ioctl.
+        unsafe { call::<IBEOS, _>(&self.file, &mut eos) }
+            .map_err(|e| errno_error(e, "end of string mode", self.address))
     }
 
     /// `ibwrt`: `data` to the device, EOI with its last byte.
@@ -199,13 +227,7 @@ impl Board {
         let _lock = Locked::take(&self.file, self.address)?;
         self.timeout(IO_TIMEOUT)?;
         self.command(&send_setup(self.own_pad, self.own_sad, self.address))?;
-        let mut data = data.to_vec();
-        let (done, _, r) = self.transfer::<IBWRT>(data.as_mut_ptr(), data.len(), true, "write");
-        r?;
-        if done < data.len() {
-            return Err(Error::device(format!("GPIB: {done} of {} bytes went out", data.len())));
-        }
-        Ok(())
+        self.send::<IBWRT>(data, true, "write")
     }
 
     /// `ibrd`: up to `buf.len()` bytes from the device, waiting at most `timeout`.
@@ -218,8 +240,10 @@ impl Board {
         let read = {
             let _lock = Locked::take(&self.file, self.address)?;
             self.timeout(timeout)?;
+            self.clear_eos()?;
             self.command(&receive_setup(self.own_pad, self.own_sad, self.address))?;
-            self.transfer::<IBRD>(buf.as_mut_ptr(), buf.len(), false, "read")
+            // SAFETY: the slice is writable for its length for the call.
+            unsafe { self.transfer::<IBRD>(buf.as_mut_ptr() as u64, buf.len(), false, "read") }
         };
         match read {
             (n, end, Ok(())) => Ok((n, end)),

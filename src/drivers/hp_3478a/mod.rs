@@ -21,17 +21,22 @@
 //!
 //! - A binary status shorter than four bytes, with no function, no digits or a range
 //!   the function lacks, is no status, where C reads past the answer or keeps what it
-//!   had (`protocol.c:441-444`, the unread returns of `parse_range_*`).
+//!   had (`protocol.c:416-419`, the unread returns of `parse_range_*`).
 //! - A reading must have the meter's form (`+1.23456E+0`), where `sr_atod_ascii`
 //!   takes any number; anything else fails the capture, as a number C can't read does.
 //! - A meter that never has a reading ready fails a capture after 30 s, and after a
 //!   reading gets a warning at 30 s and fails at 10 minutes; C polls for ever.
 //! - A time limit ends a capture with no reading, where C checks it after a sample.
 //! - `digits` takes `3.5`, `4.5` and `5.5` alone: C's loop matches `""` to `N-1` and
-//!   reads past `digits_map` for anything else (`api.c:300-303`).
+//!   reads past `digits_map` for anything else (`api.c:279-283`).
 //! - A failed `T1` or status at the start fails the capture, where C goes on.
 //! - A setting during a capture is refused, where C's would go out between a poll and
-//!   its reading.
+//!   its reading; so are a get and the range list, which ask the meter too.
+//! - A message ends in a line feed with EOI on it, as `Scpi::send` adds one: `B\n`,
+//!   `T1\n`. libsigrok's `sr_scpi_send` adds the line feed too, so the bytes are C's;
+//!   the meter takes either end.
+//! - Extended ohms (`F7`) take any range code: what the meter reports there is not
+//!   documented, and C's `parse_range_ohm` is a guess too. The model reports 7.
 
 #![forbid(unsafe_code)]
 
@@ -139,8 +144,10 @@ impl Driver for Hp3478aDriver {
 
 struct Worker {
     stop: Arc<AtomicBool>,
-    /// Ends by giving the connection back, with the last status.
-    handle: JoinHandle<(Scpi, Option<Status>)>,
+    /// Gives the connection back to the link, with the last status, before it
+    /// says the capture is over: a get after a capture that ended by itself finds
+    /// it there.
+    handle: JoinHandle<()>,
 }
 
 /// The connection and what the meter last said of itself.
@@ -180,11 +187,15 @@ impl Link {
     }
 }
 
+fn lock(link: &Mutex<Link>) -> MutexGuard<'_, Link> {
+    link.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// One meter.
 pub struct Hp3478aDevice {
     info: DeviceInfo,
     channels: Vec<Channel>,
-    link: Mutex<Link>,
+    link: Arc<Mutex<Link>>,
     worker: Option<Worker>,
     capturing: Arc<AtomicBool>,
     limits: Limits,
@@ -203,7 +214,7 @@ impl Hp3478aDevice {
                 conn: None,
             },
             channels: vec![Channel::new(0, ChannelKind::Analog, "P1")],
-            link: Mutex::new(Link { closed: Some(closed), scpi: None, status }),
+            link: Arc::new(Mutex::new(Link { closed: Some(closed), scpi: None, status })),
             worker: None,
             capturing: Arc::new(AtomicBool::new(false)),
             limits: Limits::default(),
@@ -228,20 +239,15 @@ impl Hp3478aDevice {
     }
 
     fn link(&self) -> MutexGuard<'_, Link> {
-        self.link.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        lock(&self.link)
     }
 
-    /// Sets the old worker's stop and joins it, which gets the connection back.
+    /// Sets the old worker's stop and joins it; it gives the connection back.
     fn end_worker(&mut self) {
         if let Some(worker) = self.worker.take() {
             worker.stop.store(true, Ordering::SeqCst);
-            match worker.handle.join() {
-                Ok((scpi, status)) => {
-                    let mut link = self.link();
-                    link.scpi = Some(scpi);
-                    link.status = status.or(link.status);
-                }
-                Err(_) => log::error!("The capture thread died with the connection."),
+            if worker.handle.join().is_err() {
+                log::error!("The capture thread died with the connection.");
             }
         }
     }
@@ -415,6 +421,7 @@ impl Device for Hp3478aDevice {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
         let capturing = Arc::clone(&self.capturing);
+        let link = Arc::clone(&self.link);
         capturing.store(true, Ordering::SeqCst);
         let spawned = std::thread::Builder::new()
             .name(format!("{} acquisition", self.info.driver))
@@ -429,10 +436,14 @@ impl Device for Hp3478aDevice {
                         }
                     }
                 }
+                {
+                    let mut link = lock(&link);
+                    link.scpi = Some(scpi);
+                    link.status = capture.status.or(link.status);
+                }
                 capturing.store(false, Ordering::SeqCst);
                 send_end(&sink, &stop2, outcome);
                 drop(sink);
-                (scpi, capture.status)
             });
         match spawned {
             Ok(handle) => {

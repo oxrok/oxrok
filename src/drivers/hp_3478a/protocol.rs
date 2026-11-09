@@ -127,8 +127,6 @@ pub struct Status {
     pub places: i32,
     /// The error register.
     pub errors: u8,
-    /// The front terminals are selected.
-    pub front: bool,
 }
 
 /// The error register's bits and libsigrok's words for them, in C's order.
@@ -147,7 +145,7 @@ pub const ERRORS: [(u8, &str); 6] = [
 
 impl Status {
     /// The binary status's first four bytes. C reads them from whatever came (four
-    /// bytes past a shorter answer, `protocol.c:441-444`), and keeps what it had where
+    /// bytes past a shorter answer, `protocol.c:416-419`), and keeps what it had where
     /// a field holds a value the card lists as none (`parse_range_*` return
     /// `SR_ERR_DATA`, unread) or with no function at all, the flags cleared. Here each
     /// of those is no status.
@@ -162,7 +160,13 @@ impl Status {
             0b11 => 4,
             _ => return Err(format!("The binary status gives no digits ({}).", hex())),
         };
-        let code = (function >> 2) & 0b111;
+        // Extended ohms take any code: what the meter reports there is documented
+        // nowhere (the card's range table has no entry for F7), and C's reading of
+        // it as an ohms range is a guess too. Code 0 is taken as the top range.
+        let code = match ((function >> 2) & 0b111, function >> 5) {
+            (0, 7) => 7,
+            (code, _) => code,
+        };
         let (mq, flag, mut flags, unit, lowest, highest) = match function >> 5 {
             1 => (V, DC, DC, Unit::Volt, -2, 2),
             2 => (V, AC, AC | MqFlags::RMS, Unit::Volt, -1, 2),
@@ -184,17 +188,7 @@ impl Status {
             flags |= MqFlags::AUTORANGE;
             exp = AUTO;
         }
-        Ok(Status {
-            mq,
-            flag,
-            flags,
-            unit,
-            exp,
-            digits,
-            places,
-            errors,
-            front: status & 0b1_0000 != 0,
-        })
+        Ok(Status { mq, flag, flags, unit, exp, digits, places, errors })
     }
 
     /// What `parse_error_byte` says of the error register, in its order.
@@ -268,7 +262,12 @@ pub fn digits_command(name: &str) -> Option<(String, u8)> {
 }
 
 /// A reading, as the manual has it: a sign, six digits around a point with one to
-/// three before it, `E`, a sign and one digit. An overload is infinity, as in C. C's
+/// three before it, `E`, a sign and one digit. The operating manual's output format
+/// (manualslib's copy 1016815, page 32): "The readings are output using 13 ASCII
+/// characters", the mantissa `D.DDDDD`, `DD.DDDD` or `DDD.DDD`, the exponent `E-3`,
+/// `E+0`, `E+3` or `E+6`, and "If the 3478A is in the 4 1/2 or 3 1/2 Digit mode, the
+/// 5th and/or 6th digits will be output as zeroes", so every digit mode has eleven
+/// characters before CR LF. An overload is infinity, as in C. C's
 /// `sr_atod_ascii` takes any number and more (hexadecimal, `inf`, `nan`); here what
 /// isn't the meter's form is no reading.
 pub fn parse_reading(text: &str) -> Option<f64> {
@@ -414,7 +413,7 @@ mod tests {
             (V, DC, Unit::Volt, AUTO, 6, 5)
         );
         assert_eq!(s.flags, DC | MqFlags::AUTORANGE);
-        assert_eq!((s.range_name(), s.digits_name(), s.front), ("Auto", "5.5", true));
+        assert_eq!((s.range_name(), s.digits_name()), ("Auto", "5.5"));
         // Each function and range, as parse_range_* sets sr_digits at 5½ digits.
         for (function, code, mq, flag, exp, places) in [
             (1, 1, V, DC, -2, 7),
@@ -429,6 +428,8 @@ mod tests {
             (5, 2, A, DC, 0, 5),
             (6, 2, A, AC, 0, 5),
             (7, 7, O, NONE, 7, -2),
+            (7, 3, O, NONE, 3, 2),
+            (7, 0, O, NONE, 7, -2),
         ] {
             let s = Status::parse(&[function << 5 | code << 2 | 1, 0, 0, 0, 0]).unwrap();
             assert_eq!(
@@ -495,6 +496,8 @@ mod tests {
         assert_eq!(parse_reading("-035.801E-3"), Some(-0.035_801));
         assert_eq!(parse_reading("+12.3456E+6"), Some(12.3456e6));
         assert_eq!(parse_reading("+9.99999E+9"), Some(f64::INFINITY));
+        assert_eq!(parse_reading("+9.99800E+9"), Some(f64::INFINITY), "C's bound is >=");
+        assert_eq!(parse_reading("+9.99799E+9"), Some(9.99799e9));
         for bad in [
             "",
             "+1.2X456E+0",

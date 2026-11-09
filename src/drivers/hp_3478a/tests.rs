@@ -227,6 +227,15 @@ fn analog(packets: &[Packet]) -> Vec<AnalogData> {
         .collect()
 }
 
+/// Whether `text` holds `before`, a number of seconds and `after`: under a stall the
+/// seconds are not 0.
+fn says_seconds(text: &str, before: &str, after: &str) -> bool {
+    text.split(before).skip(1).any(|rest| {
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        digits > 0 && rest[digits..].starts_with(after)
+    })
+}
+
 fn failed(packets: &[Packet]) -> Option<String> {
     packets.iter().find_map(|p| match p {
         Packet::Failed(text) => Some(text.clone()),
@@ -300,6 +309,29 @@ fn a_capture_polls_reads_and_labels_as_the_status_says() {
 }
 
 #[test]
+fn a_capture_that_ended_by_itself_leaves_the_meter_to_a_get() {
+    let f = fake();
+    let ff = f.clone();
+    let (range, ranges) = bounded(move || {
+        let mut d = device(&ff);
+        d.open().unwrap();
+        d.set(&Key::LimitSamples, &Value::U64(1), None).unwrap();
+        let (s, rx) = sink(64);
+        d.start(s).unwrap();
+        drain(&rx);
+        // Nothing joins the worker before these, which take &self.
+        let range = d.get(&Key::Range, None);
+        let ranges = d.list(&Key::Range, None);
+        d.close().unwrap();
+        (range, ranges)
+    });
+    assert_eq!(range.unwrap(), Value::Str("Auto".into()));
+    let ValueList::Str(ranges) = ranges.unwrap() else { panic!() };
+    assert_eq!(ranges.len(), 6);
+    assert_eq!(f.writes().last().map(String::as_str), Some("B"));
+}
+
+#[test]
 fn a_reading_that_is_no_number_fails_the_capture() {
     let f = fake();
     f.meter().readings = ["+1.2X456E+0".to_owned()].into();
@@ -357,7 +389,8 @@ fn a_meter_never_ready_fails_and_one_gone_quiet_warns_first() {
     let ff = f.clone();
     let packets =
         bounded(move || capture(&mut Hp3478aDevice::with_silence(Box::new(ff), short), 0, 0));
-    assert!(failed(&packets).unwrap().contains("The meter had no reading ready in 0 s"));
+    let why = failed(&packets).unwrap();
+    assert!(says_seconds(&why, "The meter had no reading ready in ", " s."), "{why}");
     // One reading, then none: the bound after it is the long one.
     let g = fake();
     let gg = g.clone();
@@ -376,7 +409,7 @@ fn a_meter_never_ready_fails_and_one_gone_quiet_warns_first() {
         packets
     });
     let why = failed(&packets).unwrap();
-    assert!(why.contains("The meter has had no reading ready for 0 s."), "{why}");
+    assert!(says_seconds(&why, "The meter has had no reading ready for ", " s."), "{why}");
     assert_ne!(analog(&packets).len(), 0);
 }
 
