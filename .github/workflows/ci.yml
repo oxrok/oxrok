@@ -219,6 +219,13 @@ jobs:
             sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
             sudo modprobe cdc-acm
           fi
+      # baylibre-acme binds its sysfs tree in a user namespace of each
+      # tool's own; Ubuntu 24.04's AppArmor refuses unprivileged ones.
+      - name: Allow unprivileged user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: cargo build -p oxrok -p oxrok-emu
       # What the harness drives the server with.
       - run: cargo install vusb-cli --version 0.2.1 --locked

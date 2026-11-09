@@ -16,6 +16,11 @@ EMU_DRIVER=baylibre-acme
 EMU_FULL=$EMU_DRIVER
 EMU_GCOV=baylibre-acme
 
+# A host that refuses unprivileged user namespaces (Ubuntu 24.04's AppArmor default,
+# kernel.apparmor_restrict_unprivileged_userns=1) can't bind the tree: skipped by name.
+unshare -Urm true 2>/dev/null \
+    || EMU_SKIP="this host refuses an unprivileged user namespace (unshare -Urm), so the tree can't be bound over /sys/class"
+
 emu_cases() {
     D=baylibre-acme
     # A capture's values in few lines: sigrok-cli prints one per channel and frame.
