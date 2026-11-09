@@ -16,7 +16,9 @@
 //! - `pub fn build(options: &[(String, String)]) -> Result<Box<dyn DeviceModel>>`,
 //!   which parses the `-o KEY=VALUE` options and rejects unknown ones;
 //! - optionally `pub fn build_tcp(options)`, the same device on a socket
-//!   (`shells::tcp`), for `oxrok-emu serve --tcp`.
+//!   (`shells::tcp`), for `oxrok-emu serve --tcp`;
+//! - optionally `pub fn build_sysfs(options)`, the same device as a tree of
+//!   files (`shells::sysfs`), for `oxrok-emu serve --sysfs`.
 
 use crate::model::DeviceModel;
 use crate::{Error, Result};

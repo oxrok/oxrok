@@ -126,6 +126,15 @@
 # held to its tcp_connect, tcp_out, tcp_in and tcp_close lines as to a USB one;
 # --unplug tcp-in=N and tcp-model close the connection, and the outputs say PORT.
 #
+# A scenario that sets EMU_SYSFS=1 serves its model as a tree of files in
+# EMU_SYSFS_DIR (--sysfs, its build_sysfs, emu/src/shells/sysfs.rs), with nothing
+# attached; each run is held to its sysfs_* lines, and --unplug and --interrupt
+# take sysfs-read=N. EMU_WRAP, in any scenario, is a command and its words that
+# each tool runs under, inside timeout and any env: tools/emu-ns.sh with
+# $EMU_SYSFS_DIR/class:/sys/class binds the tree over /sys/class in a user and
+# mount namespace of the tool's own. A session whose EMU_WRAP cannot run true
+# fails at its start, saying why.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -492,6 +501,8 @@ if [ $emu = 1 ]; then
     # socket's path has a low limit.
     EMU_CTL_DIR=$(mktemp -d /tmp/oxrok-emu.XXXXXX) || exit 2
     EMU_CONTROL=$EMU_CTL_DIR/s
+    # EMU_SYSFS=1: where the server builds the tree (root's, so removed as root).
+    EMU_SYSFS_DIR=$EMU_CTL_DIR/sysfs
     EMU_BLESS=${EMU_BLESS:-0}
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
     EMULOG=${EMULOG:-$TMP}
@@ -711,12 +722,21 @@ if [ $emu = 1 ]; then
         emu_how="--attach --open-devices"
         [ "$EMU_TCP" != only ] || emu_how=""
         [ -z "$EMU_TCP" ] || emu_how="$emu_how --tcp 127.0.0.1:0"
+        [ "$EMU_SYSFS" != 1 ] || emu_how="--sysfs $EMU_SYSFS_DIR"
         # shellcheck disable=SC2086
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 $emu_how \
             --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" --while-alive $$ \
             </dev/null >"$TMP/emu.out" 2>"$TMP/emu.err" 8<&- &
         EMUPID=$!
         emu_wait 0 '^READY ' || return 1
+        if [ -n "$EMU_WRAP" ]; then
+            # shellcheck disable=SC2086
+            if ! $EMU_WRAP true </dev/null >"$TMP/wrap.err" 2>&1; then
+                echo "$EMU_MODEL: EMU_WRAP ($EMU_WRAP) cannot run true:" >&2
+                sed 's/^/  /' "$TMP/wrap.err" >&2
+                return 1
+            fi
+        fi
         : >"$TMP/emu.sed"
         EMU_SEEN=0
         emu_track
@@ -796,6 +816,8 @@ if [ $emu = 1 ]; then
         [ "$EMU_CDC" != 1 ] || emu_cdc_unquiet
         [ "$EMU_TMC" != 1 ] || emu_tmc_unquiet
         sudo -n "$EMU" cleanup --locked >&2
+        # The server removes its tree; one it could not end leaves it to us.
+        [ "$EMU_SYSFS" != 1 ] || sudo -n rm -rf "$EMU_SYSFS_DIR"
         return $emu_status
     }
     # The transaction lines of a section of the log, comments dropped.
@@ -1367,9 +1389,10 @@ EOF
             # A command run in the background starts with SIGINT ignored;
             # an interrupt case gives the tool the default that a
             # terminal's Ctrl-C meets.
+            # shellcheck disable=SC2086
             case "$event" in
-                interrupt*) set -- env --default-signal=INT "$tool" "$@" ;;
-                *) set -- "$tool" "$@" ;;
+                interrupt*) set -- env --default-signal=INT $EMU_WRAP "$tool" "$@" ;;
+                *) set -- $EMU_WRAP "$tool" "$@" ;;
             esac
             preload=""
             if { [ $hangs = 1 ] || [ $oracle_hangs = 1 ]; } && [ $t = a ] && [ -n "$EMU_TERM_EXIT" ]; then
@@ -1835,7 +1858,7 @@ EOF
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
         . "$f"

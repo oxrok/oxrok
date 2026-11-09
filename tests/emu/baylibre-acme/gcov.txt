@@ -1,0 +1,29 @@
+gcov baylibre-acme (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        89.7%  139 of 155
+  gpio.c       90.4%  66 of 73
+  protocol.c   91.2%  311 of 341
+  total        90.7%  516 of 569
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 79, 110-112
+    config_get: 155, 162, 167-168
+    config_set: 197, 201, 203-204
+    config_list: 236-237
+    dev_acquisition_start: 287-288
+    dev_acquisition_stop: 330
+  gpio.c
+    open_and_write: 47-48
+    sr_gpio_export: 71-76
+  protocol.c
+    bl_acme_is_sane: 128-129
+    get_hwmon_index: 207-210
+    append_channel: 255-257
+    bl_acme_register_probe: 379
+    get_shunt_path: 412-413
+    bl_acme_read_power_state: 541-542
+    bl_acme_set_power_off: 560-561
+    channel_to_mq: 590-591
+    channel_to_unit: 611-612
+    type_digits: 627-628
+    bl_acme_open_channel: 671-673
+    bl_acme_receive_data: 720, 724, 731-732, 740

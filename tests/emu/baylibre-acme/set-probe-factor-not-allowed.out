@@ -1,0 +1,2 @@
+sr: baylibre-acme: Error opening /sys/class/hwmon/hwmon0/shunt_resistor: Permission denied
+Failed to set device option 'probe_factor': input/output error.

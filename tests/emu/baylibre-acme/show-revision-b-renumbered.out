@@ -1,0 +1,13 @@
+Driver functions:
+    Thermometer
+    Power meter
+baylibre-acme - BayLibre ACME with 15 channels: P5_ENRG_PWR P5_ENRG_CURR P5_ENRG_VOL P6_ENRG_PWR P6_ENRG_CURR P6_ENRG_VOL P3_ENRG_PWR P3_ENRG_CURR P3_ENRG_VOL P4_ENRG_PWR P4_ENRG_CURR P4_ENRG_VOL P7_ENRG_PWR P7_ENRG_CURR P7_ENRG_VOL
+Channel groups:
+    Probe_5: channels P5_ENRG_PWR P5_ENRG_CURR P5_ENRG_VOL
+    Probe_6: channels P6_ENRG_PWR P6_ENRG_CURR P6_ENRG_VOL
+    Probe_3: channels P3_ENRG_PWR P3_ENRG_CURR P3_ENRG_VOL
+    Probe_4: channels P4_ENRG_PWR P4_ENRG_CURR P4_ENRG_VOL
+    Probe_7: channels P7_ENRG_PWR P7_ENRG_CURR P7_ENRG_VOL
+Supported configuration options on channel group Probe_5:
+    probe_factor: 20 (current)
+    power_off: on, off (current)

@@ -1,0 +1,20 @@
+sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0040/hwmon
+sysfs_get class/gpio/gpio487/value -> "junk\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0041/hwmon
+sysfs_get class/i2c-adapter/i2c-1/1-0051/eeprom -> @256:deed16ecbe73f03c6039bd66defd4389f7de4b08d375b0e68f83f61b64788ded
+sysfs_put class/hwmon/hwmon1/shunt_resistor "20000\n" -> ok
+sysfs_get class/i2c-adapter/i2c-1/1-0044/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0045/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0042/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004c/name -> "tmp435\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-004c/hwmon
+sysfs_get class/gpio/gpio479/value -> "0\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0043/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0049/name -> "tmp435\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0046/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004f/name -> "tmp435\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
+sysfs_get class/i2c-adapter/i2c-1/1-004b/name -> "tmp435\n"
+sysfs_get class/hwmon/hwmon0/shunt_resistor -> "10000\n"

@@ -1,0 +1,1 @@
+sr: gpio: Error reading from /sys/class/gpio/gpio487/value: not a number

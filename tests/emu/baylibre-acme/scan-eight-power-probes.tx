@@ -1,0 +1,24 @@
+sysfs_get class/i2c-adapter/i2c-1/1-0040/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0040/hwmon
+sysfs_get class/gpio/gpio487/value -> "1\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0041/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0041/hwmon
+sysfs_get class/gpio/gpio499/value -> "0\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0044/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0044/hwmon
+sysfs_get class/gpio/gpio503/value -> "1\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0045/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0045/hwmon
+sysfs_get class/gpio/gpio483/value -> "0\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0042/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0042/hwmon
+sysfs_get class/gpio/gpio479/value -> "1\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0043/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0043/hwmon
+sysfs_get class/gpio/gpio507/value -> "0\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0046/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0046/hwmon
+sysfs_get class/gpio/gpio511/value -> "1\n"
+sysfs_get class/i2c-adapter/i2c-1/1-0047/name -> "ina226\n"
+sysfs_dir class/i2c-adapter/i2c-1/1-0047/hwmon
+sysfs_get class/gpio/gpio475/value -> "0\n"
