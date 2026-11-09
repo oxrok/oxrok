@@ -1,15 +1,26 @@
 # AGENTS.md
 
+## How main changes
+
+`main` changes only through a pull request whose required checks passed:
+the branch rules allow no direct push, by anyone. Work on a branch, open
+the PR, let CI run, and the owner merges it (an org admin may merge their
+own PR without a review; a PR by the bot needs the owner's review). A
+batch of ports merged locally is pushed as `batch/<name>` and opened as a
+PR the same way, with `merge` so the per-port commits stay. The rules and
+their reasons are in oxrok/management, `docs/HARDENING.md`.
+
 ## Roadmap
 
-Before pushing new work to `main`, update `docs/ROADMAP.md`:
+Before opening a pull request with new work, update `docs/ROADMAP.md`:
 
 - Remove anything the work completes or makes effectively done.
 - Add any newly discovered open work, with the same level of detail as
   the existing entries.
 - Keep the roadmap forward-looking. It is not a completion log.
 
-Push the roadmap update with the work it describes, or before it.
+Put the roadmap update in the pull request with the work it describes,
+or in one before it.
 
 ## Vendor firmware
 
