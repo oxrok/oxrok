@@ -849,8 +849,15 @@ mod process {
         }
         assert_eq!(String::from_utf8(got).unwrap().trim(), "closed");
         drop(c);
-        let out =
-            run_version_of(&OsString::from("/bin/sh"), &format!("echo \"Version $({test})\""));
+        // No `$(...)` here: its pipe takes the lowest free number, which is the
+        // closed descriptor's, and would read as open.
+        let fd = file.as_raw_fd();
+        let out = run_version_of(
+            &OsString::from("/bin/sh"),
+            &format!(
+                "if [ -e /proc/$$/fd/{fd} ]; then echo 'Version open'; else echo 'Version closed'; fi"
+            ),
+        );
         assert_eq!(protocol::parse_version(&out).as_deref(), Some("closed"));
         drop(file);
     }
