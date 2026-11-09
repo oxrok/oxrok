@@ -67,15 +67,18 @@
 //! state after a write is posted at once; how long a real one takes is
 //! unknown, and `busy=N` makes each post N reads late instead.
 //!
-//! The samples: what a real DSO-2100 extracts from its 5000 sample
-//! buffer for each step size is not documented beyond the comment (the
-//! second subset starts at `5 * X * step` of the first). The model
-//! takes that formula, modulo the buffer, and fills the buffer from a
-//! made-up input: on A a 100 kHz triangle from -0.4 V to 0.6 V, on B a
+//! The samples: what a real DSO-2100 extracts for each step size is not
+//! documented beyond the comment (the second subset starts at
+//! `5 * X * step` of the first). The model takes that formula, modulo
+//! the plain steps' 5000 sample buffer, and for the interleaved steps
+//! C's table, whose addresses work out as `0x6000 + 5 * X * step` mod
+//! 0x8000 (see [`readout`]), and fills its memories from a made-up input: on A a 100 kHz triangle from -0.4 V to 0.6 V, on B a
 //! 1 MHz square of +-0.3 V, at the configured rate, scaled by the
 //! channel's volts/div (32 counts a division) and coupling (AC removes
-//! the mean, GND gives `0x80`), clipped to a byte. Interleaved steps
-//! read A on both ADCs at half a sample apart. Trigger source, slope and
+//! the mean, GND gives `0x80`), clipped to a byte. The interleaved memories
+//! hold the channel the scope was armed with, timed so that the frame C
+//! assembles is one wave; that timing is the model's choice, made so a
+//! port that puts a sample in the wrong place shows. Trigger source, slope and
 //! level are checked, not used: the waveform starts where it starts.
 //!
 //! Options:
@@ -92,6 +95,12 @@
 //!   (`01 fe 00`).
 //! - `odd-state=N`: the Nth mailbox write is answered with the state
 //!   `0x42`, which no firmware state has, then the scope goes on.
+//! - `fill=N`: after the `0x99` that finds the trigger, the mailbox reads
+//!   0 for the next N `read_mbox`es the host begins, while the scope fills
+//!   its buffer; `fill=rate` makes N what 10240 samples take at the armed
+//!   rate in C's 8 ms polls (640 at 2 kHz, 64000 at 20 Hz). C's design
+//!   implies such a wait (the comment's "Send 0x99 to check if trigger
+//!   event occured"); its length on a real scope is not documented.
 //! - `mark=armed` marks the first `0x99` that finds no trigger, and
 //!   `mark=sample` the 500th sample of a readout, for an event armed with
 //!   `model`.
@@ -117,7 +126,7 @@ pub const NAME: &str = "hung-chang-dso-2100";
 pub const ABOUT: &str = "Hung-Chang DSO-2100 oscilloscope behind a USS720 USB to parallel cable \
                          (050d:0002, the kernel's uss720 and ppdev make it /dev/parportN); \
                          scope=absent, trigger=N|never, busy=N, silent-after=N, bad-sig=N, \
-                         odd-state=N, mark=armed|sample";
+                         odd-state=N, fill=N|rate, mark=armed|sample";
 
 /// The cable's vendor id (Belkin).
 pub const VENDOR_ID: u16 = 0x050d;
@@ -249,6 +258,25 @@ pub struct Options {
     pub odd_state: Option<u32>,
     /// What to mark.
     pub mark: Option<Mark>,
+    /// How long the scope fills its buffer after a trigger.
+    pub fill: Fill,
+}
+
+/// How long the mailbox stays silent after the `0x99` that finds the
+/// trigger, while the scope fills its buffer past it, counted in mailbox
+/// reads the host begins (each `read_mbox`, whatever its number of reads).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fill {
+    /// That many reads.
+    Reads(u32),
+    /// What 10240 samples take at the armed rate, in C's 8 ms polls.
+    Rate,
+}
+
+/// The polls `fill=rate` keeps silent at rate index `rate`.
+pub fn fill_polls(rate: usize) -> u32 {
+    let seconds = 10_240.0 / SAMPLERATES[rate] as f64;
+    (seconds / 0.008).ceil() as u32
 }
 
 impl Default for Options {
@@ -261,6 +289,7 @@ impl Default for Options {
             bad_sig: 0,
             odd_state: None,
             mark: None,
+            fill: Fill::Reads(0),
         }
     }
 }
@@ -298,6 +327,9 @@ pub fn parse_options(options: &[(String, String)]) -> Result<Options> {
             "silent-after" => o.silent_after = Some(number(k, v, 1_000_000)?),
             "bad-sig" => o.bad_sig = number(k, v, 1000)?,
             "odd-state" => o.odd_state = Some(number(k, v, 1_000_000)?.max(1)),
+            "fill" => {
+                o.fill = if v == "rate" { Fill::Rate } else { Fill::Reads(number(k, v, 10_000_000)?) };
+            }
             "mark" => {
                 o.mark = Some(match v.as_str() {
                     "armed" => Mark::Armed,
@@ -396,8 +428,10 @@ impl Lines {
 /// The scope's configuration, as the chain set it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
-    /// The ADC a readout reads, 1 or 2.
+    /// The channel value the chain last set, 1 or 2.
     channel: u8,
+    /// The channel the capture sampled: the one set when the scope was armed.
+    armed_channel: u8,
     /// Index into [`SAMPLERATES`].
     rate: usize,
     step1: u8,
@@ -408,7 +442,7 @@ struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { channel: 1, rate: 0, step1: 1, step2: 1, shift: 100, cctl: [0x31, 0x31] }
+        Config { channel: 1, armed_channel: 1, rate: 0, step1: 1, step2: 1, shift: 100, cctl: [0x31, 0x31] }
     }
 }
 
@@ -445,25 +479,49 @@ fn sample(ch: usize, t: f64, cctl: u8) -> u8 {
     (128.0 + counts).clamp(0.0, 255.0) as u8
 }
 
+/// Samples each ADC's interleaved memory holds.
+pub const INTERLEAVED: usize = 5120;
+/// Where the interleaved steps' addresses start, before C's mod 0x8000.
+const INTERLEAVED_BASE: usize = 0x6000;
+/// The interleaved memory's address space.
+const ADDRESS_SPACE: usize = 0x8000;
+
 /// The 1000 samples a readout of `cfg` gives from ADC `adc` (1 or 2).
+///
+/// A plain step reads the 5000 sample buffer of the channel its ADC
+/// samples (1 is A, 2 is B), sample `i` at time `i / rate`; its subsets
+/// start at 0 and at `5 * shift * step1`, as the firmware's comment says.
+/// An interleaved step reads both ADCs' interleaved memories, 5120
+/// samples each of the channel latched at arming; its addresses are
+/// `0x6000 + 5 * shift * step1` on, mod 0x8000, which for C's table are
+/// 2500, 3000, 3500, 4000, 4500 and 4620, so its readouts cover samples
+/// 2501 to 5119 of each memory end to end. Sample `s` of ADC `k` is
+/// taken at time `(2 * s - 2 + k - 1) / rate`: the 5238 samples C puts
+/// after the plain steps' 5000 then continue the same wave.
 fn readout(cfg: &Config, adc: u8) -> Vec<u8> {
     let rate = SAMPLERATES[cfg.rate] as f64;
-    let interleaved = interleaves(cfg.step1);
     let step1 = usize::from(cfg.step1.max(1));
     let step2 = usize::from(cfg.step2.max(1));
     let start2 = 5 * usize::from(cfg.shift) * step1;
-    let at = |i: usize| -> u8 {
-        let index = if i < READOUT / 2 { i * step1 } else { start2 + (i - READOUT / 2) * step2 };
-        let index = index % BUFFER;
-        if interleaved {
-            let t = (2 * index + usize::from(adc == 2)) as f64 / (2.0 * rate);
-            sample(0, t, cfg.cctl[0])
-        } else {
-            let ch = usize::from(adc == 2);
-            sample(ch, index as f64 / rate, cfg.cctl[ch])
-        }
+    let index = |i: usize| -> usize {
+        if i < READOUT / 2 { i * step1 } else { start2 + (i - READOUT / 2) * step2 }
     };
-    (0..READOUT).map(at).collect()
+    if interleaves(cfg.step1) {
+        let ch = usize::from(cfg.armed_channel == 2);
+        let at = |i: usize| -> u8 {
+            let s = (INTERLEAVED_BASE + index(i)) % ADDRESS_SPACE;
+            if s >= INTERLEAVED {
+                // Past what the memory holds: no step of C's reads there.
+                return 0x80;
+            }
+            let t = (2 * s + usize::from(adc == 2)) as f64 - 2.0;
+            sample(ch, t / rate, cfg.cctl[ch])
+        };
+        (0..READOUT).map(at).collect()
+    } else {
+        let ch = usize::from(adc == 2);
+        (0..READOUT).map(|i| sample(ch, (index(i) % BUFFER) as f64 / rate, cfg.cctl[ch])).collect()
+    }
 }
 
 /// The microcontroller behind the mailbox.
@@ -530,6 +588,8 @@ pub struct Dso2100 {
     readout_ready: bool,
     bad_sig_left: u32,
     marked: bool,
+    /// Mailbox reads to begin before a filled capture's state shows.
+    fill_left: u32,
 }
 
 impl Dso2100 {
@@ -548,6 +608,7 @@ impl Dso2100 {
             readout_ready: false,
             bad_sig_left: options.bad_sig,
             marked: false,
+            fill_left: 0,
             uc,
             options,
         }
@@ -579,6 +640,9 @@ impl Dso2100 {
 
     /// One read of the mailbox.
     fn mailbox(&mut self) -> u8 {
+        if self.fill_left > 0 {
+            return 0;
+        }
         if self.uc.late > 0 {
             self.uc.late -= 1;
             return 0;
@@ -621,6 +685,10 @@ impl Dso2100 {
             }
             let value = self.data;
             self.mailbox_write(value, v);
+        }
+        // A read_mbox ends as nStrobe rises out of the mailbox read lines.
+        if before.mailbox_read() && after.strobe && self.fill_left > 0 {
+            self.fill_left -= 1;
         }
         if after.readout() && after.autofd != before.autofd && before.readout() {
             // The ADC is picked before the strobes start; C sets it with
@@ -716,6 +784,7 @@ impl Dso2100 {
             state::IDLE => match value {
                 2 => {
                     self.uc = self.uc.clone().armed_with(&self.options);
+                    self.uc.cfg.armed_channel = self.uc.cfg.channel;
                     self.uc.forced = false;
                     self.readout_ready = false;
                     state::ARMED
@@ -731,6 +800,10 @@ impl Dso2100 {
                 0x99 => {
                     if self.uc.forced || self.uc.checks_left <= 1 {
                         self.uc.forced = false;
+                        self.fill_left = match self.options.fill {
+                            Fill::Reads(n) => n,
+                            Fill::Rate => fill_polls(self.uc.cfg.rate),
+                        };
                         self.extract()
                     } else {
                         self.uc.checks_left -= 1;
@@ -1168,6 +1241,21 @@ mod tests {
     }
 
     #[test]
+    fn a_fill_keeps_the_mailbox_silent_for_n_reads() {
+        let mut h = Host::new(Options { fill: Fill::Reads(3), trigger: Trigger::After(1), ..Options::default() });
+        h.dir(true);
+        assert_eq!(h.send(2), 0x21);
+        h.write_mbox(0x99);
+        for _ in 0..3 {
+            assert_eq!(h.read_mbox(4), 0);
+        }
+        assert_eq!(h.read_mbox(4), 0x03);
+        assert_eq!(fill_polls(19), 640);
+        assert_eq!(fill_polls(27), 64_000);
+        assert_eq!(parse_options(&[("fill".into(), "rate".into())]).unwrap().fill, Fill::Rate);
+    }
+
+    #[test]
     fn busy_and_silence() {
         let mut h = Host::new(Options { busy: 1, ..Options::default() });
         h.dir(true);
@@ -1201,13 +1289,75 @@ mod tests {
         assert!(h.v.is_empty(), "{:?}", h.v.drain());
     }
 
+    /// C's `readout_steps[]`: samples read, step1, shift, interleaved.
+    const C_STEPS: [(usize, u8, u8, bool); 15] = [
+        (1000, 1, 100, false),
+        (500, 100, 2, false),
+        (500, 100, 3, false),
+        (500, 100, 4, false),
+        (500, 100, 5, false),
+        (500, 100, 6, false),
+        (500, 100, 7, false),
+        (500, 100, 8, false),
+        (500, 100, 9, false),
+        (499, 212, 41, true),
+        (500, 157, 56, true),
+        (500, 247, 36, true),
+        (500, 232, 180, true),
+        (500, 230, 182, true),
+        (120, 212, 43, true),
+    ];
+
+    /// A 10238 sample frame as C assembles it from the readouts, on
+    /// channel `channel` at rate index `rate`.
+    fn c_frame(channel: u8, rate: usize) -> Vec<u8> {
+        let mut frame = Vec::new();
+        for &(num, step1, shift, interleave) in &C_STEPS {
+            let cfg = Config {
+                channel,
+                armed_channel: channel,
+                rate,
+                step1,
+                step2: 1,
+                shift,
+                ..Config::default()
+            };
+            if interleave {
+                let a = readout(&cfg, 1);
+                let b = readout(&cfg, 2);
+                for i in READOUT - num..READOUT {
+                    frame.push(a[i]);
+                    frame.push(b[i]);
+                }
+            } else {
+                frame.extend_from_slice(&readout(&cfg, channel)[READOUT - num..]);
+            }
+        }
+        frame
+    }
+
     #[test]
-    fn interleaved_steps_read_a_on_both_adcs() {
-        let cfg = Config { step1: 212, shift: 41, rate: 4, ..Config::default() };
-        let a = readout(&cfg, 1);
-        let b = readout(&cfg, 2);
-        assert_ne!(a, b);
-        assert_eq!(a.len(), READOUT);
+    fn interleaved_addresses_are_cs_table() {
+        // 0x6000 + 5 * shift * step1, mod 0x8000.
+        let table = [(212u8, 41u8, 2500), (157, 56, 3000), (247, 36, 3500), (232, 180, 4000), (230, 182, 4500), (212, 43, 4620)];
+        for (step1, shift, at) in table {
+            let a = (INTERLEAVED_BASE + 5 * usize::from(shift) * usize::from(step1)) % ADDRESS_SPACE;
+            assert_eq!(a, at);
+        }
+    }
+
+    #[test]
+    fn a_frame_is_one_wave_on_either_channel() {
+        for (channel, rate) in [(1u8, 4usize), (2, 4), (1, 20), (2, 0)] {
+            let frame = c_frame(channel, rate);
+            assert_eq!(frame.len(), 10238);
+            let ch = usize::from(channel == 2);
+            let r = SAMPLERATES[rate] as f64;
+            for (n, &got) in frame.iter().enumerate() {
+                let want = sample(ch, n as f64 / r, 0x31);
+                assert_eq!(got, want, "channel {channel} rate {rate} sample {n}");
+            }
+        }
     }
 
     #[test]

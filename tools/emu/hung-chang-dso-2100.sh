@@ -39,6 +39,10 @@ HC_NO_READOUT='/^ctl_out 40 04 023[89ab] /d; /^ctl_in 40 03 0000 0000 7 -> 003[8
 # so how many there are is the pace's. Runs of a repeated line count once.
 HC_UNIQ='$!N; /^(.*)\n\1$/!P; D'
 HC_THIN='1~50!d'
+# Every 50th line, and where the plain steps' 5000 samples meet the
+# interleaved ones, and the frame's end: a sample put in the wrong place
+# shows as a step in the wave there.
+HC_WIN='1~50b; 4991,5011b; 10231,10238b; d'
 HC_COUNT="libsigrok's push_samples sends num_samples 4294967295 (protocol.c, since 99f8fa25)"
 # oxrok's log prefix made sigrok-cli's, and the detail of the reason oxrok's
 # message adds to sigrok-cli's own; the "words" cases keep oxrok's own.
@@ -67,7 +71,9 @@ emu_cases() {
     emu_case "dso2100 both channels" --stderr --expect-fail --filter "$HC_W" -- -d $P -C A,B --frames 1 -O analog
     emu_case "dso2100 two frames" --filter d --no-output --tx-filter "$HC_NO_READOUT" -- -d $P -C A --frames 2 -O analog
     emu_case "dso2100 buffer 1500" --filter d --no-output -- -d $P -C A -c buffersize=1500 --frames 1 -O analog
-    emu_case "dso2100 buffer 5998" --filter d --no-output --tx-filter "$HC_NO_READOUT" -- -d $P -C B -c buffersize=5998 --frames 1 -O analog
+    # The interleaved readouts kept whole, on B: which data line each ADC's
+    # pass reads, and the strobe counts, against C's.
+    emu_case "dso2100 buffer 5998" --filter d --no-output -- -d $P -C B -c buffersize=5998 --frames 1 -O analog
     emu_case "dso2100 buffer 10238" --filter d --no-output --tx-filter "$HC_NO_READOUT" -- -d $P -C A -c buffersize=10238 --frames 1 -O analog
 
     # The samples, which sigrok-cli never prints (see the head): oxrok's,
@@ -77,8 +83,8 @@ emu_cases() {
     emu_case "dso2100 B samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C B --frames 1 -O analog
     emu_case "dso2100 two frames samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A --frames 2 -O analog
     emu_case "dso2100 buffer 1500 samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -c buffersize=1500 --frames 1 -O analog
-    emu_case "dso2100 buffer 5998 samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C B -c buffersize=5998 --frames 1 -O analog
-    emu_case "dso2100 buffer 10238 samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -c buffersize=10238 --frames 1 -O analog
+    emu_case "dso2100 buffer 5998 samples" --oracle-differs "$HC_COUNT" $S "$HC_WIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C B -c buffersize=5998 --frames 1 -O analog
+    emu_case "dso2100 buffer 10238 samples" --oracle-differs "$HC_COUNT" $S "$HC_WIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -c buffersize=10238 --frames 1 -O analog
     emu_case "dso2100 vdiv 10mV samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -g A -c vdiv=10mV --frames 1 -O analog
     emu_case "dso2100 vdiv 5V probe 1 samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -g A -c vdiv=5V:probe_factor=1 --frames 1 -O analog
     emu_case "dso2100 coupling AC samples" --oracle-differs "$HC_COUNT" $S "$HC_THIN" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -g A -c coupling=AC --frames 1 -O analog
@@ -108,6 +114,11 @@ emu_cases() {
     # The scope's own pace and faults, through the model's options.
     hc_options trigger=12
     emu_case "dso2100 late trigger" --filter d --no-output --tx-filter "$HC_NO_READOUT" -- -d $P -C A --frames 1 -O analog
+    # The scope filling 10240 samples after its trigger at 2 kHz, 5.12 s,
+    # with its mailbox reading 0 meanwhile: 640 polls of nothing, then the
+    # frame. Each poll's reads count once (their number is the pace's).
+    hc_options fill=rate
+    emu_case "dso2100 fill at 2 kHz" --filter d --no-output --tx-filter "$HC_NO_READOUT; $HC_UNIQ" -- -d $P -C A -c samplerate=2k --frames 1 -O analog
     hc_options busy=1
     emu_case "dso2100 busy" --filter d --no-output --tx-filter "$HC_NO_READOUT" -- -d $P -C A --frames 1 -O analog
     hc_options scope=absent
