@@ -60,7 +60,7 @@
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses
-//! into Python.
+//! into Python, and `gpib`, whose ioctls on `/dev/gpibN` are unsafe calls.
 
 pub mod core;
 pub mod decode;
@@ -69,6 +69,7 @@ pub mod dmm;
 pub mod ezusb;
 pub mod formats;
 pub mod ftdi;
+pub mod gpib;
 pub mod hid;
 pub mod lcr;
 pub mod modbus;
@@ -114,6 +115,7 @@ pub mod drivers {
     pub mod hantek_6xxx;
     pub mod hantek_dso;
     pub mod hp_3457a;
+    pub mod hp_3478a;
     pub mod hp_59306a;
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
@@ -261,4 +263,5 @@ pub fn register_all(registry: &mut core::Registry) {
     // Linux alone has the files it reads, as libsigrok builds it there alone.
     #[cfg(target_os = "linux")]
     registry.register(Box::new(drivers::baylibre_acme::BaylibreAcmeDriver::default()));
+    registry.register(Box::new(drivers::hp_3478a::Hp3478aDriver));
 }

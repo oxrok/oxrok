@@ -1,0 +1,18 @@
+Driver functions:
+    Multimeter
+Scan options:
+    conn
+hp-3478a - Hewlett-Packard 3478A with 1 channel: P1
+Supported configuration options:
+    continuous: on, off
+    limit_samples: 0 (current)
+    limit_time: 0 (current)
+    measured_quantity:  - supported measurements:
+      voltage/dc (current)
+      voltage/ac
+      current/dc
+      current/ac
+      resistance
+      resistance/four_wire
+    range: Auto (current), 30mV, 300mV, 3V, 30V, 300V
+    digits: 3.5, 4.5, 5.5 (current)

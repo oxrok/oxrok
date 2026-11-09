@@ -44,6 +44,10 @@
 //! (`shells::sysfs`), which the tools see in a mount namespace; nothing is
 //! attached, and a `READY` line with no device says the tree is there.
 //!
+//! `gpib-config` brings a free GPIB board online on an emulated NI adapter, as
+//! linux-gpib's `gpib_config` would, for a model behind the kernel's `ni_usb_gpib`,
+//! and says which (`GPIB minor=N`); `--release` gives the boards it took back.
+//!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
 //! with `--all` every attached port. A running session's port carries
@@ -51,6 +55,9 @@
 //! (`/tmp/oxrok-emu.lock`, `--lock PATH`) and refuses while another
 //! session holds it; a session cleaning up under its own lock says so
 //! with `--locked`, and `--force` cleans up regardless.
+
+#[cfg(target_os = "linux")]
+mod gpib_config;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -98,6 +105,25 @@ enum Command {
         /// Detach even while another session holds the lock.
         #[arg(long, conflicts_with = "locked")]
         force: bool,
+    },
+    /// Brings GPIB board MINOR online as an NI USB adapter, as linux-gpib's
+    /// `gpib_config` would (Linux, root).
+    #[cfg(target_os = "linux")]
+    GpibConfig {
+        /// The USB device whose first interface the board takes (the READY line's
+        /// busid); any free adapter without it. Prints `GPIB minor=N`.
+        #[arg(long)]
+        busid: Option<String>,
+        /// Instead, leaves board MINOR in an end of string mode on BYTE (8-bit),
+        /// as a program before might have.
+        #[arg(long, value_name = "BYTE", requires = "minor", conflicts_with_all = ["busid", "release"])]
+        eos: Option<u8>,
+        /// The board for --eos.
+        #[arg(long)]
+        minor: Option<u32>,
+        /// Instead, takes each board it took offline and puts its node's mode back.
+        #[arg(long, conflicts_with = "busid")]
+        release: bool,
     },
 }
 
@@ -171,6 +197,15 @@ fn main() -> ExitCode {
             locked_cleanup(all, &lock, locked || force).map(|()| 0)
         }
         Command::Serve(args) => serve(&args),
+        #[cfg(target_os = "linux")]
+        Command::GpibConfig { busid, eos, minor, release } => {
+            let done = match (eos, minor) {
+                (Some(byte), Some(minor)) => gpib_config::set_eos(minor, byte),
+                _ if release => gpib_config::release().map(|n| println!("GPIB released={n}")),
+                _ => gpib_config::configure(busid.as_deref()).map(|m| println!("GPIB minor={m}")),
+            };
+            done.map(|()| 0).map_err(Error::Io)
+        }
     };
     match outcome {
         Ok(0) => ExitCode::SUCCESS,

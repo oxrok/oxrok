@@ -22,7 +22,8 @@ sha2 = "0.10"
 vusb = "0.2.1"
 
 # The sysfs carrier's inotify and poll (shells/sysfs.rs), safe wrappers, as
-# this crate forbids unsafe code.
+# the library forbids unsafe code; and the binary's gpib-config, whose ioctls on
+# /dev/gpibN are its only unsafe calls (src/gpib_config.rs).
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs"] }
 
