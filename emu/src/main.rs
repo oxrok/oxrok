@@ -355,7 +355,7 @@ fn sysfs_commands(tree: Option<&SysfsCarrier>, builder: Builder) -> Builder {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn sysfs_commands(_tree: &Option<SysfsCarrier>, builder: Builder) -> Builder {
+fn sysfs_commands(_tree: Option<&SysfsCarrier>, builder: Builder) -> Builder {
     builder
 }
 
