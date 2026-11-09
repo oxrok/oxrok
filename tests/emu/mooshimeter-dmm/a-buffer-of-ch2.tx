@@ -63,13 +63,13 @@ att_notify 0015 280a00
 att_write 0012 138b02 -> ok
 att_notify 0015 290b02
 att_write 0012 1425 -> ok
-att_notify 0015 2a250000f036
-att_notify 0015 2b190000803e236000abaa1aacaa1aabaa1aacaa
-att_notify 0015 2c1aabaa1aacaa1aabaa1aacaa1aabaa1aacaa1a
-att_notify 0015 2dabaa1aacaa1aabaa1aacaa1aabaa1aacaa1aab
-att_notify 0015 2eaa1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa
-att_notify 0015 2f1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa1a
-att_notify 0015 30acaa1aabaa1aacaa1a2700004840
+att_notify 0015 2a2500007037
+att_notify 0015 2b190000803e23600055550d56550d55550d5655
+att_notify 0015 2c0d55550d56550d55550d56550d55550d56550d
+att_notify 0015 2d55550d56550d55550d56550d55550d56550d55
+att_notify 0015 2e550d56550d55550d56550d55550d56550d5555
+att_notify 0015 2f0d56550d55550d56550d55550d56550d55550d
+att_notify 0015 3056550d55550d56550d2700004840
 att_write 0012 158b00 -> ok
 att_notify 0015 310b00
 ble_disconnect host 13

@@ -38,14 +38,29 @@
 //!   value comes, so it sends one more after the time, and never ends while the
 //!   meter is silent.
 //! - A lost notification, the link gone or a meter that stops answering ends the
-//!   capture with an error; C polls on for ever. A capture with a sample limit
-//!   that has had no reading in 10 s fails; one that had some says so after 30 s
-//!   of silence and fails after 10 minutes. With a time limit, silence is a
-//!   warning.
+//!   capture with an error; C polls on for ever. With a sample limit and no time
+//!   limit, no reading in 10 s fails the capture, and after readings, 30 s of
+//!   silence is told and 10 minutes fails. With a time limit, or none at all
+//!   (`--continuous`), silence is only told.
+//! - Channel P on a tree without `REAL_PWR` is told at the start, and alone it
+//!   refuses the start; C waits for it for ever.
 //! - A connection is given 20 s, C's `CONNECT_BLE_TIMEOUT`; C waits for the
 //!   kernel's 40 s.
+//! - Before the handshake, a message of a node the startup tree lacks (a meter
+//!   still sampling for a host that left, say) drops what the stream holds, as
+//!   the vendor's app does; C drops one byte and frames on from the next. After
+//!   the handshake such a message ends the capture.
+//! - The tree takes over within the notification that ends it, so what follows
+//!   ADMIN:TREE in it is read with the new tree, as C's `consume_packets` does.
+//! - A notification of another handle, an ATT PDU C doesn't handle and an empty
+//!   notification are passed over. C's `sr_bt_check_notify` returns -4, -3 and
+//!   -1 for them, which fails a setting's wait or the open's handshake, and is
+//!   ignored by its capture's poll.
+//! - An empty `channel_config` is refused, as C refuses it (`api.c:654-656`).
 //!
 //! See [`protocol`].
+
+#![forbid(unsafe_code)]
 
 pub mod protocol;
 #[cfg(test)]
@@ -149,6 +164,8 @@ pub struct Meter {
     update_timeout: Duration,
     /// The link failed: nothing more can be sent.
     link_failed: bool,
+    /// The CRC of the tree that took over from the startup one, once one has.
+    tree_crc: Option<u32>,
 }
 
 /// `flags` with `off` cleared.
@@ -181,6 +198,7 @@ impl Meter {
             diagnostic_node: Some(3),
             update_timeout: UPDATE_TIMEOUT,
             link_failed: false,
+            tree_crc: None,
         }
     }
 
@@ -205,8 +223,8 @@ impl Meter {
         let started = Instant::now();
         let crc = loop {
             m.pump(POLL)?;
-            if m.tree.nodes[tree_node].updates > 0 {
-                break m.take_tree(tree_node)?;
+            if let Some(crc) = m.tree_crc {
+                break crc;
             }
             if started.elapsed() > STARTUP_TIMEOUT {
                 log::debug!("Startup handshake failed: timeout.");
@@ -327,15 +345,35 @@ impl Meter {
         }
         let mut updated = Vec::new();
         loop {
+            let startup = self.tree_crc.is_none();
             match self.tree.take_message(&self.rx.contents) {
                 Ok(Some((node, used))) => {
                     self.rx.contents.drain(..used);
                     if Some(node) == self.diagnostic_node {
                         self.diagnostic(node);
                     }
+                    if startup && self.tree.nodes[node].id == Some(1) {
+                        // `startup_tree_updated`, here, so that what follows in
+                        // this notification is read with the new tree.
+                        let crc = self.take_tree(node)?;
+                        self.tree_crc = Some(crc);
+                        updated.clear();
+                        continue;
+                    }
                     updated.push(node);
                 }
                 Ok(None) => break,
+                Err(id) if startup => {
+                    // The vendor's app clears its buffer at an unknown id: what
+                    // a meter sends ahead of the handshake can't be framed.
+                    log::error!("Command {id} code does not map to a known node.");
+                    log::debug!(
+                        "Dropping {} bytes received before the handshake.",
+                        self.rx.contents.len()
+                    );
+                    self.rx.contents.clear();
+                    break;
+                }
                 Err(id) => {
                     log::error!("Command {id} code does not map to a known node.");
                     return Err(Error::device(format!(
@@ -658,6 +696,8 @@ pub struct MooshimeterDevice {
     worker: Option<Worker>,
     capturing: Arc<AtomicBool>,
     bounds: Bounds,
+    /// How many times a capture has told of silence, for the tests.
+    silences_told: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 struct Worker {
@@ -690,6 +730,7 @@ impl MooshimeterDevice {
             pending: None,
             worker: None,
             capturing: Arc::new(AtomicBool::new(false)),
+            silences_told: Arc::default(),
             bounds: BOUNDS,
         }
     }
@@ -778,6 +819,9 @@ impl Device for MooshimeterDevice {
             }
             Key::ChannelConfig => {
                 let text = value.as_str().ok_or_else(|| Error::arg("channel_config"))?;
+                if text.is_empty() {
+                    return Err(Error::arg("channel_config is empty"));
+                }
                 let (cfg, refused) = protocol::parse_channel_config(text);
                 self.with_meter(|m| m.apply(&cfg, refused))
             }
@@ -844,6 +888,16 @@ impl Device for MooshimeterDevice {
         self.end_worker();
         let enabled =
             [self.channels[0].enabled, self.channels[1].enabled, self.channels[2].enabled];
+        let no_power =
+            enabled[2] && self.with_meter(|m| Ok(m.tree.lookup("REAL_PWR").is_none()))?;
+        if no_power {
+            if !enabled[0] && !enabled[1] {
+                return Err(Error::device(
+                    "Channel P has nothing to show: the meter's tree has no REAL_PWR.",
+                ));
+            }
+            log::warn!("Channel P has nothing to show: the meter's tree has no REAL_PWR.");
+        }
         self.with_meter(|m| {
             let started = m
                 .set_chooser("SAMPLING:TRIGGER", "SAMPLING:TRIGGER:CONTINUOUS")
@@ -863,6 +917,7 @@ impl Device for MooshimeterDevice {
             limit_msec: self.limit_msec,
             enabled,
             bounds: self.bounds,
+            silences_told: Arc::clone(&self.silences_told),
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
@@ -903,6 +958,7 @@ struct Capture {
     limit_msec: u64,
     enabled: [bool; 3],
     bounds: Bounds,
+    silences_told: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How a capture's loop ended.
@@ -1027,18 +1083,16 @@ impl Capture {
             }
             drop(guard);
             let now = Instant::now();
+            // Only a sample limit with no time limit fails on silence.
+            let bounded = self.limit_samples > 0 && deadline.is_none();
             match last_reading {
-                None if deadline.is_none()
-                    && now.duration_since(started) > self.bounds.first_reading =>
-                {
+                None if bounded && now.duration_since(started) > self.bounds.first_reading => {
                     return Ended::Failed(Error::device(format!(
                         "No reading from the meter in {} s.",
                         self.bounds.first_reading.as_secs()
                     )));
                 }
-                Some(at)
-                    if now.duration_since(at) > self.bounds.silence_limit && deadline.is_none() =>
-                {
+                Some(at) if bounded && now.duration_since(at) > self.bounds.silence_limit => {
                     return Ended::Failed(Error::device(format!(
                         "No reading from the meter in {} s.",
                         self.bounds.silence_limit.as_secs()
@@ -1050,6 +1104,7 @@ impl Capture {
                         self.bounds.silence_warning.as_secs()
                     );
                     warned = true;
+                    self.silences_told.fetch_add(1, Ordering::SeqCst);
                 }
                 _ => {}
             }

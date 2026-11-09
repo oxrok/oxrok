@@ -18,8 +18,9 @@
 //!
 //! - A connection has a bound: `connect` gives up after the time it is given.
 //!   C's blocking `connect()` waits for the kernel's 40 s, and when that ends
-//!   with the socket still connecting it polls the socket with no bound, in a
-//!   loop that spins once the socket has failed (`bt_bluez.c:731-748`).
+//!   with the socket still connecting it polls for writability until its own
+//!   20 s deadline, but never leaves that loop on success, so a connection
+//!   that completes late is reported as a timeout (`bt_bluez.c:729-748`).
 //! - A peer that has gone is an error on the next read or write, where C's
 //!   `sr_bt_check_notify` returns -2 and its callers poll on.
 //!

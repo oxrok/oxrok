@@ -25,7 +25,9 @@ emu_cases() {
     TIME_BUG="C looks at the time limit only when a value comes (protocol.c:643-645), so with no reading it never ends; oxrok ends when the time is up"
     LSB_DIFF="C takes BUF_LSB2NATIVE only from a node of the binary type (protocol.c:798, 808), and it is a float, so every buffered sample is 0 and the range autoranges on 0 (protocol.c:738-739); oxrok reads the scale at the start and scales each sample"
     KELVIN_DIFF="C labels CH2's internal temperature in degrees Celsius (api.c:491) and CH1's, the same sensor, in kelvin (api.c:289); the meter sends kelvin, as its vendor's app says, and oxrok says K on both"
-    LOST_BUG="C keeps a notification ahead of a gap for ever, and reads nothing more (protocol.c:418-434), so the capture never ends; oxrok fails it once 8 more have come"
+    LOST_BUG="C keeps a notification ahead of a gap for ever, and reads nothing more (protocol.c:418-434), so the capture never ends; oxrok fails it when a ninth is held past the gap"
+    STALE_BUG="C drops one byte at an id the startup tree lacks and frames on from the next (protocol.c:450-453), so a reading ahead of the handshake is read as garbage and the open fails; oxrok drops what the stream holds, as the vendor's app does"
+    NOPWR_BUG="C waits for REAL_PWR, which the tree lacks, for ever; oxrok refuses the start"
     HUP_BUG="C's poll takes a failed read for no data (protocol.c:1536) and polls on, so the capture never ends; oxrok fails it"
     COLON_BUG="sigrok-cli splits --config at colons, sets channel_config=A, and only then fails on 10, a key it lacks; oxrok checks the whole -c first and sends nothing (docs/CLI.md)"
     SIGINT_BUG="sigrok-cli has no SIGINT handler and dies; oxrok ends the capture"
@@ -93,6 +95,11 @@ emu_cases() {
     emu_case "a buffer" --oracle-differs "$LSB_DIFF" -- -d $T --config "channel_config=A;10;Buffer,V;60;Samples:avg_samples=32" --samples 64
     emu_case "a buffer of CH2" --oracle-differs "$LSB_DIFF" -- -d $T -C CH2 --config "channel_config=A,V;60;Buffer:avg_samples=32" --samples 32
     emu_case "an autoranging buffer" --oracle-differs "$LSB_DIFF" -- -d $T -C CH2 --config "channel_config=A,V;0;Buffer:avg_samples=32" --samples 64
+    # A buffer past its range moves it up, then its scale is read again (the
+    # model's buffers have twice the range's headroom), and back down.
+    emu_options ch2=12.5,75,12.5
+    emu_case "a buffer that crosses its range" --oracle-differs "$LSB_DIFF" -- -d $T -C CH2 --config "channel_config=A,V;0;Buffer:avg_samples=32" --samples 96
+    emu_options
 
     # Autorange: a reading out of its range moves the range, unasked.
     emu_options ch2=12.5,75,12.5,-350
@@ -125,6 +132,12 @@ emu_cases() {
     emu_case "a tree that is not zlib" --no-output --expect-fail -- -d $T --samples 2
     emu_options tree=no-pwr
     emu_case "a tree with no power" --stderr --filter "$L" -- -d $T --samples 2
+    emu_case "power alone on a tree without it" --oracle-bug "$NOPWR_BUG" --oracle-hangs --expect-fail --stderr --filter "$L" --timeout 8 -- -d $T -C P --samples 2
+
+    # A meter still sampling for a host that left: readings come ahead of the
+    # tree, before the handshake has given their ids a meaning.
+    emu_options keep-sampling=2
+    emu_case "a meter still sampling" --oracle-bug "$STALE_BUG" --stderr --filter "$L" -- -d $T --samples 2
 
     # A meter that stops answering, or goes.
     emu_options mute-at=13

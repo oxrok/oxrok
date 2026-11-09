@@ -26,12 +26,13 @@
 //!
 //! Where it goes its own way:
 //!
-//! - A notification ahead of its turn waits only so long: once [`HELD_MAX`]
-//!   more have come with the gap still open, it was lost, and the stream can't be
-//!   read past it ([`Lost`]). C keeps them for ever, and from then on nothing
-//!   that comes is read. C's reorder list also shifts against the numbers when a
-//!   gap is two long, and appends what it holds out of order then. A number
-//!   behind the count is a repeat and is dropped; C files it 255 ahead.
+//! - A notification ahead of its turn waits only so long: when a ninth is held
+//!   past a gap still open (more than [`HELD_MAX`]), the one in the gap was
+//!   lost, and the stream can't be read past it ([`Lost`]). C keeps them for
+//!   ever, and from then on nothing that comes is read. C's reorder list also
+//!   stays shifted when its head slot is empty, so a gap of two filled in order
+//!   loses the second frame. A number behind the count is a repeat and is
+//!   dropped; C files it 255 ahead.
 //! - An id no node has ends the reading of the stream, as the bytes after it
 //!   can't be framed. C drops the one byte and reads on, so what follows is
 //!   framed wherever a byte happens to fall.
@@ -41,7 +42,7 @@ use std::fmt;
 
 /// The bytes of the stream one notification or write carries.
 pub const CHUNK: usize = 19;
-/// Notifications held ahead of a gap before it counts as a loss.
+/// Notifications held ahead of a gap: one more than these counts as a loss.
 pub const HELD_MAX: usize = 8;
 /// The most ids a tree has: 7 bits, and C's `tree_id_lookup[0x7F]`.
 pub const MAX_IDS: usize = 0x7f;
@@ -744,6 +745,29 @@ mod tests {
         assert_eq!(tree.integer_write(5, 1), Some(vec![0x83, 1]));
         assert_eq!(tree.integer_write(2, -1), Some(vec![0x80, 0xff, 0xff, 0xff, 0xff]));
         assert_eq!(tree.integer_write(3, 1), None, "a blob takes no integer");
+    }
+
+    #[test]
+    fn signed_values_are_framed_and_sign_extended() {
+        // root { S8 A, S16 B, S32 C, U16 D }: ids 0 to 3.
+        let mut serial = vec![0, 0, 4];
+        for (k, n) in [(6u8, b'A'), (7, b'B'), (8, b'C'), (4, b'D')] {
+            serial.extend_from_slice(&[k, 1, n, 0]);
+        }
+        let mut tree = Tree::deserialize(&serial).unwrap();
+        let id = |p: &str| tree.lookup(p).unwrap();
+        let (s8, s16, s32, u16) = (id("A"), id("B"), id("C"), id("D"));
+        assert_eq!(tree.take_message(&[0x00, 0xff, 0x99]), Ok(Some((s8, 2))));
+        assert_eq!(tree.nodes[s8].value, Val::Int(-1));
+        assert_eq!(tree.take_message(&[0x01, 0xfe]), Ok(None), "an S16 cut short");
+        assert_eq!(tree.take_message(&[0x01, 0xfe, 0xff]), Ok(Some((s16, 3))));
+        assert_eq!(tree.nodes[s16].value, Val::Int(-2));
+        assert_eq!(tree.take_message(&[0x02, 0xfd, 0xff, 0xff, 0xff]), Ok(Some((s32, 5))));
+        assert_eq!(tree.nodes[s32].value, Val::Int(-3));
+        assert_eq!(tree.take_message(&[0x03, 0xfe, 0xff]), Ok(Some((u16, 3))));
+        assert_eq!(tree.nodes[u16].value, Val::Int(0xfffe), "a U16 is not extended");
+        assert_eq!(tree.integer_write(s16, -2), Some(vec![0x81, 0xfe, 0xff]));
+        assert_eq!(tree.integer_write(s8, -1), Some(vec![0x80, 0xff]));
     }
 
     #[test]

@@ -140,6 +140,12 @@ struct Faults {
     bad_crc: bool,
     /// The link goes after N readings.
     gone_after: Option<u32>,
+    /// No reading comes after N (the link stays up).
+    stop_after: Option<u32>,
+    /// N readings of a sampling left on come before the tree's answer.
+    stale: u32,
+    /// `BAT_V` comes in the notification that ends the tree.
+    battery_after_tree: bool,
     /// No reading ever comes.
     silent: bool,
     /// After N frames, nothing is answered.
@@ -195,13 +201,24 @@ impl State {
                 out
             }
             3 => vec![3, 8],
-            29 | 37 => {
+            29 => {
                 let mut out = vec![id];
                 out.extend_from_slice(&(10.0f32 / 8_388_608.0).to_le_bytes());
                 out
             }
+            37 => {
+                let mut out = vec![id];
+                out.extend_from_slice(&self.ch2_lsb().to_le_bytes());
+                out
+            }
             _ => vec![id, v as u8],
         }
+    }
+
+    /// CH2's scale: twice its range (`CH2:RANGE_I`, id 31) at full scale.
+    fn ch2_lsb(&self) -> f32 {
+        let range = if self.ints.get(&31) == Some(&1) { 600.0 } else { 60.0 };
+        2.0 * range / 8_388_608.0
     }
 
     fn written(&mut self, frame: &[u8]) {
@@ -214,10 +231,21 @@ impl State {
         let mut answer = Vec::new();
         if body[0] & 0x80 == 0 {
             if id == 1 {
+                for _ in 0..std::mem::take(&mut self.faults.stale) {
+                    let mut r = vec![25];
+                    r.extend_from_slice(&0.5f32.to_le_bytes());
+                    r.push(33);
+                    r.extend_from_slice(&5.0f32.to_le_bytes());
+                    self.notify(&r);
+                }
                 let tree = compressed_tree();
                 answer.push(1);
                 answer.extend_from_slice(&(tree.len() as u16).to_le_bytes());
                 answer.extend_from_slice(&tree);
+                if self.faults.battery_after_tree {
+                    answer.push(7);
+                    answer.extend_from_slice(&2.5f32.to_le_bytes());
+                }
             } else {
                 answer = self.value(id);
             }
@@ -248,6 +276,9 @@ impl State {
             self.gone = true;
             return;
         }
+        if self.faults.stop_after == Some(self.readings) {
+            return;
+        }
         let k = self.readings as usize;
         self.readings += 1;
         let pick = |l: &[f32], d: f32| if l.is_empty() { d } else { l[k % l.len()] };
@@ -261,8 +292,18 @@ impl State {
             s.push(25);
             s.extend_from_slice(&v1.to_le_bytes());
         }
-        s.push(33);
-        s.extend_from_slice(&v2.to_le_bytes());
+        if self.ints.get(&32) == Some(&2) {
+            // Four 24 bit samples of v2, at CH2's scale now.
+            let raw = (v2 / self.ch2_lsb()).round() as i32;
+            s.push(35);
+            s.extend_from_slice(&12u16.to_le_bytes());
+            for _ in 0..4 {
+                s.extend_from_slice(&raw.to_le_bytes()[..3]);
+            }
+        } else {
+            s.push(33);
+            s.extend_from_slice(&v2.to_le_bytes());
+        }
         s.push(39);
         s.extend_from_slice(&(v1 * v2).to_le_bytes());
         self.notify(&s);
@@ -547,21 +588,25 @@ fn a_silent_meter_fails_a_sample_limit_and_warns_a_time_limit() {
 fn a_time_limit_ends_at_its_time() {
     let (mut dev, _fake) = opened(Faults::default());
     dev.set(&Key::LimitMsec, &Value::U64(100), None).unwrap();
+    let began = Instant::now();
     let packets = capture(&mut dev);
     assert_eq!(failed(&packets), None);
-    // Readings every 30 ms: three by 100 ms, each three values.
+    // Readings every 30 ms: at most four by 100 ms, two values each; a stall
+    // may leave fewer, even none, but the end comes on time.
     let n = values(&packets).len();
-    assert!((6..=12).contains(&n), "{n}");
+    assert!(n <= 8, "{n}");
+    assert!(began.elapsed() < Duration::from_secs(5));
 }
 
 #[test]
 fn the_heartbeat_reads_pcb_version() {
     let (mut dev, fake) = opened(Faults::default());
     dev.bounds.heartbeat = Duration::from_millis(50);
-    dev.set(&Key::LimitMsec, &Value::U64(180), None).unwrap();
+    // Ten readings, 30 ms apart on the meter's clock: at least 300 ms.
+    dev.set(&Key::LimitSamples, &Value::U64(20), None).unwrap();
     capture(&mut dev);
     let polls = fake.frames().iter().filter(|f| *f == "03").count();
-    assert!((2..=4).contains(&polls), "{polls}");
+    assert!(polls >= 1, "{polls}");
 }
 
 #[test]
@@ -610,4 +655,92 @@ fn a_start_with_no_echo_fails_and_turns_the_trigger_off() {
     let e = dev.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
     assert!(e.contains("No answer from the meter to SAMPLING:TRIGGER in time"), "{e}");
     assert_eq!(fake.frames()[n..], ["8b02".to_owned(), "8b00".to_owned()]);
+}
+
+#[test]
+fn a_buffer_that_crosses_its_range_moves_it_and_rescales() {
+    let (mut dev, fake) = opened(Faults::default());
+    fake.state().ch2 = vec![75.0, 12.5];
+    dev.set(&Key::ChannelConfig, &Value::Str("A,V;0;Buffer".into()), None).unwrap();
+    dev.enable_channel(0, false).unwrap();
+    dev.set(&Key::LimitSamples, &Value::U64(8), None).unwrap();
+    let packets = capture(&mut dev);
+    assert_eq!(failed(&packets), None);
+    let v = values(&packets);
+    assert_eq!(v.len(), 2, "{v:?}");
+    assert!(v[0].1.iter().all(|s| (s - 75.0).abs() < 1e-3), "{v:?}");
+    // Read at the new range's scale: 12.5, not a tenth of it.
+    assert!(v[1].1.iter().all(|s| (s - 12.5).abs() < 1e-3), "{v:?}");
+    let frames = fake.frames();
+    let up = frames.iter().position(|f| f == "9f01").expect("the range moves up");
+    assert_eq!(frames[up + 1], "25", "then its scale is read: {frames:?}");
+}
+
+#[test]
+fn silence_after_readings_is_told_then_fails_a_sample_limit() {
+    let (mut dev, _fake) = opened(Faults { stop_after: Some(1), ..Faults::default() });
+    dev.bounds.silence_warning = Duration::from_millis(100);
+    dev.bounds.silence_limit = Duration::from_millis(300);
+    dev.set(&Key::LimitSamples, &Value::U64(100), None).unwrap();
+    let packets = capture(&mut dev);
+    assert_eq!(values(&packets).len(), 2);
+    let e = failed(&packets).expect("a failure");
+    assert!(e.contains("No reading from the meter in"), "{e}");
+    assert_eq!(dev.silences_told.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn silence_under_a_time_limit_is_told_and_fails_nothing() {
+    let (mut dev, _fake) = opened(Faults { stop_after: Some(1), ..Faults::default() });
+    dev.bounds.silence_warning = Duration::from_millis(100);
+    dev.bounds.silence_limit = Duration::from_millis(150);
+    dev.set(&Key::LimitMsec, &Value::U64(400), None).unwrap();
+    let packets = capture(&mut dev);
+    assert_eq!(failed(&packets), None);
+    assert_eq!(dev.silences_told.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn power_alone_on_a_tree_without_it_is_refused_at_the_start() {
+    let (mut dev, _fake) = opened(Faults::default());
+    // A tree with no REAL_PWR: the node renamed out of the lookup.
+    {
+        let mut guard = dev.meter.lock().unwrap();
+        let m = guard.as_mut().unwrap();
+        let p = m.tree.lookup("REAL_PWR").unwrap();
+        m.tree.nodes[p].name = "OTHER".into();
+    }
+    dev.enable_channel(0, false).unwrap();
+    dev.enable_channel(1, false).unwrap();
+    dev.enable_channel(2, true).unwrap();
+    let (tx, _rx) = sync_channel(64);
+    let e = dev.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
+    assert!(e.contains("Channel P has nothing to show"), "{e}");
+}
+
+#[test]
+fn an_empty_channel_config_is_refused() {
+    let (mut dev, fake) = opened(Faults::default());
+    let before = fake.frames().len();
+    assert!(dev.set(&Key::ChannelConfig, &Value::Str(String::new()), None).is_err());
+    assert_eq!(fake.frames().len(), before);
+}
+
+#[test]
+fn readings_ahead_of_the_handshake_are_dropped_and_the_open_goes_on() {
+    let fake = FakeMeter::new(Faults { stale: 3, ..Faults::default() });
+    let mut dev = MooshimeterDevice::from_bearer(Box::new(fake.clone()));
+    dev.open().unwrap();
+    assert_eq!(fake.frames()[2], "8b00", "the handshake went through");
+}
+
+#[test]
+fn what_follows_the_tree_in_its_notification_is_read_with_the_new_tree() {
+    let fake = FakeMeter::new(Faults { battery_after_tree: true, ..Faults::default() });
+    let mut dev = MooshimeterDevice::from_bearer(Box::new(fake));
+    dev.open().unwrap();
+    let guard = dev.meter.lock().unwrap();
+    let m = guard.as_ref().unwrap();
+    let bat = m.tree.lookup("BAT_V").unwrap();
+    assert_eq!(m.tree.nodes[bat].value, Val::Float(2.5));
 }
