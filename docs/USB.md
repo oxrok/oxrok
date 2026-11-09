@@ -1079,9 +1079,16 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   library's, not the driver's (libudev lists `class` for libusb in sigrok-cli).
 - **Pace.** After each read of a paced file the model may give it its next value,
   written in place, so a tool that keeps the file open sees a live meter, and what
-  a capture reads depends on how many reads it made. `Tree::tick` comes every
-  5 ms, for values that follow the clock. `--unplug sysfs-read=N` and
-  `--interrupt sysfs-read=N` fire after the Nth paced read.
+  a capture reads depends on how many reads it made, never on how late the
+  carrier is: the server (root) puts a fanotify permission mark on each paced
+  file, so a read(2) waits until the carrier has taken in all that came before
+  it (the last read's next value, a write's new setting, an armed unplug). Run as
+  a user, the carrier has no such marks, says so on standard error, and paces
+  after the fact. `Tree::tick` comes every 5 ms, for values that follow the
+  clock. `--unplug sysfs-read=N` and `--interrupt sysfs-read=N` fire after the
+  Nth paced read, and the next read sees the unplug. What a tool reads is then
+  fixed by its reads; how many frames it sends still depends on its own pace, as
+  a driver that catches up on missed ticks (`baylibre-acme`) repeats values.
 - **What it can't show.** A value of another length from `Tree::tick` waits for
   the file's next read, since a rewrite is a write and a cut a reader could fall
   between. A refused write is put back after the tool's close: the
@@ -1090,8 +1097,7 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   file in another run. A model puts `/dev/full` behind a file for a write that
   fails at the tool. A read error on an open attribute (EIO, or ENODEV for a
   removed device) shows only as a directory in the file's place (EISDIR) or a file
-  emptied. A carrier held up longer than a sample period lets a read see the old
-  value again.
+  emptied.
 
 ### A program as the model
 

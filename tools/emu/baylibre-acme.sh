@@ -166,13 +166,14 @@ s/^(Failed to set device option .samplerate.: invalid argument): it cannot be 0\
     emu_case "capture probe 2" -- -d $D -g Probe_2 --samples 1
     emu_case "capture time 250" -- -d $D $VOL_ONLY --time 250
     emu_case "capture time 50" -- -d $D $VOL_ONLY --time 50
-    emu_case "capture at 50 hz" -- -d $D -c samplerate=50 $VOL_ONLY --samples 5
-    emu_case "capture at 100 hz" -- -d $D -c samplerate=100 $VOL_ONLY,P1_ENRG_CURR --samples 20
-    # At 500 Hz a tool that falls behind sends frames again, and C counts one sample
-    # for them (protocol.c:758-790) where oxrok counts each: how many and of which
-    # read is the load's. So the first frame's units, and no read of a value.
-    emu_case "capture at 500 hz" --filter '2,$d; s/: -?[0-9.]+ [mµ]?/: VALUE /' \
-        --tx-filter '/^sysfs_read /d' -- -d $D -c samplerate=500 $VOL_ONLY,P1_ENRG_CURR --samples 20
+    # Above the default rate a tool that falls behind by a period sends frames again
+    # with the values it read last, and C counts one sample for them
+    # (protocol.c:758-790) where oxrok counts each: how many and of which read is the
+    # load's. So these keep the first frame's units and no read of a value; the
+    # values are the 10 Hz cases'.
+    F1='2,$d; s/: -?[0-9.]+ [mµ]?/: VALUE /'
+    emu_case "capture at 50 hz" --filter "$F1" --tx-filter '/^sysfs_read /d' -- -d $D -c samplerate=50 $VOL_ONLY --samples 5
+    emu_case "capture at 500 hz" --filter "$F1" --tx-filter '/^sysfs_read /d' -- -d $D -c samplerate=500 $VOL_ONLY,P1_ENRG_CURR --samples 20
     emu_case "capture at 1 hz" --oracle-bug "$TIMER_1HZ" -- -d $D -c samplerate=1 $VOL_ONLY --samples 1
     emu_case "capture at 0 hz" --stderr --filter "$L" --expect-fail -- -d $D -c samplerate=0 $VOL_ONLY --samples 1
     emu_case "capture csv" --filter '/^; /d' -- -d $D --samples 2 -O csv
@@ -180,8 +181,7 @@ s/^(Failed to set device option .samplerate.: invalid argument): it cannot be 0\
     # The chip's own pace: values move on every update_interval (35 ms and 125 ms at
     # power on), whatever the reads; how many reads fall in one conversion is the clock's.
     emu_options pace=time
-    emu_case "capture live at 50 hz" --filter 's/: -?[0-9.]+ [mµ]?/: VALUE /' \
-        --tx-filter 's/^(sysfs_read [^ ]+ -> ).*/\1VALUE/' -- -d $D -c samplerate=50 --samples 20
+    emu_case "capture live at 50 hz" --filter "$F1" --tx-filter '/^sysfs_read /d' -- -d $D -c samplerate=50 --samples 20
     emu_options
 
     # What a value file can hold or do.
