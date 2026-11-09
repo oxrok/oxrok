@@ -44,6 +44,9 @@
 //! (`shells::sysfs`), which the tools see in a mount namespace; nothing is
 //! attached, and a `READY` line with no device says the tree is there.
 //!
+//! `gpib-config` brings a GPIB board online on an emulated NI adapter, as linux-gpib's
+//! `gpib_config` would, for a model behind the kernel's `ni_usb_gpib`.
+//!
 //! `cleanup` detaches the `vhci-hcd` ports a crashed run left attached:
 //! those whose device announced an oxrok-emu `devid` (bus `0x6f78`), or
 //! with `--all` every attached port. A running session's port carries
@@ -51,6 +54,9 @@
 //! (`/tmp/oxrok-emu.lock`, `--lock PATH`) and refuses while another
 //! session holds it; a session cleaning up under its own lock says so
 //! with `--locked`, and `--force` cleans up regardless.
+
+#[cfg(target_os = "linux")]
+mod gpib_config;
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -98,6 +104,21 @@ enum Command {
         /// Detach even while another session holds the lock.
         #[arg(long, conflicts_with = "locked")]
         force: bool,
+    },
+    /// Brings GPIB board MINOR online as an NI USB adapter, as linux-gpib's
+    /// `gpib_config` would (Linux, root).
+    #[cfg(target_os = "linux")]
+    GpibConfig {
+        /// The board, /dev/gpibMINOR.
+        #[arg(long, default_value_t = 0)]
+        minor: u32,
+        /// The USB device whose first interface the board takes (the READY line's
+        /// busid); any free adapter without it.
+        #[arg(long)]
+        busid: Option<String>,
+        /// Only takes the board offline.
+        #[arg(long)]
+        offline: bool,
     },
 }
 
@@ -171,6 +192,10 @@ fn main() -> ExitCode {
             locked_cleanup(all, &lock, locked || force).map(|()| 0)
         }
         Command::Serve(args) => serve(&args),
+        #[cfg(target_os = "linux")]
+        Command::GpibConfig { minor, busid, offline } => {
+            gpib_config::configure(minor, busid.as_deref(), offline).map(|()| 0).map_err(Error::Io)
+        }
     };
     match outcome {
         Ok(0) => ExitCode::SUCCESS,

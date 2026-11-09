@@ -147,6 +147,15 @@
 # tool ended`. The stand-in's options go in EMU_STANDIN_OPTIONS (emu_standin), as
 # the tool, not the server, starts it.
 #
+# A model a kernel driver carries to the tools (a GPIB adapter under the gpib
+# subsystem) needs that driver kept and set up. EMU_KEEP_BOUND names the kernel
+# drivers emu_unbind leaves bound to the device's vendor interfaces. A scenario
+# may define emu_attached, run after each attach the server reports (READY,
+# REPLUGGED, RENUMERATED), once EMU_BUSID and the rest name it; it runs what the
+# device needs as root, in a log section of its own (emu_cmd "section ...") so
+# that its traffic is in no case's transactions, and a failure is reported, not
+# fatal: the cases then fail on their own.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -732,6 +741,11 @@ if [ $emu = 1 ]; then
             | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
         EMU_SEEN=$total
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
+        # The scenario's hook, once per batch of attaches (see the head of
+        # this file). Its own commands come back here with nothing new.
+        if [ -s "$TMP/emu.attach" ] && [ "$EMU_DRY" = 0 ]; then
+            emu_attached || echo "$EMU_MODEL: the scenario's emu_attached failed" >&2
+        fi
     }
     emu_start() {
         rm -rf "$EMU_STANDIN_DIR"
@@ -889,6 +903,7 @@ if [ $emu = 1 ]; then
             [ -e "$intf/driver" ] || continue
             drv=$(basename "$(readlink "$intf/driver")")
             [ "$drv" != usbfs ] || continue
+            case " ${EMU_KEEP_BOUND:-} " in *" $drv "*) continue ;; esac
             [ "$(cat "$intf/bInterfaceClass" 2>/dev/null)" = "$un_class" ] || continue
             intf=$(basename "$intf")
             emu_cmd "section unbind $drv from $intf before $1" >/dev/null || return 1
@@ -1916,6 +1931,8 @@ EOF
         EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
+        emu_attached() { :; }
+        EMU_KEEP_BOUND=""
         . "$f"
         [ -n "$EMU_MODEL" ] || { emu_fail "$f: no EMU_MODEL"; continue; }
         if [ -n "$emu_models" ]; then

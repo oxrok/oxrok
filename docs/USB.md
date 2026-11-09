@@ -1139,6 +1139,36 @@ What it can't show: the real program's timing beyond what its source says, how
 wine treats the pipes, and a stand-in killed by a signal says nothing (no `exit`
 line), so a kill shows only as a missing line.
 
+### A model behind a kernel subsystem: GPIB
+
+Some drivers reach a device through a kernel driver that is not a plain class node:
+`hp-3478a` talks to `/dev/gpibN`, the kernel's `gpib` subsystem, which drives an NI
+GPIB-USB-HS through `ni_usb_gpib`. The model is then the USB adapter with the
+instrument behind it (`emu/src/models/hp-3478a.rs`), and the kernel driver stays in
+between, as on a bench. Two generic hooks of `tools/diffcli.sh` make that work:
+
+- `EMU_KEEP_BOUND="DRV..."`: kernel drivers that `emu_unbind` leaves bound to the
+  device's vendor interfaces, where it would otherwise unbind them before each
+  `--no-oracle` run.
+- `emu_attached`, a function the scenario may define: it runs after each attach the
+  server reports (`READY`, `REPLUGGED`, `RENUMERATED`), with `EMU_BUSID` and the rest
+  naming the new attach. It does what the device needs as root, in a log section of
+  its own (`emu_cmd "section ..."`), so its traffic is in no case's transactions. A
+  failure is printed, and the cases then fail on their own.
+
+A GPIB board must be brought online, which needs `CAP_SYS_ADMIN`: linux-gpib's
+`gpib_config` does it, and the testers need not have it. `sudo oxrok-emu gpib-config
+--minor 0 --busid BUSID` does the same (`emu/src/gpib_config.rs`): offline, board type
+`ni_usb_b`, address 0, the emulated interface's device path, online, then REN, system
+control and IFC, and the node made world accessible. `tools/emu/hp-3478a.sh` runs it from
+`emu_attached`, so an unplug case's replug comes back online too.
+
+The oracle has no libgpib, so every case is `--no-oracle-only` and its goldens are
+oxrok's, written with `EMU_WRITE_MISSING=1` and read against the C source and the
+instrument's manual. What the kernel itself does (its status and line reads around
+each transfer, the interrupt monitor) is in every `.tx`, so a case also pins how
+`ni_usb_gpib` drives the adapter: a kernel that changes that changes the goldens.
+
 ### Writing a device model
 
 Do no slow work inside a reply: the host's timeout is running, and a
