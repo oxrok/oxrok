@@ -116,7 +116,7 @@ fn list_tools(flags: &[&str]) -> (String, bool) {
     (String::from_utf8_lossy(text).into_owned(), out.status.success())
 }
 
-const ALL_TOOLS: [&str; 40] = [
+const ALL_TOOLS: [&str; 41] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -145,6 +145,7 @@ const ALL_TOOLS: [&str; 40] = [
     "capture_analog",
     "measure",
     "find",
+    "capture_view",
     "add_analyzer",
     "update_analyzer",
     "remove_analyzer",
@@ -160,7 +161,7 @@ const ALL_TOOLS: [&str; 40] = [
 ];
 
 /// The tools that change nothing.
-const READ_ONLY: [&str; 24] = [
+const READ_ONLY: [&str; 25] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -178,6 +179,7 @@ const READ_ONLY: [&str; 24] = [
     "capture_analog",
     "measure",
     "find",
+    "capture_view",
     "list_analyzers",
     "analyzer_status",
     "analyzer_frames",
@@ -357,6 +359,20 @@ fn the_demo_device_over_the_pipe() {
     let a = c.call("capture_analog", json!({"capture_id": id, "channel": "A0", "buckets": 5}));
     assert_eq!(a["buckets"].as_array().unwrap().len(), 5);
     assert_eq!(a["unit"], "V");
+    // A picture of the first 50 samples comes as image content.
+    let r = c.ok(
+        "tools/call",
+        json!({"name": "capture_view", "arguments": {"capture_id": id, "to": 50, "width": 320}}),
+    );
+    assert_eq!(r["content"][0]["type"], "image");
+    assert_eq!(r["content"][0]["mimeType"], "image/png");
+    assert!(r["content"][0]["data"].as_str().unwrap().starts_with("iVBORw0KGgo"));
+    assert_eq!(r["structuredContent"]["channels"].as_array().unwrap().len(), 5);
+    let t = c.call(
+        "capture_view",
+        json!({"capture_id": id, "form": "text", "to": 10, "width": 10, "channels": ["D0"]}),
+    );
+    assert_eq!(t["lanes"][0]["lane"], "_‾____‾___");
 
     let path = dir.join("demo.sr");
     let e = c.call("export_capture", json!({"capture_id": id, "path": path}));

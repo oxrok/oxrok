@@ -30,6 +30,7 @@ pub mod jsonrpc;
 pub mod protocol;
 pub mod tool;
 pub mod tools;
+pub mod view;
 
 pub use capture::{Capture, CaptureStore};
 pub use catalog::{Catalog, CatalogError};

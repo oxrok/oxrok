@@ -20,7 +20,10 @@ What is served today:
   `drop_capture`, `capture_summary`, `load_capture`, `export_capture`;
 - the data tools over a capture in the store: `capture_logic`
   (transitions, runs or samples, paged), `capture_analog` (buckets),
-  `measure` and `find`;
+  `measure`, `find`, and `capture_view`, a window of the capture as a
+  PNG (logic lanes, analog traces, the time axis, the trigger and an
+  analyzer's frames) for an agent that sees, or as the window's edges
+  merged in sample order for one that reads;
 - the analyzer tools: a decoder stack over a capture whose output is
   kept, so the agent decodes once and then pages, searches and counts:
   `add_analyzer`, `update_analyzer`, `remove_analyzer`,
@@ -45,7 +48,15 @@ The workflow the instructions give the model: `scan` → `open` →
 `describe_device` → `set_option` / `enable_channels` → `capture` →
 `measure`, `find`, `capture_logic` on the `capture_id` → `export_capture`.
 A capture lives in the server's memory, under a budget; the agent reads
-statistics and transitions from it, never a megabyte of bits.
+statistics and transitions from it, never a megabyte of bits. When the
+question is about timing between channels, or the shape of an analog
+trace, `capture_view` draws a window of the capture as a picture
+(`image/png` content, which a multimodal model looks at) with the
+decoded frames of an analyzer under the signals; the agent narrows the
+window around a `find` result or a frame, since a whole long capture in
+one picture shows only density. The `text` form gives the edges in the
+window merged in sample order, exact where a picture is approximate,
+with the lanes drawn in characters beside them.
 
 Decoding: `add_analyzer {capture_id, stack: "i2c:scl=D0:sda=D1,eeprom24xx"}`
 (or `capture_decode` for a one-shot answer) → `analyzer_status {wait}` →
@@ -586,6 +597,28 @@ Arguments:
 - `what` (string): `edge` (default), `rising`, `falling`, or `pulse` for the first run (high or low) at least `min_width` long.
 
 Example: `{"capture_id":1,"channel":"D0","what":"rising"}`
+
+### `capture_view`
+
+View a window. Tags: capture. Read-only.
+
+A window of a capture to look at: by default a PNG with the logic channels as lanes, the analog channels as traces with their scale, a time axis, the trigger, and, with `analyzer_id`, the decoded frames as labelled boxes under the signals, so the timing between channels and against the decode is visible at a glance. `form: text` gives the window's edges merged in sample order instead, which is exact where a picture is approximate. Narrow the window (`from`/`to` or `from_time`/`to_time`) around a `find` result or a frame; a whole long capture in one picture shows only density.
+
+Arguments:
+
+- `analyzer_id` (integer): Draw this analyzer's frames under the signals, one lane per row.
+- `capture_id` (integer, required): The id `capture` or `load_capture` returned.
+- `channels` (array of string): The channels to draw, top to bottom; every enabled one when left out.
+- `form` (string): `image` (default): a PNG of the window, logic lanes, analog traces with their scale, a time axis, the trigger and the frames of `analyzer_id`; `text`: the edges in the window merged in sample order, with the lanes drawn in characters.
+- `from` (integer): The first sample, 0 when left out.
+- `from_time` (number): The start in seconds instead of `from`.
+- `max_events` (integer): With `form: text`: at most this many edges (200 by default, 2000 at most).
+- `rows` (array of string): With `analyzer_id`: only these rows (`addr-data`); the rows that are not bit rows otherwise.
+- `to` (integer): One past the last sample, the end when left out.
+- `to_time` (number): The end in seconds instead of `to`.
+- `width` (integer): The picture's width in pixels (1024 by default, 200 to 4096), or the text lanes' columns (100 by default, 400 at most).
+
+Example: `{"analyzer_id":1,"capture_id":1,"from_time":0.0,"to_time":0.0002}`
 
 ### `add_analyzer`
 

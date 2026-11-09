@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod cli;
 pub mod data;
 pub mod device;
+pub mod view;
 
 use super::Host;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ pub fn catalog(host: &Arc<Host>) -> super::Catalog {
     tools.extend(device::tools(host));
     tools.extend(capture::tools(host));
     tools.extend(data::tools(host));
+    tools.extend(view::tools(host));
     tools.extend(analyzers::tools(host));
     super::Catalog::from_tools(tools).expect("the library's tool names are distinct")
 }

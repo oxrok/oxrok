@@ -33,7 +33,7 @@ pub struct Range {
 
 impl Range {
     /// The sample range on `c`.
-    fn resolve(&self, c: &Capture, total: u64) -> Result<(u64, u64), ToolError> {
+    pub(crate) fn resolve(&self, c: &Capture, total: u64) -> Result<(u64, u64), ToolError> {
         let at = |samples: Option<u64>,
                   seconds: Option<f64>,
                   default: u64|
@@ -369,7 +369,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
     vec![capture_logic, capture_analog, measure, find]
 }
 
-fn channel<'a>(c: &'a Capture, name: &str) -> Result<&'a Channel, ToolError> {
+pub(crate) fn channel<'a>(c: &'a Capture, name: &str) -> Result<&'a Channel, ToolError> {
     c.channel(name).ok_or_else(|| {
         let names: Vec<&str> = c.channels.iter().map(|ch| ch.name.as_str()).collect();
         ToolError::new(format!(

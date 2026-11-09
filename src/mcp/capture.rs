@@ -122,6 +122,11 @@ impl Capture {
             .sum()
     }
 
+    /// The most analog samples any channel has.
+    pub fn analog_samples_max(&self) -> u64 {
+        self.analog_channels().map(|c| self.analog_samples(c.index)).max().unwrap_or(0)
+    }
+
     /// The bytes this capture holds, for the budget.
     pub fn bytes(&self) -> usize {
         self.logic.len() + self.analog.iter().map(|b| b.data.samples.len() * 4).sum::<usize>()

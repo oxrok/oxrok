@@ -17,7 +17,8 @@ release may change the library API.
   `set_option`, `enable_channels`), captures into a store (`capture`,
   `capture_summary`, `list_captures`, `drop_capture`, `load_capture`,
   `export_capture`) and the data tools over them (`capture_logic`,
-  `capture_analog`, `measure`, `find`); `--no-hardware`, `--drivers`,
+  `capture_analog`, `measure`, `find`, and `capture_view`, a window of a
+  capture as a PNG or as its edges); `--no-hardware`, `--drivers`,
   `--allow-path` and `--max-memory`. Analyzers: a decoder stack over a
   capture whose frames are kept, paged, searched and counted, with raw
   values and a radix per request (`add_analyzer`, `analyzer_frames`,
