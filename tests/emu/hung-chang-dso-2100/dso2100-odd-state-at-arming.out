@@ -1,3 +1,1 @@
-sr: session: Could not start hung-chang-dso-2100 device (null) acquisition.
-sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
-Failed to start session.
+device error: The DSO-2100 answered state 0x42, which it has none of, on the way to 0x21.

@@ -1138,6 +1138,7 @@ The scenario sets `EMU_STANDIN=NAME` (several, space separated), with
 What it can't show: the real program's timing beyond what its source says, how
 wine treats the pipes, and a stand-in killed by a signal says nothing (no `exit`
 line), so a kill shows only as a missing line.
+
 ### A model behind a kernel parallel port
 
 `hung-chang-dso-2100` drives a parallel port through libieee1284, which on

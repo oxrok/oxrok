@@ -73,6 +73,7 @@ pub mod gpib;
 pub mod hid;
 pub mod lcr;
 pub mod modbus;
+pub mod parport;
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub mod pydecode;
 pub mod scpi;
@@ -117,6 +118,7 @@ pub mod drivers {
     pub mod hp_3457a;
     pub mod hp_3478a;
     pub mod hp_59306a;
+    pub mod hung_chang_dso_2100;
     pub mod icstation_usbrelay;
     pub mod ikalogic_scanalogic2;
     pub mod ikalogic_scanaplus;
@@ -221,6 +223,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::scpi_pps::HpibPpsDriver));
     registry.register(Box::new(drivers::rohde_schwarz_sme_0x::SmeDriver));
     registry.register(Box::new(drivers::hp_59306a::Hp59306aDriver));
+    registry.register(Box::new(drivers::hung_chang_dso_2100::HungChangDso2100Driver));
     registry.register(Box::new(drivers::siglent_sdl10x0::SiglentSdl10x0Driver));
     registry.register(Box::new(drivers::siglent_sds::SiglentSdsDriver));
     registry.register(Box::new(drivers::raspberrypi_pico::RaspberryPiPicoDriver));
