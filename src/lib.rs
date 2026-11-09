@@ -60,7 +60,8 @@
 //! ```
 //!
 //! Every module forbids unsafe code except `pydecode`, which crosses
-//! into Python.
+//! into Python, and `spawn`, which marks inherited descriptors close-on-exec
+//! by their numbers before a driver starts a program.
 
 pub mod core;
 pub mod decode;
@@ -76,6 +77,7 @@ pub mod modbus;
 pub mod pydecode;
 pub mod scpi;
 pub mod serial;
+pub mod spawn;
 pub mod usb;
 
 /// The device drivers, one module per family.

@@ -828,6 +828,33 @@ mod process {
         run_version(exe, bound)
     }
 
+    /// A descriptor oxrok was handed without `FD_CLOEXEC` (a CI runner gives two):
+    /// glib's spawn closes it in the child, and so must this, for both runs.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_program_gets_no_inherited_descriptor() {
+        use rustix::io::{FdFlags, fcntl_setfd};
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+        let file = std::fs::File::open("/dev/null").unwrap();
+        fcntl_setfd(file.as_fd(), FdFlags::empty()).unwrap();
+        // Whether the shell has the descriptor's number open.
+        let test = format!("[ -e /proc/$$/fd/{} ] && echo open || echo closed", file.as_raw_fd());
+        let mut c = sh(&format!("{test}; exec cat >/dev/null"));
+        let mut got = Vec::new();
+        while !got.ends_with(b"\n") {
+            match c.read(Duration::from_secs(5)) {
+                Got::Data(d) => got.extend(d),
+                other => panic!("{other:?}"),
+            }
+        }
+        assert_eq!(String::from_utf8(got).unwrap().trim(), "closed");
+        drop(c);
+        let out =
+            run_version_of(&OsString::from("/bin/sh"), &format!("echo \"Version $({test})\""));
+        assert_eq!(protocol::parse_version(&out).as_deref(), Some("closed"));
+        drop(file);
+    }
+
     /// `-version` stays in oxrok's process group: an oxrok a terminal's Ctrl-C ends
     /// during a scan, before it has a handler, takes the program along.
     #[cfg(target_os = "linux")]
