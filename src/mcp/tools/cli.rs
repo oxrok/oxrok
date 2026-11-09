@@ -131,7 +131,10 @@ fn driver_arg(args: &[String]) -> Option<&str> {
 }
 
 /// Runs `program` with `args`, stdin closed, for at most `timeout`, keeping
-/// `max_bytes` of each output stream.
+/// `max_bytes` of each output stream. The command leads its own process
+/// group, so the timeout kills what it started too: a shell that forks
+/// its command rather than `exec` it would otherwise leave that command
+/// holding the output pipes, and the run would last as long as it did.
 pub fn run(
     program: &Path,
     args: &[String],
@@ -139,11 +142,14 @@ pub fn run(
     max_bytes: usize,
 ) -> Result<CliOutput, ToolError> {
     let start = Instant::now();
-    let mut child = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command
         .spawn()
         .map_err(|e| ToolError::new(format!("Cannot run {}: {e}", program.display())))?;
     let stdout = child.stdout.take().map(|r| thread::spawn(move || read_capped(r, max_bytes)));
@@ -154,7 +160,7 @@ pub fn run(
             break Some(status);
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
+            kill_group(&mut child);
             let _ = child.wait();
             timed_out = true;
             break None;
@@ -177,6 +183,16 @@ pub fn run(
 fn join(handle: Option<thread::JoinHandle<(Vec<u8>, bool)>>) -> (String, bool) {
     let (bytes, truncated) = handle.and_then(|h| h.join().ok()).unwrap_or_default();
     (String::from_utf8_lossy(&bytes).into_owned(), truncated)
+}
+
+/// Kills `child` and everything in its process group (it leads one).
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = rustix::process::Pid::from_child(child);
+        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+    }
+    let _ = child.kill();
 }
 
 /// Reads everything, keeps the first `max` bytes, and says whether more
@@ -236,8 +252,10 @@ mod tests {
         assert_eq!(out.stderr, "err\n");
         assert!(!out.timed_out && !out.stdout_truncated);
         // The command would run 30 s; the timeout kills it, however slow
-        // the machine is about spawning and reaping.
-        let out = run(sh, &args("sleep 30"), Duration::from_millis(100), 1000).unwrap();
+        // the machine is about spawning and reaping. `&` and `wait` make
+        // the shell fork it, as dash does for any command, so the kill
+        // must reach the process group and not the shell alone.
+        let out = run(sh, &args("sleep 30 & wait"), Duration::from_millis(100), 1000).unwrap();
         assert!(out.timed_out);
         assert_eq!(out.exit_code, None);
         assert!(out.seconds < 20.0, "{}", out.seconds);
