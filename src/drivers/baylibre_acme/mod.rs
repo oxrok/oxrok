@@ -35,7 +35,9 @@
 //!   missed and counts one sample: so does this, but each frame counts toward
 //!   `limit_samples`, which is never passed.
 //! - GPIOs are exported first when they need it (C never manages to export one),
-//!   and a write that fails says so (C checks none of them).
+//!   and a write that fails says so (C checks none of them). A switch that is an
+//!   input refuses its `value`, and is then made an output with its level through
+//!   `direction`; C never sees the refusal.
 
 #![forbid(unsafe_code)]
 
@@ -56,7 +58,7 @@ use crate::core::{
 };
 use protocol::{
     ChannelType, Limits, MAX_PROBES, MAX_SAMPLE_RATE, Probe, ProbeType, Sysfs,
-    TEMP_PRB_START_INDEX, Timer, ValueFile,
+    TEMP_PRB_START_INDEX, Timer, ValueSource,
 };
 
 const CLASSES: [DeviceClass; 2] = [DeviceClass::Thermometer, DeviceClass::PowerMeter];
@@ -376,7 +378,7 @@ impl Device for AcmeDevice {
                 name: ch.name.clone(),
                 hwmon: self.probes[info.probe].hwmon,
                 kind: info.kind,
-                file,
+                file: Box::new(file) as Box<dyn ValueSource>,
                 value: 0.0,
                 readable: ch.enabled,
             })
@@ -432,7 +434,7 @@ struct Read {
     name: String,
     hwmon: i64,
     kind: ChannelType,
-    file: ValueFile,
+    file: Box<dyn ValueSource>,
     /// The last value read, which a tick missed sends again.
     value: f32,
     /// Whether it is read: an enabled channel whose read has not failed.

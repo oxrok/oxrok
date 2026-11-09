@@ -587,26 +587,69 @@ fn a_continuous_capture_stops_and_a_close_joins_it() {
     assert_eq!(packets.iter().filter(|p| matches!(p, Packet::FrameBegin)).count(), 1);
 }
 
+/// A value that is one more at each read, and counts the reads.
+struct Counter(Arc<std::sync::atomic::AtomicI64>);
+
+impl protocol::ValueSource for Counter {
+    fn read(&mut self) -> std::result::Result<i64, ReadError> {
+        Ok(self.0.fetch_add(1, Ordering::SeqCst) + 1)
+    }
+}
+
+/// C reads once a callback, and sends what it read for each tick missed: so a
+/// read per frame on catch-up fails this, as does a frame past the limit.
 #[test]
 fn falling_behind_sends_the_last_values_again_and_the_limit_holds() {
-    // A sink that a test holds up: three ticks are due at once.
-    let t = Tree::cape();
-    let mut d = t.scan().remove(0);
-    for ch in 0..8 {
-        d.enable_channel(ch, ch == 2).unwrap();
-    }
-    d.set(&Key::Samplerate, &Value::U64(100), None).unwrap();
-    d.set(&Key::LimitSamples, &Value::U64(4), None).unwrap();
+    let reads = Arc::new(std::sync::atomic::AtomicI64::new(0));
+    let capture = Capture {
+        reads: vec![Read {
+            index: 0,
+            name: "P1_ENRG_VOL".into(),
+            hwmon: 0,
+            kind: ChannelType::EnrgVol,
+            file: Box::new(Counter(Arc::clone(&reads))),
+            value: 0.0,
+            readable: true,
+        }],
+        samplerate: 100,
+        limits: Limits { samples: 4, msec: 0 },
+    };
+    // Room for the header alone: the first frame waits for the test.
     let (tx, rx) = sync_channel(1);
-    d.start(PacketSink::new(tx, 0)).unwrap();
-    // The header waits in the queue; the first frame's FrameBegin blocks.
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop2 = Arc::clone(&stop);
+    std::thread::spawn(move || {
+        let sink = PacketSink::new(tx, 0);
+        let outcome = capture.run(&sink, &stop2);
+        send_end(&sink, &stop2, outcome);
+    });
     std::thread::sleep(Duration::from_millis(80));
     let packets = collect(&rx);
     let frames = packets.iter().filter(|p| matches!(p, Packet::FrameBegin)).count();
     assert_eq!(frames, 4, "never past the limit");
     let values: Vec<f32> = analog(&packets).iter().map(|a| a.samples[0]).collect();
-    assert_eq!(values.len(), 4);
-    assert!(values.iter().all(|v| v.to_bits() == scale(4975, 3).to_bits()));
+    assert_eq!(values[0].to_bits(), scale(1, 3).to_bits());
+    assert!(values[1..].iter().all(|v| v.to_bits() == scale(2, 3).to_bits()), "{values:?}");
+    assert_eq!(reads.load(Ordering::SeqCst), 2, "one read for the three frames caught up");
+}
+
+/// A switch exported as an input refuses its `value` (EPERM from write(2) on a
+/// real kernel; `/dev/full` stands for it here): `direction` then makes it an
+/// output with its level.
+#[test]
+fn a_switch_whose_value_wont_take_gets_its_level_through_direction() {
+    let t = Tree::cape();
+    let mut d = t.scan().remove(0);
+    let value = under(&t.0, "/sys/class/gpio/gpio486/value");
+    fs::remove_file(&value).unwrap();
+    std::os::unix::fs::symlink("/dev/full", &value).unwrap();
+    d.set(&Key::PowerOff, &Value::Bool(true), Some("Probe_1")).unwrap();
+    assert_eq!(t.get("/sys/class/gpio/gpio486/direction"), "low\n");
+    // A value that takes is all a set writes.
+    t.gpio(491, "out", 0);
+    d.set(&Key::PowerOff, &Value::Bool(false), Some("Probe_2")).unwrap();
+    assert_eq!(t.get("/sys/class/gpio/gpio491/direction"), "out\n");
+    assert_eq!(t.get("/sys/class/gpio/gpio491/value"), "1\n");
 }
 
 #[test]

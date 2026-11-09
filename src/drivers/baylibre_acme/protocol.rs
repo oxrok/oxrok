@@ -622,7 +622,8 @@ pub struct ValueFile {
 pub enum ReadError {
     /// read(2) failed.
     Io(std::io::Error),
-    /// It returned nothing: a removed attribute, never a live one.
+    /// It returned nothing, which no attribute does: a removed one fails with
+    /// ENODEV and one whose chip won't answer with EIO. A file emptied.
     Empty,
     /// What it holds is not the kernel's number.
     Junk(Vec<u8>),
@@ -635,6 +636,22 @@ impl std::fmt::Display for ReadError {
             ReadError::Empty => write!(f, "nothing to read"),
             ReadError::Junk(data) => write!(f, "not a number: {:?}", String::from_utf8_lossy(data)),
         }
+    }
+}
+
+/// What a capture reads a channel from: a [`ValueFile`], or a test's fake.
+pub trait ValueSource: Send {
+    /// The number the file holds now.
+    ///
+    /// # Errors
+    ///
+    /// When the read fails, returns nothing or holds no number.
+    fn read(&mut self) -> std::result::Result<i64, ReadError>;
+}
+
+impl ValueSource for ValueFile {
+    fn read(&mut self) -> std::result::Result<i64, ReadError> {
+        ValueFile::read(self)
     }
 }
 

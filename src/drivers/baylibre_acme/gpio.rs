@@ -69,11 +69,30 @@ fn settle(sysfs: &Sysfs, gpio: u32) {
 /// # Errors
 ///
 /// When a file can't be written, said in C's words.
+///
+/// A switch exported as an input (by a read here, or by anyone) takes no
+/// `value`: the kernel's write(2) fails with EPERM. C sets the direction to
+/// `out` once, right after its export (`b41bbfdb`), and never sees that failure.
+/// Here a `value` that won't take is followed by `direction`, which makes the
+/// line an output with its level. Reading the direction first would cost every
+/// set a read C doesn't make.
 pub fn setval_export(sysfs: &Sysfs, gpio: u32, high: bool) -> Result<()> {
     if export(sysfs, gpio, Some(high))? {
         return Ok(());
     }
-    write(sysfs, &format!("/sys/class/gpio/gpio{gpio}/value"), &format!("{}\n", u8::from(high)))
+    let value = format!("/sys/class/gpio/gpio{gpio}/value");
+    match sysfs.write_raw(&value, &format!("{}\n", u8::from(high))) {
+        Ok(()) => Ok(()),
+        Err((true, e)) => {
+            log::error!("Error opening {value}: {}", strerror(&e));
+            Err(Error::Io(e))
+        }
+        Err((false, e)) => {
+            log::warn!("Error writing to {value}: {}; setting its direction", strerror(&e));
+            let level = if high { "high" } else { "low" };
+            write(sysfs, &format!("/sys/class/gpio/gpio{gpio}/direction"), &format!("{level}\n"))
+        }
+    }
 }
 
 /// `sr_gpio_getval_export`: the level, the line's direction left alone.
