@@ -181,7 +181,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
                 .map(|ch| {
                     let mut v = json!({"name": ch.name, "index": ch.index});
                     if form == "samples" {
-                            let start = from + offset as u64;
+                            let start = from.saturating_add(offset as u64);
                             let levels: Vec<u8> = c
                                 .levels(ch.index, start, to)
                                 .take(limit)
@@ -208,7 +208,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
                                     runs.push(json!({"sample": start, "t": c.time(start), "level": level, "length": to - start}));
                                 }
                                 let page: Vec<Value> = runs.iter().skip(offset).take(limit).cloned().collect();
-                                v["truncated"] = json!(offset + page.len() < runs.len());
+                                v["truncated"] = json!(offset.saturating_add(page.len()) < runs.len());
                                 v["runs"] = json!(page);
                             } else {
                                 let page: Vec<Value> = edges
@@ -217,7 +217,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
                                     .take(limit)
                                     .map(|(s, l)| json!({"sample": s, "t": c.time(*s), "level": l}))
                                     .collect();
-                                v["truncated"] = json!(offset + page.len() < edges.len());
+                                v["truncated"] = json!(offset.saturating_add(page.len()) < edges.len());
                                 v["transitions"] = json!(page);
                             }
                         }

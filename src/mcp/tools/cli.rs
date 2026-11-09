@@ -9,7 +9,9 @@
 //! a kill, so a driver that hangs does not hang the server.
 
 use crate::mcp::Host;
-use crate::mcp::tool::{Annotations, Tag, Tool, ToolError, ToolResult, ToolSpec, function};
+use crate::mcp::tool::{
+    Annotations, Tag, Tool, ToolError, ToolResult, ToolSpec, function, seconds,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::json;
@@ -92,8 +94,13 @@ pub fn tool(host: &Arc<Host>) -> Arc<dyn Tool> {
                 )));
             }
             let limits = h.limits();
-            let timeout = args.timeout.map_or(limits.cli_timeout, Duration::from_secs_f64);
-            let max_bytes = args.max_bytes.unwrap_or(limits.cli_max_bytes);
+            // A call may ask for less than the server allows, never more.
+            let timeout = match args.timeout {
+                Some(t) => seconds(t, "timeout")?.min(limits.cli_timeout),
+                None => limits.cli_timeout,
+            };
+            let max_bytes =
+                args.max_bytes.map_or(limits.cli_max_bytes, |m| m.min(limits.cli_max_bytes));
             let out = run(program, &args.args, timeout, max_bytes)?;
             Ok(ToolResult::structured(json!({
                 "exit_code": out.exit_code,
@@ -228,10 +235,12 @@ mod tests {
         assert_eq!(out.stdout, "out\n");
         assert_eq!(out.stderr, "err\n");
         assert!(!out.timed_out && !out.stdout_truncated);
-        let out = run(sh, &args("sleep 5"), Duration::from_millis(100), 1000).unwrap();
+        // The command would run 30 s; the timeout kills it, however slow
+        // the machine is about spawning and reaping.
+        let out = run(sh, &args("sleep 30"), Duration::from_millis(100), 1000).unwrap();
         assert!(out.timed_out);
         assert_eq!(out.exit_code, None);
-        assert!(out.seconds < 3.0);
+        assert!(out.seconds < 20.0, "{}", out.seconds);
         let out = run(sh, &args("printf 123456789"), Duration::from_secs(5), 4).unwrap();
         assert_eq!(out.stdout, "1234");
         assert!(out.stdout_truncated);

@@ -69,8 +69,10 @@ and makes patterns (`channel_group=Logic:pattern=walking-one`).
 
 `cli` runs the oxrok command line with sigrok-cli arguments, one per element: \
 `{\"args\": [\"-d\", \"demo\", \"--samples\", \"100\", \"-O\", \"bits\"]}`; use \
-it for what the tools do not cover (`-P i2c` decoding, `-L`). Keep its outputs \
-small. It cannot run on a device this server has open.
+it for what the tools do not cover (`-L`, an output module's text). Decoding \
+goes through `add_analyzer` or `capture_decode`, whose frames are paged and \
+searched, not through `cli -P`. Keep `cli` outputs small. It cannot run on a \
+device this server has open.
 
 Hardware and the files on disk are shared with the person at the bench: say \
 what a call will do before it changes a setting on a supply or a load, and \

@@ -423,7 +423,11 @@ impl Host {
 
     /// `path` as an absolute path under one of the allowed directories,
     /// or a refusal naming them. The file need not exist; its directory
-    /// must.
+    /// must, and neither may lead outside through a symlink: the
+    /// directory is resolved, and a file that exists must resolve under
+    /// the allowed directories too, so a link planted there cannot read
+    /// or overwrite what is beyond them. (A link made between this check
+    /// and the open is not caught; the directories are the user's own.)
     pub fn check_path(&self, path: &str) -> Result<PathBuf, ToolError> {
         let given = Path::new(path);
         let absolute = if given.is_absolute() {
@@ -435,20 +439,36 @@ impl Host {
         let dir = dir.canonicalize().map_err(|e| {
             ToolError::new(format!("Cannot use '{path}': {e} ({}).", dir.display()))
         })?;
+        let full = dir.join(absolute.file_name().unwrap_or_default());
+        self.check_allowed(path, &dir)?;
+        if let Ok(meta) = std::fs::symlink_metadata(&full)
+            && meta.file_type().is_symlink()
+        {
+            // The link's target, wherever it points, must be allowed too.
+            let target = full.canonicalize().map_err(|e| {
+                ToolError::new(format!("Cannot use '{path}': {e} (a dangling link)."))
+            })?;
+            self.check_allowed(path, &target)?;
+        }
+        Ok(full)
+    }
+
+    /// Whether `resolved` (a canonical path) is under an allowed directory.
+    fn check_allowed(&self, path: &str, resolved: &Path) -> Result<(), ToolError> {
         let allowed = self
             .limits
             .allow_paths
             .iter()
-            .any(|a| a.canonicalize().is_ok_and(|a| dir.starts_with(&a)));
-        if !allowed {
-            let dirs: Vec<String> =
-                self.limits.allow_paths.iter().map(|p| p.display().to_string()).collect();
-            return Err(ToolError::new(format!(
-                "'{path}' is outside the allowed directories ({}).",
-                dirs.join(", ")
-            )));
+            .any(|a| a.canonicalize().is_ok_and(|a| resolved.starts_with(&a)));
+        if allowed {
+            return Ok(());
         }
-        Ok(dir.join(absolute.file_name().unwrap_or_default()))
+        let dirs: Vec<String> =
+            self.limits.allow_paths.iter().map(|p| p.display().to_string()).collect();
+        Err(ToolError::new(format!(
+            "'{path}' is outside the allowed directories ({}).",
+            dirs.join(", ")
+        )))
     }
 
     /// Scans with a `-d` spec, or every allowed driver, and remembers
@@ -479,10 +499,13 @@ impl Host {
         let mut entries: Vec<ScanEntry> = Vec::new();
         let mut scanned = Vec::new();
         for device in found {
-            let mut device_id = device_id(device.info());
-            let n = entries.iter().filter(|e| e.device_id == device_id).count();
-            if n > 0 {
-                device_id = format!("{device_id}#{}", n + 1);
+            // Two of a kind are `x` and `x#2`; a third is `x#3`, and so on.
+            let base = device_id(device.info());
+            let mut device_id = base.clone();
+            let mut n = 1;
+            while entries.iter().any(|e| e.device_id == device_id) {
+                n += 1;
+                device_id = format!("{base}#{n}");
             }
             let handle = open_ids.get(&device_id).copied();
             entries.push(ScanEntry {
@@ -604,6 +627,16 @@ impl Host {
         } else {
             drop(devices);
             let _ = open.device.close();
+        }
+    }
+
+    /// Forgets a handle whose device is lost: its capture thread died
+    /// with the device in hand, so there is nothing to put back or to
+    /// close. The handle answers "no open device" from now on.
+    pub fn forget_device(&self, handle: u64) {
+        let mut devices = lock(&self.devices);
+        if matches!(devices.open.get(&handle), Some(Slot::Busy(_))) {
+            devices.open.remove(&handle);
         }
     }
 
@@ -737,10 +770,23 @@ mod tests {
         let h = host().with_limits(Limits { allow_paths: vec![dir.clone()], ..Limits::default() });
         let ok = h.check_path(&dir.join("x.sr").display().to_string()).unwrap();
         assert!(ok.ends_with("x.sr"));
-        let e = h.check_path("/etc/passwd").unwrap_err();
+        // The temp dir is outside the allowed one under it, on every OS.
+        let outside = std::env::temp_dir().join("oxrok-mcp-outside");
+        let e = h.check_path(&outside.display().to_string()).unwrap_err();
         assert!(e.message.contains("outside"), "{e}");
         let e = h.check_path(&dir.join("missing/x.sr").display().to_string()).unwrap_err();
         assert!(e.message.contains("Cannot use"), "{e}");
+        #[cfg(unix)]
+        {
+            // A link inside pointing outside is refused; one pointing
+            // inside is fine; a dangling one is refused.
+            std::os::unix::fs::symlink(&outside, dir.join("escape")).unwrap();
+            let e = h.check_path(&dir.join("escape").display().to_string()).unwrap_err();
+            assert!(e.message.contains("outside") || e.message.contains("dangling"), "{e}");
+            std::fs::write(dir.join("real.sr"), b"x").unwrap();
+            std::os::unix::fs::symlink(dir.join("real.sr"), dir.join("inside")).unwrap();
+            assert!(h.check_path(&dir.join("inside").display().to_string()).is_ok());
+        }
         std::fs::remove_dir_all(&dir).unwrap();
         let info = |serial: &str, conn: Option<&str>| DeviceInfo {
             driver: "fx2lafw",

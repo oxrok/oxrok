@@ -12,7 +12,9 @@ use crate::decode::{Analyzer, InstanceInfo};
 use crate::mcp::Host;
 use crate::mcp::capture::CaptureStore;
 use crate::mcp::host::AnalyzerEntry;
-use crate::mcp::tool::{Annotations, Call, Tag, Tool, ToolError, ToolResult, ToolSpec, function};
+use crate::mcp::tool::{
+    Annotations, Call, Tag, Tool, ToolError, ToolResult, ToolSpec, deadline, function, seconds,
+};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -222,13 +224,32 @@ pub struct BinaryArgs {
     #[serde(default)]
     pub radix: Option<String>,
     /// At most this many bytes in the answer: 4096 by default, 1 MiB at
-    /// most.
+    /// most. `export_binary` writes them all to a file.
     #[serde(default)]
     pub max_bytes: Option<usize>,
-    /// Write the bytes to this file (under the allowed directories)
-    /// instead of returning them.
+}
+
+/// `export_binary`.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportBinaryArgs {
+    /// The analyzer.
+    pub analyzer_id: u64,
+    /// The instance; the first with binary output otherwise.
     #[serde(default)]
-    pub path: Option<String>,
+    pub instance: Option<String>,
+    /// The binary class, by id (what `-B dec=class` names); the first
+    /// otherwise.
+    #[serde(default)]
+    pub class: Option<String>,
+    /// Items starting from this sample.
+    #[serde(default)]
+    pub from: Option<u64>,
+    /// Items starting before this sample.
+    #[serde(default)]
+    pub to: Option<u64>,
+    /// The file to write, under the allowed directories.
+    pub path: String,
 }
 
 /// `analyzer_meta`.
@@ -389,7 +410,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
             let entry =
                 h.analyzer(args.analyzer_id).ok_or_else(|| no_analyzer(args.analyzer_id))?;
             if let Some(secs) = args.wait {
-                wait(&entry.analyzer, Duration::from_secs_f64(secs.max(0.0)), cx);
+                wait(&entry.analyzer, seconds(secs, "wait")?, cx)?;
             }
             Ok(ToolResult::structured(describe(&entry)))
         },
@@ -466,7 +487,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
                 "total": total,
                 "offset": offset,
                 "limit": limit,
-                "truncated": offset + page.len() < total,
+                "truncated": offset.saturating_add(page.len()) < total,
                 "frames": page,
             })))
         },
@@ -632,7 +653,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
             title: "Binary output",
             description: "One instance's binary output class (what `-B` selects) over a \
                           range of samples, as hex, ascii, dec, bin or base64, capped at \
-                          `max_bytes`, or written to a file under the allowed directories.",
+                          `max_bytes`; `export_binary` writes it all to a file.",
             example: json!({"analyzer_id": 1, "class": "rx", "radix": "ascii"}),
             annotations: Annotations::READ_ONLY,
             tags: &[Tag::Decode],
@@ -640,79 +661,79 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
         move |args, _| {
             let entry =
                 h.analyzer(args.analyzer_id).ok_or_else(|| no_analyzer(args.analyzer_id))?;
-            let a = &entry.analyzer;
-            let (i, inst) = match &args.instance {
-                Some(id) => a.instance(id).ok_or_else(|| no_instance(a, id))?,
-                None => a
-                    .instances()
-                    .iter()
-                    .enumerate()
-                    .find(|(_, inst)| !inst.info.binary.is_empty())
-                    .ok_or_else(|| ToolError::new("No instance has binary output."))?,
-            };
-            let class = match &args.class {
-                Some(id) => inst.info.binary.iter().position(|b| b.id == id).ok_or_else(|| {
-                    let ids: Vec<&str> = inst.info.binary.iter().map(|b| b.id).collect();
-                    ToolError::new(format!(
-                        "No binary class '{id}' in {}; it has: {}.",
-                        inst.id,
-                        ids.join(", ")
-                    ))
-                })?,
-                None if inst.info.binary.is_empty() => {
-                    return Err(ToolError::new(format!("{} has no binary output.", inst.id)));
-                }
-                None => 0,
-            };
-            let from = args.from.unwrap_or(0);
-            let to = args.to.unwrap_or(u64::MAX);
             let max = args.max_bytes.unwrap_or(4096).clamp(1, 1 << 20);
-            let store = a.store(i);
-            let mut bytes = Vec::new();
-            let mut total = 0usize;
-            let mut items = 0usize;
-            for item in store
-                .binary()
-                .iter()
-                .filter(|b| b.class == class && b.start >= from && b.start < to)
-            {
-                items += 1;
-                total += item.bytes.len();
-                let room = max.saturating_sub(bytes.len());
-                bytes.extend_from_slice(&item.bytes[..item.bytes.len().min(room)]);
-            }
-            drop(store);
-            let mut v = json!({
+            let picked = binary_bytes(
+                &entry.analyzer,
+                args.instance.as_deref(),
+                args.class.as_deref(),
+                args.from,
+                args.to,
+                Some(max),
+            )?;
+            let encoding = args.radix.as_deref().unwrap_or("hex");
+            let data = match encoding {
+                "base64" => base64(&picked.bytes),
+                other => {
+                    let r = Radix::from_id(other).ok_or_else(|| {
+                        ToolError::invalid_args(format!(
+                            "Unknown radix '{other}': hex, ascii, dec, bin or base64."
+                        ))
+                    })?;
+                    radix::format_bytes(&picked.bytes, r)
+                }
+            };
+            Ok(ToolResult::structured(json!({
                 "analyzer_id": entry.id,
-                "instance": inst.id,
-                "class": inst.info.binary[class].id,
-                "items": items,
-                "bytes": total,
-                "truncated": total > bytes.len(),
-            });
-            if let Some(path) = &args.path {
-                let path = h.check_path(path)?;
-                std::fs::write(&path, &bytes).map_err(|e| {
-                    ToolError::new(format!("Cannot write '{}': {e}", path.display()))
-                })?;
-                v["path"] = json!(path);
-                v["written"] = json!(bytes.len());
-            } else {
-                let encoding = args.radix.as_deref().unwrap_or("hex");
-                v["encoding"] = json!(encoding);
-                v["data"] = json!(match encoding {
-                    "base64" => base64(&bytes),
-                    other => {
-                        let r = Radix::from_id(other).ok_or_else(|| {
-                            ToolError::invalid_args(format!(
-                                "Unknown radix '{other}': hex, ascii, dec, bin or base64."
-                            ))
-                        })?;
-                        radix::format_bytes(&bytes, r)
-                    }
-                });
-            }
-            Ok(ToolResult::structured(v))
+                "instance": picked.instance,
+                "class": picked.class,
+                "items": picked.items,
+                "bytes": picked.total,
+                "truncated": picked.total > picked.bytes.len(),
+                "encoding": encoding,
+                "data": data,
+            })))
+        },
+    );
+
+    let h = host.clone();
+    let export_binary = function::<ExportBinaryArgs, _>(
+        ToolSpec {
+            name: "export_binary",
+            title: "Export binary output",
+            description: "Writes one instance's binary output class over a range of samples \
+                          to a file under the allowed directories, whole: the bytes a UART \
+                          carried, an EEPROM's contents. Returns the path and size.",
+            example: json!({"analyzer_id": 1, "class": "rx", "path": "rx.bin"}),
+            annotations: Annotations {
+                read_only: false,
+                destructive: true,
+                idempotent: true,
+                open_world: false,
+            },
+            tags: &[Tag::Decode],
+        },
+        move |args, _| {
+            let entry =
+                h.analyzer(args.analyzer_id).ok_or_else(|| no_analyzer(args.analyzer_id))?;
+            let path = h.check_path(&args.path)?;
+            let picked = binary_bytes(
+                &entry.analyzer,
+                args.instance.as_deref(),
+                args.class.as_deref(),
+                args.from,
+                args.to,
+                None,
+            )?;
+            std::fs::write(&path, &picked.bytes)
+                .map_err(|e| ToolError::new(format!("Cannot write '{}': {e}", path.display())))?;
+            Ok(ToolResult::structured(json!({
+                "analyzer_id": entry.id,
+                "instance": picked.instance,
+                "class": picked.class,
+                "items": picked.items,
+                "bytes": picked.bytes.len(),
+                "path": path,
+            })))
         },
     );
 
@@ -751,7 +772,7 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
                 "analyzer_id": entry.id,
                 "total": total,
                 "offset": offset,
-                "truncated": offset + page.len() < total,
+                "truncated": offset.saturating_add(page.len()) < total,
                 "items": page,
             })))
         },
@@ -773,10 +794,13 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
         move |args, cx| {
             let spec = stack_text(args.stack.as_deref(), &args.decoders)?;
             let (spec, analyzer) = build(&h, args.capture_id, &spec, args.radix.as_deref())?;
-            let timeout = args.timeout.map_or(h.limits().capture_timeout, Duration::from_secs_f64);
+            let timeout = match args.timeout {
+                Some(t) => seconds(t, "timeout")?,
+                None => h.limits().capture_timeout,
+            };
             // The analyzer joins the table only when kept, so one-shot
             // decodes do not consume ids.
-            let status = wait(&analyzer, timeout, cx);
+            let status = wait(&analyzer, timeout, cx)?;
             let a = &analyzer;
             let limit = args.limit.unwrap_or(100).clamp(1, 2000);
             let mut frames: Vec<(u64, usize, u32)> = Vec::new();
@@ -840,9 +864,79 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
         analyzer_summary,
         analyzer_find,
         analyzer_binary,
+        export_binary,
         analyzer_meta,
         capture_decode,
     ]
+}
+
+/// The bytes of a binary class, picked out of an analyzer.
+struct PickedBinary {
+    instance: String,
+    class: &'static str,
+    /// The bytes, cut at the cap when one was given.
+    bytes: Vec<u8>,
+    /// Items matched.
+    items: usize,
+    /// Bytes they hold in all.
+    total: usize,
+}
+
+/// One instance's binary output class over `from..to`, cut at `cap`
+/// bytes when given. The instance is the first with binary output and
+/// the class its first, unless named.
+fn binary_bytes(
+    a: &Analyzer,
+    instance: Option<&str>,
+    class: Option<&str>,
+    from: Option<u64>,
+    to: Option<u64>,
+    cap: Option<usize>,
+) -> Result<PickedBinary, ToolError> {
+    let (i, inst) = match instance {
+        Some(id) => a.instance(id).ok_or_else(|| no_instance(a, id))?,
+        None => a
+            .instances()
+            .iter()
+            .enumerate()
+            .find(|(_, inst)| !inst.info.binary.is_empty())
+            .ok_or_else(|| ToolError::new("No instance has binary output."))?,
+    };
+    let class = match class {
+        Some(id) => inst.info.binary.iter().position(|b| b.id == id).ok_or_else(|| {
+            let ids: Vec<&str> = inst.info.binary.iter().map(|b| b.id).collect();
+            ToolError::new(format!(
+                "No binary class '{id}' in {}; it has: {}.",
+                inst.id,
+                ids.join(", ")
+            ))
+        })?,
+        None if inst.info.binary.is_empty() => {
+            return Err(ToolError::new(format!("{} has no binary output.", inst.id)));
+        }
+        None => 0,
+    };
+    let from = from.unwrap_or(0);
+    let to = to.unwrap_or(u64::MAX);
+    let store = a.store(i);
+    let mut bytes = Vec::new();
+    let mut total = 0usize;
+    let mut items = 0usize;
+    for item in
+        store.binary().iter().filter(|b| b.class == class && b.start >= from && b.start < to)
+    {
+        items += 1;
+        total += item.bytes.len();
+        let room = cap.map_or(usize::MAX, |c| c.saturating_sub(bytes.len()));
+        bytes.extend_from_slice(&item.bytes[..item.bytes.len().min(room)]);
+    }
+    Ok(PickedBinary {
+        instance: inst.id.clone(),
+        class: inst.info.binary[class].id,
+        bytes,
+        items,
+        total,
+    })
 }
 
 fn no_analyzer(id: u64) -> ToolError {
@@ -933,7 +1027,9 @@ fn build(
         None => radix::default_radix(bottom),
     };
     // A decoder that renders the radix itself takes it as its `format`
-    // option, unless the spec sets one.
+    // option, unless the spec sets one. The injected option stays out of
+    // the spec that is kept, so a later radix change injects anew.
+    let given = spec.to_owned();
     let mut spec = spec.to_owned();
     if RadixSupport::of(bottom, true) == RadixSupport::FormatOption
         && let Some(format) = radix.sigrok_format()
@@ -949,10 +1045,10 @@ fn build(
             spec = first;
         }
     }
-    let plan = crate::setup::parse_stacks(host.decoders(), &[spec.clone()], &channels)?;
+    let plan = crate::setup::parse_stacks(host.decoders(), &[spec], &channels)?;
     let analyzer =
         Analyzer::start(plan, radix, true, source, unit_size.max(1), samplerate, max_bytes);
-    Ok((spec, analyzer))
+    Ok((given, analyzer))
 }
 
 /// The bytes of a running capture as they come: each poll copies what
@@ -975,13 +1071,13 @@ fn live_source(store: Arc<Mutex<CaptureStore>>, capture_id: u64) -> Source {
 
 /// Waits for the decode, reporting progress, until done, the timeout or
 /// a cancellation.
-fn wait(a: &Analyzer, timeout: Duration, cx: &Call) -> Status {
-    let deadline = Instant::now() + timeout;
+fn wait(a: &Analyzer, timeout: Duration, cx: &Call) -> Result<Status, ToolError> {
+    let deadline = deadline(timeout)?;
     let mut last = 0u64;
     loop {
         let status = a.wait_until(Instant::now() + Duration::from_millis(200), || !cx.cancelled());
         if status != Status::Running || Instant::now() >= deadline || cx.cancelled() {
-            return status;
+            return Ok(status);
         }
         let (fed, total) = a.progress();
         if fed != last {

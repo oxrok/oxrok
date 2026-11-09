@@ -17,7 +17,9 @@ use crate::formats::sr::{SessionReader, is_session_file};
 use crate::mcp::Host;
 use crate::mcp::capture::{Capture, CaptureStore};
 use crate::mcp::host::{CaptureRun, Open};
-use crate::mcp::tool::{Annotations, Call, Tag, Tool, ToolError, ToolResult, ToolSpec, function};
+use crate::mcp::tool::{
+    Annotations, Call, Tag, Tool, ToolError, ToolResult, ToolSpec, deadline, function, seconds,
+};
 use crate::setup::{self, CaptureLimits};
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -138,9 +140,12 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
             tags: &[Tag::Capture, Tag::Hardware],
         },
         move |args, cx| {
-            let timeout = args.timeout.map_or(h.limits().capture_timeout, Duration::from_secs_f64);
+            let timeout = match args.timeout {
+                Some(t) => seconds(t, "timeout")?,
+                None => h.limits().capture_timeout,
+            };
             let run = start_run(&h, &args, true, Some(timeout))?;
-            follow(&h, &run, None, cx);
+            follow(&h, &run, None, true, cx);
             h.reap_run(run.capture_id);
             let mut v = summary(&h, run.capture_id)?;
             v["handle"] = json!(args.handle);
@@ -167,7 +172,8 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
         },
         move |args, _| {
             let continuous = args.samples.is_none() && args.time.is_none() && args.frames.is_none();
-            let run = start_run(&h, &args, false, args.timeout.map(Duration::from_secs_f64))?;
+            let timeout = args.timeout.map(|t| seconds(t, "timeout")).transpose()?;
+            let run = start_run(&h, &args, false, timeout)?;
             let evicted = h.captures().get(run.capture_id).map(|c| c.evicted.clone());
             Ok(ToolResult::structured(json!({
                 "capture_id": run.capture_id,
@@ -198,7 +204,8 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
             if let Some(run) = h.run(id)
                 && let Some(secs) = args.wait
             {
-                follow(&h, &run, Some(Duration::from_secs_f64(secs.max(0.0))), cx);
+                // A cancelled wait is only that: the capture goes on.
+                follow(&h, &run, Some(seconds(secs, "wait")?), false, cx);
             }
             h.reap_run(id);
             let run = h.run(id);
@@ -398,6 +405,9 @@ fn start_run(
     need_limit: bool,
     timeout: Option<Duration>,
 ) -> Result<Arc<CaptureRun>, ToolError> {
+    if let Some(t) = timeout {
+        deadline(t)?;
+    }
     let open = host.take_device(args.handle)?;
     let Open { device_id, mut device } = open;
     let give_back =
@@ -454,6 +464,34 @@ fn start_run(
     Ok(run)
 }
 
+/// Ends a run on every way out of [`feed_run`], a panic included: the
+/// capture is no longer running, the failure is recorded, and the run
+/// is finished so `capture`, `capture_status` and `close_all` do not
+/// wait for ever. The device cannot be given back after a panic (the
+/// session went with it), so its handle is forgotten.
+struct RunGuard<'a> {
+    run: &'a CaptureRun,
+    store: &'a Mutex<CaptureStore>,
+    host: &'a Weak<Host>,
+    clean: bool,
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        if !self.clean {
+            if let Some(c) = lock(self.store).get_mut(self.run.capture_id) {
+                c.running = false;
+                c.stopped = self.run.reason();
+                c.failed.get_or_insert_with(|| "the capture thread panicked".to_owned());
+            }
+            if let Some(h) = self.host.upgrade() {
+                h.forget_device(self.run.handle);
+            }
+        }
+        self.run.finish();
+    }
+}
+
 /// The acquisition, on the capture's thread: feeds the capture in the
 /// store packet by packet, stops on the run's flag, the timeout, a drop
 /// or the memory budget, then marks the capture ended and gives the
@@ -468,13 +506,19 @@ fn feed_run(
     timeout: Option<Duration>,
 ) {
     let id = run.capture_id;
+    let mut guard = RunGuard { run, store, host, clean: false };
     let session_stop = session.stop_flag();
     // The watchdog relays the run's stop flag to the session and keeps
     // the timeout; it ends with the run, when `done` drops.
     let (done, wake) = mpsc::channel::<()>();
     let watchdog = {
         let run = run.clone();
-        let deadline = timeout.map(|t| Instant::now() + t);
+        // Checked when the run started; a failure here is a stop now.
+        let deadline = timeout.map(|t| Instant::now().checked_add(t));
+        if deadline == Some(None) {
+            run.stop("timeout");
+        }
+        let deadline = deadline.flatten();
         std::thread::spawn(move || {
             loop {
                 if wake.recv_timeout(Duration::from_millis(50))
@@ -544,21 +588,32 @@ fn feed_run(
         let mut device = device;
         let _ = device.close();
     }
-    run.finish();
+    guard.clean = true;
 }
 
 /// Waits for a run to end, up to `wait` when given, reporting the
-/// samples so far as progress and stopping the run when the call is
-/// cancelled. Returns whether the run ended.
-fn follow(host: &Host, run: &CaptureRun, wait: Option<Duration>, cx: &Call) -> bool {
-    let deadline = wait.map(|w| Instant::now() + w);
+/// samples so far as progress. A cancelled call stops the run when
+/// `stop_on_cancel` (the blocking `capture`), else just returns (a
+/// status wait). Returns whether the run ended.
+fn follow(
+    host: &Host,
+    run: &CaptureRun,
+    wait: Option<Duration>,
+    stop_on_cancel: bool,
+    cx: &Call,
+) -> bool {
+    let deadline = wait.and_then(|w| Instant::now().checked_add(w));
     let mut last_report = (Instant::now(), 0u64);
     loop {
         if run.is_done() {
             return true;
         }
         if cx.cancelled() {
-            run.stop("cancelled");
+            if stop_on_cancel {
+                run.stop("cancelled");
+            } else {
+                return false;
+            }
         }
         if deadline.is_some_and(|d| Instant::now() >= d) {
             return false;
@@ -843,9 +898,13 @@ mod tests {
         assert_eq!(call(&h, "drop_capture", json!({"capture_id": 1})).unwrap()["dropped"], 1);
         let e = call(&h, "capture_summary", json!({"capture_id": 1})).unwrap_err();
         assert!(e.message.contains("No capture 1"), "{e}");
-        let e =
-            call(&h, "export_capture", json!({"capture_id": 2, "path": "/etc/x.sr"})).unwrap_err();
+        // The temp dir itself is outside the allowed one under it.
+        let outside = std::env::temp_dir().join("oxrok-mcp-outside.sr");
+        let e = call(&h, "export_capture", json!({"capture_id": 2, "path": outside})).unwrap_err();
         assert!(e.message.contains("outside"), "{e}");
+        let e = call(&h, "capture", json!({"handle": handle, "samples": "10", "timeout": -1.0}))
+            .unwrap_err();
+        assert!(e.invalid_args, "{e}");
         let e = call(&h, "load_capture", json!({"path": dir.join("missing.sr")})).unwrap_err();
         assert!(e.message.contains("Failed to load"), "{e}");
         std::fs::remove_dir_all(&dir).unwrap();

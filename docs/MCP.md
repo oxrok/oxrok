@@ -26,7 +26,7 @@ What is served today:
   `add_analyzer`, `update_analyzer`, `remove_analyzer`,
   `list_analyzers`, `analyzer_status`, `analyzer_frames`,
   `analyzer_summary`, `analyzer_find`, `analyzer_binary`,
-  `analyzer_meta`, and the one-shot `capture_decode`.
+  `export_binary`, `analyzer_meta`, and the one-shot `capture_decode`.
 
 Every acquisition runs on a thread of its own and feeds its capture in
 the store packet by packet. `capture` waits for it; `capture_start`
@@ -95,13 +95,19 @@ oxrok mcp [--read-only] [--no-hardware] [--no-cli] [--tools a,b,c]
 ```
 
 - `--read-only` keeps only the tools whose `readOnlyHint` is true: the
-  reference tools, `scan`, `describe_device`, `get_option` and the
-  tools that read a capture. It drops `cli`, `open`, `set_option`,
-  `capture`, `close`, `enable_channels`, `load_capture`,
-  `export_capture` and `drop_capture`.
+  reference tools, `scan`, `describe_device`, `get_option`, and the
+  tools that read a capture or an analyzer (`capture_status`,
+  `capture_summary`, `capture_logic`, `capture_analog`, `measure`,
+  `find`, `list_captures`, `list_analyzers`, `analyzer_status`,
+  `analyzer_frames`, `analyzer_summary`, `analyzer_find`,
+  `analyzer_binary`, `analyzer_meta`). It drops `cli`, `open`,
+  `set_option`, `capture`, `capture_start`, `capture_stop`, `close`,
+  `enable_channels`, `load_capture`, `export_capture`, `drop_capture`,
+  `add_analyzer`, `update_analyzer`, `remove_analyzer`,
+  `export_binary` and `capture_decode`.
 - `--no-hardware` drops the tools tagged `hardware`: `open`,
-  `set_option` and `capture`. Scanning stays: it finds devices without
-  opening them. `cli` is not tagged, since it can do anything the
+  `set_option`, `capture` and `capture_start`. Scanning stays: it finds
+  devices without opening them. `cli` is not tagged, since it can do anything the
   command line can; drop it with `--no-cli` or `--read-only`.
 - `--no-cli` drops the `cli` pass-through.
 - `--tools` serves exactly the tools named, comma separated, and fails
@@ -154,8 +160,9 @@ ends or `capture_stop` ends it, and a call on that handle meanwhile gets
 Every tool carries MCP's annotations (`readOnlyHint`,
 `destructiveHint`, `idempotentHint`, `openWorldHint`), so a client can
 ask before the ones that act. `cli`, `open`, `set_option`, `capture`
-and `capture_start` are destructive; `export_capture` writes a file; the rest change at most
-the server's own state.
+and `capture_start` are destructive; `export_capture` and
+`export_binary` write files; the rest change at most the server's own
+state.
 
 ## Protocol
 
@@ -714,7 +721,7 @@ Example: `{"analyzer_id":1,"next_after":0,"row":"address-write"}`
 
 Binary output. Tags: decode. Read-only.
 
-One instance's binary output class (what `-B` selects) over a range of samples, as hex, ascii, dec, bin or base64, capped at `max_bytes`, or written to a file under the allowed directories.
+One instance's binary output class (what `-B` selects) over a range of samples, as hex, ascii, dec, bin or base64, capped at `max_bytes`; `export_binary` writes it all to a file.
 
 Arguments:
 
@@ -722,12 +729,28 @@ Arguments:
 - `class` (string): The binary class, by id (what `-B dec=class` names); the first otherwise.
 - `from` (integer): Items starting from this sample.
 - `instance` (string): The instance; the first with binary output otherwise.
-- `max_bytes` (integer): At most this many bytes in the answer: 4096 by default, 1 MiB at most.
-- `path` (string): Write the bytes to this file (under the allowed directories) instead of returning them.
+- `max_bytes` (integer): At most this many bytes in the answer: 4096 by default, 1 MiB at most. `export_binary` writes them all to a file.
 - `radix` (string): `hex` (default), `ascii`, `dec`, `bin` or `base64`.
 - `to` (integer): Items starting before this sample.
 
 Example: `{"analyzer_id":1,"class":"rx","radix":"ascii"}`
+
+### `export_binary`
+
+Export binary output. Tags: decode. Acts on hardware or runs commands.
+
+Writes one instance's binary output class over a range of samples to a file under the allowed directories, whole: the bytes a UART carried, an EEPROM's contents. Returns the path and size.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `class` (string): The binary class, by id (what `-B dec=class` names); the first otherwise.
+- `from` (integer): Items starting from this sample.
+- `instance` (string): The instance; the first with binary output otherwise.
+- `path` (string, required): The file to write, under the allowed directories.
+- `to` (integer): Items starting before this sample.
+
+Example: `{"analyzer_id":1,"class":"rx","path":"rx.bin"}`
 
 ### `analyzer_meta`
 

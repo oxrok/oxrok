@@ -84,29 +84,10 @@ Static binaries, the release archives, `make dist`, notices and
 ## MCP server
 
 An MCP server so an agent can scan, capture, measure and decode through
-oxrok: `oxrok mcp` over stdio, and an extended server in oxrok-ui whose
-tools the user picks. [PLAN.mcp.md](../PLAN.mcp.md) has the design, the
-phases and the open decisions. Phase 1 is in: the stdio server
-(`src/mcp/`), the tool model and catalog, the reference tools and the
-`cli` pass-through, with `--read-only`, `--no-hardware`, `--no-cli` and
-`--tools` ([MCP.md](MCP.md)). Decisions 1 to 3 of the plan went the
-recommended way: a hand-rolled synchronous protocol layer, the `mcp`
-subcommand, `schemars` for the schemas. Phase 2 is in too: the CLI's
-setup code (driver specs, `-c` plans, `-C`, `-t`, limits, decoder
-stacks, `-I`/`-O` specs) lives in `oxrok::setup` and `src/cli/` calls
-it. Phase 3 too: the device tools (`scan`, `open`, `describe_device`,
-`set_option`, ...), the synchronous `capture` into a store with a byte
-budget, `load_capture`/`export_capture` under `--allow-path`, and the
-data tools (`capture_logic`, `capture_analog`, `measure`, `find`).
-Phase 4 too: `decode::radix`, `decode::FrameStore` and
-`decode::Analyzer` (the UI's code moved, with raw values and the binary
-and meta items added) and the analyzer tools with `capture_decode`.
-Phase 5 too: every acquisition on its own thread feeding the store,
-`capture_start`/`capture_status`/`capture_stop`, analyzers over a
-running capture (`decode::Source::Live`), and the memory budget over
-captures and frames. oxrok-ui still has its own copies of the radix and
-frame-store code; moving it onto `oxrok::decode` is the UI side's work
-(Phase 6).
+oxrok: `oxrok mcp` over stdio ([MCP.md](MCP.md) documents it), and an
+extended server in oxrok-ui whose tools the user picks.
+[PLAN.mcp.md](../PLAN.mcp.md) has the design, the phases and the open
+decisions; the CLI side (phases 1 to 5) is in.
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the

@@ -12,6 +12,7 @@ use std::fmt;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::time::{Duration, Instant};
 
 /// What a tool does to the world, as MCP's tool annotations tell it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -504,6 +505,27 @@ where
         tags: spec.tags.to_vec(),
     };
     Arc::new(FnTool { desc, f, _args: PhantomData })
+}
+
+/// A client's seconds as a duration: finite, not negative, and small
+/// enough to add to a clock. `what` names the argument in the refusal.
+pub fn seconds(value: f64, what: &str) -> Result<Duration, ToolError> {
+    // A year, so a deadline from it always fits an `Instant`.
+    const MAX: f64 = 366.0 * 24.0 * 3600.0;
+    if !(0.0..=MAX).contains(&value) {
+        return Err(ToolError::invalid_args(format!(
+            "`{what}` must be a number of seconds from 0 to {MAX}; got {value}."
+        )));
+    }
+    Duration::try_from_secs_f64(value)
+        .map_err(|e| ToolError::invalid_args(format!("`{what}` is not a usable duration: {e}.")))
+}
+
+/// `now + d`, refused instead of overflowing.
+pub fn deadline(d: Duration) -> Result<Instant, ToolError> {
+    Instant::now()
+        .checked_add(d)
+        .ok_or_else(|| ToolError::invalid_args(format!("A wait of {d:?} is too long.")))
 }
 
 #[cfg(test)]

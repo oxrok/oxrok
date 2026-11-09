@@ -386,10 +386,15 @@ pub fn measure_logic(capture: &Capture, index: usize, from: u64, to: u64) -> Val
     let duty = {
         let mut high = 0u64;
         let mut span = 0u64;
-        for w in risings.windows(2) {
-            if let Some((fall, _)) = edges.iter().find(|(s, l)| !*l && *s > w[0] && *s < w[1]) {
-                high += fall - w[0];
-                span += w[1] - w[0];
+        // Edges alternate, so after a rising edge at `k` the falling one
+        // is `k + 1` and the next rising one `k + 2`: one pass.
+        for (k, &(rise, level)) in edges.iter().enumerate() {
+            if !level {
+                continue;
+            }
+            if let (Some(&(fall, _)), Some(&(next, _))) = (edges.get(k + 1), edges.get(k + 2)) {
+                high += fall - rise;
+                span += next - rise;
             }
         }
         if span > 0 {

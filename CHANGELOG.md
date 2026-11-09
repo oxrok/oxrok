@@ -21,8 +21,8 @@ release may change the library API.
   `--allow-path` and `--max-memory`. Analyzers: a decoder stack over a
   capture whose frames are kept, paged, searched and counted, with raw
   values and a radix per request (`add_analyzer`, `analyzer_frames`,
-  `analyzer_summary`, `analyzer_find`, `analyzer_binary`, `analyzer_meta`,
-  `capture_decode`, ...). Captures run on their own thread and grow in
+  `analyzer_summary`, `analyzer_find`, `analyzer_binary`, `export_binary`,
+  `analyzer_meta`, `capture_decode`, ...). Captures run on their own thread and grow in
   the store: `capture_start`, `capture_status` (with `wait` and progress)
   and `capture_stop`, open-ended without a limit; the data tools and
   analyzers work on a running capture; the memory budget covers captures

@@ -116,7 +116,7 @@ fn list_tools(flags: &[&str]) -> (String, bool) {
     (String::from_utf8_lossy(text).into_owned(), out.status.success())
 }
 
-const ALL_TOOLS: [&str; 39] = [
+const ALL_TOOLS: [&str; 40] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -154,6 +154,7 @@ const ALL_TOOLS: [&str; 39] = [
     "analyzer_summary",
     "analyzer_find",
     "analyzer_binary",
+    "export_binary",
     "analyzer_meta",
     "capture_decode",
 ];
@@ -521,7 +522,8 @@ fn flags_narrow_the_catalog() {
     assert_eq!(names(&["--tools", "cli,version"]), ["version", "cli"]);
     let (text, ok) = list_tools(&["--tools", "version,nope"]);
     assert!(!ok);
-    assert_eq!(text, "invalid argument: Unknown tool 'nope'.\n");
+    // The Python decoder host may print warnings of its own before it.
+    assert_eq!(text.lines().last(), Some("invalid argument: Unknown tool 'nope'."), "{text}");
 
     // --json is the tools/list result the server would give.
     let (text, ok) = list_tools(&["--json", "--tools", "version"]);
