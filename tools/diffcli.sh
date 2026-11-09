@@ -167,8 +167,9 @@
 # with nothing attached over USB/IP: the server creates the controller on
 # /dev/vhci (hci_vhci) and brings it up, and the tools reach the peripheral
 # through the kernel by its address, which the model fixes, so the outputs need
-# no rewriting. No bluetoothd is needed. --unplug ble-notify=N and ble-model drop
-# the link.
+# no rewriting. bluetoothd must not run: a session refuses to start while it
+# does. --unplug ble-notify=N and ble-model drop the link. A scenario sets
+# EMU_SKIP when the kernel has no hci_vhci.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -781,7 +782,15 @@ if [ $emu = 1 ]; then
         [ "$EMU_TCP" != only ] || emu_how=""
         [ -z "$EMU_TCP" ] || emu_how="$emu_how --tcp 127.0.0.1:0"
         [ "$EMU_SYSFS" != 1 ] || emu_how="--sysfs $EMU_SYSFS_DIR"
-        [ "$EMU_BLE" != 1 ] || emu_how="--ble"
+        if [ "$EMU_BLE" = 1 ]; then
+            # bluetoothd would claim the controller and connect a GATT client of
+            # its own to the peripheral, in the cases' transactions.
+            if pgrep -x bluetoothd >/dev/null 2>&1; then
+                echo "$EMU_MODEL: bluetoothd is running; it would take the virtual controller (stop it for the session)" >&2
+                return 1
+            fi
+            emu_how="--ble"
+        fi
         # shellcheck disable=SC2086
         sudo -n "$EMU" serve "$EMU_MODEL" $EMU_OPTIONS --listen 127.0.0.1:0 $emu_how \
             --log "$EMULOG/$EMU_MODEL.log" --control "$EMU_CONTROL" --while-alive $$ \

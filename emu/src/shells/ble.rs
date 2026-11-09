@@ -46,6 +46,15 @@
 //!   a supervision timeout does (reason 08), `unplug` goes in the log, and the
 //!   peripheral neither advertises nor connects until the next `replug` or
 //!   `reset`. `--interrupt` takes the same points.
+//! - **What a later BLE model must know.** A CCCD write turns notifications on
+//!   by its bit 0 only: indications (bit 1, which libsigrok's `ble122` path
+//!   writes as 0x0003) are not sent, and nothing indicates. The ATT MTU is fixed
+//!   at 23: an Exchange MTU is answered 23, nothing is fragmented, and a value
+//!   longer than 20 bytes is neither sent nor refused whole. Write Requests sent
+//!   before the last one's response (libsigrok pipelines them) are answered in
+//!   turn and not flagged. bluetoothd must not run: it would claim the
+//!   controller and connect a GATT client of its own (`tools/diffcli.sh` refuses
+//!   a session while it does).
 //! - **Time.** [`Peripheral::tick`] comes every 20 ms of wall time while a host
 //!   is connected, with the time in [`Port::now`]: a meter streams on its own
 //!   clock, and nothing on the host side paces it.

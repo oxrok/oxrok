@@ -1197,8 +1197,9 @@ early, so its own waits hold on the model too.
 ### A Bluetooth LE model
 
 libsigrok's `bt/bt_bluez.c` and oxrok's `src/bt` open an L2CAP socket on the ATT
-fixed channel to an address and leave the link to the kernel: no bluetoothd, no
-D-Bus. So the boundary a BLE device stands behind is the kernel's HCI, and the
+fixed channel to an address and leave the link to the kernel: no D-Bus, and
+bluetoothd must not run, as it would claim the controller and connect a GATT
+client of its own (`tools/diffcli.sh` refuses a session while it does). So the boundary a BLE device stands behind is the kernel's HCI, and the
 model is the controller as well: `emu/src/shells/ble.rs` answers the kernel's
 `hci_vhci` (`/dev/vhci`) as an LE only 4.0 controller with one peripheral on its
 air, as BlueZ's `emulator/btdev.c` does, and serves that peripheral's GATT table.
@@ -1233,6 +1234,19 @@ any user's.
   L2CAP frames. A command it does not know is refused, "unknown command", and
   written to standard error. A connection to an address nobody advertises waits
   for the kernel's cancel, 40 s later (`L2CAP_CONN_TIMEOUT`).
+
+- Neither the server nor the tools need a user namespace or any descriptor
+  they inherit: the controller is a file the server opens as root, and the
+  tools open an L2CAP socket of their own. A host without `hci_vhci` skips the
+  model (`EMU_SKIP`).
+- A device's own habits stay the model's reading where no oracle can check
+  them: for the Mooshimeter, which messages a reading brings and in what order,
+  its period of DEPTH / RATE, and the buffers' full scale.
+- What a later BLE model must know: a CCCD write turns notifications on by bit 0
+  only, so indications (bit 1, which libsigrok's `ble122` path writes as 0x0003)
+  are not sent; the ATT MTU is 23 with no Exchange MTU of the host's own and no
+  fragmentation; Write Requests sent before the last one's response (libsigrok
+  pipelines them) are answered in turn, not flagged.
 
 What it can't show: radio timing (connection events, a slow link, retransmission:
 each PDU arrives whole at once), pairing and encryption, more than one link, and a

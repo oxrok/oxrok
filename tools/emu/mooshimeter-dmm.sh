@@ -6,6 +6,10 @@
 # semicolons, both of which libsigrok takes too.
 EMU_MODEL=mooshimeter-dmm
 EMU_BLE=1
+# A kernel without hci_vhci has no virtual controller to carry the meter
+# (GitHub's hosted runners, for one): skipped by name.
+modinfo hci_vhci >/dev/null 2>&1 || [ -d /sys/module/hci_vhci ] \
+    || EMU_SKIP="kernel $(uname -r) has no hci_vhci, so no virtual HCI controller to carry the meter"
 EMU_DRIVER=mooshimeter-dmm
 EMU_FULL=$EMU_DRIVER
 EMU_GCOV=mooshimeter-dmm

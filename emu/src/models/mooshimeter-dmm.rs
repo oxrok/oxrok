@@ -69,6 +69,9 @@
 //!   tree without `REAL_PWR`.
 //! - `idle=S`: the silence after which the meter drops the host, 0 for never
 //!   (default 20).
+//! - `keep-sampling=N`: the meter is still sampling for a host that left: N
+//!   readings come before the answer to the first write of a connection, ahead
+//!   of the handshake.
 //! - `absent=1`: the meter is not on the air; `refuse=1`: a connection to it
 //!   fails (0x3e, failed to be established).
 
@@ -89,7 +92,7 @@ pub const NAME: &str = "mooshimeter-dmm";
 pub const ABOUT: &str = "Mooshimeter BLE multimeter, on the BLE carrier alone (addr=, seq=N, \
                          ch1=, ch2=, pwr=, period=MS, battery=N, diag=TEXT, lose=N, swap=N, \
                          dup=N, mute-at=N, stop-at=N, mark-at=N, crc=bad, \
-                         tree=garbage|no-pwr, idle=S, absent=1, refuse=1)";
+                         tree=garbage|no-pwr, idle=S, keep-sampling=N, absent=1, refuse=1)";
 
 /// SERIN, the value the host writes.
 pub const SERIN: u16 = 0x0012;
@@ -98,6 +101,10 @@ pub const SEROUT: u16 = 0x0015;
 /// The bytes of a stream a notification or a write carries, after its
 /// sequence number.
 const CHUNK: usize = 19;
+/// A buffer's full scale, in ranges: the model's own choice, so that a reading
+/// past its range still encodes, as an ADC with headroom over the range's
+/// nominal top would have it.
+const HEADROOM: f32 = 2.0;
 
 /// The node types of the tree (`protocol.c:93-106`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -300,6 +307,7 @@ struct Options {
     idle: Option<Duration>,
     absent: bool,
     refuse: bool,
+    keep_sampling: u32,
 }
 
 /// The meter.
@@ -322,6 +330,8 @@ pub struct Meter {
     readings: u32,
     next_reading: Option<Instant>,
     heard: Instant,
+    /// Readings of a sampling left on are due at the next write.
+    stale: bool,
 }
 
 fn parse_floats(key: &str, value: &str) -> Result<Vec<f32>> {
@@ -374,6 +384,7 @@ fn parse_options(options: &[(String, String)]) -> Result<Options> {
             }
             "absent" if v == "1" => o.absent = true,
             "refuse" if v == "1" => o.refuse = true,
+            "keep-sampling" => o.keep_sampling = num(k, v)?,
             _ => return Err(Error::Invalid(format!("{NAME}: no option {k}={v}"))),
         }
     }
@@ -411,6 +422,7 @@ impl Meter {
             readings: 0,
             next_reading: None,
             heard: Instant::now(),
+            stale: false,
             o,
         };
         m.set("ADMIN:CRC32", Val::Int(i64::from(tree_crc)));
@@ -484,7 +496,7 @@ impl Meter {
     fn update_lsb(&mut self) {
         for ch in [1, 2] {
             let full = (1u64 << (self.bps(ch) - 1)) as f32;
-            let lsb = self.range(ch) / full;
+            let lsb = HEADROOM * self.range(ch) / full;
             self.set(&format!("CH{ch}:BUF_LSB2NATIVE"), Val::Float(lsb));
         }
     }
@@ -556,7 +568,7 @@ impl Meter {
         let bps = self.bps(ch);
         let bytes = bps.div_ceil(8) as usize;
         let full = (1i64 << (bps - 1)) - 1;
-        let lsb = self.range(ch) / (1u64 << (bps - 1)) as f32;
+        let lsb = HEADROOM * self.range(ch) / (1u64 << (bps - 1)) as f32;
         let raw = (f64::from(value) / f64::from(lsb)).round() as i64;
         let mut out = Vec::with_capacity(depth * bytes);
         for i in 0..depth {
@@ -767,6 +779,11 @@ impl Peripheral for Meter {
         }
         self.heard = port.now();
         self.writes += 1;
+        if std::mem::take(&mut self.stale) {
+            for _ in 0..self.o.keep_sampling {
+                self.take_reading(port);
+            }
+        }
         if self.o.mute_at.is_some_and(|n| self.writes > n) {
             return;
         }
@@ -788,6 +805,7 @@ impl Peripheral for Meter {
         self.heard = port.now();
         self.inbox.clear();
         self.unlocked = false;
+        self.stale = self.o.keep_sampling > 0;
     }
 
     fn disconnected(&mut self) {
@@ -990,10 +1008,41 @@ mod tests {
         let r: Vec<u8> = port.notified().iter().flat_map(|(_, p)| p[1..].to_vec()).collect();
         assert_eq!(r[0], 27);
         assert_eq!(u16::from_le_bytes([r[1], r[2]]), 96);
-        let lsb = 10.0 / 8_388_608.0f32;
+        let lsb = 20.0 / 8_388_608.0f32;
         let first = i32::from_le_bytes([r[3], r[4], r[5], 0]);
         assert!((first as f32 * lsb - 0.25).abs() < 1e-5);
         assert_eq!(r[3 + 96], 33, "then CH2's value");
+    }
+
+    #[test]
+    fn a_meter_left_sampling_sends_readings_before_the_first_answer() {
+        let mut m = meter(&[("keep-sampling", "2")]);
+        let now = Instant::now();
+        m.connected(&mut Port::new(now, &[SEROUT]));
+        let (out, _) = write(&mut m, &[0x01], now);
+        // Two readings of CH1, CH2 and power, then the tree.
+        assert_eq!((out[0], out[5], out[10], out[15]), (25, 33, 39, 25));
+        assert_eq!(out[30], 0x01);
+        // Only once a connection.
+        let (out, _) = write(&mut m, &[0x01], now);
+        assert_eq!(out[0], 0x01);
+    }
+
+    #[test]
+    fn a_buffer_has_headroom_over_its_range() {
+        let mut m = meter(&[("period", "1"), ("ch2", "75")]);
+        unlock(&mut m);
+        let t0 = Instant::now();
+        write(&mut m, &[0x8a, 0], t0);
+        write(&mut m, &[0xa0, 2], t0); // CH2 BUFFER, in the 60 V range
+        write(&mut m, &[0x8b, 2], t0);
+        let mut port = Port::new(t0 + Duration::from_millis(5), &[SEROUT]);
+        m.tick(&mut port);
+        let r: Vec<u8> = port.notified().iter().flat_map(|(_, p)| p[1..].to_vec()).collect();
+        let at = 5 + 3; // after CH1's value, CH2:BUF's id and length
+        let raw = i32::from_le_bytes([r[at], r[at + 1], r[at + 2], 0]);
+        let lsb = 120.0 / 8_388_608.0f32;
+        assert!((raw as f32 * lsb - 75.0).abs() < 1e-3, "{raw}");
     }
 
     #[test]

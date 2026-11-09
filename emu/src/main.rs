@@ -494,16 +494,19 @@ fn serve(args: &Serve) -> Result<u8> {
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 fn hci_up(index: u16) -> io::Result<()> {
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::AsRawFd;
+
+    use rustix::net::{AddressFamily, Protocol, RawProtocol, SocketFlags, SocketType, socket_with};
     /// `_IOW('H', 201, int)`.
     const HCIDEVUP: libc::Ioctl = 0x4004_48c9;
-    // SAFETY: socket(2) takes no pointers; a negative result is checked.
-    let fd = unsafe { libc::socket(libc::AF_BLUETOOTH, libc::SOCK_RAW | libc::SOCK_CLOEXEC, 1) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: fd is a new descriptor of ours, owned from here on.
-    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+    /// `BTPROTO_HCI`.
+    const HCI: RawProtocol = RawProtocol::new(1).expect("nonzero");
+    let socket = socket_with(
+        AddressFamily::BLUETOOTH,
+        SocketType::RAW,
+        SocketFlags::CLOEXEC,
+        Some(Protocol::from_raw(HCI)),
+    )?;
     // SAFETY: HCIDEVUP takes the device index as an int, by value: no pointer.
     let r = unsafe { libc::ioctl(socket.as_raw_fd(), HCIDEVUP, libc::c_int::from(index)) };
     if r < 0 {

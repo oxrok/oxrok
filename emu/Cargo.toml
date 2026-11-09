@@ -25,12 +25,13 @@ vusb = "0.2.1"
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# One ioctl, HCIDEVUP, in main.rs for the --ble controller; already in the tree.
+# The --ble controller's HCIDEVUP, in main.rs: its one unsafe call, the
+# socket being rustix's; already in the tree.
 libc = "0.2"
 # The sysfs carrier's inotify and poll (shells/sysfs.rs), safe wrappers, as
 # the library forbids unsafe code; and the binary's gpib-config, whose ioctls on
-# /dev/gpibN are its only unsafe calls (src/gpib_config.rs).
-rustix = { version = "1.1", features = ["event", "fs"] }
+# /dev/gpibN are unsafe calls of its own (src/gpib_config.rs).
+rustix = { version = "1.1", features = ["event", "fs", "net"] }
 
 [lints]
 workspace = true
