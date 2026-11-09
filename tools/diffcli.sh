@@ -807,6 +807,9 @@ if [ $emu = 1 ]; then
         [ "$EMU_TMC" != 1 ] || emu_tmc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
         EMU_DEAD=0
+        # Before any return: emu_stop's detach runs emu_track, which reads it,
+        # and an unset one under set -u ends the whole run (exit 2).
+        EMU_SEEN=0
         EMU_TCP_PORT=""
         emu_how="--attach --open-devices"
         [ "$EMU_TCP" != only ] || emu_how=""
