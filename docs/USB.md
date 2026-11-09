@@ -1061,7 +1061,10 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   (`unshare -Urm`), then executes the command with the same process id, so
   `timeout`, an interrupt and gcov's counts reach it as ever. A session whose
   `EMU_WRAP` cannot run `true` fails at its start and says why, so a host where
-  unprivileged user namespaces are off shows at once.
+  unprivileged user namespaces are off shows at once. `EMU_WRAP` is split into
+  words, with no quoting, so its paths hold no space; a case's `LD_PRELOAD`,
+  `--oracle-env` and the event's `env` wrap outside it, so they reach the
+  wrapper and, through its `exec`, the tool.
 - **Permissions as on a machine.** The server runs as root and the tree is
   root's. In the tools' namespace root is not mapped, so the tools, root there,
   meet the files as a user does: a mode decides. An attribute of mode 0444 can't
@@ -1079,7 +1082,9 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   a capture reads depends on how many reads it made. `Tree::tick` comes every
   5 ms, for values that follow the clock. `--unplug sysfs-read=N` and
   `--interrupt sysfs-read=N` fire after the Nth paced read.
-- **What it can't show.** A refused write is put back after the tool's close: the
+- **What it can't show.** A value of another length from `Tree::tick` waits for
+  the file's next read, since a rewrite is a write and a cut a reader could fall
+  between. A refused write is put back after the tool's close: the
   tool can't see the refusal (on a real attribute write(2) fails), and a read
   right after the write can still see what was written, so a case reads such a
   file in another run. A model puts `/dev/full` behind a file for a write that

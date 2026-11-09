@@ -31,7 +31,11 @@
 //!   read's event, long before the next read at any rate C allows (500 Hz); a
 //!   carrier held up longer than a sample period would let a read see the old
 //!   value again. [`Tree::tick`] comes every 5 ms too, for a model whose values
-//!   follow the clock.
+//!   follow the clock. A new value is written and then the file cut to its length,
+//!   two calls a reader could fall between, so a value from a tick whose length
+//!   differs from the file's waits for that file's next read and goes in right
+//!   after it, when its reader is between reads; one of the same length is a
+//!   single write.
 //! - **A write** is what the file holds when the host closes it. The model accepts
 //!   it ([`Written::Kept`]) or refuses it as the kernel's store would
 //!   ([`Written::Refused`], with the errno's name): the old contents go back. The
@@ -47,9 +51,13 @@
 //!   the Nth read of a paced file: an unplug calls [`Tree::unplug`], and `replug`
 //!   [`Tree::replug`].
 //!
-//! What it can't show: a read error on an open attribute (the kernel's -EIO or,
-//! for a removed device, -ENODEV) other than as a directory in the file's place
-//! (EISDIR), or a file emptied; and sysfs's 4096 byte size of every attribute.
+//! What it can't show: a read error on an open attribute (the kernel's -EIO for
+//! an I2C fault, -ENODEV for a removed attribute) other than as a directory in the
+//! file's place (EISDIR), or a file emptied, which no attribute ever reads as;
+//! sysfs's 4096 byte size of every attribute; and a read atomic with a rewrite: a
+//! tick's value of the same length is one write(2), but a reader in the middle of
+//! its copy could still see part of it, and a value whose length changes shows
+//! one read late.
 
 use crate::model::Violations;
 
@@ -261,6 +269,8 @@ mod carrier {
         log: Arc<Mutex<dyn Log>>,
         armed: Option<(Event, u32)>,
         reads: u32,
+        /// A tick's values whose length differs from the file's, until its next read.
+        pending: HashMap<String, Vec<u8>>,
     }
 
     /// The carrier: the tree, its watches and a thread that serves them.
@@ -292,6 +302,7 @@ mod carrier {
                 log,
                 armed: None,
                 reads: 0,
+                pending: HashMap::new(),
             };
             inner.clear()?;
             let carrier = Carrier {
@@ -347,6 +358,7 @@ mod carrier {
             inner.tree = None;
             inner.armed = None;
             inner.reads = 0;
+            inner.pending.clear();
             inner.teardown()?;
             inner.clear()?;
             let mut fs = Fs::default();
@@ -610,7 +622,25 @@ mod carrier {
             let mut fs = Fs::default();
             tree.tick(Instant::now(), &mut fs);
             self.tree = Some(tree);
-            self.apply_fs(fs, violations);
+            // A paced file's new length waits for its next read.
+            let (ops, said) = fs.take();
+            let mut now = Fs::default();
+            for message in said {
+                now.violation(message);
+            }
+            for op in ops {
+                match op {
+                    Op::Set(rel, data)
+                        if self.files.get(&rel).is_some_and(|s| s.paced)
+                            && (self.pending.contains_key(&rel)
+                                || self.files[&rel].data.len() != data.len()) =>
+                    {
+                        self.pending.insert(rel, data);
+                    }
+                    other => now.ops.push(other),
+                }
+            }
+            self.apply_fs(now, violations);
         }
 
         fn event(
@@ -665,6 +695,11 @@ mod carrier {
         fn paced_read(&mut self, rel: &str, violations: &AtomicUsize) {
             let text = render(&self.files[rel].data);
             self.line(&format!("sysfs_read {rel} -> {text}"));
+            if let Some(data) = self.pending.remove(rel) {
+                let mut fs = Fs::default();
+                fs.set(rel, data);
+                self.apply_fs(fs, violations);
+            }
             if let Some(mut tree) = self.tree.take() {
                 let mut fs = Fs::default();
                 tree.read(rel, &mut fs);
@@ -907,6 +942,37 @@ mod carrier_tests {
         );
         carrier.stop();
         assert!(!dir.0.join("tree").exists());
+    }
+
+    /// A tick's value of another length waits for the next read, so no reader
+    /// falls between its write and its cut.
+    #[test]
+    fn a_ticks_value_of_another_length_waits_for_a_read() {
+        struct Clock(u32);
+        impl Tree for Clock {
+            fn build(&mut self, fs: &mut Fs) {
+                fs.paced("class/c/value", "1003125\n");
+            }
+            fn tick(&mut self, _now: std::time::Instant, fs: &mut Fs) {
+                self.0 += 1;
+                let v = if self.0 % 2 == 1 { "987500\n" } else { "987501\n" };
+                fs.set("class/c/value", v);
+            }
+        }
+        let dir = tempdir::Dir::new();
+        let lines = Arc::new(Mutex::new(Lines::default()));
+        let log: Arc<Mutex<dyn Log>> = lines.clone();
+        let carrier = Carrier::new(&dir.0.join("tree"), log).unwrap();
+        carrier.install(Box::new(Clock(0))).unwrap();
+        let path = dir.0.join("tree/class/c/value");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "1003125\n", "not before a read");
+        carrier.sync();
+        assert!(lines.lock().unwrap().0.iter().any(|l| l.starts_with("sysfs_read")));
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after == "987500\n" || after == "987501\n", "{after:?}");
+        carrier.stop();
     }
 
     #[test]

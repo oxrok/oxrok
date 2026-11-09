@@ -11,12 +11,11 @@
 # command runs as the namespace's root, which is the caller's own user mapped:
 # root's files outside stay as a user sees them (their modes decide, as they
 # would for the caller). A scenario of tools/diffcli.sh sets EMU_WRAP to it
-# (docs/USB.md, "Scenarios"). Fails with 125 when a bind fails, 126 when
-# unshare cannot make the namespaces.
+# (docs/USB.md, "Scenarios"). Fails with 125 when a bind fails; when unshare
+# cannot make the namespaces, with its own status and message.
 set -u
 if [ "${EMU_NS_INSIDE:-}" != 1 ]; then
     EMU_NS_INSIDE=1 exec unshare -Urm sh "$0" "$@"
-    exit 126
 fi
 unset EMU_NS_INSIDE
 while [ $# -gt 0 ] && [ "$1" != -- ]; do

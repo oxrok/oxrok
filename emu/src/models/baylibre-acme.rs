@@ -344,6 +344,13 @@ impl Config {
                 _ => return Err(Error::Invalid(format!("{NAME} has no option {k}"))),
             }
         }
+        // An EEPROM is a power probe's here: C reads a tmp435's at the tmp435's
+        // address + 0x10 (protocol.c:150-155), which no ACME probe has.
+        for slot in 0..SLOTS {
+            if c.revb[slot] && c.slots[slot] == Slot::Tmp435 {
+                return Err(Error::Invalid(format!("revb={}: a tmp435 probe has no EEPROM", slot + 1)));
+            }
+        }
         // Every path a fault names is one the tree has.
         let probes = probes(&c);
         let known = |p: &str| tree_paths(&c, &probes).iter().any(|q| q == p);
@@ -556,9 +563,10 @@ fn ina226_interval(avg: usize) -> i64 {
 fn ina226_avg_for(interval: i64) -> usize {
     let interval = interval.clamp(0, 32000);
     let avg = div_round_closest(interval * 1000, INA226_CONV_US);
-    // find_closest: the first whose midpoint with the next is not below it.
+    // find_closest: the first whose midpoint with the next, (a + b) / 2 in
+    // integers, is not below it.
     for i in 0..INA226_AVG.len() - 1 {
-        if avg <= div_round_closest(INA226_AVG[i] + INA226_AVG[i + 1], 2) {
+        if avg <= i64::midpoint(INA226_AVG[i], INA226_AVG[i + 1]) {
             return i;
         }
     }
@@ -1132,6 +1140,8 @@ mod tests {
         assert_eq!(ina226_interval(INA226_AVG_DEFAULT), 35);
         assert_eq!(ina226_interval(ina226_avg_for(100)), 141, "C's 1000 / 10 Hz");
         assert_eq!(ina226_interval(ina226_avg_for(2)), 2, "500 Hz");
+        assert_eq!(ina226_interval(ina226_avg_for(6)), 9, "6 ms: 4 averages, as find_closest's (1 + 4) / 2");
+        assert_eq!(ina226_interval(ina226_avg_for(7)), 9, "C at 143 Hz");
         assert_eq!(ina226_interval(ina226_avg_for(1000)), 1126, "1 Hz");
         assert_eq!(ina226_interval(ina226_avg_for(0)), 2);
         assert_eq!(ina226_interval(ina226_avg_for(1_000_000)), 2253);
@@ -1284,6 +1294,7 @@ mod tests {
             ("shunt", "0"),
             ("pace", "fast"),
             ("hwmon-entry", "1:a/b"),
+            ("revb", "5"),
             ("nope", "1"),
         ] {
             assert!(Config::parse(&opts(&[bad])).is_err(), "{bad:?}");
