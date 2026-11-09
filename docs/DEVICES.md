@@ -33,9 +33,14 @@ default system list adds `/opt/homebrew/share`, where Homebrew puts
 is skipped by oxrok, where libsigrok keeps it as a lookup relative to
 the current directory.
 
-`sigrok-fwextract-intronix-logicport` from sigrok-util gets the file
-from the vendor's Windows installer. Per image `.rbf` files written by
-that tool (`intronix-logicport-<image>.rbf`) are accepted as a fallback.
+`sigrok-fwextract-intronix-logicport` from
+[oxrok-util](https://github.com/oxrok/oxrok-util)
+(`firmware/intronix-logicport/`) gets the file from an installed copy
+of the vendor software or from the vendor's Windows installer (`-d`
+downloads it; unpacking needs 7-Zip), and saves it as
+`intronix-logicport.ccf`. It is not in sigrok-util: the tool is
+sigrok-util pull request 22, unmerged. Per image `.rbf` files
+(`intronix-logicport-<image>.rbf`) are accepted as a fallback.
 
 Permissions: on Linux the device is root only without a udev rule; until
 oxrok ships rules (phase 7), a rule with `MODE="0666"` for `0403:dc48`
@@ -844,7 +849,11 @@ after 64 failed transfers in a row, saying the data is incomplete, where
 the C driver retries for ever. Ctrl-C during a capture halts it and
 downloads what it holds; during a stream or a download it ends there.
 Firmware and bitstreams: `kingst-la-01a2.fw` and
-`kingst-MODEL-fpga.bitstream`, as sigrok. With the libusb backend, reads
+`kingst-MODEL-fpga.bitstream`, as sigrok. `sigrok-fwextract-kingst-la2016`
+extracts them from KingstVIS; the copy in
+[oxrok-util](https://github.com/oxrok/oxrok-util) also reads the macOS
+and Windows builds (sigrok-util pull request 21, unmerged), where
+sigrok-util's needs the Linux one. With the libusb backend, reads
 go one packet at a time, so a fast stream may overflow.
 
 Emulated (2026-11-03): model `kingst-la2016`
