@@ -590,9 +590,15 @@ impl Device for Dso2100 {
                 let go_on = || !stop2.load(Ordering::SeqCst);
                 let mut capture = Capture::new(cfg, factor, times, &sink, &stop2);
                 let outcome = capture.run(link.port.as_mut());
-                // dev_acquisition_stop: back to idle, whatever happened.
-                let idle = protocol::move_to(link.port.as_mut(), state::IDLE, &capture.settings)
-                    .map_err(|e| e.into_error(state::IDLE));
+                // dev_acquisition_stop: back to idle, whatever happened, but
+                // after a state the poll does not know: C's poll then drops
+                // itself and nothing stops the device.
+                let idle = if capture.unknown_state {
+                    Ok(())
+                } else {
+                    protocol::move_to(link.port.as_mut(), state::IDLE, &capture.settings)
+                        .map_err(|e| e.into_error(state::IDLE))
+                };
                 let outcome = match (outcome, idle) {
                     (Err(e), _) => Err(e),
                     // After a stop or a failure the way back is best effort, as
@@ -639,6 +645,8 @@ struct Capture<'a> {
     stop: &'a AtomicBool,
     retries: u8,
     frame: u64,
+    /// The poll met a state it does not know.
+    unknown_state: bool,
 }
 
 /// Why a capture's loop ended early.
@@ -665,7 +673,17 @@ impl<'a> Capture<'a> {
         let mut settings = cfg.proto.clone();
         settings.step = 0;
         settings.adc2 = false;
-        Capture { cfg, settings, factor, times, sink, stop, retries: MAX_RETRIES, frame: 0 }
+        Capture {
+            cfg,
+            settings,
+            factor,
+            times,
+            sink,
+            stop,
+            retries: MAX_RETRIES,
+            frame: 0,
+            unknown_state: false,
+        }
     }
 
     fn stopped(&self) -> bool {
@@ -717,6 +735,7 @@ impl<'a> Capture<'a> {
             }
             if state != state::EXTRACTED {
                 log::error!("Unexpected state 0x{state:X} while checking for trigger");
+                self.unknown_state = true;
                 return Err(Halt::Failed(Error::device(format!(
                     "Unexpected state 0x{state:X} while checking for trigger"
                 ))));

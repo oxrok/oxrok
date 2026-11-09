@@ -494,6 +494,8 @@ fn an_unknown_state_in_the_poll_fails() {
     port.scope().state = state::SCROLL;
     let p = collect(&rx);
     assert_eq!(failed(&p), Some("device error: Unexpected state 0x14 while checking for trigger"));
+    // As in C, nothing takes the scope back: the last write is the poll's.
+    assert_eq!(port.scope().mailbox.last(), Some(&0x99));
 }
 
 /// Waits, with a bound, until the capture polled `n` times.

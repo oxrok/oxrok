@@ -1169,6 +1169,15 @@ that sets `EMU_ORACLE_PPCLAIM_SETTLE_MS=N` gives sigrok-cli and the
 libsigrok runner a preload that sleeps N ms after each successful
 `PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else.
 
+The kernel (7.2.14) keeps a detached cable's port number: each session's
+port is the next one, and from `parport8` on libieee1284 finds no `ppdev`
+at all (it opens `/dev/parport0` to `7` only) and sigrok-cli finds no
+device. Such a session fails at its start, saying so, unless it is
+`--no-oracle`; a reboot gives the numbers back. Unloading `parport` does
+not: the old ports stay in sysfs, and the next `parport0` collides with
+one (`kobject_add_internal failed for parport0 with -EEXIST`, `uss720:
+could not register parport`) until the reboot.
+
 Pulling such a cable while a tool holds the port claimed took a tester's
 kernel down on 2026-11-09 (nothing reached its journal, and it rebooted by
 itself), so no case unplugs one; the port's going away is tested in the

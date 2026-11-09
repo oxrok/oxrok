@@ -60,7 +60,7 @@ emu_cases() {
     emu_case "dso2100 A one frame" --filter d --no-output -- -d $P -C A --frames 1 -O analog
     emu_case "dso2100 B one frame" --filter d --no-output -- -d $P -C B --frames 1 -O analog
     emu_case "dso2100 continuous" --stderr --expect-fail -- -d $P -C A --continuous -O analog
-    emu_case "dso2100 csv" --oracle-bug "$HC_COUNT; csv aborts on a 16 GiB g_malloc" --digest --filter "$HC_THIN" -- -d $P -C A --frames 1 -O csv
+    emu_case "dso2100 csv" --oracle-bug "$HC_COUNT; csv aborts on a 16 GiB g_malloc" --digest --filter "$HC_THIN" -- -d $P -C A --frames 1 -O csv:header=false
     # sigrok-cli opens the scope, refuses, and leaves without its close;
     # oxrok's close then resets the port (its last two lines, 0x30 and 0x10).
     emu_case "dso2100 no channel" --stderr --expect-fail --filter "$HC_NOCH" --tx-filter '34,35d' -- -d $P --frames 1 -O analog
@@ -119,6 +119,17 @@ emu_cases() {
     # The 19th mailbox write is the arming, after config_commit's 18.
     hc_options odd-state=19
     emu_case "dso2100 odd state at arming" --oracle-bug "libsigrok stops the device whose start failed: Cannot remove non-existing event source" --stderr --expect-fail -- -d $P -C A --frames 1 -O analog
+    # The 21st write, the second 0x99, answered with a state the poll does
+    # not know.
+    hc_options odd-state=21
+    emu_case "dso2100 odd state while armed" --stderr --filter "$HC_W" --oxrok-fails "Unexpected state 0x42 while checking for trigger" -- -d $P -C A --frames 1 -O analog
+    # With buffersize 1500: the 40th write, the 3 that extracts the second
+    # readout, answered with an unknown state; and silence from the 23rd,
+    # the 4 after the first readout, on the way to the second.
+    hc_options odd-state=40
+    emu_case "dso2100 odd state at the second extraction" --no-output --filter d --oxrok-fails "answered 0x42 to the extraction of a readout" --tx-filter "$HC_NO_READOUT" -- -d $P -C A -c buffersize=1500 --frames 1 -O analog
+    hc_options silent-after=22
+    emu_case "dso2100 silent between readouts" --no-output --filter d --oxrok-fails "stopped answering on the way to state 0x01" --tx-filter "$HC_NO_READOUT; $HC_UNIQ" -- -d $P -C A -c buffersize=1500 --frames 1 -O analog
     # Silent from the 21st write: the second 0x99 of the trigger poll.
     hc_options silent-after=20
     emu_case "dso2100 silent while armed" --oracle-bug "C polls a silent mailbox for ever" --oracle-hangs --timeout 15 --oxrok-fails "No answer from the DSO-2100 in 600 trigger polls" --no-output --tx-filter "$HC_UNIQ" -- -d $P -C A --frames 1 -O analog

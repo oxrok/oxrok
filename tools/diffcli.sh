@@ -169,6 +169,11 @@
 # whatever took its printer interface (usblp), the node opened to all, and
 # EMU_PARPORT_NAME set to the port's name (parportN, for conn=); the outputs
 # say parportN. emu_unbind leaves uss720 alone, as neither tool detaches it.
+# A detached cable keeps its port number taken (seen on kernel 7.2.14), so
+# each session's port is the next one, and from parport8 on libieee1284
+# finds no ppdev (it opens /dev/parport0 to 7 only): such a session fails
+# at its start, saying so, unless it is --no-oracle. Unloading parport then does not help (the old
+# ports stay in sysfs and the new parport0 collides); a reboot does.
 #
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
@@ -889,8 +894,15 @@ if [ $emu = 1 ]; then
         done
         if [ -z "$EMU_PARPORT_NAME" ]; then
             echo "$EMU_MODEL: the device got no /dev/parportN; are the kernel's uss720 and ppdev there?" >&2
+            sudo -n dmesg | grep -E 'uss720|parport' | tail -3 >&2
             return 1
         fi
+        case "$no_oracle:$EMU_PARPORT_NAME" in
+            1:* | *:parport[0-7]) ;;
+            *)
+                echo "$EMU_MODEL: the cable is $EMU_PARPORT_NAME: libieee1284 looks for ppdev at /dev/parport0 to 7 only, so sigrok-cli would find nothing. The kernel keeps a detached cable's number; reboot the machine." >&2
+                return 1 ;;
+        esac
         sudo -n chmod 0666 "/dev/$EMU_PARPORT_NAME" || return 1
         printf 's#%s([^0-9]|$)#parportN\\1#g\n' "$EMU_PARPORT_NAME" >>"$TMP/emu.sed"
     }
