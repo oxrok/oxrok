@@ -13,6 +13,10 @@ release may change the library API.
   instruments are one rule by interface class. `contrib/60-oxrok.rules`
   is that output (`make udev-rules`), with `61-oxrok-uaccess.rules` and
   `61-oxrok-plugdev.rules` for the access policy.
+- `packaging/fedora/oxrok.spec` and `.packit.yaml`: a Fedora package built
+  from the vendored source tarball (`make vendor-src`), with the udev rules,
+  and a COPR build of every pull request through Packit
+  (`packaging/README.md`).
 - `oxrok firmware`: `list` shows the firmware drivers load and whether it
   is installed, `fetch` downloads the vendor's software and extracts the
   firmware on the user's machine, `import` does it from installers,

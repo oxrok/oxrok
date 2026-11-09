@@ -212,7 +212,9 @@ archive or a folder you have, for firmware behind a vendor login or on
 a CD. A run that misses firmware says which command gets it, and asks
 to download it when run on a terminal. The extractors are ports of
 sigrok-util's, in the `oxrok-firmware-fetch` crate (`firmware/` in
-[oxrok-util](https://github.com/oxrok/oxrok-util)).
+[oxrok-util](https://github.com/oxrok/oxrok-util)). `packaging/` has
+the Fedora spec and the Packit configuration that builds every pull
+request in COPR ([packaging/README.md](packaging/README.md)).
 
 ### Features
 

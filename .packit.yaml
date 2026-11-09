@@ -1,0 +1,34 @@
+# Packit builds oxrok in COPR from this repository: every pull request
+# gets a scratch build, so the spec and the tree are proven together.
+# packaging/README.md says how it is set up and what comes next.
+specfile_path: packaging/fedora/oxrok.spec
+upstream_package_name: oxrok
+downstream_package_name: oxrok
+upstream_tag_template: v{version}
+
+# The SRPM is built from a vendored source tarball made here, not from a
+# release asset, so a pull request builds what it changes.
+srpm_build_deps:
+  - make
+  - cargo
+  - git-core
+  - xz
+actions:
+  create-archive:
+    - make vendor-src
+  get-current-version:
+    - bash -c "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml | head -n 1"
+
+jobs:
+  - job: copr_build
+    trigger: pull_request
+    targets:
+      - fedora-latest-stable
+      - fedora-rawhide
+  # Main into a named COPR, once the project exists (packaging/README.md):
+  # - job: copr_build
+  #   trigger: commit
+  #   branch: main
+  #   owner: "@oxrok"
+  #   project: oxrok
+  #   targets: [fedora-latest-stable, fedora-rawhide]
