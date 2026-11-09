@@ -18,7 +18,14 @@ release may change the library API.
   `capture_summary`, `list_captures`, `drop_capture`, `load_capture`,
   `export_capture`) and the data tools over them (`capture_logic`,
   `capture_analog`, `measure`, `find`); `--no-hardware`, `--drivers`,
-  `--allow-path` and `--max-memory`.
+  `--allow-path` and `--max-memory`. Analyzers: a decoder stack over a
+  capture whose frames are kept, paged, searched and counted, with raw
+  values and a radix per request (`add_analyzer`, `analyzer_frames`,
+  `analyzer_summary`, `analyzer_find`, `analyzer_binary`, `analyzer_meta`,
+  `capture_decode`, ...).
+- `oxrok::decode::{Radix, FrameStore, Analyzer}`: the radix rules and the
+  frame store from oxrok-ui, and a runner that keeps a stack's output per
+  instance.
 - `oxrok::setup`: the command line's setup code as a library module (driver
   specs, `-c` plans, `-C`, `-t`, limits, decoder stacks, `-I`/`-O` specs),
   shared with the MCP server. `oxrok::decoder_registry()` is every decoder

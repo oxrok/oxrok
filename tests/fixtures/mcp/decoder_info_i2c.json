@@ -106,6 +106,7 @@
       "role": "sda"
     }
   ],
+  "default_radix": "native",
   "description": "Two-wire, multi-master, serial bus.",
   "id": "i2c",
   "inputs": [
@@ -130,6 +131,7 @@
   "outputs": [
     "i2c"
   ],
+  "radix_support": "raw_values",
   "tags": [
     "Embedded/industrial"
   ]

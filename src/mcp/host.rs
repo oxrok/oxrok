@@ -13,9 +13,10 @@ use super::capture::CaptureStore;
 use super::tool::ToolError;
 use crate::core::{Channel, Device, DeviceClass, DeviceInfo, Registry};
 use crate::decode;
+use crate::decode::Analyzer;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 /// Bounds the tools keep.
@@ -104,6 +105,30 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// An analyzer the host keeps: a decoder stack over one capture.
+#[derive(Clone)]
+pub struct AnalyzerEntry {
+    /// Its id.
+    pub id: u64,
+    /// The capture it decodes.
+    pub capture_id: u64,
+    /// A name the client gave it.
+    pub name: Option<String>,
+    /// The stack in `-P` syntax.
+    pub spec: String,
+    /// Goes up when the stack is rebuilt; a client paging with an older
+    /// one is told its offsets are stale.
+    pub generation: u64,
+    /// The run and its frames.
+    pub analyzer: Arc<Analyzer>,
+}
+
+#[derive(Default)]
+struct Analyzers {
+    next_id: u64,
+    list: Vec<AnalyzerEntry>,
+}
+
 /// What the tools work on.
 pub struct Host {
     registry: Registry,
@@ -112,6 +137,7 @@ pub struct Host {
     cli_program: Option<PathBuf>,
     devices: Mutex<Devices>,
     captures: Mutex<CaptureStore>,
+    analyzers: Mutex<Analyzers>,
 }
 
 impl Default for Host {
@@ -139,6 +165,7 @@ impl Host {
             limits,
             cli_program: std::env::current_exe().ok(),
             devices: Mutex::new(Devices::default()),
+            analyzers: Mutex::new(Analyzers::default()),
         }
     }
 
@@ -181,6 +208,71 @@ impl Host {
     /// The captures.
     pub fn captures(&self) -> MutexGuard<'_, CaptureStore> {
         lock(&self.captures)
+    }
+
+    /// Keeps a started analyzer; returns its id.
+    pub fn add_analyzer(
+        &self,
+        capture_id: u64,
+        name: Option<String>,
+        spec: String,
+        analyzer: Analyzer,
+    ) -> u64 {
+        let mut table = lock(&self.analyzers);
+        table.next_id += 1;
+        let id = table.next_id;
+        table.list.push(AnalyzerEntry {
+            id,
+            capture_id,
+            name,
+            spec,
+            generation: 1,
+            analyzer: Arc::new(analyzer),
+        });
+        id
+    }
+
+    /// The analyzer with `id`.
+    pub fn analyzer(&self, id: u64) -> Option<AnalyzerEntry> {
+        lock(&self.analyzers).list.iter().find(|a| a.id == id).cloned()
+    }
+
+    /// Every analyzer, oldest first.
+    pub fn analyzers(&self) -> Vec<AnalyzerEntry> {
+        lock(&self.analyzers).list.clone()
+    }
+
+    /// Replaces an analyzer's run, keeping its id and name; the
+    /// generation goes up. The old run is stopped once the last client
+    /// holding it lets go.
+    pub fn replace_analyzer(
+        &self,
+        id: u64,
+        spec: String,
+        analyzer: Analyzer,
+    ) -> Option<AnalyzerEntry> {
+        let mut table = lock(&self.analyzers);
+        let entry = table.list.iter_mut().find(|a| a.id == id)?;
+        entry.spec = spec;
+        entry.generation += 1;
+        entry.analyzer = Arc::new(analyzer);
+        Some(entry.clone())
+    }
+
+    /// Removes an analyzer; its thread is joined when the entry drops.
+    pub fn remove_analyzer(&self, id: u64) -> Option<AnalyzerEntry> {
+        let mut table = lock(&self.analyzers);
+        let pos = table.list.iter().position(|a| a.id == id)?;
+        Some(table.list.remove(pos))
+    }
+
+    /// Removes the analyzers of a capture; returns their ids.
+    pub fn remove_analyzers_of(&self, capture_id: u64) -> Vec<u64> {
+        let mut table = lock(&self.analyzers);
+        let (gone, kept): (Vec<_>, Vec<_>) =
+            table.list.drain(..).partition(|a| a.capture_id == capture_id);
+        table.list = kept;
+        gone.into_iter().map(|a| a.id).collect()
     }
 
     /// Whether `--drivers` lets this driver be scanned and opened.

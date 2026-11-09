@@ -19,10 +19,16 @@
 
 #![forbid(unsafe_code)]
 
+pub mod analyzer;
+pub mod frames;
 pub mod info;
+pub mod radix;
 pub mod stream;
 
+pub use analyzer::{Analyzer, InstanceInfo, Status as AnalyzerStatus};
+pub use frames::{Frame, FrameStore, MetaItem, RawBinary};
 pub use info::{AnnClass, AnnRow, BinClass, ChannelDesc, DecoderInfo, OptionDesc, OptionValue};
+pub use radix::{Radix, RadixSupport};
 pub use stream::{Cond, CondKind, Pins, Stream, StreamWriter};
 
 use crate::core::{Error, Result};

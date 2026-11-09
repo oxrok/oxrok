@@ -98,14 +98,16 @@ it. Phase 3 too: the device tools (`scan`, `open`, `describe_device`,
 `set_option`, ...), the synchronous `capture` into a store with a byte
 budget, `load_capture`/`export_capture` under `--allow-path`, and the
 data tools (`capture_logic`, `capture_analog`, `measure`, `find`).
+Phase 4 too: `decode::radix`, `decode::FrameStore` and
+`decode::Analyzer` (the UI's code moved, with raw values and the binary
+and meta items added) and the analyzer tools with `capture_decode`.
+oxrok-ui still has its own copies of the radix and frame-store code;
+moving it onto `oxrok::decode` is the UI side's work (Phase 6).
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
   docs are not in the published crate, so the table would have to be
   generated into the source at build time or kept in `tools/site-data`.
-- Phase 4: analyzers: `decode::FrameStore`, `decode::Analyzer` and the
-  radix rules moved from oxrok-ui, so decoded output is kept, paged,
-  searched and returned with raw values.
 - Phase 5: asynchronous captures, the memory budget, the safety flags.
 - Phase 6: the UI server over a local socket, with a per-tool checklist.
 

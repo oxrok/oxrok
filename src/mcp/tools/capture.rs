@@ -159,14 +159,19 @@ pub fn tools(host: &Arc<Host>) -> Vec<Arc<dyn Tool>> {
         ToolSpec {
             name: "drop_capture",
             title: "Drop a capture",
-            description: "Removes a capture from the store and frees its memory.",
+            description: "Removes a capture from the store and frees its memory, with the \
+                          analyzers over it.",
             example: json!({"capture_id": 1}),
             annotations: Annotations::MUTATING,
             tags: &[Tag::Capture],
         },
         move |args, _| {
             h.captures().remove(args.capture_id).ok_or_else(|| no_capture(args.capture_id))?;
-            Ok(ToolResult::structured(json!({"dropped": args.capture_id})))
+            let analyzers = h.remove_analyzers_of(args.capture_id);
+            Ok(ToolResult::structured(json!({
+                "dropped": args.capture_id,
+                "analyzers_dropped": analyzers,
+            })))
         },
     );
 

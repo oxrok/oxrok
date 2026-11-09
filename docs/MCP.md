@@ -19,16 +19,36 @@ What is served today:
   `load_capture`, `export_capture`;
 - the data tools over a capture in the store: `capture_logic`
   (transitions, runs or samples, paged), `capture_analog` (buckets),
-  `measure` and `find`.
+  `measure` and `find`;
+- the analyzer tools: a decoder stack over a capture whose output is
+  kept, so the agent decodes once and then pages, searches and counts:
+  `add_analyzer`, `update_analyzer`, `remove_analyzer`,
+  `list_analyzers`, `analyzer_status`, `analyzer_frames`,
+  `analyzer_summary`, `analyzer_find`, `analyzer_binary`,
+  `analyzer_meta`, and the one-shot `capture_decode`.
 
-Decoders over a capture (analyzers) and the asynchronous capture come
-next.
+The asynchronous capture (`capture_start`/`capture_status`/
+`capture_stop`) comes next.
 
 The workflow the instructions give the model: `scan` → `open` →
 `describe_device` → `set_option` / `enable_channels` → `capture` →
 `measure`, `find`, `capture_logic` on the `capture_id` → `export_capture`.
 A capture lives in the server's memory, under a budget; the agent reads
 statistics and transitions from it, never a megabyte of bits.
+
+Decoding: `add_analyzer {capture_id, stack: "i2c:scl=D0:sda=D1,eeprom24xx"}`
+(or `capture_decode` for a one-shot answer) → `analyzer_status {wait}` →
+`analyzer_summary` (counts per row and class: "were there NACKs?") →
+`analyzer_frames` (paged, filtered by row, class, range, text or value)
+→ `analyzer_find` (the next frame after a sample). A frame carries the
+decoder's text and, where the decoder has binary output, the raw
+`value` and its `bits`, so an agent compares numbers rather than
+parsing `0x50` back out of a string. The radix (`native`, `hex`, `dec`,
+`bin`, `ascii`) is chosen per request where the decoder gives raw
+values; a decoder that renders the radix itself through its `format`
+option takes it from `update_analyzer`, which decodes again. The frame
+store and the radix rules are oxrok-ui's, moved into
+`oxrok::decode`, so both front ends agree on the text of a frame.
 
 ## Configuring a client
 
@@ -145,8 +165,10 @@ has a reader thread and a handler thread.
 
 `oxrok::mcp`, behind the `mcp` feature (on with `cli`): `Tool`,
 `Catalog`, `Host` (the registries, the limits, the open devices by
-handle and the `CaptureStore`), `Capture` (the data and the statistics
-over it) and `Server`. `oxrok::mcp::tools::catalog(&host)` is the
+handle, the `CaptureStore` and the analyzers), `Capture` (the data and
+the statistics over it) and `Server`. `oxrok::decode::{Analyzer,
+FrameStore, Radix}` are the decoder-stack runner, the frame store and
+the radix rules, usable without the MCP. `oxrok::mcp::tools::catalog(&host)` is the
 library's catalog; `Catalog::select`, `only`, `without`, `read_only`,
 `merge` and `prefixed` narrow or extend it; `Server::serve(reader,
 writer)` runs the protocol over any pair of streams. A tool is a
@@ -379,7 +401,7 @@ Example: `{}`
 
 Drop a capture. Tags: capture. Changes the server's state.
 
-Removes a capture from the store and frees its memory.
+Removes a capture from the store and frees its memory, with the analyzers over it.
 
 Arguments:
 
@@ -499,4 +521,187 @@ Arguments:
 - `what` (string): `edge` (default), `rising`, `falling`, or `pulse` for the first run (high or low) at least `min_width` long.
 
 Example: `{"capture_id":1,"channel":"D0","what":"rising"}`
+
+### `add_analyzer`
+
+Add an analyzer. Tags: decode. Changes the server's state.
+
+Runs a decoder stack over a capture and keeps the output: give the `capture_id` and the stack in `-P` syntax (`i2c:scl=D0:sda=D1`, `uart:rx=D0:baudrate=115200`, `i2c:scl=D0:sda=D1,eeprom24xx`) or as `decoders`. Returns the `analyzer_id`, the instances with their rows and how each takes a radix, and the status; the decode runs on its own thread, so follow with `analyzer_status {wait}` and then `analyzer_summary` and `analyzer_frames`.
+
+Arguments:
+
+- `capture_id` (integer, required): The capture to decode.
+- `decoders` (array of object): The stack as data, bottom first. Or `stack`.
+- `name` (string): A name for the listing.
+- `radix` (string): The analyzer's radix: `native`, `hex`, `dec`, `bin`, `ascii`. The decoder's default otherwise (`ascii` for `uart`, else `native`).
+- `stack` (string): The stack in `-P` syntax, bottom first: `i2c:scl=D0:sda=D1,eeprom24xx`, `uart:rx=D0:baudrate=115200`. Or `decoders`.
+
+Example: `{"capture_id":1,"stack":"uart:rx=D0:baudrate=115200"}`
+
+### `update_analyzer`
+
+Update an analyzer. Tags: decode. Changes the server's state.
+
+Changes an analyzer's stack, options or radix. Decoders cannot seek, so the stack is rebuilt and decodes from sample 0; the `generation` goes up, and pages taken from the old one are stale.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `decoders` (array of object): A new stack as data; the old one otherwise.
+- `radix` (string): A new radix.
+- `stack` (string): A new stack in `-P` syntax; the old one otherwise.
+
+Example: `{"analyzer_id":1,"radix":"hex"}`
+
+### `remove_analyzer`
+
+Remove an analyzer. Tags: decode. Changes the server's state.
+
+Stops an analyzer, waiting for its thread, and frees its frames.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+
+Example: `{"analyzer_id":1}`
+
+### `list_analyzers`
+
+List analyzers. Tags: decode. Read-only.
+
+Every analyzer: its capture, stack, radix, status, progress, generation and frame count.
+
+Arguments:
+
+- `capture_id` (integer): Only the analyzers of this capture.
+
+Example: `{}`
+
+### `analyzer_status`
+
+Analyzer status. Tags: decode. Read-only.
+
+Status (`running`, `complete`, `error`), progress, generation and frame count of an analyzer; with `wait`, waits up to that many seconds for the decode to end first.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `wait` (number): Wait up to this many seconds for the decode to end.
+
+Example: `{"analyzer_id":1,"wait":10}`
+
+### `analyzer_frames`
+
+Analyzer frames. Tags: decode. Read-only.
+
+The decoded frames, in sample order, filtered by instance, rows, classes, range, text, value or errors, and paged with `offset` and `limit`. Each frame has `ss`/`es` (samples), `t0`/`t1` (seconds), `instance`, `row`, `class`, `text`, and `value`/`bits` when the decoder gave a raw value: compare numbers on `value`, not on the text. `radix` renders the values per request.
+
+Arguments:
+
+- `all_texts` (boolean): Include every text variant the decoder gave, longest first.
+- `analyzer_id` (integer, required): The analyzer.
+- `classes` (array of string): Only these annotation classes, by id (the names `-A` takes).
+- `errors_only` (boolean): Only frames the error heuristic flagged.
+- `from` (integer): From this sample.
+- `from_time` (number): From this time, in seconds.
+- `generation` (integer): The generation the offsets were taken from; refused when the analyzer was rebuilt since.
+- `instance` (string): One instance (`i2c-1`); every instance otherwise.
+- `limit` (integer): At most this many frames: 100 by default, 2000 at most.
+- `offset` (integer): Skip this many matching frames.
+- `radix` (string): Render values in this radix; the analyzer's otherwise.
+- `rows` (array of string): Only these rows, by id (`rx-data`, `address-write`, ...).
+- `text` (string): Only frames whose rendered text contains this, case-insensitive.
+- `to` (integer): To this sample, exclusive.
+- `to_time` (number): To this time, in seconds.
+- `value` (integer): Only frames with this raw value (`80` for I²C address 0x50).
+
+Example: `{"analyzer_id":1,"limit":50,"rows":["rx-data"]}`
+
+### `analyzer_summary`
+
+Analyzer summary. Tags: decode. Read-only.
+
+Per instance, row and class: frame counts, error counts, and the first and last frame. The answer to "were there NACKs?" or "how many bytes?" in one call.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+
+Example: `{"analyzer_id":1}`
+
+### `analyzer_find`
+
+Find a frame. Tags: decode. Read-only.
+
+The frame of a row at a sample or time, or the next after / the previous before one, optionally the next whose text contains `text` or whose value is `value`: walking frames as `find` walks edges.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `at` (integer): The frame containing this sample.
+- `at_time` (number): `at`, in seconds.
+- `instance` (string): The instance; the one that has `row` otherwise.
+- `next_after` (integer): The first frame starting after this sample.
+- `next_after_time` (number): `next_after`, in seconds.
+- `prev_before` (integer): The last frame ending before this sample.
+- `prev_before_time` (number): `prev_before`, in seconds.
+- `radix` (string): Render in this radix.
+- `row` (string, required): The row to look in, by id.
+- `text` (string): With `next_after`/`prev_before`: keep looking until the text contains this.
+- `value` (integer): With `next_after`/`prev_before`: keep looking until the raw value is this.
+
+Example: `{"analyzer_id":1,"next_after":0,"row":"address-write"}`
+
+### `analyzer_binary`
+
+Binary output. Tags: decode. Read-only.
+
+One instance's binary output class (what `-B` selects) over a range of samples, as hex, ascii, dec, bin or base64, capped at `max_bytes`, or written to a file under the allowed directories.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `class` (string): The binary class, by id (what `-B dec=class` names); the first otherwise.
+- `from` (integer): Items starting from this sample.
+- `instance` (string): The instance; the first with binary output otherwise.
+- `max_bytes` (integer): At most this many bytes in the answer: 4096 by default, 1 MiB at most.
+- `path` (string): Write the bytes to this file (under the allowed directories) instead of returning them.
+- `radix` (string): `hex` (default), `ascii`, `dec`, `bin` or `base64`.
+- `to` (integer): Items starting before this sample.
+
+Example: `{"analyzer_id":1,"class":"rx","radix":"ascii"}`
+
+### `analyzer_meta`
+
+Meta output. Tags: decode. Read-only.
+
+An instance's meta output (what `-M` selects): named values such as a measured bitrate, with their sample ranges, paged.
+
+Arguments:
+
+- `analyzer_id` (integer, required): The analyzer.
+- `instance` (string): The instance; every instance otherwise.
+- `limit` (integer): At most this many items: 100 by default.
+- `offset` (integer): Skip this many items.
+
+Example: `{"analyzer_id":1}`
+
+### `capture_decode`
+
+Decode a capture. Tags: decode. Changes the server's state.
+
+The one-shot form: adds an analyzer, waits for it, and returns the summary with one page of frames; the analyzer is dropped unless `keep` is true, in which case `analyzer_id` is returned for more questions.
+
+Arguments:
+
+- `capture_id` (integer, required): The capture to decode.
+- `decoders` (array of object): The stack as data. Or `stack`.
+- `keep` (boolean): Keep the analyzer for more questions; dropped otherwise.
+- `limit` (integer): At most this many frames in the page: 100 by default.
+- `radix` (string): The radix.
+- `rows` (array of string): Only these rows in the page of frames.
+- `stack` (string): The stack in `-P` syntax: `i2c:scl=D0:sda=D1`. Or `decoders`.
+- `timeout` (number): Wait at most this many seconds for the decode.
+
+Example: `{"capture_id":1,"limit":50,"stack":"i2c:scl=D0:sda=D1"}`
 <!-- tools:end -->

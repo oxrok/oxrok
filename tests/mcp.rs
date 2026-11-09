@@ -116,7 +116,7 @@ fn list_tools(flags: &[&str]) -> (String, bool) {
     (String::from_utf8_lossy(text).into_owned(), out.status.success())
 }
 
-const ALL_TOOLS: [&str; 25] = [
+const ALL_TOOLS: [&str; 36] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -142,10 +142,21 @@ const ALL_TOOLS: [&str; 25] = [
     "capture_analog",
     "measure",
     "find",
+    "add_analyzer",
+    "update_analyzer",
+    "remove_analyzer",
+    "list_analyzers",
+    "analyzer_status",
+    "analyzer_frames",
+    "analyzer_summary",
+    "analyzer_find",
+    "analyzer_binary",
+    "analyzer_meta",
+    "capture_decode",
 ];
 
 /// The tools that change nothing.
-const READ_ONLY: [&str; 16] = [
+const READ_ONLY: [&str; 23] = [
     "version",
     "list_drivers",
     "driver_info",
@@ -162,6 +173,13 @@ const READ_ONLY: [&str; 16] = [
     "capture_analog",
     "measure",
     "find",
+    "list_analyzers",
+    "analyzer_status",
+    "analyzer_frames",
+    "analyzer_summary",
+    "analyzer_find",
+    "analyzer_binary",
+    "analyzer_meta",
 ];
 
 /// The tools that open or drive hardware.
@@ -349,6 +367,78 @@ fn the_demo_device_over_the_pipe() {
     assert_eq!(c.call("close", json!({"handle": handle}))["closed"], handle);
     c.finish();
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The frames an analyzer keeps are the annotations `-P` prints on the
+/// same input: same instances, classes, sample ranges and texts. The CLI
+/// prints in emission order and the store in start order, so the lines
+/// are compared sorted.
+#[test]
+fn analyzer_frames_match_the_cli_decoder_output() {
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    let vcd = format!("{fixtures}/i2c-write-read.vcd");
+    let out = Command::new(env!("CARGO_BIN_EXE_oxrok"))
+        .args(["-l", "4", "-i", &vcd, "-P", "i2c"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let mut cli: Vec<String> =
+        String::from_utf8(out.stdout).unwrap().lines().map(str::to_owned).collect();
+    cli.sort();
+    assert!(cli.len() > 20, "{}", cli.len());
+
+    let mut c = Client::start(&["--allow-path", fixtures]);
+    c.initialize();
+    let cap = c.call("load_capture", json!({"path": vcd}));
+    let id = cap["capture_id"].as_u64().unwrap();
+    let dec = c.call(
+        "capture_decode",
+        json!({"capture_id": id, "stack": "i2c", "keep": true, "limit": 1}),
+    );
+    assert_eq!(dec["status"], "complete");
+    let analyzer = dec["analyzer_id"].as_u64().unwrap();
+    let mut ours = Vec::new();
+    let mut offset = 0;
+    loop {
+        let page = c.call(
+            "analyzer_frames",
+            json!({"analyzer_id": analyzer, "all_texts": true, "limit": 2000, "offset": offset}),
+        );
+        let frames = page["frames"].as_array().unwrap();
+        for f in frames {
+            let texts: Vec<String> = f["texts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| format!("\"{}\"", t.as_str().unwrap()))
+                .collect();
+            ours.push(format!(
+                "{}-{} {}: {}: {}",
+                f["ss"],
+                f["es"],
+                f["instance"].as_str().unwrap(),
+                f["class"].as_str().unwrap(),
+                texts.join(" ")
+            ));
+        }
+        offset += frames.len();
+        if page["truncated"] != true {
+            break;
+        }
+    }
+    ours.sort();
+    assert_eq!(ours, cli);
+    // The summary counts what the frames show, and values come with the bytes.
+    let sum = c.call("analyzer_summary", json!({"analyzer_id": analyzer}));
+    assert_eq!(sum["instances"][0]["frames"].as_u64().unwrap() as usize, cli.len());
+    let data = c.call(
+        "analyzer_frames",
+        json!({"analyzer_id": analyzer, "classes": ["data-write"], "radix": "hex", "limit": 5}),
+    );
+    assert!(data["total"].as_u64().unwrap() > 0, "{data}");
+    assert!(data["frames"][0]["value"].is_number(), "{}", data["frames"][0]);
+    assert!(data["frames"][0]["text"].as_str().unwrap().contains("0x"), "{}", data["frames"][0]);
+    c.finish();
 }
 
 #[test]

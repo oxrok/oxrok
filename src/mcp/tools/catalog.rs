@@ -3,7 +3,7 @@
 //! The reference tools: what oxrok supports. Read-only, no hardware.
 
 use crate::core::{DeviceClass, Driver, FirmwareKind, Key, ValueKind, firmware};
-use crate::decode::{DecoderInfo, OptionValue};
+use crate::decode::{DecoderInfo, OptionValue, RadixSupport};
 use crate::mcp::Host;
 use crate::mcp::tool::{Annotations, Tag, Tool, ToolError, ToolResult, ToolSpec, function};
 use schemars::JsonSchema;
@@ -375,6 +375,7 @@ fn decoder_summary(i: &DecoderInfo) -> Value {
         "inputs": i.inputs,
         "outputs": i.outputs,
         "native": is_native(i.id),
+        "radix_support": RadixSupport::of(i, true).id(),
     })
 }
 
@@ -402,6 +403,8 @@ fn decoder_detail(i: &DecoderInfo) -> Value {
         "description": i.desc,
         "license": i.license,
         "native": is_native(i.id),
+        "radix_support": RadixSupport::of(i, true).id(),
+        "default_radix": crate::decode::radix::default_radix(i).id(),
         "tags": i.tags,
         "inputs": i.inputs,
         "outputs": i.outputs,
