@@ -30,6 +30,11 @@ rpmbuild -bs --define "_sourcedir $PWD/dist" --define "_srcrpmdir $PWD/dist" pac
 mock -r fedora-rawhide-x86_64 rebuild dist/oxrok-*.src.rpm
 ```
 
+The build is heavy: every RustPython crate compiles with LTO and debuginfo,
+about an hour and a half on 16 cores. `%limit_build -m 4096` in the spec caps
+`-j` at one job per 4 GB of available memory, so a 16 GB COPR builder runs four
+jobs; on a shared box run mock while nothing else compiles.
+
 Fedora proper is a different build: every crate from a `rust-*` package,
 no vendoring, and the decoders on CPython (`-f python`), since the pinned
 RustPython crates are not in Fedora. That spec would start from

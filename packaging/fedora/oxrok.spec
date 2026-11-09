@@ -38,6 +38,9 @@ in %{_udevrulesdir} give the seated user access to the USB devices.
 %cargo_prep -v vendor
 
 %build
+# One rustc of the RustPython crates or of oxrok itself with LTO and debuginfo
+# takes a few GB; let the parallelism follow the memory the builder has.
+%limit_build -m 4096
 %cargo_build -f rustpython
 %cargo_vendor_manifest
 %cargo_license_summary -f rustpython
