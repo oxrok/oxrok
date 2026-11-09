@@ -3751,6 +3751,29 @@ by `oxrok-emu serve baylibre-acme --sysfs DIR` and bind-mounted for each
 tool in a user namespace: 91 cases on 2026-11-09, gcov 90.7%. Units follow
 the kernel's ina2xx and tmp401 drivers. Never run on a cape.
 
+### ASIX OMEGA RTM (`asix-omega-rtm-cli`)
+
+The ASIX OMEGA in real-time mode through ASIX's `omegartmcli` program
+(`OMEGARTMCLI`, else `omegartmcli` on `PATH`; under wine a script that runs
+the `.exe`), 16 channels at 200 MHz, `conn=sn=SN` (four digits get the `03`
+prefix). Emulated by a stand-in for the program, written from ASIX's
+published source (`sigma-omega_src_2025-06-05.zip`): model
+`asix-omega-rtm-cli`, options in `EMU_STANDIN_OPTIONS` (`bytes=`,
+`then=exit|quiet|hang`, `exit=`, `version-exit=`, `version-hang=`, `banner=`,
+`serial=`, `stamp=`, `idle=`, `piece=`, `gap=`, `pace=real`, `start=`,
+`stderr=`, `eof=ignore`, `hang-max=`, `mark=`). 71 cases on 2026-11-09 (55
+full, 9 `--oracle-bug` of which 3 interrupts, 7 `--oracle-differs`), gcov
+87.9%. Never run on hardware or under wine.
+
+The program runs in a process group of its own; a close shuts its pipes,
+then kills the group after 2 s and reaps it, so a wrapper script's program
+goes too. The first chunk is awaited on the capture's thread, where a stop
+reaches it, bounded at 30 s, as is `-version`; the time limit starts after
+the first chunk. The end of the stream ends the capture, failed unless the
+program exited 0. Silence warns at 5 s and fails at 30 s: the program writes
+every 100 ms, so longer silence is the program wedged after a USB error. A
+sample limit is exact.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in

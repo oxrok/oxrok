@@ -11,7 +11,8 @@ release may change the library API.
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
   `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
   `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`, `hameg-hmo`, `scpi-dmm`,
-  `baylibre-acme` (on an emulated sysfs tree in a user namespace).
+  `baylibre-acme` (on an emulated sysfs tree in a user namespace),
+  `asix-omega-rtm-cli` (through the vendor's program, emulated by a stand-in).
 - SCPI over TCP: an answer ends at its line end, not at a short read, and the
   sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request

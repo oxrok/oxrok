@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 83 of libsigrok's 87 `src/hardware` drivers are
-ported; the 4 still missing are listed below. Native decoder porting is
+crates.io. 84 of libsigrok's 87 `src/hardware` drivers are
+ported; the 3 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,7 +13,7 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 4 libsigrok drivers with no oxrok port. Each needs a device model,
+The 3 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
@@ -33,10 +33,8 @@ GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
 MSO5000, Agilent DSO1000) also remain unverified on hardware; see
 [Open verification](#open-verification).
 
-### Odd transports (3)
+### Odd transports (2)
 
-- `asix-omega-rtm-cli`: runs the vendor's CLI and reads its stream. The
-  model is a stand-in executable on `PATH`.
 - `hung-chang-dso-2100`: parallel port. Model a USB adapter with an
   in-tree driver (Belkin USS-720) so `/dev/parport0` and the
   `/proc/sys/dev/parport` entries exist, or use CUSE or an
@@ -142,6 +140,10 @@ The models are plain Rust with no I/O for this reason; see
   `cem-dt-885x` session lost after an interrupt's close.
 
 ### Harness and CI
+
+- No record/replay path for a driver that runs a program
+  (`asix-omega-rtm-cli`): its logic runs in CI only through the emulator's
+  stand-in and unit tests.
 
 - sysfs carrier, synchronous stores: `oxrok-emu --sysfs` sees a write only
   after the tool closes the file, so a store the model refuses never fails at
@@ -345,6 +347,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `asix-omega-rtm-cli` with a real OMEGA and ASIX's `omegartmcli`, natively
+  and under wine: the program's real timing, its stdin behaviour under wine,
+  and a release build's throughput at 200 MHz.
 
 - `baylibre-acme` on an ACME cape, and on current kernels: the fixed GPIO
   numbers 474-511 and the legacy `/sys/class/gpio` don't exist there; the

@@ -1101,17 +1101,24 @@ limits = []
 [drivers.asix-omega-rtm-cli]
 name = "ASIX Omega RTM (vendor CLI)"
 libsigrok = "asix-omega-rtm-cli"
-ids = []
+ids = ["asix-omega-rtm-cli"]
 kind = "logic-analyzer"
 connection = "usb"
 vendor = "ASIX"
-models = []
-status = ["not-ported"]
-emu = []
+models = ["OMEGA"]
+status = ["emulated"]
+emu = ["asix-omega-rtm-cli"]
 evidence = []
-reason = "Spawns the vendor's program and reads its stream; a stand-in executable is the model."
-behaviour = []
-limits = []
+behaviour = [
+  "Runs ASIX's omegartmcli program (OMEGARTMCLI, else PATH) and reads its stream: 16 channels at 200 MHz.",
+  "conn=sn=SN picks a device; four digits get the 03 prefix.",
+  "Closing a capture ends the program and anything a wrapper script started: pipes closed, its process group killed after 2 s, always reaped.",
+  "The end of the program's stream ends the capture; it fails unless the program exited with status 0.",
+]
+limits = [
+  "-version and the first chunk are bounded at 30 s; a stream silent for 30 s fails.",
+  "Not run against a real OMEGA, the real program or wine.",
+]
 
 [drivers.baylibre-acme]
 name = "BayLibre ACME"
