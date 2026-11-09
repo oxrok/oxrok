@@ -27,10 +27,13 @@
 //! - **Reads pace the values.** After each read of a paced file the model may give
 //!   it its next value ([`Tree::read`]), written in place, so a tool that keeps the
 //!   file open, as C does, sees a live meter, and how many reads a capture made
-//!   decides what it read, not the clock. The new value is written right after the
-//!   read's event, long before the next read at any rate C allows (500 Hz); a
-//!   carrier held up longer than a sample period would let a read see the old
-//!   value again. [`Tree::tick`] comes every 5 ms too, for a model whose values
+//!   decides what it read, not the clock. inotify says so after the fact, so as
+//!   root (the harness's server) each paced file also has a fanotify permission
+//!   mark: a read(2) of it waits until the carrier has taken in everything before
+//!   it (the last read's next value, a write's new setting, an armed unplug), and
+//!   only then goes on. So what a read gets never depends on how late the carrier
+//!   is. Without the permission (a unit test as a user) the carrier says so on
+//!   standard error and paces after the fact, as fast as it is. [`Tree::tick`] comes every 5 ms too, for a model whose values
 //!   follow the clock. A new value is written and then the file cut to its length,
 //!   two calls a reader could fall between, so a value from a tick whose length
 //!   differs from the file's waits for that file's next read and goes in right
@@ -238,9 +241,13 @@ mod carrier {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    use nix::sys::fanotify::{
+        EventFFlags, Fanotify, FanotifyResponse, InitFlags, MarkFlags, MaskFlags, Response,
+    };
     use rustix::event::{PollFd, PollFlags, Timespec, poll};
     use rustix::fs::inotify::{self, CreateFlags, ReadFlags, WatchFlags};
     use serde_json::{Value, json};
+    use std::os::fd::AsFd;
     use vusb::arm::Event;
     use vusb::session::{Builder, Ctx};
 
@@ -269,6 +276,7 @@ mod carrier {
         log: Arc<Mutex<dyn Log>>,
         armed: Option<(Event, u32)>,
         reads: u32,
+        held: Option<Arc<Fanotify>>,
         /// A tick's values whose length differs from the file's, until its next read.
         pending: HashMap<String, Vec<u8>>,
     }
@@ -279,6 +287,9 @@ mod carrier {
         inner: Arc<Mutex<Inner>>,
         /// The inotify descriptor again, to wait on without the lock.
         ready: Arc<OwnedFd>,
+        /// The fanotify group whose permission events hold each read of a paced
+        /// file, when the carrier may have one (root).
+        held: Option<Arc<Fanotify>>,
         violations: Arc<AtomicUsize>,
         stop: Arc<AtomicBool>,
     }
@@ -293,7 +304,21 @@ mod carrier {
             let inotify = inotify::init(CreateFlags::NONBLOCK | CreateFlags::CLOEXEC)
                 .map_err(|e| Error::Other(format!("inotify: {e}")))?;
             let ready = Arc::new(inotify.try_clone()?);
+            let held = match Fanotify::init(
+                InitFlags::FAN_CLASS_CONTENT | InitFlags::FAN_NONBLOCK | InitFlags::FAN_CLOEXEC,
+                EventFFlags::O_RDONLY,
+            ) {
+                Ok(f) => Some(Arc::new(f)),
+                Err(e) => {
+                    eprintln!(
+                        "oxrok-emu: no fanotify permission events ({e}): reads of the tree are \
+                         paced after the fact"
+                    );
+                    None
+                }
+            };
             let inner = Inner {
+                held: held.clone(),
                 root: root.to_owned(),
                 inotify,
                 tree: None,
@@ -308,6 +333,7 @@ mod carrier {
             let carrier = Carrier {
                 inner: Arc::new(Mutex::new(inner)),
                 ready,
+                held,
                 violations: Arc::new(AtomicUsize::new(0)),
                 stop: Arc::new(AtomicBool::new(false)),
             };
@@ -316,6 +342,11 @@ mod carrier {
                 .name("sysfs carrier".to_owned())
                 .spawn(move || serving.serve())?;
             Ok(carrier)
+        }
+
+        /// Whether reads of paced files wait for the carrier (fanotify, as root).
+        pub fn synchronous(&self) -> bool {
+            self.held.is_some()
         }
 
         /// The violations it logged.
@@ -331,6 +362,12 @@ mod carrier {
             let _ = inner.teardown();
         }
 
+        /// The carrier held up, for a test, until what this returns is dropped.
+        #[cfg(test)]
+        pub(super) fn hold(&self) -> impl Sized + '_ {
+            self.lock()
+        }
+
         fn lock(&self) -> MutexGuard<'_, Inner> {
             self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
         }
@@ -338,11 +375,21 @@ mod carrier {
         fn serve(&self) {
             let timeout = Timespec { tv_sec: 0, tv_nsec: TICK.as_nanos().try_into().unwrap_or(0) };
             while !self.stop.load(Ordering::SeqCst) {
-                let mut fds = [PollFd::new(&*self.ready, PollFlags::IN)];
-                if poll(&mut fds, Some(&timeout)).is_err() {
+                let polled = if let Some(held) = &self.held {
+                    let mut fds = [
+                        PollFd::new(&*self.ready, PollFlags::IN),
+                        PollFd::new(&**held, PollFlags::IN),
+                    ];
+                    poll(&mut fds, Some(&timeout))
+                } else {
+                    let mut fds = [PollFd::new(&*self.ready, PollFlags::IN)];
+                    poll(&mut fds, Some(&timeout))
+                };
+                if polled.is_err() {
                     thread::sleep(TICK);
                 }
                 let mut inner = self.lock();
+                inner.release(&self.violations);
                 inner.take_in(&self.violations);
                 inner.tick(&self.violations);
             }
@@ -463,12 +510,41 @@ mod carrier {
         }
 
         /// The watches and files go, so that nothing of the old tree is logged.
+        /// Lets the reads waiting on their permission go on, once all that came
+        /// before them is taken in: the reader's own last read included, whose
+        /// inotify event was queued before this read began.
+        fn release(&mut self, violations: &AtomicUsize) {
+            let Some(held) = self.held.clone() else { return };
+            loop {
+                let events = match held.read_events() {
+                    Ok(events) if !events.is_empty() => events,
+                    _ => return,
+                };
+                self.take_in(violations);
+                for event in &events {
+                    if let Some(fd) = event.fd() {
+                        // A reader left waiting would hang: an error here is the
+                        // group's, and its end lets the read go.
+                        let _ = held.write_response(FanotifyResponse::new(fd, Response::FAN_ALLOW));
+                    }
+                }
+            }
+        }
+
         fn teardown(&mut self) -> Result<()> {
             for wd in self.watches.keys() {
                 let _ = inotify::remove_watch(&self.inotify, *wd);
             }
             self.watches.clear();
             self.files.clear();
+            if let Some(held) = &self.held {
+                let _ = held.mark(
+                    MarkFlags::FAN_MARK_FLUSH,
+                    MaskFlags::empty(),
+                    held.as_fd(),
+                    None::<&Path>,
+                );
+            }
             self.discard();
             match fs::remove_dir_all(&self.root) {
                 Ok(()) => Ok(()),
@@ -548,6 +624,15 @@ mod carrier {
                     file.write_all_at(&data, 0).map_err(|e| io(&path, &e))?;
                     fs::set_permissions(&path, Permissions::from_mode(mode))
                         .map_err(|e| io(&path, &e))?;
+                    if paced && let Some(held) = &self.held {
+                        held.mark(
+                            MarkFlags::FAN_MARK_ADD,
+                            MaskFlags::FAN_ACCESS_PERM,
+                            held.as_fd(),
+                            Some(path.as_path()),
+                        )
+                        .map_err(|e| Error::Other(format!("{}: fanotify: {e}", path.display())))?;
+                    }
                     self.files.insert(rel, FileState { file, data, paced });
                     Ok(())
                 }
@@ -911,6 +996,42 @@ mod carrier_tests {
                 "sysfs_close class/c/value",
             ]
         );
+        carrier.stop();
+    }
+
+    /// As root, a read waits for the carrier: back to back reads, with no sync
+    /// between them and the carrier held up, still get one value each. A user
+    /// has no fanotify, and the test says so and passes.
+    #[test]
+    fn as_root_a_read_waits_for_the_last_reads_next_value() {
+        let (carrier, _lines, dir) = carrier();
+        if !carrier.synchronous() {
+            eprintln!("not root: no fanotify, the reads are paced after the fact");
+            carrier.stop();
+            return;
+        }
+        let path = dir.0.join("tree/class/c/value");
+        let mut f = std::fs::File::open(&path).unwrap();
+        let mut got = Vec::new();
+        for _ in 0..50 {
+            // The carrier is busy elsewhere for a while.
+            let held = carrier.hold();
+            let reader = std::thread::spawn({
+                let mut f = f.try_clone().unwrap();
+                move || {
+                    let mut buf = [0u8; 16];
+                    f.seek(SeekFrom::Start(0)).unwrap();
+                    let n = f.read(&mut buf).unwrap();
+                    String::from_utf8_lossy(&buf[..n]).into_owned()
+                }
+            });
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            drop(held);
+            got.push(reader.join().unwrap());
+        }
+        drop(f.seek(SeekFrom::Start(0)));
+        let want: Vec<String> = (0..50).map(|n| format!("{n}\n")).collect();
+        assert_eq!(got, want);
         carrier.stop();
     }
 

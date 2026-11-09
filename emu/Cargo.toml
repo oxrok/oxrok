@@ -21,10 +21,12 @@ serde_json = "1"
 sha2 = "0.10"
 vusb = "0.2.1"
 
-# The sysfs carrier's inotify and poll (shells/sysfs.rs), safe wrappers, as
-# this crate forbids unsafe code.
+# The sysfs carrier's inotify, fanotify and poll (shells/sysfs.rs), safe
+# wrappers, as this crate forbids unsafe code.
 [target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs"] }
+# Its fanotify permission events: a read waits for the tree (shells/sysfs.rs).
+nix = { version = "0.31", default-features = false, features = ["fanotify"] }
 
 [lints]
 workspace = true

@@ -1852,6 +1852,7 @@ dependencies = [
  "aes",
  "clap",
  "ctrlc",
+ "nix 0.31.3",
  "rustix",
  "serde_json",
  "sha2 0.10.9",
