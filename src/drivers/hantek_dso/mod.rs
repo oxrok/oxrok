@@ -465,7 +465,10 @@ impl Device for HantekDsoDevice {
         let tuple_index = |list: &[(u64, u64)]| {
             let Value::Rational(p, q) = value else { return Err(bad()) };
             // The parser reduces its fractions: 10 us comes as 1/100000.
-            list.iter().position(|(a, b)| a * q == p * b).ok_or_else(bad)
+            // Compared in u128: no pair overflows (in debug it panicked, in
+            // release it wrapped onto another entry).
+            let (p, q) = (u128::from(*p), u128::from(*q));
+            list.iter().position(|&(a, b)| u128::from(a) * q == p * u128::from(b)).ok_or_else(bad)
         };
         match (self.group(group)?, key) {
             (None, Key::LimitFrames) => {
@@ -952,6 +955,19 @@ mod tests {
         assert_eq!(d.get(&Key::Filter, Some("CH2")).unwrap(), Value::Bool(false));
         assert!(d.get(&Key::Vdiv, Some("CH3")).is_err());
         assert!(d.get(&Key::Samplerate, Some("CH1")).is_err());
+    }
+
+    #[test]
+    fn rationals_compare_without_overflow() {
+        let mut d = device(0);
+        // 922337203685477581 * 1000 overflows u64.
+        assert!(
+            d.set(&Key::Vdiv, &Value::Rational(922_337_203_685_477_581, 1), Some("CH1")).is_err()
+        );
+        assert!(d.set(&Key::Timebase, &Value::Rational(u64::MAX, 3), None).is_err());
+        assert_eq!(d.settings.voltage, [5, 5], "left as it was");
+        d.set(&Key::Vdiv, &Value::Rational(u64::MAX, u64::MAX), Some("CH1")).unwrap();
+        assert_eq!(d.get(&Key::Vdiv, Some("CH1")).unwrap(), Value::Rational(1, 1));
     }
 
     /// api.c:430-435, 482-483: the C driver fails on both.
