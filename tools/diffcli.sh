@@ -162,6 +162,14 @@
 # models were skipped so does not fail for running no case. A plain run says SKIP
 # for a model all of whose cases are --no-oracle-only.
 #
+# A scenario that sets EMU_PARPORT=1 is a model of a USB to parallel port
+# cable that the kernel's uss720 drives, with ppdev making it /dev/parportN,
+# so a tool reaches it through libieee1284 or its own ppdev ioctls (emu_parport):
+# at each attach ppdev is loaded, uss720 bound to the device in place of
+# whatever took its printer interface (usblp), the node opened to all, and
+# EMU_PARPORT_NAME set to the port's name (parportN, for conn=); the outputs
+# say parportN. emu_unbind leaves uss720 alone, as neither tool detaches it.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -174,6 +182,11 @@
 # libsigrok runner with no libusb bulk timeout under N ms
 # (tools/oracle-usb-floor.c), for a C driver whose timeouts are shorter than
 # what the host can hold a transfer up for. oxrok runs as it is.
+#
+# A scenario that sets EMU_ORACLE_PPCLAIM_SETTLE_MS=N runs sigrok-cli and the
+# libsigrok runner with a sleep of N ms after each ppdev PPCLAIM
+# (tools/oracle-ppclaim-settle.c), for uss720's claim, whose unwaited read
+# can undo libieee1284's next PPDATADIR. oxrok runs as it is.
 
 set -u
 # Another oracle's environment and build tree, for a model whose driver is
@@ -585,6 +598,14 @@ if [ $emu = 1 ]; then
     else
         echo "note: no USB timeout floor for the oracle (cc failed): $(head -1 "$TMP/usb-floor.err")"
     fi
+    # EMU_ORACLE_PPCLAIM_SETTLE_MS, in a scenario: the oracle sleeps after each
+    # PPCLAIM (tools/oracle-ppclaim-settle.c).
+    EMU_PPCLAIM_SETTLE=""
+    if cc -shared -fPIC -o "$TMP/ppclaim-settle.so" "$TOOLS/oracle-ppclaim-settle.c" -ldl 2>"$TMP/ppclaim-settle.err"; then
+        EMU_PPCLAIM_SETTLE=$TMP/ppclaim-settle.so
+    else
+        echo "note: no PPCLAIM settle for the oracle (cc failed): $(head -1 "$TMP/ppclaim-settle.err")"
+    fi
     # tools/oracle-header.c, for a C driver that sends no header: a scenario calls
     # emu_header_oracle in its emu_cases, and its cases from then on run sigrok-cli
     # with the preload. EMU_STOCK_CLI keeps the real one, for cases on stock C and
@@ -748,6 +769,7 @@ if [ $emu = 1 ]; then
             | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
         EMU_SEEN=$total
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
+        if [ "$EMU_PARPORT" = 1 ] && [ -s "$TMP/emu.attach" ]; then emu_parport || return 1; fi
         # The scenario's hook, once per batch of attaches (see the head of
         # this file). Its own commands come back here with nothing new.
         if [ -s "$TMP/emu.attach" ] && [ "$EMU_DRY" = 0 ]; then
@@ -795,6 +817,9 @@ if [ $emu = 1 ]; then
             export EMU_TCP_PORT
             printf 's#(tcp-[a-z]+/127[.]0[.]0[.]1/)%s([^0-9]|$)#\\1PORT\\2#g\n' "$EMU_TCP_PORT" >>"$TMP/emu.sed"
         fi
+        if [ "$EMU_PARPORT" = 1 ] && [ -z "$EMU_PARPORT_NAME" ]; then
+            return 1
+        fi
         if [ "$EMU_CDC" = 1 ]; then
             case "$EMU_TTY" in
                 /dev/ttyACM*) ;;
@@ -832,6 +857,42 @@ if [ $emu = 1 ]; then
         if [ -n "$EMU_USB" ]; then
             printf 's#conn=%s([^0-9]|$)#conn=BUS.ADDR\\1#g\n' "$(echo "$EMU_USB" | sed 's/[.]/\\./g')" >>"$TMP/emu.sed"
         fi
+    }
+    # EMU_PARPORT=1, at each attach: the port uss720 and ppdev make of the
+    # device, open to all, named in EMU_PARPORT_NAME (see the head of this file).
+    emu_parport() {
+        EMU_PARPORT_NAME=""
+        export EMU_PARPORT_NAME
+        [ -n "$EMU_BUSID" ] || return 0
+        sudo -n modprobe ppdev 2>/dev/null
+        sudo -n modprobe uss720 2>/dev/null
+        pp_dev=/sys/bus/usb/devices/$EMU_BUSID
+        for intf in "$pp_dev":*; do
+            [ -e "$intf" ] || continue
+            if [ -e "$intf/driver" ]; then
+                drv=$(basename "$(readlink "$intf/driver")")
+                [ "$drv" != uss720 ] || continue
+                printf '%s' "$(basename "$intf")" | sudo -n tee "/sys/bus/usb/drivers/$drv/unbind" >/dev/null
+            fi
+            printf '%s' "$(basename "$intf")" | sudo -n tee /sys/bus/usb/drivers/uss720/bind >/dev/null 2>&1
+        done
+        pp_i=0
+        while [ $pp_i -lt 100 ]; do
+            for n in "$pp_dev"/ppdev/parport*; do
+                [ -e "$n" ] || continue
+                EMU_PARPORT_NAME=$(basename "$n")
+            done
+            [ -z "$EMU_PARPORT_NAME" ] || [ ! -e "/dev/$EMU_PARPORT_NAME" ] || break
+            EMU_PARPORT_NAME=""
+            sleep 0.05
+            pp_i=$((pp_i + 1))
+        done
+        if [ -z "$EMU_PARPORT_NAME" ]; then
+            echo "$EMU_MODEL: the device got no /dev/parportN; are the kernel's uss720 and ppdev there?" >&2
+            return 1
+        fi
+        sudo -n chmod 0666 "/dev/$EMU_PARPORT_NAME" || return 1
+        printf 's#%s([^0-9]|$)#parportN\\1#g\n' "$EMU_PARPORT_NAME" >>"$TMP/emu.sed"
     }
     # Detaches and ends the emulator, whatever state it is in: a
     # server that does not end after the detach is terminated, then
@@ -906,6 +967,7 @@ if [ $emu = 1 ]; then
     }
     emu_unbind() {
         [ -n "$EMU_BUSID" ] || return 0
+        [ "$EMU_PARPORT" != 1 ] || return 0
         un_class=ff
         if [ "$EMU_TMC" = 1 ]; then
             un_class=fe
@@ -1478,6 +1540,10 @@ EOF
                 preload="$preload${preload:+ }$EMU_USB_FLOOR"
                 set -- env EMU_ORACLE_USB_FLOOR_MS="$EMU_ORACLE_USB_FLOOR_MS" "$@"
             fi
+            if [ -n "$EMU_ORACLE_PPCLAIM_SETTLE_MS" ] && [ $t = a ] && [ -n "$EMU_PPCLAIM_SETTLE" ]; then
+                preload="$preload${preload:+ }$EMU_PPCLAIM_SETTLE"
+                set -- env EMU_ORACLE_PPCLAIM_SETTLE_MS="$EMU_ORACLE_PPCLAIM_SETTLE_MS" "$@"
+            fi
             if [ -n "$preload" ]; then
                 set -- env LD_PRELOAD="$preload" "$@"
             fi
@@ -1959,6 +2025,7 @@ EOF
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
         EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
+        EMU_ORACLE_PPCLAIM_SETTLE_MS=""; EMU_PARPORT=""; EMU_PARPORT_NAME=""
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
         emu_attached() { :; }
@@ -1999,7 +2066,7 @@ EOF
                 set +u
                 EMU_DRY=1; emu_dry_full=0; emu_dry_oracle=0; emu_dry_noo=0; emu_slugs=""
                 EMU_PORT=""; EMU_BUSID=""; EMU_USB=""; EMU_USBFS=""; EMU_NODES=""
-                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""
+                EMU_HIDRAW=""; EMU_TTY=""; EMU_USBTMC=""; EMU_PARPORT_NAME=parport0
                 emu_cases >/dev/null 2>&1 8<&-
                 echo "$emu_dry_full $emu_dry_oracle"
             )

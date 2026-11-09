@@ -1,0 +1,3 @@
+sr: session: Could not start hung-chang-dso-2100 device (null) acquisition.
+sr: session: Cannot remove non-existing event source 0xffffffffffffffff.
+Failed to start session.
