@@ -2,4 +2,3 @@ exec omegartmcli -version stdin=null stdout=pipe stderr=null
 exit 1
 exec omegartmcli -bin stdin=pipe stdout=pipe stderr=null
 stdin closed
-standin: still running 2 s after the tool ended

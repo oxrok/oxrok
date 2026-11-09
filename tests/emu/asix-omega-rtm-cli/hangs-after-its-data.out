@@ -1,3 +1,1 @@
-Acquisition with 16/16 channels at 200 MHz
-16:00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
-5e4776799aac9af5a295fd6ee09557abf120553a6ec3fa1e8bdf46b7d998fce3  -
+sr: asix-omega-rtm-cli: The vendor application was still running 2 s after its pipes closed: killed.

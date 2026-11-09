@@ -7,6 +7,7 @@ EMU_TCP=only
 EMU_STANDIN=omegartmcli
 EMU_DRIVER=asix-omega-rtm-cli
 EMU_GCOV=asix-omega-rtm-cli
+EMU_FULL=$EMU_DRIVER
 
 emu_cases() {
     D=asix-omega-rtm-cli
@@ -16,10 +17,14 @@ emu_cases() {
     # glib's words for a failed exec name the file and the system's error.
     X="$L
 s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
-    # sigrok-cli's two lines of a refused start as oxrok's one, so the golden holds oxrok's.
-    S='s/^sr: session: Could not start asix-omega-rtm-cli device .* acquisition\.$/Could not start the capture./
-/^Failed to start session\.$/d'
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
+    PROBE_NAMES="scan() takes probe_names (c18f4891) but scanopts lists conn alone (api.c:112-114), so sigrok-cli refuses it"
+    ONE_READ="omega_rtm_cli_open makes one read() of 6 bytes and fails on fewer (protocol.c:97-106); oxrok takes the chunk in pieces"
+    NO_BOUND="omega_rtm_cli_open's read() has no bound (protocol.c:97), so a program that says nothing holds sigrok-cli for ever; oxrok gives up after 30 s"
+    HUP="the source asks for G_IO_IN and G_IO_ERR (api.c:369), a closed pipe gives G_IO_HUP, which omega_rtm_cli_receive_data ignores (protocol.c:282-326), so sigrok-cli spins until a time limit, and with a sample limit for ever; oxrok's capture ends"
+    ORPHAN="omega_rtm_cli_close closes the pipes and calls g_spawn_close_pid (protocol.c:125-160, 151), which does nothing on Unix, so a program that doesn't end by itself outlives sigrok-cli; oxrok kills it after 2 s and reaps it"
+    ONE_MORE="omega_rtm_cli_process_rawdata submits both samples of a chunk and caps the count after (protocol.c:231-251), so with one sample left it sends two, and sigrok-cli writes them; oxrok sends what the limit says"
+    VERSION_BOUND="scan's g_spawn_sync has no bound (api.c:196-197), so a -version that never ends holds sigrok-cli for ever; oxrok kills it after 30 s"
 
     emu_case "scan" --keep-header -- -d $D --scan
     emu_case "show" --keep-header -- -d $D --show
@@ -30,8 +35,8 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
     emu_case "set limit" -- -d $D -c limit_samples=100 --get limit_samples
     emu_case "set time" -- -d $D -c limit_time=250 --get limit_time
     emu_case "set samplerate" --stderr --expect-fail -- -d $D -c samplerate=100M --set
-    emu_case "probe names" --stderr -- -d $D:probe_names=a,b,c --scan
-    emu_case "probe names capture" --stderr --expect-fail -- -d $D:probe_names=uart --samples 8 -O bits
+    emu_case "probe names" --keep-header --oracle-differs "$PROBE_NAMES" -- -d $D:probe_names=a,b,c --scan
+    emu_case "probe names capture" --oracle-bug "$PROBE_NAMES" -- -d $D:probe_names=-uart --samples 8 -O bits
 
     # conn=sn=: four digits get C's 03, six or eight go as they are, other lengths
     # are an error and no -serial, and a conn= without sn= is no device.
@@ -39,8 +44,8 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
     emu_case "conn sn four" -- -d $D:conn=sn=1234 --samples 4 -O bits
     emu_case "conn sn six" -- -d $D:conn=sn=031234 --samples 4 -O bits
     emu_case "conn sn eight capture" -- -d $D:conn=sn=A6031234 --samples 4 -O bits
-    emu_case "conn sn another device" --stderr --expect-fail --filter "$S" -- -d $D:conn=sn=A6039999 --samples 4 -O bits
-    emu_case "conn sn not hex" --stderr --expect-fail --filter "$S" -- -d $D:conn=sn=zz1234 --samples 4 -O bits
+    emu_case "conn sn another device" --no-output --expect-fail -- -d $D:conn=sn=A6039999 --samples 4 -O bits
+    emu_case "conn sn not hex" --no-output --expect-fail -- -d $D:conn=sn=zz1234 --samples 4 -O bits
     emu_case "conn sn five" --stderr --filter "$L" -- -d $D:conn=sn=12345 --scan
     emu_case "conn sn five capture" -- -d $D:conn=sn=12345 --samples 4 -O bits
     emu_case "conn sn empty" --keep-header -- -d $D:conn=sn= --scan
@@ -77,9 +82,9 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
     emu_standin
 
     # Captures.
-    emu_case "capture one" -- -d $D --samples 1 -O bits
+    emu_case "capture one" --oracle-differs "$ONE_MORE" -- -d $D --samples 1 -O bits
     emu_case "capture two" -- -d $D --samples 2 -O bits
-    emu_case "capture three" -- -d $D --samples 3 -O bits
+    emu_case "capture three" --oracle-differs "$ONE_MORE" -- -d $D --samples 3 -O bits
     emu_case "capture bits" -- -d $D --samples 64 -O bits
     emu_case "capture hex" --digest --filter "$A" -- -d $D --samples 4096 -O hex
     emu_case "capture csv" --digest --filter "$A" -- -d $D --samples 300 -O csv:header=false
@@ -88,7 +93,7 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
     # 13 chunks are 46 samples; the 14th repeats its sample 78 times, then two.
     emu_case "limit in a run" -- -d $D --samples 60 -O hex
     emu_case "limit at a run's end" -- -d $D --samples 124 -O hex
-    emu_case "limit after a run" -- -d $D --samples 125 -O hex
+    emu_case "limit after a run" --oracle-differs "$ONE_MORE" -- -d $D --samples 125 -O hex
     emu_case "limit by config" -- -d $D -c limit_samples=10 --samples 10 -O bits
     emu_case "a long capture" --digest --filter "$A" -- -d $D --samples 2M -O hex
     emu_standin stamp=32768 idle=1
@@ -113,36 +118,42 @@ s/^(sr: asix-omega-rtm-cli: Cannot execute RTM CLI process: ).*/\1WHY/"
 
     # A start that fails.
     emu_standin bytes=0
-    emu_case "ends at once" --stderr --expect-fail --filter "$S" -- -d $D --samples 4 -O bits
+    emu_case "ends at once" --no-output --expect-fail -- -d $D --samples 4 -O bits
     emu_standin bytes=0 exit=1
-    emu_case "fails at once" --stderr --expect-fail --filter "$S" -- -d $D --samples 4 -O bits
+    emu_case "fails at once" --no-output --expect-fail -- -d $D --samples 4 -O bits
     emu_standin bytes=3
-    emu_case "a short first chunk" --stderr --expect-fail --filter "$S" -- -d $D --samples 4 -O bits
-    emu_standin bytes=0 then=hang
-    emu_case "silent at the start" --timeout 3 --hangs --no-output -- -d $D --samples 4 -O bits
+    # C closes stdin as soon as it has read the 3 bytes, while the program is on its
+    # way out: whether the program saw the close first is the pace's.
+    emu_case "a short first chunk" --no-output --expect-fail --tx-filter '/^stdin closed$/d' -- -d $D --samples 4 -O bits
+    emu_standin bytes=0 then=hang hang-max=60000
+    # Thirty seconds, oxrok's bound on the first chunk.
+    emu_case "silent at the start" --oracle-bug "$NO_BOUND" --oracle-hangs --timeout 40 --no-output --expect-fail -- -d $D --samples 4 -O bits
     emu_standin piece=5 gap=20
-    emu_case "pieces of five" --stderr --expect-fail --filter "$S" -- -d $D --samples 4 -O bits
+    emu_case "pieces of five" --oracle-bug "$ONE_READ" -- -d $D --samples 4 -O bits
     emu_standin
 
     # A stream that ends: C's source sees only G_IO_HUP, which its callback ignores,
     # so sigrok-cli spins until its time limit, and without one for ever.
     emu_standin bytes=600 then=exit
-    emu_case "cut short" --timeout 4 --hangs --no-output -- -d $D --samples 100000 -O bits
+    emu_case "cut short" --oracle-bug "$HUP" --oracle-hangs --timeout 4 --stderr --filter "$L" -- -d $D --samples 100000 -O bits
     emu_case "cut short with a time" --digest --filter "$A" -- -d $D --time 500 -O hex
     emu_standin bytes=603 then=exit
-    emu_case "cut inside a chunk" --timeout 4 --hangs --no-output -- -d $D --samples 100000 -O bits
+    emu_case "cut inside a chunk" --oracle-bug "$HUP" --oracle-hangs --timeout 4 --stderr --filter "$L" -- -d $D --samples 100000 -O bits
     emu_standin bytes=600 then=exit exit=1
-    emu_case "fails inside" --timeout 4 --hangs --no-output -- -d $D --samples 100000 -O bits
+    emu_case "fails inside" --oracle-bug "$HUP" --oracle-hangs --timeout 4 --oxrok-fails "ended the stream" --stderr --filter "$L" -- -d $D --samples 100000 -O bits
     emu_standin bytes=600 then=hang
-    emu_case "hangs after its data" --digest --filter "$A" -- -d $D --time 500 -O hex
+    emu_case "hangs after its data" --oracle-differs "$ORPHAN" --stderr --filter "$L" -- -d $D --time 500 -O hex
     emu_standin bytes=600 then=hang eof=ignore
-    emu_case "hangs ignoring stdin" --digest --filter "$A" -- -d $D --time 500 -O hex
-    emu_standin version-hang=1 hang-max=3000
-    emu_case "version hangs" --timeout 2 --hangs --no-output -- -d $D --scan
+    emu_case "hangs ignoring stdin" --oracle-differs "$ORPHAN" --stderr --filter "$L" -- -d $D --time 500 -O hex
+    emu_standin version-hang=1 hang-max=60000
+    # Thirty seconds, oxrok's bound on -version.
+    emu_case "version hangs" --oracle-bug "$VERSION_BOUND" --oracle-hangs --timeout 40 --stderr --filter "$L" -- -d $D --scan
     emu_standin
 
     # SIGINT, as the tools' pace has it: at chunk 100000 of a stream.
     emu_standin mark=100000
-    : emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt tcp-model --stderr --filter "$L" -- -d $D --samples 100G -O hex
+    emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt tcp-model --stderr --no-output -- -d $D --time 600000 -O hex
+    emu_standin mark=100000 bytes=601200 then=hang
+    emu_case "interrupt a hung program" --oracle-bug "$SIGINT_BUG" --interrupt tcp-model --stderr --filter "$L" -- -d $D --time 600000 -O hex
     emu_standin
 }

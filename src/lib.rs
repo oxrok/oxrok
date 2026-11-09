@@ -83,6 +83,7 @@ pub mod drivers {
     pub mod agilent_dmm;
     pub mod appa_55ii;
     pub mod arachnid_labs_re_load_pro;
+    pub mod asix_omega_rtm_cli;
     pub mod asix_sigma;
     pub mod atorch;
     pub mod atten_pps3xxx;
@@ -185,6 +186,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::center_3xx::VoltcraftK204Driver));
     registry.register(Box::new(drivers::itech_it8500::ItechIt8500Driver));
     registry.register(Box::new(drivers::ipdbg_la::IpdbgLaDriver));
+    registry.register(Box::new(drivers::asix_omega_rtm_cli::AsixOmegaRtmCliDriver));
     registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
