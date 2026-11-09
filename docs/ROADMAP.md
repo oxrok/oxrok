@@ -48,6 +48,27 @@ shell (`emu/src/shells/ble.rs`, a controller on `hci_vhci`). Open:
   marker: take it offline by hand (or reboot).
 - Prologix adapters over serial remain an oxrok extra.
 
+## Upstream pull requests
+
+Pull requests to sigrok's libsigrok, sigrok-util, sigrok-firmware-fx2lafw
+and sigrok-firmware that never landed upstream, triaged for oxrok on
+2026-11-09 and tracked one item per unit of work on the
+[Upstream intake](https://github.com/orgs/oxrok/projects/1) board
+(issues labelled `upstream` here). The rules, the intake and progress
+skills and `track.py` are in
+[oxrok/management](https://github.com/oxrok/management). The workstreams:
+
+- `bug-check`: upstream fixes for bugs oxrok may share (USB bus 0 on
+  macOS, macOS HID paths, RD6006 multipliers, Kingst stream stalls,
+  center-3xx recovery, crafted VCD input, demo, R&S RTM/RTB).
+- `tooling`: firmware extractors in oxrok-util.
+- `firmware-build`: firmware-fx2lafw built on Linux, macOS and Windows
+  in CI, WCID descriptors, and the open Kingst FX2 firmware.
+- `model`, `driver-rework`, `new-driver`, `input-format`: models for
+  ported drivers (Rigol DHO, Siglent HD, Korad, ...), larger driver
+  changes (OLS, FTDI-LA, DSLogic), about 30 drivers oxrok lacks, and two
+  input formats.
+
 ## Packaging and release
 
 - Linux udev rules. The README and [USB.md](USB.md) both say a device is

@@ -137,8 +137,9 @@ impl Driver for LogicPortDriver {
     }
 
     fn firmware(&self) -> Vec<FirmwareDependency> {
-        // The vendor's `LogicPort.ccf`, or the per image `.rbf` files
-        // `sigrok-fwextract-intronix-logicport` writes from it.
+        // The vendor's `LogicPort.ccf`, which oxrok-util's
+        // `sigrok-fwextract-intronix-logicport` saves unchanged, or per
+        // image `.rbf` files split from it by hand.
         let mut files = vec![firmware::FILE.to_owned()];
         for image in firmware::Image::ALL {
             files.push(format!("intronix-logicport-{}.rbf", image.name()));
@@ -146,9 +147,9 @@ impl Driver for LogicPortDriver {
         vec![
             FirmwareDependency::upload(
                 files,
-                "the vendor's LogicPort.ccf, via sigrok-fwextract-intronix-logicport",
+                "the vendor's LogicPort.ccf, via oxrok-util's sigrok-fwextract-intronix-logicport",
             )
-            .note("the .ccf, or the per image .rbf files it writes"),
+            .note("the .ccf, or per image .rbf files"),
         ]
     }
 
