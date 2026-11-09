@@ -582,6 +582,12 @@ fn prepare(
     args: &CaptureArgs,
     need_limit: bool,
 ) -> Result<(Option<crate::core::Trigger>, setup::ConfigPlan), ToolError> {
+    // `wait_trigger` holds back every sample before the trigger: with
+    // no trigger nothing would be kept at all (the CLI refuses `-w`
+    // without `-t` the same way).
+    if args.wait_trigger && args.triggers.is_none() {
+        return Err(ToolError::invalid_args("`wait_trigger` needs `triggers`."));
+    }
     let plan = setup::plan_configs(&*device, &args.config, None)?;
     plan.send_settings(device)?;
     let no_limit = args.samples.is_none() && args.time.is_none() && args.frames.is_none();
@@ -860,6 +866,10 @@ mod tests {
         assert_eq!(e.message, "Invalid sample limit 'lots'.");
         let e = call(&h, "capture", json!({"handle": 9, "samples": "10"})).unwrap_err();
         assert!(e.message.contains("No open device"), "{e}");
+        let e =
+            call(&h, "capture", json!({"handle": handle, "samples": "10", "wait_trigger": true}))
+                .unwrap_err();
+        assert!(e.invalid_args && e.message.contains("triggers"), "{e}");
         // Still usable after the refusals.
         let s = call(&h, "capture", json!({"handle": handle, "time": "1ms"})).unwrap();
         assert_eq!(s["samples"], 200);
