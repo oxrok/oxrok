@@ -15,6 +15,7 @@ mod args;
 mod decode;
 mod input;
 mod logger;
+mod mcp;
 mod parse;
 mod pipeline;
 mod run;
@@ -45,6 +46,16 @@ pub fn strict_check(args: &args::Args) -> oxrok::core::Result<()> {
 
 pub fn main() -> ExitCode {
     let args = args::Args::parse();
+    if let Some(args::Command::Mcp(mcp_args)) = &args.command {
+        logger::init(mcp_args.loglevel);
+        return match mcp::run(mcp_args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     logger::init(args.loglevel);
     let registry = registry();
     let result = if args.version {

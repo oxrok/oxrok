@@ -32,6 +32,11 @@ Also there: the `bits`, `hex`, `ascii`, `analog`, `csv`, `vcd`, `binary`,
 [docs/CLI.md](docs/CLI.md)); USB, serial, TCP, HID and SCPI transports, most
 with record and replay; native `uart`, `i2c` and `spi` decoders.
 
+`oxrok mcp` serves the Model Context Protocol over stdio, so an LLM agent
+(Claude Code, Claude Desktop, Cursor) can ask what oxrok supports and run
+the command line through it: `claude mcp add oxrok -- oxrok mcp`.
+[docs/MCP.md](docs/MCP.md) has the tools and the flags that limit them.
+
 ### What has been checked how
 
 "Emulator" means the cases described in

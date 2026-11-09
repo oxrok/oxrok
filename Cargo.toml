@@ -43,7 +43,10 @@ required-features = ["cli"]
 [features]
 default = ["cli", "nusb"]
 # The command line tool.
-cli = ["dep:clap", "dep:ctrlc"]
+cli = ["dep:clap", "dep:ctrlc", "mcp"]
+# The MCP server (`oxrok mcp`): the tool model, the catalog and a stdio
+# JSON-RPC server, for LLM agents.
+mcp = ["dep:serde", "dep:serde_json", "dep:schemars"]
 # Pure Rust USB backend (Linux, macOS, Windows, Android).
 nusb = ["dep:nusb"]
 # libusb backend, for the BSDs and as a fallback; builds libusb from
@@ -97,6 +100,10 @@ rustpython-ruff_python_trivia = { version = "=0.16.5", optional = true }
 rustpython-ruff_source_file = { version = "=0.16.5", optional = true }
 rustpython-ruff_text_size = { version = "=0.16.5", optional = true }
 malachite-bigint = { version = "=0.12.0", optional = true }
+# The MCP server: JSON-RPC messages and the tools' argument schemas.
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+schemars = { version = "1.2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 # Termios beyond what serialport offers: HUPCL, INPCK (src/serial/mod.rs).

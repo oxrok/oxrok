@@ -84,19 +84,26 @@ Static binaries, the release archives, `make dist`, notices and
 ## MCP server
 
 An MCP server so an agent can scan, capture, measure and decode through
-oxrok: `oxrok mcp` over stdio, and an extended server in oxrok-ui whose
-tools the user picks. [PLAN.mcp.md](../PLAN.mcp.md) has the design, the
-phases and the open decisions. Nothing is built yet.
+oxrok: `oxrok mcp` over stdio ([MCP.md](MCP.md) documents it), and an
+extended server in oxrok-ui whose tools the user picks.
+[PLAN.mcp.md](../PLAN.mcp.md) has the design, the phases and the open
+decisions; the CLI side (phases 1 to 5) is in.
 
-- Phase 1: the stdio server, the tool model and catalog, the reference
-  tools (`list_drivers`, `decoder_info`, ...) and a `cli` pass-through.
-- Phase 2: the CLI's setup code (driver specs, configs, channels,
-  triggers, decoder stacks) moved from `src/cli/` into the library.
-- Phase 3: devices and captures as tools, with a capture store.
-- Phase 4: analyzers: `decode::FrameStore`, `decode::Analyzer` and the
-  radix rules moved from oxrok-ui, so decoded output is kept, paged,
-  searched and returned with raw values.
-- Phase 5: asynchronous captures, the memory budget, the safety flags.
+- `driver_info` does not yet report a driver's verification status
+  (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
+  docs are not in the published crate, so the table would have to be
+  generated into the source at build time or kept in `tools/site-data`.
+- A driver whose acquisition ends on its limit is only stopped (its
+  thread joined) by the MCP run thread; the CLI runs one capture per
+  process and never needed it. `Session::run` could stop the devices
+  itself when every `End` came, so every caller gets an idle device.
+- A `guess_signals` tool: rank a capture's logic channels as clock,
+  data, select or idle from the features `measure` reports (regular
+  period, pulse widths that are multiples of another channel's period,
+  edges only while another channel is low), try the common two and
+  three wire decoders on the candidates, and score each by frames
+  decoded and the warnings row. An agent does this by hand today over
+  `measure`, `capture_logic` and `capture_decode`.
 - Phase 6: the UI server over a local socket, with a per-tool checklist.
 
 ## Pico backend

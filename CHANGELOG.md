@@ -8,6 +8,35 @@ release may change the library API.
 
 ### Added
 
+- `oxrok mcp`: a Model Context Protocol server over stdio, for LLM agents.
+  Reference tools (`version`, `list_drivers`, `driver_info`, `list_decoders`,
+  `decoder_info`, `list_formats`, `firmware_status`) and a `cli` tool that
+  runs the command line; `--read-only`, `--no-cli`, `--tools` and
+  `--list-tools`. The `oxrok::mcp` module behind the `mcp` feature.
+  Device tools (`scan`, `open`, `close`, `describe_device`, `get_option`,
+  `set_option`, `enable_channels`), captures into a store (`capture`,
+  `capture_summary`, `list_captures`, `drop_capture`, `load_capture`,
+  `export_capture`) and the data tools over them (`capture_logic`,
+  `capture_analog`, `measure`, `find`, and `capture_view`, a window of a
+  capture as a PNG or as its edges); `--no-hardware`, `--drivers`,
+  `--allow-path` and `--max-memory`. Analyzers: a decoder stack over a
+  capture whose frames are kept, paged, searched and counted, with raw
+  values and a radix per request (`add_analyzer`, `analyzer_frames`,
+  `analyzer_summary`, `analyzer_find`, `analyzer_binary`, `export_binary`,
+  `analyzer_meta`, `capture_decode`, ...). Captures run on their own thread and grow in
+  the store: `capture_start`, `capture_status` (with `wait` and progress)
+  and `capture_stop`, open-ended without a limit; the data tools and
+  analyzers work on a running capture; the memory budget covers captures
+  and frames, stops a run that outgrows it and evicts finished captures
+  first.
+- `oxrok::decode::{Radix, FrameStore, Analyzer}`: the radix rules and the
+  frame store from oxrok-ui, and a runner that keeps a stack's output per
+  instance, over a complete capture or a live one (`Source::Live`), under
+  a byte budget for its frames.
+- `oxrok::setup`: the command line's setup code as a library module (driver
+  specs, `-c` plans, `-C`, `-t`, limits, decoder stacks, `-I`/`-O` specs),
+  shared with the MCP server. `oxrok::decoder_registry()` is every decoder
+  of a build.
 - Drivers: `hp-59306a`, `ipdbg-la`, `beaglelogic` (over its TCP server),
   `hp-3457a`, `rigol-dg`, `siglent-sdl10x0`, `siglent-sds`, `yokogawa-dlm`, `fluke-45`,
   `lecroy-xstream`, `gwinstek-gds-800`, `scpi-pps`, `hameg-hmo`, `scpi-dmm`,

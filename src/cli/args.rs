@@ -4,14 +4,26 @@
 
 //! Command line flags, sigrok-cli compatible.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 /// A sigrok compatible logic analyzer command line tool.
 #[derive(Parser, Debug)]
 #[allow(clippy::struct_excessive_bools, clippy::doc_markdown)]
-#[command(name = "oxrok", disable_version_flag = true, about, long_about = None)]
+#[command(
+    name = "oxrok",
+    disable_version_flag = true,
+    disable_help_subcommand = true,
+    args_conflicts_with_subcommands = true,
+    subcommand_negates_reqs = true,
+    about,
+    long_about = None
+)]
 pub struct Args {
+    /// `oxrok mcp`: the other things this binary does.
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Show version and support list
     #[arg(short = 'V', long)]
     pub version: bool,
@@ -127,4 +139,68 @@ pub struct Args {
     /// Set device options only
     #[arg(long)]
     pub set: bool,
+}
+
+/// The subcommands. Every sigrok-cli flag keeps its meaning without one.
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Serve the Model Context Protocol over stdio, for LLM agents
+    Mcp(McpArgs),
+}
+
+/// `oxrok mcp`.
+#[derive(clap::Args, Debug)]
+#[allow(clippy::struct_excessive_bools)]
+pub struct McpArgs {
+    /// Set loglevel (0-5, default 2); logs go to stderr
+    #[arg(short = 'l', long, default_value_t = 2, value_name = "LEVEL")]
+    pub loglevel: u8,
+
+    /// Serve only the tools that change nothing
+    #[arg(long)]
+    pub read_only: bool,
+
+    /// Drop the tools that open or drive hardware
+    #[arg(long)]
+    pub no_hardware: bool,
+
+    /// Drop the `cli` pass-through
+    #[arg(long)]
+    pub no_cli: bool,
+
+    /// Serve only these tools, comma separated
+    #[arg(long, value_name = "NAMES", value_delimiter = ',')]
+    pub tools: Vec<String>,
+
+    /// How long the `cli` tool and a `capture` may run (seconds, or with a unit: 30s, 2m)
+    #[arg(long, value_name = "TIME", default_value = "60s")]
+    pub timeout: String,
+
+    /// Let only these drivers be scanned and opened, comma separated
+    #[arg(long, value_name = "IDS", value_delimiter = ',')]
+    pub drivers: Vec<String>,
+
+    /// The memory captures may take before the oldest are dropped (with a suffix: 512M, 2G)
+    #[arg(long, value_name = "SIZE", default_value = "512M")]
+    pub max_memory: String,
+
+    /// A directory files may be read from and written to; repeatable. The working directory otherwise
+    #[arg(long = "allow-path", value_name = "DIR")]
+    pub allow_paths: Vec<PathBuf>,
+
+    /// Print the tools the server would offer and exit
+    #[arg(long)]
+    pub list_tools: bool,
+
+    /// With --list-tools: print the tools/list result as JSON
+    #[arg(long, requires = "list_tools")]
+    pub json: bool,
+
+    /// With --list-tools: print the tool reference as Markdown
+    #[arg(long, requires = "list_tools", conflicts_with = "json")]
+    pub markdown: bool,
+
+    /// Send this file's text to the model as the instructions
+    #[arg(long, value_name = "FILE")]
+    pub instructions: Option<PathBuf>,
 }

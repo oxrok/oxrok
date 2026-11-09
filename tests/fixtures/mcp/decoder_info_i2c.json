@@ -1,0 +1,138 @@
+{
+  "annotation_rows": [
+    {
+      "classes": [
+        "bit"
+      ],
+      "description": "Bits",
+      "id": "bits"
+    },
+    {
+      "classes": [
+        "start",
+        "repeat-start",
+        "stop",
+        "ack",
+        "nack",
+        "address-read",
+        "address-write",
+        "data-read",
+        "data-write"
+      ],
+      "description": "Address/Data",
+      "id": "addr-data"
+    },
+    {
+      "classes": [
+        "warnings"
+      ],
+      "description": "Warnings",
+      "id": "warnings"
+    }
+  ],
+  "annotations": [
+    {
+      "description": "Start condition",
+      "id": "start"
+    },
+    {
+      "description": "Repeat start condition",
+      "id": "repeat-start"
+    },
+    {
+      "description": "Stop condition",
+      "id": "stop"
+    },
+    {
+      "description": "ACK",
+      "id": "ack"
+    },
+    {
+      "description": "NACK",
+      "id": "nack"
+    },
+    {
+      "description": "Data/address bit",
+      "id": "bit"
+    },
+    {
+      "description": "Address read",
+      "id": "address-read"
+    },
+    {
+      "description": "Address write",
+      "id": "address-write"
+    },
+    {
+      "description": "Data read",
+      "id": "data-read"
+    },
+    {
+      "description": "Data write",
+      "id": "data-write"
+    },
+    {
+      "description": "Human-readable warnings",
+      "id": "warnings"
+    }
+  ],
+  "binary": [
+    {
+      "description": "Address read",
+      "id": "address-read"
+    },
+    {
+      "description": "Address write",
+      "id": "address-write"
+    },
+    {
+      "description": "Data read",
+      "id": "data-read"
+    },
+    {
+      "description": "Data write",
+      "id": "data-write"
+    }
+  ],
+  "channels": [
+    {
+      "description": "Serial clock line",
+      "name": "SCL",
+      "role": "scl"
+    },
+    {
+      "description": "Serial data line",
+      "name": "SDA",
+      "role": "sda"
+    }
+  ],
+  "default_radix": "native",
+  "description": "Two-wire, multi-master, serial bus.",
+  "id": "i2c",
+  "inputs": [
+    "logic"
+  ],
+  "license": "gplv2+",
+  "longname": "Inter-Integrated Circuit",
+  "name": "I2C",
+  "native": true,
+  "optional_channels": [],
+  "options": [
+    {
+      "default": "shifted",
+      "description": "Displayed slave address format",
+      "id": "address_format",
+      "values": [
+        "shifted",
+        "unshifted"
+      ]
+    }
+  ],
+  "outputs": [
+    "i2c"
+  ],
+  "radix_support": "raw_values",
+  "tags": [
+    "Embedded/industrial"
+  ]
+}

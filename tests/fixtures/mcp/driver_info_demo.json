@@ -1,0 +1,45 @@
+{
+  "accepted_scan_options": [
+    {
+      "key": "logic_channels",
+      "kind": "i32",
+      "name": "Number of logic channels"
+    },
+    {
+      "key": "analog_channels",
+      "kind": "i32",
+      "name": "Number of analog channels"
+    },
+    {
+      "key": "limit_frames",
+      "kind": "u64",
+      "name": "Frame limit"
+    }
+  ],
+  "classes": [
+    "demo-device",
+    "logic-analyzer",
+    "oscilloscope"
+  ],
+  "ends_captures_itself": false,
+  "firmware": [],
+  "id": "demo",
+  "name": "Demo driver and pattern generator",
+  "scan_options": [
+    {
+      "key": "logic_channels",
+      "kind": "i32",
+      "name": "Number of logic channels"
+    },
+    {
+      "key": "analog_channels",
+      "kind": "i32",
+      "name": "Number of analog channels"
+    },
+    {
+      "key": "limit_frames",
+      "kind": "u64",
+      "name": "Frame limit"
+    }
+  ]
+}

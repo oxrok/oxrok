@@ -7,9 +7,8 @@
 
 use crate::cli::args::Args;
 use crate::cli::decode::Decoding;
-use crate::cli::parse;
 use oxrok::core::{Channel, Error, Packet, Result};
-use oxrok::formats::output::{self, Options, Output, OutputContext};
+use oxrok::formats::output::{self, Output, OutputContext};
 use std::io::{ErrorKind, Write};
 
 const DEFAULT_OUTPUT_NOFILE: &str = "bits:width=64";
@@ -65,12 +64,7 @@ impl Pipeline {
             if args.output_file.is_some() { DEFAULT_OUTPUT_FILE } else { DEFAULT_OUTPUT_NOFILE }
                 .to_owned()
         });
-        let parsed = parse::generic_args(&spec, true);
-        let id = parsed.scope.ok_or_else(|| Error::arg("Invalid output format."))?;
-        let module = output::find(&id)
-            .ok_or_else(|| Error::Arg(format!("Unknown output module '{id}'.")))?;
-        let options: Options =
-            parsed.items.into_iter().map(|(k, v)| (k, v.unwrap_or_default())).collect();
+        let (module, options) = oxrok::setup::output_spec(&spec)?;
         let ctx = OutputContext {
             channels,
             samplerate,

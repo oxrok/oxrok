@@ -8,32 +8,14 @@ use crate::cli::args::Args;
 use crate::cli::parse;
 use crate::cli::pipeline::Pipeline;
 use oxrok::core::session::Flow;
-use oxrok::core::util::{parse_sizestring, parse_timestring};
-use oxrok::core::{
-    Device, DeviceClass, Error, Key, Registry, Result, Session, Value, ValueList, config_set,
-};
+use oxrok::core::{Device, Error, Registry, Result, Session, Value};
+use oxrok::setup::CaptureLimits;
 use std::sync::atomic::Ordering;
 
-/// Scans and picks the one device to work with, the way sigrok-cli does:
-/// with several devices found, the demo device is dropped and exactly one
-/// real device must remain.
+/// Scans and picks the one device to work with, opened; see
+/// [`oxrok::setup::pick_device`].
 fn pick_device(registry: &Registry, args: &Args) -> Result<Box<dyn Device>> {
-    let devices = parse::device_scan(registry, args)?;
-    if devices.is_empty() {
-        return Err(Error::arg("No devices found."));
-    }
-    let mut devices = devices;
-    if devices.len() > 1 {
-        let real: Vec<Box<dyn Device>> =
-            devices.into_iter().filter(|d| !d.classes().contains(&DeviceClass::Demo)).collect();
-        if real.len() != 1 {
-            return Err(Error::arg("oxrok only supports one device for capturing."));
-        }
-        devices = real;
-    }
-    let mut device = devices.remove(0);
-    parse::open_device(device.as_mut())?;
-    Ok(device)
+    oxrok::setup::pick_device(registry, args.driver.as_deref())
 }
 
 /// `--get`.
@@ -203,49 +185,6 @@ pub fn set_options(registry: &Registry, args: &Args) -> Result<()> {
     device.close()
 }
 
-fn has_option(device: &dyn Device, key: &Key) -> bool {
-    device.option(key, None).is_some()
-}
-
-/// sigrok-cli's `maybe_config_set()` (main.c:87-97), which its `--samples` and
-/// `--frames` use: a key the device cannot set fails without `check_key()`'s
-/// message.
-fn maybe_config_set(device: &mut dyn Device, key: &Key, value: u64) -> Result<()> {
-    if device.option(key, None).is_some_and(|o| o.access.set) {
-        config_set(device, key, &Value::U64(value), None)
-    } else {
-        Err(Error::not_supported(key.id()))
-    }
-}
-
-/// The samples of a time limit. sigrok-cli's multiplication wraps
-/// (session.c:61) and gives a limit unrelated to the time; here it saturates.
-fn time_samples(rate: u64, msec: u64) -> u64 {
-    rate.saturating_mul(msec) / 1000
-}
-
-fn set_limit_time(device: &mut dyn Device, text: &str) -> Result<u64> {
-    let msec = parse_timestring(text)
-        .filter(|t| *t > 0)
-        .ok_or_else(|| Error::Arg(format!("Invalid time '{text}'")))?;
-    if device.option(&Key::LimitMsec, None).is_some_and(|o| o.access.set) {
-        config_set(device, &Key::LimitMsec, &Value::U64(msec), None)
-            .map_err(|_| Error::arg("Failed to configure time limit."))?;
-        return Ok(0);
-    }
-    if device.option(&Key::Samplerate, None).is_some_and(|o| o.access.get) {
-        let rate = device.get(&Key::Samplerate, None)?.as_u64().unwrap_or(0);
-        let samples = time_samples(rate, msec);
-        if samples == 0 {
-            return Err(Error::arg("Not enough time at this samplerate."));
-        }
-        config_set(device, &Key::LimitSamples, &Value::U64(samples), None)
-            .map_err(|_| Error::arg("Failed to configure time-based sample limit."))?;
-        return Ok(samples);
-    }
-    Err(Error::arg("This device does not support time limits."))
-}
-
 /// Whether the command line asks for a capture of a driver that ends each
 /// one itself ([`oxrok::core::Driver::ends_captures_itself`]): its output or
 /// its trigger, with no limit, which such a driver has no key for.
@@ -277,37 +216,13 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
         Some(spec) => Some(parse::parse_triggers(device.as_ref(), spec)?),
         None => None,
     };
-    if args.continuous && !has_option(device.as_ref(), &Key::Continuous) {
-        return Err(Error::arg("This device does not support continuous sampling."));
-    }
-    let mut limit_samples = 0u64;
-    if let Some(t) = &args.time {
-        limit_samples = set_limit_time(device.as_mut(), t)?;
-    }
-    if let Some(s) = &args.samples {
-        limit_samples =
-            parse_sizestring(s).map_err(|_| Error::Arg(format!("Invalid sample limit '{s}'.")))?;
-        if let Ok(ValueList::MinMaxU64(min, max)) = device.list(&Key::LimitSamples, None) {
-            if limit_samples < min {
-                return Err(Error::Arg(format!(
-                    "The device stores at least {min} samples with the current settings."
-                )));
-            }
-            if limit_samples > max {
-                return Err(Error::Arg(format!(
-                    "The device can store only {max} samples with the current settings."
-                )));
-            }
-        }
-        maybe_config_set(device.as_mut(), &Key::LimitSamples, limit_samples)
-            .map_err(|_| Error::arg("Failed to configure sample limit."))?;
-    }
-    if let Some(f) = &args.frames {
-        let frames =
-            parse_sizestring(f).map_err(|_| Error::Arg(format!("Invalid frame limit '{f}'.")))?;
-        maybe_config_set(device.as_mut(), &Key::LimitFrames, frames)
-            .map_err(|_| Error::arg("Failed to configure frame limit."))?;
-    }
+    let limits = CaptureLimits {
+        time: args.time.clone(),
+        samples: args.samples.clone(),
+        frames: args.frames.clone(),
+        continuous: args.continuous,
+    };
+    let limit_samples = oxrok::setup::apply_limits(device.as_mut(), &limits)?;
 
     device.check_capture(trigger.as_ref())?;
     if let Some(module) =
@@ -315,7 +230,7 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
     {
         device.note_output(&module);
     }
-    let samplerate = device.get(&Key::Samplerate, None).ok().and_then(|v| v.as_u64());
+    let samplerate = device.get(&oxrok::core::Key::Samplerate, None).ok().and_then(|v| v.as_u64());
     let channels = device.channels().to_vec();
     let title = registry.find(device.info().driver).map_or("unknown", |d| d.long_name()).to_owned();
     let mut pipeline = Pipeline::new(args, &channels, samplerate, &title)?;
@@ -355,70 +270,6 @@ pub fn session(registry: &Registry, args: &Args) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_time_limit_does_not_overflow() {
-        assert_eq!(time_samples(1000, 1500), 1500);
-        assert_eq!(time_samples(200_000, 1), 200);
-        assert_eq!(time_samples(999, 1), 0);
-        assert_eq!(time_samples(u64::MAX, 2), u64::MAX / 1000);
-        assert_eq!(time_samples(2, u64::MAX), u64::MAX / 1000);
-    }
-
-    /// A device that reads `limit_samples` and has no way to set it.
-    struct ReadsLimit {
-        info: oxrok::core::DeviceInfo,
-        set_calls: usize,
-    }
-
-    impl Device for ReadsLimit {
-        fn info(&self) -> &oxrok::core::DeviceInfo {
-            &self.info
-        }
-        fn classes(&self) -> &[DeviceClass] {
-            &[]
-        }
-        fn channels(&self) -> &[oxrok::core::Channel] {
-            &[]
-        }
-        fn enable_channel(&mut self, _: usize, _: bool) -> Result<()> {
-            Ok(())
-        }
-        fn rename_channel(&mut self, _: usize, _: &str) -> Result<()> {
-            Ok(())
-        }
-        fn options(&self, _: Option<&str>) -> Result<Vec<oxrok::core::OptionDesc>> {
-            Ok(vec![oxrok::core::OptionDesc::new(Key::LimitSamples, oxrok::core::Access::GET)])
-        }
-        fn get(&self, key: &Key, _: Option<&str>) -> Result<Value> {
-            Err(Error::UnknownKey(key.id().to_owned()))
-        }
-        fn set(&mut self, _: &Key, _: &Value, _: Option<&str>) -> Result<()> {
-            self.set_calls += 1;
-            Ok(())
-        }
-        fn list(&self, key: &Key, _: Option<&str>) -> Result<ValueList> {
-            Err(Error::UnknownKey(key.id().to_owned()))
-        }
-        fn start(&mut self, _: oxrok::core::PacketSink) -> Result<()> {
-            Ok(())
-        }
-        fn stop(&mut self) -> Result<()> {
-            Ok(())
-        }
-    }
-
-    /// sigrok-cli's --samples and --frames fail silently here: not through
-    /// `check_key()`, whose message `config_set` would log.
-    #[test]
-    fn samples_ask_for_set_access_first() {
-        let mut dev = ReadsLimit { info: oxrok::core::DeviceInfo::default(), set_calls: 0 };
-        let e = maybe_config_set(&mut dev, &Key::LimitSamples, 5).unwrap_err();
-        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
-        let e = maybe_config_set(&mut dev, &Key::LimitFrames, 5).unwrap_err();
-        assert!(matches!(&e, Error::NotSupported(_)), "{e}");
-        assert_eq!(dev.set_calls, 0);
-    }
 
     #[test]
     fn a_driver_that_ends_captures_itself_starts_with_output_or_trigger() {
