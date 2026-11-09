@@ -1093,6 +1093,52 @@ returns `NoUsb`, and `oxrok-emu serve MODEL --sysfs DIR` builds the tree in
   emptied. A carrier held up longer than a sample period lets a read see the old
   value again.
 
+### A program as the model
+
+Some drivers reach their device through a program they run, not a bus:
+`asix-omega-rtm-cli` runs ASIX's `omegartmcli` and reads its stdout. The model
+then stands in for the program, at the boundary the driver touches: the
+arguments, the three standard streams and the exit. A model module exports
+`pub const STANDIN: &str` (the program's name) and
+`pub fn standin(args: &[OsString]) -> u8`; `oxrok-emu` run under that name (a
+link to it) is the program (`build.rs` makes the dispatch, as for `build_tcp`).
+It stays Rust in the one binary, so `emu-remote.sh` and CI carry it as they carry
+the server.
+
+The scenario sets `EMU_STANDIN=NAME` (several, space separated), with
+`EMU_TCP=only` for a server that attaches nothing:
+
+- The harness links each NAME to `oxrok-emu` in `EMU_STANDIN_DIR` and puts that
+  first on both tools' `PATH`, so a driver that runs the program by name finds
+  the stand-in. A case that names it by path uses `$EMU_STANDIN_DIR/NAME`.
+- Each tool's run gets a fresh `EMU_STANDIN_LOG`. The stand-in appends its
+  transaction lines there (`exec ARGV stdin=pipe stdout=pipe stderr=null`,
+  `stdin closed`, `exit 1`, `! violation: ...`, each written in one `write`),
+  and those lines end that run's `.tx`, after the server's section. Its
+  violations fail the case and are not counted against the server's log.
+- The stand-in holds a shared lock on the file while it runs. After each run the
+  harness waits up to 2 s for every stand-in to end, then copies the file; one
+  still running gets `standin: still running 2 s after the tool ended`, which is
+  how a program the tool left behind shows. A `timeout` that ends sigrok-cli
+  sends its signal to its process group, which ends a stand-in still in it; oxrok
+  starts the program in a group of its own, so there the stand-in ends only by
+  oxrok's close.
+- An `LD_PRELOAD` given to one tool (the oracle's shims, sigrok-cli only) would
+  reach the stand-in too: the stand-in runs itself again without it.
+- Options go in the environment, as the tool, not the server, starts the
+  stand-in: `emu_standin KEY=VALUE...` sets `EMU_STANDIN_OPTIONS` for the cases
+  that follow, and `emu_standin` alone clears it. The stand-in checks them when it
+  runs and logs a violation for one it lacks. A case that needs a variable of the
+  driver's own (`OMEGARTMCLI`) exports and unsets it around the `emu_case`.
+- An event at a point of the program's stream: the stand-in connects to the
+  server's socket (`EMU_TCP_PORT`) at the point and the model's `connected`
+  marks it, so `--interrupt tcp-model` works as for a TCP model; the case's
+  `.tx` then begins with the server's `tcp_connect`, `interrupt` and `tcp_close`.
+
+What it can't show: the real program's timing beyond what its source says, how
+wine treats the pipes, and a stand-in killed by a signal says nothing (no `exit`
+line), so a kill shows only as a missing line.
+
 ### Writing a device model
 
 Do no slow work inside a reply: the host's timeout is running, and a

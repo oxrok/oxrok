@@ -15,7 +15,8 @@
 //! table and the `build` dispatch from the `NAME`, `ABOUT` and `build`
 //! each module exports, and the `log_rules` dispatch from the modules
 //! with a line that starts `pub fn log_rules(`, and likewise the
-//! `build_tcp` and `build_sysfs` dispatches. A new model is a new
+//! `build_tcp` and `build_sysfs` dispatches, and the `standin` dispatch from
+//! those with a line that starts `pub fn standin(`. A new model is a new
 //! file and nothing else, so models written in parallel never touch a
 //! shared list.
 
@@ -139,6 +140,7 @@ fn main() {
 
     out.push_str(&build_tcp_dispatch(&models));
     out.push_str(&build_sysfs_dispatch(&models));
+    out.push_str(&standin_dispatch(&models));
 
     let dest = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("models.rs");
     // Rewritten only when it changes, so an unrelated build script run
@@ -201,6 +203,31 @@ fn build_sysfs_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String 
     out.push_str(
         "    let _ = options;\n    Err(Error::Invalid(format!(\"{name} is not a model on sysfs\")))\n}\n",
     );
+    out
+}
+
+/// The `standin` dispatch, from the modules with a line that starts
+/// `pub fn standin(`: a program a driver runs, which `oxrok-emu` stands in for
+/// when it is run under the module's `STANDIN` name.
+fn standin_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "\n/// The stand-in for the program `name`, which `oxrok-emu` runs as when run\n\
+         /// under that name: it takes the arguments, `argv[0]` first, and returns the\n\
+         /// exit status.\n\
+         pub fn standin(name: &str) -> Option<fn(&[std::ffi::OsString]) -> u8> {\n",
+    );
+    for (id, (_, path)) in models {
+        let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if source.lines().any(|l| l.starts_with("pub fn standin(")) {
+            writeln!(
+                out,
+                "    if name == {id}::STANDIN {{\n        return Some({id}::standin);\n    }}"
+            )
+            .unwrap();
+        }
+    }
+    out.push_str("    let _ = name;\n    None\n}\n");
     out
 }
 

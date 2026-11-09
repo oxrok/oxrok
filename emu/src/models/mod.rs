@@ -18,7 +18,11 @@
 //! - optionally `pub fn build_tcp(options)`, the same device on a socket
 //!   (`shells::tcp`), for `oxrok-emu serve --tcp`;
 //! - optionally `pub fn build_sysfs(options)`, the same device as a tree of
-//!   files (`shells::sysfs`), for `oxrok-emu serve --sysfs`.
+//!   files (`shells::sysfs`), for `oxrok-emu serve --sysfs`;
+//! - optionally `pub const STANDIN: &str` and
+//!   `pub fn standin(args: &[OsString]) -> u8`, for a device a driver
+//!   reaches through a program it runs: `oxrok-emu` run under the name
+//!   `STANDIN` (a link to it) is that program ([`standin`]).
 
 use crate::model::DeviceModel;
 use crate::{Error, Result};

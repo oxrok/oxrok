@@ -1,0 +1,17 @@
+gcov asix-omega-rtm-cli (libsigrok libsigrok-unreleased-1848-g0bc24877): executable lines reached
+  api.c        90.3%  158 of 175
+  protocol.c   85.2%  132 of 155
+  total        87.9%  290 of 330
+never reached, by function (line ranges hold no reached line):
+  api.c
+    scan: 150-152
+    config_get: 290, 305-306
+    config_set: 320, 327-328
+    config_list: 342, 348-349
+    dev_acquisition_start: 379, 388, 394
+    dev_acquisition_stop: 418, 427
+  protocol.c
+    omega_rtm_cli_open: 47, 50, 53-54, 74-76, 79, 81-82, 100
+    omega_rtm_cli_close: 130, 133
+    omega_rtm_cli_process_rawdata: 191, 221, 235, 241
+    omega_rtm_cli_receive_data: 293, 296, 305, 309, 315-316

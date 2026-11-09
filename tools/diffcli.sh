@@ -135,6 +135,18 @@
 # mount namespace of the tool's own. A session whose EMU_WRAP cannot run true
 # fails at its start, saying why.
 #
+# A scenario that sets EMU_STANDIN="NAME..." is a model a driver reaches through
+# a program it runs, not a device: oxrok-emu run under NAME is the model's
+# stand-in for that program (docs/USB.md, "A program as the model"). The links
+# are made in EMU_STANDIN_DIR, which goes first on PATH for both tools, and each
+# tool's run gets a fresh file in EMU_STANDIN_LOG that the stand-ins append their
+# transaction lines to; those lines end the run's transactions, after the
+# server's (usually none, with EMU_TCP=only). A stand-in holds a shared lock on
+# the file while it runs: after each run the harness waits up to 2 s for it, and a
+# stand-in still running then gets the line `standin: still running 2 s after the
+# tool ended`. The stand-in's options go in EMU_STANDIN_OPTIONS (emu_standin), as
+# the tool, not the server, starts it.
+#
 # A scenario that sets EMU_TX_FOLD=1 folds each run of two or more
 # consecutive transactions of the same shape (the same line once the
 # one @LEN:SHA256 payload digest in it is set aside: direction,
@@ -507,6 +519,14 @@ if [ $emu = 1 ]; then
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
     EMULOG=${EMULOG:-$TMP}
     mkdir -p "$EMULOG"
+    # EMU_STANDIN: the links that make oxrok-emu a model's stand-in program,
+    # in a directory the tools find first on PATH (see the head of this file).
+    EMU_STANDIN_DIR=$TMP/standin
+    case "$EMU" in
+        */*) EMU_ABS=$(cd "$(dirname "$EMU")" && pwd)/$(basename "$EMU") ;;
+        *) EMU_ABS=$(command -v "$EMU") || EMU_ABS=$EMU ;;
+    esac
+    export EMU_STANDIN_DIR
     emu_fail() { fail=$((fail + 1)); echo "FAIL $*"; }
     EMU_DRY=0
     # The drivers oxrok has: a case of one of them runs under both tools.
@@ -714,6 +734,11 @@ if [ $emu = 1 ]; then
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
     }
     emu_start() {
+        rm -rf "$EMU_STANDIN_DIR"
+        if [ -n "$EMU_STANDIN" ]; then
+            mkdir -p "$EMU_STANDIN_DIR" || return 1
+            for n in $EMU_STANDIN; do ln -s "$EMU_ABS" "$EMU_STANDIN_DIR/$n" || return 1; done
+        fi
         [ "$EMU_CDC" != 1 ] || emu_cdc_quiet
         [ "$EMU_TMC" != 1 ] || emu_tmc_quiet
         : >"$TMP/emu.out"; : >"$TMP/emu.err"
@@ -901,6 +926,24 @@ if [ $emu = 1 ]; then
         set -- options "$@"
         emu_cmd "$*" >/dev/null || emu_fail "$EMU_MODEL: the emulator refused '$*'"
         emu_conns
+    }
+    # emu_standin [KEY=VALUE...], in a scenario with EMU_STANDIN: the stand-in's
+    # options for the cases that follow, none for its defaults. The stand-in
+    # checks them when it runs, and logs a violation for one it lacks.
+    emu_standin() {
+        EMU_STANDIN_OPTIONS="$*"
+        export EMU_STANDIN_OPTIONS
+    }
+    # EMU_STANDIN, after tool T's run: its stand-ins' lines, once they have
+    # ended, or 2 s on with a line that one has not. A copy, as one left
+    # running would write on into the file.
+    emu_standin_done() {
+        [ -n "$EMU_STANDIN" ] || return 0
+        if ! flock -w 2 -x "$TMP/standin.$1" true 8<&-; then
+            echo "standin: still running 2 s after the tool ended" >>"$TMP/standin.$1"
+        fi
+        cp "$TMP/standin.$1" "$TMP/standin.$1.done"
+        rm -f "$TMP/standin.$1"
     }
     # emu_hex TEXT: TEXT as hex, printf's backslash escapes included, for a
     # model's option: an option's value can hold no space.
@@ -1412,6 +1455,11 @@ EOF
                 rm -f "$TMP/rec.usb" "$TMP/rec.hid"
                 set -- env OXROK_USB_RECORD="$TMP/rec.usb" OXROK_HID_RECORD="$TMP/rec.hid" "$@"
             fi
+            if [ -n "$EMU_STANDIN" ]; then
+                rm -f "$TMP/standin.$t" "$TMP/standin.$t.done"
+                : >"$TMP/standin.$t"
+                set -- env PATH="$EMU_STANDIN_DIR:$PATH" EMU_STANDIN_LOG="$TMP/standin.$t" "$@"
+            fi
             # stdin is /dev/null, whatever the harness was launched with,
             # as sigrok-cli stops a capture at any key or at EOF. A case
             # that interrupts it gets a FIFO that stays quiet instead, or
@@ -1487,6 +1535,7 @@ EOF
             if ! emu_cmd sync >/dev/null; then
                 emu_fail "$name: the emulator did not answer"; return
             fi
+            emu_standin_done $t
             case "$event" in
                 unplug*)
                     if ! emu_replug; then emu_fail "$name: the emulator did not replug the device"; return; fi ;;
@@ -1499,7 +1548,13 @@ EOF
             tname=$(emu_tname $t)
             emu_tx "$t $name" >"$TMP/$t.tx"
             v=$(grep -c '^!' "$TMP/$t.tx")
+            # The session's count is the server log's; a stand-in's violations
+            # are the case's alone.
             emu_case_v=$((emu_case_v + v))
+            if [ -n "$EMU_STANDIN" ]; then
+                cat "$TMP/standin.$t.done" >>"$TMP/$t.tx"
+                v=$(grep -c '^!' "$TMP/$t.tx")
+            fi
             if [ "$EMU_CDC" = 1 ]; then
                 emu_tx_tty "$t" <"$TMP/$t.tx" >"$TMP/$t.n" && mv "$TMP/$t.n" "$TMP/$t.tx"
             fi
@@ -1858,7 +1913,7 @@ EOF
     found=""
     for f in "$TOOLS"/emu/*.sh; do
         [ -f "$f" ] || continue
-        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""
+        EMU_MODEL=""; EMU_OPTIONS=""; EMU_DRIVER=""; EMU_GCOV=""; EMU_GCOV_SHARED=""; EMU_FULL=""; EMU_TX_FOLD=""; EMU_CDC=""; EMU_TMC=""; EMU_TCP=""; EMU_TCP_PORT=""; EMU_ORACLE_USB_FLOOR_MS=""; EMU_SYSFS=""; EMU_WRAP=""; EMU_STANDIN=""; unset EMU_STANDIN_OPTIONS
         emu_cases() { emu_fail "$f: no emu_cases function"; }
         emu_conns() { :; }
         . "$f"

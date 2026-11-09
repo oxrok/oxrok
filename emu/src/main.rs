@@ -32,6 +32,10 @@
 //! arms `mark interrupt` for an interrupt of the tool under test, which
 //! it delivers itself.
 //!
+//! Run under a model's `STANDIN` name (a link to this binary), `oxrok-emu` is
+//! that model's stand-in for a program a driver runs, and takes that program's
+//! arguments (`docs/USB.md`, "A program as the model").
+//!
 //! With `--tcp ADDRESS` the model is served on a socket too (`shells::tcp`): its
 //! port is on a line `TCP port=N` on standard output, before anything else, and
 //! without `--attach` a `READY` line with no device follows it.
@@ -144,6 +148,16 @@ const BUSNUM: u32 = 0x6f78;
 const DEFAULT_LOCK: &str = "/tmp/oxrok-emu.lock";
 
 fn main() -> ExitCode {
+    // Run under a model's STANDIN name (a link to this binary), it is that
+    // program, and takes that program's arguments.
+    let mut args = std::env::args_os();
+    if let Some(argv0) = args.next()
+        && let Some(name) = Path::new(&argv0).file_name().and_then(|n| n.to_str())
+        && let Some(standin) = models::standin(name)
+    {
+        let all: Vec<_> = std::iter::once(argv0).chain(args).collect();
+        return ExitCode::from(standin(&all));
+    }
     let cli = Cli::parse();
     let outcome = match cli.command {
         Command::List => {
