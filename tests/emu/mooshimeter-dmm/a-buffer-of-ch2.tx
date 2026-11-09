@@ -62,18 +62,14 @@ att_write 0012 128a00 -> ok
 att_notify 0015 280a00
 att_write 0012 138b02 -> ok
 att_notify 0015 290b02
-att_notify 0015 2a190000803e236000abaa1aacaa1aabaa1aacaa
-att_notify 0015 2b1aabaa1aacaa1aabaa1aacaa1aabaa1aacaa1a
-att_notify 0015 2cabaa1aacaa1aabaa1aacaa1aabaa1aacaa1aab
-att_notify 0015 2daa1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa
-att_notify 0015 2e1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa1a
-att_notify 0015 2facaa1aabaa1aacaa1a2700004840
-att_notify 0015 3019000000be23600022221a23221a22221a2322
-att_notify 0015 311a22221a23221a22221a23221a22221a23221a
-att_notify 0015 3222221a23221a22221a23221a22221a23221a22
-att_notify 0015 33221a23221a22221a23221a22221a23221a2222
-att_notify 0015 341a23221a22221a23221a22221a23221a22221a
-att_notify 0015 3523221a22221a23221a270000c4bf
-att_write 0012 148b00 -> ok
-att_notify 0015 360b00
+att_write 0012 1425 -> ok
+att_notify 0015 2a250000f036
+att_notify 0015 2b190000803e236000abaa1aacaa1aabaa1aacaa
+att_notify 0015 2c1aabaa1aacaa1aabaa1aacaa1aabaa1aacaa1a
+att_notify 0015 2dabaa1aacaa1aabaa1aacaa1aabaa1aacaa1aab
+att_notify 0015 2eaa1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa
+att_notify 0015 2f1aacaa1aabaa1aacaa1aabaa1aacaa1aabaa1a
+att_notify 0015 30acaa1aabaa1aacaa1a2700004840
+att_write 0012 158b00 -> ok
+att_notify 0015 310b00
 ble_disconnect host 13

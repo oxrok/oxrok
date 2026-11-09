@@ -64,6 +64,7 @@
 //! into Python, and `spawn`, which marks inherited descriptors close-on-exec
 //! by their numbers before a driver starts a program.
 
+pub mod bt;
 pub mod core;
 pub mod decode;
 pub mod decoders;
@@ -140,6 +141,7 @@ pub mod drivers {
     pub mod maynuo_m97;
     pub mod mic_985xx;
     pub mod microchip_pickit2;
+    pub mod mooshimeter_dmm;
     pub mod motech_lps_30x;
     pub mod norma_dmm;
     pub mod ols;
@@ -214,6 +216,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::rdtech_dps::RdtechDpsDriver));
     registry.register(Box::new(drivers::rdtech_dps::RdtechRdDriver));
     registry.register(Box::new(drivers::maynuo_m97::MaynuoM97Driver));
+    registry.register(Box::new(drivers::mooshimeter_dmm::MooshimeterDriver));
     registry.register(Box::new(drivers::norma_dmm::NormaDmmDriver));
     registry.register(Box::new(drivers::norma_dmm::SiemensB102xDriver));
     registry.register(Box::new(drivers::rigol_dg::RigolDgDriver));

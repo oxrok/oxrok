@@ -48,8 +48,4 @@ att_write 0012 0b9f00 -> ok
 att_notify 0015 211f00
 att_write 0012 0ca000 -> ok
 att_notify 0015 222000
-att_write 0012 0d9600 -> ok
-att_notify 0015 231600
-att_write 0012 0e9700 -> ok
-att_notify 0015 241700
 ble_disconnect host 13

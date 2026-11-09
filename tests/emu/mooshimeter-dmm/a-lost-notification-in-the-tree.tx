@@ -23,4 +23,4 @@ att_notify 0015 1393098fe65b74892f16c9bbb97dc49d4d6cae2d
 att_notify 0015 14a4784b365fd9f18b47a6246507cca1487b7265
 att_notify 0015 15ad650207aa0e74c0f30b1ef8f2858f433e6a5e
 att_notify 0015 16c5d3ab625db17b4b5c7f79f80de9089015
-ble_disconnect device 13
+ble_disconnect host 13
