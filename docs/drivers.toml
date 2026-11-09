@@ -1260,17 +1260,25 @@ limits = [
 [drivers.hp-3478a]
 name = "HP 3478A"
 libsigrok = "hp-3478a"
-ids = []
+ids = ["hp-3478a"]
 kind = "meter"
-connection = "tcp"
+connection = "gpib"
 vendor = "HP"
 models = ["3478A"]
-status = ["not-ported"]
-emu = []
+status = ["emulated"]
+emu = ["hp-3478a"]
 evidence = []
-reason = "GPIB only; the only instrument with no other port. Needs the GPIB work first, and is not in the oracle build for want of libgpib."
-behaviour = []
-limits = []
+behaviour = [
+  "A multimeter on HP-IB through Linux's gpib subsystem: `conn=gpib/MINOR/PAD`, the board brought online beforehand; nothing is probed without `conn=`.",
+  "`measured_quantity`, `range` and `digits` read the meter's binary status, and a setting goes out only when the status says it changes something.",
+  "A capture polls the meter every 100 ms by serial poll and takes a reading when one is ready, labelled with the range and digits the status gives.",
+  "An overload reads as infinity; a reading or status not in the meter's form fails the capture.",
+]
+limits = [
+  "Linux only, and only with the kernel's gpib modules (6.13 and later); `libgpib/NAME` from gpib.conf is not read.",
+  "A meter with no reading ready fails a capture after 30 s, or warns at 30 s and fails at 10 minutes once it has given one.",
+  "Emulated only: no real 3478A or adapter has been tried.",
+]
 
 [drivers.hp-59306a]
 name = "HP 59306A"

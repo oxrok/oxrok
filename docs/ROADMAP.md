@@ -1,8 +1,8 @@
 # Roadmap
 
 Status: 2026-11-08. `v0.2.0` is the current stable release, on GitHub and
-crates.io. 84 of libsigrok's 87 `src/hardware` drivers are
-ported; the 3 still missing are listed below. Native decoder porting is
+crates.io. 85 of libsigrok's 87 `src/hardware` drivers are
+ported; the 2 still missing are listed below. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is driver ports, packaging, the Pico backend, and
@@ -13,25 +13,10 @@ is in [DEVICES.md](DEVICES.md) and the decoder checklist in
 
 ## Driver ports still open
 
-The 3 libsigrok drivers with no oxrok port. Each needs a device model,
+The 2 libsigrok drivers with no oxrok port. Each needs a device model,
 scenario cases and a `--hw` path like the ported ones. No USB
 logic-analyzer port remains: every one is ported, has a replay fixture,
 and needs hardware runs rather than code.
-
-### SCPI instruments (1)
-
-The `src/scpi` foundation already carries USBTMC, raw and Rigol TCP and
-serial; `rigol-ds` is emulated on it (75 cases, gcov 74.2%). The
-remaining drivers can start there.
-
-| driver | kind | notes |
-|---|---|---|
-| `hp-3478a` | meter | needs GPIB; not in the oracle (`[libgpib]`) |
-
-There is no ordering dependency except `hp-3478a`, which waits for the
-GPIB transport. `rigol-ds`'s other series (DS2000, DS1000Z, DS4000,
-MSO5000, Agilent DSO1000) also remain unverified on hardware; see
-[Open verification](#open-verification).
 
 ### Odd transports (2)
 
@@ -47,14 +32,20 @@ MSO5000, Agilent DSO1000) also remain unverified on hardware; see
 
 ### GPIB
 
-GPIB sits under the SCPI layer, so every GPIB instrument's driver logic
-can be tested over `tcp-raw` with the same SCPI model; only `hp-3478a`
-has no other port. The transport itself is open: linux-gpib is in
-`drivers/staging/gpib` (6.13 and later) with `lpvo_usb_gpib`,
-`agilent_82357a` and `ni_usb_gpib`, and a model of one of those USB
-adapters gives a real `/dev/gpib0`. `uss720` and the three GPIB modules
-load on Fedora 44 / kernel 7.2.14. CUSE and an `LD_PRELOAD` of `libgpib`
-are the fallbacks. Prologix adapters over serial are an oxrok extra.
+`hp-3478a` runs over `src/gpib` (`conn=gpib/MINOR/PAD`) on the kernel's
+`gpib` subsystem; only `ni_usb_b` is modelled. Open:
+
+- `libgpib/NAME` resources, read from `/etc/gpib.conf` as libgpib's
+  `ibfind` does.
+- `agilent_82357a` and `lpvo_usb_gpib` models.
+- Other SCPI drivers over `conn=gpib/...`: the transport is shared, but no
+  case covers one.
+- A CI runner without `ni_usb_gpib` skips the model by name with a warning
+  and runs none of its cases.
+- Waiting on SRQ (`IBWAIT`) instead of the 100 ms serial poll.
+- usbtester4 has minor 0 left configured by an early `gpib-config` with no
+  marker: take it offline by hand (or reboot).
+- Prologix adapters over serial remain an oxrok extra.
 
 ## Packaging and release
 
@@ -347,6 +338,10 @@ The models are plain Rust with no I/O for this reason; see
   wordings with `--oracle-differs` or `--no-oracle-only` cases.
 
 ## Open verification
+
+- `hp-3478a` on a real meter and adapter: the reading rate, the 4.5 and 3.5
+  digit readings, `F7`'s range code, and a real adapter's timeouts (the
+  kernel rounds them up to the adapter's next step).
 
 - `asix-omega-rtm-cli` with a real OMEGA and ASIX's `omegartmcli`, natively
   and under wine: the program's real timing, its stdin behaviour under wine,

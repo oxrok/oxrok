@@ -3774,6 +3774,36 @@ program exited 0. Silence warns at 5 s and fails at 30 s: the program writes
 every 100 ms, so longer silence is the program wedged after a USB error. A
 sample limit is exact.
 
+### HP 3478A (`hp-3478a`)
+
+A multimeter on HP-IB, reached through Linux's `gpib` subsystem (kernel 6.13
+and later): `conn=gpib/MINOR/PAD`, for example `gpib/0/23`; nothing is
+probed without `conn=`. The board must be online first (`gpib_config`; on a
+tester, `oxrok-emu gpib-config`, which takes a free board and gives it back).
+libsigrok's `libgpib/NAME` names from `gpib.conf` are refused with a hint.
+`measured_quantity`, `range` and `digits` read the meter's binary status, and
+a setting goes out only when the status says it changes something. A capture
+polls the meter every 100 ms by serial poll and takes a reading when one is
+ready, labelled with the range and digits the status gives; an overload is
+infinity. Each read clears the board's end-of-string mode first, as libgpib
+does, so a board left in one doesn't cut a binary status.
+
+Differences from libsigrok: a short or malformed status, or a reading not in
+the meter's 11-character form (operating manual, output format), fails the
+capture; a meter with no reading ready fails after 30 s, or warns at 30 s and
+fails at 10 minutes after a first reading; a time limit ends a capture with
+no reading; `digits` takes 3.5, 4.5 and 5.5 only; a failed `T1` or status at
+the start fails it; settings, gets and the range list are refused during a
+capture. Extended ohms (`F7`) take any range code, which is inferred.
+
+Emulated by model `hp-3478a`, the meter behind an NI GPIB-USB-HS that the
+kernel's own `ni_usb_gpib` drives: 66 `--no-oracle-only` cases on
+2026-11-09. The oracle has no libgpib, so there is no comparison with
+sigrok-cli and no gcov; the goldens were checked against the C source, HP's
+manual and quick reference, and linux-gpib's userspace. The `.tx` goldens
+pin how `ni_usb_gpib` drives the adapter. A kernel without `ni_usb_gpib`
+skips the model by name with a warning. Never run on hardware.
+
 ## Oracle
 
 The oracle is libsigrok 0bc24877 with four patches, in
