@@ -15,7 +15,7 @@
 //! table and the `build` dispatch from the `NAME`, `ABOUT` and `build`
 //! each module exports, and the `log_rules` dispatch from the modules
 //! with a line that starts `pub fn log_rules(`, and likewise the
-//! `build_tcp` and `build_sysfs` dispatches, and the `standin` dispatch from
+//! `build_tcp`, `build_sysfs` and `build_ble` dispatches, and the `standin` dispatch from
 //! those with a line that starts `pub fn standin(`. A new model is a new
 //! file and nothing else, so models written in parallel never touch a
 //! shared list.
@@ -140,6 +140,7 @@ fn main() {
 
     out.push_str(&build_tcp_dispatch(&models));
     out.push_str(&build_sysfs_dispatch(&models));
+    out.push_str(&build_ble_dispatch(&models));
     out.push_str(&standin_dispatch(&models));
 
     let dest = Path::new(&env::var("OUT_DIR").expect("OUT_DIR")).join("models.rs");
@@ -228,6 +229,34 @@ fn standin_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
         }
     }
     out.push_str("    let _ = name;\n    None\n}\n");
+    out
+}
+
+/// The `build_ble` dispatch, from the modules with a line that starts
+/// `pub fn build_ble(`.
+fn build_ble_dispatch(models: &BTreeMap<String, (String, PathBuf)>) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "\n/// The model `name` as a Bluetooth LE peripheral, built with `options`.\n\
+         ///\n\
+         /// # Errors\n\
+         ///\n\
+         /// When the model has no `build_ble`, or it rejects an option.\n\
+         pub fn build_ble(\n    name: &str,\n    options: &[(String, String)],\n) -> Result<Box<dyn crate::shells::ble::Peripheral>> {\n",
+    );
+    for (id, (_, path)) in models {
+        let source = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        if source.lines().any(|l| l.starts_with("pub fn build_ble(")) {
+            writeln!(
+                out,
+                "    if name == {id}::NAME {{\n        return {id}::build_ble(options);\n    }}"
+            )
+            .unwrap();
+        }
+    }
+    out.push_str(
+        "    let _ = options;\n    Err(Error::Invalid(format!(\"{name} is not a Bluetooth LE model\")))\n}\n",
+    );
     out
 }
 

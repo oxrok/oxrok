@@ -20,11 +20,16 @@ ctrlc = { version = "3", features = ["termination"] }
 serde_json = "1"
 sha2 = "0.10"
 vusb = "0.2.1"
+# The Mooshimeter's zlib compressed config tree (models/mooshimeter-dmm.rs);
+# oxrok's own flate2, so nothing new is built.
+flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# One ioctl, HCIDEVUP, in main.rs for the --ble controller; already in the tree.
+libc = "0.2"
 # The sysfs carrier's inotify and poll (shells/sysfs.rs), safe wrappers, as
 # the library forbids unsafe code; and the binary's gpib-config, whose ioctls on
 # /dev/gpibN are its only unsafe calls (src/gpib_config.rs).
-[target.'cfg(target_os = "linux")'.dependencies]
 rustix = { version = "1.1", features = ["event", "fs"] }
 
 [lints]
