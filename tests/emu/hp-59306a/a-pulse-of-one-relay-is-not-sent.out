@@ -1,1 +1,1 @@
-oxrok: warn: oxrok::cli::parse: -c channel_group=R1:enabled=on is not sent, as the later -c channel_group=R1:enabled=off counts. A pulse takes two runs.
+oxrok: warn: oxrok::setup::configs: -c channel_group=R1:enabled=on is not sent, as the later -c channel_group=R1:enabled=off counts. A pulse takes two runs.
