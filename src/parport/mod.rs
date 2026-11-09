@@ -56,6 +56,12 @@ pub const MODE_TRISTATE: u32 = 1 << 1;
 /// write (seen in the emulator: `PPDATADIR` then `PPWCONTROL` sent `0x11`
 /// for `0x31`). A USB round trip is a few ms; 20 ms covers three under
 /// load. libieee1284 does not wait, and can meet the same race.
+///
+/// A waited read after the claim (`PPRSTATUS`) would be an exact barrier,
+/// as the control endpoint completes in order, but it is a request
+/// libieee1284 does not send: the cable would see other transactions than
+/// under sigrok, and the emulator compares them. So the claim sleeps, and
+/// the emulator's oracle sleeps as long (`tools/oracle-ppclaim-settle.c`).
 pub const CLAIM_SETTLE: std::time::Duration = std::time::Duration::from_millis(20);
 
 /// What a port can do, from its modes, as libieee1284's capabilities
@@ -83,6 +89,12 @@ pub struct PortInfo {
     pub name: String,
     /// Its device node.
     pub device: PathBuf,
+}
+
+/// The PC control register `PPWCONTROL` takes for libieee1284's control
+/// bits: the low four, with nStrobe, nAutoFd and nSelectIn inverted.
+pub fn pc_control(control: u8) -> u8 {
+    (control & 0x0f) ^ C1284_INVERTED
 }
 
 /// The device node of a port named `name`: `/dev/parport` and the
@@ -115,8 +127,19 @@ pub fn find_ports() -> Vec<PortInfo> {
 }
 
 /// The sysfs device behind the port's node, which a replug changes.
-fn identity(name: &str) -> Option<PathBuf> {
-    std::fs::canonicalize(format!("/sys/class/ppdev/{name}/device")).ok()
+///
+/// The device's sysfs path, and for a USB device its bus and device
+/// numbers: a cable plugged back gets the same path when it goes into the
+/// same port, and the port the same name when the kernel hands the number
+/// out again, but never the same device number.
+fn identity(name: &str) -> Option<(PathBuf, Option<String>)> {
+    let path = std::fs::canonicalize(format!("/sys/class/ppdev/{name}/device")).ok()?;
+    let read = |f: &str| std::fs::read_to_string(path.join(f)).ok().map(|v| v.trim().to_owned());
+    let usb = match (read("busnum"), read("devnum")) {
+        (Some(b), Some(d)) => Some(format!("{b}.{d}")),
+        _ => None,
+    };
+    Some((path, usb))
 }
 
 /// An open port.
@@ -124,7 +147,7 @@ fn identity(name: &str) -> Option<PathBuf> {
 pub struct Parport {
     name: String,
     file: std::fs::File,
-    identity: Option<PathBuf>,
+    identity: Option<(PathBuf, Option<String>)>,
 }
 
 impl Parport {
@@ -196,13 +219,13 @@ impl Parport {
         sys::write_data(&self.file, value)
     }
 
-    /// `ieee1284_write_control`, in libieee1284's bits.
+    /// `ieee1284_write_control`, in libieee1284's bits: see [`pc_control`].
     ///
     /// # Errors
     ///
     /// When the ioctl fails.
     pub fn write_control(&self, control: u8) -> Result<()> {
-        sys::write_control(&self.file, (control & 0x0f) ^ C1284_INVERTED)
+        sys::write_control(&self.file, pc_control(control))
     }
 
     /// `ieee1284_data_dir`: the data lines read (`reverse`) or driven.
@@ -351,6 +374,16 @@ mod tests {
         assert_eq!(device_of("parport0"), Some(PathBuf::from("/dev/parport0")));
         assert_eq!(device_of("parport12"), Some(PathBuf::from("/dev/parport12")));
         assert_eq!(device_of("lpt"), None);
+    }
+
+    #[test]
+    fn control_bits_are_inverted_as_the_pc_has_them() {
+        // libieee1284's bits, a set bit a high line, to the PC register.
+        assert_eq!(pc_control(0x0f), 0x04);
+        assert_eq!(pc_control(0x00), 0x0b);
+        assert_eq!(pc_control(C1284_NSTROBE | C1284_NAUTOFD | C1284_NSELECTIN), 0x00);
+        assert_eq!(pc_control(C1284_NINIT), 0x0f);
+        assert_eq!(pc_control(0xf1), 0x0a, "only the low four bits go");
     }
 
     #[test]

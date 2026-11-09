@@ -1156,7 +1156,7 @@ and `uss720`, binds `uss720` to the device in place of whatever took its
 printer interface (`usblp`), waits for `/dev/parportN` under the device in
 sysfs, makes it readable and writable by all, and exports its name as
 `EMU_PARPORT_NAME` (`conn=$EMU_PARPORT_NAME`); outputs say `parportN`.
-`emu_unbind` leaves `uss720` alone, as neither tool detaches it. The port's
+The scenario sets `EMU_KEEP_BOUND=uss720`, as neither tool detaches it. The port's
 number depends on what the kernel had before, so cases always use the variable.
 
 `uss720` ends a claim with a register read it does not wait for, and its
@@ -1167,7 +1167,11 @@ does not wait, and about one run in eight of the oracle met it. oxrok
 waits 20 ms after each claim (`parport::CLAIM_SETTLE`), and a scenario
 that sets `EMU_ORACLE_PPCLAIM_SETTLE_MS=N` gives sigrok-cli and the
 libsigrok runner a preload that sleeps N ms after each successful
-`PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else.
+`PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else;
+if it does not compile, such a session fails outside `--no-oracle`. A
+waited read after the claim would be an exact barrier, but it is a
+request libieee1284 does not send, so the two tools' transactions would
+differ.
 
 The kernel (7.2.14) keeps a detached cable's port number: each session's
 port is the next one, and from `parport8` on libieee1284 finds no `ppdev`

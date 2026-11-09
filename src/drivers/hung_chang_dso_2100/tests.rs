@@ -43,6 +43,11 @@ struct Scope {
     released: bool,
     /// Port operations, for counting.
     ops: usize,
+    /// `read_mbox`es after a trigger whose mailbox reads 0: the fill.
+    fill: u32,
+    fill_left: u32,
+    /// The ADC the readout reads, by nAutoFd.
+    adc: u8,
 }
 
 /// The chain's states from `0x0f`, as the firmware's comment orders them.
@@ -50,8 +55,10 @@ const CHAIN: [u8; 16] = [
     0x0f, 0x0f, 0x05, 0x08, 0x09, 0x06, 0x07, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x10, 0x11, 0x12, 0x13,
 ];
 
-fn sample(i: usize) -> u8 {
-    (i % 200) as u8 + 28
+/// Sample `i` of a readout of ADC `adc`: the two ADCs never agree, so a
+/// sample put in the other's place shows.
+fn sample(adc: u8, i: usize) -> u8 {
+    if adc == 2 { (i % 100) as u8 + 150 } else { (i % 100) as u8 + 20 }
 }
 
 impl Scope {
@@ -87,6 +94,7 @@ impl Scope {
                 }
                 0x99 | 0xff => {
                     self.pos = 0;
+                    self.fill_left = self.fill;
                     state::EXTRACTED
                 }
                 _ => state::ARMED,
@@ -124,7 +132,9 @@ impl Scope {
         if sel && !init && afd && !stb {
             protocol::ID
         } else if sel && !init && !afd && !stb {
-            if self.late > 0 {
+            if self.fill_left > 0 {
+                0
+            } else if self.late > 0 {
                 self.late -= 1;
                 0
             } else {
@@ -132,7 +142,7 @@ impl Scope {
             }
         } else if !sel && !init && !stb {
             match self.pos {
-                p if p < READOUT => sample(p),
+                p if p < READOUT => sample(self.adc, p),
                 p if p < READOUT + 2 => SIGNATURE[p - READOUT],
                 p if p == READOUT + 2 => {
                     if self.bad_sigs > 0 {
@@ -190,6 +200,16 @@ impl Port for FakePort {
         let sel = control & C1284_NSELECTIN != 0;
         let init = control & C1284_NINIT != 0;
         let afd = control & C1284_NAUTOFD != 0;
+        // A read_mbox ends as nStrobe rises out of the mailbox read lines.
+        let reading = |c: u8| {
+            c & C1284_NSELECTIN != 0 && c & (C1284_NINIT | C1284_NAUTOFD | C1284_NSTROBE) == 0
+        };
+        if reading(before) && rose && s.fill_left > 0 {
+            s.fill_left -= 1;
+        }
+        if !sel && !init {
+            s.adc = if afd { 2 } else { 1 };
+        }
         if fell && sel && init && !afd {
             assert!(!s.reverse, "mailbox strobe with the port reversed");
             let v = s.data;
@@ -227,7 +247,8 @@ impl Port for FakePort {
     }
 }
 
-const FAST: Times = Times { poll: Duration::from_millis(1), silent_polls: 50 };
+const FAST: Times =
+    Times { poll: Duration::from_millis(1), silent_polls: 50, fill_margin: Duration::ZERO };
 
 fn device(scope: Scope) -> (Dso2100, FakePort) {
     let port = FakePort::new(scope);
@@ -388,7 +409,7 @@ fn one_frame_of_a() {
     assert_eq!(p[6], Packet::End);
     let volts = samples(&p);
     assert_eq!(volts.len(), READOUT);
-    assert!((volts[0] - (f32::from(sample(0)) - 128.0) * 0.3125).abs() < 1e-6);
+    assert!((volts[0] - (f32::from(sample(1, 0)) - 128.0) * 0.3125).abs() < 1e-6);
     let s = port.scope();
     assert_eq!(s.readouts, [1]);
     // Commit (4, 0xff, the chain), arm, three polls, back to idle.
@@ -424,8 +445,81 @@ fn interleaved_steps_read_both_adcs() {
     d.set(&Key::Buffersize, &Value::U64(5998), None).unwrap();
     let p = capture(&mut d);
     assert!(failed(&p).is_none(), "{:?}", failed(&p));
-    assert_eq!(samples(&p).len(), 5998);
+    let volts = samples(&p);
+    assert_eq!(volts.len(), 5998);
     assert_eq!(port.scope().readouts, [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2]);
+    // The interleaved step reads 499 of each ADC after skipping 501: the
+    // first ADC's on even places, the second's on odd ones.
+    let count = |v: f32| (v / 0.3125 + 128.0).round() as u8;
+    for j in 0..499 {
+        assert_eq!(count(volts[5000 + 2 * j]), sample(1, 501 + j), "ADC 1 at {j}");
+        assert_eq!(count(volts[5001 + 2 * j]), sample(2, 501 + j), "ADC 2 at {j}");
+    }
+}
+
+#[test]
+fn channel_b_reads_the_second_adc_in_plain_steps_only() {
+    let (mut d, port) = device(Scope::new());
+    d.enable_channel(1, true).unwrap();
+    d.set(&Key::Buffersize, &Value::U64(5998), None).unwrap();
+    let p = capture(&mut d);
+    assert!(failed(&p).is_none(), "{:?}", failed(&p));
+    // Channel 2 picks the second ADC in the plain steps; the interleaved
+    // one reads the first and then the second, whatever the channel.
+    assert_eq!(port.scope().readouts, [2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 2]);
+}
+
+#[test]
+fn the_silent_bound_scales_with_the_rate() {
+    assert_eq!(TIMES.silent_bound(100_000_000), 600);
+    assert_eq!(TIMES.silent_bound(2_000), 1405);
+    assert_eq!(TIMES.silent_bound(20), 128_125);
+    assert_eq!(FAST.silent_bound(100_000_000), 50);
+}
+
+#[test]
+fn a_fill_under_the_bound_in_each_frame_is_waited_for() {
+    // 35 silent polls a frame, 70 in two: the count starts again at the
+    // frame's state, so the bound of 50 holds each.
+    let (mut d, port) = device(Scope { fill: 35, ..Scope::new() });
+    d.enable_channel(0, true).unwrap();
+    d.set(&Key::LimitFrames, &Value::U64(2), None).unwrap();
+    let p = capture(&mut d);
+    assert!(failed(&p).is_none(), "{:?}", failed(&p));
+    assert_eq!(port.scope().readouts.len(), 2);
+    let (mut d, _port) = device(Scope { fill: 60, ..Scope::new() });
+    d.enable_channel(0, true).unwrap();
+    let p = capture(&mut d);
+    assert_eq!(failed(&p), Some("device error: No answer from the DSO-2100 in 50 trigger polls."));
+}
+
+#[test]
+fn a_port_gone_while_armed_fails_at_once() {
+    let (mut d, port) = device(Scope { misses: u32::MAX, ..Scope::new() });
+    d.enable_channel(0, true).unwrap();
+    let (tx, rx) = sync_channel(64);
+    d.start(PacketSink::new(tx, 0)).unwrap();
+    wait_polls(&port, 2);
+    let t = Instant::now();
+    port.scope().gone = true;
+    let p = collect(&rx);
+    assert_eq!(failed(&p), Some("device disconnected"));
+    assert!(t.elapsed() < Duration::from_secs(2), "no waits on a dead port");
+}
+
+#[test]
+fn vdivs_match_by_value_without_overflow() {
+    assert_eq!(vdiv_index(1, 100), Some(0));
+    assert_eq!(vdiv_index(10, 1000), Some(0));
+    assert_eq!(vdiv_index(1, 1), Some(6));
+    // The CLI's parser makes 1000mV 1/1: taken, where C refuses (1000,1000).
+    assert_eq!(vdiv_index(1000, 1000), Some(6));
+    // The parser takes 0.5V as 1/2, 500 mV, where C's strtoull refuses it.
+    assert_eq!(vdiv_index(1, 2), Some(5));
+    assert_eq!(vdiv_index(3, 10), None, "300 mV is no step");
+    assert_eq!(vdiv_index(922_337_203_685_477_581, 1), None);
+    assert_eq!(vdiv_index(u64::MAX, u64::MAX), Some(6));
+    assert_eq!(vdiv_index(u64::MAX, 1), None);
 }
 
 #[test]

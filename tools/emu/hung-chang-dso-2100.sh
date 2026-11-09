@@ -28,6 +28,8 @@ EMU_DRIVER=hung-chang-dso-2100
 # oxrok has the driver: its cases must run full.
 EMU_FULL=hung-chang-dso-2100
 EMU_PARPORT=1
+# uss720 is the cable's driver for both tools: emu_unbind leaves it bound.
+EMU_KEEP_BOUND=uss720
 # uss720's claim ends with a register read it does not wait for, whose late
 # answer can undo libieee1284's PPDATADIR right after it: about one run in
 # eight lost the direction bit (DCR 0x12 for 0x32) and read the latch. The

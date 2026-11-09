@@ -27,12 +27,16 @@
 //!
 //! The microcontroller answers its mailbox at once (C waits 0.25 ms for
 //! the trigger poll's answer and 100 ms in `move_to`); a scope waiting for
-//! its trigger answers "armed", which is not silence. So 600 trigger polls
-//! in a row whose mailbox reads 0, 8 ms apart and so at least 4.8 s, end
-//! the capture ("No answer from the DSO-2100 in 600 trigger polls."),
-//! whether or not a frame came; C reads on for ever. The bound counts polls
-//! rather than time, so the transactions of a silent scope are the same
-//! from one run to the next.
+//! its trigger answers "armed", which is not silence. After the trigger
+//! the mailbox reads 0 while the scope fills its buffer past it, about
+//! 10240 samples, which takes 5.1 s at 2 kHz and 512 s at 20 Hz. So the
+//! trigger polls in a row whose mailbox reads 0 end the capture at
+//! whichever is more of 600 (8 ms apart, at least 4.8 s) and what twice
+//! that fill and a second take at the rate, in 8 ms polls ("No answer from
+//! the DSO-2100 in N trigger polls."), whether or not a frame came; C reads
+//! on for ever. A known state starts the count again, so each frame has
+//! the whole bound. The bound counts polls rather than time, so the
+//! transactions of a silent scope are the same from one run to the next.
 //! A port that went away (a USB cable pulled) is seen at the first silent
 //! read: the kernel's dead port reads 0 for ever, and C waits out each of
 //! `move_to`'s 40 steps of 100 ms, or polls for ever.
@@ -157,11 +161,33 @@ const BUFFER: usize = READOUT;
 struct Times {
     /// The trigger poll's period, the session source's 8 ms.
     poll: Duration,
-    /// Trigger polls in a row whose mailbox reads 0 that end a capture.
+    /// The fewest trigger polls in a row whose mailbox reads 0 that end a
+    /// capture.
     silent_polls: u32,
+    /// The time beyond twice the fill that the bound allows.
+    fill_margin: Duration,
 }
 
-const TIMES: Times = Times { poll: Duration::from_millis(8), silent_polls: 600 };
+const TIMES: Times = Times {
+    poll: Duration::from_millis(8),
+    silent_polls: 600,
+    fill_margin: Duration::from_secs(1),
+};
+
+/// Samples the scope fills after its trigger, its buffer's 10240.
+const FILL_SAMPLES: f64 = 10_240.0;
+/// C's poll period, which the bound's count of polls is in.
+const POLL_PERIOD: f64 = 0.008;
+
+impl Times {
+    /// The silent polls that end a capture at `rate` Hz: the floor, or
+    /// twice the fill and the margin, in C's polls.
+    fn silent_bound(&self, rate: u64) -> u32 {
+        let fill = 2.0 * FILL_SAMPLES / rate.max(1) as f64 + self.fill_margin.as_secs_f64();
+        let polls = (fill / POLL_PERIOD).ceil();
+        self.silent_polls.max(polls.min(f64::from(u32::MAX)) as u32)
+    }
+}
 
 /// The driver.
 pub struct HungChangDso2100Driver;
@@ -365,6 +391,15 @@ impl Dso2100 {
     }
 }
 
+/// The index of `p/q` volts in [`VDIVS`], compared as values: the CLI's
+/// parser reduces its fractions, so 10 mV comes as 1/100. Wide enough not
+/// to overflow on any `u64` pair. C compares the pair as given, which
+/// refuses `1000mV`, and its parser refuses `0.5V`; here they are 1 V and
+/// 500 mV, as oxrok's parser makes them.
+fn vdiv_index(p: u64, q: u64) -> Option<usize> {
+    VDIVS.iter().position(|&(a, b)| u128::from(a) * u128::from(q) == u128::from(p) * u128::from(b))
+}
+
 fn not_applicable() -> Error {
     Error::not_supported("not applicable")
 }
@@ -484,7 +519,7 @@ impl Device for Dso2100 {
             (Some(ch), Key::Vdiv) => {
                 let Value::Rational(p, q) = value else { return Err(bad()) };
                 // The parser reduces its fractions: 10 mV comes as 1/100.
-                let i = VDIVS.iter().position(|(a, b)| a * q == p * b).ok_or_else(bad)?;
+                let i = vdiv_index(*p, *q).ok_or_else(bad)?;
                 c.proto.cctl[ch] = (c.proto.cctl[ch] & 0xcc) | VDIV_CODES[i];
             }
             (Some(ch), Key::Coupling) => {
@@ -720,7 +755,8 @@ impl<'a> Capture<'a> {
                     return Err(Halt::Failed(Error::Disconnected));
                 }
                 silent += 1;
-                if silent >= self.times.silent_polls {
+                if silent >= self.times.silent_bound(SAMPLERATES[usize::from(self.cfg.proto.rate)])
+                {
                     return Err(Halt::Failed(Error::device(format!(
                         "No answer from the DSO-2100 in {silent} trigger polls."
                     ))));

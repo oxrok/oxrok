@@ -168,7 +168,8 @@
 # at each attach ppdev is loaded, uss720 bound to the device in place of
 # whatever took its printer interface (usblp), the node opened to all, and
 # EMU_PARPORT_NAME set to the port's name (parportN, for conn=); the outputs
-# say parportN. emu_unbind leaves uss720 alone, as neither tool detaches it.
+# say parportN. The scenario keeps uss720 bound with EMU_KEEP_BOUND, as
+# neither tool detaches it.
 # A detached cable keeps its port number taken (seen on kernel 7.2.14), so
 # each session's port is the next one, and from parport8 on libieee1284
 # finds no ppdev (it opens /dev/parport0 to 7 only): such a session fails
@@ -191,7 +192,8 @@
 # A scenario that sets EMU_ORACLE_PPCLAIM_SETTLE_MS=N runs sigrok-cli and the
 # libsigrok runner with a sleep of N ms after each ppdev PPCLAIM
 # (tools/oracle-ppclaim-settle.c), for uss720's claim, whose unwaited read
-# can undo libieee1284's next PPDATADIR. oxrok runs as it is.
+# can undo libieee1284's next PPDATADIR. oxrok runs as it is. A preload that
+# does not compile fails such a session, outside --no-oracle.
 
 set -u
 # Another oracle's environment and build tree, for a model whose driver is
@@ -609,7 +611,9 @@ if [ $emu = 1 ]; then
     if cc -shared -fPIC -o "$TMP/ppclaim-settle.so" "$TOOLS/oracle-ppclaim-settle.c" -ldl 2>"$TMP/ppclaim-settle.err"; then
         EMU_PPCLAIM_SETTLE=$TMP/ppclaim-settle.so
     else
-        echo "note: no PPCLAIM settle for the oracle (cc failed): $(head -1 "$TMP/ppclaim-settle.err")"
+        # A scenario that needs it fails its session (emu_start), as its
+        # oracle's transactions would vary from run to run.
+        EMU_PPCLAIM_SETTLE_ERR=$(head -1 "$TMP/ppclaim-settle.err")
     fi
     # tools/oracle-header.c, for a C driver that sends no header: a scenario calls
     # emu_header_oracle in its emu_cases, and its cases from then on run sigrok-cli
@@ -822,6 +826,10 @@ if [ $emu = 1 ]; then
             export EMU_TCP_PORT
             printf 's#(tcp-[a-z]+/127[.]0[.]0[.]1/)%s([^0-9]|$)#\\1PORT\\2#g\n' "$EMU_TCP_PORT" >>"$TMP/emu.sed"
         fi
+        if [ -n "$EMU_ORACLE_PPCLAIM_SETTLE_MS" ] && [ -z "$EMU_PPCLAIM_SETTLE" ] && [ $no_oracle = 0 ]; then
+            echo "$EMU_MODEL: no PPCLAIM settle for the oracle, tools/oracle-ppclaim-settle.c did not compile: ${EMU_PPCLAIM_SETTLE_ERR:-}" >&2
+            return 1
+        fi
         if [ "$EMU_PARPORT" = 1 ] && [ -z "$EMU_PARPORT_NAME" ]; then
             return 1
         fi
@@ -979,7 +987,6 @@ if [ $emu = 1 ]; then
     }
     emu_unbind() {
         [ -n "$EMU_BUSID" ] || return 0
-        [ "$EMU_PARPORT" != 1 ] || return 0
         un_class=ff
         if [ "$EMU_TMC" = 1 ]; then
             un_class=fe
