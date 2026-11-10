@@ -26,6 +26,66 @@ fn word(sample: &[u8]) -> u64 {
     u64::from_le_bytes(w)
 }
 
+/// Samples per word when several fit: 8, 4 or 2 for 1, 2 or 4 byte
+/// samples, else 1.
+fn lanes(unit_size: usize) -> usize {
+    match unit_size {
+        1 | 2 | 4 => 8 / unit_size,
+        _ => 1,
+    }
+}
+
+/// `x` in every `unit_size` byte lane of a word.
+fn broadcast(x: u64, unit_size: usize) -> u64 {
+    (0..lanes(unit_size)).fold(0, |w, k| w | x << (k * unit_size * 8))
+}
+
+/// A stage's conditions over a block of samples, one per lane of a
+/// word: a filter that says when no sample of the block can match.
+#[derive(Clone, Copy, Debug, Default)]
+struct Block {
+    zero: u64,
+    one: u64,
+    rise: u64,
+    fall: u64,
+    change: u64,
+    /// The stage can't match at all.
+    never: bool,
+    /// The lowest and the highest bit of every lane.
+    low: u64,
+    high: u64,
+}
+
+impl Block {
+    fn new(m: [u64; 5], never: bool, unit: usize) -> Self {
+        let b = |x| broadcast(x, unit);
+        Block {
+            zero: b(m[0]),
+            one: b(m[1]),
+            rise: b(m[2]),
+            fall: b(m[3]),
+            change: b(m[4]),
+            never,
+            low: b(1),
+            high: b(1 << (unit * 8 - 1)),
+        }
+    }
+
+    /// Whether some lane of `now` may match, its previous samples in
+    /// the lanes of `prev`. A lane matches when it fails no condition,
+    /// i.e. its lane of `fail` is zero; the zero-lane test can flag a
+    /// lane above a zero one, never misses one.
+    #[inline]
+    fn may_match(&self, now: u64, prev: u64) -> bool {
+        let fail = (now & self.zero)
+            | (!now & self.one)
+            | (self.rise & (prev | !now))
+            | (self.fall & (!prev | now))
+            | (self.change & !(prev ^ now));
+        !self.never && fail.wrapping_sub(self.low) & !fail & self.high != 0
+    }
+}
+
 /// Which bits of a word a value range reads.
 #[derive(Clone, Debug)]
 enum Pick {
@@ -52,6 +112,37 @@ struct Masks {
 }
 
 impl Masks {
+    /// The block filter: the conditions, and of a range matched inside
+    /// the high bits on which its bounds agree (all of them for one
+    /// value). A consecutive count with an edge also starts over on
+    /// the edge alone, so its filter has only the edges.
+    fn block(&self, unit: usize, edges_only: bool) -> Block {
+        let (mut zero, mut one) = if edges_only { (0, 0) } else { (self.zero, self.one) };
+        if let (false, Some((pick, low, high, true))) = (edges_only, &self.range) {
+            let bits: Vec<u32> = match pick {
+                Pick::Run { shift, mask } => (0..mask.count_ones()).map(|k| shift + k).collect(),
+                Pick::Bits(bits) => bits.clone(),
+            };
+            let max = if bits.len() < 64 { (1u64 << bits.len()) - 1 } else { u64::MAX };
+            let high = (*high).min(max);
+            if *low > high {
+                return Block::new([0; 5], true, unit);
+            }
+            // Above the highest bit where the bounds differ, a value in
+            // the range has the bounds' bits.
+            let differ = 64 - (low ^ high).leading_zeros();
+            for (k, &b) in bits.iter().enumerate().skip(differ as usize) {
+                if low >> k & 1 == 1 {
+                    one |= 1 << b;
+                } else {
+                    zero |= 1 << b;
+                }
+            }
+        }
+        let never = self.edge_never || self.level_never;
+        Block::new([zero, one, self.rise, self.fall, self.change], never, unit)
+    }
+
     fn new(
         conds: &[(usize, TriggerMatch)],
         range: Option<&TriggerRange>,
@@ -134,6 +225,8 @@ struct Stage {
     range: Option<TriggerRange>,
     /// The same, for samples of at most 8 bytes.
     masks: Masks,
+    /// The block filter, for samples of 1, 2 or 4 bytes.
+    block: Block,
     has_edge: bool,
     count: u32,
     consecutive: bool,
@@ -191,14 +284,22 @@ impl SoftTrigger {
         let stages = trigger
             .stages
             .iter()
-            .map(|s| Stage {
-                conds: s.conditions.iter().map(|c| (c.channel, c.matches)).collect(),
+            .map(|s| {
+                let conds: Vec<_> = s.conditions.iter().map(|c| (c.channel, c.matches)).collect();
+                let masks = Masks::new(&conds, s.range.as_ref(), unit_size);
+                let consecutive = s.count.is_some_and(|c| c.consecutive);
+                let block = if lanes(unit_size) > 1 {
+                    masks.block(unit_size, consecutive && s.has_edge())
+                } else {
+                    Block::default()
+                };
+                (s, conds, masks, block)
+            })
+            .map(|(s, conds, masks, block)| Stage {
+                conds,
                 range: s.range.clone(),
-                masks: Masks::new(
-                    &s.conditions.iter().map(|c| (c.channel, c.matches)).collect::<Vec<_>>(),
-                    s.range.as_ref(),
-                    unit_size,
-                ),
+                masks,
+                block,
                 has_edge: s.has_edge(),
                 count: s.count.map_or(1, |c| c.count.max(1)),
                 consecutive: s.count.is_some_and(|c| c.consecutive),
@@ -366,6 +467,75 @@ impl SoftTrigger {
         }
     }
 
+    /// Whether stage `i` sees the next sample.
+    fn active(&self, i: usize) -> bool {
+        if self.combine == TriggerCombine::Sequence {
+            i == self.stage
+        } else {
+            !self.stages[i].done
+        }
+    }
+
+    /// When no sample of the block `now` (lanes) after `prev` can match
+    /// a waiting stage, applies what the block does: nothing held, no
+    /// duration running. True when it skipped the block.
+    fn skip_block(&mut self, now: u64, prev: u64) -> bool {
+        let prev = now << (self.unit_size * 8) | prev;
+        if (0..self.stages.len())
+            .any(|i| self.active(i) && self.stages[i].block.may_match(now, prev))
+        {
+            return false;
+        }
+        for i in 0..self.stages.len() {
+            if self.active(i) {
+                self.stages[i].held = false;
+                self.stages[i].run = 0;
+            }
+        }
+        true
+    }
+
+    /// After one sample `p` of a block of samples all equal to `p` went
+    /// through `advance` and left the stages where they were: whether
+    /// the other `n` change nothing but the duration runs, which they
+    /// then advance. They match as `p` did against itself: no edge, no
+    /// new event; only a duration that completes inside them needs
+    /// each sample.
+    fn skip_same(&mut self, n: u64) -> bool {
+        let reach = |st: &Stage| st.duration > 0 && st.run > 0 && st.run + n > st.duration;
+        if (0..self.stages.len()).any(|i| self.active(i) && reach(&self.stages[i])) {
+            return false;
+        }
+        for i in 0..self.stages.len() {
+            let st = &self.stages[i];
+            if self.active(i) && st.duration > 0 && st.run > 0 {
+                self.stages[i].run += n;
+            }
+        }
+        true
+    }
+
+    /// Runs the whole samples of at most 8 bytes in `data` through the
+    /// matcher one by one, after `prev`. Returns the index of the
+    /// sample that completed the trigger, or the last sample. Its own
+    /// function, with `prev` a local, so the loop is compiled on its
+    /// own whatever `feed` grows to, and carries nothing through memory.
+    #[inline(never)]
+    fn feed_words(
+        &mut self,
+        data: &[u8],
+        mut prev: Option<u64>,
+    ) -> std::result::Result<Option<u64>, usize> {
+        for (i, sample) in data.chunks_exact(self.unit_size).enumerate() {
+            let now = word(sample);
+            if self.advance(|st| st.masks.edges_and_levels(now, prev)) {
+                return Err(i);
+            }
+            prev = Some(now);
+        }
+        Ok(prev)
+    }
+
     /// Runs the samples in `data` through the matcher. Returns the
     /// index of the sample that completed the trigger, if it did here.
     /// After that, calls return `None`.
@@ -374,15 +544,62 @@ impl SoftTrigger {
             return None;
         }
         if self.unit_size <= 8 {
+            let us = self.unit_size;
+            let (n, lanes) = (data.len() / us, lanes(us));
+            let top = 64 - us * 8;
+            let ones = broadcast(1, us);
             let mut prev = self.prev_word;
-            for (i, sample) in data.chunks_exact(self.unit_size).enumerate() {
-                let now = word(sample);
-                if self.advance(|st| st.masks.edges_and_levels(now, prev)) {
-                    self.fired = true;
-                    self.prev_word = None;
-                    return Some(i);
+            let mut i = 0;
+            // Where to look at a block again after one was not skipped,
+            // later each time, so that busy data costs almost nothing.
+            let (mut next_block, mut stride) = (0, lanes);
+            while i < n {
+                // A whole block of samples after a known one: skip it
+                // when nothing in it can match, or when it repeats the
+                // previous sample.
+                if lanes > 1
+                    && i >= next_block
+                    && i + lanes <= n
+                    && let Some(p) = prev
+                {
+                    next_block = i + stride;
+                    stride = (stride * 2).min(lanes * 64);
+                    let block = word(&data[i * us..i * us + 8]);
+                    if self.skip_block(block, p) {
+                        prev = Some(block >> top);
+                        i += lanes;
+                        (next_block, stride) = (i, lanes);
+                        continue;
+                    }
+                    if block == p.wrapping_mul(ones) {
+                        let stage = self.stage;
+                        let done = self.stages.iter().filter(|s| s.done).count();
+                        if self.advance(|st| st.masks.edges_and_levels(p, Some(p))) {
+                            self.fired = true;
+                            self.prev_word = None;
+                            return Some(i);
+                        }
+                        i += 1;
+                        let moved = stage != self.stage
+                            || done != self.stages.iter().filter(|s| s.done).count();
+                        if !moved && self.skip_same(lanes as u64 - 1) {
+                            i += lanes - 1;
+                            (next_block, stride) = (i, lanes);
+                        }
+                        continue;
+                    }
                 }
-                prev = Some(now);
+                // Sample by sample up to the next block.
+                let stop = next_block.max(i + 1).min(n);
+                match self.feed_words(&data[i * us..stop * us], prev) {
+                    Ok(p) => prev = p,
+                    Err(k) => {
+                        self.fired = true;
+                        self.prev_word = None;
+                        return Some(i + k);
+                    }
+                }
+                i = stop;
             }
             self.prev_word = prev;
             return None;
@@ -455,6 +672,8 @@ pub struct SoftTriggerLogic {
     stages: Vec<Vec<(usize, TriggerMatch)>>,
     /// The same as masks, for samples of at most 8 bytes.
     masks: Option<Vec<LogicMasks>>,
+    /// The first stage's block filter, for samples of 1, 2 or 4 bytes.
+    block: Option<Block>,
     unit_size: usize,
     /// The stage being matched.
     pub cur_stage: usize,
@@ -530,9 +749,23 @@ impl SoftTriggerLogic {
         pre_trigger_samples: usize,
     ) -> Self {
         let masks = (unit_size <= 8).then(|| stages.iter().map(|s| LogicMasks::new(s)).collect());
+        // A channel beyond the sample reads low: a zero on it always
+        // holds, anything else never does.
+        let block = stages.first().filter(|s| lanes(unit_size) > 1 && !s.is_empty()).map(|s| {
+            let width = unit_size * 8;
+            let m = LogicMasks::new(s);
+            let inside = (1u64 << width) - 1;
+            let beyond = s.iter().any(|&(ch, t)| ch >= width && t != TriggerMatch::Zero);
+            Block::new(
+                [m.zero & inside, m.one, m.rise, m.fall, m.change],
+                m.never || beyond,
+                unit_size,
+            )
+        });
         SoftTriggerLogic {
             stages,
             masks,
+            block,
             unit_size,
             cur_stage: 0,
             evaluated: false,
@@ -593,18 +826,25 @@ impl SoftTriggerLogic {
         }
     }
 
-    /// `soft_trigger_logic_check()` on `buf`: the offset in samples of
-    /// the trigger point and the pre-trigger packets to send before it,
-    /// or `None` (the samples go into the pre-trigger ring).
-    pub fn check(&mut self, buf: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+    /// The loop of `soft_trigger_logic_check()` over `buf` from byte
+    /// `i` (a sample boundary) to `stop`, with `words` for whole samples
+    /// of at most 8 bytes matched as words after `prev_word`. Returns
+    /// where it stopped and the last sample as a word, or the byte
+    /// offset of the trigger point. A restart goes back below `i` as it
+    /// does in C. Its own function, with `prev_word` a local, so the
+    /// loop is compiled on its own whatever `check` grows to, and
+    /// carries nothing through memory.
+    #[inline(never)]
+    fn check_run(
+        &mut self,
+        buf: &[u8],
+        words: bool,
+        mut i: isize,
+        stop: isize,
+        mut prev_word: u64,
+    ) -> std::result::Result<(isize, u64), usize> {
         let unit = self.unit_size as isize;
-        let len = buf.len() as isize;
-        // Whole samples of at most 8 bytes match as words; the previous
-        // one is kept in `prev_word` and written back on the way out.
-        let words = self.masks.is_some() && buf.len().is_multiple_of(self.unit_size);
-        let mut prev_word = if words { word(&self.prev) } else { 0 };
-        let mut i: isize = 0;
-        while i < len {
+        while i < stop {
             let at = i as usize;
             let found = if let (true, Some(masks)) = (words, &self.masks) {
                 let now = word(&buf[at..at + self.unit_size]);
@@ -635,12 +875,7 @@ impl SoftTriggerLogic {
                 if self.cur_stage + 1 < self.stages.len() {
                     self.cur_stage += 1;
                 } else {
-                    if words {
-                        self.prev.copy_from_slice(&prev_word.to_le_bytes()[..self.unit_size]);
-                    }
-                    self.append(&buf[..at]);
-                    let pre = self.take_pre();
-                    return Some((at / self.unit_size, pre));
+                    return Err(at);
                 }
             } else if self.cur_stage > 0 {
                 // C clamps to byte -1, which is sample 0 only when a
@@ -653,6 +888,60 @@ impl SoftTriggerLogic {
                 self.cur_stage = 0;
             }
             i += unit;
+        }
+        Ok((i, prev_word))
+    }
+
+    /// `soft_trigger_logic_check()` on `buf`: the offset in samples of
+    /// the trigger point and the pre-trigger packets to send before it,
+    /// or `None` (the samples go into the pre-trigger ring).
+    pub fn check(&mut self, buf: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+        let unit = self.unit_size as isize;
+        let len = buf.len() as isize;
+        // Whole samples of at most 8 bytes match as words; the previous
+        // one is kept in `prev_word` and written back on the way out.
+        let words = self.masks.is_some() && buf.len().is_multiple_of(self.unit_size);
+        let mut prev_word = if words { word(&self.prev) } else { 0 };
+        // In the first stage a sample that fails only moves on, so a
+        // block where none can match is skipped whole. `next_block` is
+        // where to look at one again after one was not skipped, later
+        // each time, so that busy data costs almost nothing.
+        let block = self.block.filter(|_| words && lanes(self.unit_size) > 1);
+        let width = self.unit_size * 8;
+        let top = 64 - width.min(64);
+        let (mut next_block, mut stride) = (0, 8);
+        let mut i: isize = 0;
+        while i < len {
+            let at = i as usize;
+            if at >= next_block
+                && let Some(b) = &block
+                && self.cur_stage == 0
+                && at + 8 <= buf.len()
+                && self.evaluated
+            {
+                next_block = at + stride;
+                stride = (stride * 2).min(512);
+                let now = word(&buf[at..at + 8]);
+                if !b.may_match(now, now << width | prev_word) {
+                    prev_word = now >> top;
+                    i += 8;
+                    (next_block, stride) = (at + 8, 8);
+                    continue;
+                }
+            }
+            // Sample by sample up to the next block.
+            let stop = (next_block as isize).max(i + unit).min(len);
+            match self.check_run(buf, words, i, stop, prev_word) {
+                Ok((next, p)) => (i, prev_word) = (next, p),
+                Err(at) => {
+                    if words {
+                        self.prev.copy_from_slice(&prev_word.to_le_bytes()[..self.unit_size]);
+                    }
+                    self.append(&buf[..at]);
+                    let pre = self.take_pre();
+                    return Some((at / self.unit_size, pre));
+                }
+            }
         }
         if words {
             self.prev.copy_from_slice(&prev_word.to_le_bytes()[..self.unit_size]);
@@ -929,14 +1218,23 @@ mod tests {
         ][rng.below(5) as usize]
     }
 
-    /// Samples of `unit` bytes whose bits flip now and then, so levels
-    /// hold for a while and triggers fire; and the same padded to 9
-    /// bytes, which the matchers read byte by byte.
+    /// Samples of `unit` bytes whose bits flip now and then and that
+    /// sometimes hold for a stretch, so levels hold, durations run,
+    /// blocks of equal samples occur and triggers fire; and the same
+    /// padded to 9 bytes, which the matchers read byte by byte.
     fn random_samples(rng: &mut Rng, unit: usize, n: usize) -> (Vec<u8>, Vec<u8>) {
         let (mut narrow, mut wide) = (Vec::new(), Vec::new());
         let mut v = rng.next();
+        let mut hold = 0;
         for _ in 0..n {
-            v ^= rng.next() & rng.next() & rng.next();
+            if hold > 0 {
+                hold -= 1;
+            } else {
+                v ^= rng.next() & rng.next() & rng.next();
+                if rng.below(4) == 0 {
+                    hold = rng.below(24);
+                }
+            }
             let bytes = v.to_le_bytes();
             narrow.extend_from_slice(&bytes[..unit]);
             wide.extend_from_slice(&bytes[..unit]);
@@ -1027,11 +1325,19 @@ mod tests {
             soft_fired += usize::from(!fires.is_empty());
             assert_eq!(fires, run_soft(&wide, 9), "{t:?}");
 
-            let plain: Vec<Vec<(usize, TriggerMatch)>> = t
+            // libsigrok's reads a channel beyond the sample as low, in
+            // both paths: a zero there holds, anything else never does.
+            let mut plain: Vec<Vec<(usize, TriggerMatch)>> = t
                 .stages
                 .iter()
                 .map(|s| s.conditions.iter().map(|c| (c.channel, c.matches)).collect())
                 .collect();
+            if rng.below(4) == 0 {
+                let st = rng.below(plain.len() as u64) as usize;
+                let ch = width as usize + rng.below(80) as usize;
+                let m = if rng.below(2) == 0 { TriggerMatch::Zero } else { random_match(&mut rng) };
+                plain[st].push((ch, m));
+            }
             let run_logic = |data: &[u8], us: usize| {
                 let mut stl = SoftTriggerLogic::new(plain.clone(), us, 4);
                 let mut base = 0;

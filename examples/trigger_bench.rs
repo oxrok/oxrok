@@ -75,6 +75,11 @@ fn triggers(top: usize) -> Vec<(&'static str, Trigger)> {
         TriggerRange { channels: (0..=top).collect(), low: 1 << top, high: u64::MAX, inside: true },
     );
     v.push(("range, all channels", t));
+    // Every value is inside, so it never matches, and a block filter
+    // can't tell: the matcher's cost when nothing can be skipped.
+    let mut t = Trigger::new();
+    t.set_range(0, TriggerRange { channels: vec![0, 1, 2, 3], low: 0, high: 15, inside: false });
+    v.push(("range outside all", t));
     let mut t = conds(&[&[(top, M::Rising)]]);
     t.set_count(0, TriggerCount { count: 10, consecutive: false });
     v.push(("count 10", t));

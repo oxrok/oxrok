@@ -87,11 +87,16 @@ release may change the library API.
 
 ### Changed
 
-- The host software triggers are 4 to 15 times faster with samples of up
-  to 8 bytes: each stage is matched as bit masks over the whole sample,
-  with no allocation per sample. On an M1 Max libsigrok's matcher runs
-  at 160-330 MS/s and the general one at 100-260 MS/s, where both were
-  around fx2lafw's 24 MS/s (`examples/trigger_bench.rs`).
+- The host software triggers are much faster with samples of up to 8
+  bytes: each stage is matched as bit masks over the whole sample, with
+  no allocation per sample, and with samples of 1, 2 or 4 bytes a word
+  of them is tested at once and skipped when none can match, as are
+  runs of equal samples. On an M1 Max libsigrok's matcher went from
+  19-30 MS/s to 160-330 on data that matches all the time and to 1.8-4
+  GS/s on data that mostly doesn't, and the general one from 27-53 to
+  190-260 and 0.7-2.1 GS/s; on its efficiency cores, which are about a
+  Raspberry Pi's, from 4-11 MS/s, below fx2lafw's 24, to 36-100 and
+  150-1000 (`examples/trigger_bench.rs`).
 
 ### Fixed
 
