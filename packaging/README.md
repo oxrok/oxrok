@@ -31,9 +31,13 @@ mock -r fedora-rawhide-x86_64 rebuild dist/oxrok-*.src.rpm
 ```
 
 The build is heavy: every RustPython crate compiles with LTO and debuginfo,
-about an hour and a half on 16 cores. `%limit_build -m 4096` in the spec caps
-`-j` at one job per 4 GB of available memory, so a 16 GB COPR builder runs four
-jobs; on a shared box run mock while nothing else compiles.
+and one rustc of `rustpython-vm` or of `oxrok` itself passes 5 GB of memory.
+`%constrain_build -m 6144` in the spec caps `-j` at one job per 6 GB of
+memory (two on a 16 GB COPR builder). A per-process memory guard below that
+kills the build; `--define 'rustflags_codegen_units 16'` gets a smaller
+build through for checking the spec itself.
+`rpmlint -r packaging/fedora/oxrok.rpmlintrc` on the results filters the known
+noise (the sigrok names, the data dependency on `libsigrokdecode`).
 
 Fedora proper is a different build: every crate from a `rust-*` package,
 no vendoring, and the decoders on CPython (`-f python`), since the pinned

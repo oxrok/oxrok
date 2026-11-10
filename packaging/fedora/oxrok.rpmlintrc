@@ -1,0 +1,7 @@
+# rpmlint filters for the oxrok spec: rpmlint -r packaging/fedora/oxrok.rpmlintrc
+# sigrok, libsigrok, libsigrokdecode, cli and usr (a path) are not misspellings.
+addFilter(r"spelling-error \(["'](sigrok|libsigrok's|libsigrokdecode's|cli|usr)["']")
+# libsigrokdecode is the package that ships the Python decoders oxrok loads
+# from /usr/share/libsigrokdecode/decoders: a dependency on that data, which
+# no automatic soname dependency can replace.
+addFilter(r"explicit-lib-dependency libsigrokdecode")

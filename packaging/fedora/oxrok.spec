@@ -20,6 +20,8 @@ ExclusiveArch:  %{rust_arches}
 
 BuildRequires:  cargo-rpm-macros >= 24
 BuildRequires:  systemd-rpm-macros
+# RustPython's ctypes module links the system libffi.
+BuildRequires:  libffi-devel
 # The Python protocol decoders, found under %%{_datadir}/libsigrokdecode.
 Requires:       libsigrokdecode
 # Firmware the drivers upload, where libsigrok keeps it.
@@ -39,8 +41,8 @@ in %{_udevrulesdir} give the seated user access to the USB devices.
 
 %build
 # One rustc of the RustPython crates or of oxrok itself with LTO and debuginfo
-# takes a few GB; let the parallelism follow the memory the builder has.
-%limit_build -m 4096
+# passes 5 GB; let the parallelism follow the memory the builder has.
+%constrain_build -m 6144
 %cargo_build -f rustpython
 %cargo_vendor_manifest
 %cargo_license_summary -f rustpython
