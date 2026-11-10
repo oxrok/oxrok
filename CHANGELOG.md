@@ -85,6 +85,14 @@ release may change the library API.
 - A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
   which fails a `--strict` run.
 
+### Changed
+
+- The host software triggers are 4 to 15 times faster with samples of up
+  to 8 bytes: each stage is matched as bit masks over the whole sample,
+  with no allocation per sample. On an M1 Max libsigrok's matcher runs
+  at 160-330 MS/s and the general one at 100-260 MS/s, where both were
+  around fx2lafw's 24 MS/s (`examples/trigger_bench.rs`).
+
 ### Fixed
 
 - Host software triggers with 2 or 4 byte samples (fx2lafw with 16
