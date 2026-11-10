@@ -398,6 +398,58 @@ struct Worker {
 }
 
 impl Fx2lafwDevice {
+    /// The trigger as the acquisition matches it on the host.
+    fn host_trigger(&self, unit_size: usize) -> Result<Option<HostTrigger>> {
+        // soft_trigger_logic_check() skips matches on disabled channels.
+        // The trigger runs on the stream's samples, two bytes with the
+        // ADC's high byte; the logic channels are the low byte.
+        self.trigger
+            .as_ref()
+            .map(|t| {
+                let pre =
+                    (self.settings.capture_ratio * self.settings.limit_samples / 100) as usize;
+                let enabled = |c: usize| self.channels.iter().any(|ch| ch.index == c && ch.enabled);
+                if !is_libsigrok_trigger(t) {
+                    // A range's value needs all its channels: one disabled
+                    // cannot be dropped like a condition, it is refused.
+                    let disabled = t
+                        .stages
+                        .iter()
+                        .filter_map(|st| st.range.as_ref())
+                        .flat_map(|r| &r.channels)
+                        .find(|&&c| !enabled(c));
+                    if let Some(&c) = disabled {
+                        let name = self
+                            .channels
+                            .iter()
+                            .find(|ch| ch.index == c)
+                            .map_or_else(|| c.to_string(), |ch| ch.name.clone());
+                        return Err(Error::Arg(format!(
+                            "{name}: a trigger range takes enabled channels only"
+                        )));
+                    }
+                    let mut t = t.clone();
+                    for st in &mut t.stages {
+                        st.conditions.retain(|c| enabled(c.channel));
+                    }
+                    return Ok(HostTrigger::soft(t, unit_size, pre));
+                }
+                let stages = t
+                    .stages
+                    .iter()
+                    .map(|st| {
+                        st.conditions
+                            .iter()
+                            .filter(|c| enabled(c.channel))
+                            .map(|c| (c.channel, c.matches))
+                            .collect()
+                    })
+                    .collect();
+                Ok(HostTrigger::Logic(SoftTriggerLogic::new(stages, unit_size, pre)))
+            })
+            .transpose()
+    }
+
     fn new(
         usb: UsbDeviceInfo,
         profile: &'static Profile,
@@ -731,11 +783,17 @@ impl Device for Fx2lafwDevice {
             // The soft trigger matches logic bits. libsigrok's takes an
             // analog channel's index for a bit as well (bit 0 of the
             // ADC's byte on the USBee AX); there is no analog trigger.
-            for c in t.stages.iter().flat_map(|s| &s.conditions) {
+            let channels = t.stages.iter().flat_map(|s| {
+                s.conditions
+                    .iter()
+                    .map(|c| c.channel)
+                    .chain(s.range.iter().flat_map(|r| r.channels.iter().copied()))
+            });
+            for channel in channels {
                 if let Some(ch) = self
                     .channels
                     .iter()
-                    .find(|ch| ch.index == c.channel && ch.kind == ChannelKind::Analog)
+                    .find(|ch| ch.index == channel && ch.kind == ChannelKind::Analog)
                 {
                     return Err(Error::Arg(format!(
                         "{}: fx2lafw triggers on logic channels only",
@@ -765,32 +823,7 @@ impl Device for Fx2lafwDevice {
         }
         let command = start_command(rate, wide, !analog.is_empty())?;
         let unit_size = if wide { 2 } else { 1 };
-        // soft_trigger_logic_check() skips matches on disabled channels.
-        // The trigger runs on the stream's samples, two bytes with the
-        // ADC's high byte; the logic channels are the low byte.
-        let stl = self.trigger.as_ref().map(|t| {
-            let pre = (self.settings.capture_ratio * self.settings.limit_samples / 100) as usize;
-            let enabled = |c: usize| self.channels.iter().any(|ch| ch.index == c && ch.enabled);
-            if !is_libsigrok_trigger(t) {
-                let mut t = t.clone();
-                for st in &mut t.stages {
-                    st.conditions.retain(|c| enabled(c.channel));
-                }
-                return HostTrigger::soft(t, unit_size, pre);
-            }
-            let stages = t
-                .stages
-                .iter()
-                .map(|st| {
-                    st.conditions
-                        .iter()
-                        .filter(|c| enabled(c.channel))
-                        .map(|c| (c.channel, c.matches))
-                        .collect()
-                })
-                .collect();
-            HostTrigger::Logic(SoftTriggerLogic::new(stages, unit_size, pre))
-        });
+        let stl = self.host_trigger(unit_size)?;
         let acq = Acquisition {
             command,
             samplerate: rate,
@@ -889,6 +922,15 @@ impl HostTrigger {
                 let samples = pre.take();
                 Some((at, if samples.is_empty() { Vec::new() } else { vec![samples] }))
             }
+        }
+    }
+
+    /// A frame ended, with or without data after it in the transfer.
+    /// libsigrok's is rearmed only with data after it, as in protocol.c;
+    /// the general matcher always, as it stays fired until rearmed.
+    fn frame_ended(&mut self, data_follows: bool) {
+        if data_follows || matches!(self, HostTrigger::Soft { .. }) {
+            self.rearm();
         }
     }
 
@@ -1031,11 +1073,12 @@ impl Acquisition {
                     sent = 0;
                     trigger_fired = false;
                     sink.send(Packet::FrameEnd);
+                    if let Some(stl) = self.stl.as_mut() {
+                        stl.frame_ended(processed < cur);
+                    }
                     // Another trigger may be in the rest of the data.
                     if processed < cur {
-                        if let Some(stl) = self.stl.as_mut() {
-                            stl.rearm();
-                        } else {
+                        if self.stl.is_none() {
                             sink.send(Packet::FrameBegin);
                             trigger_fired = true;
                         }
@@ -1254,6 +1297,49 @@ mod tests {
                 Packet::FrameEnd,
             ]
         );
+    }
+
+    #[test]
+    fn the_general_matcher_rearms_when_a_frame_ends_with_its_transfer() {
+        // D0 inside 1..1, two samples a frame: each frame ends exactly at
+        // the end of its transfer, and the second still triggers.
+        let mut t = Trigger::new();
+        t.set_range(
+            0,
+            crate::core::TriggerRange { channels: vec![0], low: 1, high: 1, inside: true },
+        );
+        let acq = Acquisition {
+            command: [0x40, 0, 47],
+            samplerate: 1_000_000,
+            unit_size: 1,
+            analog: vec![],
+            limit_samples: 2,
+            limit_frames: 2,
+            stl: Some(HostTrigger::soft(t, 1, 0)),
+        };
+        let packets = run(acq, vec![vec![0, 1, 1], vec![0, 0, 1, 1]]);
+        let frame =
+            [Packet::Trigger, Packet::FrameBegin, Packet::logic(1, vec![1, 1]), Packet::FrameEnd];
+        assert_eq!(packets, [frame.clone(), frame].concat());
+    }
+
+    #[test]
+    fn a_range_on_a0_or_on_a_disabled_channel_is_refused() {
+        let mut d = device("USBee AX");
+        let range =
+            |channels| crate::core::TriggerRange { channels, low: 1, high: 2, inside: true };
+        let mut t = Trigger::new();
+        t.set_range(0, range(vec![7, 8]));
+        let e = d.set_trigger(Some(t)).unwrap_err().to_string();
+        assert!(e.contains("A0: fx2lafw triggers on logic channels only"), "{e}");
+
+        let mut t = Trigger::new();
+        t.set_range(0, range(vec![0, 1]));
+        d.set_trigger(Some(t)).unwrap();
+        d.enable_channel(1, false).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+        let e = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
+        assert!(e.contains("D1: a trigger range takes enabled channels only"), "{e}");
     }
 
     #[test]

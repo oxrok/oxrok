@@ -56,8 +56,9 @@ Deliberate, and kept small:
   Counts, durations and ranges belong to the stage their token is in.
   The devices with a software trigger (demo, fx2lafw) take all of them,
   as does the LogicPort with two stages, see
-  `docs/DEVICES.md`. sigrok-cli rejects these forms. `>`, `;`, `|` and
-  `&` need quoting in a shell.
+  `docs/DEVICES.md`. On fx2lafw a range takes enabled logic channels
+  only: a disabled channel cannot be left out of its value. sigrok-cli
+  rejects these forms. `>`, `;`, `|` and `&` need quoting in a shell.
 - `rigol-ds` converts `horiz_triggerpos` to seconds with the number
   of horizontal divisions; libsigrok multiplies by the number of
   timebases in its table.
