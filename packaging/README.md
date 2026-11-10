@@ -44,6 +44,13 @@ no vendoring, and the decoders on CPython (`-f python`), since the pinned
 RustPython crates are not in Fedora. That spec would start from
 `rust2rpm`; this one is for COPR.
 
+The `License` tag is oxrok's licence and every vendored crate's, as
+`%cargo_license_summary` lists them (the spec keeps that list as a comment
+above the tag). Two crates carry no licence metadata, `mt19937` and
+`rustpython-pylib`, and so are not in the tag; a Fedora review would want
+them settled by hand, and would also refuse `CC0-1.0` for code
+(`hexf-parse`, through RustPython), which COPR does not.
+
 ## Later
 
 Debian and Ubuntu packages from the static binary (`cargo-deb` or

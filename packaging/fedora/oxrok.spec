@@ -11,8 +11,42 @@ Version:        0.2.0
 Release:        %autorelease
 Summary:        A sigrok compatible logic analyzer, multimeter and oscilloscope tool
 
-# oxrok itself; the crates it bundles are listed in LICENSE.dependencies.
-License:        GPL-3.0-or-later
+# oxrok is GPL-3.0-or-later. The binary links the vendored crates, so the tag
+# is theirs too: the output of `%%cargo_license_summary -f rustpython`, which
+# the mock build prints, one term per line, each kept as the crate states it.
+# Two crates carry no licence metadata (mt19937, rustpython-pylib) and are
+# not in the tag; packaging/README.md says what a Fedora review would need.
+# (MIT OR Apache-2.0) AND Unicode-3.0
+# (MIT OR Apache-2.0) AND Unicode-DFS-2016
+# 0BSD OR MIT OR Apache-2.0
+# Apache-2.0
+# Apache-2.0 OR BSL-1.0
+# Apache-2.0 OR MIT
+# Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+# BSD-2-Clause OR Apache-2.0 OR MIT
+# BSD-2-Clause OR MIT OR Apache-2.0
+# BSD-2-Clause-Views
+# BSD-3-Clause OR MIT OR Apache-2.0
+# BSL-1.0
+# CC0-1.0
+# CC0-1.0 OR MIT-0 OR Apache-2.0
+# GPL-3.0-or-later
+# GPL-3.0-or-later OR Apache-2.0
+# ISC
+# LGPL-3.0-only
+# MIT
+# MIT OR Apache-2.0
+# MIT OR Apache-2.0 OR LGPL-2.1-or-later
+# MIT OR GPL-3.0-only
+# MIT OR Zlib OR Apache-2.0
+# MPL-2.0
+# PSF-2.0
+# Unicode-3.0
+# Unlicense OR MIT
+# Zlib
+# Zlib OR Apache-2.0 OR MIT
+# bzip2-1.0.6
+License:        GPL-3.0-or-later AND ((MIT OR Apache-2.0) AND Unicode-3.0) AND ((MIT OR Apache-2.0) AND Unicode-DFS-2016) AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR MIT OR Apache-2.0) AND BSD-2-Clause-Views AND (BSD-3-Clause OR MIT OR Apache-2.0) AND BSL-1.0 AND CC0-1.0 AND (CC0-1.0 OR MIT-0 OR Apache-2.0) AND (GPL-3.0-or-later OR Apache-2.0) AND ISC AND LGPL-3.0-only AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR GPL-3.0-only) AND (MIT OR Zlib OR Apache-2.0) AND MPL-2.0 AND PSF-2.0 AND Unicode-3.0 AND (Unlicense OR MIT) AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND bzip2-1.0.6
 URL:            https://oxrok.dev
 Source0:        https://github.com/oxrok/oxrok/releases/download/v%{version}/oxrok-%{version}-vendored.tar.xz
 
