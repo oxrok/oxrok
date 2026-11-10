@@ -294,7 +294,9 @@ impl PreTriggerBuffer {
 /// stage 0 from the sample after the first match, edges against the
 /// previous sample (zero before the first), and a ring of
 /// `pre_trigger_samples` samples sent ahead of the trigger. Only level
-/// and edge matches; [`SoftTrigger`] is the general matcher.
+/// and edge matches; [`SoftTrigger`] is the general matcher. One fix:
+/// a restart that reaches back past the buffer starts at its first
+/// sample, where C starts at its second byte.
 #[derive(Clone, Debug)]
 pub struct SoftTriggerLogic {
     /// Per stage, the matches on enabled channels.
@@ -410,9 +412,12 @@ impl SoftTriggerLogic {
                     return Some((at / self.unit_size, pre));
                 }
             } else if self.cur_stage > 0 {
+                // C clamps to byte -1, which is sample 0 only when a
+                // sample is one byte; wider samples went out of step
+                // with the buffer for the rest of it.
                 i -= self.cur_stage as isize * unit;
-                if i < -1 {
-                    i = -1;
+                if i < -unit {
+                    i = -unit;
                 }
                 self.cur_stage = 0;
             }
@@ -644,5 +649,23 @@ mod tests {
             0,
         );
         assert_eq!(s.check(&[1]).map(|r| r.0), Some(0));
+    }
+
+    #[test]
+    fn a_restart_before_the_buffer_keeps_wide_samples_in_step() {
+        // 2 byte samples: D0 rising, then D15 high, which never is. The
+        // first stage matches on the last sample of a buffer and the
+        // second fails on the first of the next. The restart must read
+        // whole samples: half a sample off, D8 of the second sample
+        // reads as D0 and D7 of the fourth as D15.
+        let mut s = SoftTriggerLogic::new(
+            vec![vec![(0, TriggerMatch::Rising)], vec![(15, TriggerMatch::One)]],
+            2,
+            0,
+        );
+        assert!(s.check(&[0x00, 0x00, 0x01, 0x00]).is_none());
+        assert!(s.check(&[0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x80, 0x00]).is_none());
+        // It still fires on a real match after the restart.
+        assert_eq!(s.check(&[0x00, 0x00, 0x01, 0x00, 0x00, 0x80]).map(|r| r.0), Some(2));
     }
 }

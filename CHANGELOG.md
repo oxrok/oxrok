@@ -87,6 +87,11 @@ release may change the library API.
 
 ### Fixed
 
+- Host software triggers with 2 or 4 byte samples (fx2lafw with 16
+  channels, Saleae Logic16, BeagleLogic): a multi stage trigger whose
+  later stage failed on the first sample of a transfer read the rest of
+  that transfer half a sample off, so it could fire on a pattern that
+  never came. libsigrok's `soft-trigger.c` has the same step.
 - SCPI over TCP: a stop and continue of the process (Ctrl-Z, `fg`) during
   a read no longer fails an open or a capture, and no longer cuts an
   answer that arrived during the stop.
