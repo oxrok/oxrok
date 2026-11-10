@@ -43,7 +43,10 @@ required-features = ["cli"]
 [features]
 default = ["cli", "nusb"]
 # The command line tool.
-cli = ["dep:clap", "dep:ctrlc", "mcp"]
+cli = ["dep:clap", "dep:ctrlc", "mcp", "firmware-download"]
+# Downloading vendor firmware (`oxrok firmware fetch`). Without it the
+# registry of sources and importing the user's own files still work.
+firmware-download = ["oxrok-firmware-fetch/download"]
 # The MCP server (`oxrok mcp`): the tool model, the catalog and a stdio
 # JSON-RPC server, for LLM agents.
 mcp = ["dep:serde", "dep:serde_json", "dep:schemars"]
@@ -69,6 +72,8 @@ rustpython = [
 ]
 
 [dependencies]
+# Where each vendor firmware file comes from, and fetching it.
+oxrok-firmware-fetch.workspace = true
 # rdtech-tc's replies: AES-256 ECB, the block functions only.
 aes = "0.9"
 log.workspace = true
@@ -130,6 +135,8 @@ authors = ["Miguel Angel Ajo <mangel.ajo@gmail.com>"]
 
 [workspace.dependencies]
 oxrok = { path = ".", version = "0.2.0", default-features = false }
+# firmware/ in oxrok-util: the firmware registry and extractors.
+oxrok-firmware-fetch = { version = "0.2.0", default-features = false }
 log = "0.4"
 thiserror = "2"
 clap = { version = "4", features = ["derive"] }

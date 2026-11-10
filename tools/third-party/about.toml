@@ -36,6 +36,9 @@ ignore-dev-dependencies = true
 [oxrok]
 accepted = ["GPL-3.0-or-later"]
 
+[oxrok-firmware-fetch]
+accepted = ["GPL-3.0-or-later"]
+
 # Crates with no `license` field, with the file that says what they are
 # under. If a file changes, cargo-about warns and recognises the text
 # itself instead: read it and update this entry.

@@ -33,12 +33,11 @@ default system list adds `/opt/homebrew/share`, where Homebrew puts
 is skipped by oxrok, where libsigrok keeps it as a lookup relative to
 the current directory.
 
-`sigrok-fwextract-intronix-logicport` from
-[oxrok-util](https://github.com/oxrok/oxrok-util)
-(`firmware/intronix-logicport/`) gets the file from an installed copy
-of the vendor software or from the vendor's Windows installer (`-d`
-downloads it; unpacking needs 7-Zip), and saves it as
-`intronix-logicport.ccf`. It is not in sigrok-util: the tool is
+`oxrok firmware fetch intronix-logicport` downloads the vendor's Windows
+installer and saves the file as `intronix-logicport.ccf`;
+`oxrok firmware import intronix-logicport PATH` takes an installed copy
+instead. The extractor is in
+[oxrok-util](https://github.com/oxrok/oxrok-util)'s `firmware/` crate. It is not in sigrok-util: the tool is
 sigrok-util pull request 22, unmerged. Per image `.rbf` files
 (`intronix-logicport-<image>.rbf`) are accepted as a fallback.
 
@@ -849,11 +848,10 @@ after 64 failed transfers in a row, saying the data is incomplete, where
 the C driver retries for ever. Ctrl-C during a capture halts it and
 downloads what it holds; during a stream or a download it ends there.
 Firmware and bitstreams: `kingst-la-01a2.fw` and
-`kingst-MODEL-fpga.bitstream`, as sigrok. `sigrok-fwextract-kingst-la2016`
-extracts them from KingstVIS; the copy in
-[oxrok-util](https://github.com/oxrok/oxrok-util) also reads the macOS
-and Windows builds (sigrok-util pull request 21, unmerged), where
-sigrok-util's needs the Linux one. With the libusb backend, reads
+`kingst-MODEL-fpga.bitstream`, as sigrok. `oxrok firmware fetch kingst-la`
+downloads KingstVIS 3.6.6 and extracts them all; `oxrok firmware import
+kingst-la PATH` reads the Linux, macOS or Windows build, where
+sigrok-util's `sigrok-fwextract-kingst-la2016` needs the Linux one. With the libusb backend, reads
 go one packet at a time, so a fast stream may overflow.
 
 Emulated (2026-11-03): model `kingst-la2016`
@@ -1401,9 +1399,9 @@ authentication warns and the capture goes on as in the C driver, since
 nothing shows whether a real board refuses to capture without one.
 
 Firmware: `saleae-logicpro16-fx3.fw` and
-`saleae-logicpro16-fpga.bitstream` come from
-`sigrok-fwextract-saleae-logic16`, run on Logic 1.2.10 for Linux (per
-the sigrok wiki).
+`saleae-logicpro16-fpga.bitstream` come from Logic 1.2.10 for Linux (per
+the sigrok wiki): `oxrok firmware fetch saleae-logic` downloads and
+extracts it.
 
 libusb backend: one synchronous read at a time with a 100 ms read
 timeout. One channel at 1 MHz takes 131 ms per transfer; unmeasured at

@@ -13,6 +13,7 @@
 
 mod args;
 mod decode;
+mod firmware;
 mod input;
 mod logger;
 mod mcp;
@@ -50,6 +51,20 @@ pub fn main() -> ExitCode {
         logger::init(mcp_args.loglevel);
         return match mcp::run(mcp_args) {
             Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(args::Command::Firmware(fw_args)) = &args.command {
+        logger::init(fw_args.loglevel);
+        return match firmware::run(&registry(), fw_args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(oxrok::core::Error::Arg(msg)) => {
+                eprintln!("{msg}");
+                ExitCode::FAILURE
+            }
             Err(e) => {
                 eprintln!("{e}");
                 ExitCode::FAILURE
@@ -109,7 +124,7 @@ pub fn main() -> ExitCode {
     // A replay from OXROK_USB_REPLAY or OXROK_HID_REPLAY that was not
     // played to its end is a run that went otherwise than recorded.
     let result = result.and_then(|()| oxrok::core::sessions::finish_replays());
-    match result {
+    let code = match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(oxrok::core::Error::Arg(msg)) => {
             eprintln!("{msg}");
@@ -119,5 +134,9 @@ pub fn main() -> ExitCode {
             eprintln!("{e}");
             ExitCode::FAILURE
         }
-    }
+    };
+    // Firmware a driver needed and did not find: ask to fetch it, or
+    // say how.
+    firmware::offer_missing();
+    code
 }

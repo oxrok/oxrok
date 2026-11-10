@@ -10,7 +10,8 @@
 //! (the differences are listed below):
 //!
 //! 1. `OXROK_FIRMWARE_DIR`, a colon (on Windows semicolon) separated
-//!    list;
+//!    list, then `OXROK_FIRMWARE_INSTALL_DIR`, where fetched firmware
+//!    goes when it is set ([`install_dir`]);
 //! 2. `SIGROK_FIRMWARE_DIR`, one directory, as libsigrok takes it;
 //! 3. `SIGROK_FIRMWARE_PATH`, a separated list, empty items skipped;
 //! 4. the user's data directory (`XDG_DATA_HOME`, else
@@ -44,15 +45,16 @@ pub fn search_dirs_in(env: impl Fn(&str) -> Option<OsString>) -> Vec<PathBuf> {
     if let Some(v) = set("OXROK_FIRMWARE_DIR") {
         dirs.extend(std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()));
     }
+    if let Some(v) = set("OXROK_FIRMWARE_INSTALL_DIR") {
+        dirs.push(PathBuf::from(v));
+    }
     if let Some(v) = set("SIGROK_FIRMWARE_DIR") {
         dirs.push(PathBuf::from(v));
     }
     if let Some(v) = set("SIGROK_FIRMWARE_PATH") {
         dirs.extend(std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()));
     }
-    let user = set("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
-        set("HOME").or_else(|| set("USERPROFILE")).map(|h| PathBuf::from(h).join(".local/share"))
-    });
+    let user = user_data_dir(&set);
     let system: Vec<PathBuf> = match set("XDG_DATA_DIRS") {
         Some(v) => std::env::split_paths(&v).filter(|p| !p.as_os_str().is_empty()).collect(),
         None => ["/usr/local/share", "/opt/homebrew/share", "/usr/share"]
@@ -77,15 +79,141 @@ pub fn find_file(name: &str) -> Option<PathBuf> {
 }
 
 /// Reads `name` from the first directory that has it, or fails with
-/// [`Error::Firmware`] naming the file and `hint`.
+/// [`Error::Firmware`] naming the file and `hint`. A miss is noted for
+/// [`take_missing`].
 pub fn read(name: &str, hint: &str) -> Result<Vec<u8>> {
-    match find_file(name) {
-        Some(path) => {
-            log::debug!("Loading {} from {}.", name, path.display());
-            Ok(std::fs::read(path)?)
-        }
-        None => Err(Error::Firmware(format!("{name} ({hint})"))),
+    let Some(path) = find_file(name) else {
+        note_missing(name);
+        return Err(Error::Firmware(format!("{name} ({hint})")));
+    };
+    log::debug!("Loading {} from {}.", name, path.display());
+    Ok(std::fs::read(path)?)
+}
+
+/// Fetching firmware: the registry of where every file comes from, and
+/// the downloaders and extractors (the `oxrok-firmware-fetch` crate).
+pub use oxrok_firmware_fetch as fetch;
+
+/// Files drivers needed and did not find, in order, each once.
+static MISSING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Notes that a driver needed firmware file `name` and did not find it.
+/// [`read`] does this itself; a driver that looks files up with
+/// [`find_file`] calls it when the file it needs is not there (not for
+/// alternatives it merely probes).
+pub fn note_missing(name: &str) {
+    let mut missing = MISSING.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !missing.iter().any(|m| m == name) {
+        missing.push(name.to_owned());
     }
+}
+
+/// The files noted missing since the last call, for a front end to offer
+/// fetching them. Errors naming the file are often wrapped by the time
+/// they reach the front end (an acquisition's failure is a string), so
+/// misses are collected here instead.
+pub fn take_missing() -> Vec<String> {
+    std::mem::take(&mut *MISSING.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+}
+
+/// Where fetched firmware is installed: `OXROK_FIRMWARE_INSTALL_DIR` if
+/// it is set, else the user's `oxrok-firmware` data directory. Both are
+/// in [`search_dirs`], so drivers find what was installed.
+/// `OXROK_FIRMWARE_DIR` is not used: an application bundle points it at
+/// its own read-only firmware.
+pub fn install_dir() -> Option<PathBuf> {
+    install_dir_in(|var| std::env::var_os(var))
+}
+
+/// [`install_dir`] with the environment given by `env`.
+pub fn install_dir_in(env: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let set = |var: &str| env(var).filter(|v| !v.is_empty());
+    if let Some(dir) = set("OXROK_FIRMWARE_INSTALL_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    Some(user_data_dir(&set)?.join("oxrok-firmware"))
+}
+
+/// `XDG_DATA_HOME`, else `~/.local/share`.
+fn user_data_dir(set: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    set("XDG_DATA_HOME").map(PathBuf::from).or_else(|| {
+        set("HOME").or_else(|| set("USERPROFILE")).map(|h| PathBuf::from(h).join(".local/share"))
+    })
+}
+
+/// The package that provides firmware file `name`, if oxrok knows one.
+pub fn source_of(name: &str) -> Option<&'static fetch::Package> {
+    fetch::package_for(name)
+}
+
+/// Firmware drivers needed and did not find, grouped by where it comes
+/// from: one entry per dialog a front end shows.
+#[derive(Clone, Debug)]
+pub struct Missing {
+    /// The package providing the files; `None` for files oxrok knows no
+    /// source for.
+    pub package: Option<&'static fetch::Package>,
+    /// The files drivers asked for, in order.
+    pub files: Vec<String>,
+}
+
+impl Missing {
+    /// Whether the files can be downloaded, as opposed to provided by
+    /// the user with [`fetch::import`].
+    pub fn downloadable(&self) -> bool {
+        self.package.is_some_and(fetch::Package::downloadable)
+    }
+}
+
+/// Groups `files` by the package that provides them, packages in the
+/// order their first file comes.
+pub fn group_missing(files: &[String]) -> Vec<Missing> {
+    let mut out: Vec<Missing> = Vec::new();
+    for file in files {
+        let package = source_of(file);
+        let same = |m: &&mut Missing| match (m.package, package) {
+            (Some(a), Some(b)) => a.id == b.id,
+            _ => false,
+        };
+        match out.iter_mut().find(|m| same(m)) {
+            Some(m) => m.files.push(file.clone()),
+            None => out.push(Missing { package, files: vec![file.clone()] }),
+        }
+    }
+    out
+}
+
+/// [`take_missing`], grouped with [`group_missing`].
+pub fn take_missing_grouped() -> Vec<Missing> {
+    group_missing(&take_missing())
+}
+
+/// Which of a package's files the search finds.
+#[derive(Clone, Debug, Default)]
+pub struct PackageStatus {
+    /// The files found, where they are.
+    pub found: Vec<PathBuf>,
+    /// The files not found.
+    pub missing: Vec<&'static str>,
+}
+
+impl PackageStatus {
+    /// Every file is there.
+    pub fn complete(&self) -> bool {
+        self.missing.is_empty()
+    }
+}
+
+/// Which of `pkg`'s files are installed, anywhere [`search_dirs`] looks.
+pub fn package_status(pkg: &fetch::Package) -> PackageStatus {
+    let mut status = PackageStatus::default();
+    for f in pkg.files {
+        match find_file(f) {
+            Some(p) => status.found.push(p),
+            None => status.missing.push(f),
+        }
+    }
+    status
 }
 
 /// How a driver's firmware gets onto the device.
@@ -215,6 +343,52 @@ mod tests {
         .map(PathBuf::from)
         .collect();
         assert_eq!(d, want, "empty variables are ignored");
+    }
+
+    #[test]
+    fn installs_where_the_search_looks() {
+        let install = |vars: &[(&str, &str)]| {
+            install_dir_in(|name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| v.into()))
+        };
+        // A bundle's OXROK_FIRMWARE_DIR is read-only: not installed into.
+        let home = [("HOME", "/home/u"), ("OXROK_FIRMWARE_DIR", "/app/firmware")];
+        assert_eq!(install(&home), Some(PathBuf::from("/home/u/.local/share/oxrok-firmware")));
+        let vars = [("HOME", "/home/u"), ("XDG_DATA_HOME", "/data")];
+        let want = install(&vars).unwrap();
+        assert!(dirs(&vars).contains(&want), "{want:?} is searched");
+        let own = [("HOME", "/home/u"), ("OXROK_FIRMWARE_INSTALL_DIR", "/fw")];
+        assert_eq!(install(&own), Some(PathBuf::from("/fw")));
+        assert!(dirs(&own).contains(&PathBuf::from("/fw")), "the override is searched");
+        assert_eq!(install(&[]), None);
+    }
+
+    #[test]
+    fn missing_files_group_by_package() {
+        let files: Vec<String> = [
+            "kingst-la-01a2.fw",
+            "nobody-knows.fw",
+            "kingst-la2016a1-fpga.bitstream",
+            "intronix-logicport-timing-sdr.rbf",
+        ]
+        .map(String::from)
+        .to_vec();
+        let groups = group_missing(&files);
+        let ids: Vec<Option<&str>> = groups.iter().map(|g| g.package.map(|p| p.id)).collect();
+        assert_eq!(ids, vec![Some("kingst-la"), None, Some("intronix-logicport")]);
+        assert_eq!(groups[0].files, vec!["kingst-la-01a2.fw", "kingst-la2016a1-fpga.bitstream"]);
+        assert!(groups[0].downloadable() && !groups[1].downloadable());
+    }
+
+    #[test]
+    fn misses_are_noted_once_and_taken() {
+        // Other tests may note misses too; look only for these names.
+        note_missing("test-missing-a.fw");
+        note_missing("test-missing-b.fw");
+        note_missing("test-missing-a.fw");
+        let taken: Vec<String> =
+            take_missing().into_iter().filter(|m| m.starts_with("test-missing-")).collect();
+        assert_eq!(taken, vec!["test-missing-a.fw", "test-missing-b.fw"]);
+        assert!(!take_missing().iter().any(|m| m.starts_with("test-missing-")));
     }
 
     #[test]

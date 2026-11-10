@@ -146,6 +146,52 @@ pub struct Args {
 pub enum Command {
     /// Serve the Model Context Protocol over stdio, for LLM agents
     Mcp(McpArgs),
+    /// Fetch, import or list the vendor firmware drivers need
+    Firmware(FirmwareArgs),
+}
+
+/// `oxrok firmware`.
+#[derive(clap::Args, Debug)]
+pub struct FirmwareArgs {
+    #[command(subcommand)]
+    pub action: FirmwareAction,
+
+    /// Install into DIR instead of the user's firmware directory
+    #[arg(long, global = true, value_name = "DIR")]
+    pub dir: Option<PathBuf>,
+
+    /// Set loglevel (0-5, default 2)
+    #[arg(short = 'l', long, global = true, default_value_t = 2, value_name = "LEVEL")]
+    pub loglevel: u8,
+}
+
+/// What `oxrok firmware` does.
+#[derive(Subcommand, Debug)]
+pub enum FirmwareAction {
+    /// List the firmware drivers load: installed, missing, and where it comes from
+    List,
+    /// Download, extract and install firmware: give package ids, file names or driver ids
+    Fetch {
+        /// Packages, firmware file names or driver ids
+        #[arg(required_unless_present = "all")]
+        what: Vec<String>,
+        /// Every package that can be downloaded
+        #[arg(long)]
+        all: bool,
+    },
+    /// Extract and install firmware from files you got: installers, archives, folders or the firmware files
+    Import {
+        /// A package id, firmware file name or driver id
+        what: String,
+        /// The files or folders to take it from
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+    },
+    /// Where firmware comes from and how to get it
+    Info {
+        /// A package id, firmware file name or driver id
+        what: String,
+    },
 }
 
 /// `oxrok mcp`.
