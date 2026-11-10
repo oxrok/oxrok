@@ -525,6 +525,7 @@ pub(super) type LoadBitstream = fn(&str) -> Result<Vec<u8>>;
 fn load_bitstream(name: &str) -> Result<Vec<u8>> {
     let Some(path) = crate::core::firmware::find_file(name) else {
         log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
+        crate::core::firmware::note_missing(name);
         return Err(Error::Firmware(name.to_owned()));
     };
     let size = std::fs::metadata(&path)?.len();

@@ -8,6 +8,26 @@ release may change the library API.
 
 ### Added
 
+- `oxrok firmware`: `list` shows the firmware drivers load and whether it
+  is installed, `fetch` downloads the vendor's software and extracts the
+  firmware on the user's machine, `import` does it from installers,
+  archives or folders the user has, and `info` says where firmware comes
+  from. A run that misses firmware names the command that gets it, and
+  on a terminal asks to download it. The new `oxrok-firmware-fetch` crate
+  holds the registry (every firmware file a driver loads, with pinned
+  download hashes) and Rust ports of sigrok-util's extractors (Kingst,
+  Saleae, Intronix, Hantek, LeCroy, Sysclk); `oxrok::core::firmware`
+  re-exports it as `fetch` and adds what a front end's missing-firmware
+  dialog needs: `take_missing_grouped` (the files drivers missed, grouped
+  into `Missing` entries by package), `package_status`, `install_dir`
+  (overridden by `OXROK_FIRMWARE_INSTALL_DIR`, which is searched too; a
+  bundle's `OXROK_FIRMWARE_DIR` is never installed into), `source_of`,
+  `note_missing` and `take_missing`. A fetch can be cancelled through
+  `fetch::Progress::cancelled`. `--list-firmware` and the MCP
+  `firmware_status` tool name each file's package and whether it can be
+  downloaded. The crate lives in oxrok-util (`firmware/`), where it
+  replaces the `sigrok-fwextract-*` scripts.
+
 - `oxrok mcp`: a Model Context Protocol server over stdio, for LLM agents.
   Reference tools (`version`, `list_drivers`, `driver_info`, `list_decoders`,
   `decoder_info`, `list_formats`, `firmware_status`) and a `cli` tool that

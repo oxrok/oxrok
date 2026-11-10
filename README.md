@@ -200,7 +200,16 @@ On Linux a USB device is root only without a udev rule, and oxrok ships no
 rules yet; [docs/USB.md](docs/USB.md#troubleshooting) has this and the
 macOS and Windows notes. Drivers that upload firmware look for it where
 libsigrok does (`SIGROK_FIRMWARE_DIR`, `sigrok-firmware` under the data
-directories; `src/core/firmware.rs` has the order). oxrok ships none.
+directories; `src/core/firmware.rs` has the order). oxrok ships none, but
+fetches it: `oxrok firmware list` shows what the drivers need,
+`oxrok firmware fetch ID` downloads the vendor's software and extracts
+the files on your machine (into `~/.local/share/oxrok-firmware`), and
+`oxrok firmware import ID PATH...` does the same from an installer, an
+archive or a folder you have, for firmware behind a vendor login or on
+a CD. A run that misses firmware says which command gets it, and asks
+to download it when run on a terminal. The extractors are ports of
+sigrok-util's, in the `oxrok-firmware-fetch` crate (`firmware/` in
+[oxrok-util](https://github.com/oxrok/oxrok-util)).
 
 ### Features
 

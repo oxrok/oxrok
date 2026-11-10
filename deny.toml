@@ -40,6 +40,7 @@ exceptions = [
     # The workspace itself.
     { allow = ["GPL-3.0-or-later"], crate = "oxrok" },
     { allow = ["GPL-3.0-or-later"], crate = "oxrok-emu" },
+    { allow = ["GPL-3.0-or-later"], crate = "oxrok-firmware-fetch" },
     { allow = ["GPL-3.0-or-later"], crate = "oxrok-hil" },
     # Weak copyleft, through rustpython. The LGPL-3.0 is the GPL-3.0 with
     # extra permissions, so these link into a GPL binary, whose source
