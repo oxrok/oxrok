@@ -7,7 +7,7 @@
 //! cargo run --release --example trigger_bench [-- OPTIONS]
 //!   --samples N   samples per run, default 64 Mi
 //!   --data KIND   quiet, counter or random (default: all three)
-//!   --unit N      bytes per sample, 1 or 2 (default: both)
+//!   --unit N      bytes per sample, 1, 2 or 4 (default: 1 and 2)
 //!   --min MS/s    exit with an error when a run is slower than this
 //! ```
 //!
@@ -115,25 +115,53 @@ fn run(data: &[u8], unit: usize, chunk: usize, mut feed: impl FnMut(&[u8]) -> bo
     Run { rate: n as f64 / t0.elapsed().as_secs_f64() / 1e6, fired }
 }
 
-fn main() -> ExitCode {
+struct Options {
+    n: usize,
+    kinds: Vec<&'static str>,
+    units: Vec<usize>,
+    min: f64,
+}
+
+/// The command line, or `None` after saying what is wrong with it.
+fn options() -> Option<Options> {
     let mut n = 64 << 20;
     let mut kinds = vec!["quiet", "counter", "random"];
     let mut units = vec![1, 2];
     let mut min = 0.0;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
-        let v = args.next().unwrap_or_default();
-        match a.as_str() {
-            "--samples" => n = v.parse().expect("--samples N"),
-            "--data" => kinds = vec![v.leak()],
-            "--unit" => units = vec![v.parse().expect("--unit 1|2")],
-            "--min" => min = v.parse().expect("--min MS/s"),
+        let Some(v) = args.next() else {
+            eprintln!("{a}: a value is missing");
+            return None;
+        };
+        let ok = match a.as_str() {
+            "--samples" => v.parse().map(|x| n = x).is_ok(),
+            "--data" => ["quiet", "counter", "random"]
+                .into_iter()
+                .find(|&k| k == v)
+                .map(|k| kinds = vec![k])
+                .is_some(),
+            "--unit" => matches!(v.as_str(), "1" | "2" | "4")
+                .then(|| units = vec![v.parse().unwrap()])
+                .is_some(),
+            "--min" => v.parse().map(|x| min = x).is_ok(),
             _ => {
                 eprintln!("unknown option {a}");
-                return ExitCode::FAILURE;
+                return None;
             }
+        };
+        if !ok {
+            eprintln!("{a}: bad value {v:?}");
+            return None;
         }
     }
+    Some(Options { n, kinds, units, min })
+}
+
+fn main() -> ExitCode {
+    let Some(Options { n, kinds, units, min }) = options() else {
+        return ExitCode::FAILURE;
+    };
     let chunk = transfer_plan(24_000_000).0;
     let mut slow = Vec::new();
     for &unit in &units {

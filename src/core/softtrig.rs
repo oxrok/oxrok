@@ -589,8 +589,9 @@ impl SoftTrigger {
                         continue;
                     }
                 }
-                // Sample by sample up to the next block.
-                let stop = next_block.max(i + 1).min(n);
+                // Sample by sample up to the next block, or to the end
+                // when samples have no lanes.
+                let stop = if lanes > 1 { next_block.max(i + 1).min(n) } else { n };
                 match self.feed_words(&data[i * us..stop * us], prev) {
                     Ok(p) => prev = p,
                     Err(k) => {
@@ -830,7 +831,7 @@ impl SoftTriggerLogic {
     /// `i` (a sample boundary) to `stop`, with `words` for whole samples
     /// of at most 8 bytes matched as words after `prev_word`. Returns
     /// where it stopped and the last sample as a word, or the byte
-    /// offset of the trigger point. A restart goes back below `i` as it
+    /// offset of the trigger point and its sample as a word. A restart goes back below `i` as it
     /// does in C. Its own function, with `prev_word` a local, so the
     /// loop is compiled on its own whatever `check` grows to, and
     /// carries nothing through memory.
@@ -842,7 +843,7 @@ impl SoftTriggerLogic {
         mut i: isize,
         stop: isize,
         mut prev_word: u64,
-    ) -> std::result::Result<(isize, u64), usize> {
+    ) -> std::result::Result<(isize, u64), (usize, u64)> {
         let unit = self.unit_size as isize;
         while i < stop {
             let at = i as usize;
@@ -875,7 +876,7 @@ impl SoftTriggerLogic {
                 if self.cur_stage + 1 < self.stages.len() {
                     self.cur_stage += 1;
                 } else {
-                    return Err(at);
+                    return Err((at, prev_word));
                 }
             } else if self.cur_stage > 0 {
                 // C clamps to byte -1, which is sample 0 only when a
@@ -929,11 +930,16 @@ impl SoftTriggerLogic {
                     continue;
                 }
             }
-            // Sample by sample up to the next block.
-            let stop = (next_block as isize).max(i + unit).min(len);
+            // Sample by sample up to the next block, or to the end
+            // without a block filter.
+            let stop = if block.is_some() { (next_block as isize).max(i + unit) } else { len };
+            let stop = stop.min(len);
             match self.check_run(buf, words, i, stop, prev_word) {
                 Ok((next, p)) => (i, prev_word) = (next, p),
-                Err(at) => {
+                Err((at, p)) => {
+                    // The trigger sample is the previous one now, as
+                    // in C, not the one before the run.
+                    prev_word = p;
                     if words {
                         self.prev.copy_from_slice(&prev_word.to_le_bytes()[..self.unit_size]);
                     }
@@ -1255,12 +1261,42 @@ mod tests {
         out
     }
 
+    /// libsigrok's matcher over `data` in `chunks`: each trigger point
+    /// and its pre-trigger samples' first bytes. Rearmed after each fire
+    /// as fx2lafw does, so the sample it keeps as the previous one after
+    /// a fire counts too.
+    fn logic_fires(
+        stages: &[Vec<(usize, TriggerMatch)>],
+        chunks: &[usize],
+        data: &[u8],
+        us: usize,
+    ) -> Vec<(usize, Vec<u8>)> {
+        let mut stl = SoftTriggerLogic::new(stages.to_vec(), us, 4);
+        let mut fires = Vec::new();
+        let mut base = 0;
+        for &k in chunks {
+            let mut from = 0;
+            while let Some((at, pre)) = stl.check(&data[(base + from) * us..(base + k) * us]) {
+                let pre: Vec<u8> = pre.concat().chunks(us).map(|s| s[0]).collect();
+                fires.push((base + from + at, pre));
+                from += at + 1;
+                stl.cur_stage = 0;
+                if from == k {
+                    break;
+                }
+            }
+            base += k;
+        }
+        fires
+    }
+
     #[test]
     fn words_match_like_bytes() {
         let mut rng = Rng(0x2545_F491_4F6C_DD1D);
         let (mut soft_fired, mut logic_fired) = (0, 0);
         for _ in 0..2000 {
-            let unit = 1 + rng.below(2) as usize;
+            // Lanes of 8, 4 and 2 samples, and widths of one sample a word.
+            let unit = [1, 2, 4, 3, 8][rng.below(5) as usize];
             let width = unit as u64 * 8;
             let n = 200;
             let (narrow, wide) = random_samples(&mut rng, unit, n);
@@ -1338,21 +1374,9 @@ mod tests {
                 let m = if rng.below(2) == 0 { TriggerMatch::Zero } else { random_match(&mut rng) };
                 plain[st].push((ch, m));
             }
-            let run_logic = |data: &[u8], us: usize| {
-                let mut stl = SoftTriggerLogic::new(plain.clone(), us, 4);
-                let mut base = 0;
-                for &k in &chunks {
-                    if let Some((at, pre)) = stl.check(&data[base * us..(base + k) * us]) {
-                        let pre: Vec<u8> = pre.concat().chunks(us).map(|s| s[0]).collect();
-                        return Some((base + at, pre));
-                    }
-                    base += k;
-                }
-                None
-            };
-            let fire = run_logic(&narrow, unit);
-            logic_fired += usize::from(fire.is_some());
-            assert_eq!(fire, run_logic(&wide, 9), "{plain:?}");
+            let fires = logic_fires(&plain, &chunks, &narrow, unit);
+            logic_fired += usize::from(!fires.is_empty());
+            assert_eq!(fires, logic_fires(&plain, &chunks, &wide, 9), "{plain:?}");
         }
         // Enough of them fire for the comparison to mean something.
         assert!(soft_fired > 500 && logic_fired > 500, "{soft_fired} {logic_fired}");
