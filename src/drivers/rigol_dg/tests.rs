@@ -273,11 +273,19 @@ impl ScpiTransport for Fake {
 
 /// A device of this model, found and open, with nothing written yet.
 fn device(model: &str) -> (RigolDgDevice, Fake) {
+    patient_device(model, Duration::from_millis(100))
+}
+
+/// [`device`], with `opc_silence` for the `*OPC?` patience instead of the fake's
+/// 100 ms: for a test whose late answer must not be given up on.
+fn patient_device(model: &str, opc_silence: Duration) -> (RigolDgDevice, Fake) {
     let fake = Fake::new();
     let idn: &'static str =
         Box::leak(format!("Rigol Technologies,{model},S1,1.0").into_boxed_str());
     fake.script("*IDN?", &[Say::Text(idn)]);
-    let mut device = RigolDgDevice::from_scpi(fake.scpi()).unwrap();
+    let mut scpi = fake.scpi();
+    scpi.opc_silence = opc_silence;
+    let mut device = RigolDgDevice::from_scpi(scpi).unwrap();
     device.open().unwrap();
     fake.line().written = WriteLog::default();
     device.poll = Duration::from_millis(1);
@@ -1075,10 +1083,16 @@ fn what_makes_no_reading_drains_what_is_owed() {
 }
 
 /// `*OPC?` that takes seconds at a real pace: nothing is lost by it.
+///
+/// The late answer is ten reads away, and a read is a millisecond's sleep. The
+/// device's patience is in time: with the fake's 100 ms, ten reads that take
+/// longer (a macOS runner under nextest's load, oxrok#83) end the asking, and the
+/// answer then lands ahead of the counter's reading, which is drained as junk
+/// (1002 for 1001). Seconds of patience keep the test about the late answer.
 #[test]
 fn an_opc_that_is_slow_is_waited_for() {
     bounded(|| {
-        let (mut device, fake) = device("DG1062Z");
+        let (mut device, fake) = patient_device("DG1062Z", Duration::from_secs(10));
         fake.script(
             "*OPC?",
             &[Say::Text("1"), Say::Text("0"), Say::Late(10, "1"), Say::Text("0"), Say::Text("1")],
