@@ -42,19 +42,29 @@ TREE = {
     "emu/src/shells/scpi.rs": "use crate::shells::tcp::Port;\n",
     "emu/src/lib.rs": "",
     "src/lib.rs": "",
-    "src/core/mod.rs": "",
+    "src/core/mod.rs": (
+        "pub mod soft;\npub mod shared;\npub mod wide;\npub mod ext;\npub mod dec;\n"
+        "pub use soft::{Soft, SoftLogic as Logic};\npub use wide::*;\n"
+    ),
+    # Core submodules: used by two drivers, by cli, re-exported whole,
+    # adding a trait impl to u32, used by a decoder.
+    "src/core/soft.rs": "pub struct Soft;\npub struct SoftLogic;\nimpl Soft {}\nimpl std::fmt::Debug for SoftLogic {}\n",
+    "src/core/shared.rs": "pub struct Shared;\n",
+    "src/core/wide.rs": "pub struct Wide;\n",
+    "src/core/ext.rs": "pub trait Ext {}\nimpl Ext for u32 {}\n",
+    "src/core/dec.rs": "pub struct Dec;\n",
     "src/serial/mod.rs": "use crate::hid;\n",
     "src/hid/mod.rs": "",
     "src/scpi/mod.rs": "",
     "src/ftdi/mod.rs": "",
     "src/dmm/mod.rs": "",
     "src/lcr/mod.rs": "use crate::dmm;\n",
-    "src/decoders/spi.rs": "",
+    "src/decoders/spi.rs": "use crate::core::dec::Dec;\n",
     "src/pydecode/mod.rs": "",
     "src/cli/decode.rs": "",
-    "src/cli/mod.rs": "",
-    "src/drivers/alpha/mod.rs": "use crate::{core, ftdi};\n",
-    "src/drivers/beta_la/mod.rs": "use crate::core;\n",
+    "src/cli/mod.rs": "use crate::core::shared::Shared;\n",
+    "src/drivers/alpha/mod.rs": "use crate::{core, ftdi};\nfn f(_: core::soft::Soft) {}\n",
+    "src/drivers/beta_la/mod.rs": "use crate::core;\nuse crate::core::Logic;\n",
     "src/drivers/scpi_a/mod.rs": "use crate::scpi::Scpi;\n",
     "src/drivers/scpi_b/mod.rs": "use crate::scpi;\n",
     "src/drivers/meters/mod.rs": 'use crate::lcr;\nconst M: &[&str] = &["meter-x"];\n',
@@ -163,6 +173,35 @@ class ChangesTest(unittest.TestCase):
         s = self.sel("src/core/mod.rs")
         self.assertTrue(s.all_models)
         self.assertSelects(s, self.repo.models, python=True)
+
+    def test_core_submodule_selects_the_drivers_that_name_it(self):
+        # alpha names the module, beta_la a name mod.rs re-exports as Logic.
+        s = self.sel("src/core/soft.rs")
+        self.assertFalse(s.all_models)
+        self.assertSelects(s, ["alpha", "beta"])
+
+    def test_core_submodule_used_by_a_decoder(self):
+        self.assertSelects(self.sel("src/core/dec.rs"), [], python=True)
+
+    def test_core_submodule_that_cannot_be_traced(self):
+        # Used by cli; re-exported with a glob; implements a trait for u32;
+        # the module root; a file that is gone.
+        for path in ("src/core/shared.rs", "src/core/wide.rs", "src/core/ext.rs",
+                     "src/core/mod.rs", "src/core/gone.rs", "src/usb/mod.rs"):
+            s = self.sel(path)
+            self.assertTrue(s.all_models and s.python, path)
+
+    def test_core_glob_import_selects_everything(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            tree = dict(TREE)
+            tree["src/drivers/ols/mod.rs"] = "use crate::core::*;\n"
+            for rel, text in tree.items():
+                p = root / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text)
+            s = changes.classify(["src/core/soft.rs"], changes.Repo(root))
+            self.assertTrue(s.all_models and s.python)
 
     def test_emulator_model_used_by_another(self):
         self.assertSelects(self.sel("emu/src/models/alpha.rs"), ["alpha", "meter"])
