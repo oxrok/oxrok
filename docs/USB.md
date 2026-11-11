@@ -415,7 +415,21 @@ on Windows; attaching a device is Linux only.
 
 ### Scenarios
 
-`tools/diffcli.sh --emu` runs, after the software cases, one session
+`tools/diffcli.sh` has two modes, and the first line it prints names
+the one it is in:
+
+- By default (`mode: oxrok against the goldens`) oxrok runs alone
+  against the committed `.out` and `.tx` goldens, on every model or the
+  ones `--emu-model` names. This is the check of a change to a driver,
+  and what CI runs. `--no-oracle` is accepted and means the same.
+- `--oracle` (`mode: with the oracle`) runs sigrok-cli and libsigrok
+  alongside oxrok, as described below, for a new port or for checking
+  an upstream sigrok change. It needs the oracle's environment
+  (`docs/DEVICES.md`, "Oracle"). `--oracle` alone runs the software
+  cases; `--oracle --emu` adds every model after them; `--hw` and
+  `--gcov` need `--oracle`.
+
+`tools/diffcli.sh` runs one session
 per scenario file `tools/emu/MODEL.sh`. The file is sourced; it sets
 `EMU_MODEL` (the `oxrok-emu` model name), optionally `EMU_OPTIONS`
 (`-o relays=2`), `EMU_DRIVER` (the sigrok driver ids its cases use,
@@ -511,7 +525,7 @@ full case or oracle case. What else is checked depends on oxrok:
   a `capture failed: ` line on stderr with WHY in its text, or the case
   fails; `A|B` when either can come, as the pace has it. That line is taken
   out before anything is compared, and everything else is compared in
-  full, under `--no-oracle` too. In an `--unplug` case the fault can get
+  full, without `--oracle` too. In an `--unplug` case the fault can get
   there before the capture does (ols's unplug can land in the drain after
   its last command, in `start`): an exit 1 with the refused start's error
   as the last line of stderr passes too, and that line goes instead. There
@@ -523,20 +537,20 @@ full case or oracle case. What else is checked depends on oxrok:
   wrongly reported as failed shows. A capture that fails silently does
   not: a driver that logs an error and ends with `Ok` passes against
   sigrok-cli's goldens, so a port checks what its give-up paths return.
-- `tools/diffcli.sh --no-oracle` (implies `--emu`) runs the emulator
-  tier without sigrok-cli, as CI does. A full case runs oxrok alone
-  against the committed `.out` and `.tx` goldens, the ones sigrok-cli
-  wrote; for an `--oracle-bug` or `--oracle-differs` case that is
-  oxrok's pinned `.out`/`.tx`, and its `.oracle` is not checked. An
-  oracle-only case (oxrok has no driver for it) is skipped and counted,
-  and a model with no full case gets no session. Events, `--record`
-  fixtures and the violation checks work as in a normal run. The
-  software cases, `--hw`, `--gcov` and `EMU_BLESS=1` need sigrok-cli, so
-  `--no-oracle` refuses them. The tally reads `P passed, F failed: N
-  ran, S skipped`. A case behind a helper that holds the device is
+- Without `--oracle` (the default) the emulator tier runs without
+  sigrok-cli, as CI does. A full case runs oxrok alone against the
+  committed `.out` and `.tx` goldens; for an `--oracle-bug` or
+  `--oracle-differs` case that is oxrok's pinned `.out`/`.tx`, and its
+  `.oracle` is not checked. An oracle-only case (oxrok has no driver for
+  it, a `--libsigrok` case without `--oxrok`, a `--hangs` case) is
+  skipped and counted, and a model with no full case gets no session.
+  Events, `--record` fixtures and the violation checks work as with the
+  oracle. The software cases, `--hw` and `--gcov` need `--oracle`. The
+  tally reads `P passed, F failed: N ran, S skipped (oracle-only, run
+  with --oracle)`. A case behind a helper that holds the device is
   counted too: the helpers do nothing in the dry count. A driver that
-  `EMU_FULL` lists but `oxrok -L` lacks fails its cases, as in a normal
-  run, and a run in which no case ran fails. Before each of oxrok's runs
+  `EMU_FULL` lists but `oxrok -L` lacks fails its cases, as with the
+  oracle, and a run in which no case ran fails. Before each of oxrok's runs
   the harness unbinds, through sysfs as root, any kernel driver still
   bound to a vendor-specific interface of the emulated device (ftdi_sio
   on the FTDI models), as libftdi's detach in the sigrok-cli run that
@@ -592,22 +606,22 @@ full case or oracle case. What else is checked depends on oxrok:
   counts its runs alike. Without them a `--libsigrok` case fails, naming
   what is missing. The case is held to its own goldens like any oracle
   case, takes `--hangs`, `--timeout`, `--expect-fail` and events, not
-  `--oracle-bug`, `--oracle-differs` or `--record`, and `--no-oracle`
-  skips it. Such a case says what libsigrok does, not what sigrok-cli
+  `--oracle-bug`, `--oracle-differs` or `--record`, and runs only
+  under `--oracle`. Such a case says what libsigrok does, not what sigrok-cli
   does.
 - `--libsigrok --oxrok` is a full case with the runner in sigrok-cli's
   place, for a driver sigrok-cli cannot drive once oxrok has it: same
   arguments, oxrok held to the same goldens for output and transactions,
-  under `--no-oracle` too, and `--oracle-bug`, `--oracle-differs` and
+  without `--oracle` too, and `--oracle-bug`, `--oracle-differs` and
   `--record` work as for sigrok-cli.
 - `--tx-filter SED` is a `sed -E` script over each tool's transaction log
   before it is compared, for an order the C driver's timing decides; the
   case says what it hides.
-- `--no-oracle-only` marks a case that runs only under `--no-oracle`, for
+- `--no-oracle-only` marks a case that runs only without `--oracle`, for
   what sigrok-cli cannot run first (a flag it lacks, an address its
-  upload would move). Its goldens are written by hand, as a bless does
-  not run it, and its slug counts in every mode, so that a bless keeps
-  them.
+  upload would move). Its goldens come from an oxrok bless (below), as
+  an `--oracle` run skips it, and its slug counts in every mode, so that
+  an `--oracle` bless keeps them.
 - The tools run with stdin from `/dev/null`, whatever the harness was
   launched from: sigrok-cli's `--continuous` stops on any key, and at
   EOF it stops at once, so a driver's own stop is reached only through
@@ -690,15 +704,31 @@ full case or oracle case. What else is checked depends on oxrok:
   answer still times out. `kecheng-kc-330b` sets 250.
 - Either way the output and the transactions are compared with the
   goldens `tests/emu/MODEL/SLUG.out` and `SLUG.tx` (`SLUG` is the case
-  name in lower case, runs of other characters made `-`), the
-  sigrok-cli run's as `EMU_BLESS=1` wrote them, so a later change in
-  either tool shows. An oracle case without goldens fails; a full case
-  without them passes on the comparison of the two tools. With
-  `EMU_BLESS=1` every case writes its goldens instead of comparing
-  them (`(golden written)` after its `PASS`), and a full run of a model
-  removes the goldens no case wrote any more.
+  name in lower case, runs of other characters made `-`), so a later
+  change in either tool shows. Under `--oracle`, an oracle case without
+  goldens fails; a full case without them passes on the comparison of
+  the two tools, and fails without `--oracle`.
+- Blessing. `EMU_BLESS=1` without `--oracle` re-records the goldens
+  from oxrok, which is how an intended change to a driver's output or
+  transactions lands: a case whose other checks pass (exit status as
+  the case expects, no violation, output present or absent as it says,
+  `--oxrok-fails`' reason, the events fired) gets its `.out` and `.tx`
+  written (`(golden written)` or `(golden changed)` after its `PASS`),
+  and its `--record` fixture; a case that fails is reported and nothing
+  of it is written. It never writes a `.oracle` golden nor the goldens
+  of a case only the oracle runs. After each model it prints `bless
+  MODEL: N new, N changed, N unchanged, N not written (case failed)`,
+  and, after a run of several models, all of them again before the tally. `EMU_BLESS=missing` writes
+  only goldens and fixtures that do not exist yet (`EMU_WRITE_MISSING=1`
+  is its old name). Read each changed golden's diff before committing
+  it, and say in the commit why it changed.
+- `EMU_BLESS=1 --oracle` writes every case's goldens from sigrok-cli's
+  side instead of comparing them (`(golden written)` after its `PASS`),
+  and the `.oracle` goldens of `--oracle-bug` and `--oracle-differs`
+  cases. Either way a bless of a whole model (no `-k`) removes the
+  goldens no case wrote any more.
 
-`--gcov` (which implies `--emu`) zeroes the coverage counters of each
+`--gcov` (which needs `--oracle` and implies `--emu`) zeroes the coverage counters of each
 model's libsigrok drivers before its session (`tools/emu-gcov.sh DRIVER zero`)
 and writes `tests/emu/MODEL/gcov.txt` after it
 (`tools/emu-gcov.sh DRIVER report`): per source file the share of
@@ -957,9 +987,8 @@ pub fn build_tcp(options: &[(String, String)]) -> Result<Box<dyn Stream>> {
   The SCPI shell also takes `split-at=N:T`, `double-at=N:T` and `junk-at=N:T`, for
   an answer in pieces, twice, or behind junk. Under `OXROK_USB_BACKEND=libusb` the
   harness drops only the string reads that backend adds outside a re-enumeration.
-  `EMU_ORACLE_ENV` and `EMU_LIBSIGROK` point a run at another oracle, and
-  `EMU_WRITE_MISSING=1` under `--no-oracle` writes a `--no-oracle-only` case's
-  goldens when they're missing. `lcargo fmt --all` doesn't reach model files, which
+  `EMU_ORACLE_ENV` and `EMU_LIBSIGROK` point an `--oracle` run at another
+  oracle, and `EMU_BLESS=missing` writes the goldens that are missing. `lcargo fmt --all` doesn't reach model files, which
   are `#[path]`-included from generated code: run `rustfmt` on a model directly.
 
 The scenario, with `EMU_TMC` only where the model is on USBTMC:
@@ -1174,7 +1203,7 @@ waits 20 ms after each claim (`parport::CLAIM_SETTLE`), and a scenario
 that sets `EMU_ORACLE_PPCLAIM_SETTLE_MS=N` gives sigrok-cli and the
 libsigrok runner a preload that sleeps N ms after each successful
 `PPCLAIM` (`tools/oracle-ppclaim-settle.c`), which changes nothing else;
-if it does not compile, such a session fails outside `--no-oracle`. A
+if it does not compile, such a session fails under `--oracle`. A
 waited read after the claim would be an exact barrier, but it is a
 request libieee1284 does not send, so the two tools' transactions would
 differ.
@@ -1182,8 +1211,8 @@ differ.
 The kernel (7.2.14) keeps a detached cable's port number: each session's
 port is the next one, and from `parport8` on libieee1284 finds no `ppdev`
 at all (it opens `/dev/parport0` to `7` only) and sigrok-cli finds no
-device. Such a session fails at its start, saying so, unless it is
-`--no-oracle`; a reboot gives the numbers back. Unloading `parport` does
+device. Such a session fails at its start, saying so, under `--oracle`;
+a reboot gives the numbers back. Unloading `parport` does
 not: the old ports stay in sysfs, and the next `parport0` collides with
 one (`kobject_add_internal failed for parport0 with -EEXIST`, `uss720:
 could not register parport`) until the reboot.
@@ -1202,8 +1231,8 @@ instrument behind it (`emu/src/models/hp-3478a.rs`), and the kernel driver stays
 between, as on a bench. Two generic hooks of `tools/diffcli.sh` make that work:
 
 - `EMU_KEEP_BOUND="DRV..."`: kernel drivers that `emu_unbind` leaves bound to the
-  device's vendor interfaces, where it would otherwise unbind them before each
-  `--no-oracle` run.
+  device's vendor interfaces, where it would otherwise unbind them before each of
+  oxrok's runs without `--oracle`.
 - `emu_attached`, a function the scenario may define: it runs after each attach the
   server reports (`READY`, `REPLUGGED`, `RENUMERATED`), with `EMU_BUSID` and the rest
   naming the new attach. It does what the device needs as root, in a log section of
@@ -1215,10 +1244,9 @@ between, as on a bench. Two generic hooks of `tools/diffcli.sh` make that work:
 - `EMU_SKIP="REASON"`, set when the scenario is sourced (`hp-3478a` sets it when
   `modinfo ni_usb_gpib` fails): the model is skipped by name, with a `SKIP` line and,
   on GitHub, a `::warning::` and a line in `$GITHUB_STEP_SUMMARY`, as the vhci-hcd
-  probe does. A `--no-oracle` run whose only models were skipped so does not fail for
-  running no case. A plain run (no `--no-oracle`) says `SKIP` for a model all of whose
-  cases are `--no-oracle-only`, and counts them as skipped, rather than passing with
-  nothing run.
+  probe does. A run without `--oracle` whose only models were skipped so does not fail
+  for running no case. An `--oracle` run says `SKIP` for a model all of whose cases are
+  `--no-oracle-only`, and counts them as skipped, rather than passing with nothing run.
 
 A GPIB board must be brought online, which needs `CAP_SYS_ADMIN`: linux-gpib's
 `gpib_config` does it, and the testers need not have it. `sudo oxrok-emu gpib-config
@@ -1235,7 +1263,7 @@ back online too) and `emu_detaching`, and names the board in `conn=` as
 `gpib/$EMU_GPIB_MINOR/23`.
 
 The oracle has no libgpib, so every case is `--no-oracle-only` and its goldens are
-oxrok's, written with `EMU_WRITE_MISSING=1` and read against the C source and the
+oxrok's, written with `EMU_BLESS=missing` and read against the C source and the
 instrument's manual. What the kernel itself does (its status and line reads around
 each transfer, the interrupt monitor) is in every `.tx`, so a case also pins how
 `ni_usb_gpib` drives the adapter: a kernel that changes that changes the goldens.
@@ -1349,8 +1377,10 @@ of a sigrok driver `DRIVER`:
    set, captures at a few rates and sizes, triggers, the selection by
    `conn=`, and the error answers the driver handles), and
    `tools/emu/NAME.firmware` when the driver uploads files.
-5. Run it alone, without the software cases:
-   `cargo build --workspace && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --emu-model NAME`.
+5. Run it with the oracle, alone, without the software cases:
+   `cargo build --workspace && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --oracle --emu-model NAME`.
+   A new model is checked against sigrok-cli this way; a later change to
+   a model or a driver already ported runs without `--oracle` (step 9).
    Every case must pass and log no violation under sigrok-cli; a
    violation there is a fault of the model (or a rule the C driver
    does not keep, which then goes into the model's comments) until
@@ -1361,10 +1391,10 @@ of a sigrok driver `DRIVER`:
    session's device makes the session's cases see two, and a session's
    `cleanup` would detach the hand-served one. A script that cleans up
    inside its `flock` passes `cleanup --locked`.
-6. Bless the goldens, `EMU_BLESS=1 sh tools/diffcli.sh --emu-model NAME`,
+6. Bless the goldens, `EMU_BLESS=1 sh tools/diffcli.sh --oracle --emu-model NAME`,
    read them (they are the reference from now on), and run again
    without `EMU_BLESS` to see them pass. Commit them.
-7. Measure: `sh tools/diffcli.sh --emu-model NAME --gcov` writes
+7. Measure: `sh tools/diffcli.sh --oracle --emu-model NAME --gcov` writes
    `tests/emu/NAME/gcov.txt`. Read the unreached ranges against the C
    source: add cases for the paths a device can take, and leave those
    it cannot (allocation failures, transport errors, model variants
@@ -1377,7 +1407,11 @@ of a sigrok driver `DRIVER`:
    only once oxrok's port passes the same cases as full cases.
 9. Before handing over: `cargo fmt --all --check`,
    `cargo clippy --workspace --all-targets` with no warning,
-   `cargo test --workspace`, and `sh tools/diffcli.sh --emu-model NAME`.
+   `cargo test --workspace`, and `sh tools/diffcli.sh --emu-model NAME`
+   (oxrok against the goldens). A change after that runs the same
+   check; when it changes oxrok's output or transactions on purpose,
+   `EMU_BLESS=1 sh tools/diffcli.sh --emu-model NAME` re-records the
+   goldens from oxrok, and the commit says why they changed.
 
 ## Troubleshooting
 

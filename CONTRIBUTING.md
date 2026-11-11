@@ -38,5 +38,13 @@ replay fixture so it is tested without the hardware, and an entry in
 Outputs are compared with sigrok-cli byte for byte after the header
 line. When adding an output or changing one, capture the reference with
 sigrok-cli and put it in the test next to the command that produced it.
-`tools/diffcli.sh` runs the documented flows through both tools, with
-`--hw` for the attached hardware.
+`tools/diffcli.sh --oracle` runs the documented flows through both tools,
+with `--hw` for the attached hardware.
+
+A change to a driver is checked with `sh tools/diffcli.sh --emu-model
+MODEL`, which runs oxrok alone against the model's committed goldens on
+the emulator ([docs/USB.md](docs/USB.md#emulation-over-usbip)). When
+oxrok's output or transactions change on purpose, `EMU_BLESS=1` re-records
+the goldens of the cases whose other checks pass, and the commit says why
+they changed. `--oracle` brings sigrok-cli and libsigrok back for a new
+port or for checking an upstream sigrok change.
