@@ -944,14 +944,19 @@ limits = []
 name = "UNI-T DMM (raw USB)"
 libsigrok = "uni-t-dmm"
 ids = [
-  "uni-t-ut372", "uni-t-ut60a", "uni-t-ut60e", "uni-t-ut60g", "uni-t-ut612",
-  "uni-t-ut61b", "uni-t-ut61c", "uni-t-ut61d", "uni-t-ut61e", "uni-t-ut71a",
-  "uni-t-ut71b", "uni-t-ut71c", "uni-t-ut71d", "uni-t-ut71e", "uni-t-ut804",
+  "uni-t-ut372", "uni-t-ut60a", "uni-t-ut60e", "uni-t-ut60g", "uni-t-ut61b",
+  "uni-t-ut61c", "uni-t-ut61d", "uni-t-ut61e", "uni-t-ut71a", "uni-t-ut71b",
+  "uni-t-ut71c", "uni-t-ut71d", "uni-t-ut71e", "uni-t-ut804",
+  # Other brands' meters on the same UT-D04 cable.
+  "tecpel-dmm-8061", "tenma-72-7730", "tenma-72-7732", "tenma-72-7745",
+  "tenma-72-7750", "tenma-72-9380a", "voltcraft-vc820", "voltcraft-vc830",
+  "voltcraft-vc840", "voltcraft-vc870", "voltcraft-vc920", "voltcraft-vc940",
+  "voltcraft-vc960",
 ]
 kind = "meter"
 connection = "usb"
 vendor = "UNI-T"
-models = ["UT372", "UT60A", "UT60E", "UT60G", "UT612", "UT61B", "UT61C", "UT61D", "UT61E", "UT71A", "UT71B", "UT71C", "UT71D", "UT71E", "UT804"]
+models = ["UT372", "UT60A", "UT60E", "UT60G", "UT61B", "UT61C", "UT61D", "UT61E", "UT71A", "UT71B", "UT71C", "UT71D", "UT71E", "UT804"]
 status = ["emulated"]
 emu = ["uni-t-dmm"]
 evidence = []

@@ -188,5 +188,10 @@ clean-dist:
 
 # The udev rules, from the drivers; tests/udev_rules.rs fails when the
 # committed file is behind.
+# A host build: the static flag for musl or MSVC releases cannot build
+# proc-macros.
+udev-rules: export RUSTFLAGS := $(strip $(subst -C target-feature=+crt-static,,$(RUSTFLAGS)))
 udev-rules:
-	$(CARGO) run -q --bin oxrok -- --udev-rules > contrib/60-oxrok.rules
+	$(CARGO) run -q --bin oxrok -- --udev-rules > contrib/60-oxrok.rules.tmp \
+		|| { rm -f contrib/60-oxrok.rules.tmp; exit 1; }
+	mv contrib/60-oxrok.rules.tmp contrib/60-oxrok.rules

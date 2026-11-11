@@ -1392,6 +1392,19 @@ of a sigrok driver `DRIVER`:
   `61-oxrok-plugdev.rules` (group `plugdev`) grants the access. Copy
   `60-oxrok.rules` and one of the two to `/etc/udev/rules.d/`, then
   `sudo udevadm control --reload && sudo udevadm trigger` and replug.
+  Without a checkout (a `cargo install` or a binary archive), the binary
+  prints the first file and the policy file is one download:
+
+  ```sh
+  oxrok --udev-rules | sudo tee /etc/udev/rules.d/60-oxrok.rules >/dev/null
+  sudo curl -fsSL -o /etc/udev/rules.d/61-oxrok-uaccess.rules \
+    https://raw.githubusercontent.com/oxrok/oxrok/main/contrib/61-oxrok-uaccess.rules
+  sudo udevadm control --reload && sudo udevadm trigger
+  ```
+
+  (`61-oxrok-plugdev.rules` in place of the uaccess one for the
+  `plugdev` group.) The printed rules are the installed binary's own
+  drivers, so run it again after an upgrade.
   USBTMC instruments are one rule by interface class. Serial ports behind
   a USB cable are not in the rules: the tty's group (`dialout` or `uucp`)
   covers them. `tools/udev-diff.py` compares the file with libsigrok's.

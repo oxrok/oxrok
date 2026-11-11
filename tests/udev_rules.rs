@@ -47,7 +47,8 @@ const NO_RULE: [&str; 16] = [
 ];
 
 /// `connection` per driver id, from `docs/drivers.toml`; empty when the
-/// file is not there (a crate checkout has no `docs/`).
+/// file is not there (a crate checkout has no `docs/`). An `ids` array
+/// may run over several lines.
 fn connections() -> HashMap<String, String> {
     let Ok(text) =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/drivers.toml"))
@@ -56,25 +57,40 @@ fn connections() -> HashMap<String, String> {
     };
     let mut out = HashMap::new();
     let (mut ids, mut connection) = (Vec::new(), None);
+    let mut in_ids = false;
     let flush =
         |ids: &mut Vec<String>, connection: &mut Option<String>, out: &mut HashMap<_, _>| {
             if let Some(c) = connection.take() {
                 for id in ids.drain(..) {
-                    out.insert(id, c.clone());
+                    let before = out.insert(id.clone(), c.clone());
+                    assert!(before.is_none(), "{id} is in two entries of docs/drivers.toml");
                 }
             }
             ids.clear();
         };
     for line in text.lines() {
-        if line.starts_with("[drivers.") {
-            flush(&mut ids, &mut connection, &mut out);
+        let line = line.trim();
+        let ids_part = if in_ids {
+            Some(line)
         } else if let Some(rest) = line.strip_prefix("ids = [") {
-            ids = rest
-                .trim_end_matches(']')
-                .split(',')
-                .map(|s| s.trim().trim_matches('"').to_owned())
-                .filter(|s| !s.is_empty())
-                .collect();
+            in_ids = true;
+            Some(rest)
+        } else {
+            None
+        };
+        if let Some(part) = ids_part {
+            let (part, closed) = match part.split_once(']') {
+                Some((before, _)) => (before, true),
+                None => (part.split('#').next().unwrap_or(""), false),
+            };
+            ids.extend(
+                part.split(',')
+                    .map(|s| s.trim().trim_matches('"').to_owned())
+                    .filter(|s| !s.is_empty()),
+            );
+            in_ids = !closed;
+        } else if line.starts_with("[drivers.") {
+            flush(&mut ids, &mut connection, &mut out);
         } else if let Some(rest) = line.strip_prefix("connection = ") {
             connection = Some(rest.trim().trim_matches('"').to_owned());
         }
@@ -92,9 +108,15 @@ fn every_usb_or_hid_driver_claims_its_devices() {
     let mut registry = Registry::new();
     oxrok::register_all(&mut registry);
     let mut missing = Vec::new();
+    let unlisted: Vec<&str> = registry
+        .drivers()
+        .map(oxrok::core::Driver::id)
+        .filter(|id| !connections.contains_key(*id))
+        .collect();
+    assert!(unlisted.is_empty(), "drivers with no connection in docs/drivers.toml: {unlisted:?}");
     for d in registry.drivers() {
-        let connection = connections.get(d.id()).map_or("", String::as_str);
-        if matches!(connection, "usb" | "hid")
+        let connection = &connections[d.id()];
+        if matches!(connection.as_str(), "usb" | "hid")
             && d.usb_claims().is_empty()
             && !NO_RULE.contains(&d.id())
         {

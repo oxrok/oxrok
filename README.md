@@ -198,9 +198,10 @@ Binary archives, where a release has them, are on the repository's
 
 On Linux a USB device is root only without a udev rule; `contrib/` has them:
 `60-oxrok.rules`, generated from the drivers by `oxrok --udev-rules`, and
-one of the two `61-oxrok-*.rules` for the access policy.
-[docs/USB.md](docs/USB.md#troubleshooting) has the install, and the macOS
-and Windows notes. Drivers that upload firmware look for it where
+one of the two `61-oxrok-*.rules` for the access policy. Without a
+checkout, `oxrok --udev-rules` prints the first and the policy file is a
+download. [docs/USB.md](docs/USB.md#troubleshooting) has the install
+steps for both, and the macOS and Windows notes. Drivers that upload firmware look for it where
 libsigrok does (`SIGROK_FIRMWARE_DIR`, `sigrok-firmware` under the data
 directories; `src/core/firmware.rs` has the order). oxrok ships none, but
 fetches it: `oxrok firmware list` shows what the drivers need,
