@@ -3,24 +3,27 @@
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
 //! A software trigger for streaming devices: matches a [`Trigger`]
-//! against logic samples on the host, one stage after another.
+//! against logic samples on the host.
 //!
-//! Level conditions (`0`, `1`) must all hold on one sample; edge
-//! conditions (`r`, `f`, `e`) compare with the previous sample. A stage
-//! fires on the first sample where all of its conditions hold, or on the
-//! Nth with a count, or once they held for a duration. Then the next
-//! stage is armed on the samples that follow. The trigger point is the
-//! sample that completed the last stage. Value ranges and the or/and
-//! combines are not implemented here; [`SoftTrigger::FEATURES`] says so
-//! and [`Trigger::check`] rejects them.
+//! Level conditions (`0`, `1`) and a stage's value range must all hold
+//! on one sample; edge conditions (`r`, `f`, `e`) compare with the
+//! previous sample. A stage fires on the first sample where all of its
+//! conditions hold, or on the Nth with a count, or once they held for a
+//! duration. In a sequence the next stage is armed on the samples that
+//! follow; with or/and both stages are matched side by side, and the
+//! trigger fires when either fired, or once both did. The trigger point
+//! is the sample that completed the trigger.
 
 use crate::core::error::Result;
-use crate::core::trigger::{Trigger, TriggerDuration, TriggerFeatures, TriggerMatch};
+use crate::core::trigger::{
+    Trigger, TriggerCombine, TriggerDuration, TriggerFeatures, TriggerMatch, TriggerRange,
+};
 
 /// One stage, flattened.
 #[derive(Clone, Debug)]
 struct Stage {
     conds: Vec<(usize, TriggerMatch)>,
+    range: Option<TriggerRange>,
     count: u32,
     consecutive: bool,
     /// Samples the condition must hold, 0 for none.
@@ -31,14 +34,19 @@ struct Stage {
     run: u64,
     /// Whether the condition held on the previous sample.
     held: bool,
+    /// Or/and: whether this stage has fired.
+    done: bool,
 }
 
 /// The matcher state.
 #[derive(Clone, Debug)]
 pub struct SoftTrigger {
     stages: Vec<Stage>,
+    combine: TriggerCombine,
     unit_size: usize,
+    /// Sequence: the stage being matched.
     stage: usize,
+    fired: bool,
     prev: Option<Vec<u8>>,
 }
 
@@ -48,9 +56,9 @@ impl SoftTrigger {
         count: true,
         consecutive: true,
         duration: true,
-        range: false,
-        or: false,
-        and: false,
+        range: true,
+        or: true,
+        and: true,
         max_stages: 0,
     };
 
@@ -72,6 +80,7 @@ impl SoftTrigger {
             .iter()
             .map(|s| Stage {
                 conds: s.conditions.iter().map(|c| (c.channel, c.matches)).collect(),
+                range: s.range.clone(),
                 count: s.count.map_or(1, |c| c.count.max(1)),
                 consecutive: s.count.is_some_and(|c| c.consecutive),
                 duration: match s.duration {
@@ -81,9 +90,35 @@ impl SoftTrigger {
                 hits: 0,
                 run: 0,
                 held: false,
+                done: false,
             })
             .collect();
-        Some(SoftTrigger { stages, unit_size, stage: 0, prev: None })
+        // Or and and need two stages; anything else runs as a sequence.
+        let combine =
+            if trigger.stages.len() == 2 { trigger.combine } else { TriggerCombine::Sequence };
+        Some(SoftTrigger { stages, combine, unit_size, stage: 0, fired: false, prev: None })
+    }
+
+    /// Arms the matcher again, its stages from the start, with `prev`
+    /// as the sample before the next one fed: an edge between them is
+    /// seen. `None` forgets it, as a new matcher does.
+    pub fn rearm(&mut self, prev: Option<&[u8]>) {
+        // A counted level-only stage counts entries into its condition: one
+        // that already held on `prev` is not entered again by the next
+        // sample. A count of one still fires on a level that holds, and a
+        // later stage of a sequence is armed afresh, as at the start.
+        for idx in 0..self.stages.len() {
+            let s = &self.stages[idx];
+            let held = s.count > 1
+                && s.duration == 0
+                && !s.conds.iter().any(|(_, m)| m.is_edge())
+                && (self.combine != TriggerCombine::Sequence || idx == 0)
+                && prev.is_some_and(|sample| self.edges_and_levels(idx, sample).1);
+            let s = &mut self.stages[idx];
+            (s.hits, s.run, s.held, s.done) = (0, 0, held, false);
+        }
+        (self.stage, self.fired) = (0, false);
+        self.prev = prev.map(<[u8]>::to_vec);
     }
 
     /// Bytes per sample.
@@ -91,9 +126,9 @@ impl SoftTrigger {
         self.unit_size
     }
 
-    /// True once every stage has fired.
+    /// True once the trigger fired.
     pub fn fired(&self) -> bool {
-        self.stage >= self.stages.len()
+        self.fired
     }
 
     fn bit(sample: &[u8], channel: usize) -> Option<bool> {
@@ -113,73 +148,103 @@ impl SoftTrigger {
         }
     }
 
-    fn matches(&self, sample: &[u8]) -> bool {
-        self.stages[self.stage].conds.iter().all(|&(ch, m)| self.matches_one(sample, ch, m))
+    /// Whether the group's value, least significant channel first, is
+    /// inside (or outside) the range. A channel beyond the sample width
+    /// never matches.
+    fn range_holds(sample: &[u8], r: &TriggerRange) -> bool {
+        let mut value = 0u64;
+        for (k, &ch) in r.channels.iter().enumerate() {
+            match Self::bit(sample, ch) {
+                Some(b) => value |= u64::from(b) << k,
+                None => return false,
+            }
+        }
+        (r.low..=r.high).contains(&value) == r.inside
     }
 
     /// Whether the stage's edge conditions all match, and whether its
-    /// level conditions all hold, on this sample.
-    fn edges_and_levels(&self, sample: &[u8]) -> (bool, bool) {
-        let conds = &self.stages[self.stage].conds;
-        let edges = conds
+    /// level conditions and value range all hold, on this sample.
+    fn edges_and_levels(&self, idx: usize, sample: &[u8]) -> (bool, bool) {
+        let st = &self.stages[idx];
+        let edges = st
+            .conds
             .iter()
             .filter(|(_, m)| m.is_edge())
             .all(|&(ch, m)| self.matches_one(sample, ch, m));
-        let levels = conds
+        let levels = st
+            .conds
             .iter()
             .filter(|(_, m)| !m.is_edge())
-            .all(|&(ch, m)| self.matches_one(sample, ch, m));
+            .all(|&(ch, m)| self.matches_one(sample, ch, m))
+            && st.range.as_ref().is_none_or(|r| Self::range_holds(sample, r));
         (edges, levels)
     }
 
-    /// Advances the current stage by one sample; true when it fired.
-    fn step(&mut self, sample: &[u8]) -> bool {
-        let matched = self.matches(sample);
-        let idx = self.stage;
-        let (duration, consecutive, count, held, run) = {
-            let s = &self.stages[idx];
-            (s.duration, s.consecutive, s.count, s.held, s.run)
-        };
+    /// Advances stage `idx` by one sample; true when it fired.
+    fn step(&mut self, idx: usize, sample: &[u8]) -> bool {
+        let (edges, levels) = self.edges_and_levels(idx, sample);
+        let matched = edges && levels;
         let has_edge = self.stages[idx].conds.iter().any(|(_, m)| m.is_edge());
-        if duration > 0 {
-            let run = if matched { run + 1 } else { 0 };
-            self.stages[idx].run = run;
-            return run == duration + 1;
+        let st = &mut self.stages[idx];
+        if st.duration > 0 {
+            st.run = if matched { st.run + 1 } else { 0 };
+            return st.run == st.duration + 1;
         }
         // A level-only stage counts the times it becomes true. A
         // consecutive count starts over when the counted edge comes
         // while the levels do not hold.
-        let event = if has_edge { matched } else { matched && !held };
-        let (edges, levels) = self.edges_and_levels(sample);
-        let reset = consecutive && has_edge && edges && !levels;
-        let st = &mut self.stages[idx];
+        let event = if has_edge { matched } else { matched && !st.held };
+        let reset = st.consecutive && has_edge && edges && !levels;
         st.held = matched;
         if reset {
             st.hits = 0;
         }
         if event {
             st.hits += 1;
-            if st.hits >= count {
+            if st.hits >= st.count {
                 return true;
             }
         }
         false
     }
 
+    /// Advances the trigger by one sample; true when it fired.
+    fn advance(&mut self, sample: &[u8]) -> bool {
+        match self.combine {
+            TriggerCombine::Sequence => {
+                if self.step(self.stage, sample) {
+                    self.stage += 1;
+                }
+                self.stage >= self.stages.len()
+            }
+            TriggerCombine::Or | TriggerCombine::And => {
+                // Every stage still waiting sees every sample.
+                for idx in 0..self.stages.len() {
+                    if !self.stages[idx].done && self.step(idx, sample) {
+                        self.stages[idx].done = true;
+                    }
+                }
+                if self.combine == TriggerCombine::Or {
+                    self.stages.iter().any(|s| s.done)
+                } else {
+                    self.stages.iter().all(|s| s.done)
+                }
+            }
+        }
+    }
+
     /// Runs the samples in `data` through the matcher. Returns the
     /// index of the sample that completed the trigger, if it did here.
     /// After that, calls return `None`.
     pub fn feed(&mut self, data: &[u8]) -> Option<usize> {
-        if self.fired() {
+        if self.fired {
             return None;
         }
         for (i, sample) in data.chunks_exact(self.unit_size).enumerate() {
-            if self.step(sample) {
-                self.stage += 1;
-                if self.fired() {
-                    self.prev = None;
-                    return Some(i);
-                }
+            if self.advance(sample) {
+                self.fired = true;
+                self.prev = None;
+                return Some(i);
             }
             self.prev = Some(sample.to_vec());
         }
@@ -361,6 +426,29 @@ impl SoftTriggerLogic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rearmed inside a counted range, the samples still in it are no new
+    /// entry: the count starts with the next time the value comes back.
+    #[test]
+    fn a_rearm_inside_a_counted_range_is_no_entry() {
+        let range = TriggerRange { channels: vec![0, 1], low: 1, high: 1, inside: true };
+        let mut t = Trigger::new();
+        t.set_range(0, range.clone());
+        t.set_count(0, crate::core::trigger::TriggerCount { count: 2, consecutive: false });
+        let mut m = SoftTrigger::new(&t, 1).unwrap();
+        assert_eq!(m.feed(&[1, 0, 1]), Some(2));
+        m.rearm(Some(&[1]));
+        assert_eq!(m.feed(&[1, 1, 0, 1]), None, "held, left, entered once");
+        assert_eq!(m.feed(&[0, 1]), Some(1), "entered twice");
+
+        // A count of one still fires on a value that holds.
+        let mut t = Trigger::new();
+        t.set_range(0, range);
+        let mut m = SoftTrigger::new(&t, 1).unwrap();
+        assert_eq!(m.feed(&[1]), Some(0));
+        m.rearm(Some(&[1]));
+        assert_eq!(m.feed(&[1]), Some(0));
+    }
     use crate::core::trigger::TriggerCount;
 
     fn trig(stages: &[&[(usize, TriggerMatch)]]) -> Trigger {
@@ -442,7 +530,78 @@ mod tests {
                 inside: true,
             },
         );
-        assert!(SoftTrigger::check(&r).is_err());
+        assert!(SoftTrigger::check(&r).is_ok());
+    }
+
+    fn range(channels: &[usize], low: u64, high: u64, inside: bool) -> TriggerRange {
+        TriggerRange { channels: channels.to_vec(), low, high, inside }
+    }
+
+    #[test]
+    fn value_ranges() {
+        // D0-D2 count 0..7: the value enters 3..5 at index 3.
+        let count: Vec<u8> = (0..8).collect();
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 1, 2], 3, 5, true));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&count), Some(3));
+        // Outside 0..5 first holds at 6.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 1, 2], 0, 5, false));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&count), Some(6));
+        // The first channel is the least significant: D2 D1 D0 read as
+        // 0b011 (= 3) only when D0 is the top bit.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[2, 1, 0], 6, 6, true));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&count), Some(3));
+        // A range that already holds on the first sample fires there.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 1], 0, 0, true));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&count), Some(0));
+        // Channels beyond the sample width never match.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 9], 0, 3, true));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&count), None);
+    }
+
+    #[test]
+    fn ranges_qualify_edges_and_count() {
+        // D3 rises at 1, 3 and 5; D0-D1 hold 1, 2, then 2.
+        let data = [0x00, 0x09, 0x01, 0x0a, 0x02, 0x0a];
+        let mut t = trig(&[&[(3, TriggerMatch::Rising)]]);
+        t.set_range(0, range(&[0, 1], 2, 2, true));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&data), Some(3));
+        // Entering the range is one event: the second entry fires.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 1], 2, 2, true));
+        t.set_count(0, TriggerCount { count: 2, consecutive: false });
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&[2, 2, 0, 2]), Some(3));
+        // And a range held for a duration.
+        let mut t = Trigger::new();
+        t.set_range(0, range(&[0, 1], 2, 2, true));
+        t.set_duration(0, TriggerDuration::Longer(2));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&[2, 2, 0, 2, 2, 2]), Some(5));
+    }
+
+    #[test]
+    fn or_and_combines() {
+        // D0 rises at 4, D1 rises at 2.
+        let data = [0b00, 0b00, 0b10, 0b10, 0b11];
+        let mut t = trig(&[&[(0, TriggerMatch::Rising)], &[(1, TriggerMatch::Rising)]]);
+        t.combine = TriggerCombine::Or;
+        assert!(SoftTrigger::check(&t).is_ok());
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&data), Some(2));
+        // Both, in either order: complete at D0's edge.
+        t.combine = TriggerCombine::And;
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&data), Some(4));
+        // A sequence needs D0 first, then D1: D1 never rises again.
+        t.combine = TriggerCombine::Sequence;
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&data), None);
+        // And across chunks, with the stage that fired first remembered.
+        t.combine = TriggerCombine::And;
+        let mut s = SoftTrigger::new(&t, 1).unwrap();
+        assert_eq!(s.feed(&data[..3]), None);
+        assert_eq!(s.feed(&data[3..]), Some(1));
+        assert!(s.fired());
     }
 
     #[test]

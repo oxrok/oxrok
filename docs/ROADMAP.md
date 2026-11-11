@@ -344,6 +344,11 @@ The models are plain Rust with no I/O for this reason; see
 - A VXI-11 transport, the Yokogawa DLM's Ethernet path.
 - `siglent-sds`: an E-series history mode as pull request 247 has it
   (`HSMD`, `FRAM`).
+- Pulse width triggers: `TriggerDuration` has only `Longer`, so a pulse
+  shorter than, or between, two widths can't be asked for. A
+  `Shorter`/`Between` that fires on the edge ending the pulse would
+  cover glitch triggers in `SoftTrigger`; the LogicPort's counter may
+  take it in hardware (check `convert_trigger`).
 
 - `hp-3457a`'s look at the line before each question, which catches an extra
   answer, has no counterpart on USBTMC.
@@ -513,7 +518,8 @@ the device is attached, and `oxrok-hil` runs the LogicPort bench.
   cold start after a power cycle on macOS covers renumeration. The nusb
   claim before the first control transfer has not run on Windows.
   Triggers and timing against the signal generator need a wire from the
-  ESP32.
+  ESP32, including the counts, durations, value ranges and or/and that
+  fx2lafw now runs through `SoftTrigger`.
 - `rigol-ds` on the other series (DS2000, DS1000Z, DS4000, MSO5000, the
   Agilent DSO1000): the DS1102E is verified; each other series needs an
   `OXROK_SCPI_RECORD` recording and a sigrok-cli comparison.
