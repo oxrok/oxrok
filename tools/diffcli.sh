@@ -39,9 +39,11 @@
 # never writes a .oracle file, nor the goldens of a case only the oracle
 # runs. After each model it prints "bless MODEL: N new, N changed, N
 # unchanged, N not written (case failed)"; after an unfiltered run it
-# removes the goldens no case has. EMU_BLESS=missing writes only the
-# goldens and fixtures that are missing (EMU_WRITE_MISSING=1 is its old
-# name). A commit that changes goldens says why they changed.
+# removes the goldens no case has. EMU_BLESS=missing compares each
+# golden and fixture file there is, and only when they all match (and
+# the other checks pass) writes the absent ones, each file on its own
+# (EMU_WRITE_MISSING=1 is its old name). A commit that changes goldens
+# says why they changed.
 #
 # --oracle (a new port, or checking an upstream sigrok change) runs
 # sigrok-cli and libsigrok alongside oxrok, from the environment
@@ -1473,7 +1475,7 @@ EOF
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""; ofails=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""; ofails=""; rec_fix=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -1884,16 +1886,19 @@ EOF
         if [ "$EMU_BLESS" = 1 ] && [ $no_oracle = 0 ]; then
             mkdir -p "$(dirname "$fix")"
             cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/rec.out" "$fix.out"
-        elif [ "$EMU_BLESS" != 0 ] && [ $no_oracle = 1 ] && [ -z "$why" ] \
-            && { [ "$EMU_BLESS" = 1 ] || [ ! -f "$fix.txt" ] || [ ! -f "$fix.out" ]; }; then
-            # An oxrok bless: only a case whose other checks passed so far
-            # (emu_no_oracle counts the rest).
-            if [ -f "$fix.txt" ] && [ -f "$fix.out" ] && cmp -s "$fix.txt" "$TMP/rec.txt" && cmp -s "$fix.out" "$TMP/rec.out"; then
-                :
-            else
-                if [ -f "$fix.txt" ] || [ -f "$fix.out" ]; then bless_fix_changed=$((bless_fix_changed + 1)); else bless_fix_new=$((bless_fix_new + 1)); fi
-                mkdir -p "$(dirname "$fix")"
-                cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/rec.out" "$fix.out"
+        elif [ "$EMU_BLESS" != 0 ] && [ $no_oracle = 1 ]; then
+            # An oxrok bless: emu_no_oracle writes the fixture with the
+            # goldens, once the case's checks have passed. Under
+            # EMU_BLESS=missing each file there is is compared here.
+            rec_fix=$fix
+            if [ "$EMU_BLESS" = missing ]; then
+                if [ -f "$fix.txt" ] && ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
+                    why="$why; the recording differs from $(basename "$fix").txt"
+                    diff "$fix.txt" "$TMP/rec.txt" | head -${DIFF_LINES:-6}
+                fi
+                if [ -f "$fix.out" ] && ! cmp -s "$fix.out" "$TMP/rec.out"; then
+                    why="$why; oxrok output differs from $(basename "$fix").out"
+                fi
             fi
         elif [ -f "$fix.txt" ] && [ -f "$fix.out" ]; then
             if ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
@@ -1906,37 +1911,76 @@ EOF
         fi
     }
 
+    # emu_bless_write all|absent SRC DST...: an oxrok bless of each
+    # file DST from SRC, every one that is absent or differs (all) or
+    # only the absent ones; counts them in bw_new and bw_changed.
+    emu_bless_write() {
+        bw_mode=$1; shift
+        while [ $# -ge 2 ]; do
+            if [ ! -f "$2" ]; then
+                mkdir -p "$(dirname "$2")"; cp "$1" "$2"; bw_new=$((bw_new + 1))
+            elif [ "$bw_mode" = all ] && ! cmp -s "$1" "$2"; then
+                cp "$1" "$2"; bw_changed=$((bw_changed + 1))
+            fi
+            shift 2
+        done
+    }
+
     # The end of a full emu_case without --oracle, --oracle-bug and
     # --oracle-differs ones too: oxrok against the .out and .tx goldens.
-    # EMU_BLESS=1 first writes them from oxrok when every other check of
-    # the case passed (why is empty), EMU_BLESS=missing only where there
-    # are none; the .oracle golden is never written.
+    # Only when every other check of the case passed (why is empty),
+    # EMU_BLESS=1 first writes each golden and --record fixture file that
+    # is absent or differs; EMU_BLESS=missing compares each file there is
+    # and then, if all of them matched, writes the absent ones. The
+    # .oracle golden is never written.
     emu_no_oracle() {
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
         blessed=""
+        g_new=0; g_changed=0; f_new=0; f_changed=0
+        if [ "$EMU_BLESS" = 1 ] && [ -z "$why" ]; then
+            bw_new=0; bw_changed=0
+            emu_bless_write all "$TMP/b.cmp" "$golden.out" "$TMP/b.tx" "$golden.tx"
+            g_new=$bw_new; g_changed=$bw_changed
+            if [ -n "$rec_fix" ]; then
+                bw_new=0; bw_changed=0
+                emu_bless_write all "$TMP/rec.txt" "$rec_fix.txt" "$TMP/rec.out" "$rec_fix.out"
+                f_new=$bw_new; f_changed=$bw_changed
+            fi
+        fi
+        if [ -f "$golden.out" ]; then
+            cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
+        fi
+        if [ -f "$golden.tx" ]; then
+            cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
+        fi
+        if { [ ! -f "$golden.out" ] || [ ! -f "$golden.tx" ]; } && [ "$EMU_BLESS" != missing ]; then
+            why="$why; no golden $golden.out/.tx to hold oxrok to"
+        fi
+        if [ "$EMU_BLESS" = missing ] && [ -z "$why" ]; then
+            bw_new=0; bw_changed=0
+            emu_bless_write absent "$TMP/b.cmp" "$golden.out" "$TMP/b.tx" "$golden.tx"
+            g_new=$bw_new
+            if [ -n "$rec_fix" ]; then
+                bw_new=0; bw_changed=0
+                emu_bless_write absent "$TMP/rec.txt" "$rec_fix.txt" "$TMP/rec.out" "$rec_fix.out"
+                f_new=$bw_new
+            fi
+        fi
         if [ "$EMU_BLESS" != 0 ]; then
             if [ -n "$why" ]; then
                 bless_failed=$((bless_failed + 1))
-            elif [ -f "$golden.out" ] && [ -f "$golden.tx" ] && cmp -s "$golden.out" "$TMP/b.cmp" && cmp -s "$golden.tx" "$TMP/b.tx"; then
-                bless_same=$((bless_same + 1))
-            elif [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
-                if [ "$EMU_BLESS" = 1 ]; then
-                    cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"
-                    bless_changed=$((bless_changed + 1))
-                    blessed=" (golden changed)"
-                fi
+            elif [ $g_changed != 0 ]; then
+                bless_changed=$((bless_changed + 1)); blessed=" (golden changed)"
+            elif [ $g_new != 0 ]; then
+                bless_new=$((bless_new + 1)); blessed=" (golden written)"
             else
-                mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
-                cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"
-                bless_new=$((bless_new + 1))
-                blessed=" (golden written)"
+                bless_same=$((bless_same + 1))
             fi
-        fi
-        if [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
-            cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
-            cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
-        else
-            why="$why; no golden $golden.out/.tx to hold oxrok to"
+            if [ $f_changed != 0 ]; then
+                bless_fix_changed=$((bless_fix_changed + 1))
+            elif [ $f_new != 0 ]; then
+                bless_fix_new=$((bless_fix_new + 1))
+            fi
         fi
         if [ -z "$why" ]; then
             pass=$((pass + 1))

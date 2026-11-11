@@ -718,9 +718,11 @@ full case or oracle case. What else is checked depends on oxrok:
   of it is written. It never writes a `.oracle` golden nor the goldens
   of a case only the oracle runs. After each model it prints `bless
   MODEL: N new, N changed, N unchanged, N not written (case failed)`,
-  and, after a run of several models, all of them again before the tally. `EMU_BLESS=missing` writes
-  only goldens and fixtures that do not exist yet (`EMU_WRITE_MISSING=1`
-  is its old name). Read each changed golden's diff before committing
+  and, after a run of several models, all of them again before the
+  tally. `EMU_BLESS=missing` compares each golden and fixture file that
+  exists, and only when they all match (and the other checks pass)
+  writes the absent ones, each file on its own (`EMU_WRITE_MISSING=1` is
+  its old name). Read each changed golden's diff before committing
   it, and say in the commit why it changed.
 - `EMU_BLESS=1 --oracle` writes every case's goldens from sigrok-cli's
   side instead of comparing them (`(golden written)` after its `PASS`),
