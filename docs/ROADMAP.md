@@ -280,17 +280,15 @@ The models are plain Rust with no I/O for this reason; see
   `serial/tcpraw.rs` is one: `serial::open` hands it any `tcp-raw/`
   port, so it could select the TCP drivers plus the models served
   with `EMU_TCP`, if the replay tests cover the other drivers' use.
-- Delete the cases only the oracle runs, now that `diffcli.sh` runs
-  oxrok against the goldens by default and skips them: the library-only
-  cases (`emu_case --libsigrok` without `--oxrok`, about 170 lines, 13 in
-  atten-pps3xxx, 12 in kecheng-kc-330b, 10 in greatfet, 8 or 9 in
-  uni-t-ut181a, sysclk-lwla, ikalogic-scanalogic2 and lecroy-logicstudio)
-  and the `--hangs` cases (about 67 lines, mostly library ones), with
-  their `.out`, `.tx` and `.oracle` goldens. They are C-side evidence and
-  feed `gcov.txt`, so the next `--oracle --gcov` run of those models
-  drops their totals; `libsigrok-run` stays for the `--libsigrok --oxrok`
-  cases. The harness's `--hangs` flag and `emu_hang_cut` can go with
-  them once no scenario uses them.
+- The gcov figures of the 48 models that lost their library-only cases
+  (atten-pps3xxx, kecheng-kc-330b, lecroy-logicstudio, sysclk-sla5032,
+  greatfet, uni-t-ut181a and others) still count those cases: their
+  `tests/emu/MODEL/gcov.txt` and the percentages in `docs/DEVICES.md`
+  (labelled there as from the last `--oracle --gcov` run, which still
+  had them) predate the deletion. The next `--oracle --gcov` run of each
+  model lowers them; refresh them together, drop the label, and say
+  which C paths no case reaches any more (stops from a client, the
+  no-limit crashes, the waits that never end).
 - The software cases in `diffcli.sh` (`case_`, about 70 lines: the demo
   driver, input and output modules, the `.sr`/`.vcd` round trips, the
   decoders, 9 of them only with the python feature) compare oxrok with
