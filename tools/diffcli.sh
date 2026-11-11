@@ -1112,11 +1112,31 @@ fcntl.ioctl(fd, 0x541F, info)
         emu_cmd "section tty restore before $1" >/dev/null || return 1
         if [ ! -c "$EMU_TTY" ] && ! emu_tty_find; then
             echo "$1: no tty: EMU_TTY='$EMU_TTY', nodes '$EMU_NODES', busid '$EMU_BUSID'" >&2
+            emu_tty_state >&2
             return 1
         fi
         stty -F "$EMU_TTY" 9600 cs8 -parenb -cstopb -crtscts -ixon -ixoff clocal hupcl raw -echo \
             || return 1
         emu_cmd reset >/dev/null
+    }
+    # What the kernel has of the device, for a run with no tty: the
+    # device's directory, each interface's class and driver, the ttyACM
+    # nodes there are, and the server's last attach lines.
+    emu_tty_state() {
+        ets_dir=/sys/bus/usb/devices/$EMU_BUSID
+        if [ -n "$EMU_BUSID" ] && [ -d "$ets_dir" ]; then
+            echo "  $ets_dir: configuration '$(cat "$ets_dir/bConfigurationValue" 2>/dev/null)'"
+            for ets_if in "$ets_dir":*; do
+                [ -d "$ets_if" ] || continue
+                ets_drv=none
+                [ -e "$ets_if/driver" ] && ets_drv=$(basename "$(readlink "$ets_if/driver")")
+                echo "  ${ets_if##*/}: class $(cat "$ets_if/bInterfaceClass" 2>/dev/null), driver $ets_drv, tty $(ls "$ets_if/tty" 2>/dev/null | tr '\n' ' ')"
+            done
+        else
+            echo "  no $ets_dir"
+        fi
+        echo "  nodes: $(ls /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
+        echo "  attach lines: $(grep -E '^(READY|REPLUGGED|RENUMERATED) ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
     }
     # The device's ttyACMn from sysfs, when the attach line named none
     # or one that is gone: after a replug, cdc_acm can bind after the
