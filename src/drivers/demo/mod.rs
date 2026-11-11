@@ -616,7 +616,14 @@ impl Acquisition {
                     Some(i) => {
                         let mut before = self.pre.take();
                         before.extend_from_slice(&data[..i * unit]);
-                        let keep = usize::try_from(room).unwrap_or(usize::MAX).saturating_mul(unit);
+                        // The triggering sample keeps its room, unless the
+                        // ratio asks for every sample before the trigger.
+                        let reserve = u64::from(
+                            self.settings.limit_samples > 0 && self.settings.capture_ratio < 100,
+                        );
+                        let keep = usize::try_from(room.saturating_sub(reserve))
+                            .unwrap_or(usize::MAX)
+                            .saturating_mul(unit);
                         if before.len() > keep {
                             before.drain(..before.len() - keep);
                         }
@@ -775,6 +782,39 @@ mod tests {
             })
             .sum();
         assert_eq!((first, first + second, logic), (0, 12, 12));
+    }
+
+    /// With samples before the trigger enough to fill the room, the
+    /// triggering sample still goes out, after the Trigger: a limit of 3
+    /// and D2 rising at sample 4, three samples into the second call.
+    #[test]
+    fn the_triggering_sample_keeps_its_room() {
+        let settings = Settings {
+            samplerate: 1_000_000,
+            limit_samples: 3,
+            limit_msec: 0,
+            limit_frames: 0,
+            averaging: false,
+            avg_samples: 0,
+            capture_ratio: DEFAULT_CAPTURE_RATIO,
+            logic_pattern: LogicPattern::Incremental,
+            analog: vec![],
+        };
+        let mut acq = Acquisition::new(settings, 4, &[0, 1, 2, 3], vec![]);
+        let mut t = Trigger::new();
+        t.add(0, 2, TriggerMatch::Rising);
+        acq.set_trigger(Some(&t));
+        let (tx, rx) = sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        assert_eq!(acq.send_logic(&sink, 1, 3), Some(0));
+        assert_eq!(acq.send_logic(&sink, 10, 3), Some(3));
+        drop(sink);
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        let at = packets.iter().position(|p| matches!(p, Packet::Trigger)).expect("a Trigger");
+        let Some(Packet::Logic(after)) = packets.get(at + 1) else {
+            panic!("no samples after the Trigger: {packets:?}");
+        };
+        assert_eq!(after.data, [0b0100], "the triggering sample, D2 high");
     }
 
     fn capture(args: &[(Key, Value)], configure: impl FnOnce(&mut dyn Device)) -> Vec<Packet> {
