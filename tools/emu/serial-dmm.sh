@@ -12,7 +12,7 @@ emu_cases() {
     HUP_BUG="serial-dmm receive_data takes a hung up port for a timeout, and a meter it does not ask writes nothing that could fail (protocol.c:254-262)"
     BLOCK_BUG="serial_write_blocking without a timeout waits for ever in sp_blocking_write once a write is held"
     SIGINT_BUG="sigrok-cli has no SIGINT handler, it dies where oxrok ends the capture"
-    serial_dmm_conns
+    emu_conns
 
     # A meter that is asked for each packet.
     emu_case "metex scan" --keep-header -- -d $M --scan
@@ -103,7 +103,7 @@ emu_cases() {
 # conn= for each meter, as the tty is now; a scenario expands them when the
 # case line is read, and a replug can give the tty another minor. emu_case
 # fails a case whose tty moved after that.
-serial_dmm_conns() {
+emu_conns() {
     M=metex-m3640d:conn=$EMU_TTY
     E=uni-t-ut61e-ser:conn=$EMU_TTY
     F=uni-t-ut60a-ser:conn=$EMU_TTY
@@ -114,5 +114,5 @@ serial_dmm_conns() {
 serial_dmm_options() {
     set -- options "$@"
     emu_cmd "$*" >/dev/null || emu_fail "serial-dmm: the emulator refused '$*'"
-    serial_dmm_conns
+    emu_conns
 }

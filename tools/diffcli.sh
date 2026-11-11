@@ -1122,24 +1122,27 @@ fcntl.ioctl(fd, 0x541F, info)
     # or one that is gone: after a replug, cdc_acm can bind after the
     # server stopped waiting for nodes, and the line then lists no tty.
     # Waits up to 10 s; the node found is opened to all and named
-    # generically in the outputs, as the server's own would be.
+    # generically in the outputs, as the server's own would be, and the
+    # scenario's emu_conns sets its conn= variables again. Its variables
+    # are its own: emu_case's t (the tool) and the like are the caller's.
     emu_tty_find() {
         [ -n "$EMU_BUSID" ] || return 1
-        i=0
-        while [ $i -lt 100 ]; do
-            for t in /sys/bus/usb/devices/"$EMU_BUSID":*/tty/ttyACM*; do
-                n=/dev/${t##*/}
-                [ -c "$n" ] || continue
-                sudo -n chmod 666 "$n" || return 1
-                echo "note: $EMU_MODEL: $n found in sysfs (EMU_TTY was '$EMU_TTY')" >&2
-                EMU_TTY=$n
-                EMU_NODES=${EMU_NODES:+$EMU_NODES,}$n
+        etf_i=0
+        while [ $etf_i -lt 100 ]; do
+            for etf_sys in /sys/bus/usb/devices/"$EMU_BUSID":*/tty/ttyACM*; do
+                etf_node=/dev/${etf_sys##*/}
+                [ -c "$etf_node" ] || continue
+                sudo -n chmod 666 "$etf_node" || return 1
+                echo "note: $EMU_MODEL: $etf_node found in sysfs (EMU_TTY was '$EMU_TTY')" >&2
+                EMU_TTY=$etf_node
+                EMU_NODES=${EMU_NODES:+$EMU_NODES,}$etf_node
                 export EMU_TTY EMU_NODES
-                printf 's#%s([^0-9]|$)#%s\\1#g\n' "$n" "$(echo "$n" | sed -E 's#[0-9]+$#N#')" >>"$TMP/emu.sed"
+                printf 's#%s([^0-9]|$)#%s\\1#g\n' "$etf_node" "$(echo "$etf_node" | sed -E 's#[0-9]+$#N#')" >>"$TMP/emu.sed"
+                emu_conns
                 return 0
             done
             sleep 0.1
-            i=$((i + 1))
+            etf_i=$((etf_i + 1))
         done
         return 1
     }
