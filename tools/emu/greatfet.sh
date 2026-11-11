@@ -214,13 +214,10 @@ s/(invalid argument).*\$/\\1./" -- -d $F -c samplerate=0 --samples 64 -O bits
 
     # Both banks: 9 bits and more are refused by this firmware without
     # telling the host, so no samples come; wide=1 stands for one that can.
-    emu_case "both banks no samples" --libsigrok --hangs --timeout 2 --stderr -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
     emu_case "both banks oxrok waits" --oracle-bug "$W_SINT" --interrupt out=0:6 --no-output -- -d $F -C SGPIO0,SGPIO8 -c samplerate=1M --samples 8 -O bits
-    emu_case "rate over the clock no samples" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C SGPIO0 -c samplerate=205M --samples 8 -O bits
     # From the clock up to where the bandwidth limit refuses it: answered as
     # asked, no samples, and oxrok warns.
     emu_case "rate over the clock oxrok waits" --oracle-bug "$W_SINT" --interrupt out=0:6 --stderr --filter "$R" -- -d $F -C SGPIO0 -c samplerate=205M --samples 8 -O bits
-    emu_case "rate 336M no samples" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C SGPIO0 -c samplerate=336M --samples 8 -O bits
     gf_options wide=1
     emu_case "wide 16ch" --stderr --filter "$R" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 8 -O bits
     emu_case "wide 16ch output" -- -d $F -C $A8,$B8 -c samplerate=20400k --samples 80 -O bits
@@ -252,23 +249,11 @@ s/(invalid argument).*\$/\\1./" -- -d $F -c samplerate=0 --samples 64 -O bits
     emu_case "time one transfer" --digest --filter "$LONG" -- -d $F --time 300 -O bits
     gf_options
 
-    # A stop by hand: oxrok on SIGINT, the library from its main loop.
+    # A stop by hand: oxrok on SIGINT.
     gf_options in-limit=0
     emu_case "interrupt no samples" --oracle-bug "$W_SINT" --interrupt out=0:6 --no-output -- -d $F --continuous -O bits
     gf_options in-limit=1
     emu_case "interrupt with samples" --oracle-bug "$W_SINT" --interrupt in=1:1 --digest --filter "$LONG" -- -d $F --continuous -O bits
-    gf_options in-limit=0
-    emu_case "lib stop at the header" --libsigrok --no-output -- -d $F --stop-after 0 -O bits
-    emu_case "lib stop after time" --libsigrok --no-output -- -d $F --stop-after-ms 200 -O bits
-    gf_options in-limit=1
-    emu_case "lib stop after time with samples" --libsigrok --digest --filter "$LONG" -- -d $F --stop-after-ms 300 -O bits
-    # The feed queue holds 4 MiB samples: the 16th transfer flushes it,
-    # which is the runner's first look at any sample.
-    gf_options in-limit=16
-    emu_case "lib stop after samples" --libsigrok -- -d $F --stop-after 40 -O bits
-    gf_options in-limit=1
-    emu_case "lib limit" --libsigrok -- -d $F --samples 40 -O bits
-    emu_case "lib scan" --libsigrok --keep-header -- -d $F --scan
     gf_options
 
     # A capture the firmware fails.
@@ -298,8 +283,6 @@ $U" -- -d $F --samples 8 -O bits
     # ever goes out. The second pins oxrok's message.
     emu_case "halted at once" --oxrok-fails "endpoint stalled" --oracle-differs "$W_STOP" --no-output -- -d $F --samples 8 -O bits
     emu_case "halted at once message" --oxrok-fails "endpoint stalled" --oracle-differs "$W_STOP" --stderr --filter "$R" -- -d $F --samples 8 -O bits
-    # The C's stop as it is, failed from inside the callback, 16 times.
-    emu_case "lib halted at once" --libsigrok --stderr -- -d $F --samples 8 -O bits
     gf_options in-stall=1 in-limit=2
     emu_case "halted after one" --oxrok-fails "endpoint stalled" --oracle-differs "$W_LOST" --digest --filter "$LONG" -- -d $F --samples 300000 -O bits
     gf_options

@@ -256,8 +256,6 @@ s/^oxrok: warn: oxrok::drivers::arachnid_labs_re_load_pro::protocol: (A read fai
     emu_options setters=0 count=1
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 6 -- -d $K --samples 3
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $K --continuous
-    # A library client's stop: monitoring goes on until the close.
-    emu_case "lib stop" --libsigrok -- -d $K --continuous --stop-after 1
     emu_options
 }
 

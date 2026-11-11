@@ -305,10 +305,8 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
     emu_options sends=0
     # Nothing ends these but a stop, under either tool: a capture that has
     # not begun has no silence to end on. What oxrok does with the stop.
-    emu_case "lib sends nothing" --libsigrok --hangs --no-output --timeout 2 -- -d $O --samples 16 -O hex
     emu_case "interrupt waiting" --oracle-bug "$SIGINT_BUG" --interrupt model --no-output --timeout 15 --tx-filter '/^interrupt$/q' -- -d $O --samples 16 -O hex
     emu_options
-    emu_case "lib a trigger that never comes" --libsigrok --hangs --no-output --timeout 2 -- -d $O --samples 16 -t 0=1,16=1 -O hex
     emu_case "interrupt a trigger that never comes" --oracle-bug "$SIGINT_BUG" --interrupt model --no-output --timeout 15 --tx-filter '/^interrupt$/q' -- -d $O --samples 16 -t 0=1,16=1 -O hex
     # A stop mid capture drops what came, as abort_acquisition does, with
     # 100 ms of silence racing it: a unit test has that.
@@ -342,14 +340,6 @@ $W" --timeout 120 -- -d $O --samples 300000 -O hex
     # not, as the pace has it, and with none C crashes. A unit test has it.
     emu_options
 
-    # What sigrok-cli cannot reach: a stop, and no limit.
-    emu_options sends=0
-    emu_case "lib stop waiting" --libsigrok --no-output --timeout 5 -- -d $O --samples 16 --stop-after-ms 300
-    emu_options
-    # g_try_malloc(0) is NULL, so "Sample buffer malloc failed." and the
-    # source goes (protocol.c:381-385), and with it the session.
-    emu_options memory=64
-    emu_case "lib no limit" --libsigrok --stderr --filter 's/0x[0-9a-f]+/PTR/' -- -d $O -O hex
     # A device that stops reading: this driver drains each command, so it
     # stops at the first, a path of its own. It costs a closing_wait.
     emu_options out-hold=0

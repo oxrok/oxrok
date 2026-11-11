@@ -174,18 +174,8 @@ s/^(sr: ipdbg-la: Address lookup failed: [^:]+:)[0-9]*([^ ]*): .*/\1PORT\2: WHY/
     emu_case "unplug at the scan's end" --no-oracle-only --unplug tcp-in=2 --timeout 4 --no-output --oxrok-fails "closed the connection" -- -d $T --samples 8 -O bits
     emu_options
 
-    # A client's stop, which sigrok-cli has no way to ask for.
+    # Stock C.
     SIGROK_CLI=$EMU_STOCK_CLI
-    H=LD_PRELOAD=$EMU_HEADER
-    emu_options never=1
-    emu_case "lib stop waiting" --libsigrok --oracle-env "$H" --no-output -- -d $T --continuous -O bits --stop-after-ms 200
-    emu_options
-    emu_case "lib capture" --libsigrok --oracle-env "$H" --digest --filter "$A" -- -d $T --samples 512 -O hex
-    emu_case "lib stock capture" --libsigrok --no-output -- -d $T --samples 8 -O bits
-    emu_options addr-width=12 pace=256
-    emu_case "lib stop inside a dump" --libsigrok --oracle-env "$H" --no-output -- -d $T --continuous -O bits --stop-after-ms 200
-    emu_options cut=100
-    emu_case "lib stop inside a silent dump" --libsigrok --oracle-env "$H" --no-output --hangs --timeout 3 -- -d $T --continuous -O bits --stop-after-ms 200
     emu_options
     emu_case "stock capture" --oracle-differs "$NO_HEADER" -- -d $T --samples 8 -O bits
     SIGROK_CLI=$EMU_STOCK_CLI

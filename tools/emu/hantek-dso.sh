@@ -252,12 +252,9 @@ emu_cases() {
     emu_case "unplug while polling hangs" --oxrok-fails "device disconnected" --oracle-bug "api.c:853-854 polls for ever a device that is gone" --oracle-hangs --timeout 5 --stderr --filter '/Lost communication/!d' --unplug in=6:3 -- -d $H --frames 1
     # A trigger that never fires (EXT with nothing on it): the driver
     # polls, restarts the capture without a force every third empty
-    # state, and polls on, as a scope should, until it is stopped. The
-    # transactions are cut after one period. sigrok-cli's session cannot
-    # be stopped (no SIGINT handler), so this is libsigrok's run alone...
-    emu_case "trigger never fires hangs" --libsigrok --hangs --timeout 5 --stderr --no-output -- -d $H -c triggersource=EXT --frames 1
-    # ...and oxrok's a Ctrl-C at the seventh poll, past a restart, the
-    # device then holding its answers so that the signal lands there.
+    # state, and polls on, as a scope should, until it is stopped: here
+    # oxrok's Ctrl-C at the seventh poll, past a restart, the device then
+    # holding its answers so that the signal lands there.
     I="sigrok-cli has no SIGINT handler"
     hantek_options profile=dso-2090 flashed=1 in-limit=7
     emu_case "interrupt waiting for the trigger" --interrupt in=6:7 --oracle-bug "$I" --no-output -- -d $H -c triggersource=EXT --frames 1

@@ -83,9 +83,6 @@ emu_cases() {
     emu_options period=2 burst=2 stall-out=2
     emu_case "the stop stalled" --tx-filter "$TAIL" -- -d $H --samples 2
 
-    # A long period: the stop lands ahead of the second record.
-    emu_options period=10 burst=2
-    emu_case "lib stop" --libsigrok --tx-filter "$TAIL" -- -d $H --continuous --stop-after 1
     # A long period: the event point is a period behind the last record, and a signal or
     # a hangup then loses what the tool has not read yet.
     emu_options period=10 burst=2

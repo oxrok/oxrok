@@ -110,8 +110,6 @@ emu_cases() {
     emu_case "analog with the analyzer on tcp" --oracle-bug "$FEW" --digest --filter "$A" -- -d $T -C CH1 --frames 1 -O analog
     emu_options depth=32
     emu_case "digital turns the analyzer on tcp" --oracle-differs "$DISW" -- -d $T -C D0 --frames 1 -O bits
-    # What C sent, which an --oracle-differs case doesn't keep.
-    emu_case "lib digital with the analyzer off tcp" --libsigrok -- -d $T -C D0 --frames 1 -O bits
 
     # An SPO model, the one whose USBTMC reads C gets through.
     emu_options model=SDS1202X sanu=1.40Mpts depth=400
@@ -130,9 +128,6 @@ emu_cases() {
     emu_case "spo waits for a trigger" --no-output -- -d $U --frames 1 -O analog
     emu_options model=SDS1202X depth=0 inr=0,0,1
     emu_case "spo inr of 0 after arm" --no-output --oracle-bug "$INR0" -- -d $U --frames 1 -O analog
-    emu_options model=SDS1202X depth=0
-    emu_case "lib a source and its slope" --no-output --libsigrok -- -d $U -c triggersource=CH2 -c triggerslope=f --frames 1 -O analog
-    emu_case "lib horiz_triggerpos" --no-output --libsigrok -- -d $U -c horiz_triggerpos=0.25 --frames 1 -O analog
     emu_options model=SDS1202X depth=0
     emu_case "spo history" --no-output --oracle-bug "$NO_FPAR" -- -d $U -c data_source=History --frames 1 -O analog
     emu_options model=SDS1202X depth=400

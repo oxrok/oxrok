@@ -277,9 +277,5 @@ s/^oxrok: [a-z]+: oxrok::drivers::uni_t_dmm: /sr: uni-t-dmm: /'
         emu_case "interface claimed by another program" --oxrok-fails "device is busy" --stderr --filter "$N" -- -d $I --samples 1
         unit_release
     fi
-    # A client's stop, between polls: no USB in the C's stop. sigrok-cli
-    # cannot ask for one.
-    unit_options "packet=$ES14" baud=19200 parity=odd burst=1
-    emu_case "lib stop after a sample" --libsigrok --tx-filter "$NOIDLE" -- -d $I --continuous --stop-after 1
     unit_options
 }

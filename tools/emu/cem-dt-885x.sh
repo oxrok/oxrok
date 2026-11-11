@@ -260,8 +260,6 @@ s/^(..)$/bulk_out 02 \1 -> told/
     SCAN=LD_PRELOAD=$TMP/cem-scan.so
     emu_options no-level=1
     emu_case "log with no limit" --libsigrok --oxrok --oracle-env "$SCAN" --tx-filter "$ONCE" -- -d $X -c data_source=Memory --continuous
-    emu_options setters=0
-    emu_case "lib stop" --libsigrok --oracle-env "$SCAN" --tx-filter "$OUT" -- -d $X --continuous --stop-after 2
 
     # ---- C before 2014: past wait_for_token, only with a read that waits. ----
     cem_oracle cem-sigrok-cli

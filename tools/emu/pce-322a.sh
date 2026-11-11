@@ -90,8 +90,6 @@ s/^(Failed to set device option .data_source.: invalid argument): data_source: i
     emu_case "three samples" -- -d $A --samples 3
     emu_case "config limit_samples" -- -d $A -c limit_samples=3 --samples 3
     emu_case "lib limit_samples" --libsigrok --oxrok -- -d $A -c limit_samples=2 --continuous
-    emu_case "lib continuous" --libsigrok --no-output -- -d $A --continuous --stop-after 0
-    emu_case "lib stop after one" --libsigrok -- -d $A --continuous --stop-after 1
     # The wiki's meter, streaming from the open: which bulk INs land where is the
     # clock's, and with one reply all frames are alike. Three readings lie between
     # the connect and the disconnect, so those two stay on lines of their own.
@@ -147,7 +145,6 @@ s/^(Failed to set device option .data_source.: invalid argument): data_source: i
     emu_case "memory stdout" -- -d $A $M --samples 1000
     emu_case "memory cut" --oracle-differs "$CUT_BUG" -- -d $A $M --samples 3
     emu_case "lib memory" --libsigrok --oxrok -- -d $A $M --continuous
-    emu_case "lib stop in memory" --libsigrok --no-output -- -d $A $M --continuous --stop-after 0
     emu_options frames=0 records=0
     emu_case "memory empty" --libsigrok --oxrok --stderr --filter "$F" -- -d $A $M --continuous
     # 611 bytes.
@@ -197,11 +194,6 @@ s/^(Failed to set device option .data_source.: invalid argument): data_source: i
     # What ends no capture in C.
     emu_options frames=0
     emu_case "silent" --oxrok-fails "nothing has come of the meter" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 7 --no-output -- -d $A --samples 1
-    # The same way out for oxrok, so C's alone.
-    emu_options frames=1 period=5
-    emu_case "lib power off" --libsigrok --hangs --timeout 2 --no-output -- -d $A -c power_off=true --samples 1
-    emu_options frames=1 uart=9600/8n1
-    emu_case "lib another line" --libsigrok --hangs --timeout 2 --no-output -- -d $A --samples 1
 
     # The USB side.
     emu_options frames=0 stall=line

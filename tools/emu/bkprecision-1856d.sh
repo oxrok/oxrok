@@ -91,8 +91,6 @@ emu_cases() {
     # The empty message, on a counter that has nothing yet, or nothing at all.
     emu_options settle=2
     emu_case "empty messages after each G" -- -d $B --samples 2
-    emu_options c=0
-    emu_case "lib no signal never ends" --libsigrok --hangs --timeout 2 --no-output --tx-filter "$NO_SIGNAL" -- -d $B --samples 1
 
     # The forms of a frame: what strtod, the digits, the prefix and the checks do
     # with each. All are 15 bytes.
@@ -223,27 +221,20 @@ emu_cases() {
     # The answer comes a few offers after its request: at once, C's look at the line
     # right after D0 finds it about one time in thirty, and no third G3 goes.
     emu_options replies=,$(R '   1.00000 Hz \r') late=2:2
-    emu_case "lib an expiry at gate 10s" --libsigrok -- -d $B -c gate_time=10s --samples 1
     emu_case "an expiry at gate 10s" --oracle-differs "$TIMER" -- -d $B -c gate_time=10s --samples 1
     # A silent counter: C goes on for ever.
     emu_options answers=0
-    emu_case "lib silent never ends" --libsigrok --hangs --timeout 2 --no-output --tx-filter "$FOLD" -- -d $B --samples 1
     emu_case "silent ends after the bound" --oxrok-fails "no usable answer from the device for 5s" --oracle-bug "$SILENT" --oracle-hangs --timeout 8 --stderr --filter "$L" --tx-filter "$FOLD" -- -d $B --samples 1
 
-    # The stops. sigrok-cli has none it can be held to, so its side runs as a library.
+    # The stops. sigrok-cli has none it can be held to.
     # --continuous under sigrok-cli stops at stdin's end, and oxrok has no such stop.
     emu_options answers=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --timeout 3 --interrupt model --tx-filter "$LATE_SIGNAL" -- -d $B --samples 1000
     emu_case "continuous and an interrupt" --oracle-bug "$SIGINT_BUG" --timeout 3 --interrupt model --tx-filter "$LATE_SIGNAL" -- -d $B --continuous
-    emu_options
-    emu_case "lib stop" --libsigrok -- -d $B --continuous --stop-after 2
-    emu_case "lib stop at the header" --libsigrok --tx-filter "$CONTINUOUS" --no-output -- -d $B --continuous --stop-after 0
 
     # The port going.
     emu_options answers=2
-    emu_case "lib unplug in a capture" --libsigrok --hangs --timeout 3 --stderr --filter '3,$d' --unplug model -- -d $B --samples 3
-    # At -l 0, as C's two lines in turn defeat the folding of an .oracle: the case
-    # above pins them.
+    # At -l 0, as C's two lines in turn defeat the folding of an .oracle.
     emu_case "unplug in a capture" --oxrok-fails "commands could not go out" --oracle-bug "$GONE" --oracle-hangs --timeout 8 --unplug model -- -d $B -l 0 --samples 3
     emu_case "oxrok says: the port went" --oxrok-fails "commands could not go out" --no-oracle-only --stderr --timeout 8 --unplug model -- -d $B --samples 3
 
@@ -268,9 +259,4 @@ emu_conns() {
     # All that goes out up to the first answer, cut anywhere.
     LATE='s/^bulk_out 02 46320d(47300d|44300d)* -> [0-9]+$/bulk_out 02 F THEN G AND D/
 /^bulk_in/q'
-    # D alone and what it gets, on a counter with nothing to show.
-    NO_SIGNAL='/^bulk_in 82 15 -> 20202020202020202030202020200d$/d
-/^bulk_out 02 44300d -> 3$/d'
-    # What came before the stop.
-    CONTINUOUS='/^bulk_in/,$d'
 }

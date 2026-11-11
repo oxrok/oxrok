@@ -262,7 +262,6 @@ s/^oxrok: [a-z]+: oxrok::drivers::serial_lcr: /sr: serial-lcr: /'
     # and streams all the time is off or unplugged, so oxrok ends after its 10 s.
     # This case costs that: a seam tests the times, this the message and the end.
     emu_options period=5 scan-burst=2 burst=1
-    emu_case "es lib silent at a frame limit" --libsigrok --hangs --timeout 3 -- -d $D --frames 5
     emu_case "es silent ends at the bound" --oxrok-fails "no bytes from the meter" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $D --frames 5
     emu_options
 

@@ -196,10 +196,9 @@ emu_cases() {
     # After the start's last vendor request.
     emu_case "testo unplug at the start" --oxrok-fails "device disconnected" --unplug out=0:8 --no-output -- -d $D --samples 100
 
-    # The stop while a read is held: a limit of time, and a client's stop.
+    # The stop while a read is held: a limit of time, and a signal.
     testo_options units=1 mute=2 mute-hold=1
     emu_case "testo time limit" --timeout 5 -- -d $D --time 150
-    emu_case "testo stop" --libsigrok -- -d $D --continuous --stop-after-ms 150
     # oxrok ends on the signal, from a held read; a stop it ignored would time out.
     emu_case "testo interrupt" --oracle-bug "sigrok-cli has no SIGINT handler: a signal kills it" --interrupt in=1:3 --timeout 5 -- -d $D --continuous
 

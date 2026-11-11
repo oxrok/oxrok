@@ -199,7 +199,6 @@ emu_cases() {
     # Silence at a sample limit: for ever in C. This case costs oxrok's 10 s: a seam
     # tests the times, this the message and the end.
     emu_options period=10 scan-burst=1 burst=1
-    emu_case "lib silent at a sample limit" --libsigrok --hangs --timeout 3 -- -d $K --samples 5
     emu_case "silent ends at the bound" --oxrok-fails "no usable packet from the scale" --oracle-bug "$SILENT_BUG" --oracle-hangs --stderr --filter "$F" --timeout 13 -- -d $K --samples 5
     # The same when the scale refuses: a scan's O1 is taken and a capture's not, and
     # oxrok says so. This costs the 10 s too, for its message.

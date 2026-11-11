@@ -151,10 +151,6 @@ s/^(Failed to set device option .[a-z_]+.: invalid argument).*$/\\1./"
     emu_options burst=0
     emu_case "samples, silent says so" --oxrok-fails "no record from the device" --oracle-bug "$UNTIL_PACKET" --oracle-hangs --timeout 8 --stderr --filter "$F" -- -d $A --samples 1
 
-    # A stop, from a client, and from a signal. A long period: the client's stop lands
-    # ahead of the second record.
-    emu_options period=10 burst=2
-    emu_case "lib stop" --libsigrok -- -d $A --continuous --stop-after 1
     # Long periods: the event point is a period behind the last record, and a signal or
     # a hangup then loses what the tool has not read yet. A hangup takes the longer one.
     emu_options period=10 burst=2

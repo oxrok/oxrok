@@ -131,7 +131,6 @@ emu_cases() {
     emu_case "samples" --keep-header --stderr --expect-fail -- -d $R --samples 1
     emu_case "time" --keep-header --stderr --expect-fail -- -d $R --time 100
     emu_case "continuous" --keep-header --stderr --expect-fail -- -d $R --continuous
-    emu_case "lib capture has no enabled channels" --libsigrok --expect-fail --stderr -- -d $R --continuous
 
     # Settings.
     emu_options

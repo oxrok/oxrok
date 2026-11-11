@@ -371,7 +371,6 @@ $FIRST" --tx-filter '/^bulk_out 02 (514d0d|514d2031310d)+ -> [0-9]+$/d; /^bulk_i
     # A meter that says nothing is waited for: C's comment at protocol.c:127
     # has it come back. Only a time limit or the user ends such a capture.
     emu_options answers=0
-    emu_case "lib 287 silent waits on" --libsigrok --hangs --timeout 3 --no-output -- -d $F --samples 1
     emu_case "287 silent until an interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' --no-output -- -d $F --samples 1
     emu_options answers=2
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F --continuous

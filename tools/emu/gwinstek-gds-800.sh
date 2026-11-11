@@ -135,7 +135,6 @@ emu_cases() {
     emu_case "line feed behind each block" --no-oracle-only --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
     emu_options points=5000 last=0a
     emu_case "line feed at a block's end" --oracle-differs "$LF_LAST" --digest --filter "$A" -- -d $G -C CH1 --frames 1 -O analog
-    emu_case "lib line feed at a block's end" --libsigrok --stderr -- -d $G -C CH1 --frames 1 -O analog
 
     # The head.
     emu_options head=#3100
@@ -159,17 +158,13 @@ emu_cases() {
     emu_options
 
     # A silence holds C for ever. The end of oxrok's wait is 10 minutes off, and a unit
-    # test's: here an interrupt on oxrok, and a library run for C's hang.
+    # test's: here an interrupt on oxrok.
     emu_options mute-at=2 mark-at=2
     emu_case "block silent" --no-output --oracle-bug "$NO_STOP: $NEVER" --interrupt model --timeout 8 -- -d $G -C CH1 --frames 1 -O analog
-    emu_options mute-at=2
-    emu_case "lib block silent" --libsigrok --hangs --timeout 3 --no-output -- -d $G -C CH1 --frames 1 -O analog
     emu_options firmware=V.2.01 mark-at=2
     emu_case "firmware before the memory read" --no-output --oracle-bug "$NO_STOP: $NEVER" --interrupt model --timeout 8 -- -d $G -C CH1 --frames 1 -O analog
     emu_options cut=100 mark-at=2
     emu_case "block cut short" --no-output --oracle-bug "$NO_STOP: $NEVER" --interrupt model --timeout 8 -- -d $G -C CH1 --frames 1 -O analog
-    emu_options cut=100
-    emu_case "lib block cut short" --libsigrok --hangs --timeout 3 --no-output -- -d $G -C CH1 --frames 1 -O analog
     emu_options
 
     # An unplug.

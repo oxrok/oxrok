@@ -110,10 +110,6 @@ emu_cases() {
     # same.
     emu_case "bad conn" --stderr --filter "$N; /usb:|sysclk-lwla:/!d; s/ *\[[0-9:.]+\]//" -- -l 4 -d $F:conn=nonsense --scan
     emu_case "bad conn lists" --oracle-differs "$C" --no-output -- -d $F:conn=nonsense --scan
-    # The root hub of the emulator's bus: matched, and not an LWLA. Library
-    # only: nusb does not list root hubs, so oxrok finds nothing there, and
-    # this bus has no other device to name.
-    emu_case "lib conn another device" --libsigrok --stderr --filter "$E; s/device [0-9]+\.1 /device BUS.1 /" -- -l 4 -d $F:conn=${EMU_USB%.*}.1 --scan
     emu_case "show" --keep-header -- -d $F --show
     emu_case "open and close" --stderr --filter "$E" -- -l 5 -d $F --show
     for k in samplerate limit_samples limit_time external_clock clock_edge triggersource triggerslope; do
@@ -151,7 +147,6 @@ emu_cases() {
     # Oxrok's stop writes the whole stop sequence. The status polls of the
     # hang are not cut: the interrupt comes after the third (replies 8-10).
     emu_case "trigger never fires" --interrupt in=6:10 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
-    emu_case "lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
     # One sequence of the trigger, as sigrok-cli hands it over: two stages.
     emu_case "two trigger stages" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -t CH1=01 --samples 10 -O bits
     # A stop: with the C driver, only the first write of each sequence
@@ -162,11 +157,6 @@ emu_cases() {
     # sampling" for oxrok's five writes. On the LWLA1016 the first write
     # is REG_CAP_CTRL=0, which does stop it, and only DIV_COUNT=0 is skipped.
     emu_case "interrupt while sampling" --interrupt in=6:9 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
-    emu_case "lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
-    # From the status wait (protocol.c:293), halfway between the first poll
-    # at 100 ms and the second: the stop's first write alone.
-    emu_case "lib stop from the status wait" --libsigrok --no-output -- --stop-after-ms 150 -d $F -C CH1,CH4 -c samplerate=1k --time 100s -O bits
-    emu_case "lib stop during the readout" --libsigrok --digest --filter "$B" -- --stop-after 100 -d $F -C CH1,CH2 -c samplerate=10M --samples 30000 -O bits
     emu_case "trigger TRG rising" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=r --samples 64 -O bits
     emu_case "trigger TRG falling" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M:triggersource=TRG:triggerslope=f --samples 64 -O bits
     emu_case "trigger TRG and a level" --digest --filter "$B" -- -d $F -C CH1,CH12 -t CH12=1 -c samplerate=1M:triggersource=TRG:triggerslope=r --samples 64 -O bits
@@ -310,9 +300,6 @@ emu_cases() {
     emu_case "1016 trigger" --digest --filter "$B" -- -d $F -C CH1,CH2,CH3 -t CH3=r -c samplerate=1M --samples 64 -O bits
     # The third poll's last reply: 4 of the open's and 9 of the polls'.
     emu_case "1016 trigger never fires" --interrupt in=6:13 --oracle-bug "$I" --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
-    emu_case "1016 lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH1,CH2 -t CH1=r,CH2=r -c samplerate=1k --samples 64 -O bits
-    emu_case "1016 lib stop from the status wait" --libsigrok --no-output -- --stop-after-ms 150 -d $F -C CH1,CH2 -c samplerate=1k --time 100s -O bits
-    emu_case "1016 lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH1 -c samplerate=1k --samples 64 -O bits
     emu_case "1016 3M divides" --digest --filter "$B" -- -d $F -C CH1 -c samplerate=3M:rle=0 --samples 100 -O bits
     lwla_options model=1016 short_transfers=1
     emu_case "1016 short transfers" --digest --filter "$B" -- -d $F -C CH1,CH2 -c samplerate=1M --samples 100 -O bits

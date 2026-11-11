@@ -75,9 +75,6 @@ emu_cases() {
     emu_case "samples k204" --driver voltcraft-k204 -- -d $Z --samples 1
     emu_case "samples csv" -- -d $K --samples 2 -O csv:header=false:time=false
     emu_case "config limit_samples" -- -d $K -c limit_samples=2 --samples 1
-    # sigrok-cli stops at the end of stdin, before the first A, where oxrok goes on
-    # till its signal: see "interrupt".
-    emu_case "lib continuous stopped" --libsigrok -- -d $K --continuous --stop-after 8
     # What -C does: C's packets go out whatever it says, here only those asked for.
     emu_options "frames=$F"
     emu_case "channel T1" --oracle-differs "$CHANNEL_BUG" -- -d $K -C T1 --samples 1

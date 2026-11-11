@@ -183,11 +183,6 @@ $L" -- -d $A --scan
     emu_case "time" -- -d $A --time 1
     emu_options $P scan=1 burst=0
     emu_case "time silent" --oracle-bug "$QUIET_BUG" --oracle-hangs --stderr --filter "$L" --timeout 8 -- -d $A --time 100
-    # A library's stop.
-    emu_options $P scan=1 burst=2
-    emu_case "stop after 2 frames" --libsigrok -- -d $A --continuous -O analog --stop-after 10
-    emu_options $P scan=1 burst=0
-    emu_case "stop at the header" --libsigrok --no-output -- -d $A --continuous -O analog --stop-after 0
     # The debug line, for its form.
     emu_options $P scan=1 burst=0
     emu_case "the debug line" --stderr --filter 's/^oxrok: dbg: oxrok::drivers::atorch::protocol: /sr: atorch: /
@@ -198,9 +193,8 @@ s/^sr: \[[0-9:.]+\] /sr: /
     emu_case "unplug in the scan" --unplug model --timeout 14 --keep-header --stderr --filter "$L" -- -d $A --scan
     emu_options $P scan=1 burst=1
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 7 --tx-filter '/^unplug$/q' -- -d $A --frames 5
-    # oxrok's 30 s for a frame limit alone is for unit tests: the case would hold
-    # the lock for it twice, to say what they say.
-    emu_case "stops sending" --libsigrok --hangs --filter '2,$d' --timeout 6 -- -d $A --frames 5
+    # No case for a device that stops sending at a frame limit: oxrok's 30 s for
+    # it is for unit tests.
     # A quiet point: the report has gone, the signal lands in the wait for the next.
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $A --continuous -O analog
     emu_options

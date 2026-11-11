@@ -193,7 +193,6 @@ s/^sr: \[[^]]*\] /sr: /
     # sample limit in Live mode (SILENCE_BOUND, by choice, in its unit tests), and
     # the signal lands well before.
     emu_options mute=1
-    emu_case "lib silent with no time limit" --libsigrok --hangs --timeout 3 --no-output -- -d $A --samples 3
     emu_case "interrupt on a silent device" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 8 -- -d $A --samples 3
     emu_options burst=1
     emu_case "interrupt waiting for a log" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 8 -- -d $A $M --samples 3

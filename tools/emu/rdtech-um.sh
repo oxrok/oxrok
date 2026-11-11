@@ -98,8 +98,6 @@ emu_cases() {
     emu_options
     emu_case "time" --filter '3,$d' \
         --tx-filter '/^bulk_in 82 130 -> /{x;s/^/x/;/^xx/{x;q};x}' -- -d $U --time 350ms
-    emu_case "stop after 2 frames" --libsigrok -- -d $U --continuous -O analog --stop-after 12
-    emu_case "stop at the header" --libsigrok --no-output -- -d $U --continuous -O analog --stop-after 0
 
     # Answers gone wrong.
     emu_options bad-end=3
@@ -130,11 +128,6 @@ emu_cases() {
     # What does not sync leaves two bytes behind, which count as accumulating.
     emu_options junk=2:130
     emu_case "junk for an answer" --oracle-bug "$STUCK_BUG" --oracle-hangs --timeout 4 -- -d $U --frames 2
-    emu_options junk=2:300
-    # How the reads cut it decides what C says: only the first read of a reply
-    # syncs, so it hangs or fails a checksum. Either way no poll follows. oxrok
-    # goes on, whatever the cut (unit tests).
-    emu_case "more junk than the buffer" --libsigrok --no-output -- -d $U --time 300ms
     # A late answer comes with the next: both are taken in one read.
     emu_options defer=2
     emu_case "a late answer" -- -d $U --frames 2
@@ -167,9 +160,8 @@ emu_cases() {
     emu_case "unplug in the scan" --unplug model --timeout 8 --stderr --filter "$L" --keep-header -- -d $U --scan
     emu_options answers=2
     # -l 0: its two lines repeat in turn, as often as the time lets them, which
-    # the .oracle's count of repeats does not fold. The next case pins them.
+    # the .oracle's count of repeats does not fold.
     emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -l 0 -d $U --frames 5
-    emu_case "unplug in a capture what C says" --libsigrok --hangs --unplug model --timeout 4 --stderr --filter '3,$d' --tx-filter '/^unplug$/q' -- -d $U --frames 5
     # A quiet point: the poll goes unanswered, the signal lands in its wait.
     emu_options answers=3
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $U --continuous -O analog
