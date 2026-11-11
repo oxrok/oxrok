@@ -265,10 +265,13 @@ The models are plain Rust with no I/O for this reason; see
 - `tools/ci/changes.py` balances emulator shards by golden case count,
   a rough proxy (a 12-minute and a 22-minute shard had 1339 and 1789
   cases). `diffcli.sh` printing each model's elapsed time would allow
-  real weights. It also treats all of `src/serial`, `src/usb`,
-  `src/cli` and `src/formats` as core; per-file rules (`tcpraw.rs` is
-  used by the TCP drivers only) would narrow the full runs that most
-  driver ports still trigger.
+  real weights. A submodule of `src/core`, `src/serial`, `src/usb`,
+  `src/cli` or `src/formats` selects only the drivers that name it
+  when it can tell (`core/softtrig.rs`); the rest still select
+  everything, mostly because `cli` or a sibling uses them.
+  `serial/tcpraw.rs` is one: `serial::open` hands it any `tcp-raw/`
+  port, so it could select the TCP drivers plus the models served
+  with `EMU_TCP`, if the replay tests cover the other drivers' use.
 - Delete the cases only the oracle runs, now that `diffcli.sh` runs
   oxrok against the goldens by default and skips them: the library-only
   cases (`emu_case --libsigrok` without `--oxrok`, about 170 lines, 13 in

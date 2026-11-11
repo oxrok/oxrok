@@ -13,10 +13,11 @@ jobs:
   # Which slow jobs this run needs (tools/ci/changes.py). A push to main
   # runs everything. A pull request runs the emulator models of the
   # drivers, models and shells it changes, and the Python decoder jobs
-  # only when it changes decoder code; core code, shared emulator code,
-  # Cargo.lock, this file and any path the script does not know select
-  # everything. The label `ci:full` selects everything too: add it, then
-  # re-run all jobs. The step summary says what each path selected.
+  # only when it changes decoder code; core code (except a submodule
+  # only some drivers name, such as core/softtrig.rs), shared emulator
+  # code, Cargo.lock, this file and any path the script does not know
+  # select everything. The label `ci:full` selects everything too: add
+  # it, then re-run all jobs. The step summary says what each path selected.
   # tests/emu_replay.rs replays every model in the test job regardless.
   changes:
     name: changes

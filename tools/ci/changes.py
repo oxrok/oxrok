@@ -4,8 +4,11 @@
 Two jobs are expensive: the emulator tier (oxrok against the goldens,
 through vhci-hcd) and the Python decoder runs. A pull request that
 changes one driver needs that driver's emulator models only; one that
-changes no decoder code needs no Python run. Anything this script does
-not recognise selects everything: it fails safe, not open.
+changes no decoder code needs no Python run. Core code (src/core, usb,
+serial, cli, formats) selects everything, except a submodule whose users
+the text shows: core/softtrig.rs selects the drivers that use soft
+triggers. Anything this script does not recognise selects everything:
+it fails safe, not open.
 
     changes.py --base REV --head REV [--event NAME] [--labels a,b]
     changes.py --files PATH... (no git; for a dry run)
@@ -235,6 +238,77 @@ class Repo:
             got |= self._tcp_models
         return self.model_users(got)
 
+    def leaf_users(self, path: str) -> tuple[set[str], set[str]] | None:
+        """Who uses a submodule of a core module: (modules, driver dirs).
+
+        `src/core/softtrig.rs` is in core, which every driver goes through,
+        but only the code that names it, or a name its module re-exports
+        from it, can see a change to it. None when that cannot be told
+        from the text, and the change then selects everything: the file is
+        the module's own mod.rs, or is gone; it defines a macro or adds an
+        impl to a type it does not define (its users need not name it);
+        the module re-exports all of it; a glob import of the module could
+        bring one of its traits into scope; or the crate root, a sibling or
+        another core module names it.
+        """
+        parts = PurePosixPath(path).parts
+        top, sub = parts[1], PurePosixPath(parts[2]).stem
+        if len(parts) == 3 and (PurePosixPath(parts[2]).suffix != ".rs" or sub == "mod"):
+            return None
+        rel = f"src/{top}/{sub}"
+        if (self.root / rel).is_dir():
+            leaf = self.text(rel)
+        elif (self.root / f"{rel}.rs").is_file():
+            leaf = self.text(f"{rel}.rs")
+        else:
+            return None
+        if re.search(r"macro_rules!|#\[macro_export\]", leaf):
+            return None
+        defined = set(
+            re.findall(r"\b(?:struct|enum|union|trait|type)\s+([A-Za-z_][A-Za-z0-9_]*)", leaf)
+        )
+        for target in re.findall(
+            r"^\s*(?:unsafe\s+)?impl\b(?:\s*<[^{]*?>)?\s+(?:[^{]*?\bfor\s+)?&?(?:mut\s+)?"
+            r"(?:dyn\s+)?([A-Za-z_][A-Za-z0-9_:]*)",
+            leaf,
+            re.M,
+        ):
+            if target.rsplit("::", 1)[-1] not in defined:
+                return None
+        mod_path = self.root / f"src/{top}/mod.rs"
+        mod_rs = mod_path.read_text(errors="replace") if mod_path.is_file() else ""
+        names = {sub}
+        for spec in re.findall(rf"\bpub\s+use\s+(?:self::)?{sub}::([^;]*);", mod_rs):
+            if "*" in spec:
+                return None
+            names |= set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\b", spec)) - {"as", "self"}
+        mod_rs = re.sub(rf"\bpub\s+(?:mod\s+{sub}|use\s+(?:self::)?{sub}::[^;]*);", "", mod_rs)
+        name_re = re.compile(r"\b(?:%s)\b" % "|".join(sorted(map(re.escape, names))))
+        glob_re = re.compile(rf"(?:crate|oxrok)::{top}::\*")
+        mods: set[str] = set()
+        drivers: set[str] = set()
+        for f in sorted((self.root / "src").rglob("*.rs")):
+            r = f.relative_to(self.root).as_posix()
+            if r == f"{rel}.rs" or r.startswith(f"{rel}/"):
+                continue
+            text = mod_rs if r == f"src/{top}/mod.rs" else f.read_text(errors="replace")
+            fp = PurePosixPath(r).parts
+            if glob_re.search(text) or (fp[1] == top and re.search(r"^use super::\*", text, re.M)):
+                return None
+            if not name_re.search(text):
+                continue
+            if len(fp) < 3 or fp[1] == top or fp[1] in CORE_MODULES:
+                return None
+            if fp[1] == "drivers":
+                if len(fp) < 4:
+                    return None
+                drivers.add(fp[2])
+            elif fp[1] in self.module_dirs:
+                mods.add(fp[1])
+            else:
+                return None
+        return mods, drivers
+
     def golden_weight(self, model: str) -> int:
         """How long a model runs, by its golden case count."""
         d = self.root / "tests/emu" / model
@@ -331,7 +405,21 @@ def classify(
             sel.python = True
             sel.note(path, "decoders: python")
         elif len(parts) >= 3 and parts[0] == "src" and parts[1] in CORE_MODULES:
-            sel.everything(f"src/{parts[1]} is used by every driver", path)
+            users = repo.leaf_users(path)
+            if users is None:
+                sel.everything(f"src/{parts[1]} is used by every driver", path)
+                continue
+            mods = set().union(*(repo.module_users(m) for m in users[0]))
+            if mods & CORE_MODULES:
+                sel.everything(f"src/{parts[1]}: used by a module every driver uses", path)
+                continue
+            got = repo.models_of_drivers(users[1] | repo.drivers_using(mods))
+            sel.models |= got
+            uses = ", ".join(sorted(got)) or "no emulator model"
+            if mods & DECODER_MODULES:
+                sel.python = True
+                uses += "; python"
+            sel.note(path, f"used only by {', '.join(sorted(users[1] | users[0])) or 'nothing'}: {uses}")
         elif len(parts) >= 3 and parts[0] == "src" and parts[1] in repo.module_dirs:
             mods = repo.module_users(parts[1])
             got = repo.models_of_drivers(repo.drivers_using(mods))
