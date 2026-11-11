@@ -14,6 +14,9 @@ the same layout with the notices and the bundled decoders added
 Python decoders, which `oxrok` finds under
 `/usr/share/libsigrokdecode/decoders`, recommends the fx2lafw firmware,
 and installs `contrib/60-oxrok.rules` with the `uaccess` policy file.
+The published tarballs up to 0.2.0 predate those rules, so `Source0`
+builds from the release after 0.2.0 on; until then, the tarball comes
+from `make vendor-src`, as Packit makes it.
 
 [Packit](https://packit.dev) reads `.packit.yaml` at the root and, once
 the Packit GitHub App is installed on the repository and the

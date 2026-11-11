@@ -20,13 +20,16 @@ Summary:        A sigrok compatible logic analyzer, multimeter and oscilloscope 
 # (MIT OR Apache-2.0) AND Unicode-DFS-2016
 # 0BSD OR MIT OR Apache-2.0
 # Apache-2.0
+# Apache-2.0 AND ISC
 # Apache-2.0 OR BSL-1.0
+# Apache-2.0 OR ISC OR MIT
 # Apache-2.0 OR MIT
 # Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
 # BSD-2-Clause OR Apache-2.0 OR MIT
 # BSD-2-Clause OR MIT OR Apache-2.0
 # BSD-2-Clause-Views
 # BSD-3-Clause OR MIT OR Apache-2.0
+# BSD-3-Clause
 # BSL-1.0
 # CC0-1.0
 # CC0-1.0 OR MIT-0 OR Apache-2.0
@@ -46,8 +49,11 @@ Summary:        A sigrok compatible logic analyzer, multimeter and oscilloscope 
 # Zlib
 # Zlib OR Apache-2.0 OR MIT
 # bzip2-1.0.6
-License:        GPL-3.0-or-later AND ((MIT OR Apache-2.0) AND Unicode-3.0) AND ((MIT OR Apache-2.0) AND Unicode-DFS-2016) AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR MIT OR Apache-2.0) AND BSD-2-Clause-Views AND (BSD-3-Clause OR MIT OR Apache-2.0) AND BSL-1.0 AND CC0-1.0 AND (CC0-1.0 OR MIT-0 OR Apache-2.0) AND (GPL-3.0-or-later OR Apache-2.0) AND ISC AND LGPL-3.0-only AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR GPL-3.0-only) AND (MIT OR Zlib OR Apache-2.0) AND MPL-2.0 AND PSF-2.0 AND Unicode-3.0 AND (Unlicense OR MIT) AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND bzip2-1.0.6
+License:        GPL-3.0-or-later AND ((MIT OR Apache-2.0) AND Unicode-3.0) AND ((MIT OR Apache-2.0) AND Unicode-DFS-2016) AND (0BSD OR MIT OR Apache-2.0) AND Apache-2.0 AND (Apache-2.0 AND ISC) AND (Apache-2.0 OR BSL-1.0) AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR MIT) AND (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR Apache-2.0 OR MIT) AND (BSD-2-Clause OR MIT OR Apache-2.0) AND BSD-2-Clause-Views AND (BSD-3-Clause OR MIT OR Apache-2.0) AND BSD-3-Clause AND BSL-1.0 AND CC0-1.0 AND (CC0-1.0 OR MIT-0 OR Apache-2.0) AND (GPL-3.0-or-later OR Apache-2.0) AND ISC AND LGPL-3.0-only AND MIT AND (MIT OR Apache-2.0) AND (MIT OR Apache-2.0 OR LGPL-2.1-or-later) AND (MIT OR GPL-3.0-only) AND (MIT OR Zlib OR Apache-2.0) AND MPL-2.0 AND PSF-2.0 AND Unicode-3.0 AND (Unlicense OR MIT) AND Zlib AND (Zlib OR Apache-2.0 OR MIT) AND bzip2-1.0.6
 URL:            https://oxrok.dev
+# The first release this spec builds from is the one after 0.2.0: the
+# 0.2.0 tarball predates contrib/'s udev rules, which %%install takes.
+# Packit builds from the tarball `make vendor-src` makes of the tree.
 Source0:        https://github.com/oxrok/oxrok/releases/download/v%{version}/oxrok-%{version}-vendored.tar.xz
 
 ExclusiveArch:  %{rust_arches}
