@@ -99,6 +99,17 @@ impl SoftTrigger {
         Some(SoftTrigger { stages, combine, unit_size, stage: 0, fired: false, prev: None })
     }
 
+    /// Arms the matcher again, its stages from the start, with `prev`
+    /// as the sample before the next one fed: an edge between them is
+    /// seen. `None` forgets it, as a new matcher does.
+    pub fn rearm(&mut self, prev: Option<&[u8]>) {
+        for s in &mut self.stages {
+            (s.hits, s.run, s.held, s.done) = (0, 0, false, false);
+        }
+        (self.stage, self.fired) = (0, false);
+        self.prev = prev.map(<[u8]>::to_vec);
+    }
+
     /// Bytes per sample.
     pub fn unit_size(&self) -> usize {
         self.unit_size

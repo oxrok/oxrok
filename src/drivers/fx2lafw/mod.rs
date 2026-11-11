@@ -428,11 +428,21 @@ impl Fx2lafwDevice {
                             "{name}: a trigger range takes enabled channels only"
                         )));
                     }
+                    // A stage whose conditions are all on disabled
+                    // channels would match at once: refused, where
+                    // libsigrok's path drops the conditions as C does.
                     let mut t = t.clone();
-                    for st in &mut t.stages {
+                    for (i, st) in t.stages.iter_mut().enumerate() {
+                        let had = !st.conditions.is_empty();
                         st.conditions.retain(|c| enabled(c.channel));
+                        if had && st.conditions.is_empty() && st.range.is_none() {
+                            return Err(Error::Arg(format!(
+                                "trigger stage {}: every channel in it is disabled",
+                                i + 1
+                            )));
+                        }
                     }
-                    return Ok(HostTrigger::soft(t, unit_size, pre));
+                    return Ok(HostTrigger::soft(&t, unit_size, pre));
                 }
                 let stages = t
                     .stages
@@ -899,13 +909,13 @@ enum HostTrigger {
     /// libsigrok's, for the triggers it can run.
     Logic(SoftTriggerLogic),
     /// The general matcher, with its own pre-trigger buffer.
-    Soft { trigger: Trigger, matcher: SoftTrigger, pre: PreTriggerBuffer },
+    Soft { matcher: SoftTrigger, pre: PreTriggerBuffer },
 }
 
 impl HostTrigger {
-    fn soft(trigger: Trigger, unit_size: usize, pre: usize) -> Self {
-        let matcher = SoftTrigger::new(&trigger, unit_size).expect("a trigger with stages");
-        HostTrigger::Soft { trigger, matcher, pre: PreTriggerBuffer::new(unit_size, pre) }
+    fn soft(trigger: &Trigger, unit_size: usize, pre: usize) -> Self {
+        let matcher = SoftTrigger::new(trigger, unit_size).expect("a trigger with stages");
+        HostTrigger::Soft { matcher, pre: PreTriggerBuffer::new(unit_size, pre) }
     }
 
     /// The offset in samples of the trigger point in `buf` and the
@@ -925,22 +935,19 @@ impl HostTrigger {
         }
     }
 
-    /// A frame ended, with or without data after it in the transfer.
-    /// libsigrok's is rearmed only with data after it, as in protocol.c;
-    /// the general matcher always, as it stays fired until rearmed.
-    fn frame_ended(&mut self, data_follows: bool) {
-        if data_follows || matches!(self, HostTrigger::Soft { .. }) {
-            self.rearm();
-        }
-    }
-
-    /// Arms the trigger again for the next frame.
-    fn rearm(&mut self) {
+    /// A frame ended, with or without data after it in the transfer;
+    /// `before` is the transfer up to the next sample checked. libsigrok's is
+    /// rearmed only with data after it, as in protocol.c, and keeps the
+    /// sample it saw last. The general matcher is rearmed always, as it
+    /// stays fired until then, after `last`, so that an edge on the next
+    /// sample is seen.
+    fn frame_ended(&mut self, data_follows: bool, before: &[u8]) {
         match self {
-            HostTrigger::Logic(stl) => stl.cur_stage = 0,
-            HostTrigger::Soft { trigger, matcher, .. } => {
-                *matcher =
-                    SoftTrigger::new(trigger, matcher.unit_size()).expect("a trigger with stages");
+            HostTrigger::Logic(stl) if data_follows => stl.cur_stage = 0,
+            HostTrigger::Logic(_) => {}
+            HostTrigger::Soft { matcher, .. } => {
+                let u = matcher.unit_size();
+                matcher.rearm(before.len().checked_sub(u).map(|at| &before[at..]));
             }
         }
     }
@@ -1074,7 +1081,7 @@ impl Acquisition {
                     trigger_fired = false;
                     sink.send(Packet::FrameEnd);
                     if let Some(stl) = self.stl.as_mut() {
-                        stl.frame_ended(processed < cur);
+                        stl.frame_ended(processed < cur, &data[..processed as usize * u]);
                     }
                     // Another trigger may be in the rest of the data.
                     if processed < cur {
@@ -1282,7 +1289,7 @@ mod tests {
             crate::core::TriggerRange { channels: vec![0, 1], low: 2, high: 3, inside: true },
         );
         assert!(!is_libsigrok_trigger(&t));
-        let stl = HostTrigger::soft(t, 2, 1);
+        let stl = HostTrigger::soft(&t, 2, 1);
         let data = vec![0x00, 0xff, 0x01, 0xff, 0x02, 128, 0x03, 192, 0x04, 0];
         let packets = run(ax_acquisition(3, Some(stl)), vec![data]);
         assert_eq!(
@@ -1315,7 +1322,7 @@ mod tests {
             analog: vec![],
             limit_samples: 2,
             limit_frames: 2,
-            stl: Some(HostTrigger::soft(t, 1, 0)),
+            stl: Some(HostTrigger::soft(&t, 1, 0)),
         };
         let packets = run(acq, vec![vec![0, 1, 1], vec![0, 0, 1, 1]]);
         let frame =
@@ -1340,6 +1347,46 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::sync_channel(16);
         let e = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
         assert!(e.contains("D1: a trigger range takes enabled channels only"), "{e}");
+    }
+
+    #[test]
+    fn an_edge_on_the_first_sample_after_a_frame_triggers_the_next() {
+        // D0 falling, once (a count: the general matcher). The second
+        // fall is at the first sample after the first frame, against the
+        // last sample of that frame.
+        let mut t = Trigger::new();
+        t.add(0, 0, TriggerMatch::Falling);
+        t.set_count(0, crate::core::TriggerCount { count: 1, consecutive: false });
+        assert!(!is_libsigrok_trigger(&t));
+        let acq = Acquisition {
+            command: [0x40, 0, 47],
+            samplerate: 1_000_000,
+            unit_size: 1,
+            analog: vec![],
+            limit_samples: 2,
+            limit_frames: 2,
+            stl: Some(HostTrigger::soft(&t, 1, 0)),
+        };
+        let packets = run(acq, vec![vec![1, 0, 1, 0, 0]]);
+        let frame = |d: Vec<u8>| {
+            [Packet::Trigger, Packet::FrameBegin, Packet::logic(1, d), Packet::FrameEnd]
+        };
+        assert_eq!(packets, [frame(vec![0, 1]), frame(vec![0, 0])].concat());
+    }
+
+    #[test]
+    fn a_general_stage_left_without_conditions_is_refused() {
+        // D0=r|D1=r with D0 disabled: the first stage would match at once.
+        let mut d = device("USBee AX");
+        let mut t = Trigger::new();
+        t.add(0, 0, TriggerMatch::Rising);
+        t.add(1, 1, TriggerMatch::Rising);
+        t.combine = TriggerCombine::Or;
+        d.set_trigger(Some(t)).unwrap();
+        d.enable_channel(0, false).unwrap();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(16);
+        let e = d.start(PacketSink::new(tx, 0)).unwrap_err().to_string();
+        assert!(e.contains("trigger stage 1: every channel in it is disabled"), "{e}");
     }
 
     #[test]
