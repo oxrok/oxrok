@@ -1917,10 +1917,20 @@ EOF
     emu_bless_write() {
         bw_mode=$1; shift
         while [ $# -ge 2 ]; do
+            # A write that fails fails the case (why), which the bless
+            # then counts as not written, rather than as a new golden.
             if [ ! -f "$2" ]; then
-                mkdir -p "$(dirname "$2")"; cp "$1" "$2"; bw_new=$((bw_new + 1))
+                if mkdir -p "$(dirname "$2")" && cp "$1" "$2"; then
+                    bw_new=$((bw_new + 1))
+                else
+                    why="$why; could not write $2"
+                fi
             elif [ "$bw_mode" = all ] && ! cmp -s "$1" "$2"; then
-                cp "$1" "$2"; bw_changed=$((bw_changed + 1))
+                if cp "$1" "$2"; then
+                    bw_changed=$((bw_changed + 1))
+                else
+                    why="$why; could not write $2"
+                fi
             fi
             shift 2
         done
