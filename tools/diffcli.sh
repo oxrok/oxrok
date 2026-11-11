@@ -289,8 +289,14 @@ strip_header() {
 to_cmp() {
     if [ "$which" = stderr ]; then
         # The core's refusals (oxrok::core::config_set) under libsigrok's
-        # name; drivers' filters read the one form.
-        sed -E 's/^oxrok: err: oxrok::core::hwdriver: /sr: hwdriver: /' "$TMP/$1.err" >"$TMP/$1.cmp"
+        # name; drivers' filters read the one form. In a case checked
+        # against libsigrok, oxrok's hint after a run that missed firmware
+        # ("oxrok: missing firmware ...", its last line) has no
+        # counterpart and goes before a filter reads the last line.
+        drop=""
+        [ "${libsig:-0}" = 1 ] && drop='/^oxrok: missing firmware /d;'
+        sed -E "$drop s/^oxrok: err: oxrok::core::hwdriver: /sr: hwdriver: /" \
+            "$TMP/$1.err" >"$TMP/$1.cmp"
     elif [ $strip = 1 ]; then
         strip_header <"$TMP/$1.out" >"$TMP/$1.cmp"
     else
