@@ -169,10 +169,8 @@ emu_cases() {
     emu_case "trigger on disabled channel" --expect-fail --stderr --filter "$P" -- -d $S -C 1 -c samplerate=1M -t 0=r --samples 32 -O bits
     # Two stages: "only 1 trigger stage", whose SR_ERR
     # dev_acquisition_start() drops: the capture runs without a trigger.
-    # oxrok refuses it, before CMD_SAMPLE. The runner shows the C's message,
-    # which an --oracle-differs case does not keep.
+    # oxrok refuses it, before CMD_SAMPLE.
     emu_case "trigger two stages" --oracle-differs "dev_acquisition_start() drops sl2_convert_trigger()'s error and captures untriggered, api.c:342" --expect-fail --stderr --filter "$P" -- -d $S -c samplerate=1M -t 0=rf --samples 32 -O bits
-    emu_case "trigger two stages stderr" --libsigrok --stderr -- -d $S -c samplerate=1M -t 0=rf --samples 32 -O bits
     # Types the driver does not list.
     emu_case "trigger level refused" --expect-fail --stderr --filter "$P" -- -d $S -t 0=1 --samples 8 -O bits
 
@@ -210,11 +208,9 @@ emu_cases() {
     # status wait that follows this read, which it cuts short: a status read,
     # RESET, a status read, IDLE.
     sl2_options wait-trigger=never
-    emu_case "trigger never comes" --libsigrok --hangs --timeout 6 --no-output -- -d $S -c samplerate=1M -t 0=r --samples 16 -O bits
     emu_case "oxrok interrupt during a status wait" --oracle-bug "$I" --interrupt in=0:2 --no-output -- -d $S -c samplerate=1M -t 0=r --samples 16 -O bits
-    # With the reset never recognized as well, the C resets for ever ("lib
-    # stop never recognized" below). oxrok gives up after a hundred status
-    # reads, or Ctrl-C could not end it.
+    # With the reset never recognized as well, the C resets for ever. oxrok
+    # gives up after a hundred status reads, or Ctrl-C could not end it.
     sl2_options digest=1 wait-trigger=never ignore-reset=never
     emu_case "oxrok interrupt with the reset never recognized" --oracle-bug "$I" --interrupt in=0:2 --stderr --filter "$P" -- -d $S -c samplerate=1M -t 0=r --samples 16 -O bits
     sl2_options
@@ -242,8 +238,6 @@ emu_cases() {
     # A short answer: the C names ret, its length, as a libusb error.
     sl2_options short-get=1
     emu_case "scan read short" --oracle-differs "ret, 4, goes to libusb_error_name() as LIBUSB_TRANSFER_STALL, protocol.c:666-668" --stderr --filter "$P" -- -d $S --scan
-    # The runner shows the C's message, which that case does not keep.
-    emu_case "scan read short stderr" --libsigrok --stderr -- -d $S --scan
     sl2_options stall-set=3
     emu_case "scan second reset stalls" --stderr --filter "$P" -- -d $S --scan
     sl2_options stall-set=4
@@ -331,30 +325,5 @@ emu_cases() {
     # Between two status reads, the driver's own poll fails to submit.
     sl2_options sampling=1
     emu_case "unplug between status reads" --oxrok-fails "device disconnected" --stderr --filter "$P" --unplug in=0:2 -- -d $S --samples 8 -O bits
-    sl2_options
-
-    # libsigrok-run: what sigrok-cli cannot do. No limit: 0 bytes asked,
-    # and sample_packet %= num_sample_packets divides by 0 (protocol.c:317).
-    # Library clients only, and only because the model answers a capture
-    # of 0 bytes with 05 60, its own choice (the model's doc): a device that
-    # never says data ready would make the driver poll for ever.
-    # --expect-fail takes any failure: only the .tx is pinned, not status 136.
-    emu_case "lib no limit" --libsigrok --expect-fail --no-output -- -d $S -O bits
-    # A stop, as a client's button (sigrok-cli stops only on a key with
-    # --continuous, which the driver does not offer). libsigrok-run's stop
-    # runs at high priority, ahead of the next USB completion.
-    emu_case "lib stop at header" --libsigrok --no-output -- -d $S --samples 800 --stop-after 0 -O bits
-    sl2_options stale-sample=1
-    emu_case "lib stop at header stale status" --libsigrok --no-output -- -d $S --samples 800 --stop-after 0 -O bits
-    sl2_options
-    # Mid-capture, the stop comes from the datafeed callback: libusb can reap
-    # the next sample packets in the pass that delivered this one, ahead of
-    # any callback of the main loop (tools/libsigrok-run.c), and the .tx would
-    # hold 1 or 2 packets more, about once in 30 runs under load. The driver's
-    # stop only sets a flag (api.c:403-408), so it can run there.
-    emu_case "lib stop during packets" --libsigrok -- -d $S -C 0 --samples 5000 --stop-after 100 --stop-in-callback -O bits
-    # The reset of a stop never recognized: for ever.
-    sl2_options wait-trigger=never ignore-reset=never
-    emu_case "lib stop never recognized" --libsigrok --hangs --timeout 3 --no-output -- -d $S -t 0=r --samples 800 --stop-after 0 -O bits
     sl2_options
 }

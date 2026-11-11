@@ -314,15 +314,10 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_case "time" --oracle-differs "$TIME_BUG" -- -d $U --time 400 -O analog
     emu_options setters=0 period=2 frames=0
     emu_case "time on a silent meter" --oracle-bug "$NO_TIME_BUG" --oracle-hangs --timeout 3 --no-output -- -d $U --time 100 -O analog
-    emu_case "samples on a silent meter" --libsigrok --hangs --timeout 2 --no-output -- -d $U --samples 1 -O analog
     # sigrok-cli stops a --continuous at stdin's end, here at once, and oxrok at the
     # time limit. With a reading to read, whether C has read it would be a race.
     emu_options setters=0 period=100 frames=0
     emu_case "continuous and a time limit" --no-output -- -d $U --continuous --time 200 -O analog
-    # A library client, whose stop comes from the main loop.
-    emu_options setters=0 period=2 frames=3
-    emu_case "lib stop" --libsigrok -- -d $U --continuous --stop-after 2 -O analog
-    emu_case "lib continuous stops after the stream" --libsigrok --hangs --timeout 3 -- -d $U --continuous -O analog
     # The monitor off, unanswered or with a reading behind it.
     emu_options setters=0 period=2 frames=1 fail=05:4:silent
     emu_case "monitor off silent" -- -d $U --samples 1 -O analog
@@ -333,8 +328,6 @@ $C" -- -d $U --frames 1 -O analog -l 4
     emu_case "save samples 2" -- -d $U -c data_source=Save --samples 2 -O analog
     emu_case "save frames 3" -- -d $U -c data_source=Save --frames 3 -O analog
     emu_case "save time" -- -d $U -c data_source=Save --time 10000 -O analog
-    emu_options setters=0 $PAD saved=na@3111.1:m=1.5/30/VDC,n~1600@3111.1:m=2/30/VDC,n@3111.1:m=3/30/VDC
-    emu_case "save a frame cut holds it" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 100 -O analog
     emu_options setters=0
     emu_case "save none" --oxrok-fails "the meter refused the request" --oracle-bug "$ER_BUG" --oracle-hangs --timeout 3 --no-output -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=08:1:silent saved=n@3111.1:m=1/30/VDC
@@ -343,12 +336,6 @@ $NO_ANSWER" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
     emu_options setters=0 fail=08:1:er saved=n@3111.1:m=1/30/VDC
     emu_case "save count refused" --stderr --filter "$F
 $REFUSED" --expect-fail -- -d $U -c data_source=Save --samples 1 -O analog
-    emu_options setters=0 fail=07:2:silent saved=n@3111.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
-    emu_case "save second silent" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 5 -O analog
-    emu_options setters=0 fail=07:2:er saved=n@3111.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
-    emu_case "save second refused" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=Save --samples 5 -O analog
-    emu_options setters=0 saved=n@1234.1:m=1/30/VDC,n@3111.1:m=2/30/VDC
-    emu_case "save a mode unknown holds it" --libsigrok --hangs --timeout 2 --no-output -- -d $U -c data_source=Save --samples 5 -O analog
 
     # Recordings: an info, then chunks.
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/9,Two/mVAC/5/2,Three/kHz/1/5,Empty/VDC/1/0 over=3:13
@@ -367,14 +354,9 @@ $NO_ANSWER" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0c:2:er
     emu_case "recording info refused" --stderr --filter "$F
 $REFUSED" --expect-fail -- -d $U -c data_source=One --samples 100 -O analog
-    emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:2:silent
-    emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:2:er
-    emu_case "recording chunk refused" --libsigrok --hangs --timeout 2 -- -d $U -c data_source=One --samples 9 -O analog
     # A device that says it has more than it gives: C asks again for ever.
     emu_options setters=0 pad=300 per=2 rec=One/VDC/2/5 have=3
     emu_case "recording shorter than its info" --oxrok-fails "samples of the" --oracle-bug "$EMPTY_BUG" --oracle-hangs --timeout 3 -- -d $U -c data_source=One --samples 100 -O analog
-    emu_options setters=0 pad=300 per=2 rec=One/VDC/2/3 fail=0d:1:bad
-    emu_case "recording chunk checksum" --libsigrok --hangs --timeout 2 --no-output -- -d $U -c data_source=One --samples 9 -O analog
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 stall=line

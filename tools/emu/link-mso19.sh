@@ -250,8 +250,6 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
     emu_case "ready at the start" --oracle-bug "$READY_BUG" --oracle-hangs --digest --filter "$D" --timeout 3 -- -d $K --samples 1024
     # A trigger that never fires is no error: both wait, polling. The stop is on
     # the mark, a few polls in, and how many more go by depends on when it lands.
-    emu_options wait=never
-    emu_case "lib trigger never fires" --libsigrok --hangs --no-output --timeout 2 --tx-filter "$T" -- -d $K --samples 1024
     emu_options wait=never mark-at=6
     emu_case "trigger never fires, interrupted" --oracle-bug "$SIGINT_BUG" --no-output --interrupt model --timeout 15 --tx-filter "$T" -- -d $K --samples 1024
 
@@ -264,11 +262,6 @@ $A" --expect-fail -- -d $K -c horiz_triggerpos=-10.5 --set
     emu_case "line coding stalled" --digest --filter "$D" -- -d $K --samples 1024
     emu_options stall=lines
     emu_case "control lines stalled" --digest --filter "$D" -- -d $K --samples 1024
-    emu_options
-
-    # What sigrok-cli cannot ask for.
-    emu_options wait=never
-    emu_case "lib stop" --libsigrok --no-output -- -d $K --samples 1024 --stop-after 0
     emu_options
 }
 

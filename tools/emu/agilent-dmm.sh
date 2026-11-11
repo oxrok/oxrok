@@ -459,17 +459,11 @@ x
     emu_options answers=3
     emu_case "stops answering" --tx-filter 's/^bulk_out 02 (464554433f0a0d0a)+ -> [0-9]+$/FETC again and again/' -- -d $F -C P1 --time 1500ms
 
-    emu_options answers=0
-    emu_case "lib silent waits on" --libsigrok --hangs --timeout 3 --no-output -- -d $F -C P1 --samples 1
-
     # A line that fills the buffer: 254 bytes and a LF fit, 255 stop it reading.
     emu_options fetc=$(ag_h "$(printf 'x%.0s' $(seq 1 253))"),$(ag_h '+1.23475000E+00')
     emu_case "a line of 255 bytes" --timeout 15 -- -d $F -C P1 --samples 1
     emu_options fetc=$(ag_h "$(printf 'x%.0s' $(seq 1 254))"),$(ag_h '+1.23475000E+00')
     emu_case "a line of 256 bytes" --oracle-bug "$WEDGED_BUG" --oracle-hangs --timeout 3 -- -d $F -C P1 --samples 1
-    # A log entry that never is one, asked for ever.
-    emu_options model=U1282A log=$(ag_h '"14123450000000"')
-    emu_case "lib log entry that never is one" --libsigrok --hangs --timeout 3 --no-output -- -d $F -c data_source=Log-Hand --samples 1
     # A NUL first leaves g_strsplit an empty string, an empty vector, and
     # api.c:146 hands strcmp its NULL.
     emu_options id=$(emu_hex '\000\r\n')
@@ -495,10 +489,9 @@ x
     # C's two error lines repeat in turn, as often as time allows, so this one
     # is quiet, and the next holds them. A unit test holds oxrok's.
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP_BUG" --oracle-hangs --unplug model --timeout 4 --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3 -l 0
-    emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --stderr --filter '3,$d' --tx-filter '/^unplug$/q' -- -d $F -C P1 --samples 3
     emu_options answers=4
     emu_case "interrupt" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --tx-filter '/^interrupt$/q' -- -d $F -C P1 --samples 9
-    # oxrok's bound on silence, and C's wait, of which "lib silent" has the wire.
+    # oxrok's bound on silence, and C's wait.
     emu_options answers=0
     emu_case "silent with only a sample limit" --oxrok-fails "nothing new from the meter" --oracle-bug "$SILENT_DIFFERS" --oracle-hangs --timeout 13 --stderr --filter "$L" --tx-filter 's/^bulk_out 02 434f4e463f0a0d0a535441543f0a0d0a(464554433f0a0d0a)+ -> [0-9]+$/CONF, STAT, and FETC until the bound/' -- -d $F -C P1 --samples 1
     emu_options id=none

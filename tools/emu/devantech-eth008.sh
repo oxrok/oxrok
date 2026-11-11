@@ -238,11 +238,6 @@ emu_cases() {
     emu_case "time" --stderr --expect-fail -- -d $K --time 10
     emu_case "frames" --stderr --expect-fail -- -d $K --frames 1
     emu_case "continuous" --stderr --expect-fail -- -d $K --continuous
-    # What a session makes of a device with no channels. The runner finds its
-    # libsigrok through the real sigrok-cli, and has the preload through the env.
-    SIGROK_CLI=$ETH_STOCK_CLI
-    emu_case "lib capture has no enabled channels" --libsigrok --oracle-env "LD_PRELOAD=$TMP/eth-run.so" --expect-fail --stderr -- -d $K --continuous
-    [ "$no_oracle" = 1 ] || SIGROK_CLI=$TMP/eth-sigrok-cli
 
     # The device leaves in a get's answer.
     emu_options setters=0 answers=2

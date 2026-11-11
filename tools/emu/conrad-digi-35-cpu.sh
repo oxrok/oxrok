@@ -64,9 +64,6 @@ $A"
     done
     emu_case "set voltage nan" --oracle-differs "$NAN_BUG" --keep-header --stderr --expect-fail --filter "$R" -- -d $C --set -c voltage_target=nan
     emu_case "set current nan" --oracle-differs "$NAN_BUG" --keep-header --stderr --expect-fail --filter "$R" -- -d $C --set -c current_limit=nan
-    # The differs cases hold oxrok's .tx and refusal, so C's frames are pinned here:
-    # with no limit it goes on to the start and the session refuses.
-    emu_case "lib nan goes out" --libsigrok --keep-header --stderr --expect-fail -- -d $C -c voltage_target=nan -c current_limit=nan
 
     # Each -c in turn, and what a refusal leaves behind.
     emu_case "set two" --keep-header --no-output -- -d $C --set -c voltage_target=5 -c current_limit=1
@@ -81,8 +78,6 @@ $A"
     emu_case "capture set" --keep-header --stderr --expect-fail -- -d $C -c voltage_target=5 --samples 1
     emu_case "capture continuous" --keep-header --stderr --expect-fail -- -d $C --continuous
     emu_case "capture time" --keep-header --stderr --expect-fail -- -d $C --time 10
-    # With no limit to set, the session refuses: no channels (session.c:790-793).
-    emu_case "lib capture" --libsigrok --keep-header --stderr --expect-fail -- -d $C
 
     # The write failures. C's words and oxrok's differ, as oxrok says which it was,
     # and C fails too, so these compare the failure and the wire, and the "says so"

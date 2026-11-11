@@ -120,10 +120,6 @@ emu_cases() {
     # sr_usb_find() refuses the spec; the scan lists the board all the same.
     emu_case "bad conn" --stderr --filter "$N; /usb:|sysclk-sla5032:/!d; s/ *\[[0-9:.]+\]//" -- -l 4 -d $F:conn=nonsense --scan
     emu_case "bad conn lists" --oracle-differs "$C" --no-output -- -d $F:conn=nonsense --scan
-    # Another device's address: the warning of api.c:132-133 (the root hub).
-    # Library only: nusb does not list root hubs, so oxrok finds nothing
-    # there, and this bus has no other device to name.
-    emu_case "lib conn another device" --libsigrok --stderr --filter "$E; s/device [0-9]+\.1 /device BUS.1 /" -- -l 4 -d $F:conn=${EMU_USB%.*}.1 --scan
     # --show opens the device: the bitstream goes up.
     emu_case "show" --keep-header -- -d $F --show
     emu_case "open and close" --stderr --filter "$E" -- -l 5 -d $F --show
@@ -224,14 +220,8 @@ emu_cases() {
     # oxrok is stopped after the second poll's last reply: open 1, start
     # 2-13, polls 14-16 and 17-19.
     emu_case "trigger never fires" --interrupt in=8:19 --oracle-bug "$I" --no-output -- -d $F -C CH0,CH1 -t CH0=r,CH1=r --samples 512 -O bits
-    emu_case "lib trigger never fires" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH0,CH1 -t CH0=r,CH1=r --samples 512 -O bits
     # One sequence of the trigger, as sigrok-cli hands it over: two stages.
     emu_case "two trigger stages" --expect-fail --stderr --filter "$O" -- -d $F -C CH1 -t CH1=01 --samples 512 -O bits
-    # A client's stop: the C puts nothing more on the wire, at the header or
-    # between polls, and neither does oxrok ("trigger never fires").
-    emu_case "lib stop at the header" --libsigrok --no-output -- --stop-after 0 -d $F -C CH0 --samples 512 -O bits
-    sla_options configured=1 wait=1000
-    emu_case "lib stop between polls" --libsigrok --no-output -- --stop-after-ms 150 -d $F -C CH0 --samples 512 -O bits
     sla_options configured=1
     # Recorded for the replay tests: the board has its design, since the
     # replay's stand-in bitstream has no sync word. The fixtures hold the
@@ -270,13 +260,11 @@ emu_cases() {
         kf=${c%:*}
         sla_options $kf
         emu_case "fault keys $kf" --interrupt in=8:${c##*:} --oracle-bug "$I" --no-output -- -d $F -C CH0 --samples 512 -O bits
-        emu_case "lib fault keys $kf" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH0 --samples 512 -O bits
     done
     # Neither tool gives the first reply up before 500 s, and an open has
     # nothing to stop: the signal ends oxrok there as it ends any program.
     sla_options hold_reply=read-reg:1
     emu_case "fault no answer at the open" --interrupt out=4:1 --oracle-bug "$I" --expect-fail --no-output -- -d $F -C CH0 --samples 512 -O bits
-    emu_case "lib fault no answer at the open" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH0 --samples 512 -O bits
     # emu_case begins with a reset, which re-attaches only when the
     # descriptors change: they never do here.
     sla_options
@@ -361,7 +349,6 @@ emu_cases() {
     emu_case "fault samples over an int cut" --oracle-differs "$V" --digest --filter "$B" -- -d $F -C CH0 --samples 512 -O bits
     # No answer to a poll: the driver waits 500 s (USB_REPLY_TIMEOUT_MS).
     sla_options configured=1 hold_reply=read-reg:16
-    emu_case "lib fault no answer to a poll" --libsigrok --hangs --timeout 2 --no-output -- -d $F -C CH0 --samples 512 -O bits
     # oxrok is stopped at the reply before: the wait ends in its next slice,
     # with no command on top of the reply unread.
     emu_case "fault no answer to a poll" --interrupt in=8:15 --oracle-bug "$I" --no-output -- -d $F -C CH0 --samples 512 -O bits

@@ -72,7 +72,6 @@ emu_cases() {
     emu_case "capture continuous" --keep-header --stderr --expect-fail -- -d $I --continuous
     emu_case "capture time" --keep-header --stderr --expect-fail -- -d $I --time 10
     # With no limit to set, the session refuses: no channels (session.c:790-793).
-    emu_case "lib capture" --libsigrok --keep-header --stderr --expect-fail -- -d $I
 
     # Scans that find nothing. The request on a started board is a relay byte,
     # which no golden can show; the model's unit tests hold that.

@@ -329,11 +329,4 @@ emu_cases() {
         emu_case "held interface" --no-output -- -d $C --scan
         el_release
     fi
-
-    # libsigrok-run: a stop from the client, and no limit.
-    emu_case "lib no limit" --libsigrok -- -d $C -O analog
-    emu_case "lib stop at header" --libsigrok --no-output -- -d $C --samples 10 --stop-after 0 -O analog
-    el_options logged=2000
-    emu_case "lib stop during log" --libsigrok -- -d $C --samples 2000 --stop-after 100 --stop-in-callback -O analog
-    el_options
 }

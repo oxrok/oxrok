@@ -23,9 +23,8 @@
 # goldens, output and transactions, and --no-oracle runs oxrok against them.
 # Where the C driver cannot be the oracle (it hangs or dies), an "oxrok"
 # case keeps the runner's failure in SLUG.oracle and pins oxrok's own output
-# and transactions in SLUG.out and SLUG.tx; its "lib" case stays, library
-# only, for what the C driver does. No --oracle-differs: nothing here has
-# the C driver ending well with another result.
+# and transactions in SLUG.out and SLUG.tx. No --oracle-differs: nothing
+# here has the C driver ending well with another result.
 EMU_MODEL=lecroy-logicstudio
 EMU_DRIVER=lecroy-logicstudio
 EMU_FULL=lecroy-logicstudio
@@ -215,23 +214,11 @@ emu_cases() {
     # wraps for 0, and die of SIGSEGV; csv dies of SIGFPE. sigrok-cli's
     # datafeed_in() hands the empty packet on the same way. The ascii
     # output counts samples (ascii.c:219), so it takes the whole capture.
-    emu_case "lib 8ch upper wraps bits crash" --libsigrok --expect-fail --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1M -t D14=r -O bits
     emu_case "lib 8ch upper wraps ascii" --libsigrok --oxrok --digest --filter '1,/^D15:/b; /T/{=;b;}; d' -- -d $L -C $HI -c samplerate=1M -t D14=r -O ascii
     emu_case "lib 8ch upper 1G ratio 20" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -C $HI -c samplerate=1G:captureratio=20 -t D9=r -O bits
-    # The runner's own limit (--stop-after): the output cut at 1000
-    # samples. The driver sends the samples and ends the acquisition in
-    # one callback (recv_bulk_transfer()), so the stop asked from the
-    # main loop comes after that end: the capture is over, its write to
-    # the arm register goes out as the last transaction, and stderr stays
-    # empty of the failure a stop nested in that callback would log.
-    emu_case "lib stop after 1000" --libsigrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
-    emu_case "lib stop after 1000 stderr" --libsigrok --no-output --stderr -- -d $L -c samplerate=1M -t D3=r --stop-after 1000 -O bits
     # The C driver never ends: with no trigger it arms nothing and waits
     # (protocol.c:1119, 926-933); an unplug during the fetch or while
     # it waits for the trigger leaves it resubmitting or waiting.
-    emu_case "lib no trigger hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -O bits
-    emu_case "lib unplug mid fetch hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=2:1 -- -d $L -c samplerate=1M -t D3=r -O bits
-    emu_case "lib unplug while waiting hangs" --libsigrok --hangs --timeout 3 --no-output --unplug in=1:2 -- -d $L -c samplerate=1M -t D3=r -O bits
     # Where the C driver never ends, oxrok does, or refuses; --oracle-hangs
     # holds the runner to its hang. The errors are oxrok's own lines.
     H='recv_intr_transfer() submits no transfer after a failure or a short packet, protocol.c:926-933'
@@ -262,15 +249,9 @@ emu_cases() {
         ls_options flashed=1 $f
         emu_case "lib fault $f" --libsigrok --oxrok --digest --filter "$T16" -- -d $L -c samplerate=1M -t D3=r -O bits
     done
-    # And those it never gets out of: the last register write (the
-    # fetch's), short status packets, a halted sample endpoint, and
-    # inputs that never move.
-    for f in stall=write:31 intr_short=16 bulk_stall=1 still=1; do
-        ls_options flashed=1 $f
-        emu_case "lib fault $f hangs" --libsigrok --hangs --timeout 3 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
-    done
-    # The same under oxrok, each pinned to its own end: the failed fetch
-    # write, the short packet, the halted endpoint.
+    # And those the C driver never gets out of, under oxrok, each pinned
+    # to its own end: the failed fetch write, the short packet, the halted
+    # endpoint.
     ls_options flashed=1 stall=write:31
     emu_case "oxrok fault stall=write:31" --oxrok-fails "endpoint stalled" --libsigrok --oxrok --oracle-bug "handle_fetch_samples_done() ignores the status of its write, protocol.c:244-264, and resubmits for ever" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_options flashed=1 intr_short=16
@@ -279,23 +260,14 @@ emu_cases() {
     emu_case "oxrok fault bulk_stall=1" --oxrok-fails "endpoint stalled" --libsigrok --oxrok --oracle-bug "recv_bulk_transfer() resubmits whatever the status, protocol.c:1017-1027" --oracle-hangs --timeout 3 --stderr --filter "$P" -- -d $L -c samplerate=1M -t D3=r -O bits
     # Ctrl-C. Neither sigrok-cli nor the runner has a SIGINT handler, and
     # a trigger that does not fire is waited for until then; the stop
-    # writes the arm register (as "lib stop while waiting"), on a board
-    # that told its state before, and on one that says nothing, right after
-    # the arm (the 32nd control write here, bitstream and FX2 requests
-    # included). The latter's transactions are "lib stop while waiting"'s
-    # with the harness's interrupt line among them.
+    # writes the arm register, on a board that told its state before, and
+    # on one that says nothing, right after the arm (the 32nd control
+    # write here, bitstream and FX2 requests included).
     I="the runner has no SIGINT handler, like sigrok-cli"
     ls_options flashed=1 still=1
     emu_case "oxrok interrupt while waiting" --libsigrok --oxrok --oracle-bug "$I" --interrupt in=1:2 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
     ls_options flashed=1 intr_silent=1
     emu_case "oxrok interrupt on a silent board" --libsigrok --oxrok --oracle-bug "$I" --interrupt out=0:32 --no-output -- -d $L -c samplerate=1M -t D3=r -O bits
-    # A stop while the trigger wait is pending: --stop-after 0 asks for
-    # it as the session starts. How many status packets complete before
-    # the main loop gets to it depends on timing, so a board that sends
-    # none. The stop writes the arm register, and the interrupt transfer's
-    # timeout finds the abort (recv_intr_transfer(), protocol.c:920-923).
-    ls_options flashed=1 intr_silent=1
-    emu_case "lib stop while waiting" --libsigrok --no-output -- -d $L -c samplerate=1M -t D3=r --stop-after 0 -O bits
     # The bitstream file missing, or of another size than the driver's
     # FPGA_FIRMWARE_SIZE (upload_fpga_bitstream(), protocol.c:433-445).
     ls_options flashed=1

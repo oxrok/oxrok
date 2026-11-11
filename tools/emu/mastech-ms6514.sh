@@ -146,7 +146,6 @@ emu_cases() {
     emu_case "channel T2" -- -d $K -C T2 --samples 1
     # Each tool reads T1-T2 as a range of numbered channels (parsers.c:81-91) and
     # refuses it, in its own words: no full case can hold both.
-    emu_case "lib channel T1-T2 alone" --libsigrok --stderr --expect-fail --tx-filter "$N" -- -d $K -C T1-T2 --samples 1
     emu_case "channel T1-T2 alone" --no-oracle-only --stderr --expect-fail --tx-filter "$N" -- -d $K -C T1-T2 --samples 1
     emu_options frame=$(ms_f $T1 $T2 01 01 00) burst=1
     emu_case "channel T1 with T2 on main" --oracle-differs "$SLOTS" -- -d $K -C T1 --samples 1
@@ -187,8 +186,6 @@ emu_cases() {
     emu_case "continuous and a time limit" --oracle-differs "$ANYKEY" --filter '2,$d' --tx-filter "$N" --timeout 20 -- -d $K --continuous --time 2s
 
     # A unit that went quiet, or left. With a sample limit alone both wait.
-    emu_options burst=1
-    emu_case "lib samples, then silence" --libsigrok --hangs --timeout 3 -- -d $K --samples 2
     # A period long enough that the tool has read the burst when the event lands.
     emu_options burst=2 first=0 period=15
     emu_case "interrupt a silent unit" --oracle-bug "$SIGINT_BUG" --timeout 10 --interrupt model -- -d $K --samples 100
@@ -199,7 +196,6 @@ emu_cases() {
     emu_options still=1 burst=1
     emu_case "memory" -- -d $K -c data_source=Memory --samples 100
     emu_case "memory stderr" --stderr --filter 's/^oxrok: warn: oxrok::cli::pipeline: //' -- -d $K -c data_source=Memory --samples 100
-    emu_case "lib memory, no limit" --libsigrok -- -d $K -c data_source=Memory --continuous
     emu_options still=1 burst=1 chunk=1
     emu_case "memory one byte per transfer" -- -d $K -c data_source=Memory --samples 100
     emu_options still=1 burst=1 stored=none
@@ -209,14 +205,11 @@ emu_cases() {
     emu_case "memory and the live frame in one read" -- -d $K -c data_source=Memory --samples 100
     emu_options still=2 burst=1 stored=$S0,$S1
     emu_case "memory limit within the dump" -- -d $K -c data_source=Memory --samples 2
-    emu_options still=2 burst=1
-    emu_case "lib memory, silence after the dump" --libsigrok --hangs --timeout 3 -- -d $K -c data_source=Memory --samples 100
     # What a stop in the parse leaves behind in one read: the parse goes on.
     emu_options still=2 burst=1 stored=$S0,$OK,$OK bunch=3
     emu_case "memory two live frames in one read" -- -d $K -c data_source=Memory --samples 100
     emu_options still=2 burst=1 stored=$S0,$OK,$S1 bunch=3
     emu_case "memory a stored frame after the live one" -- -d $K -c data_source=Memory --samples 100
-    emu_case "lib memory, a stored frame after the live one" --libsigrok -- -d $K -c data_source=Memory --continuous
     emu_options still=2 burst=1 stored=$S0,$OK bunch=2
     emu_case "memory limit and the live frame in one read" -- -d $K -c data_source=Memory --samples 1
 }

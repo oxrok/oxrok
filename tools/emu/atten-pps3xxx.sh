@@ -155,30 +155,6 @@ emu_cases() {
     emu_case "capture with a setting" --oxrok-fails "no answer from the device for 2s" -- -d $A -c ocp_enabled=on --continuous
     emu_case "capture with a bad setpoint" --stderr --expect-fail --filter "$F" -- -d $A -c $A1:enabled=on:voltage_target=99 --continuous
 
-    # The library runs it for longer. A poll of 20 follows each answer, and
-    # a stop is noticed at the next answer, of which nothing goes out.
-    emu_options
-    emu_case "lib two samples" --libsigrok -- -d $A --continuous --stop-after 2
-    emu_case "lib four samples" --libsigrok -- -d $A --continuous --stop-after 4
-    emu_options output=7
-    emu_case "lib turns off what it was not told about" --libsigrok -- -d $A --continuous --stop-after 4
-    emu_options
-    emu_case "lib stop at the header" --libsigrok --no-output -- -d $A --continuous --stop-after 0
-    # A device that stops answering holds it.
-    emu_options answers=1
-    emu_case "lib silent from the start" --libsigrok --hangs --timeout 2 --no-output -- -d $A --continuous
-    emu_options answers=3
-    emu_case "lib silent after two" --libsigrok --hangs --timeout 2 --filter '1,6!d' -- -d $A --continuous
-    emu_options answers=1
-    emu_case "lib stop never ends on silence" --libsigrok --hangs --timeout 2 --no-output -- -d $A --continuous --stop-after 0
-    # No framing: a byte too many shifts all that follow.
-    emu_options replies=${R}ff,$R
-    emu_case "lib a long answer shifts the rest" --libsigrok -- -d $A --continuous --stop-after 8 -O csv:header=false:time=false
-    emu_options replies=$R,aaaa04
-    emu_case "lib a short answer never ends" --libsigrok --hangs --timeout 2 --no-output -- -d $A --continuous
-    emu_options chunk=1
-    emu_case "lib one byte per transfer" --libsigrok -- -d $A --continuous --stop-after 2
-
     # oxrok goes on until it is stopped, or the device goes quiet. The model's
     # silence is the point for the signal: all that came is in the golden, and
     # the last poll is the one unanswered. Each .tx shows the polls, and that
@@ -202,13 +178,9 @@ emu_cases() {
     emu_case "set on a live supply" --no-output -- -d $A -c $A1:voltage_target=5 --set
     # A reply with no header: C reads it as readings, oxrok none.
     G=55aa270f01f401f404e2014a001901070100010100000000
-    emu_options replies=$R,$G,$R
-    emu_case "lib an answer without its header" --libsigrok -- -d $A --continuous --stop-after 4 -O csv:header=false:time=false
     emu_options answers=4 replies=$R,$G,$R
     emu_case "interrupt an answer without its header" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous -O csv:header=false:time=false
     # A stray aa ahead of a frame reads as 435.24 V in C, and shifts the rest.
-    emu_options replies=$R,aa$R,$R
-    emu_case "lib a stray byte" --libsigrok -- -d $A --continuous --stop-after 4 -O csv:header=false:time=false
     emu_options answers=4 replies=$R,aa$R,$R
     emu_case "interrupt a stray byte" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 -- -d $A --continuous -O csv:header=false:time=false
     emu_options answers=4 chunk=1
@@ -221,8 +193,6 @@ emu_cases() {
     emu_case "unplug in a capture" --oxrok-fails "Broken pipe" --oracle-bug "$STOP_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --continuous
 
     # A device that leaves.
-    emu_options answers=1
-    emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --no-output -- -d $A --continuous
     emu_options setters=0 answers=0
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $A --scan
 

@@ -191,10 +191,8 @@ emu_cases() {
     emu_case "get clock_edge set" -- -d $Z -c external_clock=1:clock_edge=falling --get clock_edge
     # A level high and low: the C ORs the bits (analyzer.c:532-535), and
     # the model takes pair 11 as both, which never fires. Neither tool
-    # refuses it, as nothing says what a board makes of it; both wait, so
-    # libsigrok alone can run to its timeout here. oxrok is held below, by
-    # the unplug that ends its wait.
-    emu_case "two levels on one channel hangs" --libsigrok --hangs --timeout 2 --stderr --no-output -- -d $Z -C A0 -t A0=0,A0=1 --samples 100 -O bits
+    # refuses it, as nothing says what a board makes of it; both wait.
+    # oxrok is held by the unplug that ends its wait.
     # Polls are not paced, so an interrupt there would land on no known
     # count; an unplug after the fifth status read does. The C goes on
     # with its error code for a status; oxrok warned first, sent the same

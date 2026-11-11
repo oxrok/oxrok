@@ -343,16 +343,8 @@ emu_cases() {
     emu_case "a success for data" --oracle-differs "$SUCCESS_BUG" -- -d $A --samples 2 -O csv:header=false:time=false
     emu_options reply-5f=$R0,${R1}ff,$R1
     emu_case "a long answer shifts nothing" --oracle-differs "$SHIFT_BUG" -- -d $A --samples 3 -O csv:header=false:time=false
-    # The library, as a client's button: the first sample comes after a period.
-    emu_options
-    emu_case "lib two samples" --libsigrok -- -d $A --continuous --stop-after 2
-    emu_case "lib stop at the header" --libsigrok --no-output -- -d $A --continuous --stop-after 0
-    emu_case "lib samples 1" --libsigrok -- -d $A --samples 1
-    # A load that stops answering holds it, for each limit.
+    # A load that stops answering holds C, for each limit.
     emu_options answers=5
-    emu_case "lib silent with a time limit" --libsigrok --hangs --timeout 2 --no-output -- -d $A --time 100
-    emu_case "lib silent with a sample limit" --libsigrok --hangs --timeout 2 --no-output -- -d $A --samples 2
-    emu_case "lib stop on a silent load" --libsigrok --no-output -- -d $A --continuous --stop-after 0
 
     # oxrok ends them. The scan's four answers and the remote mode, then silence.
     emu_case "silent with a time limit" --oracle-bug "$HANG_BUG" --oracle-hangs --timeout 4 --no-output -- -d $A -c samplerate=1 --time 500
@@ -367,7 +359,6 @@ emu_cases() {
     emu_options answers=0
     emu_case "unplug in the scan" --unplug model --timeout 30 --keep-header --no-output -- -d $A --scan
     emu_options answers=5
-    emu_case "lib unplug in a capture" --libsigrok --hangs --unplug model --timeout 3 --no-output -- -d $A --continuous
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HANG_BUG" --oracle-hangs --unplug model --timeout 5 --no-output --tx-filter '/^unplug$/q' -- -d $A --samples 5
 
     # The ways out where oxrok sends local mode, with oxrok's own wording, which

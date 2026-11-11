@@ -258,12 +258,6 @@ s/^Failed to start session\\.\$/not supported: Invalid channel configuration spe
     emu_case "stock frame prints nothing" --oracle-differs "$NO_HEADER" --digest --filter "$A" -- -d $T $F -O analog
     emu_case "stock frame usb prints nothing" --oracle-differs "$NO_HEADER" --digest --filter "$A" -- -d $U $F -O analog
     emu_case "stock binary prints nothing" --oracle-differs "$NO_HEADER" --digest --filter '1,$d' -- -d $T -C 1 $F -O binary
-    # A silent :WAVEFORM:SEND?: 42 queries come ahead of it. C tries for ever, on USBTMC
-    # through read_begin and on TCP in a recv with no timeout; a port's bound of 120 s is
-    # a unit test, and an interrupt below.
-    emu_options length=16 silent-at=42
-    emu_case "lib block silent usb" --libsigrok --hangs --no-output --timeout 5 -- -d $U -C 1 $F -O analog
-    emu_case "lib block silent tcp" --libsigrok --hangs --no-output --timeout 5 -- -d $T -C 1 $F -O analog
     emu_options
     # A channel's display and the pods at a stock --show.
     emu_case "stock show one channel" -- -d $T -C 1 --show

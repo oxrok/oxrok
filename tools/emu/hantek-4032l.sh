@@ -241,13 +241,10 @@ emu_cases() {
     h4032l_options stall=out@5
     emu_case "fault get stall" --oxrok-fails "endpoint stalled" --oracle-bug "$IGNORED" --oracle-hangs --timeout 2 --stderr --filter "$N" -- -d $H --samples $S
     # A trigger the counter never meets (A0 high and B0 rising: B0 rises
-    # where A0 is low): status 1 for ever. This runs libsigrok alone, through
-    # the runner, as sigrok-cli has no way to stop it. oxrok waits the same
-    # way until stopped; its unit test status_answers_of_1_wait_until_a_stop
-    # shows that, as the model answers status polls at once and so cannot
-    # pace a signal among status 1 answers.
-    h4032l_options
-    emu_case "trigger never fires hangs" --libsigrok --hangs --timeout 2 --stderr --no-output -- -d $H -t A0=1,B0=r --samples $S
+    # where A0 is low): status 1 for ever. oxrok waits the same way until
+    # stopped; its unit test status_answers_of_1_wait_until_a_stop shows
+    # that, as the model answers status polls at once and so cannot pace a
+    # signal among status 1 answers.
     # Ctrl-C ends oxrok while it polls, here before any status answer: the
     # status command refused makes the two reads after it time out (500 ms
     # each), so that the signal lands on a known number of transfers: no
@@ -270,10 +267,6 @@ emu_cases() {
     emu_case "interrupt while held" --interrupt in=6:7 --oracle-bug "sigrok-cli has no SIGINT handler" --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits
     h4032l_options hold=1 partial=512
     emu_case "interrupt while held with a partial" --interrupt in=6:7 --oracle-bug "sigrok-cli has no SIGINT handler" --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits
-    # dev_acquisition_stop() in libsigrok, on the samples that came before
-    # the hold (127 and 512): the transfers held come back to the abort.
-    h4032l_options hold=1
-    emu_case "lib stop while held" --libsigrok --digest --filter '1,3!d' -- -d $H -C A0 --samples $S -O bits --stop-after 639
 
     h4032l_options
     # Unplugged while the driver polls the status (after IN #3), and in

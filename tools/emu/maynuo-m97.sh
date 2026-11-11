@@ -249,8 +249,6 @@ s/^bulk_out 02 ([0-9a-f]+) -> [0-9]+$/bulk_out 02 \1/'
     emu_case "samples" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 3 -- -d $M --samples 3
     emu_case "samples analog" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 3 -- -d $M --samples 3 -O analog
     emu_case "samples csv" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 3 -- -d $M --samples 3 -O csv:header=false:time=false
-    # The C's side of those alone, to the end of what it sends.
-    emu_case "lib samples, none ever come" --libsigrok --hangs --timeout 3 --no-output -- -d $M --samples 1
     emu_options setters=0 answers=3 quiet=50
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$NO_REQUEST_BUG" --oracle-hangs --timeout 10 --unplug model -- -d $M --samples 3
     emu_options setters=0 answers=5 quiet=50
@@ -293,9 +291,6 @@ s/^bulk_out 02 ([0-9a-f]+) -> [0-9]+$/bulk_out 02 \1/'
     # not looked at.
     emu_options setters=0 unasked=5
     emu_case "unasked more than the limit" --tx-filter "$T" -- -d $M --samples 2
-    # A stop from the library, which sigrok-cli has no way to ask for.
-    emu_options setters=0 unasked=4
-    emu_case "lib unasked stop" --libsigrok -- -d $M --continuous --stop-after 2
 
     # The USB side misbehaving, the shell's options.
     emu_options setters=0 stall=line

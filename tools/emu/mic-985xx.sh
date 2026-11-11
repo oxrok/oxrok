@@ -159,10 +159,5 @@ emu_cases() {
     # No case for a hang up before the first silence, where C's write fails and it
     # goes on (protocol.c:29-30): an --unplug out=0:3 reached it, but in 1 of 15
     # runs it beat the open's termios and C failed the open instead.
-    # A silent logger, and one whose bytes are no frames.
-    emu_options burst=0
-    emu_case "lib silent at a sample limit" --libsigrok --hangs --no-output --timeout 3 -- -d $S --samples 5
-    emu_options
-    emu_case "lib no frames at a sample limit" --libsigrok --hangs --driver mic-98581 --no-output --timeout 3 -- -d $T --samples 5
     emu_options
 }

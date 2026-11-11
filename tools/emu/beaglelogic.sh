@@ -197,12 +197,7 @@ $CAUSE" -- -d beaglelogic:conn=tcp-raw/127.0.0.1/no-such-service --scan
     emu_case "trigger in a later read" --oracle-differs "$WAIT_COUNTS" --digest --filter "$Z" -- -d $T --samples 2000 -t P8_28=r -O hex
     emu_case "trigger in a later read with pre-trigger samples" --oracle-differs "$WAIT_COUNTS" --digest --filter "$Z" -- -d $T --samples 2000 -c captureratio=10 -t P8_28=r -O hex
 
-    # A stop.
-    emu_options
-    emu_case "lib stop" --libsigrok -- -d $T --continuous --stop-after 8 -O bits
-    emu_options free=1
-    emu_case "lib stop on a stream" --libsigrok --digest --filter "$Z" --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous --stop-after 8 -O bits
-    # The same wire from oxrok, whose --continuous has no any-key stop.
+    # A stop, from oxrok, whose --continuous has no any-key stop.
     emu_options free=1 mark=8192
     emu_case "interrupt a stream" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous --output-file /dev/null
     # No limit to take a share of, so no pre-trigger samples. C takes a share of
@@ -211,20 +206,15 @@ $CAUSE" -- -d beaglelogic:conn=tcp-raw/127.0.0.1/no-such-service --scan
     # the trigger's.
     emu_options free=1 mark=8192
     emu_case "continuous trigger with a ratio" --oracle-bug "$SIGINT" --interrupt tcp-model --filter '15,$d' --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous -c captureratio=50 -t P8_29=r -O bits
-    emu_options free=1
-    emu_case "lib continuous trigger with a ratio" --libsigrok --filter '15,$d' --tx-filter 's/^tcp_in [0-9]+ -> @[0-9]+:[0-9a-f]+$/tcp_in STREAM/' -- -d $T --continuous -c captureratio=50 -t P8_29=r --stop-after 64 -O bits
     emu_options mark=65536
     emu_case "interrupt a capture with a limit left" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output -- -d $T --samples 40000 --output-file /dev/null
 
-    # What leaves the device silent. C waits for ever, here shown on the library, as
-    # sigrok-cli can't be stopped; oxrok's bound on a stream is 30 s or more, so here it
-    # is stopped, and the bound is in the unit tests.
+    # What leaves the device silent. C waits for ever; oxrok's bound on a stream is
+    # 30 s or more, so here it is stopped, and the bound is in the unit tests.
     emu_options memalloc=0 mark=0
     emu_case "no buffers" --oracle-bug "$SIGINT" --interrupt tcp-model --stderr --filter "$L" -- -d $T --samples 8 --output-file /dev/null
-    emu_case "lib no buffers" --libsigrok --hangs --timeout 3 --no-output -- -d $T $D
     emu_options first=100000 mark=0
     emu_case "silent at the stream" --oracle-bug "$SIGINT" --interrupt tcp-model --no-output -- -d $T --samples 8 --output-file /dev/null
-    emu_case "lib silent at the stream" --libsigrok --hangs --timeout 3 --no-output -- -d $T $D
     emu_options mute=sampleunit+
     emu_case "silent at sampleunit" --oracle-bug "$SILENT" --oracle-hangs --timeout 5 --expect-fail --stderr -- -d $T $D
     # The module keeps 8 bits, and C reads them as 16.

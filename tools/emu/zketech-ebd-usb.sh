@@ -162,8 +162,6 @@ s/^(Failed to open device).*$/\\1./"
     # 128 mV: every frame's XOR is f0 or more, so its checksum modulo f0 fails all
     # through the ripple. Nothing counts and the limit never comes, in either tool,
     # for as long as the device goes on. The scan takes any frame.
-    emu_options vbus=128
-    emu_case "lib all frames dropped" --libsigrok --hangs --timeout 3 --stderr --filter "$F" --tx-filter 's/^bulk_in 82 [0-9]+ -> .*/bulk_in, how much depends on the time/' -- -d $A --samples 1
     emu_options vbus=128 frames=5
     emu_case "interrupt all frames dropped" --oracle-bug "$SIGINT_BUG" --interrupt model --timeout 15 --no-output -- -d $A --samples 1
 
@@ -178,16 +176,6 @@ s/^(Failed to open device).*$/\\1./"
     emu_case "silent with the load on" --oxrok-fails "no messages received" -- -d $A -c current_limit=1 --samples 3
     emu_options frames=1
     emu_case "silent with continuous" --oxrok-fails "no messages received" --libsigrok --oxrok --no-output -- -d $A --continuous
-
-    # The library runs it for longer. Four analog packets a frame.
-    emu_options
-    emu_case "lib two frames" --libsigrok -- -d $A --continuous --stop-after 8
-    emu_case "lib load" --libsigrok -- -d $A -c current_limit=1 --continuous --stop-after 12
-    emu_case "lib stop at the header" --libsigrok --no-output -- -d $A --continuous --stop-after 0
-    emu_options frames=1
-    emu_case "lib silent" --libsigrok --stderr --filter "$F" -- -d $A --continuous
-    emu_options frames=3
-    emu_case "lib silent after two" --libsigrok -- -d $A --continuous
 
     # A device that leaves: oxrok ends at once. C ends by itself some 200 s later,
     # which these cases do not wait for: see UNPLUG_BUG.

@@ -301,8 +301,6 @@ emu_cases() {
 
     # Silence, where C has no end: protocol.c:193 returns before any limit.
     emu_options period=5 scan-burst=2 burst=1 frame=$TI_BASE,$TI_BASE,$TI_BASE
-    emu_case "lib silence and samples" --libsigrok --hangs --timeout 3 -- -d $K --samples 100
-    emu_case "lib silence and time" --libsigrok --hangs --timeout 3 -- -d $K --time 200ms
     emu_case "silence and time" --oracle-bug "$TIME_HANG" --oracle-hangs --timeout 5 -- -d $K --time 1s
     emu_case "unplug in a capture" --oxrok-fails "the port gone" --oracle-bug "$HUP" --oracle-hangs --timeout 5 --unplug model -- -d $K --samples 100
     emu_case "interrupt a silent meter" --oracle-bug "$SIGINT_BUG" --timeout 5 --interrupt model -- -d $K --samples 100

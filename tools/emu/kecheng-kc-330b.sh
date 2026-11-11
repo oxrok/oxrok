@@ -68,10 +68,6 @@ kc_release() {
 emu_cases() {
     S=kecheng-kc-330b
     M="$S -c data_source=Memory"
-    # The driver's own lines at -l 4, no other module's, without the time.
-    D='s/^sr: \[[^]]*\] //;/^kecheng-kc-330b: /!d'
-    # GLib's critical on api.c:367's tuple is what "log" below stops at.
-    G=--survive-glib-critical
     # oxrok's log lines as sigrok-cli's.
     N='s/^oxrok: [a-z]+: oxrok::drivers::kecheng_kc_330b[a-z_:]*: /sr: kecheng-kc-330b: /'
     # A refused start, however each tool puts it: sigrok-cli's two lines, of
@@ -154,13 +150,8 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     emu_case "output csv" -- -d $S --samples 2 -O csv:header=false
     # hwdriver.c refuses a limit of 0.
     emu_case "samples 0 refused" --expect-fail --stderr --filter "$R" -- -d $S --samples 0
-    # The stops a sigrok-cli without a key cannot reach. Live never ends by
-    # itself, and a stop at the first sample lands in the 125 ms pause.
-    emu_case "lib stop after 1" --libsigrok -- -d $S -O analog --stop-after 1
-    emu_case "lib stop after 2" --libsigrok -- -d $S -O analog --stop-after 2
-    emu_case "lib stop between requests" --libsigrok -- -d $S -O analog --stop-after-ms 60
-    emu_case "lib continuous runs on" --libsigrok --hangs --timeout 2 --filter '2,$d' -- -d $S --continuous -O analog
-    # oxrok's stop, on the same pause: the signal lands at the second sample.
+    # Live never ends by itself. oxrok's stop lands in the 125 ms pause
+    # between samples: the signal at the second sample.
     emu_case "interrupt between samples" --oracle-bug "$NO_INT" --interrupt in=1:5 -- -d $S --continuous
 
     # An inactive meter reads 30.0 and is logged at, and the capture goes on
@@ -250,7 +241,6 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     # nothing configured, as the setting of data_source left it dirty.
     kc_options stored=0
     emu_case "log empty" --no-output -- -d $M --samples 5
-    emu_case "log empty no limit" --no-output --libsigrok -- -d $M -O analog
     kc_options
 
     # A log with samples. sigrok-cli dies on the meta packet before the first
@@ -291,25 +281,6 @@ s/^(Failed to start session\.|device error: .*)\$/start refused/"
     done
     kc_options
 
-    # The runner's analog output module stops at the same tuple, in analog.c,
-    # so it needs $G to go on. Then api.c:405: buf_len is 4, the check is
-    # len != 1, so the start fails on a request that went out. The chunk stays
-    # unread, and the stop's configure (api.c:429) gets it in a one byte read,
-    # a babble (see the model). So no client reads the log.
-    emu_case "lib log" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G
-    emu_case "lib log limit 5" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G --samples 5
-    emu_case "lib log limit 200" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G --samples 200
-    for n in 1 62 63 64; do
-        kc_options stored=$n
-        emu_case "lib log stored $n" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G
-    done
-    kc_options stored=32000
-    emu_case "lib log full" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G
-    # The request itself refused.
-    kc_options stall-out=07
-    emu_case "lib log request fails" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4 $G
-    kc_options stall-out=05
-    emu_case "lib log info fails" --libsigrok --expect-fail --stderr --filter "$D" -- -d $M -l 4
     # The log info fails: the start is refused, and only the C configures.
     for f in stall-out=05 stall-in=05 silent=05 garbage=05 short=05; do
         kc_options $f

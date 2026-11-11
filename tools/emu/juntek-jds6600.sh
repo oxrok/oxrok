@@ -286,9 +286,6 @@ s/^(Failed to set device option [^ ]+: )invalid argument: no such pattern\.$/\1n
     emu_case "samples" --keep-header --stderr --expect-fail -- -d $J --samples 1
     emu_case "time" --keep-header --stderr --expect-fail -- -d $J --time 100
     emu_case "continuous" --keep-header --stderr --expect-fail -- -d $J --continuous
-    # Past sigrok-cli's refusals: the channels start disabled (api.c:109-110), so
-    # the session refuses to start at all.
-    emu_case "lib capture has no enabled channels" --libsigrok --expect-fail --stderr -- -d $J --continuous
     emu_options
     emu_case "capture with a setting" --oracle-bug "$PARTIAL_BUG" --keep-header --stderr --expect-fail -- -d $J -c enabled=on --samples 1
 

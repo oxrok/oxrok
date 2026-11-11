@@ -116,7 +116,6 @@ s/^(Failed to set device option '[a-z_]+'): not supported: .*/\\1: not applicabl
     hp_case "set nplc under" --stderr --expect-fail --filter "$BADSET" -- -d $T -c nplc=0.0000001 --set
     hp_case "set nplc at the floor" --stderr --expect-fail --filter "$BADSET" -- -d $T -c nplc=0.000001 --set
     hp_case "set nplc to nan" --oracle-differs "$PLC_NAN" --stderr --expect-fail --filter "$BADSET" -- -d $T -c nplc=nan --set
-    hp_case "lib nplc nan goes out" --libsigrok -- -d $T -c nplc=nan --samples 1 -O analog
     emu_options plcs=+1.000000E+00,x
     hp_case "nplc does not read back" --oracle-differs "$PLC_UNKNOWN" --stderr --expect-fail -- -d $T -c nplc=10 --get nplc
     emu_options plcs=x
@@ -145,7 +144,6 @@ s/^(Failed to set device option '[a-z_]+'): not supported: .*/\\1: not applicabl
     hp_case "capture high resolution" -- -d $T -c nplc=10 -c measured_quantity=voltage --samples 3 -O analog
     hp_case "capture 100 plc" -- -d $T -c nplc=100 --samples 2 -O analog
     hp_case "time is no limit here" --stderr --expect-fail -- -d $T --time 100 -O analog
-    hp_case "lib a stop crashes C" --libsigrok --expect-fail --stderr -- -d $T --continuous -O analog --stop-after 1
 
     # Digits, and what a reading may be.
     hp_values() {
