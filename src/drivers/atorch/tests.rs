@@ -157,9 +157,12 @@ fn device(fake: &Fake, pace: Pace) -> AtorchDevice {
     d
 }
 
+/// The packets a test's capture queue holds.
+const QUEUE: usize = 65536;
+
 /// A capture with a queue that takes everything.
 fn capture(d: &mut AtorchDevice) -> Receiver<(usize, Packet)> {
-    let (tx, rx) = sync_channel(65536);
+    let (tx, rx) = sync_channel(QUEUE);
     d.start(PacketSink::new(tx, 0)).unwrap();
     rx
 }
@@ -176,7 +179,9 @@ fn until_end(rx: &Receiver<(usize, Packet)>) -> Vec<Packet> {
             return out;
         }
         out.push(packet);
-        assert!(out.len() < 60000, "a capture that does not end");
+        // Beyond what a full queue held when the stop came: a capture
+        // that still sends.
+        assert!(out.len() < 2 * QUEUE, "a capture that does not end");
     }
 }
 
@@ -526,9 +531,48 @@ fn a_stop_ends_a_capture_that_gets_reports_all_the_time() {
     let mut d = device(&fake, CALM);
     let rx = capture(&mut d);
     assert_eq!(frames(&rx, 3), [9, 9, 9]);
+    // The port never pauses, so the capture fills the queue while nobody
+    // reads; the stop comes with it full, as it did on a loaded runner.
+    wait_full(&fake);
     d.stop().unwrap();
-    until_end(&rx);
+    drain_after_stop(&rx);
+    // A capture that panicked lets go of the queue too, and close()
+    // does not say: the worker's own end is checked here.
+    let worker = d.worker.take().expect("a capture");
+    assert!(worker.handle.join().is_ok(), "the capture panicked");
     d.close().unwrap();
+}
+
+/// Until the capture is blocked on a full queue: the port's reads stop.
+fn wait_full(fake: &Fake) {
+    let deadline = Instant::now() + BOUND;
+    let mut before = fake.get(|s| s.reads);
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = fake.get(|s| s.reads);
+        if now == before {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the queue never filled");
+        before = now;
+    }
+}
+
+/// The queue after a stop, to its End or, when the End found no room
+/// within [`END_AFTER_STOP`] (a reader slower than that), to the capture
+/// letting go of the queue. Either way the capture has to stop sending.
+fn drain_after_stop(rx: &Receiver<(usize, Packet)>) {
+    let deadline = Instant::now() + BOUND;
+    let mut n = 0;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((_, Packet::End)) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(_) => n += 1,
+            Err(RecvTimeoutError::Timeout) => panic!("the capture did not end in time"),
+        }
+        assert!(n < 2 * QUEUE, "a capture that does not end");
+    }
 }
 
 #[test]
