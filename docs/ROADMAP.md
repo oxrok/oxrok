@@ -359,10 +359,13 @@ The models are plain Rust with no I/O for this reason; see
   `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`). The
   fixed order of `sysclk-sla5032`, or a busy flag cleared before the End
   as in `rdtech-dps`, fits each of them.
-- About 20 drivers block in `sink.send` while close joins them; a full
-  queue nobody reads hangs the close (`atten-pps3xxx` did under load).
-  `PacketSink::send_while` is the fix; whether the rest get it one by
-  one or through a shared change is undecided.
+- About 35 drivers block in `sink.send` or `sink.end` while close joins
+  them; a full queue nobody reads hangs the close. `Session` always reads
+  its queue, so this bites a direct `Device` user and the drivers' own
+  unit tests (one hung a CI runner for an hour). The bounded `send_end`
+  of `gmc-mh-1x-2x`, `appa-55ii`, `beaglelogic`, `atorch` and
+  `atten-pps3xxx` fits the rest; one by one or through a shared
+  `PacketSink` change is undecided.
 - The rusb stream thread exits on any non-timeout error, keeps one read
   in flight, and is not joined on drop, so one transient error loses
   the rest of a capture. `nusb_backend`'s `bulk_out` takes `Cancelled`
