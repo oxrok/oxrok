@@ -839,7 +839,13 @@ if [ $emu = 1 ]; then
         tail -n +$((EMU_SEEN + 1)) "$TMP/emu.out" | head -n $((total - EMU_SEEN)) \
             | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
         EMU_SEEN=$total
+        # A new attach is looked for afresh, though its address may repeat.
+        if [ -s "$TMP/emu.attach" ]; then EMU_TTY_LOST=""; fi
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
+        # Before the next scenario line reads EMU_TTY.
+        if [ "$EMU_CDC" = 1 ] && [ -s "$TMP/emu.attach" ] && [ ! -c "$EMU_TTY" ]; then
+            emu_tty_find || true
+        fi
         if [ "$EMU_PARPORT" = 1 ] && [ -s "$TMP/emu.attach" ]; then emu_parport || return 1; fi
         # The scenario's hook, once per batch of attaches (see the head of
         # this file). Its own commands come back here with nothing new.
@@ -1154,9 +1160,78 @@ fcntl.ioctl(fd, 0x541F, info)
     # and closing that took. In a section of its own, as an unbind is.
     emu_tty_restore() {
         emu_cmd "section tty restore before $1" >/dev/null || return 1
+        if [ ! -c "$EMU_TTY" ] && ! emu_tty_find; then
+            echo "$1: no tty: EMU_TTY='$EMU_TTY', nodes '$EMU_NODES', busid '$EMU_BUSID'" >&2
+            emu_tty_state >&2
+            return 1
+        fi
         stty -F "$EMU_TTY" 9600 cs8 -parenb -cstopb -crtscts -ixon -ixoff clocal hupcl raw -echo \
             || return 1
         emu_cmd reset >/dev/null
+    }
+    # What the kernel has of the device, for a run with no tty: the
+    # device's directory, each interface's class and driver, the ttyACM
+    # nodes there are, and the server's last attach lines.
+    emu_tty_state() {
+        ets_dir=/sys/bus/usb/devices/$EMU_BUSID
+        if [ -n "$EMU_BUSID" ] && [ -d "$ets_dir" ]; then
+            echo "  $ets_dir: configuration '$(cat "$ets_dir/bConfigurationValue" 2>/dev/null)'"
+            for ets_if in "$ets_dir":*; do
+                [ -d "$ets_if" ] || continue
+                ets_drv=none
+                [ -e "$ets_if/driver" ] && ets_drv=$(basename "$(readlink "$ets_if/driver")")
+                echo "  ${ets_if##*/}: class $(cat "$ets_if/bInterfaceClass" 2>/dev/null), driver $ets_drv, tty $(ls "$ets_if/tty" 2>/dev/null | tr '\n' ' ')"
+            done
+        else
+            echo "  no $ets_dir"
+        fi
+        echo "  nodes: $(ls /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
+        echo "  attach lines: $(grep -E '^(READY|REPLUGGED|RENUMERATED) ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
+    }
+    # The device's ttyACMn from sysfs, when the attach line named none
+    # or one that is gone: after a replug, cdc_acm can bind after the
+    # server stopped waiting for nodes, and the line then lists no tty.
+    # Waits up to 10 s; the node found is opened to all and named
+    # generically in the outputs, as the server's own would be, and the
+    # scenario's emu_conns sets its conn= variables again. Its variables
+    # are its own: emu_case's t (the tool) and the like are the caller's.
+    # The mode is set once udev has settled (it applies its own rules to a
+    # new node, which would undo an earlier chmod), and checked. An attach
+    # that got no tty in 10 s is not waited for again: the cases after it
+    # fail at once rather than hold the emulator lock 10 s each.
+    emu_tty_find() {
+        [ -n "$EMU_BUSID" ] || return 1
+        etf_key="$EMU_BUSID $EMU_USB"
+        # After a wait that timed out for this attach, one look, no wait.
+        etf_tries=100
+        [ "${EMU_TTY_LOST:-}" != "$etf_key" ] || etf_tries=1
+        etf_i=0
+        while [ $etf_i -lt $etf_tries ]; do
+            for etf_sys in /sys/bus/usb/devices/"$EMU_BUSID":*/tty/ttyACM*; do
+                etf_node=/dev/${etf_sys##*/}
+                [ -c "$etf_node" ] || continue
+                sudo -n udevadm settle -t 5 || echo "note: $EMU_MODEL: udev has not settled" >&2
+                sudo -n chmod 666 "$etf_node" || return 1
+                if [ ! -r "$etf_node" ] || [ ! -w "$etf_node" ]; then
+                    echo "note: $EMU_MODEL: $etf_node is not open to all after chmod" >&2
+                    return 1
+                fi
+                echo "note: $EMU_MODEL: $etf_node found in sysfs (EMU_TTY was '$EMU_TTY')" >&2
+                EMU_TTY=$etf_node
+                EMU_NODES=${EMU_NODES:+$EMU_NODES,}$etf_node
+                export EMU_TTY EMU_NODES
+                printf 's#%s([^0-9]|$)#%s\\1#g\n' "$etf_node" "$(echo "$etf_node" | sed -E 's#[0-9]+$#N#')" >>"$TMP/emu.sed"
+                emu_conns
+                return 0
+            done
+            etf_i=$((etf_i + 1))
+            [ $etf_i -lt $etf_tries ] && sleep 0.1
+        done
+        if [ "${EMU_TTY_LOST:-}" != "$etf_key" ]; then
+            EMU_TTY_LOST=$etf_key
+            echo "note: $EMU_MODEL: no tty for $EMU_BUSID in 10 s; the cases after this one look without waiting" >&2
+        fi
+        return 1
     }
     # EMU_CDC=1: the transactions as a tty's, see the head of this file.
     # Joined data longer than 1 KiB is its digest, as the fixtures have it.
