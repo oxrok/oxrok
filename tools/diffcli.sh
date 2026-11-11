@@ -1145,14 +1145,25 @@ fcntl.ioctl(fd, 0x541F, info)
     # generically in the outputs, as the server's own would be, and the
     # scenario's emu_conns sets its conn= variables again. Its variables
     # are its own: emu_case's t (the tool) and the like are the caller's.
+    # The mode is set once udev has settled (it applies its own rules to a
+    # new node, which would undo an earlier chmod), and checked. An attach
+    # that got no tty in 10 s is not waited for again: the cases after it
+    # fail at once rather than hold the emulator lock 10 s each.
     emu_tty_find() {
         [ -n "$EMU_BUSID" ] || return 1
+        etf_key="$EMU_BUSID $EMU_USB"
+        [ "${EMU_TTY_LOST:-}" != "$etf_key" ] || return 1
         etf_i=0
         while [ $etf_i -lt 100 ]; do
             for etf_sys in /sys/bus/usb/devices/"$EMU_BUSID":*/tty/ttyACM*; do
                 etf_node=/dev/${etf_sys##*/}
                 [ -c "$etf_node" ] || continue
+                sudo -n udevadm settle -t 5 || echo "note: $EMU_MODEL: udev has not settled" >&2
                 sudo -n chmod 666 "$etf_node" || return 1
+                if [ ! -r "$etf_node" ] || [ ! -w "$etf_node" ]; then
+                    echo "note: $EMU_MODEL: $etf_node is not open to all after chmod" >&2
+                    return 1
+                fi
                 echo "note: $EMU_MODEL: $etf_node found in sysfs (EMU_TTY was '$EMU_TTY')" >&2
                 EMU_TTY=$etf_node
                 EMU_NODES=${EMU_NODES:+$EMU_NODES,}$etf_node
@@ -1164,6 +1175,8 @@ fcntl.ioctl(fd, 0x541F, info)
             sleep 0.1
             etf_i=$((etf_i + 1))
         done
+        EMU_TTY_LOST=$etf_key
+        echo "note: $EMU_MODEL: no tty for $EMU_BUSID in 10 s; the cases after this one do not wait for it" >&2
         return 1
     }
     # EMU_CDC=1: the transactions as a tty's, see the head of this file.
