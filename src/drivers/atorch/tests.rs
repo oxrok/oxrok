@@ -536,6 +536,10 @@ fn a_stop_ends_a_capture_that_gets_reports_all_the_time() {
     wait_full(&fake);
     d.stop().unwrap();
     drain_after_stop(&rx);
+    // A capture that panicked lets go of the queue too, and close()
+    // does not say: the worker's own end is checked here.
+    let worker = d.worker.take().expect("a capture");
+    assert!(worker.handle.join().is_ok(), "the capture panicked");
     d.close().unwrap();
 }
 
