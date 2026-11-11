@@ -157,9 +157,12 @@ fn device(fake: &Fake, pace: Pace) -> AtorchDevice {
     d
 }
 
+/// The packets a test's capture queue holds.
+const QUEUE: usize = 65536;
+
 /// A capture with a queue that takes everything.
 fn capture(d: &mut AtorchDevice) -> Receiver<(usize, Packet)> {
-    let (tx, rx) = sync_channel(65536);
+    let (tx, rx) = sync_channel(QUEUE);
     d.start(PacketSink::new(tx, 0)).unwrap();
     rx
 }
@@ -176,7 +179,9 @@ fn until_end(rx: &Receiver<(usize, Packet)>) -> Vec<Packet> {
             return out;
         }
         out.push(packet);
-        assert!(out.len() < 60000, "a capture that does not end");
+        // Beyond what a full queue held when the stop came: a capture
+        // that still sends.
+        assert!(out.len() < 2 * QUEUE, "a capture that does not end");
     }
 }
 
@@ -526,6 +531,9 @@ fn a_stop_ends_a_capture_that_gets_reports_all_the_time() {
     let mut d = device(&fake, CALM);
     let rx = capture(&mut d);
     assert_eq!(frames(&rx, 3), [9, 9, 9]);
+    // The port never pauses, so the capture fills the queue while nobody
+    // reads; the stop comes with it full, as it did on a loaded runner.
+    std::thread::sleep(Duration::from_millis(50));
     d.stop().unwrap();
     until_end(&rx);
     d.close().unwrap();
