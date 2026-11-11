@@ -1726,14 +1726,18 @@ mod tests {
 
     #[test]
     fn a_healthy_capture_goes_on_past_the_bound() {
+        // The real bound: an answer a loaded runner sees past REQ_TIMEOUT
+        // costs its round and a QUIET wait, about a second with no sample,
+        // which ended the capture under a bound of 800 ms (macOS CI). Twenty
+        // samples at about 190 ms each still run well past it.
         let (mut fake, _) = Fake::new();
         fake.answer_after = Duration::from_millis(60);
         let mut d = device(fake);
-        d.silence_bound = Duration::from_millis(800);
-        d.set(&Key::LimitSamples, &Value::U64(10), None).unwrap();
+        d.silence_bound = SILENCE_BOUND;
+        d.set(&Key::LimitSamples, &Value::U64(20), None).unwrap();
         let began = Instant::now();
         let rx = start(&mut d);
-        assert_all_true(&readings(&rx), 10);
+        assert_all_true(&readings(&rx), 20);
         assert!(began.elapsed() > d.silence_bound, "{:?} proves nothing", began.elapsed());
     }
 
