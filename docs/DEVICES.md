@@ -319,7 +319,7 @@ the C.
 Emulated by model `uni-t-dmm`, with descriptors from the sigrok wiki's
 lsusb: options packet, baud, parity, chunk, idle, burst, stall-report,
 stall-in, short-in, hold. 77 cases (75 full, 1 --oracle-bug, 1
---oracle-differs), gcov 97.4%, unreached: a failed detach and
+--oracle-differs), gcov 97.4% (from the last `--oracle --gcov` run, which still had the library-only cases), unreached: a failed detach and
 a short control write. Not on hardware. The HE2325U cable and the
 bcdDevice 12.00 variant are not modelled, and full speed is an
 assumption from the CH9326's datasheet. The model found that oxrok's
@@ -959,7 +959,7 @@ with another board's firmware opens.
 Ported (2026-11-04): `src/drivers/hantek_dso`, emulator-verified, no
 hardware. The 147 cases of `tools/emu/hantek-dso.sh` are 136 full and 11
 `--oracle-bug`, with no violation; gcov 96.2% as
-before. The port sends the C driver's transactions, reading a frame one
+before (from the last `--oracle --gcov` run, which still had the library-only cases). The port sends the C driver's transactions, reading a frame one
 packet at a time. It answers `num_hdiv` and `num_vdiv` and sends no
 empty analog packet. It reads again after an empty or timed out data
 transfer: on the model, which keeps the bytes for the next transfer, the
@@ -1338,7 +1338,7 @@ sigrok-cli cannot start a capture with this driver (it runs a session
 only with `--samples`, `--time`, `--frames` or `--continuous`, and the
 driver offers none of their keys, api.c 44-48): the rate classes, 8 and
 16 channels, capture ratios, trigger stages, a wrapping memory, a stop
-while waiting for the trigger, the faults and the bitstream file. gcov:
+while waiting for the trigger, the faults and the bitstream file. gcov (from the last `--oracle --gcov` run, which still had the library-only cases):
 api.c 92.9 % (170/183), protocol.c 97.1 % (465/479). Not reached:
 OS-level failures, a NULL sdi, match or transfer data, unknown keys,
 more than 32 registers, another 05ff product or a second board, a status
@@ -1464,7 +1464,7 @@ never-written samples; two error messages print the wrong byte
 firmware to upload. Ported 2026-11-04 from `api.c` and `protocol.c`; the
 device sees the same transactions as under sigrok-cli. Emulator only,
 not verified on hardware. The 133 cases of `tools/emu/hantek-4032l.sh`:
-127 full, 5 `--oracle-bug`, 1 `--oracle-differs`; gcov 91.4%.
+127 full, 5 `--oracle-bug`, 1 `--oracle-differs`; gcov 91.4% (from the last `--oracle --gcov` run, which still had the library-only cases).
 The model's new options `hold=N`, `partial=BYTES` and `release=1` show a
 stream that stops, a transfer that times out with data, and a slow
 board. Differences: a refused configure or get ends the capture with an
@@ -1526,8 +1526,8 @@ own (not the model's layout).
 ## ZEROPLUS Logic Cube (zeroplus-logic-cube)
 
 `zeroplus-logic-cube`: ported (`src/drivers/zeroplus_logic_cube`), all
-13 boards of the C's table. 134 cases: 111 full, 7 `--oracle-bug`, 15
-`--oracle-differs`, 1 on libsigrok alone; gcov unchanged, 87.6%. Scan,
+13 boards of the C's table. 133 cases: 111 full, 7 `--oracle-bug`, 15
+`--oracle-differs`; gcov 87.6% (from the last `--oracle --gcov` run, which still had the library-only cases). Scan,
 open and capture send what the C sends. `conn=` selects a board,
 accepted but not listed, as libsigrok refuses it. A rate not listed is
 refused. A failed status or address read is not used as a value, and the
@@ -1607,7 +1607,7 @@ LWLA1016 (2961:6688, 16 channels, up to 100 MHz). The driver needs
 Ported (2026-11-04) in `src/drivers/sysclk_lwla`, with the 133 cases of
 `tools/emu/sysclk-lwla.sh`: 126 full, 4 `--oracle-differs`, 3
 `--oracle-bug` (interrupts: sigrok-cli has no SIGINT handler). gcov
-91.1%. Not on hardware.
+91.1% (from the last `--oracle --gcov` run, which still had the library-only cases). Not on hardware.
 
 The port keeps the C's integer divider and the rate asked for, with a
 warning when they differ. `close()` always sends the shut-down
@@ -1697,7 +1697,7 @@ without a trigger (`api.c:501-502`), keeping an earlier session's masks.
 `sysclk-sla5032`: ported, emulator-verified, not checked on hardware.
 154 cases: 131
 full, 8 `--oracle-bug`, 15 `--oracle-differs`; gcov 91.5%
-(api.c 85.7%, protocol.c 94.7%), usb.c 35.4%. The driver rounds depths
+(api.c 85.7%, protocol.c 94.7%), usb.c 35.4% (from the last `--oracle --gcov` run, which still had the library-only cases). The driver rounds depths
 both ways: a limit of 512 gets 1024 samples, 5000 gets 4608. sigrok-cli
 counts its limit only for decoders and "Device only sent", and writes
 whole packets to its output (session.c:464), so it prints all 1024;
@@ -1778,7 +1778,7 @@ sigrok wiki's lsusb of a real device, the protocol from its Protocol
 section (by the driver's author) and the C driver. Options: `serial=`,
 `fw=`, `wait-trigger=N|never`, `sampling=N`, `digest=1`; faults
 `stall-get=`, `stall-set=`, `short-get=`, `stale-sample=`,
-`stale-info=1`, `stale-reset=`, `busy-reset=`, `ignore-reset=N|never`, `short-len=N`. gcov 88.6% of the driver, src/usb.c 64.2%. Not emulated:
+`stale-info=1`, `stale-reset=`, `busy-reset=`, `ignore-reset=N|never`, `short-len=N`. gcov 88.6% of the driver, src/usb.c 64.2% (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated:
 allocation failures, a kernel driver returning or refusing to detach,
 the device vanishing between scan and open or between a callback and its
 resubmit (races only), a stop during the 1.5 s status poll
@@ -1810,7 +1810,7 @@ hhtcd7b_e, HHTCD4_e, exto_e), which agree on the request, 115200 8N1,
 the layout and units 1, 3, 5, 24; the CRC's algorithm is the C's alone.
 No capture is known, so the model's Size, Unused and Decimal exponent
 bytes are invented zeros. Ported, 69 cases: 54 full, 13 --oracle-bug, 2
---oracle-differs; gcov 91.3%. **This oracle has one line
+--oracle-differs; gcov 91.3% (from the last `--oracle --gcov` run, which still had the library-only cases). **This oracle has one line
 restored: `sdi->driver = di;`, removed by b258c09f
 (tools/oracle-patches/libsigrok-testo-sdi-driver.patch). Stock libsigrok
 finds no Testo: libsigrok 0.5.1, 0.5.2 and unreleased lack the line,
@@ -1831,7 +1831,7 @@ Kecheng KC-330B (`kecheng-kc-330b`), sound level meter, 1041:8101,
 vendor bulk. Emulated and ported: model `kecheng-kc-330b` (options
 model=, inactive=, stored=, log-interval=, log-time=, log-freq=,
 log-source=, id-length=, digest=, and faults stall-out=, silent=,
-stall-in=, short=, garbage=, each CC[@N]). 114 cases, gcov 79.3%.
+stall-in=, short=, garbage=, each CC[@N]). 114 cases, gcov 79.3% (from the last `--oracle --gcov` run, which still had the library-only cases).
 Descriptors and protocol are from the sigrok wiki and the C; no firmware
 or recording, not verified on hardware. The model needs a quiet host:
 the oracle's 5 to 40 ms timeouts miss under load, and oxrok's are 100 to
@@ -1870,7 +1870,7 @@ Temperature and humidity models 3, 12, 13, 16 (channels Temp, Hum) and
 CO models 9, 11 (channel CO); the 15 others of the C table are
 identified and refused, as in C. Emulated and ported 2026-11-04, none on
 hardware: model lascar-el-usb, 149 cases (140 full, 4 --oracle-bug, 5
---oracle-differs), gcov 93.9%. Not emulated: allocation
+--oracle-differs), gcov 93.9% (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated: allocation
 failures, libusb_open failing, a claim failing only after the scan, a
 submit failing right after one that worked. The model's descriptors are
 the wiki's lsusb recordings. Its block and memory sizes are inferred
@@ -1903,7 +1903,7 @@ model `greatfet` (options `in-limit=N`, `wide=1`, `level=HHLL`; faults
 greatscottgadgets/greatfet da49f6b, libgreat 699d267 and the C driver.
 121 cases, 2026-11-04: 104 full, 6 `--oracle-bug`, 11
 `--oracle-differs`. gcov 84.8% (api.c 86.6%, protocol.c
-84.1%); not emulated: a failing open, a device without string 3,
+84.1%) (from the last `--oracle --gcov` run, which still had the library-only cases); not emulated: a failing open, a device without string 3,
 timed-out transfers (timeout 0), allocation failures, unknown transfer
 status. No real board has been tried.
 What the model taught:
@@ -2002,7 +2002,7 @@ I, D+, D-, T, E, one frame per poll at about 100 ms; use `--frames` or
 range). Emulator-verified on a CDC-ACM stand-in (the real meters have no
 USB data side); not verified on hardware. The model's layout comes from
 the sigrok wiki and the C driver. 86 cases: 72 full, 7 `--oracle-bug`, 7
-`--oracle-differs`; gcov 93.7%.
+`--oracle-differs`; gcov 93.7% (from the last `--oracle --gcov` run, which still had the library-only cases).
 
 ## RDTech DPS and RD power supplies (rdtech-dps, rdtech-rd)
 
@@ -2029,7 +2029,7 @@ Ported and emulated on the CDC-ACM shell. Model `atten-pps3xxx`
 (`vset=`, `iset=`, `output=`, `ocp=`, `mode=`, `load=`, `replies=`,
 `answers=`, `setters=`, `uart=`, and the shell's faults), 120 cases,
 2026-11-05: 86 full, 20 `--oracle-differs`, 14 `--oracle-bug`. gcov
-90.5% of the driver. The real device is an FT232R; the
+90.5% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). The real device is an FT232R; the
 model is a CDC-ACM stand-in, as ftdi_sio would take the real ids. Not
 checked on hardware.
 
@@ -2113,7 +2113,7 @@ emulated on the CDC-ACM shell. Model `fluke-dmm` (`model=`,
 `uart=LINE|native`, `id=HEX|none`, `qm=HEX`, `data=HEX`, `answers=`, and
 the shell's faults), 158 cases, 2026-11-05: 148 full, 5
 `--oracle-differs`, 5 `--oracle-bug`. gcov 98.6% of the
-driver. Not emulated: a write failing at the first QM or a `QM N`
+driver (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated: a write failing at the first QM or a `QM N`
 (`api.c:220-221`, `protocol.c:73`; an unplug there is a race), and the
 real IR cable, which is a USB serial adapter, not CDC-ACM.
 
@@ -2141,7 +2141,7 @@ gone ends a capture.
 port. Ported (src/drivers/ols), sharing `p-ols`' commands, metadata
 reader, channel groups and sample decoder.
 `tools/emu/openbench-logic-sniffer.sh` runs 209 cases: 184 full, 10
-`--oracle-bug`, 15 `--oracle-differs`; gcov 94.7%. Model
+`--oracle-bug`, 15 `--oracle-differs`; gcov 94.7% (from the last `--oracle --gcov` run, which still had the library-only cases). Model
 `openbench-logic-sniffer` on the CDC-ACM shell (`04d8:fc92`), options
 id=, meta=, name=, fpga=, channels=, rate=, protocol=, memory=, slow=,
 sends=, uart=. Facts from jawi/ols, gillham/logic_analyzer, pysump and a
@@ -2178,7 +2178,7 @@ Unverified, from the fork's source only:
 ## Maynuo M97 and M98 electronic loads (maynuo-m97)
 
 maynuo-m97: model `maynuo-m97` on the CDC-ACM shell, a Modbus RTU slave
-behind a UART; 208 cases, 172 full; gcov 95.8%; not on hardware. A scan
+behind a UART; 208 cases, 172 full; gcov 95.8% (from the last `--oracle --gcov` run, which still had the library-only cases); not on hardware. A scan
 finds the two models of `api.c`'s table (M9710, id 28, and M9812, id
 101), whose ids its comment calls guessed. Settings and state are in
 channel group `1`: `-g 1`.
@@ -2269,8 +2269,8 @@ fit only that, so `100,3` reads as 1000 Hz here and 0.001 Hz there
 (writes always send scale 0); and a negative phase goes out with its
 sign, though protocol.c:811 says 0..360 and the Python sends -90 as
 35100. The model's ranges are the C driver's limits, not the device's.
-229 cases: 205 full, 10 --oracle-bug, 13 --oracle-differs, 1 library.
-gcov 89.2%.
+228 cases: 205 full, 10 --oracle-bug, 13 --oracle-differs.
+gcov 89.2% (from the last `--oracle --gcov` run, which still had the library-only cases).
 
 ## ZKETECH EBD-USB (zketech-ebd-usb)
 
@@ -2280,7 +2280,7 @@ is required and `serialcomm=` defaults to 9600/8e1. Emulated by the
 would take the real ones), options `vbus=`, `dp=`, `dm=`, `limit=`,
 `cutoff=`, `load=`, `sag=`, `device=`, `raw-checksum=`, `period=`,
 `frames=`, `replies=`, `deaf=`, `setters=`, `uart=`. 103 cases: 88 full,
-8 `--oracle-bug`, 7 `--oracle-differs`. gcov 86.6%; not
+8 `--oracle-bug`, 7 `--oracle-differs`. gcov 86.6% (from the last `--oracle --gcov` run, which still had the library-only cases); not
 reached: the setters past "later", as no client sets during a capture,
 the end of `ebd_loadstart`, read errors, and argument checks. Never run
 on hardware. Frames are from the sigrok wiki, the line from mdijkens'
@@ -2315,7 +2315,7 @@ the CDC-ACM shell. Model `agilent-dmm` (`model=`, `uart=LINE|native`,
 `id=HEX|none`, `conf=`, `conf2=`, `stat=`, `fetc=`, `fetc2=`, `fetc3=`,
 `log=HEX|none`, `answers=`, and the shell's faults), 380 cases,
 2026-11-05: 374 full, 5 `--oracle-bug`, 1 `--oracle-differs`.
-gcov 97.4% of the driver. Not emulated: the scan's write going short
+gcov 97.4% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated: the scan's write going short
 (`api.c:135-136`; a unit test has it), and the real IR or Bluetooth
 cable, which is a USB serial adapter or an rfcomm port, not CDC-ACM.
 Facts come from the C driver, Keysight's U1281A/U1282A guide and the
@@ -2404,7 +2404,7 @@ The model is `emu/src/models/icstation-usbrelay.rs`, a CDC-ACM stand-in
 with test ids; cases `tools/emu/icstation-usbrelay.sh`, goldens
 `tests/emu/icstation-usbrelay` (42 cases: 36 full, 2 `--oracle-bug`, 3
 `--oracle-differs`, 1 `--no-oracle-only`). gcov of the
-C driver over them is 83.0%; the rest is argument checks, defaults that
+C driver over them is 83.0% (from the last `--oracle --gcov` run, which still had the library-only cases); the rest is argument checks, defaults that
 libsigrok refuses first, and write failures, which an unplug reaches
 only by a race and a fake `Port` covers. No factory firmware source was
 found. Not run on a real board.
@@ -2412,7 +2412,7 @@ found. Not run on a real board.
 ## ITECH IT8500 series, BK Precision 8500 series (itech-it8500)
 
 Electronic load on its TTL serial port. Emulator only (`itech-it8500`
-model on CDC-ACM, 216 cases, 2026-11-05, gcov 93.6%), never on hardware.
+model on CDC-ACM, 216 cases, 2026-11-05, gcov 93.6% (from the last `--oracle --gcov` run, which still had the library-only cases)), never on hardware.
 `conn=` is required. Without `serialcomm=` a scan tries 9600, 38400,
 19200 and 4800, and the line caps the sample rate at 10 to 60 Hz.
 Options other than the limits and sample rate are in channel group `1`:
@@ -2434,7 +2434,7 @@ CDC-ACM shell, not on hardware. Model `arachnid-labs-re-load-pro`
 `volts=`, `amps=`, `replies=`, `answers=`, `lines=`, `count=`,
 `period=`, `fields=2|4`, `gap=`, `setters=`), 130 cases (90 full, 15
 `--oracle-bug`, 23 `--oracle-differs`, 2 `--no-oracle-only`),
-2026-11-06, gcov 91.8%. Not emulated: a port gone between the open and
+2026-11-06, gcov 91.8% (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated: a port gone between the open and
 the scan's first write, a get during a capture (no CLI or runner path
 asks; fake-port tests only), branches check_key stops first, and oxrok's
 own failed writes after an answer (no event falls there; unit tests
@@ -2473,7 +2473,7 @@ SME02, SME03, SME03A, SME03E and SME06, SCPI over RS-232 (`conn=PORT`,
 optional `serialcomm=`). `tcp-raw` and `usbtmc` resources go through
 `src/scpi` untested, and C's GPIB is not ported. Emulator-verified on
 the CDC-ACM shell (`emu/src/models/rohde-schwarz-sme-0x.rs`), 75 cases
-(55 full, 20 `--oracle-differs`), gcov 94.9%, no hardware.
+(55 full, 20 `--oracle-differs`), gcov 94.9% (from the last `--oracle --gcov` run, which still had the library-only cases), no hardware.
 Options: output_frequency and amplitude, get and set. A scan sends a
 bare LF, which switches RS-232 to remote, and `*IDN?`, and closes; an
 open and a close send nothing. With no `serialcomm=` the port keeps its
@@ -2511,7 +2511,7 @@ A two-probe logging thermometer (and the RS 55II clone) on a serial port
 at 9600/8n1. It only sends. Emulated by `appa-55ii` on the CDC-ACM
 shell, with options reading=, packet=, period=, burst=, mute=, records=,
 after=, gap=, piece=, claim=, bad=, sync=, drop=: 71 cases, 55 full, 6
---oracle-bug, 10 --oracle-differs, gcov 96.6%. Not emulated:
+--oracle-bug, 10 --oracle-differs, gcov 96.6% (from the last `--oracle --gcov` run, which still had the library-only cases). Not emulated:
 the `default:` arms for unknown keys and the read error, which C's check
 of revents never reaches. Not on hardware. Protocol from the sigrok wiki
 and the driver; no firmware source found.
@@ -2566,7 +2566,7 @@ doesn't say so, and its figures are that patched C's.
 Emulated: model `mastech-ms6514` on the CDC-ACM shell (options `frame=`,
 `stored=`, `period=`, `first=`, `burst=`, `bunch=`, `still=`), 65 cases
 (49 full against the patched C, 4 `--oracle-bug`, 10 `--oracle-differs`,
-2 oxrok alone), 2026-11-06. gcov 94.9% of the driver. Not
+2 oxrok alone), 2026-11-06. gcov 94.9% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Not
 emulated: `protocol.c:223-224` (a read of 0 with exactly `G_IO_IN`),
 `:240-241` (dead: the parse always leaves under 18 bytes), and the
 default branches of `config_get`, `config_set` and `config_list`.
@@ -2600,7 +2600,7 @@ Serial, 115200/8n1 (the wiki and libsigrok; the older PCE manual says
 9600, which is unresolved): `-d pce-322a:conn=/dev/ttyUSB0`. Any port
 that opens is taken for a meter, as in libsigrok. Emulator-verified (90
 cases: 60 full, 12 full via library, 9 `--oracle-bug`, 9
-`--oracle-differs`; gcov 88.1%), not on hardware. `data_source=Live`
+`--oracle-differs`; gcov 88.1%, from the last `--oracle --gcov` run, which still had the library-only cases), not on hardware. `data_source=Live`
 reads the stream; `Memory` reads the recordings by blocks and ends by
 itself, each recording starting with a reading of -1. A full memory of
 32,700 values takes about 44 s, and a small `--samples` still reads it
@@ -2630,7 +2630,7 @@ ETH002, ETH008, ETH484 and ETH8020, plus the ETH1610, WIFI002, WIFI008,
 WIFI484 and WIFI8020 on the word of libsigrok's table alone
 (`devantech-eth008`): ported and emulated on the CDC-ACM shell, model
 `devantech-eth008`, 116 cases: 108 full, 5 `--oracle-bug`, 3
-`--oracle-differs`. gcov 88.2% of the driver. Never on
+`--oracle-differs`. gcov 88.2% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Never on
 hardware. These are full under a preload, on a tty; TCP was compared by
 hand only. The boards are reached over TCP, `conn=tcp-raw/HOST/17494`,
 which the emulator can't carry, and no board with this command set on a
@@ -2691,7 +2691,7 @@ period, burst, uart, and the shell's) and `uni-t-ut32x-hid` (CH9325
 descriptors from the wiki's UT325 lsusb, bcdDevice 12.00; also baud,
 bits, chunk, idle, stall-report, stall-out, bad-report). 82 cases (67
 full, 13 --oracle-bug, 2 --oracle-differs). gcov 94.5% on the
-serial model and 87.7% on the cable. Unreached: option defaults
+serial model and 87.7% on the cable (from the last `--oracle --gcov` run, which still had the library-only cases). Unreached: option defaults
 sigrok-cli cannot ask, spew, a loop line a 19 byte buffer cannot reach,
 null guards, and the chip's bad report header, whose crashing runs write
 no counts. Not on hardware. The record layout is the wiki's. How the
@@ -2707,7 +2707,7 @@ CDC-ACM shell, model `uni-t-ut181a` (`readings=`, `saved=`, `rec=`,
 `recs=`, `first=`, `frames=`, `period=`, `per=`, `over=`, `have=`,
 `fail=`, `pad=`, `off-reading=`, `uart=`, `setters=`, and the shell's
 faults), 186 cases, 2026-11-06: 168 full, 10 `--oracle-bug`, 8
-`--oracle-differs`. gcov 90.1% of the driver. Behind its real
+`--oracle-differs`. gcov 90.1% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Behind its real
 cable as model `uni-t-ut181a-cp2110` (the `cp2110` model's chip with
 this meter on its UART), 6 full cases; gcov of `serial_hid_cp2110.c`
 48.9%. BLE is not emulated. `conn=` is required, as nothing identifies
@@ -2777,7 +2777,7 @@ apart, 1 C count = 1 mAh and 1 E count = 10 mWh. That program's USB mAh
 (×10) and DC energy differ from C's tables, and C's are kept. Its USB
 temperature is signed where C's is not, so a reading below 0 would show
 about 65535 °C, as in C. 67 cases, 2026-11-06: 58 full, 5
-`--oracle-differs`, 4 `--oracle-bug`; gcov 95.8%. The sum at
+`--oracle-differs`, 4 `--oracle-bug`; gcov 95.8% (from the last `--oracle --gcov` run, which still had the library-only cases). The sum at
 a message's end is not checked, as in C: esphome-atorch-dl24's README
 says the J7-C, DL24M and DT24PW fail it, and the DL24M log in its issue
 59 is cited for last bytes that look random.
@@ -2788,7 +2788,7 @@ Emulated: model `link-mso19` on CDC-ACM, 3195:f190, options `vid= pid=
 manufacturer= product= serial= pre= wait= post= status-at= mute-at=
 late-at= mark-at= dump= extra= pause= raw=`. 160 cases on 2026-11-06:
 134 full, 7 `--oracle-bug`, 19 `--oracle-differs`. gcov 92.0%
-of the driver; not emulated: write and open failures, null and group
+of the driver (from the last `--oracle --gcov` run, which still had the library-only cases); not emulated: write and open failures, null and group
 checks the CLI makes first, the unused forced capture and the dead
 default of the first serial field. Not checked on a unit.
 
@@ -2876,7 +2876,7 @@ asking.
 
 Emulated on the CDC-ACM shell: model `serial-lcr`, 123 cases on
 2026-11-06 (118 full, 5 `--oracle-bug`), gcov 87.4% of the
-driver. Not checked on a unit. Facts come from the C's reverse
+driver (from the last `--oracle --gcov` run, which still had the library-only cases). Not checked on a unit. Facts come from the C's reverse
 engineered layouts, sigrok's wiki and Conrad's protocol description
 (`web.archive.org`, the C's link is dead), whose range and Rs tables all
 match. Conrad says 7E1: a 7E1 meter and an 8n1 host share a 10-bit
@@ -2925,7 +2925,7 @@ The model is `emu/src/models/conrad-digi-35-cpu.rs`, a CDC-ACM stand-in
 with test ids; cases `tools/emu/conrad-digi-35-cpu.sh`, goldens
 `tests/emu/conrad-digi-35-cpu` (56 cases on 2026-11-06: 50 full, 4
 `--oracle-differs`, 2 `--no-oracle-only`). gcov of the
-C driver over them is 93.3%; the rest is default arms and an argument
+C driver over them is 93.3% (from the last `--oracle --gcov` run, which still had the library-only cases); the rest is default arms and an argument
 check that no client reaches. The pause is tested on a fake `Port`, as a
 model has no clock. Sources: sigrok's wiki and the driver. Conrad's
 manual could not be fetched, and no firmware source or recording was
@@ -2941,7 +2941,7 @@ and a pty on Linux.
 
 Sound level meter on a serial port, 9600/8n1, on a CP2102. Emulated, not
 run on hardware. The model is CDC-ACM with test ids, as `cp210x` binds
-the real ones whatever the class. 106 cases on 2026-11-06, gcov 94.0%.
+the real ones whatever the class. 106 cases on 2026-11-06, gcov 94.0% (from the last `--oracle --gcov` run, which still had the library-only cases).
 
 Of the cases, 58 compare with libsigrok as it is, but for a scan's read;
 44 compare with C as it was before 2014, under a preload that makes
@@ -3139,7 +3139,7 @@ wake-up behaviour is a guess.
 
 Four channel thermometers in `src/drivers/center_3xx`, 9600/8n1,
 emulated, not on hardware: model `center-3xx`, 76 cases on 2026-11-06,
-gcov 96.2% of the driver. A scan opens and closes the port, sending
+gcov 96.2% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). A scan opens and closes the port, sending
 nothing. A capture sends `A` 500 ms after the last bytes and takes a
 45-byte answer, one sample of T1 to T4.
 
@@ -3181,7 +3181,7 @@ stale by the latency.
 
 French electricity meters' customer output, historic mode, 1200/7e1.
 Emulated, not on hardware: model `teleinfo`, 106 cases on 2026-11-06,
-gcov 98.9% of the driver. Stock libsigrok has found no such device since
+gcov 98.9% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Stock libsigrok has found no such device since
 0.5.2: `api.c:79` passes a packet of 292 with a buffer of 292, and
 `serial.c:833` has wanted two packets since `d03815a0` (2019). The
 oracle carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`,
@@ -3240,7 +3240,7 @@ Known limits, the same in sigrok-cli:
 
 Emulated on the CDC-ACM shell: model `mic-985xx`, 53 cases on 2026-11-06
 (46 full, 2 `--oracle-bug`, 5 `--oracle-differs`), gcov 93.2%
-of the driver. Not run on hardware. Sources: libsigrok's driver;
+of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Not run on hardware. Sources: libsigrok's driver;
 sigrok's wiki pages for both models, with the manual
 (`File:Mic_98581_manual_specs.jpg`) and a display photo; an archived
 2013 vendor page. No firmware source or recording was found. What the
@@ -3338,7 +3338,7 @@ IPDBG server such as OpenOCD's, on TCP: `-d ipdbg-la:conn=tcp-raw/127.0.0.1/4242
 the port a number. Emulated from the core's HDL and READMEs (IPDBG master):
 `emu/src/models/ipdbg-la.rs`, on TCP alone. 120 cases on 2026-11-08 (101
 full, 7 `--oracle-bug`, 8 `--oracle-differs`, 1 oxrok alone,
-plus odd-byte splits of a dump), gcov 93.2%; not reached: a failed connect
+plus odd-byte splits of a dump), gcov 93.2% (from the last `--oracle --gcov` run, which still had the library-only cases); not reached: a failed connect
 at open, socket errors, the default arms of `config_*`, NULL and malloc
 checks, and a trigger on a disabled channel, which sigrok-cli refuses
 first.
@@ -3375,7 +3375,7 @@ TCP server, `conn=tcp-raw/HOST/5555` (the first field need only start with
 `late=`, `refuse=`, `hangup=`, `total=`, `free=`, `chunk=`, `paced=`,
 `first=`, `tail=`, `busy=`, `mark=`). 108 cases on 2026-11-08: 60 full on
 stock sigrok-cli, 20 `--oracle-bug`, 24 `--oracle-differs`, 4 oxrok
-alone. gcov 71.1%: not emulated are `beaglelogic_native.c` and the
+alone. gcov 71.1% (from the last `--oracle --gcov` run, which still had the library-only cases): not emulated are `beaglelogic_native.c` and the
 native branches of `api.c`, send and recv errors (the carrier sends no
 RST), and setters no C path calls.
 
@@ -3424,7 +3424,7 @@ between, and only `tcp-raw/HOST/PORT` is tested; nothing is probed without
 `hires=`, `ranges=`, `plcs=`, `chans=`, `plc=`, `real-rate=`, `left-rear=`,
 `split=`, `chan-skew=`, and the SCPI shell's faults), 101 cases on
 2026-11-08: 78 full, 14 `--oracle-differs`, 9 `--oracle-bug`.
-gcov 94.8% of the driver. Never on hardware. No manual could be read
+gcov 94.8% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Never on hardware. No manual could be read
 (ManualsLib's pages give headings only), so the number format, CR LF, and
 what a preset selects (1 PLC, DCV, the front terminals) are guesses in the
 model.
@@ -3511,7 +3511,7 @@ arrives after the next answer. Never on hardware; the model's USB id
 DLM2022, 2032, 2052, 2024, 2034, 2054, DL9040, 9140, 9240, DL9505L,
 9510L, 9705L and 9710L, on USBTMC (0b21:0030, from sigrok's wiki) or
 tcp-raw. Emulated: model `yokogawa-dlm`, 202 cases on 2026-11-08 (154 full,
-35 `--oracle-differs`, 11 `--oracle-bug`, 2 oxrok alone), gcov 88.3%. Stock C sends no `SR_DF_HEADER` and has never sent one,
+35 `--oracle-differs`, 11 `--oracle-bug`, 2 oxrok alone), gcov 88.3% (from the last `--oracle --gcov` run, which still had the library-only cases). Stock C sends no `SR_DF_HEADER` and has never sent one,
 so sigrok-cli prints nothing from a stock capture; 69 cases run it under
 `tools/oracle-header.c`, and three pin stock C's empty output. Stock C also
 finds no model without pods (`g_malloc0(0)` is NULL, `protocol.c:780-786`).
@@ -3534,7 +3534,7 @@ manual read. A real DLM's Ethernet is VXI-11, which oxrok lacks.
 Siglent SDS1000CML/CNL/DL, SDS1000X and X+, SDS1000X-E and SDS2000X, on
 USBTMC and TCP. Model `siglent-sds`, 98 cases on 2026-11-08 (67 full, 20
 `--oracle-bug`, 11 `--oracle-differs`), gcov 80.0% of the
-driver (more in fact: a crashed sigrok-cli writes no counts). Never on
+driver (more in fact: a crashed sigrok-cli writes no counts) (from the last `--oracle --gcov` run, which still had the library-only cases). Never on
 hardware. Page numbers are Siglent's "SDS1000-Series & SDS2000X & SDS2000X-E
 Programming Guide", PG01-E02D.
 
@@ -3625,7 +3625,7 @@ after a block is dropped from the next answer. `--time`, `--samples` and
 
 GDS-806, 810, 820 and 840, on the scope's RS-232 port: ported and emulated
 on the CDC-ACM shell, 61 cases on 2026-11-08 (45 full, 9 `--oracle-differs`,
-5 `--oracle-bug`, 2 oxrok alone), gcov 88.9%. Never on hardware;
+5 `--oracle-bug`, 2 oxrok alone), gcov 88.9% (from the last `--oracle --gcov` run, which still had the library-only cases). Never on hardware;
 from GW Instek's programming manual and the C driver. A block is read a byte
 at a time, so a point of 0x0A or 0x0D is a point; C doubles a line feed that
 ends a read (rarely, since the read must end on it) and then reads the rest
