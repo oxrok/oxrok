@@ -1,63 +1,89 @@
 #!/bin/sh
 # Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
-# Differential check: runs the same command lines through sigrok-cli and
-# oxrok and diffs the output after the first header line.
+# The check of oxrok's drivers and command line: oxrok against the
+# goldens on emulated devices, and on demand against sigrok-cli and
+# libsigrok, the oracle.
 #
-#   tools/diffcli.sh [-k substring] [--hw] [--emu] [--emu-model NAME[,NAME]]... [--gcov]
-#                    [--no-oracle]
+#   tools/diffcli.sh [-k substring] [--emu] [--emu-model NAME[,NAME]]...
+#   tools/diffcli.sh --oracle [-k substring] [--hw] [--emu] [--emu-model NAME[,NAME]]... [--gcov]
 #
-# SIGROK_CLI and OXROK name the binaries (defaults: sigrok-cli on PATH
-# and target/debug/oxrok). -k runs only the cases whose name contains
-# the substring. --hw adds the hardware cases, which need the
-# LogicPort and the fx2lafw device attached, and the ESP32 generator for
-# the LogicPort cases: HIL names the bench binary that drives it
-# (default target/debug/oxrok-hil), which sets idle inputs and a 1 MHz
-# clock on CLK1 for the trigger case.
+# The first line of output names the mode. -k runs only the cases whose
+# name contains the substring. OXROK names oxrok's binary (default
+# target/debug/oxrok).
 #
-# --emu adds the emulated devices (docs/USB.md, "Emulation over USB/IP"):
-# for each scenario file tools/emu/MODEL.sh the USB/IP server EMU
-# (default target/debug/oxrok-emu) is started under sudo, attaches the
-# model through vhci-hcd, and the file's emu_case lines run against it,
-# the commands to the server going through VUSB_CTL (default
+# By default (no --oracle) oxrok runs alone against the goldens in
+# tests/emu/MODEL, on every emulated model, or the ones --emu-model
+# names (--emu says the same as no flag): this is the check of a change
+# to a driver, and what CI runs. A full case (oxrok has the case's
+# driver) runs oxrok and holds its output and transactions to the case's
+# .out and .tx goldens, --oracle-bug and --oracle-differs cases too,
+# their .oracle left alone. A case only the oracle can run (oxrok lacks
+# the driver, a --libsigrok case without --oxrok, a --hangs case) is
+# skipped and counted, and a model none of whose cases is full gets no
+# session at all. A case of a driver EMU_FULL lists that oxrok -L lacks
+# fails, and so does a run where no case ran. Session-only helpers in a
+# scenario (the *_hold claims) return at once while the cases are
+# counted. Before each of oxrok's runs, the kernel drivers bound to the
+# device's vendor-specific interfaces are unbound (emu_unbind), as
+# libftdi's detach in sigrok-cli's run would have left them (with the
+# oracle too, before oxrok in an --unplug case, whose replug binds them
+# again). Events, --record and the violation checks are the same in both
+# modes. --no-oracle is accepted and means the default; --hw and --gcov
+# need --oracle.
+#
+# EMU_BLESS=1, without --oracle, re-records the goldens from oxrok: a
+# case whose other checks pass (exit status as the case expects, no
+# violations, output present or absent as it says, --oxrok-fails' reason,
+# the events fired) gets its .out and .tx written, and its --record
+# fixture; a failing case is reported and nothing of it is written. It
+# never writes a .oracle file, nor the goldens of a case only the oracle
+# runs. After each model it prints "bless MODEL: N new, N changed, N
+# unchanged, N not written (case failed)"; after an unfiltered run it
+# removes the goldens no case has. EMU_BLESS=missing compares each
+# golden and fixture file there is, and only when they all match (and
+# the other checks pass) writes the absent ones, each file on its own
+# (EMU_WRITE_MISSING=1 is its old name). A commit that changes goldens
+# says why they changed.
+#
+# --oracle (a new port, or checking an upstream sigrok change) runs
+# sigrok-cli and libsigrok alongside oxrok, from the environment
+# ~/work/sigrok/env.sh sets up (docs/DEVICES.md, "Oracle"): SIGROK_CLI
+# names sigrok-cli (default: sigrok-cli on PATH). Alone, --oracle runs
+# the software cases (case_ below), each command line through both tools,
+# outputs diffed after the first header line; with --emu it adds every
+# emulated model, and --emu-model runs the named models alone. --hw adds
+# the hardware cases, which need the LogicPort and the fx2lafw device
+# attached, and the ESP32 generator for the LogicPort cases: HIL names
+# the bench binary that drives it (default target/debug/oxrok-hil), which
+# sets idle inputs and a 1 MHz clock on CLK1 for the trigger case. On an
+# emulated model, a case is full when oxrok has the case's driver (both
+# tools, outputs and transactions compared with each other and the
+# goldens) and oracle-only when it does not (sigrok-cli alone, held to
+# the goldens); a driver the scenario lists in EMU_FULL must be oxrok's.
+# Either way no pedantic violation may be logged, every tool must print
+# something (unless --no-output), and existing goldens are compared. A
+# full case where libsigrok is wrong is oxrok's alone against the
+# goldens, with sigrok-cli kept in SLUG.oracle: emu_case --oracle-bug
+# when sigrok-cli fails (its stderr kept), --oracle-differs when it exits
+# 0 with other output or transactions (its stdout kept); either fails
+# once sigrok-cli is fixed. EMU_BLESS=1 with --oracle writes the goldens
+# from sigrok-cli's side instead (and the .oracle files). --gcov zeroes
+# the coverage counters of the model's libsigrok driver before its
+# session and writes tests/emu/MODEL/gcov.txt after it.
+#
+# The emulated devices (docs/USB.md, "Emulation over USB/IP"): for each
+# scenario file tools/emu/MODEL.sh the USB/IP server EMU (default
+# target/debug/oxrok-emu) is started under sudo, attaches the model
+# through vhci-hcd, and the file's emu_case lines run against it, the
+# commands to the server going through VUSB_CTL (default
 # target/debug/vusb-ctl when there is one, else vusb-ctl on PATH:
-# cargo install vusb-cli --version 0.2.1 --locked).
-# A case is full when oxrok has the case's driver (both tools, outputs
-# and transactions compared) and oracle-only when it does not
-# (sigrok-cli alone, checked against the goldens in tests/emu/MODEL);
-# a driver the scenario lists in EMU_FULL must be oxrok's. Either way
-# no pedantic violation may be logged, every tool must print something
-# (unless --no-output), and existing goldens are compared. A full case
-# where libsigrok is wrong is oxrok's alone against the goldens, with
-# sigrok-cli kept in SLUG.oracle: emu_case --oracle-bug when sigrok-cli
-# fails (its stderr kept), --oracle-differs when it exits 0 with other
-# output or transactions (its stdout kept); either fails once
-# sigrok-cli is fixed. EMU_BLESS=1 writes the goldens instead. --emu-model
-# runs only the named models (and no other cases); --gcov
-# zeroes the coverage counters of the model's libsigrok driver before
-# its session and writes tests/emu/MODEL/gcov.txt after it. Sessions
-# hold an exclusive lock on EMU_LOCK (default /tmp/oxrok-emu.lock), so
+# cargo install vusb-cli --version 0.2.1 --locked). Sessions hold an
+# exclusive lock on EMU_LOCK (default /tmp/oxrok-emu.lock), so
 # concurrent runs on one machine take turns; EMULOG=DIR keeps the
 # transaction logs as DIR/MODEL.log (default: a temporary directory).
 # Firmware stand-ins (tools/emu-firmware.sh) go to EMU_FIRMWARE_DIR,
 # exported to both tools as SIGROK_FIRMWARE_DIR. Linux only, needs
 # passwordless sudo and `modprobe vhci-hcd`.
-#
-# --no-oracle (implies --emu) runs the emulated devices without
-# sigrok-cli, as CI does: a full case runs oxrok alone against the
-# goldens sigrok-cli wrote (.out and .tx, for --oracle-bug and
-# --oracle-differs cases too, their .oracle left alone), an
-# oracle-only case is skipped and counted, and a model none of whose
-# cases is full gets no session at all. A case of a driver EMU_FULL
-# lists that oxrok -L lacks fails as in a normal run, and so does a run
-# where no case ran. Session-only helpers in a scenario (the *_hold
-# claims) return at once while the cases are counted. Before each of
-# oxrok's runs, the kernel drivers bound to the device's vendor-specific
-# interfaces are unbound (emu_unbind), as libftdi's detach in
-# sigrok-cli's run would have left them (in a normal run too, before
-# oxrok in an --unplug case, whose replug binds them again). Events,
-# --record and the
-# violation checks are as in a normal run; the software cases, --hw,
-# --gcov and EMU_BLESS=1 need sigrok-cli and are refused.
 #
 # emu_case --libsigrok makes a case library-verified rather than
 # CLI-verified: tools/libsigrok-run.c, built here with cc against the
@@ -65,10 +91,10 @@
 # override, and glib's headers; the libsigrok.so it loads must be the
 # one sigrok-cli loads, so that --gcov counts its runs alike), takes
 # sigrok-cli's place, for drivers sigrok-cli cannot drive (no limit it
-# can set). It is an oracle case, held to goldens of its own, and
-# --no-oracle skips it. With --oxrok it is a full case with the runner in
-# sigrok-cli's place: oxrok is held to the same goldens, under --no-oracle
-# too, and --oracle-bug, --oracle-differs and --record work as for
+# can set). It is an oracle case, held to goldens of its own, and runs
+# only under --oracle. With --oxrok it is a full case with the runner in
+# sigrok-cli's place: oxrok is held to the same goldens, without the
+# oracle too, and --oracle-bug, --oracle-differs and --record work as for
 # sigrok-cli.
 #
 # EMU_USB, EMU_USBFS and the node variables follow the device: each
@@ -158,9 +184,9 @@
 # the scenario defines it, runs at the session's end before the detach, to give
 # back what emu_attached took. A scenario that sets EMU_SKIP="REASON" when it is
 # sourced (a kernel module missing) is skipped by name: a SKIP line, and on
-# GitHub a warning and a line in the step summary; a --no-oracle run whose only
-# models were skipped so does not fail for running no case. A plain run says SKIP
-# for a model all of whose cases are --no-oracle-only.
+# GitHub a warning and a line in the step summary; a run without --oracle
+# whose only models were skipped so does not fail for running no case. An --oracle
+# run says SKIP for a model all of whose cases are --no-oracle-only.
 #
 # A scenario that sets EMU_PARPORT=1 is a model of a USB to parallel port
 # cable that the kernel's uss720 drives, with ppdev making it /dev/parportN,
@@ -173,7 +199,7 @@
 # A detached cable keeps its port number taken (seen on kernel 7.2.14), so
 # each session's port is the next one, and from parport8 on libieee1284
 # finds no ppdev (it opens /dev/parport0 to 7 only): such a session fails
-# at its start, saying so, unless it is --no-oracle. Unloading parport then does not help (the old
+# at its start, saying so, under --oracle. Unloading parport then does not help (the old
 # ports stay in sysfs and the new parport0 collides); a reboot does.
 # A scenario that sets EMU_BLE=1 serves its model as a Bluetooth LE peripheral
 # behind a virtual HCI controller (--ble, its build_ble, emu/src/shells/ble.rs),
@@ -201,7 +227,7 @@
 # libsigrok runner with a sleep of N ms after each ppdev PPCLAIM
 # (tools/oracle-ppclaim-settle.c), for uss720's claim, whose unwaited read
 # can undo libieee1284's next PPDATADIR. oxrok runs as it is. A preload that
-# does not compile fails such a session, outside --no-oracle.
+# does not compile fails such a session under --oracle.
 
 set -u
 # Another oracle's environment and build tree, for a model whose driver is
@@ -244,7 +270,8 @@ hw=0
 emu=0
 emu_models=""
 gcov=0
-no_oracle=0
+oracle=0
+said_no_oracle=0
 while [ $# -gt 0 ]; do
     case "$1" in
         -k) filter=$2; shift ;;
@@ -252,23 +279,45 @@ while [ $# -gt 0 ]; do
         --emu) emu=1 ;;
         --emu-model) emu=1; emu_models="$emu_models $(echo "$2" | tr ',' ' ')"; shift ;;
         --gcov) emu=1; gcov=1 ;;
-        --no-oracle) emu=1; no_oracle=1 ;;
+        --oracle) oracle=1 ;;
+        # The default since the oracle became optional; kept for scripts.
+        --no-oracle) emu=1; said_no_oracle=1 ;;
         *) echo "unknown argument $1" >&2; exit 2 ;;
     esac
     shift
 done
-# --emu-model runs that model's cases alone.
-software=1
-[ -n "$emu_models" ] && software=0
-if [ $no_oracle = 1 ]; then
-    [ $hw = 0 ] || { echo "--no-oracle runs no sigrok-cli, which --hw needs" >&2; exit 2; }
-    [ $gcov = 0 ] || { echo "--no-oracle runs no sigrok-cli, which --gcov needs" >&2; exit 2; }
-    [ "${EMU_BLESS:-0}" != 1 ] || { echo "--no-oracle runs no sigrok-cli, which EMU_BLESS=1 needs" >&2; exit 2; }
+# EMU_BLESS: 0, 1 or missing (EMU_WRITE_MISSING=1 is the old name of missing).
+EMU_BLESS=${EMU_BLESS:-0}
+[ "$EMU_BLESS" != 0 ] || [ "${EMU_WRITE_MISSING:-0}" != 1 ] || EMU_BLESS=missing
+case "$EMU_BLESS" in
+    0 | 1 | missing) ;;
+    *) echo "EMU_BLESS is 0, 1 or missing, not '$EMU_BLESS'" >&2; exit 2 ;;
+esac
+if [ $oracle = 1 ]; then
+    [ $said_no_oracle = 0 ] || { echo "--oracle and --no-oracle contradict each other" >&2; exit 2; }
+    [ "$EMU_BLESS" != missing ] || { echo "EMU_BLESS=missing writes oxrok's goldens and runs without --oracle" >&2; exit 2; }
+    no_oracle=0
+    # --emu-model runs that model's cases alone.
+    software=1
+    [ -n "$emu_models" ] && software=0
+    echo "mode: with the oracle (sigrok-cli and libsigrok run alongside oxrok)"
+else
+    [ $hw = 0 ] || { echo "--hw runs sigrok-cli: it needs --oracle" >&2; exit 2; }
+    [ $gcov = 0 ] || { echo "--gcov measures libsigrok: it needs --oracle" >&2; exit 2; }
+    no_oracle=1
+    emu=1
     software=0
+    case "$EMU_BLESS" in
+        1) bless_mode=", re-recording the goldens from oxrok (EMU_BLESS=1)" ;;
+        missing) bless_mode=", writing the missing goldens from oxrok (EMU_BLESS=missing)" ;;
+        *) bless_mode="" ;;
+    esac
+    echo "mode: oxrok against the goldens (--oracle adds sigrok-cli and libsigrok)$bless_mode"
 fi
 pass=0
 fail=0
 skipped=0
+bless_lines=""
 skipped_models=0
 
 # Drops the lines that name the tool: the version line and the META
@@ -565,7 +614,6 @@ if [ $emu = 1 ]; then
     EMU_CONTROL=$EMU_CTL_DIR/s
     # EMU_SYSFS=1: where the server builds the tree (root's, so removed as root).
     EMU_SYSFS_DIR=$EMU_CTL_DIR/sysfs
-    EMU_BLESS=${EMU_BLESS:-0}
     EMU_CASE_TIMEOUT=${EMU_CASE_TIMEOUT:-60}
     EMULOG=${EMULOG:-$TMP}
     mkdir -p "$EMULOG"
@@ -741,7 +789,7 @@ if [ $emu = 1 ]; then
     # is what a scenario names: section NAME, arm unplug WHEN, arm
     # interrupt WHEN, options [KEY=VALUE...], reset, replug, sync, detach.
     emu_cmd() {
-        # Counting the cases of a --no-oracle model without a session.
+        # Counting the cases of a model without a session (no --oracle).
         [ "$EMU_DRY" = 0 ] || return 0
         emu_alive || { echo "emulator: not running for '$1'" >&2; return 1; }
         [ "$EMU_DEAD" = 0 ] || { echo "emulator: not answering, so no '$1'" >&2; return 1; }
@@ -981,12 +1029,12 @@ if [ $emu = 1 ]; then
     # The transaction lines of a section of the log, comments dropped.
     # The name goes through the environment: awk -v would turn its
     # backslashes into escapes.
-    # --no-oracle: oxrok runs where sigrok-cli would have run before it,
+    # Without --oracle: oxrok runs where sigrok-cli would have run before it,
     # and some of libsigrok's libraries detach a kernel driver from the
     # interface and leave it detached (libftdi: ftdi_sio). Each kernel
     # driver still bound to a vendor-specific interface (class ff) of
     # the device, whichever driver and interface, is unbound through
-    # sysfs, as root, so that oxrok meets the device as in a normal run.
+    # sysfs, as root, so that oxrok meets the device as in an --oracle run.
     # A class interface (HID, CDC, USBTMC) keeps its driver: both tools
     # reach it through the driver's node (hidraw, tty, usbtmc), which
     # the unbind would remove. A claim a process holds (usbfs, the
@@ -1371,7 +1419,7 @@ flush()
     #   In an --unplug case the last line of a refused start does as well,
     #   when the unplug gets there before the capture, and WHY is only a note,
     #   as what an unplug says depends on the pace. That line is taken
-    #   out, and the rest is compared as always, --no-oracle too. In a
+    #   out, and the rest is compared as always, without --oracle too. In a
     #   --record case the fixture says `# fails: WHY`.
     #   --unplug and --interrupt arm the emulator's event at WHEN
     #   (in=EP:N, out=EP:N or model; docs/USB.md) for each tool's run,
@@ -1389,11 +1437,11 @@ flush()
     #   lost with it, so such a case compares --stderr or --no-output.
     #   --oracle-env VAR=VALUE, in sigrok-cli's environment alone, to make
     #   a crash that depends on what the heap holds come every time;
-    #   --no-oracle-only, a case that runs only under --no-oracle, for
+    #   --no-oracle-only, a case that runs only without --oracle, for
     #   what sigrok-cli cannot run first (a flag it lacks, an address its
-    #   upload would move); its goldens are written by hand, as a bless
-    #   does not run it, and its slug counts in every mode, so that a bless
-    #   keeps them.
+    #   upload would move); an --oracle run skips it, so its goldens come
+    #   from an oxrok bless (EMU_BLESS=1 or missing), and its slug counts in
+    #   every mode, so that an --oracle bless keeps them.
     #   --tx-filter, a sed -E script over each tool's transaction log
     #   before it is compared, for an order the C driver's timing decides;
     #   the case says what it hides. --libsigrok, a library-verified
@@ -1403,7 +1451,7 @@ flush()
     #   and alone, whatever oxrok has, held to the case's goldens like
     #   any oracle case; it takes --hangs, --timeout, --expect-fail,
     #   events and --gcov, not --oracle-bug, --oracle-differs or
-    #   --record, and --no-oracle skips it. --oxrok, with --libsigrok:
+    #   --record, and runs only under --oracle. --oxrok, with --libsigrok:
     #   a full case whose oracle is libsigrok-run, not sigrok-cli, for a
     #   driver sigrok-cli cannot drive once oxrok has it: same arguments,
     #   same goldens, and every flag of a full case.
@@ -1427,7 +1475,7 @@ EOF
     emu_case() {
         name=$1; shift
         strip=1; which=stdout; names=0; filter_expr=""; expect=0; no_output=0; bug=""; digest=0
-        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""; ofails=""
+        event=""; case_timeout=$EMU_CASE_TIMEOUT; record=0; hangs=0; differs=""; libsig=0; oracle_hangs=0; libsig_full=0; tx_filter=""; no_oracle_only=0; bound=""; oracle_env=""; ofails=""; rec_fix=""
         driver=${EMU_DRIVER%% *}
         while [ $# -gt 0 ] && [ "$1" != "--" ]; do
             case "$1" in
@@ -1501,7 +1549,7 @@ EOF
         if [ $mode = oracle ] && { [ $libsig = 0 ] || [ $libsig_full = 1 ]; }; then
             case " $EMU_FULL " in *" $driver "*) why="; oxrok -L lacks $driver, which EMU_FULL lists" ;; esac
         fi
-        # --no-oracle: oxrok alone, and no case without it.
+        # Without --oracle: oxrok alone, and no case without it.
         if [ $no_oracle = 1 ]; then
             if [ $mode = oracle ]; then
                 if [ -n "$why" ]; then emu_fail "$name (oracle):${why#;} [$*]"; else skipped=$((skipped + 1)); fi
@@ -1513,7 +1561,7 @@ EOF
             if [ $libsig_full = 0 ] && { [ -n "$bug" ] || [ -n "$differs" ] || [ $record = 1 ]; }; then
                 emu_fail "$name (library): --libsigrok without --oxrok takes neither --oracle-bug, --oracle-differs nor --record"; return
             fi
-            # Only when it will run: --no-oracle has no sigrok to build on.
+            # Only when it will run: without --oracle there is no sigrok to build on.
             if [ "$tools" != b ] && ! emu_libsigrok_run; then
                 emu_fail "$name (library): no libsigrok runner: $EMU_LIBSIGROK_ERR [$*]"; return
             fi
@@ -1835,9 +1883,23 @@ EOF
         } >"$TMP/rec.txt"
         sed -E '1{/^oxrok /d;}' "$TMP/b.out" >"$TMP/rec.out"
         fix=$EMU_FIXTURES/$(echo "$driver" | tr - _)/emu-$slug
-        if [ "$EMU_BLESS" = 1 ]; then
+        if [ "$EMU_BLESS" = 1 ] && [ $no_oracle = 0 ]; then
             mkdir -p "$(dirname "$fix")"
             cp "$TMP/rec.txt" "$fix.txt"; cp "$TMP/rec.out" "$fix.out"
+        elif [ "$EMU_BLESS" != 0 ] && [ $no_oracle = 1 ]; then
+            # An oxrok bless: emu_no_oracle writes the fixture with the
+            # goldens, once the case's checks have passed. Under
+            # EMU_BLESS=missing each file there is is compared here.
+            rec_fix=$fix
+            if [ "$EMU_BLESS" = missing ]; then
+                if [ -f "$fix.txt" ] && ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
+                    why="$why; the recording differs from $(basename "$fix").txt"
+                    diff "$fix.txt" "$TMP/rec.txt" | head -${DIFF_LINES:-6}
+                fi
+                if [ -f "$fix.out" ] && ! cmp -s "$fix.out" "$TMP/rec.out"; then
+                    why="$why; oxrok output differs from $(basename "$fix").out"
+                fi
+            fi
         elif [ -f "$fix.txt" ] && [ -f "$fix.out" ]; then
             if ! cmp -s "$fix.txt" "$TMP/rec.txt"; then
                 why="$why; the recording differs from $(basename "$fix").txt"
@@ -1849,25 +1911,90 @@ EOF
         fi
     }
 
-    # The end of a full emu_case under --no-oracle, --oracle-bug and
+    # emu_bless_write all|absent SRC DST...: an oxrok bless of each
+    # file DST from SRC, every one that is absent or differs (all) or
+    # only the absent ones; counts them in bw_new and bw_changed.
+    emu_bless_write() {
+        bw_mode=$1; shift
+        while [ $# -ge 2 ]; do
+            # A write that fails fails the case (why), which the bless
+            # then counts as not written, rather than as a new golden.
+            if [ ! -f "$2" ]; then
+                if mkdir -p "$(dirname "$2")" && cp "$1" "$2"; then
+                    bw_new=$((bw_new + 1))
+                else
+                    why="$why; could not write $2"
+                fi
+            elif [ "$bw_mode" = all ] && ! cmp -s "$1" "$2"; then
+                if cp "$1" "$2"; then
+                    bw_changed=$((bw_changed + 1))
+                else
+                    why="$why; could not write $2"
+                fi
+            fi
+            shift 2
+        done
+    }
+
+    # The end of a full emu_case without --oracle, --oracle-bug and
     # --oracle-differs ones too: oxrok against the .out and .tx goldens.
+    # Only when every other check of the case passed (why is empty),
+    # EMU_BLESS=1 first writes each golden and --record fixture file that
+    # is absent or differs; EMU_BLESS=missing compares each file there is
+    # and then, if all of them matched, writes the absent ones. The
+    # .oracle golden is never written.
     emu_no_oracle() {
         golden=$EMU_GOLDEN/$EMU_MODEL/$slug
-        # A --no-oracle-only case's goldens, which a bless does not reach:
-        # written once, to be read, and removed by hand to write them again.
-        if [ "${EMU_WRITE_MISSING:-0}" = 1 ] && [ $no_oracle_only = 1 ] && [ ! -f "$golden.out" ] && [ -z "$why" ]; then
-            mkdir -p "$EMU_GOLDEN/$EMU_MODEL"
-            cp "$TMP/b.cmp" "$golden.out"; cp "$TMP/b.tx" "$golden.tx"
+        blessed=""
+        g_new=0; g_changed=0; f_new=0; f_changed=0
+        if [ "$EMU_BLESS" = 1 ] && [ -z "$why" ]; then
+            bw_new=0; bw_changed=0
+            emu_bless_write all "$TMP/b.cmp" "$golden.out" "$TMP/b.tx" "$golden.tx"
+            g_new=$bw_new; g_changed=$bw_changed
+            if [ -n "$rec_fix" ]; then
+                bw_new=0; bw_changed=0
+                emu_bless_write all "$TMP/rec.txt" "$rec_fix.txt" "$TMP/rec.out" "$rec_fix.out"
+                f_new=$bw_new; f_changed=$bw_changed
+            fi
         fi
-        if [ -f "$golden.out" ] && [ -f "$golden.tx" ]; then
+        if [ -f "$golden.out" ]; then
             cmp -s "$golden.out" "$TMP/b.cmp" || why="$why; oxrok output differs from $slug.out"
+        fi
+        if [ -f "$golden.tx" ]; then
             cmp -s "$golden.tx" "$TMP/b.tx" || why="$why; oxrok transactions differ from $slug.tx"
-        else
+        fi
+        if { [ ! -f "$golden.out" ] || [ ! -f "$golden.tx" ]; } && [ "$EMU_BLESS" != missing ]; then
             why="$why; no golden $golden.out/.tx to hold oxrok to"
+        fi
+        if [ "$EMU_BLESS" = missing ] && [ -z "$why" ]; then
+            bw_new=0; bw_changed=0
+            emu_bless_write absent "$TMP/b.cmp" "$golden.out" "$TMP/b.tx" "$golden.tx"
+            g_new=$bw_new
+            if [ -n "$rec_fix" ]; then
+                bw_new=0; bw_changed=0
+                emu_bless_write absent "$TMP/rec.txt" "$rec_fix.txt" "$TMP/rec.out" "$rec_fix.out"
+                f_new=$bw_new
+            fi
+        fi
+        if [ "$EMU_BLESS" != 0 ]; then
+            if [ -n "$why" ]; then
+                bless_failed=$((bless_failed + 1))
+            elif [ $g_changed != 0 ]; then
+                bless_changed=$((bless_changed + 1)); blessed=" (golden changed)"
+            elif [ $g_new != 0 ]; then
+                bless_new=$((bless_new + 1)); blessed=" (golden written)"
+            else
+                bless_same=$((bless_same + 1))
+            fi
+            if [ $f_changed != 0 ]; then
+                bless_fix_changed=$((bless_fix_changed + 1))
+            elif [ $f_new != 0 ]; then
+                bless_fix_new=$((bless_fix_new + 1))
+            fi
         fi
         if [ -z "$why" ]; then
             pass=$((pass + 1))
-            echo "PASS $name (full, oxrok only: no oracle; $(wc -l <"$TMP/b.tx" | tr -d ' ') transactions)"
+            echo "PASS $name (full, oxrok only: no oracle; $(wc -l <"$TMP/b.tx" | tr -d ' ') transactions)$blessed"
         else
             emu_fail "$name (full, no oracle):${why#;} [$*]"
             if [ -f "$golden.out" ] && ! cmp -s "$golden.out" "$TMP/b.cmp"; then
@@ -1994,6 +2121,7 @@ EOF
         fi
         emu_slugs=""
         emu_case_v=0
+        bless_new=0; bless_changed=0; bless_same=0; bless_failed=0; bless_fix_new=0; bless_fix_changed=0; bless_removed=0
         if emu_start; then
             emu_cases
             emu_stop
@@ -2034,10 +2162,19 @@ EOF
                 case " $emu_slugs " in *" $slug "*) continue ;; esac
                 if [ "$EMU_BLESS" = 1 ]; then
                     rm -f "$g" "${g%.out}.tx" "${g%.out}.oracle"; echo "removed golden $slug of $EMU_MODEL: no case has it"
+                    bless_removed=$((bless_removed + 1))
                 else
                     echo "note: golden $slug of $EMU_MODEL belongs to no case (EMU_BLESS=1 removes it)"
                 fi
             done
+        fi
+        if [ $no_oracle = 1 ] && [ "$EMU_BLESS" != 0 ]; then
+            line="bless $EMU_MODEL: $bless_new new, $bless_changed changed, $bless_same unchanged, $bless_failed not written (case failed)"
+            [ $((bless_fix_new + bless_fix_changed)) = 0 ] || line="$line; --record fixtures: $bless_fix_new new, $bless_fix_changed changed"
+            [ $bless_removed = 0 ] || line="$line; $bless_removed removed (no case has them)"
+            echo "$line"
+            bless_lines="$bless_lines$line
+"
         fi
     }
 
@@ -2086,11 +2223,11 @@ EOF
             emu_skip_model "$EMU_SKIP"
             continue
         fi
-        # --no-oracle: a model without a full case is not attached; its
+        # Without --oracle: a model without a full case is not attached; its
         # cases are counted by running the scenario with emu_case and
         # emu_cmd doing nothing else (in a subshell, no device named).
         if [ $no_oracle = 0 ]; then
-            # A plain run drops --no-oracle-only cases: a model with no other
+            # An --oracle run drops --no-oracle-only cases: a model with no other
             # says so by name rather than passing with nothing run.
             noo=$(
                 set +u
@@ -2102,7 +2239,7 @@ EOF
             )
             if [ "${noo%% *}" = 0 ] && [ "${noo#* }" != 0 ]; then
                 skipped=$((skipped + ${noo#* }))
-                emu_skip_model "all ${noo#* } cases are --no-oracle-only: run it with --no-oracle"
+                emu_skip_model "all ${noo#* } cases are --no-oracle-only: run it without --oracle"
                 continue
             fi
         fi
@@ -2135,10 +2272,12 @@ fi
 if [ $no_oracle = 1 ]; then
     # Nothing compared is no evidence: a run that skipped every case fails.
     # A model skipped by name (EMU_SKIP) has said why, on GitHub too.
-    [ $((pass + fail)) != 0 ] || [ $skipped_models != 0 ] || emu_fail "--no-oracle: no case ran ($skipped skipped)"
+    [ $((pass + fail)) != 0 ] || [ $skipped_models != 0 ] || emu_fail "no case ran ($skipped skipped)"
     by_name=""
     [ $skipped_models = 0 ] || by_name=", $skipped_models models skipped by name"
-    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, --no-oracle)$by_name"
+    # The bless lines of several models again, together, after the cases' output.
+    [ "$(printf '%s' "$bless_lines" | grep -c '^bless ')" -lt 2 ] || printf '%s' "$bless_lines"
+    echo "$pass passed, $fail failed: $((pass + fail)) ran, $skipped skipped (oracle-only, run with --oracle)$by_name"
 elif [ $skipped != 0 ] || [ $skipped_models != 0 ]; then
     echo "$pass passed, $fail failed, $skipped skipped"
 else

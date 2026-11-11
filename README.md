@@ -321,7 +321,7 @@ still open.
 
 The oracle is the C libsigrok, built with `--coverage`, at a pinned commit
 ([docs/DEVICES.md](docs/DEVICES.md#oracle)). A scenario file,
-`tools/emu/MODEL.sh`, lists the cases, and `tools/diffcli.sh --emu` runs
+`tools/emu/MODEL.sh`, lists the cases, and `tools/diffcli.sh --oracle --emu` runs
 each one on a fresh model under both tools. They must give the same output
 and cause the same USB transaction log, with no violation logged under
 either. Identical bytes on the wire is a tighter claim than identical
@@ -359,9 +359,11 @@ What follows the `--` is the command line both tools get.
   ctl_in 21 01 0300 0000 8 -> 4142434445000000
   ```
 
-- **CI without sigrok.** `tools/diffcli.sh --no-oracle` runs oxrok alone
-  against those goldens. A `.github/workflows/ci.yml` job does this; it is
-  skipped, not failed, when the runner's kernel has no `vhci-hcd`.
+- **Goldens by default, sigrok on demand.** `tools/diffcli.sh` runs oxrok
+  alone against those goldens unless `--oracle` brings sigrok-cli and
+  libsigrok back in, for a new port or an upstream sigrok change. A
+  `.github/workflows/ci.yml` job runs the default; it is skipped, not
+  failed, when the runner's kernel has no `vhci-hcd`.
 - **gcov.** `--gcov` reports which lines of the C driver the cases reached,
   in `tests/emu/MODEL/gcov.txt`. Each unreached line is meant to get a case,
   a fault option, or a reason in the driver's "not emulated" list. The
@@ -373,7 +375,7 @@ What follows the `--` is the command line both tools get.
   command line. It takes sigrok-cli's place through `emu_case --libsigrok`.
 
 Counts on 2026-11-04: 2041 cases passed in a full run across all models,
-oracle-only ones included, and about 1744 under `--no-oracle`, which skips
+oracle-only ones included, and about 1744 without the oracle, which skips
 cases that have no oxrok driver or only the C runner. `cargo test
 --workspace` runs 920 unit and integration tests.
 
@@ -482,15 +484,16 @@ cargo install vusb-cli --version 0.2.1 --locked
 cargo build --workspace
 
 # oxrok against the committed goldens; no sigrok needed.
-sh tools/diffcli.sh --no-oracle
-sh tools/diffcli.sh --no-oracle --emu-model usbrelay
-
-# Both tools. Build the oracle as docs/DEVICES.md says and put its prefix
-# on PATH and LD_LIBRARY_PATH.
-sh tools/diffcli.sh                                # software cases, no USB
-sh tools/diffcli.sh --emu                          # those and every model
+sh tools/diffcli.sh                                # every model
 sh tools/diffcli.sh --emu-model usbrelay           # one model
-sh tools/diffcli.sh --emu-model usbrelay --gcov    # and its C coverage
+EMU_BLESS=1 sh tools/diffcli.sh --emu-model usbrelay   # re-record its goldens from oxrok
+
+# With the oracle, for a new port or an upstream sigrok change. Build it as
+# docs/DEVICES.md says and put its prefix on PATH and LD_LIBRARY_PATH.
+sh tools/diffcli.sh --oracle                                # software cases, no USB
+sh tools/diffcli.sh --oracle --emu                          # those and every model
+sh tools/diffcli.sh --oracle --emu-model usbrelay           # one model
+sh tools/diffcli.sh --oracle --emu-model usbrelay --gcov    # and its C coverage
 
 # Serve a model by hand; the lock keeps it out of a running session's way.
 flock /tmp/oxrok-emu.lock sudo target/debug/oxrok-emu serve usbrelay --attach --open-devices -v --control /tmp/emu.sock
@@ -500,7 +503,9 @@ vusb-ctl -s /tmp/emu.sock status
 To add a model, see
 [docs/USB.md, "Writing a device model"](docs/USB.md#writing-a-device-model):
 a file in `emu/src/models`, a scenario in `tools/emu`, goldens blessed with
-`EMU_BLESS=1` and then read, gcov, and an entry in `docs/DEVICES.md`.
+`EMU_BLESS=1` (under `--oracle` for a new port) and then read, gcov, and an
+entry in `docs/DEVICES.md`. A bless without `--oracle` writes a case's goldens
+only when its other checks pass, and prints what it wrote per model.
 [docs/USB.md](docs/USB.md#emulation-over-usbip) describes the server and the
 harness, and [docs/ROADMAP.md](docs/ROADMAP.md#emulation-plan) the plan and
 what counts as emulator-verified.
