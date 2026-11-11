@@ -8,6 +8,11 @@ release may change the library API.
 
 ### Added
 
+- `--udev-rules` prints the udev rules for the USB and HID devices the
+  drivers open, from the drivers' own ids (`Driver::usb_claims`); USBTMC
+  instruments are one rule by interface class. `contrib/60-oxrok.rules`
+  is that output (`make udev-rules`), with `61-oxrok-uaccess.rules` and
+  `61-oxrok-plugdev.rules` for the access policy.
 - `oxrok firmware`: `list` shows the firmware drivers load and whether it
   is installed, `fetch` downloads the vendor's software and extracts the
   firmware on the user's machine, `import` does it from installers,

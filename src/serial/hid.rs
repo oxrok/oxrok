@@ -61,6 +61,19 @@ impl Chip {
         }
     }
 
+    /// What a driver that reads a meter through these cables claims for
+    /// the udev rules: the cables' ids, which the HID layer matches.
+    pub fn claims(chips: &[Chip]) -> Vec<crate::core::UsbClaim> {
+        chips
+            .iter()
+            .flat_map(|c| {
+                c.usb_ids()
+                    .iter()
+                    .map(|&(v, p)| crate::core::UsbClaim::ids(v, p, c.vendor(), c.description()))
+            })
+            .collect()
+    }
+
     /// The chip with this name.
     pub fn from_name(name: &str) -> Option<Chip> {
         Chip::ALL.into_iter().find(|c| c.name() == name)
@@ -73,6 +86,25 @@ impl Chip {
             Chip::Ch9325 => &[(0x1a86, 0xe008), (0x04fa, 0x2490)],
             Chip::Cp2110 => &[(0x10c4, 0xea80)],
             Chip::Victor => &[(0x1244, 0xd237)],
+        }
+    }
+
+    /// What the cable is, for the udev rules.
+    pub fn description(self) -> &'static str {
+        match self {
+            Chip::Bu86x => "BU-86X adapter",
+            Chip::Ch9325 => "UT-D04 cable (WCH CH9325 or Hoitek HE2325U)",
+            Chip::Cp2110 => "UT-D09 cable (SiLabs CP2110)",
+            Chip::Victor => "70C/86C cable",
+        }
+    }
+
+    /// The chip's vendor, for the udev rules.
+    pub fn vendor(self) -> &'static str {
+        match self {
+            Chip::Bu86x => "Brymen",
+            Chip::Ch9325 | Chip::Cp2110 => "UNI-T",
+            Chip::Victor => "Victor",
         }
     }
 

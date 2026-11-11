@@ -1384,9 +1384,31 @@ of a sigrok driver `DRIVER`:
 - `Segmentation fault timeout -k 5 ...` appears twice in every
   lecroy-logicstudio run, from the pinned `bits.c:158` crash cases. It
   is not tied to the case printed next to it.
-- Linux: without a udev rule the device is root only. Packaging will
-  ship rules (`docs/ROADMAP.md`); until then `sudo` or a rule with `MODE="0666"` for the vendor
-  and product id. A kernel driver (`ftdi_sio` for FTDI devices with a
+- Linux: without a udev rule the device is root only. `contrib/` has
+  the rules: `60-oxrok.rules` tags every USB and HID device the drivers
+  open (generated from the drivers' `usb_claims` by `oxrok --udev-rules`;
+  `make udev-rules` refreshes it and a test fails when it is behind), and
+  `61-oxrok-uaccess.rules` (the seated user, through logind) or
+  `61-oxrok-plugdev.rules` (group `plugdev`) grants the access. Copy
+  `60-oxrok.rules` and one of the two to `/etc/udev/rules.d/`, then
+  `sudo udevadm control --reload && sudo udevadm trigger` and replug.
+  Without a checkout (a `cargo install` or a binary archive), the binary
+  prints the first file and the policy file is one download:
+
+  ```sh
+  oxrok --udev-rules | sudo tee /etc/udev/rules.d/60-oxrok.rules >/dev/null
+  sudo curl -fsSL -o /etc/udev/rules.d/61-oxrok-uaccess.rules \
+    https://raw.githubusercontent.com/oxrok/oxrok/main/contrib/61-oxrok-uaccess.rules
+  sudo udevadm control --reload && sudo udevadm trigger
+  ```
+
+  (`61-oxrok-plugdev.rules` in place of the uaccess one for the
+  `plugdev` group.) The printed rules are the installed binary's own
+  drivers, so run it again after an upgrade.
+  USBTMC instruments are one rule by interface class. Serial ports behind
+  a USB cable are not in the rules: the tty's group (`dialout` or `uucp`)
+  covers them. `tools/udev-diff.py` compares the file with libsigrok's.
+  A kernel driver (`ftdi_sio` for FTDI devices with a
   known product id) is detached when the interface is claimed, with
   both backends.
 - macOS: a third party FTDI VCP driver that matches the device would

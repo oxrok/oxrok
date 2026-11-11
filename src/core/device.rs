@@ -13,6 +13,7 @@ use crate::core::option::{OptionDesc, ValueList};
 use crate::core::packet::Packet;
 use crate::core::trigger::{Trigger, TriggerFeatures};
 use crate::core::value::Value;
+use crate::usb::UsbId;
 use std::sync::mpsc::{SyncSender, TrySendError};
 
 /// What kind of instrument a device is. A device can be several.
@@ -308,6 +309,51 @@ pub trait Device: Send {
     }
 }
 
+/// A USB device a driver opens itself, with bulk, control or HID
+/// transfers, so the user needs access to its node: what the udev rules
+/// of `oxrok --udev-rules` cover ([`crate::core::udev`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbClaim {
+    /// A device by its ids, as [`Driver::scan`] matches it.
+    Id {
+        /// Vendor and product id.
+        id: UsbId,
+        /// The vendor's name.
+        vendor: &'static str,
+        /// The model, or the models that share the id.
+        model: &'static str,
+    },
+    /// Every device with an interface of this class, subclass and
+    /// protocol (USBTMC: `fe`, `03`, `01`), which the scan finds by class.
+    Class {
+        /// `bInterfaceClass`.
+        class: u8,
+        /// `bInterfaceSubClass`.
+        subclass: u8,
+        /// `bInterfaceProtocol`.
+        protocol: u8,
+        /// What such devices are, for the comment in the rules.
+        name: &'static str,
+    },
+}
+
+impl UsbClaim {
+    /// A device by its [`UsbId`].
+    pub const fn id(id: UsbId, vendor: &'static str, model: &'static str) -> UsbClaim {
+        UsbClaim::Id { id, vendor, model }
+    }
+
+    /// A device by vendor and product id.
+    pub const fn ids(
+        vendor_id: u16,
+        product_id: u16,
+        vendor: &'static str,
+        model: &'static str,
+    ) -> UsbClaim {
+        UsbClaim::Id { id: UsbId { vendor: vendor_id, product: product_id }, vendor, model }
+    }
+}
+
 /// A driver: knows how to find its devices.
 pub trait Driver: Send + Sync {
     /// The id, as used with `-d`, e.g. `demo`.
@@ -335,6 +381,15 @@ pub trait Driver: Send + Sync {
     /// uploads on open, or what the device must already run. None for
     /// the drivers that talk to the device's own firmware.
     fn firmware(&self) -> Vec<FirmwareDependency> {
+        Vec::new()
+    }
+
+    /// The USB devices the driver opens itself, as [`Driver::scan`]
+    /// matches them: what a udev rule must cover for the user to reach
+    /// them ([`crate::core::udev`]). None for a serial port behind a
+    /// USB cable, which the tty's group covers, and for everything that
+    /// is no USB.
+    fn usb_claims(&self) -> Vec<UsbClaim> {
         Vec::new()
     }
 

@@ -145,6 +145,10 @@ impl Driver for LecroyXstreamDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::scpi::usbtmc::CLAIM]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

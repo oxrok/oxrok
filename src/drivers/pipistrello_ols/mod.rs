@@ -223,6 +223,15 @@ impl Driver for PipistrelloOlsDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(
+            protocol::VENDOR_ID,
+            protocol::PRODUCT_ID,
+            "Saanlima",
+            "Pipistrello (an FT2232H)",
+        )]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         if let Some((key, _)) = options.first() {
             return Err(Error::UnknownKey(key.id().to_owned()));

@@ -131,6 +131,13 @@ impl Driver for LwlaDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![
+            crate::core::UsbClaim::id(protocol::ID_1016, "Sysclk", "LWLA1016"),
+            crate::core::UsbClaim::id(protocol::ID_1034, "Sysclk", "LWLA1034"),
+        ]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

@@ -191,6 +191,13 @@ impl Driver for DslogicDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        PROFILES
+            .iter()
+            .map(|p| crate::core::UsbClaim::ids(VID, p.pid, "DreamSourceLab", p.model))
+            .collect()
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

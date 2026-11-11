@@ -102,6 +102,10 @@ impl Driver for Scanalogic2Driver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(USB_ID, "IKALOGIC", "Scanalogic-2")]
+    }
+
     /// `scan()`. A device whose info report cannot be read is no device.
     fn scan(&self, _options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut devices: Vec<Box<dyn Device>> = Vec::new();

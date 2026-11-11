@@ -161,6 +161,10 @@ impl Driver for LogicPortDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(USB_ID, "Intronix", "LogicPort LA1034")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

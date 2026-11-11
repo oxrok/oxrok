@@ -93,6 +93,10 @@ impl Driver for Pickit2Driver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(VENDOR_ID, PRODUCT_ID, "Microchip", "PICkit2")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = format!("{VENDOR_ID:04x}.{PRODUCT_ID:04x}");
         let mut probe_names = None;

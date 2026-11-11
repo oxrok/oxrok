@@ -160,6 +160,10 @@ impl Driver for UniTDmmDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        crate::serial::hid::Chip::claims(&[Chip::Ch9325])
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let conn = options.iter().find_map(|(k, v)| match k {
             Key::Conn => v.as_str(),

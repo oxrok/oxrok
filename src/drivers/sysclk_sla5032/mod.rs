@@ -110,6 +110,15 @@ impl Driver for Sla5032Driver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(
+            protocol::USB_VID_SYSCLK,
+            protocol::USB_PID_SLA5032,
+            "Sysclk",
+            "SLA5032",
+        )]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

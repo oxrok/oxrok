@@ -87,6 +87,11 @@ pub fn firmware_list(registry: &Registry) {
     print!("{out}");
 }
 
+/// `--udev-rules`: `contrib/60-oxrok.rules`, from the drivers.
+pub fn udev_rules(registry: &Registry) {
+    print!("{}", oxrok::core::udev::rules(registry));
+}
+
 /// `-L`.
 pub fn supported(registry: &Registry) {
     println!("Supported hardware drivers:");

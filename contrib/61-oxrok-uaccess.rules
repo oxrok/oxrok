@@ -1,0 +1,11 @@
+# Access to the devices 60-oxrok.rules tags, for the user seated at the
+# machine (systemd-logind's uaccess). Install this file or
+# 61-oxrok-plugdev.rules, not both.
+#
+# This file is part of oxrok, GPL-3.0-or-later.
+
+ACTION!="add|change", GOTO="oxrok_rules_uaccess_end"
+
+ENV{ID_OXROK}=="1", TAG+="uaccess"
+
+LABEL="oxrok_rules_uaccess_end"

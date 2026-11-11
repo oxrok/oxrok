@@ -63,6 +63,10 @@ impl Driver for UsbRelayDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(VENDOR_ID, PRODUCT_ID, "dcttech", "USBRelay (HID)")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

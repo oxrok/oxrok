@@ -269,6 +269,10 @@ impl Driver for La2016Driver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(protocol::VID, protocol::PID, "Kingst", "LA2016, LA1016")]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         let mut probe_names = None;

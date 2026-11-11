@@ -94,6 +94,10 @@ impl Driver for LogicProDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::id(ID, "Saleae", "Logic Pro 16")]
+    }
+
     /// `scan()`, except that `conn=` selects: libsigrok's filter applies
     /// only when `sr_usb_find()` found something, so a conn that it
     /// refuses or that matches nothing selects every Logic Pro

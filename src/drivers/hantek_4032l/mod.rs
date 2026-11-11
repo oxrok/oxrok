@@ -145,6 +145,10 @@ impl Driver for Hantek4032lDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::core::UsbClaim::ids(protocol::VID, protocol::PID, "Hantek", "4032L")]
+    }
+
     /// `scan()`: every device with the ids, or those `conn` names. The
     /// device is not touched.
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {

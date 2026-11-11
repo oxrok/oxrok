@@ -18,6 +18,15 @@ use std::time::Duration;
 const CLASS_APPLICATION: u8 = 0xfe;
 const SUBCLASS_USBTMC: u8 = 0x03;
 const PROTOCOL_USB488: u8 = 0x01;
+
+/// What a driver that scans over USBTMC claims for the udev rules: every
+/// USB488 interface, as [`list`] finds them by class.
+pub const CLAIM: crate::core::UsbClaim = crate::core::UsbClaim::Class {
+    class: CLASS_APPLICATION,
+    subclass: SUBCLASS_USBTMC,
+    protocol: PROTOCOL_USB488,
+    name: "USBTMC (USB488) instruments",
+};
 const TRANSFER_TYPE_BULK: u8 = 2;
 
 const MAX_TRANSFER: usize = 2048;

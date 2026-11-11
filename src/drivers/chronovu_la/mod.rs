@@ -53,6 +53,12 @@ use std::time::Duration;
 
 /// `SCAN_EXPECTED_VENDOR`.
 const VENDOR: u16 = 0x0403;
+/// The product id of the boards (`api.c`, `0403:8867`), for the udev
+/// rules: the scan reads the product string of every FTDI device
+/// instead, so it finds the boards on either id.
+const PRODUCT: u16 = 0x8867;
+/// The product id of the old boards, an FT232R's `0403:6001`.
+const PRODUCT_OLD: u16 = 0x6001;
 /// The strings are read into 64 byte buffers: 63 characters at most.
 const STR_MAX: usize = 63;
 
@@ -120,6 +126,13 @@ impl Driver for ChronovuLaDriver {
 
     fn classes(&self) -> &'static [DeviceClass] {
         &CLASSES
+    }
+
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![
+            crate::core::UsbClaim::ids(VENDOR, PRODUCT, "ChronoVu", "LA8, LA16"),
+            crate::core::UsbClaim::ids(VENDOR, PRODUCT_OLD, "ChronoVu", "LA8, LA16 (old ids)"),
+        ]
     }
 
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {

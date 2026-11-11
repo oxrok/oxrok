@@ -159,6 +159,15 @@ impl Driver for FtdiLaDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        CHIPS
+            .iter()
+            .map(|c| {
+                crate::core::UsbClaim::ids(c.vendor, c.product, "FTDI", default_model(c.product))
+            })
+            .collect()
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

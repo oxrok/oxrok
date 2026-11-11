@@ -168,6 +168,18 @@ impl Driver for HantekDsoDriver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        PROFILES
+            .iter()
+            .flat_map(|p| {
+                [
+                    crate::core::UsbClaim::id(p.orig, p.vendor, p.model),
+                    crate::core::UsbClaim::id(p.fw, p.vendor, p.model),
+                ]
+            })
+            .collect()
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         for (key, value) in options {

@@ -41,9 +41,9 @@ instead. The extractor is in
 sigrok-util pull request 22, unmerged. Per image `.rbf` files
 (`intronix-logicport-<image>.rbf`) are accepted as a fallback.
 
-Permissions: on Linux the device is root only without a udev rule; until
-oxrok ships rules (phase 7), a rule with `MODE="0666"` for `0403:dc48`
-does. macOS and Windows need nothing beyond `docs/USB.md`.
+Permissions: on Linux the device is root only without a udev rule;
+`contrib/60-oxrok.rules` covers `0403:dc48` ([USB.md](USB.md#troubleshooting)
+has the install). macOS and Windows need nothing beyond `docs/USB.md`.
 
 Options beyond libsigrok's, set with `-c`:
 
@@ -176,7 +176,7 @@ chip, the chip comes from the node's USB id). `usb=` and `iokit=`, the
 other path forms sigrok prints, are parsed but match no device yet:
 oxrok's HID backend names devices by node only. On
 Linux the user needs read and write access to the `/dev/hidraw*` node
-(a udev rule for the cable's USB id). Meters that come with a HID cable
+(`contrib/60-oxrok.rules` lists the cables' ids). Meters that come with a HID cable
 scan without `conn=`; an unplugged default cable is simply not found.
 
 Verified 2026-10-23 with a Raspberry Pi Pico running the cable emulator

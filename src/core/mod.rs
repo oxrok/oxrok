@@ -31,12 +31,13 @@ pub mod sessions;
 pub mod softtrig;
 pub mod trigger;
 pub mod trigger_syntax;
+pub mod udev;
 pub mod util;
 pub mod value;
 
 pub use analog::{Mq, MqFlags, Unit};
 pub use channel::{Channel, ChannelGroup, ChannelKind};
-pub use device::{Device, DeviceClass, DeviceInfo, Driver, PacketSink, Registry};
+pub use device::{Device, DeviceClass, DeviceInfo, Driver, PacketSink, Registry, UsbClaim};
 pub use error::{Error, Result};
 pub use firmware::{FirmwareDependency, FirmwareKind};
 pub use key::Key;

@@ -153,6 +153,10 @@ impl Driver for GwinstekGds800Driver {
         &CLASSES
     }
 
+    fn usb_claims(&self) -> Vec<crate::core::UsbClaim> {
+        vec![crate::scpi::usbtmc::CLAIM]
+    }
+
     fn scan(&self, options: &[(Key, Value)]) -> Result<Vec<Box<dyn Device>>> {
         let mut conn = None;
         let mut serialcomm = None;
