@@ -38,8 +38,8 @@
 //! `0x0d` and `0x0e`: `ctl_in 40 0a`, `ctl_out 40 09 0010`, `ctl_in 40
 //! 90 0000 000d`, `ctl_in 40 90 0000 000e`) after the scan and after
 //! the capture, and the next open detaches it again. The emulator's
-//! cases do not show it: sigrok-cli runs first in each, and under
-//! `--no-oracle` the harness unbinds the driver before oxrok runs.
+//! cases do not show it: under `--oracle` sigrok-cli runs first in
+//! each, and without it the harness unbinds the driver before oxrok runs.
 
 #![forbid(unsafe_code)]
 

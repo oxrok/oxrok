@@ -42,7 +42,7 @@ IGNORED_PREFIXES = (
     "hil/",
     "website/",
     "tools/third-party/",
-    # Applied to the sigrok oracle, which CI does not build (--no-oracle).
+    # Applied to the sigrok oracle, which CI does not build (no --oracle).
     "tools/oracle-patches/",
     "tools/attribution.d/",
     "tools/site-data/",

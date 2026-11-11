@@ -182,7 +182,7 @@ jobs:
       - run: cargo clippy -p oxrok --features rustpython --all-targets
 
   # The emulator tier (docs/USB.md, "Emulation over USB/IP"): oxrok
-  # against the goldens sigrok-cli wrote, through vhci-hcd. When the
+  # against the committed goldens, through vhci-hcd. When the
   # hosted kernel has no vhci-hcd, the probe says "skipped: no vhci-hcd"
   # and the emulator job shows as skipped, neither failed nor passed.
   # Two consequences to keep in mind: branch protection counts a skipped
@@ -274,11 +274,12 @@ jobs:
       - run: cargo build -p oxrok -p oxrok-emu
       # What the harness drives the server with.
       - run: cargo install vusb-cli --version 0.2.1 --locked
-      # No sigrok-cli: full cases run oxrok alone against the committed
-      # .out and .tx goldens, oracle-only cases are skipped and counted.
-      # The harness runs oxrok-emu under sudo -n.
+      # The harness's default mode, no sigrok-cli: full cases run oxrok
+      # alone against the committed .out and .tx goldens, oracle-only
+      # cases are skipped and counted. The harness runs oxrok-emu under
+      # sudo -n.
       - env:
           MODELS: ${{ matrix.models }}
         run: |
           echo "$MODELS"
-          sh tools/diffcli.sh --no-oracle --emu-model "$MODELS"
+          sh tools/diffcli.sh --emu-model "$MODELS"
