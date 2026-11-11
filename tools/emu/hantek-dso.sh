@@ -269,9 +269,14 @@ emu_cases() {
     # to the failure bound, whose output would be the same.
     emu_case "interrupt in a frame stderr" --interrupt in=6:20 --oracle-bug "$I" --stderr --no-output -- -d $H --frames 1
     # No frame limit: two frames, and a Ctrl-C at the poll after them (six
-    # polls and 40 transfers, then two polls and 40 transfers).
+    # polls and 40 transfers, then two polls and 40 transfers). The mark
+    # is that poll's command, the 26th bulk OUT, which the device leaves
+    # unanswered. The driver polls again every 100 ms until the signal
+    # lands, so how many more polls follow the mark is the runner's pace:
+    # --tx-filter drops them. (Marked at the 88th IN, the signal could
+    # land before the poll was sent, as it did on a loaded CI runner.)
     hantek_options profile=dso-2090 flashed=1 in-limit=88
-    emu_case "interrupt continuous" --interrupt in=6:88 --oracle-bug "$I" --digest --filter "$HD_FRAME" -- -d $H --continuous
+    emu_case "interrupt continuous" --interrupt out=2:26 --tx-filter '/^interrupt$/,$ { /^interrupt$/!d; }' --oracle-bug "$I" --digest --filter "$HD_FRAME" -- -d $H --continuous
     # A DSO-5200's ready frame (state 7, 9 bit samples): "Not yet
     # supported." at each poll, for ever. oxrok gives up.
     hantek_options profile=dso-5200 flashed=1
