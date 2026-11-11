@@ -124,7 +124,9 @@ jobs:
   python-decoders:
     name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
     needs: changes
-    if: needs.changes.outputs.python == 'true'
+    # Not skipped as a job: a matrix job skipped before it expands reports
+    # one check under its unexpanded name, and the six required checks of
+    # main never appear. The steps are skipped instead.
     strategy:
       fail-fast: false
       matrix:
@@ -136,21 +138,28 @@ jobs:
           - { feature: rustpython, slice: 2, of: 2 }
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - if: needs.changes.outputs.python != 'true'
+        run: echo 'skipped, no change touches the Python decoders'
+      - if: needs.changes.outputs.python == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+      - if: needs.changes.outputs.python == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - if: needs.changes.outputs.python == 'true'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.feature }}
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - if: needs.changes.outputs.python == 'true'
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - if: matrix.feature == 'python'
+      - if: needs.changes.outputs.python == 'true' && matrix.feature == 'python'
         run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
-      - run: >-
+      - if: needs.changes.outputs.python == 'true'
+        run: >-
           cargo nextest run -p oxrok --features ${{ matrix.feature }} --no-fail-fast
           --partition slice:${{ matrix.slice }}/${{ matrix.of }}
 
