@@ -552,7 +552,8 @@ impl Acquisition {
                 continue;
             }
             let covered_us = todo * 1_000_000 / s.samplerate;
-            let Some(emitted) = self.send_logic(sink, todo) else { return };
+            let room = if s.limit_samples > 0 { s.limit_samples - sent } else { u64::MAX };
+            let Some(emitted) = self.send_logic(sink, todo, room) else { return };
             if !self.send_analog(sink, sent, emitted) {
                 return;
             }
@@ -587,9 +588,10 @@ impl Acquisition {
     }
 
     /// Generates `count` logic samples and sends those past the
-    /// trigger. Returns the number sent, or `None` when the consumer is
-    /// gone.
-    fn send_logic(&mut self, sink: &PacketSink, count: u64) -> Option<u64> {
+    /// trigger, at most `room` of them: when the trigger comes, the
+    /// samples kept back before it go out too, and count in the limit.
+    /// Returns the number sent, or `None` when the consumer is gone.
+    fn send_logic(&mut self, sink: &PacketSink, count: u64, room: u64) -> Option<u64> {
         let Some(g) = &mut self.logic else { return Some(count) };
         let unit = g.unit_size();
         let per_chunk = (LOGIC_CHUNK_BYTES / unit).max(1) as u64;
@@ -614,6 +616,17 @@ impl Acquisition {
                     Some(i) => {
                         let mut before = self.pre.take();
                         before.extend_from_slice(&data[..i * unit]);
+                        // The triggering sample keeps its room, unless the
+                        // ratio asks for every sample before the trigger.
+                        let reserve = u64::from(
+                            self.settings.limit_samples > 0 && self.settings.capture_ratio < 100,
+                        );
+                        let keep = usize::try_from(room.saturating_sub(reserve))
+                            .unwrap_or(usize::MAX)
+                            .saturating_mul(unit);
+                        if before.len() > keep {
+                            before.drain(..before.len() - keep);
+                        }
                         if !before.is_empty() {
                             emitted += (before.len() / unit) as u64;
                             if !sink.send(Packet::logic(unit, before)) {
@@ -626,9 +639,14 @@ impl Acquisition {
                     }
                 }
             }
+            let left_room = usize::try_from(room - emitted).unwrap_or(usize::MAX);
+            data.truncate(left_room.saturating_mul(unit));
             emitted += (data.len() / unit) as u64;
-            if !sink.send(Packet::logic(unit, data)) {
+            if !data.is_empty() && !sink.send(Packet::logic(unit, data)) {
                 return None;
+            }
+            if emitted >= room {
+                break;
             }
         }
         Some(emitted)
@@ -729,6 +747,75 @@ mod tests {
         assert_eq!(pre_trigger_samples(1000, 25, 1), 250);
     }
     use std::sync::mpsc::sync_channel;
+
+    /// The sample limit holds when the trigger comes after samples kept
+    /// back for the pre-trigger share: a first call of 3 (no trigger, all
+    /// kept back), then one of the 12 still to send, with the trigger in
+    /// it. It sent 15 before; a loaded runner calls in small steps so.
+    #[test]
+    fn samples_kept_before_the_trigger_count_in_the_limit() {
+        let settings = Settings {
+            samplerate: 1_000_000,
+            limit_samples: 12,
+            limit_msec: 0,
+            limit_frames: 0,
+            averaging: false,
+            avg_samples: 0,
+            capture_ratio: DEFAULT_CAPTURE_RATIO,
+            logic_pattern: LogicPattern::Incremental,
+            analog: vec![],
+        };
+        let mut acq = Acquisition::new(settings, 4, &[0, 1, 2, 3], vec![]);
+        let mut t = Trigger::new();
+        t.add(0, 2, TriggerMatch::Rising);
+        acq.set_trigger(Some(&t));
+        let (tx, rx) = sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        let first = acq.send_logic(&sink, 3, 12).unwrap();
+        let second = acq.send_logic(&sink, 12, 12 - first).unwrap();
+        drop(sink);
+        let logic: usize = rx
+            .iter()
+            .filter_map(|(_, p)| match p {
+                Packet::Logic(l) => Some(l.data.len()),
+                _ => None,
+            })
+            .sum();
+        assert_eq!((first, first + second, logic), (0, 12, 12));
+    }
+
+    /// With samples before the trigger enough to fill the room, the
+    /// triggering sample still goes out, after the Trigger: a limit of 3
+    /// and D2 rising at sample 4, three samples into the second call.
+    #[test]
+    fn the_triggering_sample_keeps_its_room() {
+        let settings = Settings {
+            samplerate: 1_000_000,
+            limit_samples: 3,
+            limit_msec: 0,
+            limit_frames: 0,
+            averaging: false,
+            avg_samples: 0,
+            capture_ratio: DEFAULT_CAPTURE_RATIO,
+            logic_pattern: LogicPattern::Incremental,
+            analog: vec![],
+        };
+        let mut acq = Acquisition::new(settings, 4, &[0, 1, 2, 3], vec![]);
+        let mut t = Trigger::new();
+        t.add(0, 2, TriggerMatch::Rising);
+        acq.set_trigger(Some(&t));
+        let (tx, rx) = sync_channel(64);
+        let sink = PacketSink::new(tx, 0);
+        assert_eq!(acq.send_logic(&sink, 1, 3), Some(0));
+        assert_eq!(acq.send_logic(&sink, 10, 3), Some(3));
+        drop(sink);
+        let packets: Vec<Packet> = rx.iter().map(|(_, p)| p).collect();
+        let at = packets.iter().position(|p| matches!(p, Packet::Trigger)).expect("a Trigger");
+        let Some(Packet::Logic(after)) = packets.get(at + 1) else {
+            panic!("no samples after the Trigger: {packets:?}");
+        };
+        assert_eq!(after.data, [0b0100], "the triggering sample, D2 high");
+    }
 
     fn capture(args: &[(Key, Value)], configure: impl FnOnce(&mut dyn Device)) -> Vec<Packet> {
         let mut dev = DemoDriver.scan(args).unwrap().remove(0);

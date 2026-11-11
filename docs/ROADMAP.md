@@ -309,6 +309,12 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Driver behaviour
 
+- `demo`'s software trigger sends every sample of the triggering call
+  before the trigger, on top of the pre-trigger buffer, where libsigrok
+  caps the lot at the capture ratio's share (`pre_trigger_append`,
+  `soft-trigger.c:83-107`): with `--samples 12` and the default ratio of
+  20 it shows 4 samples before the trigger, libsigrok 2. Capping it
+  changes the outputs `demo_cli` holds.
 - Analog samples are `f32` in the core (`AnalogData.samples`): `rigol-dg`'s
   counter gives 10 digits and keeps about 7.
 - A core output maps a logic channel to its bit by its listing index, so
