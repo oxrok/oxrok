@@ -557,7 +557,7 @@ impl Device for AttenPpsDevice {
             .name("atten-pps3xxx acquisition".to_owned())
             .spawn(move || {
                 let outcome = run_capture(&shared, &sink, &stop2);
-                sink.end(outcome);
+                send_end(&sink, &stop2, outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -621,7 +621,9 @@ fn read_frame(shared: &Mutex<Shared>, stop: &AtomicBool) -> Read {
 /// each answer gets its readings out and the settings sent back, which is
 /// the next request. After a stop, an answer ends it with nothing sent.
 fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
-    sink.send(Packet::header());
+    if !sink.send_while(Packet::header(), || !stop.load(Ordering::SeqCst)) {
+        return Ok(());
+    }
     if let Err(e) = shared.lock().expect("state lock").send(&protocol::ask()) {
         log::error!("Acquisition failed: {e}.");
         return Err(e);
@@ -659,6 +661,24 @@ fn run_capture(shared: &Mutex<Shared>, sink: &PacketSink, stop: &AtomicBool) -> 
             return Err(e);
         }
     }
+}
+
+/// How long a stopped capture tries to hand over its End on a full queue.
+const END_AFTER_STOP: Duration = Duration::from_millis(500);
+
+/// `Failed` if it failed and `End`, waiting for room in the queue for as long
+/// as nobody asked to stop, and after a stop only for [`END_AFTER_STOP`]: a
+/// close joins this thread, and a queue nobody reads would hold it for ever.
+fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
+    let stopped_at = std::cell::Cell::new(None);
+    sink.end_while(outcome, || {
+        if !stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let at = stopped_at.get().unwrap_or_else(Instant::now);
+        stopped_at.set(Some(at));
+        at.elapsed() < END_AFTER_STOP
+    });
 }
 
 /// `handle_packet`: all channels at once, volts and then amperes.
@@ -1072,6 +1092,25 @@ mod tests {
         assert!(!d.shared().warned);
         d.stop().unwrap();
         until(&rx, is_end, CAPTURE_BOUND);
+    }
+
+    #[test]
+    fn a_close_returns_with_the_queue_full_and_nobody_reading() {
+        // Two packets of room, never read: the capture fills them, and the
+        // close joins it. Its End must give up rather than wait for ever.
+        let (fake, _seen) = Fake::new();
+        let mut d = device_of(fake, &reading());
+        let (tx, rx) = sync_channel(2);
+        d.start(PacketSink::new(tx, 0)).unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        let (done_tx, done_rx) = sync_channel(1);
+        let closer = std::thread::spawn(move || {
+            let _ = d.close();
+            let _ = done_tx.send(());
+        });
+        assert!(done_rx.recv_timeout(CAPTURE_BOUND).is_ok(), "the close hung on a full queue");
+        closer.join().unwrap();
+        drop(rx);
     }
 
     #[test]
