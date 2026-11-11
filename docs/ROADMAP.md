@@ -350,9 +350,9 @@ The models are plain Rust with no I/O for this reason; see
 
 - `Session`'s `End` is sent before the link goes back in its slot, so
   `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
-  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`).
-  `sysclk-sla5032` has the fixed order, and `rdtech-dps` decides Busy
-  from a flag its thread clears before its End: either way fits the rest.
+  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`). The
+  fixed order of `sysclk-sla5032`, or a busy flag cleared before the End
+  as in `rdtech-dps`, fits each of them.
 - About 20 drivers block in `sink.send` while close joins them; a full
   queue nobody reads hangs the close (`atten-pps3xxx` did under load).
   `PacketSink::send_while` is the fix; whether the rest get it one by
