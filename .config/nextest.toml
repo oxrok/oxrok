@@ -1,0 +1,6 @@
+# A test that hangs is ended and reported as TIMEOUT rather than holding
+# its runner until the job's limit. A period is 60 s, so a test is ended
+# after 10 minutes; the longest today (decoder_uart_rest's amulet_ascii
+# regression under CPython) takes about four.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 10 }

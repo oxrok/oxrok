@@ -84,6 +84,9 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
+    # About 13 minutes on macOS at most; a hang that nextest's own limit
+    # (.config/nextest.toml) does not end stops here, not after 6 hours.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -124,6 +127,7 @@ jobs:
   python-decoders:
     name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
     needs: changes
+    timeout-minutes: 45
     # Not skipped as a job: a matrix job skipped before it expands reports
     # one check under its unexpanded name, and the six required checks of
     # main never appear. The steps are skipped instead.
