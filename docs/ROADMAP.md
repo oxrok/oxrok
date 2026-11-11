@@ -349,10 +349,10 @@ The models are plain Rust with no I/O for this reason; see
   those bytes.
 
 - `Session`'s `End` is sent before the link goes back in its slot, so
-  `start()` right after `End` can get `Busy` (`rdtech-dps`'s
-  `a_second_capture_runs_after_the_first` failed once under load, `lecroy-logicstudio`,
-  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`);
-  `sysclk-sla5032` has the fixed order.
+  `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
+  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`).
+  `sysclk-sla5032` has the fixed order, and `rdtech-dps` decides Busy
+  from a flag its thread clears before its End: either way fits the rest.
 - About 20 drivers block in `sink.send` while close joins them; a full
   queue nobody reads hangs the close (`atten-pps3xxx` did under load).
   `PacketSink::send_while` is the fix; whether the rest get it one by

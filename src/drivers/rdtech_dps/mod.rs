@@ -489,12 +489,20 @@ impl Device for RdtechDevice {
     /// `dev_acquisition_start`: what the capture compares with, then the
     /// thread, whose Header goes first.
     fn start(&mut self, sink: PacketSink) -> Result<()> {
-        if let Some(worker) = &self.worker {
-            if !worker.handle.is_finished() {
-                return Err(Error::Busy);
+        // Busy while a capture runs. Its thread clears `acquiring` before
+        // it sends End, so a start right after End is not Busy though the
+        // thread may not have finished: it has at most its End left, and is
+        // told to stop so that it gives that up within END_AFTER_STOP if
+        // nobody reads its queue. Only a finished thread is joined; a join
+        // on one with End unread and its queue full would wait.
+        if self.link().acquiring {
+            return Err(Error::Busy);
+        }
+        if let Some(worker) = self.worker.take() {
+            worker.stop.store(true, Ordering::SeqCst);
+            if worker.handle.is_finished() {
+                let _ = worker.handle.join();
             }
-            let worker = self.worker.take().expect("just seen");
-            let _ = worker.handle.join();
         }
         {
             let mut link = self.link();
@@ -1525,6 +1533,18 @@ mod tests {
         capture(&mut d);
         let packets = capture(&mut d);
         assert_eq!(packets.iter().filter(|p| matches!(p, Packet::FrameBegin)).count(), 1);
+    }
+
+    #[test]
+    fn a_start_right_after_end_is_never_busy() {
+        // The thread sends End and then still has to finish: a start in
+        // that window got Busy (on a Windows CI runner).
+        let (fake, _, _) = Fake::new();
+        let mut d = dps(fake);
+        set(&mut d, &Key::LimitSamples, 1_u64).unwrap();
+        for _ in 0..300 {
+            capture(&mut d);
+        }
     }
 
     #[test]
