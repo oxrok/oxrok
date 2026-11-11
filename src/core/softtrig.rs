@@ -103,8 +103,19 @@ impl SoftTrigger {
     /// as the sample before the next one fed: an edge between them is
     /// seen. `None` forgets it, as a new matcher does.
     pub fn rearm(&mut self, prev: Option<&[u8]>) {
-        for s in &mut self.stages {
-            (s.hits, s.run, s.held, s.done) = (0, 0, false, false);
+        // A counted level-only stage counts entries into its condition: one
+        // that already held on `prev` is not entered again by the next
+        // sample. A count of one still fires on a level that holds, and a
+        // later stage of a sequence is armed afresh, as at the start.
+        for idx in 0..self.stages.len() {
+            let s = &self.stages[idx];
+            let held = s.count > 1
+                && s.duration == 0
+                && !s.conds.iter().any(|(_, m)| m.is_edge())
+                && (self.combine != TriggerCombine::Sequence || idx == 0)
+                && prev.is_some_and(|sample| self.edges_and_levels(idx, sample).1);
+            let s = &mut self.stages[idx];
+            (s.hits, s.run, s.held, s.done) = (0, 0, held, false);
         }
         (self.stage, self.fired) = (0, false);
         self.prev = prev.map(<[u8]>::to_vec);
@@ -415,6 +426,29 @@ impl SoftTriggerLogic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Rearmed inside a counted range, the samples still in it are no new
+    /// entry: the count starts with the next time the value comes back.
+    #[test]
+    fn a_rearm_inside_a_counted_range_is_no_entry() {
+        let range = TriggerRange { channels: vec![0, 1], low: 1, high: 1, inside: true };
+        let mut t = Trigger::new();
+        t.set_range(0, range.clone());
+        t.set_count(0, crate::core::trigger::TriggerCount { count: 2, consecutive: false });
+        let mut m = SoftTrigger::new(&t, 1).unwrap();
+        assert_eq!(m.feed(&[1, 0, 1]), Some(2));
+        m.rearm(Some(&[1]));
+        assert_eq!(m.feed(&[1, 1, 0, 1]), None, "held, left, entered once");
+        assert_eq!(m.feed(&[0, 1]), Some(1), "entered twice");
+
+        // A count of one still fires on a value that holds.
+        let mut t = Trigger::new();
+        t.set_range(0, range);
+        let mut m = SoftTrigger::new(&t, 1).unwrap();
+        assert_eq!(m.feed(&[1]), Some(0));
+        m.rearm(Some(&[1]));
+        assert_eq!(m.feed(&[1]), Some(0));
+    }
     use crate::core::trigger::TriggerCount;
 
     fn trig(stages: &[&[(usize, TriggerMatch)]]) -> Trigger {
