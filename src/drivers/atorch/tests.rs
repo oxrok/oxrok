@@ -533,10 +533,42 @@ fn a_stop_ends_a_capture_that_gets_reports_all_the_time() {
     assert_eq!(frames(&rx, 3), [9, 9, 9]);
     // The port never pauses, so the capture fills the queue while nobody
     // reads; the stop comes with it full, as it did on a loaded runner.
-    std::thread::sleep(Duration::from_millis(50));
+    wait_full(&fake);
     d.stop().unwrap();
-    until_end(&rx);
+    drain_after_stop(&rx);
     d.close().unwrap();
+}
+
+/// Until the capture is blocked on a full queue: the port's reads stop.
+fn wait_full(fake: &Fake) {
+    let deadline = Instant::now() + BOUND;
+    let mut before = fake.get(|s| s.reads);
+    loop {
+        std::thread::sleep(Duration::from_millis(20));
+        let now = fake.get(|s| s.reads);
+        if now == before {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the queue never filled");
+        before = now;
+    }
+}
+
+/// The queue after a stop, to its End or, when the End found no room
+/// within [`END_AFTER_STOP`] (a reader slower than that), to the capture
+/// letting go of the queue. Either way the capture has to stop sending.
+fn drain_after_stop(rx: &Receiver<(usize, Packet)>) {
+    let deadline = Instant::now() + BOUND;
+    let mut n = 0;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok((_, Packet::End)) | Err(RecvTimeoutError::Disconnected) => return,
+            Ok(_) => n += 1,
+            Err(RecvTimeoutError::Timeout) => panic!("the capture did not end in time"),
+        }
+        assert!(n < 2 * QUEUE, "a capture that does not end");
+    }
 }
 
 #[test]
