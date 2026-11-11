@@ -791,6 +791,8 @@ if [ $emu = 1 ]; then
         tail -n +$((EMU_SEEN + 1)) "$TMP/emu.out" | head -n $((total - EMU_SEEN)) \
             | grep -E '^(READY|REPLUGGED|RENUMERATED) ' >"$TMP/emu.attach"
         EMU_SEEN=$total
+        # A new attach is looked for afresh, though its address may repeat.
+        if [ -s "$TMP/emu.attach" ]; then EMU_TTY_LOST=""; fi
         while IFS= read -r l; do emu_fields "$l"; done <"$TMP/emu.attach"
         # Before the next scenario line reads EMU_TTY.
         if [ "$EMU_CDC" = 1 ] && [ -s "$TMP/emu.attach" ] && [ ! -c "$EMU_TTY" ]; then
@@ -1152,9 +1154,11 @@ fcntl.ioctl(fd, 0x541F, info)
     emu_tty_find() {
         [ -n "$EMU_BUSID" ] || return 1
         etf_key="$EMU_BUSID $EMU_USB"
-        [ "${EMU_TTY_LOST:-}" != "$etf_key" ] || return 1
+        # After a wait that timed out for this attach, one look, no wait.
+        etf_tries=100
+        [ "${EMU_TTY_LOST:-}" != "$etf_key" ] || etf_tries=1
         etf_i=0
-        while [ $etf_i -lt 100 ]; do
+        while [ $etf_i -lt $etf_tries ]; do
             for etf_sys in /sys/bus/usb/devices/"$EMU_BUSID":*/tty/ttyACM*; do
                 etf_node=/dev/${etf_sys##*/}
                 [ -c "$etf_node" ] || continue
@@ -1172,11 +1176,13 @@ fcntl.ioctl(fd, 0x541F, info)
                 emu_conns
                 return 0
             done
-            sleep 0.1
             etf_i=$((etf_i + 1))
+            [ $etf_i -lt $etf_tries ] && sleep 0.1
         done
-        EMU_TTY_LOST=$etf_key
-        echo "note: $EMU_MODEL: no tty for $EMU_BUSID in 10 s; the cases after this one do not wait for it" >&2
+        if [ "${EMU_TTY_LOST:-}" != "$etf_key" ]; then
+            EMU_TTY_LOST=$etf_key
+            echo "note: $EMU_MODEL: no tty for $EMU_BUSID in 10 s; the cases after this one look without waiting" >&2
+        fi
         return 1
     }
     # EMU_CDC=1: the transactions as a tty's, see the head of this file.
