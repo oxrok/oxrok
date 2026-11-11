@@ -346,7 +346,11 @@ impl SoftTrigger {
             (s.hits, s.run, s.held, s.done) = (0, 0, held, false);
         }
         (self.stage, self.fired) = (0, false);
-        self.prev = prev.map(<[u8]>::to_vec);
+        if self.unit_size <= 8 {
+            self.prev_word = prev.map(word);
+        } else {
+            self.prev = prev.map(<[u8]>::to_vec);
+        }
     }
 
     /// Bytes per sample.
@@ -1349,9 +1353,10 @@ mod tests {
                 for &k in &chunks {
                     let mut from = 0;
                     while let Some(i) = st.feed(&data[(base + from) * us..(base + k) * us]) {
-                        fires.push(base + from + i);
+                        let at = base + from + i;
+                        fires.push(at);
                         from += i + 1;
-                        st = SoftTrigger::new(&t, us).unwrap();
+                        st.rearm(Some(&data[at * us..(at + 1) * us]));
                     }
                     base += k;
                 }

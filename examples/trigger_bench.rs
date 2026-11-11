@@ -181,6 +181,8 @@ fn main() -> ExitCode {
                     run(&data, unit, chunk, |c| {
                         let hit = stl.check(c).is_some();
                         if hit {
+                            // check() does not rearm itself; fx2lafw
+                            // resets the stage the same way.
                             stl.cur_stage = 0;
                         }
                         hit
