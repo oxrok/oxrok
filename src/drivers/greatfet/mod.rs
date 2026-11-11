@@ -344,7 +344,15 @@ impl GreatfetDevice {
         link.transport()
             .bulk_in_stream(configured.endpoint, TRANSFER_SIZE, TRANSFER_COUNT)
             .inspect_err(|e| {
-                log::debug!("submit bulk xfer failed: {}", libusb_error_name(e));
+                // A board unplugged right after the start fails here or at its
+                // first transfer, as the kernel's pace has it. The C spews the
+                // first (protocol.c:877) and errs the second (protocol.c:1065);
+                // both say so here, so that the user hears either way.
+                if matches!(e, Error::Disconnected) {
+                    log::error!("Device gone during USB transfer. Aborting.");
+                } else {
+                    log::debug!("submit bulk xfer failed: {}", libusb_error_name(e));
+                }
                 // The start went through: the board is sampling.
                 stop_unless_gone(link, e);
             })
