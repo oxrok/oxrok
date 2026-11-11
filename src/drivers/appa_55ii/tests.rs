@@ -966,11 +966,13 @@ fn the_end_comes_after_the_port_is_back() {
         d.start(PacketSink::new(tx, 0)).unwrap();
         wait_for("the port back", || d.port.lock().unwrap().is_some());
         std::thread::sleep(Duration::from_millis(5));
-        let mut seen_end = false;
-        while let Ok((_, p)) = rx.try_recv() {
-            seen_end |= matches!(p, Packet::End);
+        // The header and the two readings fill the queue. Only those three
+        // are read: draining further makes room, and the End the capture
+        // still offers may then come in (as it did on a Windows runner).
+        for _ in 0..3 {
+            let (_, p) = rx.try_recv().expect("the queue holds three packets");
+            assert!(!matches!(p, Packet::End), "there was no room for it");
         }
-        assert!(!seen_end, "there was no room for it");
     });
 }
 
