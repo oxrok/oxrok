@@ -213,6 +213,7 @@ fn load_bitstream(name: &str) -> Result<Vec<u8>> {
     let refused = || Error::Firmware(name.to_owned());
     let Some(path) = crate::core::firmware::find_file(name) else {
         log::error!("Failed to open resource '{name}' (use loglevel 5/spew for details).");
+        crate::core::firmware::note_missing(name);
         return Err(refused());
     };
     let size = std::fs::metadata(&path)?.len();

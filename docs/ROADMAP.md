@@ -79,6 +79,38 @@ skills and `track.py` are in
 Static binaries, the release archives, `make dist`, notices and
 `cargo publish` already work.
 
+## Firmware fetching
+
+`oxrok firmware` and the `oxrok-firmware-fetch` crate (`firmware/` in
+oxrok-util) fetch, import and list vendor firmware; every downloadable
+package is checked end to end by its `cargo test --test network --
+--ignored`, which reproduces sigrok-util's outputs byte for byte.
+
+
+- LeCroy LogicStudio: the extractors (`LS16Lib.dll`, and the FX2LP
+  firmware from `LogicStudio16Load.spt`) are checked on synthetic input
+  only. The installer is behind a Teledyne LeCroy account; once one is
+  approved, import the 1.2.5.0 zip, check the outputs against the sigrok
+  wiki's MD5s, and see whether the zip opens without an external
+  unpacker.
+- Sysclk SLA5032: `top.bit` from the vendor ISO
+  (`sla5032_2015_1_24.iso`) has not been tried; the package has no known
+  hash yet. Sysclk LWLA1034 from the CD installer and LWLA1016 from an
+  installed copy: the offsets are sigrok-util's, never run on the real
+  files (no copy found online).
+- Saleae Logic 1.1.x: the path that rebuilds the FX2 firmware from x86
+  code is not ported; 1.2.10 is pinned instead. 1.2.18 has no firmware.
+- The LWLA1016 downloads come from a user's Google Drive folder (the
+  blog.danman.eu post); find a sturdier source, or SysCLK's permission
+  for fixed bitstreams in oxrok-firmware (sigrok bug 760).
+- The MCP server reports each file's package but cannot fetch; add a
+  `firmware_fetch` tool behind `--read-only`, and the UI's prompt.
+- Drivers' `FirmwareDependency::source` texts still name sigrok-util;
+  point them at the packages, or derive them from the registry.
+- `fx2lafw-instrustar-isds205b.fw` and `fx2lafw-usb-c-grok.fw` are in no
+  fx2lafw release; fetch them once one ships, or build them in CI
+  (`firmware-build` above).
+
 ## MCP server
 
 An MCP server so an agent can scan, capture, measure and decode through

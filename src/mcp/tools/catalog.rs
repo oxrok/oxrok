@@ -343,11 +343,16 @@ fn firmware_of(d: &dyn Driver) -> Vec<Value> {
                 .iter()
                 .map(|name| json!({"name": name, "path": firmware::find_file(name)}))
                 .collect();
+            // Where the files come from: a package `oxrok firmware fetch`
+            // downloads, or one the user has to provide.
+            let package = dep.files.first().and_then(|f| firmware::source_of(f));
             json!({
                 "kind": firmware_kind(dep.kind),
                 "files": files,
                 "source": dep.source,
                 "note": dep.note,
+                "package": package.map(|p| p.id),
+                "fetch": package.map(|p| if p.downloadable() { "download" } else { "manual" }),
             })
         })
         .collect()

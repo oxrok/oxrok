@@ -72,6 +72,13 @@ pub fn firmware_list(registry: &Registry) {
                 out.push_str(",\n      \"note\": ");
                 out.push_str(&json_string(note));
             }
+            // The package `oxrok firmware fetch` gets the files from.
+            if let Some(p) = dep.files.first().and_then(|f| oxrok::core::firmware::source_of(f)) {
+                out.push_str(",\n      \"package\": ");
+                out.push_str(&json_string(p.id));
+                out.push_str(",\n      \"fetch\": ");
+                out.push_str(&json_string(if p.downloadable() { "download" } else { "manual" }));
+            }
             out.push('}');
         }
         out.push_str("\n    ]\n  }");
