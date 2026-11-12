@@ -20,10 +20,20 @@ from `make vendor-src`, as Packit makes it.
 
 [Packit](https://packit.dev) reads `.packit.yaml` at the root and, once
 the Packit GitHub App is installed on the repository and the
-organisation is approved by the Packit team, builds every pull request
-in COPR for the latest stable Fedora and Rawhide, reporting as a check.
-A COPR project for `main` (the commented job) needs a COPR owner: the
-`@oxrok` group or a user, created at copr.fedorainfracloud.org first.
+organisation is approved by the Packit team, builds in COPR for every
+active Fedora with Rawhide, CentOS Stream 10 and EPEL 10 (on RHEL), on
+x86_64 and aarch64: the chroots of the
+[mangelajo/oxrok](https://copr.fedorainfracloud.org/coprs/mangelajo/oxrok/)
+project. A pull request builds in Packit's own namespace, one COPR project
+per pull request, and reports as a check; every commit on `main` builds
+into mangelajo/oxrok, which users enable with
+`dnf copr enable mangelajo/oxrok`. COPR takes those builds only from the
+forge projects the project allows: its settings list
+`github.com/oxrok/oxrok` under "Packit allowed forge projects".
+
+EPEL 10 has no `libsigrokdecode`, so on RHEL and CentOS the package
+recommends it instead of requiring it, and runs without the Python
+decoders until they are installed.
 
 By hand, on a Fedora machine with `mock`:
 

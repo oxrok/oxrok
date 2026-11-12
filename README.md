@@ -214,7 +214,10 @@ to download it when run on a terminal. The extractors are ports of
 sigrok-util's, in the `oxrok-firmware-fetch` crate (`firmware/` in
 [oxrok-util](https://github.com/oxrok/oxrok-util)). `packaging/` has
 the Fedora spec and the Packit configuration that builds every pull
-request in COPR ([packaging/README.md](packaging/README.md)).
+request in COPR, and `main` into the
+[mangelajo/oxrok](https://copr.fedorainfracloud.org/coprs/mangelajo/oxrok/)
+COPR for Fedora, CentOS Stream 10 and EPEL 10
+([packaging/README.md](packaging/README.md)).
 
 ### Features
 

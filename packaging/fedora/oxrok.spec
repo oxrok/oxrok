@@ -63,7 +63,13 @@ BuildRequires:  systemd-rpm-macros
 # RustPython's ctypes module links the system libffi.
 BuildRequires:  libffi-devel
 # The Python protocol decoders, found under %%{_datadir}/libsigrokdecode.
+# EPEL 10 has no libsigrokdecode: there oxrok runs without decoders until
+# the user installs them.
+%if 0%{?rhel}
+Recommends:     libsigrokdecode
+%else
 Requires:       libsigrokdecode
+%endif
 # Firmware the drivers upload, where libsigrok keeps it.
 Recommends:     sigrok-firmware-fx2lafw
 Suggests:       sigrok-firmware-nonfree
