@@ -191,6 +191,10 @@ The models are plain Rust with no I/O for this reason; see
 
 ### Harness and CI
 
+- The trigger benchmark (`examples/trigger_bench.rs`) runs by hand
+  only: shared runners are too noisy for a throughput floor. A quiet
+  runner, or a ratio against a baseline loop measured in the same run,
+  would let CI hold the software triggers above fx2lafw's 24 MS/s.
 - `uss720` keeps a detached cable's parport number (one per emulator
   session on kernel 7.2.x), so after 8 sessions on a tester libieee1284
   finds no ppdev and the `hung-chang-dso-2100` oracle stops; the harness

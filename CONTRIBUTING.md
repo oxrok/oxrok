@@ -16,6 +16,16 @@
 - No `unsafe` code. The one exception is `pydecode`, which crosses
   into Python; every block there says why it is sound.
 
+## Performance
+
+`cargo run --release --example trigger_bench` measures the host
+software triggers (`SoftTrigger`, `SoftTriggerLogic`, the pre-trigger
+buffer) in million samples per second, on fx2lafw-sized transfers.
+A streaming driver that triggers on the host needs them faster than
+its sample rate. Run it before and after a change to them; `--min`
+fails a run below a rate, and a trigger that fires on data built so it
+never should fails it too.
+
 ## License
 
 oxrok is GPL-3.0-or-later, like the sigrok code it ports

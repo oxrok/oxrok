@@ -85,8 +85,26 @@ release may change the library API.
 - A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
   which fails a `--strict` run.
 
+### Changed
+
+- The host software triggers are much faster with samples of up to 8
+  bytes: each stage is matched as bit masks over the whole sample, with
+  no allocation per sample, and with samples of 1, 2 or 4 bytes a word
+  of them is tested at once and skipped when none can match, as are
+  runs of equal samples. On an M1 Max libsigrok's matcher went from
+  19-30 MS/s to 160-330 on data that matches all the time and to 1.8-4
+  GS/s on data that mostly doesn't, and the general one from 27-53 to
+  190-260 and 0.7-2.1 GS/s; on its efficiency cores, which are about a
+  Raspberry Pi's, from 4-11 MS/s, below fx2lafw's 24, to 36-100 and
+  150-1000 (`examples/trigger_bench.rs`).
+
 ### Fixed
 
+- Host software triggers with 2 or 4 byte samples (fx2lafw with 16
+  channels, Saleae Logic16, BeagleLogic): a multi stage trigger whose
+  later stage failed on the first sample of a transfer read the rest of
+  that transfer half a sample off, so it could fire on a pattern that
+  never came. libsigrok's `soft-trigger.c` has the same step.
 - SCPI over TCP: a stop and continue of the process (Ctrl-Z, `fg`) during
   a read no longer fails an open or a capture, and no longer cuts an
   answer that arrived during the stop.
