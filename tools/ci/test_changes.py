@@ -127,7 +127,8 @@ class ChangesTest(unittest.TestCase):
 
     def test_docs_only_selects_nothing(self):
         s = self.sel("docs/ROADMAP.md", "CHANGELOG.md", "examples/x.rs", "Makefile",
-                     "tools/oracle-patches/x.patch")
+                     "tools/oracle-patches/x.patch", ".packit.yaml",
+                     "packaging/fedora/oxrok.spec", "packaging/fedora/oxrok.rpmlintrc")
         self.assertSelects(s, [])
         self.assertFalse(s.all_models)
 
