@@ -128,7 +128,9 @@ class ChangesTest(unittest.TestCase):
     def test_docs_only_selects_nothing(self):
         s = self.sel("docs/ROADMAP.md", "CHANGELOG.md", "examples/x.rs", "Makefile",
                      "tools/oracle-patches/x.patch", ".packit.yaml",
-                     "packaging/fedora/oxrok.spec", "packaging/fedora/oxrok.rpmlintrc")
+                     "packaging/fedora/oxrok.spec", "packaging/fedora/oxrok.rpmlintrc",
+                     "contrib/60-oxrok.rules", "tools/udev-diff.py", ".github/dependabot.yml",
+                     "tools/site-data")
         self.assertSelects(s, [])
         self.assertFalse(s.all_models)
 
@@ -223,7 +225,8 @@ class ChangesTest(unittest.TestCase):
             self.assertEqual(sorted(s.models), sorted(self.repo.models), path)
 
     def test_unknown_path_selects_everything(self):
-        for path in ("tools/diffcli.sh", "Cargo.lock", ".github/workflows/ci.yml", "tools/ci/changes.py", "foo"):
+        for path in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/ci.yml",
+                     "tools/ci/changes.py", "tools/new-tool.sh", "foo"):
             s = self.sel(path)
             self.assertTrue(s.all_models and s.python, path)
 
@@ -244,6 +247,15 @@ class ChangesTest(unittest.TestCase):
         s = self.sel("src/lib.rs", lib_diff=LIB_OTHER)
         self.assertTrue(s.all_models and s.python)
         self.assertTrue(self.sel("src/lib.rs").all_models)
+
+    def test_emulator_harness_selects_every_model(self):
+        for path in ("tools/diffcli.sh", "tools/emu-ns.sh", "tools/oracle-header.c"):
+            s = self.sel(path)
+            self.assertSelects(s, self.repo.models)
+            self.assertTrue(s.all_models, path)
+
+    def test_nextest_configuration(self):
+        self.assertSelects(self.sel(".config/nextest.toml"), [], python=True)
 
     def test_lint_configuration(self):
         self.assertSelects(self.sel("clippy.toml"), [], python=True)

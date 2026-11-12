@@ -50,9 +50,10 @@ IGNORED_PREFIXES = (
     # Applied to the sigrok oracle, which CI does not build (no --oracle).
     "tools/oracle-patches/",
     "tools/attribution.d/",
-    "tools/site-data/",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/",
+    # udev rules: tests/udev_rules.rs reads them, in the test job.
+    "contrib/",
 )
 IGNORED_FILES = {
     "LICENSE",
@@ -62,9 +63,30 @@ IGNORED_FILES = {
     ".gitignore",
     ".gitattributes",
     ".packit.yaml",
+    ".github/dependabot.yml",
     "tools/attribution.py",
     "tools/libsigrok-drivers.txt",
+    "tools/udev-diff.py",
+    # The website's data generator, a script (not a directory).
+    "tools/site-data",
 }
+
+# The emulator tier's harness: every model runs it, the Python jobs do not.
+# diffcli.sh builds the oracle helpers with cc on every run, so they are
+# here, not ignored.
+HARNESS_FILES = {
+    "tools/diffcli.sh",
+    "tools/emu-firmware.sh",
+    "tools/emu-gcov.sh",
+    "tools/emu-ns.sh",
+    "tools/libsigrok-run.c",
+    "tools/oracle-header.c",
+    "tools/oracle-ppclaim-settle.c",
+    "tools/oracle-usb-floor.c",
+}
+
+# nextest's configuration: the Python jobs run nextest, the emulators do not.
+NEXTEST_FILES = {".config/nextest.toml"}
 
 # Lint configuration: the Python clippy job reads it, the emulators do not.
 LINT_FILES = {"clippy.toml", "rustfmt.toml"}
@@ -356,6 +378,12 @@ def classify(
         parts = p.parts
         if path in IGNORED_FILES or path.startswith(IGNORED_PREFIXES) or p.suffix == ".md":
             sel.note(path, "ignored")
+        elif path in HARNESS_FILES:
+            sel.all_models = True
+            sel.note(path, "emulator harness: every model")
+        elif path in NEXTEST_FILES:
+            sel.python = True
+            sel.note(path, "nextest configuration: python")
         elif path in LINT_FILES:
             sel.python = True
             sel.note(path, "lint configuration: python clippy")
