@@ -15,12 +15,19 @@
 //! D0=r*5c       the fifth in a row (consecutive)
 //! D0=1>100      D0 high for more than 100 samples
 //! D0=1>50us     the same with a time, converted with the sample rate
+//! D0=f<50us     a high pulse on D0 shorter than 50 us, at its falling edge
+//! D0=r<100      a low pulse shorter than 100 samples, at its rising edge
+//! D0=f>10us<50us  a high pulse longer than 10 us and shorter than 50 us
+//! D0=f>10us     a high pulse longer than 10 us, at its end
+//! D0=f<50us,D1=1  a short high pulse, with D1 high when it ends
 //! D0-D2=3..5    the value on D2 D1 D0 (D0 least significant) within 3..5
 //! D0-D2=!3..5   outside 3..5; a single number means that value
 //! D0=r|D1=r     either stage; D0=r&D1=r both stages in any order
 //! ```
 //!
 //! Counts, durations and ranges belong to the stage their token is in.
+//! Both ends of a width are strict, and a time is rounded so that no
+//! width that qualifies is left out: down after `>`, up after `<`.
 
 use crate::core::channel::ChannelKind;
 use crate::core::device::Device;
@@ -66,7 +73,7 @@ pub fn parse(device: &dyn Device, spec: &str) -> Result<Trigger> {
                 .channels()
                 .iter()
                 .any(|c| c.enabled && c.name == lhs && c.kind == ChannelKind::Analog);
-            let modifier_at = rhs.find(['*', '>']);
+            let modifier_at = rhs.find(['*', '>', '<']);
             let codes = &rhs[..modifier_at.unwrap_or(rhs.len())];
             if codes.is_empty() {
                 return Err(bad());
@@ -142,8 +149,23 @@ fn parse_range(
     Some(TriggerRange { channels: (a..=b).collect(), low, high, inside })
 }
 
-/// `*N`, `*Nc`, `>N` or `>N<unit>` on `stage`. Returns `None` when the
-/// text is malformed.
+/// A number of samples, or a time converted with the sample rate and
+/// rounded down or up.
+fn samples(text: &str, samplerate: u64, round_up: bool) -> Option<u64> {
+    if let Ok(n) = text.parse::<u64>() {
+        return Some(n);
+    }
+    let (p, q) = parse_period(text)?;
+    if samplerate == 0 {
+        return None;
+    }
+    let (n, q) = (u128::from(p) * u128::from(samplerate), u128::from(q.max(1)));
+    let n = if round_up { n.div_ceil(q) } else { n / q };
+    u64::try_from(n).ok()
+}
+
+/// `*N`, `*Nc`, `>A`, `<B` or `>A<B` on `stage`, where `A` and `B` are
+/// samples or times. Returns `None` when the text is malformed.
 fn apply_modifier(trigger: &mut Trigger, stage: usize, text: &str, samplerate: u64) -> Option<()> {
     if let Some(rest) = text.strip_prefix('*') {
         let (digits, consecutive) =
@@ -152,17 +174,22 @@ fn apply_modifier(trigger: &mut Trigger, stage: usize, text: &str, samplerate: u
         trigger.set_count(stage, TriggerCount { count, consecutive });
         return Some(());
     }
-    let rest = text.strip_prefix('>')?;
-    let samples = if let Ok(n) = rest.parse::<u64>() {
-        n
+    let duration = if let Some(below) = text.strip_prefix('<') {
+        TriggerDuration::Shorter(samples(below, samplerate, true)?)
     } else {
-        let (p, q) = parse_period(rest)?;
-        if samplerate == 0 {
-            return None;
+        let rest = text.strip_prefix('>')?;
+        match rest.split_once('<') {
+            None => TriggerDuration::Longer(samples(rest, samplerate, false)?),
+            // Both ends are strict. Bounds with nothing between them
+            // stay as they are, for `check` to name.
+            Some((above, below)) => {
+                let above = samples(above, samplerate, false)?;
+                let below = samples(below, samplerate, true)?;
+                TriggerDuration::Between(above.checked_add(1)?, below.checked_sub(1)?)
+            }
         }
-        (u128::from(p) * u128::from(samplerate) / u128::from(q.max(1))) as u64
     };
-    trigger.set_duration(stage, TriggerDuration::Longer(samples));
+    trigger.set_duration(stage, duration);
     Some(())
 }
 
@@ -247,6 +274,7 @@ mod tests {
             count: true,
             consecutive: true,
             duration: true,
+            pulse: true,
             range: true,
             or: true,
             and: true,
@@ -315,7 +343,16 @@ mod tests {
             ("D0=r;D1=r|D2=r", "Mixed stage separators"),
             ("D0=r|D1=r|D2=r", "Only 2 trigger stages"),
             ("D2-D0=1", "Invalid trigger 'D2-D0=1'"),
-            ("D0=r>10", "not edges"),
+            ("D0=e>10", "one rising or falling edge"),
+            ("D0=1<10", "needs the edge that ends the pulse"),
+            ("D0=f<1", "shorter than 1 samples"),
+            ("D0=f>10<11", "within 11..10 samples"),
+            ("D0=f>10<0", "Invalid trigger 'D0=f>10<0'"),
+            ("D0=f<", "Invalid trigger 'D0=f<'"),
+            ("D0=f<10>5", "Invalid trigger 'D0=f<10>5'"),
+            ("D0=f>5<10<20", "Invalid trigger 'D0=f>5<10<20'"),
+            ("D0=f<10*2", "Invalid trigger 'D0=f<10*2'"),
+            ("D0=rf<10", "Invalid trigger 'D0=rf<10'"),
         ] {
             let e = parse(&d, spec).unwrap_err().to_string();
             assert!(e.contains(text), "{spec}: {e}");
@@ -323,5 +360,57 @@ mod tests {
         let plain = dev(TriggerFeatures::default());
         assert!(parse(&plain, "D0=r*2").unwrap_err().to_string().contains("counts not supported"));
         assert!(parse(&plain, "D0-D1=1").unwrap_err().to_string().contains("value ranges"));
+        // A device with durations and no pulse widths, as the LogicPort.
+        let levels = dev(TriggerFeatures { pulse: false, ..all() });
+        assert!(parse(&levels, "D0=1>10").is_ok());
+        for spec in ["D0=r>10", "D0=f<10", "D0=f>2<10"] {
+            let e = parse(&levels, spec).unwrap_err().to_string();
+            assert!(e.contains("Pulse width triggers not supported"), "{spec}: {e}");
+        }
+    }
+
+    #[test]
+    fn pulse_widths() {
+        use TriggerDuration::{Between, Longer, Shorter};
+        let d = dev(all());
+        let pulse = |spec: &str| {
+            let t = parse(&d, spec).unwrap_or_else(|e| panic!("{spec}: {e}"));
+            assert_eq!(t.stages.len(), 1, "{spec}");
+            let edge = t.stages[0].conditions.iter().find(|c| c.matches.is_edge()).unwrap();
+            (edge.matches, t.stages[0].duration.unwrap())
+        };
+        assert_eq!(pulse("D0=f<100"), (TriggerMatch::Falling, Shorter(100)));
+        assert_eq!(pulse("D0=r<100"), (TriggerMatch::Rising, Shorter(100)));
+        assert_eq!(pulse("D0=f>10"), (TriggerMatch::Falling, Longer(10)));
+        // Both ends are strict.
+        assert_eq!(pulse("D0=f>10<50"), (TriggerMatch::Falling, Between(11, 49)));
+        assert_eq!(pulse("D0=f>10<12"), (TriggerMatch::Falling, Between(11, 11)));
+        // Times at 1 MHz: whole samples as they are.
+        assert_eq!(pulse("D0=f<50us"), (TriggerMatch::Falling, Shorter(50)));
+        assert_eq!(pulse("D0=f>10us<50us"), (TriggerMatch::Falling, Between(11, 49)));
+        assert_eq!(pulse("D0=f>10us<1ms"), (TriggerMatch::Falling, Between(11, 999)));
+        // A fraction of a sample rounds down after `>` and up after `<`:
+        // longer than 2.5 samples is 3 and up, shorter than 2.5 is 2 and
+        // down.
+        assert_eq!(pulse("D0=f>2500ns"), (TriggerMatch::Falling, Longer(2)));
+        assert_eq!(pulse("D0=f<2500ns"), (TriggerMatch::Falling, Shorter(3)));
+        assert_eq!(pulse("D0=f>2500ns<7500ns"), (TriggerMatch::Falling, Between(3, 7)));
+        // Longer than half a sample is any pulse: none is left out. A
+        // level held for longer than no sample is still refused.
+        assert_eq!(pulse("D0=f>500ns"), (TriggerMatch::Falling, Longer(0)));
+        assert_eq!(pulse("D0=f>500ns<2500ns"), (TriggerMatch::Falling, Between(1, 2)));
+        assert_eq!(pulse("D0=f>0"), (TriggerMatch::Falling, Longer(0)));
+        let e = parse(&d, "D0=1>500ns").unwrap_err().to_string();
+        assert!(e.contains("Invalid trigger duration '0'"), "{e}");
+        // Levels and a range in the same stage, a sequence, or.
+        let t = parse(&d, "D0=f<50us,D1=1,D2-D3=2").unwrap();
+        assert_eq!(t.stages.len(), 1);
+        assert_eq!(t.stages[0].conditions.len(), 2);
+        assert!(t.stages[0].range.is_some());
+        let t = parse(&d, "D1=r;D0=f<50").unwrap();
+        assert_eq!(t.stages[1].duration, Some(Shorter(50)));
+        let t = parse(&d, "D0=f<50|D1=r>20").unwrap();
+        assert_eq!(t.combine, TriggerCombine::Or);
+        assert_eq!(t.stages[1].duration, Some(Longer(20)));
     }
 }

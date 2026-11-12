@@ -352,11 +352,26 @@ The models are plain Rust with no I/O for this reason; see
 - A VXI-11 transport, the Yokogawa DLM's Ethernet path.
 - `siglent-sds`: an E-series history mode as pull request 247 has it
   (`HSMD`, `FRAM`).
-- Pulse width triggers: `TriggerDuration` has only `Longer`, so a pulse
-  shorter than, or between, two widths can't be asked for. A
-  `Shorter`/`Between` that fires on the edge ending the pulse would
-  cover glitch triggers in `SoftTrigger`; the LogicPort's counter may
-  take it in hardware (check `convert_trigger`).
+- Pulse width triggers beyond `SoftTrigger`:
+  - The LogicPort in hardware. Its trigger level has a counter with a low
+    and a high bound (`count_low`, `count_high`, `counter_mode` in
+    `logicport/protocol.rs`), so the FPGA may time a pulse; which counter
+    mode does, and where the trigger point lands, needs the bench.
+    `FEATURES` has `pulse: false` until then.
+  - `beaglelogic` and `saleae_logic16` run `SoftTriggerLogic` only.
+    `fx2lafw`'s split (libsigrok's matcher when the trigger fits it, the
+    general one otherwise) would give them pulse widths, counts, ranges
+    and or/and.
+  - A width on a level stage (`D0=1<50us`, `D0-D2=3..5<10`): a pattern or
+    a value held for less than a time, then left. `Trigger::check`
+    refuses `Shorter` and `Between` without an edge today; the matcher's
+    pulse state would serve.
+  - `TriggerMatch::Edge` with a width (a pulse of either polarity).
+  - oxrok-ui still scans the recorded data for its Positive and Negative
+    Pulse triggers (`src/engine/trigger.rs`). They map to `Falling` or
+    `Rising` plus `Between(min, max)` in samples, linked channels to
+    levels, so the UI can read `trigger_features().pulse` and arm the
+    device trigger on streaming devices.
 
 - `hp-3457a`'s look at the line before each question, which catches an extra
   answer, has no counterpart on USBTMC.

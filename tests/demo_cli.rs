@@ -507,6 +507,56 @@ fn soft_trigger_ranges_and_combines() {
     assert_eq!(row("D0=r&D1=r"), Some(2));
 }
 
+/// Pulse width triggers on the counting pattern, where D1 is high for
+/// two samples in every four and D2 for four in every eight: the row of
+/// the edge that ends the pulse.
+#[test]
+fn soft_trigger_pulse_widths() {
+    let run = |t: &str| {
+        oxrok(&[
+            "-d",
+            DEMO4,
+            "-g",
+            "Logic",
+            "-c",
+            "pattern=incremental",
+            "--samples",
+            "12",
+            "-t",
+            t,
+            "-O",
+            "csv:header=false:trigger=true",
+        ])
+    };
+    let row = |t: &str| {
+        let (out, err, ok) = run(t);
+        assert!(ok, "{t}: {err}");
+        out.lines().position(|l| l.ends_with(",1")).map(|at| at - 1)
+    };
+    // D1 is high on 2 and 3, D2 from 4 to 7.
+    assert_eq!(row("D1=f<3"), Some(4));
+    assert_eq!(row("D1=f>1<3"), Some(4));
+    assert_eq!(row("D2=f>3<5"), Some(8));
+    assert_eq!(row("D2=f>3"), Some(8));
+    // The other channels are read where the pulse ends: D2 is high at
+    // 4 and low at 8.
+    assert_eq!(row("D1=f<3,D2=1"), Some(4));
+    assert_eq!(row("D1=f<3,D2=0"), Some(8));
+    // D1's low time on 0 and 1 began before the capture; the one on 4
+    // and 5 ends at 6.
+    assert_eq!(row("D1=r<3"), Some(6));
+
+    for (t, text) in [
+        ("D1=1<3", "A pulse width needs the edge that ends the pulse (r or f) in trigger stage 1."),
+        ("D1=e<3", "A pulse width needs one rising or falling edge in trigger stage 1."),
+        ("D1=f<1", "No pulse is shorter than 1 samples in trigger stage 1."),
+        ("D1=f>4<5", "No pulse width is within 5..4 samples in trigger stage 1."),
+    ] {
+        let (_, err, ok) = run(t);
+        assert!(!ok && err.contains(text), "{t}: {err}");
+    }
+}
+
 /// With no trigger, `-w` would write nothing at all: refused.
 #[test]
 fn wait_trigger_needs_a_trigger() {

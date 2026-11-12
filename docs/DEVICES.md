@@ -60,7 +60,8 @@ Options beyond libsigrok's, set with `-c`:
 
 Triggers take the forms in `docs/CLI.md`: occurrence counts (plain or
 consecutive), durations, value ranges on a channel group, and two stages
-in sequence, or, or and.
+in sequence, or, or and. Not the pulse widths (`D0=f<50us`): a duration
+is a level held for longer than a time.
 
 Bench: `oxrok-hil` runs the hardware checks (levels, threshold, timebase
 up to 500 MHz, triggers, counts, durations, value ranges, combine modes,

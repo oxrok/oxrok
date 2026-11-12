@@ -546,14 +546,16 @@ rejects what a device cannot do:
 ```sh
 -t 'D0=r*5'          # the fifth rising edge; *5c for the fifth in a row
 -t 'D0=1>50us'       # D0 high for longer than 50 us (or >100 in samples)
+-t 'D0=f<50us'       # a high pulse on D0 shorter than 50 us, at its falling edge
+-t 'D0=r>10us<50us'  # a low pulse of 10 to 50 us; D0=f<50us,D1=1 with D1 high at its end
 -t 'D0-D2=3..5'      # the value on D2 D1 D0 inside 3..5; =!7 for outside
 -t 'D0=r;D1=1'       # stages in sequence, as in sigrok-cli
 -t 'D0=r|D1=r'       # either stage; & for both, in any order
 ```
 
-The LogicPort runs all of these in its FPGA, with two stages, which is what
-the hardware offers. The software trigger behind the demo and fx2lafw
-devices takes all of them. These forms, and the LogicPort's clock
+The LogicPort runs all of these but the pulse widths in its FPGA, with two
+stages, which is what the hardware offers. The software trigger behind the
+demo and fx2lafw devices takes all of them. These forms, and the LogicPort's clock
 qualifier, setup and hold sampling points, input inversion and frequency
 counter, are not in sigrok; see [docs/CLI.md](docs/CLI.md) and
 [docs/DEVICES.md](docs/DEVICES.md).

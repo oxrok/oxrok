@@ -9,7 +9,12 @@
 //! on one sample; edge conditions (`r`, `f`, `e`) compare with the
 //! previous sample. A stage fires on the first sample where all of its
 //! conditions hold, or on the Nth with a count, or once they held for a
-//! duration. In a sequence the next stage is armed on the samples that
+//! duration. A duration on a stage with an edge is a pulse width: the
+//! stage fires on the edge that ends a pulse of that many samples, its
+//! levels and range checked there, and only for a pulse whose start the
+//! stage saw: one already running at the first sample, after a
+//! [`SoftTrigger::rearm`] or when a sequence arms the stage does not
+//! count. In a sequence the next stage is armed on the samples that
 //! follow; with or/and both stages are matched side by side, and the
 //! trigger fires when either fired, or once both did. The trigger point
 //! is the sample that completed the trigger.
@@ -104,6 +109,10 @@ struct Masks {
     rise: u64,
     fall: u64,
     change: u64,
+    /// A pulse width stage: the edge that starts the pulse, the opposite
+    /// of the one in `rise` or `fall` that ends it.
+    start_rise: u64,
+    start_fall: u64,
     /// An edge condition on a channel beyond the sample width.
     edge_never: bool,
     /// A level condition or range channel beyond it, or Over/Under.
@@ -115,8 +124,15 @@ impl Masks {
     /// The block filter: the conditions, and of a range matched inside
     /// the high bits on which its bounds agree (all of them for one
     /// value). A consecutive count with an edge also starts over on
-    /// the edge alone, so its filter has only the edges.
+    /// the edge alone, so its filter has only the edges. A pulse width
+    /// stage counts the samples between two edges of its channel, so its
+    /// filter passes any block where the channel changes, whatever the
+    /// levels.
     fn block(&self, unit: usize, edges_only: bool) -> Block {
+        if self.start_rise | self.start_fall != 0 {
+            let change = self.start_rise | self.start_fall;
+            return Block::new([0, 0, 0, 0, change], self.edge_never, unit);
+        }
         let (mut zero, mut one) = if edges_only { (0, 0) } else { (self.zero, self.one) };
         if let (false, Some((pick, low, high, true))) = (edges_only, &self.range) {
             let bits: Vec<u32> = match pick {
@@ -215,6 +231,12 @@ impl Masks {
             });
         (edges, levels)
     }
+
+    /// As [`SoftTrigger::starts`], on words.
+    #[inline]
+    fn starts(&self, now: u64, prev: Option<u64>) -> bool {
+        prev.is_some_and(|p| (!p & now & self.start_rise) | (p & !now & self.start_fall) != 0)
+    }
 }
 
 /// One stage, flattened.
@@ -232,9 +254,15 @@ struct Stage {
     consecutive: bool,
     /// Samples the condition must hold, 0 for none.
     duration: u64,
+    /// A pulse width stage: the widths that fire, both inclusive.
+    pulse: Option<(u64, u64)>,
+    /// And the edge that starts its pulse.
+    start: Option<(usize, TriggerMatch)>,
     /// Events seen so far.
     hits: u32,
-    /// Samples in a row the condition held.
+    /// Samples in a row the condition held. Of a pulse width stage, the
+    /// samples of the running pulse, 0 when none whose start was seen
+    /// is running.
     run: u64,
     /// Whether the condition held on the previous sample.
     held: bool,
@@ -262,6 +290,7 @@ impl SoftTrigger {
         count: true,
         consecutive: true,
         duration: true,
+        pulse: true,
         range: true,
         or: true,
         and: true,
@@ -286,16 +315,27 @@ impl SoftTrigger {
             .iter()
             .map(|s| {
                 let conds: Vec<_> = s.conditions.iter().map(|c| (c.channel, c.matches)).collect();
-                let masks = Masks::new(&conds, s.range.as_ref(), unit_size);
+                let mut masks = Masks::new(&conds, s.range.as_ref(), unit_size);
+                // The edge that ends a pulse is a condition like any
+                // other; the one that starts it is the opposite.
+                let start = s.pulse().map(|(ch, m)| {
+                    let rises = m == TriggerMatch::Falling;
+                    if ch < unit_size * 8 && unit_size <= 8 {
+                        let bit = 1u64 << ch;
+                        (masks.start_rise, masks.start_fall) =
+                            if rises { (bit, 0) } else { (0, bit) };
+                    }
+                    (ch, if rises { TriggerMatch::Rising } else { TriggerMatch::Falling })
+                });
                 let consecutive = s.count.is_some_and(|c| c.consecutive);
                 let block = if lanes(unit_size) > 1 {
                     masks.block(unit_size, consecutive && s.has_edge())
                 } else {
                     Block::default()
                 };
-                (s, conds, masks, block)
+                (s, conds, masks, block, start)
             })
-            .map(|(s, conds, masks, block)| Stage {
+            .map(|(s, conds, masks, block, start)| Stage {
                 conds,
                 range: s.range.clone(),
                 masks,
@@ -304,9 +344,11 @@ impl SoftTrigger {
                 count: s.count.map_or(1, |c| c.count.max(1)),
                 consecutive: s.count.is_some_and(|c| c.consecutive),
                 duration: match s.duration {
-                    Some(TriggerDuration::Longer(n)) => n,
-                    None => 0,
+                    Some(TriggerDuration::Longer(n)) if start.is_none() => n,
+                    _ => 0,
                 },
+                pulse: start.and(s.duration).map(TriggerDuration::bounds),
+                start,
                 hits: 0,
                 run: 0,
                 held: false,
@@ -329,7 +371,9 @@ impl SoftTrigger {
 
     /// Arms the matcher again, its stages from the start, with `prev`
     /// as the sample before the next one fed: an edge between them is
-    /// seen. `None` forgets it, as a new matcher does.
+    /// seen. `None` forgets it, as a new matcher does. A pulse running
+    /// on `prev` started before the matcher was armed, and does not
+    /// count for a pulse width stage.
     pub fn rearm(&mut self, prev: Option<&[u8]>) {
         // A counted level-only stage counts entries into its condition: one
         // that already held on `prev` is not entered again by the next
@@ -411,12 +455,32 @@ impl SoftTrigger {
         (edges, levels)
     }
 
+    /// Whether the pulse of a pulse width stage starts on this sample.
+    fn starts(st: &Stage, sample: &[u8], prev: Option<&[u8]>) -> bool {
+        st.start.is_some_and(|(ch, m)| Self::matches_one(sample, prev, ch, m))
+    }
+
     /// Advances stage `idx` by one sample, given what `edges_and_levels`
     /// says of it; true when it fired.
-    fn step(&mut self, idx: usize, edges: bool, levels: bool) -> bool {
+    fn step(&mut self, idx: usize, edges: bool, levels: bool, start: bool) -> bool {
         let matched = edges && levels;
         let st = &mut self.stages[idx];
         let has_edge = st.has_edge;
+        if let Some((min, max)) = st.pulse {
+            // `run` counts a pulse from the edge that started it; the
+            // edge that ends it fires when the width fits, and the
+            // levels hold on that sample. No edge at all leaves the
+            // channel where it was: in the pulse, when one is running.
+            if start {
+                st.run = 1;
+            } else if edges {
+                let width = std::mem::take(&mut st.run);
+                return levels && (min..=max).contains(&width);
+            } else if st.run > 0 {
+                st.run = st.run.saturating_add(1);
+            }
+            return false;
+        }
         if st.duration > 0 {
             st.run = if matched { st.run + 1 } else { 0 };
             return st.run == st.duration + 1;
@@ -440,13 +504,21 @@ impl SoftTrigger {
     }
 
     /// Advances the trigger by one sample, which `eval` matches against
-    /// a stage; true when it fired.
+    /// a stage and of which `starts` says whether the stage's pulse
+    /// starts on it; true when it fired.
     #[inline]
-    fn advance(&mut self, eval: impl Fn(&Stage) -> (bool, bool)) -> bool {
+    fn advance(
+        &mut self,
+        eval: impl Fn(&Stage) -> (bool, bool),
+        starts: impl Fn(&Stage) -> bool,
+    ) -> bool {
+        // Only a pulse width stage asks whether its pulse starts.
+        let starts = |st: &Stage| st.pulse.is_some() && starts(st);
         match self.combine {
             TriggerCombine::Sequence => {
-                let (edges, levels) = eval(&self.stages[self.stage]);
-                if self.step(self.stage, edges, levels) {
+                let st = &self.stages[self.stage];
+                let ((edges, levels), start) = (eval(st), starts(st));
+                if self.step(self.stage, edges, levels, start) {
                     self.stage += 1;
                 }
                 self.stage >= self.stages.len()
@@ -457,8 +529,9 @@ impl SoftTrigger {
                     if self.stages[idx].done {
                         continue;
                     }
-                    let (edges, levels) = eval(&self.stages[idx]);
-                    if self.step(idx, edges, levels) {
+                    let st = &self.stages[idx];
+                    let ((edges, levels), start) = (eval(st), starts(st));
+                    if self.step(idx, edges, levels, start) {
                         self.stages[idx].done = true;
                     }
                 }
@@ -482,7 +555,9 @@ impl SoftTrigger {
 
     /// When no sample of the block `now` (lanes) after `prev` can match
     /// a waiting stage, applies what the block does: nothing held, no
-    /// duration running. True when it skipped the block.
+    /// duration running. A pulse width stage's channel does not change
+    /// in such a block, so a running pulse grows by the block. True
+    /// when it skipped the block.
     fn skip_block(&mut self, now: u64, prev: u64) -> bool {
         let prev = now << (self.unit_size * 8) | prev;
         if (0..self.stages.len())
@@ -490,10 +565,16 @@ impl SoftTrigger {
         {
             return false;
         }
+        let n = lanes(self.unit_size) as u64;
         for i in 0..self.stages.len() {
-            if self.active(i) {
-                self.stages[i].held = false;
-                self.stages[i].run = 0;
+            if !self.active(i) {
+                continue;
+            }
+            let st = &mut self.stages[i];
+            if st.pulse.is_none() {
+                (st.held, st.run) = (false, 0);
+            } else if st.run > 0 {
+                st.run = st.run.saturating_add(n);
             }
         }
         true
@@ -504,7 +585,8 @@ impl SoftTrigger {
     /// the other `n` change nothing but the duration runs, which they
     /// then advance. They match as `p` did against itself: no edge, no
     /// new event; only a duration that completes inside them needs
-    /// each sample.
+    /// each sample. A pulse width stage fires on an edge alone, so its
+    /// running pulse just grows.
     fn skip_same(&mut self, n: u64) -> bool {
         let reach = |st: &Stage| st.duration > 0 && st.run > 0 && st.run + n > st.duration;
         if (0..self.stages.len()).any(|i| self.active(i) && reach(&self.stages[i])) {
@@ -512,8 +594,8 @@ impl SoftTrigger {
         }
         for i in 0..self.stages.len() {
             let st = &self.stages[i];
-            if self.active(i) && st.duration > 0 && st.run > 0 {
-                self.stages[i].run += n;
+            if self.active(i) && (st.duration > 0 || st.pulse.is_some()) && st.run > 0 {
+                self.stages[i].run = st.run.saturating_add(n);
             }
         }
         true
@@ -532,7 +614,9 @@ impl SoftTrigger {
     ) -> std::result::Result<Option<u64>, usize> {
         for (i, sample) in data.chunks_exact(self.unit_size).enumerate() {
             let now = word(sample);
-            if self.advance(|st| st.masks.edges_and_levels(now, prev)) {
+            if self
+                .advance(|st| st.masks.edges_and_levels(now, prev), |st| st.masks.starts(now, prev))
+            {
                 return Err(i);
             }
             prev = Some(now);
@@ -578,7 +662,7 @@ impl SoftTrigger {
                     if block == p.wrapping_mul(ones) {
                         let stage = self.stage;
                         let done = self.stages.iter().filter(|s| s.done).count();
-                        if self.advance(|st| st.masks.edges_and_levels(p, Some(p))) {
+                        if self.advance(|st| st.masks.edges_and_levels(p, Some(p)), |_| false) {
                             self.fired = true;
                             self.prev_word = None;
                             return Some(i);
@@ -612,7 +696,10 @@ impl SoftTrigger {
         let mut prev = self.prev.take();
         for (i, sample) in data.chunks_exact(self.unit_size).enumerate() {
             let before = prev.as_deref();
-            if self.advance(|st| Self::edges_and_levels(st, sample, before)) {
+            if self.advance(
+                |st| Self::edges_and_levels(st, sample, before),
+                |st| Self::starts(st, sample, before),
+            ) {
                 self.fired = true;
                 return Some(i);
             }
@@ -1265,6 +1352,270 @@ mod tests {
         out
     }
 
+    /// `n` one byte samples, each `(channel, from, to)` high on the
+    /// samples `from..to`.
+    fn wave(n: usize, high: &[(usize, usize, usize)]) -> Vec<u8> {
+        (0..n)
+            .map(|i| {
+                high.iter()
+                    .filter(|&&(_, a, b)| (a..b).contains(&i))
+                    .fold(0, |v, &(ch, ..)| v | 1 << ch)
+            })
+            .collect()
+    }
+
+    /// One byte samples as samples of `unit` bytes.
+    fn widen(data: &[u8], unit: usize) -> Vec<u8> {
+        data.iter()
+            .flat_map(|&b| std::iter::once(b).chain(std::iter::repeat_n(0, unit - 1)))
+            .collect()
+    }
+
+    fn pulse(edge: TriggerMatch, d: TriggerDuration, levels: &[(usize, TriggerMatch)]) -> Trigger {
+        let mut t = Trigger::new();
+        t.add(0, 0, edge);
+        for &(ch, m) in levels {
+            t.add(0, ch, m);
+        }
+        t.set_duration(0, d);
+        assert!(SoftTrigger::check(&t).is_ok(), "{t:?}");
+        t
+    }
+
+    /// Where `t` first fires in `data`, the same for samples of 1, 2, 4,
+    /// 3 and 9 bytes and wherever the data is cut in two.
+    fn fires_at(t: &Trigger, data: &[u8]) -> Option<usize> {
+        let whole = SoftTrigger::new(t, 1).unwrap().feed(data);
+        for unit in [1, 2, 4, 3, 9] {
+            let wide = widen(data, unit);
+            for cut in 0..=data.len() {
+                let mut m = SoftTrigger::new(t, unit).unwrap();
+                let at = m
+                    .feed(&wide[..cut * unit])
+                    .or_else(|| m.feed(&wide[cut * unit..]).map(|i| cut + i));
+                assert_eq!(at, whole, "unit {unit}, cut at {cut}: {t:?}");
+            }
+        }
+        whole
+    }
+
+    #[test]
+    fn pulse_widths_fire_on_the_edge_that_ends_the_pulse() {
+        use TriggerDuration::{Between, Longer, Shorter};
+        use TriggerMatch::{Falling, One, Rising, Zero};
+        // D0 rises at 10, falls at 13, rises at 20, falls at 30; D1 is
+        // high from 15 to 25.
+        let data = wave(40, &[(0, 10, 13), (0, 20, 30), (1, 15, 25)]);
+        for (edge, d, levels, at) in [
+            (Falling, Between(3, 3), &[][..], Some(13)),
+            (Falling, Between(4, 10), &[], Some(30)),
+            (Falling, Between(4, 9), &[], None),
+            // The low time between the pulses, 13 to 20.
+            (Rising, Between(7, 7), &[], Some(20)),
+            // Levels are those of the sample where the pulse ends.
+            (Falling, Between(1, 100), &[(1, Zero)], Some(13)),
+            (Falling, Between(5, 100), &[(1, One)], None),
+            (Rising, Between(1, 100), &[(1, One)], Some(20)),
+            (Falling, Shorter(4), &[], Some(13)),
+            (Falling, Shorter(3), &[], None),
+            (Falling, Shorter(11), &[(1, Zero)], Some(13)),
+            // Longer fires at the end of the pulse, not inside it.
+            (Falling, Longer(2), &[], Some(13)),
+            // Longer than no sample: the first pulse seen whole.
+            (Falling, Longer(0), &[], Some(13)),
+            (Rising, Longer(0), &[], Some(20)),
+            (Falling, Longer(3), &[], Some(30)),
+            (Falling, Longer(10), &[], None),
+            (Rising, Longer(5), &[], Some(20)),
+            // The low time before the first pulse has no start: its 10
+            // samples are no pulse, nor are the 10 after the last.
+            (Rising, Between(10, 10), &[], None),
+            (Rising, Longer(7), &[], None),
+        ] {
+            assert_eq!(fires_at(&pulse(edge, d, levels), &data), at, "{edge:?} {d:?} {levels:?}");
+        }
+        // A value range is checked on the edge too: D1-D2 read 1 at 20.
+        let mut t = pulse(Rising, Between(1, 100), &[]);
+        t.set_range(0, range(&[1, 2], 1, 1, true));
+        assert_eq!(fires_at(&t, &data), Some(20));
+        let mut t = pulse(Falling, Between(1, 100), &[]);
+        t.set_range(0, range(&[1, 2], 1, 1, true));
+        assert_eq!(fires_at(&t, &data), None);
+        // A channel beyond the samples never fires.
+        let mut t = Trigger::new();
+        t.add(0, 8, Falling);
+        t.set_duration(0, Shorter(100));
+        assert_eq!(SoftTrigger::new(&t, 1).unwrap().feed(&[0xff, 0, 0xff, 0]), None);
+    }
+
+    #[test]
+    fn a_pulse_already_running_does_not_count() {
+        use TriggerDuration::Between;
+        use TriggerMatch::{Falling, Rising};
+        let any = pulse(Falling, Between(1, 100), &[]);
+        // High on the first sample: the pulse that ends at 5 started
+        // before the capture. The next one counts.
+        let data = wave(40, &[(0, 0, 5), (0, 10, 13), (0, 20, 30)]);
+        assert_eq!(fires_at(&any, &data), Some(13));
+        // Rearmed on the trigger sample, the next pulse is seen whole.
+        let mut m = SoftTrigger::new(&any, 1).unwrap();
+        assert_eq!(m.feed(&data), Some(13));
+        m.rearm(Some(&data[13..14]));
+        assert_eq!(m.feed(&data[14..]), Some(16));
+        // Rearmed inside the pulse, it is not: nothing is left to fire.
+        m.rearm(Some(&data[21..22]));
+        assert_eq!(m.feed(&data[22..]), None);
+        // Rearmed on the sample before the pulse starts, its start is
+        // the edge between that sample and the next.
+        m.rearm(Some(&data[19..20]));
+        assert_eq!(m.feed(&data[20..]), Some(10));
+        // Without a previous sample the first one can't be a start.
+        m.rearm(None);
+        assert_eq!(m.feed(&data[20..]), None);
+
+        // A sequence arms its second stage when D1 rises at 22, inside
+        // the pulse on D0 that ends at 30, which so does not count; the
+        // one from 34 to 37 does.
+        let seq = |d1_rises: usize| {
+            let mut t = trig(&[&[(1, Rising)], &[(0, Falling)]]);
+            t.set_duration(1, Between(1, 100));
+            assert!(SoftTrigger::check(&t).is_ok());
+            let data = wave(40, &[(0, 10, 13), (0, 20, 30), (0, 34, 37), (1, d1_rises, 40)]);
+            fires_at(&t, &data)
+        };
+        assert_eq!(seq(22), Some(37));
+        assert_eq!(seq(20), Some(37), "armed on the pulse's first sample");
+        // Armed on the sample before the pulse starts, the stage sees
+        // the start as its first sample.
+        assert_eq!(seq(19), Some(30));
+        assert_eq!(seq(5), Some(13));
+    }
+
+    #[test]
+    fn pulse_widths_with_or_and_and() {
+        use TriggerDuration::{Between, Longer};
+        use TriggerMatch::{Falling, One, Rising};
+        // D0 pulses from 10 to 13 and from 20 to 30; D1 rises at 15.
+        let data = wave(40, &[(0, 10, 13), (0, 20, 30), (1, 15, 40)]);
+        let two = |d: TriggerDuration, combine: TriggerCombine| {
+            let mut t = trig(&[&[(0, Falling)], &[(1, Rising)]]);
+            t.set_duration(0, d);
+            t.combine = combine;
+            assert!(SoftTrigger::check(&t).is_ok());
+            fires_at(&t, &data)
+        };
+        assert_eq!(two(Between(3, 3), TriggerCombine::Or), Some(13));
+        assert_eq!(two(Between(10, 10), TriggerCombine::Or), Some(15));
+        assert_eq!(two(Between(3, 3), TriggerCombine::And), Some(15));
+        assert_eq!(two(Between(10, 10), TriggerCombine::And), Some(30));
+        assert_eq!(two(Between(5, 5), TriggerCombine::And), None);
+
+        // Long pulses over quiet data, where whole blocks are skipped:
+        // the width still counts every sample.
+        let data = wave(3000, &[(0, 100, 1100), (0, 1500, 2501)]);
+        assert_eq!(fires_at(&pulse(Falling, Between(1000, 1000), &[]), &data), Some(1100));
+        assert_eq!(fires_at(&pulse(Falling, Between(1001, 1001), &[]), &data), Some(2501));
+        assert_eq!(fires_at(&pulse(Falling, Longer(1001), &[]), &data), None);
+        assert_eq!(fires_at(&pulse(Rising, Between(400, 400), &[]), &data), Some(1500));
+        // Beside a level held for a duration, whose stage keeps the
+        // matcher on blocks of equal samples.
+        let data = wave(3000, &[(0, 100, 600), (1, 0, 3000)]);
+        let mut t = trig(&[&[(1, One)], &[(0, Falling)]]);
+        t.set_duration(0, Longer(1000));
+        t.set_duration(1, Between(500, 500));
+        t.combine = TriggerCombine::Or;
+        assert_eq!(fires_at(&t, &data), Some(600));
+        t.set_duration(1, Between(499, 499));
+        assert_eq!(fires_at(&t, &data), Some(1000));
+    }
+
+    /// Every sample of `data` (one channel a byte's bit, `unit` bytes a
+    /// sample) that ends a pulse on `ch` whose start is in the data and
+    /// whose width is within `min..=max`, with `level` holding there:
+    /// found by walking the samples, with nothing of the matcher.
+    fn pulses_by_scan(
+        data: &[u8],
+        unit: usize,
+        ch: usize,
+        high: bool,
+        (min, max): (u64, u64),
+        level: Option<(usize, bool)>,
+    ) -> Vec<usize> {
+        let bit = |i: usize, ch: usize| data[i * unit + ch / 8] >> (ch % 8) & 1 != 0;
+        let n = data.len() / unit;
+        let mut out = Vec::new();
+        let mut start = None;
+        for i in 1..n {
+            let (before, now) = (bit(i - 1, ch) == high, bit(i, ch) == high);
+            if !before && now {
+                start = Some(i);
+            } else if before
+                && !now
+                && let Some(first) = start.take()
+            {
+                let width = (i - first) as u64;
+                if (min..=max).contains(&width) && level.is_none_or(|(c, l)| bit(i, c) == l) {
+                    out.push(i);
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn pulse_widths_match_a_scan_of_the_samples() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let mut rounds_with_pulses = 0;
+        for round in 0..3000 {
+            let unit = [1, 2, 4, 3, 8][rng.below(5) as usize];
+            let width = unit as u64 * 8;
+            let count = 400;
+            let (narrow, wide) = random_samples(&mut rng, unit, count);
+            let chunks = random_chunks(&mut rng, count);
+            let ch = rng.below(width) as usize;
+            let high = rng.below(2) == 0;
+            let least = 1 + rng.below(6);
+            let width_of = match rng.below(3) {
+                0 => TriggerDuration::Longer(least),
+                1 => TriggerDuration::Shorter(least + 1 + rng.below(30)),
+                _ => TriggerDuration::Between(least, least + rng.below(30)),
+            };
+            let level = (rng.below(2) == 0).then(|| {
+                let other = (ch + 1 + rng.below(width - 1) as usize) % width as usize;
+                (other, rng.below(2) == 0)
+            });
+            let mut t = Trigger::new();
+            t.add(0, ch, if high { TriggerMatch::Falling } else { TriggerMatch::Rising });
+            if let Some((c, l)) = level {
+                t.add(0, c, if l { TriggerMatch::One } else { TriggerMatch::Zero });
+            }
+            t.set_duration(0, width_of);
+            assert!(SoftTrigger::check(&t).is_ok());
+
+            let expected = pulses_by_scan(&narrow, unit, ch, high, width_of.bounds(), level);
+            rounds_with_pulses += usize::from(!expected.is_empty());
+            for (data, us) in [(&narrow, unit), (&wide, 9)] {
+                // Rearmed on the trigger sample, where the channel has
+                // left the pulse level: no pulse is lost.
+                let mut m = SoftTrigger::new(&t, us).unwrap();
+                let mut fires = Vec::new();
+                let mut base = 0;
+                for &k in &chunks {
+                    let mut from = 0;
+                    while let Some(i) = m.feed(&data[(base + from) * us..(base + k) * us]) {
+                        let at = base + from + i;
+                        fires.push(at);
+                        from += i + 1;
+                        m.rearm(Some(&data[at * us..(at + 1) * us]));
+                    }
+                    base += k;
+                }
+                assert_eq!(fires, expected, "round {round}, {us} bytes: {t:?}");
+            }
+        }
+        assert!(rounds_with_pulses > 1500, "{rounds_with_pulses}");
+    }
+
     /// libsigrok's matcher over `data` in `chunks`: each trigger point
     /// and its pre-trigger samples' first bytes. Rearmed after each fire
     /// as fx2lafw does, so the sample it keeps as the previous one after
@@ -1329,7 +1680,21 @@ mod tests {
                     };
                     t.set_range(st, range);
                 }
-                match rng.below(4) {
+                match rng.below(5) {
+                    // A pulse width: one rising or falling edge, beside
+                    // the stage's levels and range.
+                    4 => {
+                        t.stages[st].conditions.retain(|c| !c.matches.is_edge());
+                        let edge = [TriggerMatch::Rising, TriggerMatch::Falling];
+                        t.add(st, rng.below(width) as usize, edge[rng.below(2) as usize]);
+                        let a = 1 + rng.below(4);
+                        let d = match rng.below(3) {
+                            0 => TriggerDuration::Longer(a),
+                            1 => TriggerDuration::Shorter(a + 1 + rng.below(20)),
+                            _ => TriggerDuration::Between(a, a + rng.below(20)),
+                        };
+                        t.set_duration(st, d);
+                    }
                     0 => t.set_count(
                         st,
                         TriggerCount {

@@ -91,6 +91,7 @@ const FEATURES: TriggerFeatures = TriggerFeatures {
     count: true,
     consecutive: true,
     duration: true,
+    pulse: false,
     range: true,
     or: true,
     and: true,
@@ -365,6 +366,10 @@ impl LogicPortDevice {
                         )));
                     }
                     Some(ticks as u32)
+                }
+                // `check` refuses these: FEATURES has no pulse widths.
+                Some(TriggerDuration::Shorter(_) | TriggerDuration::Between(..)) => {
+                    return Err(Error::arg("Pulse width triggers not supported by device."));
                 }
                 None => None,
             };

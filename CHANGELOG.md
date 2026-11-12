@@ -86,12 +86,28 @@ release may change the library API.
   which still run libsigrok's soft trigger sample for sample, and now
   takes counts, durations, ranges and or/and. A range on its analog
   channel, or on a disabled channel, is refused.
+- Pulse width triggers: `-t 'D0=f<50us'` fires on the falling edge that
+  ends a high pulse shorter than 50 us, `D0=r<50us` on the rising edge
+  that ends a low one, `D0=f>10us<50us` on a pulse between two widths and
+  `D0=f>10us` at the end of a long one, in samples or as a time. The
+  stage's levels and value range are those of the edge (`D0=f<50us,D1=1`),
+  and a pulse whose start was not seen does not count. In the library
+  `TriggerDuration` gains `Shorter` and `Between`, a duration on a stage
+  with one rising or falling edge is the width of the pulse the edge
+  ends, and `TriggerFeatures::pulse` says a device takes them. The
+  software trigger does (`demo`, `fx2lafw`, `raspberrypi-pico`); the
+  LogicPort keeps durations on levels only.
 - `-w` with no `-t` is refused.
 - A `-c enabled=...` dropped by a later `-c` of the same scope now warns,
   which fails a `--strict` run.
 
 ### Changed
 
+- `TriggerFeatures` has a new field, `pulse`, and `TriggerDuration` two
+  new variants: struct literals without `..` and matches on the enum need
+  them. A device with durations and no pulse widths now answers a
+  duration on an edge (`D0=r>10`) with "Pulse width triggers not
+  supported by device."
 - The host software triggers are much faster with samples of up to 8
   bytes: each stage is matched as bit masks over the whole sample, with
   no allocation per sample, and with samples of 1, 2 or 4 bytes a word

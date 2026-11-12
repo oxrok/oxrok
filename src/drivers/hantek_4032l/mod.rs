@@ -122,6 +122,7 @@ const TRIGGER_FEATURES: TriggerFeatures = TriggerFeatures {
     count: false,
     consecutive: false,
     duration: false,
+    pulse: false,
     range: false,
     or: false,
     and: false,

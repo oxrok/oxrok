@@ -414,7 +414,7 @@ Arguments:
 - `samples` (string): How many samples, with a size suffix: `1k`, `2m`. `capture` needs one of `samples`, `time` or `frames`; `capture_start` without one runs until `capture_stop`.
 - `time` (string): How long, in ms or with a unit: `10ms`, `2s`.
 - `timeout` (number): Give up after this many seconds, keeping what came. `capture` takes the server's limit otherwise; `capture_start` has none.
-- `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages.
+- `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages. Where the device takes them: `D0=r*5` (the fifth edge), `D0=1>50us` (high for longer than 50 us), `D0=f<50us` (a high pulse shorter than 50 us, at its falling edge; `D0=r<50us` a low one), `D0=f>10us<50us` (a pulse between two widths), `D0-D2=3..5` (a value range).
 - `wait_trigger` (boolean): Keep only the samples from the trigger on.
 
 Example: `{"config":["samplerate=1m"],"handle":1,"samples":"1k"}`
@@ -433,7 +433,7 @@ Arguments:
 - `samples` (string): How many samples, with a size suffix: `1k`, `2m`. `capture` needs one of `samples`, `time` or `frames`; `capture_start` without one runs until `capture_stop`.
 - `time` (string): How long, in ms or with a unit: `10ms`, `2s`.
 - `timeout` (number): Give up after this many seconds, keeping what came. `capture` takes the server's limit otherwise; `capture_start` has none.
-- `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages.
+- `triggers` (string): A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`, `D0=r,D1=1` for one stage, `;` between stages. Where the device takes them: `D0=r*5` (the fifth edge), `D0=1>50us` (high for longer than 50 us), `D0=f<50us` (a high pulse shorter than 50 us, at its falling edge; `D0=r<50us` a low one), `D0=f>10us<50us` (a pulse between two widths), `D0-D2=3..5` (a value range).
 - `wait_trigger` (boolean): Keep only the samples from the trigger on.
 
 Example: `{"config":["samplerate=1m"],"handle":1}`

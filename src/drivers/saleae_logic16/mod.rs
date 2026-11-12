@@ -91,6 +91,7 @@ const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatu
     count: false,
     consecutive: false,
     duration: false,
+    pulse: false,
     range: false,
     or: false,
     and: false,
