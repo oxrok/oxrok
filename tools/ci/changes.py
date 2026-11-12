@@ -44,6 +44,8 @@ IGNORED_PREFIXES = (
     "examples/",
     "hil/",
     "website/",
+    # The RPM spec and its notes: Packit builds them in Copr, not in CI.
+    "packaging/",
     "tools/third-party/",
     # Applied to the sigrok oracle, which CI does not build (no --oracle).
     "tools/oracle-patches/",
@@ -59,6 +61,7 @@ IGNORED_FILES = {
     "deny.toml",
     ".gitignore",
     ".gitattributes",
+    ".packit.yaml",
     "tools/attribution.py",
     "tools/libsigrok-drivers.txt",
 }
