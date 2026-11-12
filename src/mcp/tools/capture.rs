@@ -48,7 +48,11 @@ pub struct CaptureArgs {
     #[serde(default)]
     pub frames: Option<String>,
     /// A trigger as `-t` takes it: `D0=r` (rising), `D1=f`, `D2=1`,
-    /// `D0=r,D1=1` for one stage, `;` between stages.
+    /// `D0=r,D1=1` for one stage, `;` between stages. Where the device
+    /// takes them: `D0=r*5` (the fifth edge), `D0=1>50us` (high for
+    /// longer than 50 us), `D0=f<50us` (a high pulse shorter than 50 us,
+    /// at its falling edge; `D0=r<50us` a low one), `D0=f>10us<50us` (a
+    /// pulse between two widths), `D0-D2=3..5` (a value range).
     #[serde(default)]
     pub triggers: Option<String>,
     /// Keep only the samples from the trigger on.

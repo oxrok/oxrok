@@ -89,6 +89,14 @@ fn triggers(top: usize) -> Vec<(&'static str, Trigger)> {
     let mut t = conds(&[&[(0, M::Rising), (top, M::One)], &[(top, M::Falling)]]);
     t.combine = TriggerCombine::Or;
     v.push(("or", t));
+    // A pulse width on a channel that toggles, timed whenever it does.
+    let mut t = conds(&[&[(0, M::Falling), (top, M::One)]]);
+    t.set_duration(0, TriggerDuration::Between(2, 10));
+    v.push(("pulse D0 2..10 + level", t));
+    // And on one that never does.
+    let mut t = conds(&[&[(top, M::Falling)]]);
+    t.set_duration(0, TriggerDuration::Shorter(100));
+    v.push(("pulse, idle channel", t));
     v
 }
 

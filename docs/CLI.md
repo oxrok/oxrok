@@ -47,6 +47,17 @@ Deliberate, and kept small:
   - `D0=1>100` fires once D0 has been high for more than 100 samples,
     `D0=1>50us` with a time, converted with the sample rate set by `-c`
     (in state mode, clock cycles).
+  - `D0=f<50us` is a pulse width: it fires on the falling edge that ends
+    a high pulse shorter than 50 us (`<100` in samples), `D0=r<50us` on
+    the rising edge that ends a low one. `D0=f>10us<50us` takes a pulse
+    longer than 10 us and shorter than 50 us, and `D0=f>10us` one longer
+    than 10 us, at its end; `D0=1>10us` fires 10 us into it instead.
+    Both ends are strict, and a time that is not a whole number of
+    samples is rounded so that no width that qualifies is left out: down
+    after `>`, up after `<`. One rising or falling edge a stage; its
+    levels and range (`D0=f<50us,D1=1`) are those of the sample where
+    the pulse ends. A pulse that had already begun when the capture
+    started, or when an earlier stage fired, does not count.
   - `D0-D2=3..5` fires while the value on D2 D1 D0 (D0 least
     significant) is within 3..5, `D0-D2=!7` while it is not 7. Decimal
     or `0x` hex.
@@ -55,7 +66,7 @@ Deliberate, and kept small:
 
   Counts, durations and ranges belong to the stage their token is in.
   The devices with a software trigger (demo, fx2lafw) take all of them,
-  as does the LogicPort with two stages, see
+  as does the LogicPort with two stages, but for the pulse widths, see
   `docs/DEVICES.md`. fx2lafw rejects a range on its analog channel or
   with any channel disabled and, in a trigger that uses these forms, a
   stage whose conditions are all on disabled channels. sigrok-cli
