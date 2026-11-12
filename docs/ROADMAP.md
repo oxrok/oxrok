@@ -71,6 +71,10 @@ skills and `track.py` are in
 
 ## Packaging and release
 
+- EPEL 10 has no `libsigrokdecode`, so the COPR package for RHEL and
+  CentOS Stream 10 runs without the Python decoders unless the user
+  finds them elsewhere: package `libsigrokdecode` for EPEL, or ship the
+  bundled decoders in the RPM there.
 - A Homebrew formula or tap.
 - An AUR `PKGBUILD`.
 - A stable release. Every published version so far is a pre-release, so

@@ -99,7 +99,7 @@ SRC_TAR   := $(DIST)/$(SRC_NAME).tar.xz
 SRC_CHECK ?= $(DIST)/src-check
 SRC_CHECK_WRAP ?=
 
-.PHONY: build sign-cli decoders notices notices-all dist dist-src dist-src-check clean-dist udev-rules
+.PHONY: build sign-cli decoders notices notices-all dist src-stage src-tar vendor-src dist-src dist-src-check clean-dist udev-rules
 
 build:
 	rustup target add $(TARGET)
@@ -154,21 +154,37 @@ endif
 	rm -rf $(STAGE)
 	@echo $(DIST)/$(NAME).$(ARCHIVE)
 
-dist-src: notices-all decoders
-	@test -z "$$(git status --porcelain)" || { echo "dist-src: the tree has changes; the tarball is HEAD, commit first" >&2; exit 1; }
+# The tree at HEAD with every crate vendored, staged in $(SRC_STAGE):
+# what the two source tarballs share.
+src-stage:
+	@test -z "$$(git status --porcelain)" || { echo "src-stage: the tree has changes; the tarball is HEAD, commit first" >&2; exit 1; }
 	rm -rf $(SRC_STAGE)
-	mkdir -p $(SRC_STAGE)/.cargo $(SRC_STAGE)/$(SRD_BUNDLED)
+	mkdir -p $(SRC_STAGE)/.cargo
 	git archive HEAD | tar -x -C $(SRC_STAGE)
 	git rev-parse HEAD > $(SRC_STAGE)/GIT-COMMIT
 	$(CARGO) vendor --locked --versioned-dirs --manifest-path $(SRC_STAGE)/Cargo.toml $(SRC_STAGE)/vendor > /dev/null
 	printf '[source.crates-io]\nreplace-with = "vendored-sources"\n\n[source.vendored-sources]\ndirectory = "vendor"\n' > $(SRC_STAGE)/.cargo/config.toml
-	cp build/$(NOTICES_NAME) $(SRC_STAGE)/$(NOTICES_NAME)
-	cp -R $(SRD_DIR)/decoders $(SRC_STAGE)/$(SRD_BUNDLED)/decoders
-	cp $(SRD_DIR)/COPYING $(SRC_STAGE)/$(SRD_BUNDLED)/COPYING
+
+# The staged tree as the tarball, reproducibly.
+src-tar:
 	XZ_OPT=-T0 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@$$(git log -1 --format=%ct) -cJf $(SRC_TAR) -C $(DIST) $(SRC_NAME)
 	rm -rf $(SRC_STAGE)
 	cd $(DIST) && $(SHA256) $(SRC_NAME).tar.xz > $(SRC_NAME).tar.xz.sha256
 	@echo $(SRC_TAR)
+
+# The vendored tree alone, for a distribution package (packaging/): no
+# notices, as the package computes its own licence summary, and no
+# bundled decoders, as it depends on libsigrokdecode. Same name and
+# layout as dist-src, which the release publishes.
+vendor-src: src-stage
+	$(MAKE) src-tar
+
+dist-src: notices-all decoders src-stage
+	mkdir -p $(SRC_STAGE)/$(SRD_BUNDLED)
+	cp build/$(NOTICES_NAME) $(SRC_STAGE)/$(NOTICES_NAME)
+	cp -R $(SRD_DIR)/decoders $(SRC_STAGE)/$(SRD_BUNDLED)/decoders
+	cp $(SRD_DIR)/COPYING $(SRC_STAGE)/$(SRD_BUNDLED)/COPYING
+	$(MAKE) src-tar
 
 # `make dist` in the extracted tarball, which is `cargo build --offline
 # --locked` with the release features and an empty CARGO_HOME, so nothing

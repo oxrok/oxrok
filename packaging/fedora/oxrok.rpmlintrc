@@ -1,0 +1,9 @@
+# rpmlint filters for the oxrok spec: rpmlint -r packaging/fedora/oxrok.rpmlintrc
+# rpmlint reads each addFilter line with a regular expression, so the pattern
+# has no quote character of its own (that also keeps the file valid Python).
+# sigrok, libsigrok, libsigrokdecode, cli and usr (a path) are not misspellings.
+addFilter(r"spelling-error \(\W(sigrok|libsigrok's|libsigrokdecode's|cli|usr)\W")
+# libsigrokdecode is the package that ships the Python decoders oxrok loads
+# from /usr/share/libsigrokdecode/decoders: a dependency on that data, which
+# no automatic soname dependency can replace.
+addFilter(r"explicit-lib-dependency libsigrokdecode")
