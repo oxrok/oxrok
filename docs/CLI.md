@@ -54,7 +54,8 @@ Deliberate, and kept small:
     than 10 us, at its end; `D0=1>10us` fires 10 us into it instead.
     Both ends are strict, and a time that is not a whole number of
     samples is rounded so that no width that qualifies is left out: down
-    after `>`, up after `<`. One rising or falling edge a stage; its
+    after `>`, up after `<` (so `>` with a time below one sample takes
+    every pulse). One rising or falling edge a stage; its
     levels and range (`D0=f<50us,D1=1`) are those of the sample where
     the pulse ends. A pulse that had already begun when the capture
     started, or when an earlier stage fired, does not count.

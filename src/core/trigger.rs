@@ -105,7 +105,8 @@ pub struct TriggerCount {
 /// [`TriggerFeatures::pulse`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriggerDuration {
-    /// Held for more than this many samples.
+    /// Held for more than this many samples. 0 is any pulse, and not
+    /// valid on a stage of levels.
     Longer(u64),
     /// Held for fewer than this many samples. Pulses only.
     Shorter(u64),
@@ -185,7 +186,9 @@ impl TriggerStage {
             return Err(Error::arg("Pulse width triggers not supported by device."));
         }
         match *d {
-            TriggerDuration::Longer(0) => {
+            // A pulse is at least one sample, so longer than none is any
+            // pulse: what a time below a sample period rounds down to.
+            TriggerDuration::Longer(0) if !self.has_edge() => {
                 return Err(Error::arg("Invalid trigger duration '0'."));
             }
             TriggerDuration::Shorter(len) if len < 2 => {
@@ -474,7 +477,10 @@ mod tests {
         assert!(t.check(&pulse).is_ok());
 
         // Widths that no pulse has.
-        assert!(err(&with(Falling, Longer(0)), &pulse).contains("duration '0'"));
+        // Longer than no sample is any pulse; a level held for none is
+        // refused, as before.
+        assert!(with(Falling, Longer(0)).check(&pulse).is_ok());
+        assert!(err(&with(One, Longer(0)), &pulse).contains("duration '0'"));
         assert!(err(&with(Falling, Shorter(0)), &pulse).contains("shorter than 0"));
         assert!(err(&with(Falling, Shorter(1)), &pulse).contains("shorter than 1"));
         assert!(err(&with(Falling, Between(0, 4)), &pulse).contains("within 0..4"));
@@ -500,6 +506,7 @@ mod tests {
         t.set_count(0, TriggerCount { count: 2, consecutive: false });
         assert!(err(&t, &pulse).contains("both a count and a duration"));
 
+        assert_eq!(Longer(0).bounds(), (1, u64::MAX));
         assert_eq!(Longer(3).bounds(), (4, u64::MAX));
         assert_eq!(Shorter(3).bounds(), (1, 2));
         assert_eq!(Between(2, 7).bounds(), (2, 7));

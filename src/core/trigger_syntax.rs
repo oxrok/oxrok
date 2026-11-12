@@ -395,6 +395,13 @@ mod tests {
         assert_eq!(pulse("D0=f>2500ns"), (TriggerMatch::Falling, Longer(2)));
         assert_eq!(pulse("D0=f<2500ns"), (TriggerMatch::Falling, Shorter(3)));
         assert_eq!(pulse("D0=f>2500ns<7500ns"), (TriggerMatch::Falling, Between(3, 7)));
+        // Longer than half a sample is any pulse: none is left out. A
+        // level held for longer than no sample is still refused.
+        assert_eq!(pulse("D0=f>500ns"), (TriggerMatch::Falling, Longer(0)));
+        assert_eq!(pulse("D0=f>500ns<2500ns"), (TriggerMatch::Falling, Between(1, 2)));
+        assert_eq!(pulse("D0=f>0"), (TriggerMatch::Falling, Longer(0)));
+        let e = parse(&d, "D0=1>500ns").unwrap_err().to_string();
+        assert!(e.contains("Invalid trigger duration '0'"), "{e}");
         // Levels and a range in the same stage, a sequence, or.
         let t = parse(&d, "D0=f<50us,D1=1,D2-D3=2").unwrap();
         assert_eq!(t.stages.len(), 1);

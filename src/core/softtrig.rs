@@ -1421,6 +1421,9 @@ mod tests {
             (Falling, Shorter(11), &[(1, Zero)], Some(13)),
             // Longer fires at the end of the pulse, not inside it.
             (Falling, Longer(2), &[], Some(13)),
+            // Longer than no sample: the first pulse seen whole.
+            (Falling, Longer(0), &[], Some(13)),
+            (Rising, Longer(0), &[], Some(20)),
             (Falling, Longer(3), &[], Some(30)),
             (Falling, Longer(10), &[], None),
             (Rising, Longer(5), &[], Some(20)),
