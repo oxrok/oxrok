@@ -71,12 +71,10 @@ skills and `track.py` are in
 
 ## Packaging and release
 
-- The first COPR builds through Packit (`packaging/README.md`): the
-  Packit GitHub App and the org's approval, then the CentOS Stream 10 and
-  EPEL 10 chroots, which need a Rust as new as the MSRV (1.95); if theirs
-  is older, drop those targets or build with a newer toolchain. EPEL 10
-  has no `libsigrokdecode`, so the package there has no decoders until it
-  is packaged for EPEL or bundled.
+- EPEL 10 has no `libsigrokdecode`, so the COPR package for RHEL and
+  CentOS Stream 10 runs without the Python decoders unless the user
+  finds them elsewhere: package `libsigrokdecode` for EPEL, or ship the
+  bundled decoders in the RPM there.
 - A Homebrew formula or tap.
 - An AUR `PKGBUILD`.
 - A stable release. Every published version so far is a pre-release, so

@@ -30,6 +30,8 @@ into mangelajo/oxrok, which users enable with
 `dnf copr enable mangelajo/oxrok`. COPR takes those builds only from the
 forge projects the project allows: its settings list
 `github.com/oxrok/oxrok` under "Packit allowed forge projects".
+The CentOS Stream 10 chroot has no EPEL, where `cargo-rpm-macros` comes
+from, so `.packit.yaml` adds the EPEL 10 repository to it.
 
 EPEL 10 has no `libsigrokdecode`, so on RHEL and CentOS the package
 recommends it instead of requiring it, and runs without the Python

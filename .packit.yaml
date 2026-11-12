@@ -21,14 +21,20 @@ actions:
 
 # The targets are the chroots of the COPR project mangelajo/oxrok:
 # every active Fedora with Rawhide, CentOS Stream 10 and EPEL 10 on RHEL,
-# for x86_64 and aarch64. Both jobs inherit them.
+# for x86_64 and aarch64. Both jobs inherit them. The CentOS Stream
+# chroot has no EPEL, where cargo-rpm-macros comes from, so it gets the
+# EPEL 10 repository.
 targets:
-  - fedora-all-x86_64
-  - fedora-all-aarch64
-  - centos-stream-10-x86_64
-  - centos-stream-10-aarch64
-  - rhel+epel-10-x86_64
-  - rhel+epel-10-aarch64
+  fedora-all-x86_64: {}
+  fedora-all-aarch64: {}
+  centos-stream-10-x86_64:
+    additional_repos:
+      - https://dl.fedoraproject.org/pub/epel/10/Everything/x86_64/
+  centos-stream-10-aarch64:
+    additional_repos:
+      - https://dl.fedoraproject.org/pub/epel/10/Everything/aarch64/
+  rhel+epel-10-x86_64: {}
+  rhel+epel-10-aarch64: {}
 
 jobs:
   # A pull request builds in Packit's own COPR namespace, one project per
