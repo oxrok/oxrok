@@ -96,6 +96,7 @@ const FEATURES: TriggerFeatures = TriggerFeatures {
     or: true,
     and: true,
     max_stages: 2,
+    holdoff: false,
 };
 static CLASSES: [DeviceClass; 1] = [DeviceClass::LogicAnalyzer];
 static SCAN_OPTIONS: [Key; 1] = [Key::Conn];

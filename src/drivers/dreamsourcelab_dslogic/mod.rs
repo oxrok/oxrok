@@ -138,6 +138,7 @@ const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatu
     or: false,
     and: false,
     max_stages: 1,
+    holdoff: false,
 };
 static TRIGGER_MATCHES: [TriggerMatch; 5] = [
     TriggerMatch::Zero,

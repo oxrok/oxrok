@@ -91,6 +91,7 @@ const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatu
     or: false,
     and: false,
     max_stages: 0,
+    holdoff: false,
 };
 /// `channel_names_logic[]`.
 const LOGIC_NAMES: [&str; 32] = [
