@@ -8,6 +8,15 @@ release may change the library API.
 
 ### Added
 
+- A trigger hold-off: `Trigger::holdoff` is a number of samples the
+  device takes before the trigger is armed, for a front end that wants a
+  time before the trigger. A trigger fires on its first match, which is
+  often in the first samples of an acquisition, with nothing before it;
+  with the pre-trigger share as the hold-off, that share is there. The
+  software trigger (`SoftTrigger`) keeps it, so `demo`, `fx2lafw` and
+  `raspberrypi-pico` take it (`TriggerFeatures::holdoff`); other devices
+  refuse a trigger that has one. Matching starts on the sample after the
+  hold-off, and an edge from its last sample counts.
 - `--udev-rules` prints the udev rules for the USB and HID devices the
   drivers open, from the drivers' own ids (`Driver::usb_claims`); USBTMC
   instruments are one rule by interface class. `contrib/60-oxrok.rules`

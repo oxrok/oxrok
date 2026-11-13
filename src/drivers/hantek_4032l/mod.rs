@@ -127,6 +127,7 @@ const TRIGGER_FEATURES: TriggerFeatures = TriggerFeatures {
     or: false,
     and: false,
     max_stages: 1,
+    holdoff: false,
 };
 
 impl Driver for Hantek4032lDriver {

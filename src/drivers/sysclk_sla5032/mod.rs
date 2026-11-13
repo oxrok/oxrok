@@ -85,6 +85,7 @@ const TRIGGER_FEATURES: crate::core::TriggerFeatures = crate::core::TriggerFeatu
     or: false,
     and: false,
     max_stages: 0,
+    holdoff: false,
 };
 
 impl Driver for Sla5032Driver {

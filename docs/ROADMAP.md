@@ -350,6 +350,14 @@ The models are plain Rust with no I/O for this reason; see
 - A VXI-11 transport, the Yokogawa DLM's Ethernet path.
 - `siglent-sds`: an E-series history mode as pull request 247 has it
   (`HSMD`, `FRAM`).
+- The trigger hold-off (`Trigger::holdoff`) beyond `SoftTrigger`:
+  - The `-t` grammar and the MCP `capture` tool have no word for it, so
+    only a front end that builds a `Trigger` can ask for one.
+  - `saleae-logic16`, `beaglelogic` and `sysclk-sla5032` run libsigrok's
+    `SoftTriggerLogic`, which is armed from the first sample; `fx2lafw`
+    switches to the general matcher for a hold-off, and they could too.
+  - The hardware triggers: which devices fill their pre-trigger memory
+    before they arm is not recorded per driver, and needs the bench.
 - Pulse width triggers beyond `SoftTrigger`:
   - The LogicPort in hardware. Its trigger level has a counter with a low
     and a high bound (`count_low`, `count_high`, `counter_mode` in

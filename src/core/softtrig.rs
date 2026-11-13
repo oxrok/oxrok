@@ -282,6 +282,8 @@ pub struct SoftTrigger {
     /// The previous sample, as bytes or (at most 8 bytes) as a word.
     prev: Option<Vec<u8>>,
     prev_word: Option<u64>,
+    /// Samples still to pass before the matcher is armed.
+    holdoff: u64,
 }
 
 impl SoftTrigger {
@@ -295,6 +297,7 @@ impl SoftTrigger {
         or: true,
         and: true,
         max_stages: 0,
+        holdoff: true,
     };
 
     /// Checks `trigger` against [`SoftTrigger::FEATURES`], for a driver's
@@ -366,6 +369,7 @@ impl SoftTrigger {
             fired: false,
             prev: None,
             prev_word: None,
+            holdoff: trigger.holdoff,
         })
     }
 
@@ -627,10 +631,29 @@ impl SoftTrigger {
     /// Runs the samples in `data` through the matcher. Returns the
     /// index of the sample that completed the trigger, if it did here.
     /// After that, calls return `None`.
+    ///
+    /// The samples of the trigger's hold-off pass unmatched: the matcher
+    /// is armed after them, with the last of them as the previous
+    /// sample, as [`SoftTrigger::rearm`] arms it.
     pub fn feed(&mut self, data: &[u8]) -> Option<usize> {
         if self.fired {
             return None;
         }
+        if self.holdoff > 0 {
+            let us = self.unit_size;
+            let n = data.len() / us;
+            let skip = usize::try_from(self.holdoff).map_or(n, |h| h.min(n));
+            self.holdoff -= skip as u64;
+            if skip > 0 {
+                self.rearm(Some(&data[(skip - 1) * us..skip * us]));
+            }
+            return self.feed_armed(&data[skip * us..]).map(|i| i + skip);
+        }
+        self.feed_armed(data)
+    }
+
+    /// [`SoftTrigger::feed`], past the hold-off.
+    fn feed_armed(&mut self, data: &[u8]) -> Option<usize> {
         if self.unit_size <= 8 {
             let us = self.unit_size;
             let (n, lanes) = (data.len() / us, lanes(us));
@@ -1084,6 +1107,49 @@ mod tests {
             }
         }
         t
+    }
+
+    /// A hold-off passes its samples unmatched, across calls, and arms
+    /// the matcher on the sample after them: an edge from the last held
+    /// sample counts, a stage is not begun before, and a pulse that began
+    /// before is no pulse.
+    #[test]
+    fn a_hold_off_arms_the_matcher_late() {
+        let held =
+            |stages: &[&[(usize, TriggerMatch)]], holdoff| Trigger { holdoff, ..trig(stages) };
+        // D0 rises at samples 1, 3, 5, 7.
+        let data = [0u8, 1, 0, 1, 0, 1, 0, 1];
+        let rising: &[&[(usize, TriggerMatch)]] = &[&[(0, TriggerMatch::Rising)]];
+        let first = |holdoff| SoftTrigger::new(&held(rising, holdoff), 1).unwrap().feed(&data);
+        assert_eq!(first(0), Some(1));
+        assert_eq!(first(1), Some(1), "the edge after the one held sample");
+        assert_eq!(first(2), Some(3));
+        assert_eq!(first(4), Some(5));
+        assert_eq!(first(7), Some(7), "the last held sample is the previous one");
+        assert_eq!(first(8), None);
+        // Across calls: the index is in the call the trigger fires in.
+        let mut s = SoftTrigger::new(&held(rising, 10), 1).unwrap();
+        assert_eq!(s.feed(&data), None);
+        assert_eq!(s.feed(&data), Some(3), "two held, then the rise at 3");
+        assert_eq!(s.feed(&data), None, "fired");
+        // A level that holds fires on the first sample after.
+        let high: &[&[(usize, TriggerMatch)]] = &[&[(0, TriggerMatch::One)]];
+        assert_eq!(SoftTrigger::new(&held(high, 4), 1).unwrap().feed(&[1, 1, 1, 1, 1, 1]), Some(4));
+        // Stage A in the hold-off does not count: A (D1 rising) and then
+        // B (D0 rising) both come again after it.
+        let two: &[&[(usize, TriggerMatch)]] =
+            &[&[(1, TriggerMatch::Rising)], &[(0, TriggerMatch::Rising)]];
+        let data = [0u8, 2, 2, 3, 0, 1, 2, 2, 3];
+        assert_eq!(SoftTrigger::new(&held(two, 0), 1).unwrap().feed(&data), Some(3));
+        assert_eq!(SoftTrigger::new(&held(two, 2), 1).unwrap().feed(&data), Some(8));
+        // A pulse whose start was held is not measured.
+        let mut pulse = held(&[&[(0, TriggerMatch::Falling)]], 2);
+        pulse.set_duration(0, TriggerDuration::Longer(0));
+        let data = [0u8, 1, 1, 0, 0, 1, 1, 0];
+        assert_eq!(SoftTrigger::new(&pulse, 1).unwrap().feed(&data), Some(7));
+        // Wide samples take the same path.
+        let wide: Vec<u8> = data.iter().flat_map(|b| [*b, 0, 0, 0, 0, 0, 0, 0, 0]).collect();
+        assert_eq!(SoftTrigger::new(&pulse, 9).unwrap().feed(&wide), Some(7));
     }
 
     #[test]

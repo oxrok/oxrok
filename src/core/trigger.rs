@@ -248,6 +248,14 @@ pub struct Trigger {
     pub stages: Vec<TriggerStage>,
     /// How two stages combine.
     pub combine: TriggerCombine,
+    /// Samples the device takes before the trigger is armed, 0 for
+    /// none. A trigger fires on the first match, which may be the first
+    /// samples of the acquisition, with nothing before it to show; a
+    /// front end that wants a time before the trigger sets that many
+    /// samples here. Matching starts with the sample after them, and an
+    /// edge from the last of them counts. Devices say they take this
+    /// with [`TriggerFeatures::holdoff`].
+    pub holdoff: u64,
 }
 
 /// What a device's trigger can do beyond level and edge stages.
@@ -271,6 +279,8 @@ pub struct TriggerFeatures {
     pub and: bool,
     /// The most stages, 0 for any number.
     pub max_stages: usize,
+    /// A hold-off: samples to take before the trigger is armed.
+    pub holdoff: bool,
 }
 
 impl Trigger {
@@ -317,6 +327,9 @@ impl Trigger {
     pub fn check(&self, f: &TriggerFeatures) -> Result<()> {
         if !self.is_valid() {
             return Err(Error::arg("Invalid trigger."));
+        }
+        if self.holdoff > 0 && !f.holdoff {
+            return Err(Error::arg("Trigger hold-off not supported by device."));
         }
         if f.max_stages > 0 && self.stages.len() > f.max_stages {
             return Err(Error::Arg(format!("Only {} trigger stages are supported.", f.max_stages)));
@@ -412,8 +425,13 @@ mod tests {
             or: true,
             and: true,
             max_stages: 2,
+            holdoff: true,
         };
         assert!(simple().check(&none).is_ok());
+        // A hold-off is the device's to keep.
+        let held = Trigger { holdoff: 100, ..simple() };
+        assert!(held.check(&all).is_ok());
+        assert!(held.check(&none).is_err());
         assert!(Trigger::new().check(&all).is_err());
         let mut t = simple();
         t.set_count(0, TriggerCount { count: 5, consecutive: true });

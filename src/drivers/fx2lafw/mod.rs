@@ -898,8 +898,11 @@ struct Acquisition {
 }
 
 /// Whether libsigrok's soft trigger can run `t`: stages of level and
-/// edge matches, one after another.
+/// edge matches, one after another, armed from the first sample.
 fn is_libsigrok_trigger(t: &Trigger) -> bool {
+    if t.holdoff > 0 {
+        return false;
+    }
     t.combine == TriggerCombine::Sequence
         && t.stages.iter().all(|s| s.count.is_none() && s.duration.is_none() && s.range.is_none())
 }
@@ -1372,6 +1375,18 @@ mod tests {
             [Packet::Trigger, Packet::FrameBegin, Packet::logic(1, d), Packet::FrameEnd]
         };
         assert_eq!(packets, [frame(vec![0, 1]), frame(vec![0, 0])].concat());
+    }
+
+    /// libsigrok's matcher is armed from the first sample: a hold-off
+    /// goes to the general one, which keeps it.
+    #[test]
+    fn a_hold_off_runs_the_general_matcher() {
+        let mut t = Trigger::new();
+        t.add(0, 0, TriggerMatch::Rising);
+        assert!(is_libsigrok_trigger(&t));
+        t.holdoff = 1000;
+        assert!(!is_libsigrok_trigger(&t));
+        assert!(t.check(&TRIGGER_FEATURES).is_ok());
     }
 
     #[test]

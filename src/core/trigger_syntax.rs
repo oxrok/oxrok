@@ -279,6 +279,7 @@ mod tests {
             or: true,
             and: true,
             max_stages: 2,
+            holdoff: true,
         }
     }
 

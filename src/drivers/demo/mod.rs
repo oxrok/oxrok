@@ -938,4 +938,35 @@ mod tests {
         assert_eq!(kinds, ["begin", "end", "begin", "end", "END"]);
         assert_eq!(logic_bytes(&packets).len(), 2000);
     }
+    /// A trigger fires on its first match, a few samples into the
+    /// acquisition, with those few before it. With a hold-off of the
+    /// pre-trigger share, that share is there.
+    #[test]
+    fn a_hold_off_fills_the_time_before_the_trigger() {
+        let before_and_all = |holdoff: u64| {
+            let packets = capture(
+                &[(Key::NumLogicChannels, Value::I32(4)), (Key::NumAnalogChannels, Value::I32(0))],
+                |d| {
+                    d.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+                    d.set(&Key::LimitSamples, &Value::U64(2000), None).unwrap();
+                    d.set(&Key::CaptureRatio, &Value::U64(25), None).unwrap();
+                    d.set(&Key::PatternMode, &Value::Str("incremental".into()), Some("Logic"))
+                        .unwrap();
+                    let mut t = Trigger::new();
+                    t.add(0, 2, TriggerMatch::Rising);
+                    t.holdoff = holdoff;
+                    d.set_trigger(Some(t)).unwrap();
+                },
+            );
+            let at = packets.iter().position(|p| matches!(p, Packet::Trigger)).expect("a Trigger");
+            (logic_bytes(&packets[..at]).len(), logic_bytes(&packets).len())
+        };
+        // The counter's D2 rises at sample 4.
+        assert_eq!(before_and_all(0), (4, 2000));
+        // A quarter of the 2000 samples before the trigger, and the D2
+        // edge after them.
+        let (before, all) = before_and_all(500);
+        assert_eq!((before, all), (500, 2000));
+        assert_eq!(before_and_all(497), (500, 2000), "the next rise, at a multiple of 8 plus 4");
+    }
 }
