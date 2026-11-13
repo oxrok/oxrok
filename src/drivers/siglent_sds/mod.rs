@@ -297,11 +297,11 @@ fn read_horizontal(scpi: &mut Scpi, model: &Model, st: &mut State) -> Result<()>
 }
 
 fn read_vertical(scpi: &mut Scpi, model: &Model, st: &mut State) -> Result<()> {
-    for i in 0..model.analog_channels {
-        st.vdiv[i] = scpi.get_f32(&format!("C{}:VDIV?", i + 1))?;
+    for (i, vdiv) in st.vdiv.iter_mut().enumerate().take(model.analog_channels) {
+        *vdiv = scpi.get_f32(&format!("C{}:VDIV?", i + 1))?;
     }
-    for i in 0..model.analog_channels {
-        st.vert_offset[i] = scpi.get_f32(&format!("C{}:OFST?", i + 1))?;
+    for (i, offset) in st.vert_offset.iter_mut().enumerate().take(model.analog_channels) {
+        *offset = scpi.get_f32(&format!("C{}:OFST?", i + 1))?;
     }
     Ok(())
 }
@@ -398,8 +398,8 @@ impl SiglentDevice {
         let model = self.model;
         let mut st = self.state.clone();
         self.with_scpi(|s| {
-            for i in 0..model.analog_channels {
-                st.analog_on[i] = s.get_bool(&format!("C{}:TRA?", i + 1))?;
+            for (i, on) in st.analog_on.iter_mut().enumerate().take(model.analog_channels) {
+                *on = s.get_bool(&format!("C{}:TRA?", i + 1))?;
             }
             if model.has_digital {
                 st.la_enabled = s.get_bool("DI:SW?")?;
@@ -409,12 +409,12 @@ impl SiglentDevice {
                 }
             }
             st.timebase = s.get_f32(":TDIV?")?;
-            for i in 0..model.analog_channels {
-                st.attenuation[i] = s.get_f32(&format!("C{}:ATTN?", i + 1))?;
+            for (i, factor) in st.attenuation.iter_mut().enumerate().take(model.analog_channels) {
+                *factor = s.get_f32(&format!("C{}:ATTN?", i + 1))?;
             }
             read_vertical(s, model, &mut st)?;
-            for i in 0..model.analog_channels {
-                st.coupling[i] = s.get_string(&format!("C{}:CPL?", i + 1))?;
+            for (i, coupling) in st.coupling.iter_mut().enumerate().take(model.analog_channels) {
+                *coupling = s.get_string(&format!("C{}:CPL?", i + 1))?;
             }
             let select = protocol::trigger_select(&s.get_string("TRSE?")?)?;
             st.horiz_triggerpos = select.position;

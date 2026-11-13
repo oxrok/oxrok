@@ -121,8 +121,7 @@ impl Ps2 {
         let parity_ok = (word.count_ones() + u32::from(self.bits[9].val)) % 2 == 1;
 
         // "Emit annotations."
-        for i in 0..11 {
-            let b = self.bits[i];
+        for b in &self.bits[..11] {
             ctx.put_ann(b.ss, b.es, ANN_BIT, vec![b.val.to_string()]);
         }
         let start = self.bits[0];

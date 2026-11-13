@@ -455,8 +455,8 @@ impl SdcardSd {
     /// The bits `[from, to)` of the token as an integer, MSB first.
     fn bits(&self, from: usize, to: usize) -> u32 {
         let mut out = 0u32;
-        for i in from..to {
-            out = (out << 1) | u32::from(self.token[i].bit);
+        for t in &self.token[from..to] {
+            out = (out << 1) | u32::from(t.bit);
         }
         out
     }

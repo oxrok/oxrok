@@ -126,8 +126,8 @@ impl Sda2506 {
     /// as a byte, oldest bit first because the list is prepended to.
     fn putdata(&self, ctx: &mut dyn Context, ss: u64, es: u64) {
         let mut value = 0u32;
-        for i in 0..8 {
-            value = (value << 1) | u32::from(self.databits[i]);
+        for bit in &self.databits[..8] {
+            value = (value << 1) | u32::from(*bit);
         }
         ctx.put_ann(ss, es, ANN_DATA, vec![format!("{value:02X}")]);
     }
