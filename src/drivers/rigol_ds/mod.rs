@@ -305,34 +305,34 @@ impl RigolDevice {
         let protocol = self.protocol();
         let mut st = self.state.clone();
         self.with_scpi(|s| {
-            for i in 0..model.analog_channels {
-                st.analog_on[i] = s.get_bool(&format!(":CHAN{}:DISP?", i + 1))?;
+            for (i, on) in st.analog_on.iter_mut().enumerate().take(model.analog_channels) {
+                *on = s.get_bool(&format!(":CHAN{}:DISP?", i + 1))?;
             }
             if model.has_digital {
                 let la = if protocol >= Protocol::V3 { ":LA:STAT?" } else { ":LA:DISP?" };
                 st.la_enabled = s.get_bool(la)?;
-                for i in 0..DIGITAL_CHANNELS {
+                for (i, on) in st.digital_on.iter_mut().enumerate().take(DIGITAL_CHANNELS) {
                     let cmd = match protocol {
                         Protocol::V5 => format!(":LA:DISP? D{i}"),
                         Protocol::V3 | Protocol::V4 => format!(":LA:DIG{i}:DISP?"),
                         _ => format!(":DIG{i}:TURN?"),
                     };
-                    st.digital_on[i] = s.get_bool(&cmd)?;
+                    *on = s.get_bool(&cmd)?;
                 }
             }
             st.timebase = s.get_f32(":TIM:SCAL?")?;
-            for i in 0..model.analog_channels {
+            for (i, factor) in st.attenuation.iter_mut().enumerate().take(model.analog_channels) {
                 // The DSO1000B answers with an X after the factor.
                 let text = s.get_string(&format!(":CHAN{}:PROB?", i + 1))?;
                 let text = text.strip_suffix('X').unwrap_or(&text);
-                st.attenuation[i] = text
+                *factor = text
                     .trim()
                     .parse()
                     .map_err(|_| Error::device(format!("bad probe factor '{text}'")))?;
             }
             read_vertical(s, model, &mut st)?;
-            for i in 0..model.analog_channels {
-                st.coupling[i] = s.get_string(&format!(":CHAN{}:COUP?", i + 1))?;
+            for (i, coupling) in st.coupling.iter_mut().enumerate().take(model.analog_channels) {
+                *coupling = s.get_string(&format!(":CHAN{}:COUP?", i + 1))?;
             }
             st.trigger_source = s.get_string(":TRIG:EDGE:SOUR?")?;
             st.horiz_triggerpos = s.get_f32(model.triggerpos_cmds.0)?;
@@ -377,11 +377,11 @@ fn config_set(
 }
 
 fn read_vertical(scpi: &mut Scpi, model: &Model, st: &mut State) -> Result<()> {
-    for i in 0..model.analog_channels {
-        st.vdiv[i] = scpi.get_f32(&format!(":CHAN{}:SCAL?", i + 1))?;
+    for (i, vdiv) in st.vdiv.iter_mut().enumerate().take(model.analog_channels) {
+        *vdiv = scpi.get_f32(&format!(":CHAN{}:SCAL?", i + 1))?;
     }
-    for i in 0..model.analog_channels {
-        st.vert_offset[i] = scpi.get_f32(&format!(":CHAN{}:OFFS?", i + 1))?;
+    for (i, offset) in st.vert_offset.iter_mut().enumerate().take(model.analog_channels) {
+        *offset = scpi.get_f32(&format!(":CHAN{}:OFFS?", i + 1))?;
     }
     Ok(())
 }

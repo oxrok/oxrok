@@ -1059,9 +1059,8 @@ impl Link {
 
     fn read_lanes(&mut self, lanes: u32, start: usize, count: usize) -> Result<Rows> {
         let mut rows = Rows::default();
-        for k in 0..4 {
-            rows.lanes[k] =
-                self.reg_read(lanes + k as u32 * MEM_LANE_STRIDE + start as u32, count)?;
+        for (k, lane) in rows.lanes.iter_mut().enumerate().take(4) {
+            *lane = self.reg_read(lanes + k as u32 * MEM_LANE_STRIDE + start as u32, count)?;
         }
         rows.lanes[4] = self.reg_read(MEM_FLAGS + start as u32, count)?;
         Ok(rows)

@@ -262,10 +262,10 @@ mod tests {
         assert_eq!(values(&r), [32767.0, -32768.0, -1.0, 258.0]);
         for bit in 0..4 {
             let r = parse(&packet(0x80, [10; 4], [0; 4], 1 << bit));
-            for i in 0..4 {
+            for (i, t) in r.temperatures.iter().enumerate().take(4) {
                 let whole = i == bit;
-                assert_eq!(r.temperatures[i].value, if whole { 10.0 } else { 1.0 });
-                assert_eq!(r.temperatures[i].digits, i32::from(!whole));
+                assert_eq!(t.value, if whole { 10.0 } else { 1.0 });
+                assert_eq!(t.digits, i32::from(!whole));
             }
         }
         // The high bits mean nothing.

@@ -256,10 +256,9 @@ fn scope_state_query(scpi: &mut Scpi, config: &Config, state: &mut State) -> Res
         protocol::scaled_index(text, table)
             .ok_or_else(|| Error::device(format!("{what}: no such value: '{text}'")))
     };
-    for i in 0..config.analog {
+    for (i, slot) in state.analog.iter_mut().enumerate().take(config.analog) {
         let n = i + 1;
-        let mut ch =
-            AnalogState { on: scpi.get_bool(&format!(":CHANNEL{n}:DISPLAY?"))?, ..state.analog[i] };
+        let mut ch = AnalogState { on: scpi.get_bool(&format!(":CHANNEL{n}:DISPLAY?"))?, ..*slot };
         let text = scpi.get_string(&format!(":CHANNEL{n}:VDIV?"))?;
         ch.vdiv = tables(&text, "vdiv", &protocol::VDIVS)?;
         ch.position = get_number(scpi, &format!(":CHANNEL{n}:POSITION?"))?;
@@ -272,13 +271,13 @@ fn scope_state_query(scpi: &mut Scpi, config: &Config, state: &mut State) -> Res
             .iter()
             .position(|c| *c == text)
             .ok_or_else(|| Error::device(format!("coupling: no such value: '{text}'")))?;
-        state.analog[i] = ch;
+        *slot = ch;
     }
     if config.digital == 0 {
         log::warn!("Tried obtaining digital channel states on a model without digital inputs.");
     } else {
-        for i in 0..config.digital {
-            state.digital[i] = scpi.get_bool(&format!(":LOGIC:PODA:BIT{}:DISPLAY?", i + 1))?;
+        for (i, on) in state.digital.iter_mut().enumerate().take(config.digital) {
+            *on = scpi.get_bool(&format!(":LOGIC:PODA:BIT{}:DISPLAY?", i + 1))?;
         }
         for pod in &mut state.pods {
             // The pod is ignored in C: the DLM2000 has pod A alone.
@@ -345,8 +344,8 @@ impl YokogawaDevice {
             let in_pod = (0..config.digital).filter(|i| i / 8 == pod).map(|i| config.analog + i);
             groups.push(ChannelGroup::new(format!("POD{pod}"), in_pod.collect()));
         }
-        for i in 0..config.digital {
-            channels.push(Channel::new(i, ChannelKind::Logic, config.digital_names[i]));
+        for (i, name) in config.digital_names.iter().enumerate().take(config.digital) {
+            channels.push(Channel::new(i, ChannelKind::Logic, *name));
         }
         YokogawaDevice {
             config,

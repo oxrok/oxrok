@@ -220,42 +220,42 @@ fn array_option(scpi: &mut Scpi, command: &str, table: &[&str]) -> Result<usize>
 
 /// `analog_channel_state_get`.
 fn read_analog(scpi: &mut Scpi, model: &Model, state: &mut State) -> Result<()> {
-    for i in 0..model.analog {
+    for (i, ch) in state.analog.iter_mut().enumerate().take(model.analog) {
         let n = i + 1;
         let on = scpi.get_bool(&format!(":CHAN{n}:STAT?"))?;
-        state.analog[i].on = on;
+        ch.on = on;
         let scale = scpi.get_string(&format!(":CHAN{n}:SCAL?"))?;
         let Some(vdiv) = table_index(&scale, model.vdivs) else {
             log::error!("Could not determine array index for vertical div scale.");
             return Err(Error::device(format!("no such vertical scale here: '{scale}'")));
         };
-        state.analog[i].vdiv = vdiv;
-        state.analog[i].vertical_offset = scpi.get_f32(&format!(":CHAN{n}:POS?"))?;
-        state.analog[i].coupling = array_option(scpi, &format!(":CHAN{n}:COUP?"), model.coupling)?;
+        ch.vdiv = vdiv;
+        ch.vertical_offset = scpi.get_f32(&format!(":CHAN{n}:POS?"))?;
+        ch.coupling = array_option(scpi, &format!(":CHAN{n}:COUP?"), model.coupling)?;
         let unit = scpi.get_string(&format!(":PROB{n}:SET:ATT:UNIT?"))?;
-        state.analog[i].probe_unit = if unit.starts_with('A') { 'A' } else { 'V' };
+        ch.probe_unit = if unit.starts_with('A') { 'A' } else { 'V' };
     }
     Ok(())
 }
 
 /// `digital_channel_state_get`.
 fn read_digital(scpi: &mut Scpi, model: &Model, state: &mut State) -> Result<()> {
-    for i in 0..model.digital {
-        state.digital[i] = scpi.get_bool(&format!(":LOG{i}:STAT?"))?;
+    for (i, on) in state.digital.iter_mut().enumerate().take(model.digital) {
+        *on = scpi.get_bool(&format!(":LOG{i}:STAT?"))?;
     }
     // "USER" for USER1 is what SCPI's short form makes of it, so a second reading asks
     // again and takes that too. So an answer nobody knows is asked for twice.
     let short: Vec<&str> =
         model.thresholds.iter().map(|t| if *t == USER1 { "USER" } else { *t }).collect();
-    for i in 0..model.pods() {
-        state.pods[i].on = scpi.get_bool(&model.dialect.get_pod_state(i + 1))?;
+    for (i, pod) in state.pods.iter_mut().enumerate().take(model.pods()) {
+        pod.on = scpi.get_bool(&model.dialect.get_pod_state(i + 1))?;
         let number = model.threshold_number(i);
         let command = model.dialect.get_threshold(number);
         let threshold = match array_option(scpi, &command, model.thresholds) {
             Ok(t) => t,
             Err(_) => array_option(scpi, &command, &short)?,
         };
-        state.pods[i].threshold = threshold;
+        pod.threshold = threshold;
         let user = match model.thresholds[threshold] {
             USER1 => Some(1),
             USER2 => Some(2),
@@ -264,7 +264,7 @@ fn read_digital(scpi: &mut Scpi, model: &Model, state: &mut State) -> Result<()>
         };
         if let Some(user) = user {
             let command = model.dialect.get_user_threshold(number, user);
-            state.pods[i].user_threshold = scpi.get_f32(&command)?;
+            pod.user_threshold = scpi.get_f32(&command)?;
         }
     }
     Ok(())

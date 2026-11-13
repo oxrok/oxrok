@@ -1275,15 +1275,15 @@ impl Midi {
         }
         let mut payload = "<empty>".to_owned();
         let max_bytes = 16; // Put a limit on the length on the hex dump.
-        for index in 0..self.cmd.len() {
+        for (index, byte) in self.cmd.iter().enumerate() {
             if index == max_bytes {
                 payload.push_str(" ...");
                 break;
             }
             if index == 0 {
-                payload = format!("0x{:02x}", self.cmd[index]);
+                payload = format!("0x{byte:02x}");
             } else {
-                payload.push_str(&format!(" 0x{:02x}", self.cmd[index]));
+                payload.push_str(&format!(" 0x{byte:02x}"));
             }
         }
         self.putx(

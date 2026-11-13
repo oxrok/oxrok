@@ -477,13 +477,13 @@ impl Link {
         let reply = self.read(REG_ENABLE)?;
         log::debug!("get enabled, response text: {}", reply.escape_ascii());
         let words = words(&reply);
-        for channel in 0..CHANNELS {
+        for (channel, enabled) in self.enabled.iter_mut().enumerate().take(CHANNELS) {
             let word = words.get(channel).ok_or_else(|| data("an enable flag missing"))?;
             let (on, rest) = c_strtoul(word)?;
             if !rest.is_empty() {
                 return Err(data("an enable flag that is no number"));
             }
-            self.enabled[channel] = on as u32 != 0;
+            *enabled = on as u32 != 0;
         }
         Ok(())
     }
