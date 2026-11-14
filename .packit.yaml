@@ -17,7 +17,7 @@ actions:
   create-archive:
     - make vendor-src
   get-current-version:
-    - bash -c "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml | head -n 1"
+    - bash -c "sed -n 's/^version = \"\\(.*\\)\"/\\1/p' Cargo.toml | head -n 1 | tr - '~'"
 
 # The targets are the chroots of the COPR project mangelajo/oxrok:
 # every active Fedora with Rawhide, CentOS Stream 10 and EPEL 10 on RHEL,

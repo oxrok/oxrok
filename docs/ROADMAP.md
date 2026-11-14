@@ -1,8 +1,8 @@
 # Roadmap
 
-Status: 2026-11-09. `v0.2.0` is the current stable release, on GitHub and
-crates.io. All 87 of libsigrok's `src/hardware` drivers are
-ported. Native decoder porting is
+Status: 2026-11-14. `v0.3.0-alpha.1` is the current release, a pre-release
+on GitHub and crates.io; `v0.2.0` is the current stable one. All 87 of
+libsigrok's `src/hardware` drivers are ported. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
 The work that remains is transports, packaging, the Pico backend, and
