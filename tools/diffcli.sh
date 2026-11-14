@@ -1192,10 +1192,25 @@ fcntl.ioctl(fd, 0x541F, info)
         echo "  nodes: $(ls /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
         echo "  attach lines: $(grep -E '^(READY|REPLUGGED|RENUMERATED) ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
         echo "  events: $(grep -E '^EVENT ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
-        echo "  vhci ports in use: $(awk 'NR > 1 && $3 != "004" { print $1 " " $2 " " $3 " " $7 }' /sys/devices/platform/vhci_hcd.0/status 2>/dev/null | tr '\n' '|')"
+        # One status file per controller: status, then status.1 and on.
+        ets_ports=unavailable
+        for ets_st in /sys/devices/platform/vhci_hcd.0/status /sys/devices/platform/vhci_hcd.0/status.[0-9]*; do
+            [ -e "$ets_st" ] || continue
+            [ "$ets_ports" != unavailable ] || ets_ports=
+            if [ ! -r "$ets_st" ]; then
+                ets_ports="$ets_ports${ets_st##*/} unreadable|"
+                continue
+            fi
+            ets_ports=$ets_ports$(awk '$1 != "hub" && $3 != "004" { print $1 " " $2 " " $3 " " $7 }' "$ets_st" | tr '\n' '|')
+        done
+        echo "  vhci ports in use: ${ets_ports:-none}"
         echo "  emulator stderr: $(tail -n 3 "$TMP/emu.err" 2>/dev/null | tr '\n' '|')"
-        echo "  kernel:"
-        sudo -n dmesg 2>/dev/null | grep -E 'vhci|usbip|usb [0-9]+-[0-9]|cdc_acm' | tail -n 8 | sed 's/^/    /'
+        if ets_kernel=$(sudo -n dmesg 2>/dev/null); then
+            echo "  kernel:"
+            printf '%s\n' "$ets_kernel" | grep -E 'vhci|usbip|usb [0-9]+-[0-9]|cdc_acm' | tail -n 8 | sed 's/^/    /'
+        else
+            echo "  kernel: dmesg unreadable"
+        fi
     }
     # The device's ttyACMn from sysfs, when the attach line named none
     # or one that is gone: after a replug, cdc_acm can bind after the
