@@ -1171,7 +1171,11 @@ fcntl.ioctl(fd, 0x541F, info)
     }
     # What the kernel has of the device, for a run with no tty: the
     # device's directory, each interface's class and driver, the ttyACM
-    # nodes there are, and the server's last attach lines.
+    # nodes there are, and the server's last attach lines. Then whether
+    # the device went with the server knowing: its last events, the vhci
+    # ports in use (a port the kernel dropped on its own is free there,
+    # while the server holds it still), the server's last stderr lines and
+    # the kernel's last about USB/IP and the bus.
     emu_tty_state() {
         ets_dir=/sys/bus/usb/devices/$EMU_BUSID
         if [ -n "$EMU_BUSID" ] && [ -d "$ets_dir" ]; then
@@ -1187,6 +1191,11 @@ fcntl.ioctl(fd, 0x541F, info)
         fi
         echo "  nodes: $(ls /dev/ttyACM* 2>/dev/null | tr '\n' ' ')"
         echo "  attach lines: $(grep -E '^(READY|REPLUGGED|RENUMERATED) ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
+        echo "  events: $(grep -E '^EVENT ' "$TMP/emu.out" | tail -n 3 | tr '\n' '|')"
+        echo "  vhci ports in use: $(awk 'NR > 1 && $3 != "004" { print $1 " " $2 " " $3 " " $7 }' /sys/devices/platform/vhci_hcd.0/status 2>/dev/null | tr '\n' '|')"
+        echo "  emulator stderr: $(tail -n 3 "$TMP/emu.err" 2>/dev/null | tr '\n' '|')"
+        echo "  kernel:"
+        sudo -n dmesg 2>/dev/null | grep -E 'vhci|usbip|usb [0-9]+-[0-9]|cdc_acm' | tail -n 8 | sed 's/^/    /'
     }
     # The device's ttyACMn from sysfs, when the attach line named none
     # or one that is gone: after a replug, cdc_acm can bind after the
