@@ -126,7 +126,7 @@ resolver = "3"
 members = ["hil/oxrok-hil", "emu"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0-alpha.1"
 edition = "2024"
 rust-version = "1.95"
 license = "GPL-3.0-or-later"
@@ -134,7 +134,7 @@ repository = "https://github.com/oxrok/oxrok"
 authors = ["Miguel Angel Ajo <mangel.ajo@gmail.com>"]
 
 [workspace.dependencies]
-oxrok = { path = ".", version = "0.2.0", default-features = false }
+oxrok = { path = ".", version = "0.3.0-alpha.1", default-features = false }
 # firmware/ in oxrok-util: the firmware registry and extractors.
 oxrok-firmware-fetch = { version = "0.2.0", default-features = false }
 log = "0.4"

@@ -7,8 +7,12 @@
 
 %bcond check 1
 
+# The version as Cargo.toml and the tag have it. RPM writes a pre-release
+# with a tilde, which sorts before the release it leads to.
+%global upstream_version 0.3.0-alpha.1
+
 Name:           oxrok
-Version:        0.2.0
+Version:        0.3.0~alpha.1
 Release:        %autorelease
 Summary:        A sigrok compatible logic analyzer, multimeter and oscilloscope tool
 
@@ -39,7 +43,7 @@ URL:            https://oxrok.dev
 # The first release this spec builds from is the one after 0.2.0: the
 # 0.2.0 tarball predates contrib/'s udev rules, which %%install takes.
 # Packit builds from the tarball `make vendor-src` makes of the tree.
-Source0:        https://github.com/oxrok/oxrok/releases/download/v%{version}/oxrok-%{version}-vendored.tar.xz
+Source0:        https://github.com/oxrok/oxrok/releases/download/v%{upstream_version}/oxrok-%{upstream_version}-vendored.tar.xz
 
 ExclusiveArch:  %{rust_arches}
 
@@ -68,7 +72,7 @@ on the system's Python. The command line follows sigrok-cli. The udev rules
 in %{_udevrulesdir} give the seated user access to the USB devices.
 
 %prep
-%autosetup -n oxrok-%{version}-vendored -p1
+%autosetup -n oxrok-%{upstream_version}-vendored -p1
 %cargo_prep -v vendor
 
 %build

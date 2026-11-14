@@ -6,6 +6,22 @@ release may change the library API.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.1] - 2026-11-14
+
+The first pre-release of 0.3.0. Every one of libsigrok's 87 hardware
+drivers is now ported, 19 of them since 0.2.0. Triggers grew the most:
+pulse widths, value ranges, or/and between two stages and a hold-off, on
+host software triggers that are five to ten times faster, and more on
+data that rarely matches. `oxrok firmware` downloads or imports the
+firmware a device needs, `oxrok mcp` serves devices, captures and
+decoders to LLM agents, and Linux gets udev rules and a Fedora package.
+
+For library users, `oxrok::setup`, `oxrok::decode::{Radix, FrameStore,
+Analyzer}`, `oxrok::core::firmware` and `oxrok::mcp` are new. `Trigger`,
+`TriggerFeatures` and `TriggerDuration` gained fields and variants, so
+code that builds them as struct literals or matches them exhaustively
+needs an update (see Changed).
+
 ### Added
 
 - A trigger hold-off: `Trigger::holdoff` is a number of samples the
@@ -113,11 +129,11 @@ release may change the library API.
 
 ### Changed
 
-- `TriggerFeatures` has a new field, `pulse`, and `TriggerDuration` two
-  new variants: struct literals without `..` and matches on the enum need
-  them. A device with durations and no pulse widths now answers a
-  duration on an edge (`D0=r>10`) with "Pulse width triggers not
-  supported by device."
+- `TriggerFeatures` has two new fields, `pulse` and `holdoff`, `Trigger`
+  one, `holdoff`, and `TriggerDuration` two new variants: struct literals
+  without `..` and matches on the enum need them. A device with
+  durations and no pulse widths now answers a duration on an edge
+  (`D0=r>10`) with "Pulse width triggers not supported by device."
 - The host software triggers are much faster with samples of up to 8
   bytes: each stage is matched as bit masks over the whole sample, with
   no allocation per sample, and with samples of 1, 2 or 4 bytes a word
@@ -139,6 +155,16 @@ release may change the library API.
 - SCPI over TCP: a stop and continue of the process (Ctrl-Z, `fg`) during
   a read no longer fails an open or a capture, and no longer cuts an
   answer that arrived during the stop.
+
+### Known issues
+
+- The `emulator` CI job failed on the two commits before this release,
+  in a different shard each time: the emulated USB serial port goes away
+  on the runner (`no tty for 1-1`, `could not put the tty back`) and the
+  cases after it fail. It has not been rerun, so it is not yet known to
+  be the runner alone.
+- The trigger hold-off is tested on the `demo` driver and in the
+  software trigger's unit tests, not yet on an fx2lafw or a Pico board.
 
 ## [0.2.0] - 2026-11-08
 
