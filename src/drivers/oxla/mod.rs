@@ -55,6 +55,7 @@ use crate::core::{
 };
 use crate::serial::{Params, Port};
 use protocol::{ClockSetting, Clocks, Cut, Description, Ended, ID_LEN, Id, Plan, Rate, Window};
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -711,14 +712,24 @@ impl Device for OxlaDevice {
             // to say.
             let variant = self.id.variant();
             let mut found = None;
+            let mut failed = None;
             for _ in 0..LOAD_PROBES {
-                found = probe_logging(port.as_mut(), self.pace, log::Level::Debug, Some(&variant))?;
+                // An answer cut short is asked for again, and not by a
+                // second load at the next open; a port that fails is not.
+                match probe_logging(port.as_mut(), self.pace, log::Level::Debug, Some(&variant)) {
+                    Ok(answer) => (found, failed) = (answer, None),
+                    Err(e @ (Error::Device(_) | Error::Timeout)) => failed = Some(e),
+                    Err(e) => return Err(e),
+                }
                 if found.is_some() {
                     break;
                 }
                 std::thread::sleep(self.pace.answer.min(LOAD_SETTLE));
             }
             let Some(found) = found else {
+                if let Some(e) = failed {
+                    return Err(e);
+                }
                 return Err(Error::device(format!(
                     "{} does not answer as a {} after the load of its bitstream",
                     self.conn,
@@ -784,6 +795,7 @@ impl Device for OxlaDevice {
         let handle = std::thread::Builder::new()
             .name("oxla acquisition".into())
             .spawn(move || {
+                let sink = Patient { sink: &sink, stop: &stop2, stopped_at: Cell::new(None) };
                 let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 if let Err(e) = &outcome {
                     log::error!("The capture failed: {e}.");
@@ -805,6 +817,39 @@ impl Device for OxlaDevice {
     }
 }
 
+/// What a queue nobody reads gets after a stop before a packet is given
+/// up: a close joins the thread that waits.
+const SEND_AFTER_STOP: Duration = Duration::from_millis(500);
+
+/// A sink that waits for room in the queue for as long as nobody asked to
+/// stop, and after a stop for [`SEND_AFTER_STOP`] in all: what a stopped
+/// capture had still goes to a reader that reads, and a thread a close
+/// joins does not wait for ever on one that does not.
+struct Patient<'a> {
+    sink: &'a PacketSink,
+    stop: &'a AtomicBool,
+    stopped_at: Cell<Option<Instant>>,
+}
+
+impl Patient<'_> {
+    fn go_on(&self) -> bool {
+        if !self.stop.load(Ordering::SeqCst) {
+            return true;
+        }
+        let at = self.stopped_at.get().unwrap_or_else(Instant::now);
+        self.stopped_at.set(Some(at));
+        at.elapsed() < SEND_AFTER_STOP
+    }
+
+    fn send(&self, packet: Packet) -> bool {
+        self.sink.send_while(packet, || self.go_on())
+    }
+
+    fn end(&self, outcome: Result<()>) -> bool {
+        self.sink.end_while(outcome, || self.go_on())
+    }
+}
+
 /// One capture on its own thread, from the armed device to the last
 /// packet.
 struct Capture {
@@ -814,7 +859,7 @@ struct Capture {
 }
 
 impl Capture {
-    fn run(&self, port: &mut dyn Port, sink: &PacketSink, stop: &AtomicBool) -> Result<()> {
+    fn run(&self, port: &mut dyn Port, sink: &Patient, stop: &AtomicBool) -> Result<()> {
         sink.send(Packet::header());
         let (status, stopped) = self.wait(port, stop)?;
         let mut read = |addr| rreg(port, addr, self.pace.answer);
@@ -908,7 +953,7 @@ impl Capture {
 
     /// Sends the samples of `words`, the part of them that was wanted,
     /// with the trigger marked when the user set one.
-    fn send(&self, sink: &PacketSink, ended: &Ended, window: &Window, words: &[u32], whole: bool) {
+    fn send(&self, sink: &Patient, ended: &Ended, window: &Window, words: &[u32], whole: bool) {
         let w = self.id.channels;
         let (pre, post) = (self.plan.pre, self.plan.post);
         let mut out = Emitter::new(sink, self.id.unit_size(), self.plan.channel_mask as u16);
@@ -943,7 +988,7 @@ impl Capture {
 /// Makes logic packets of runs of samples: those of a [`Cut`], the trigger
 /// packet ahead of its sample.
 struct Emitter<'a> {
-    sink: &'a PacketSink,
+    sink: &'a Patient<'a>,
     unit: usize,
     /// The enabled channels: the others are sent low.
     mask: u16,
@@ -957,7 +1002,7 @@ struct Emitter<'a> {
 }
 
 impl<'a> Emitter<'a> {
-    fn new(sink: &'a PacketSink, unit: usize, mask: u16) -> Self {
+    fn new(sink: &'a Patient<'a>, unit: usize, mask: u16) -> Self {
         Emitter {
             sink,
             unit,
