@@ -1198,3 +1198,54 @@ fn a_description_bit_with_no_registers_is_the_document() {
     assert_eq!(found.clocks, want.clocks);
     assert!(commands(&seen).iter().any(|c| c[0] == OP_WREG && c[1] == REG_CLOCK));
 }
+
+#[test]
+fn an_answer_cut_short_after_a_load_is_asked_again_and_not_loaded_again() {
+    // The ID comes whole and the first register after it does not.
+    struct Short {
+        board: Board,
+        cut: bool,
+    }
+    impl Port for Short {
+        fn name(&self) -> &'static str {
+            "short"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], timeout: Duration) -> Result<usize> {
+            if self.cut && buf.len() == 4 && self.board.out.len() == 4 {
+                self.cut = false;
+                self.board.out.truncate(2);
+            }
+            self.board.read(buf, timeout)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.board.write(data)
+        }
+        fn purge(&mut self) -> Result<()> {
+            self.board.purge()
+        }
+    }
+    let (board, _seen) = Board::new(la16_clocks(), Manner::default());
+    let (mut dev, loads) = to_load("la16-rle", vec![Box::new(Short { board, cut: true })]);
+    dev.open().unwrap();
+    assert_eq!((loads.load(Ordering::SeqCst), dev.needs_load()), (1, false));
+}
+
+#[test]
+fn a_close_does_not_wait_on_a_queue_nobody_reads() {
+    let (mut dev, _seen) = device(la16(), Manner::default());
+    set(&mut dev, &Key::LimitSamples, 100_000);
+    // Room for the header alone, and nobody reads.
+    let (tx, rx) = sync_channel(1);
+    dev.start(PacketSink::new(tx, 0)).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let before = Instant::now();
+    dev.close().unwrap();
+    assert!(before.elapsed() < Duration::from_secs(5));
+    drop(rx);
+}

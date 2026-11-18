@@ -638,9 +638,10 @@ release passed the gateware's self test on a board before it was packed.
 
 The scan finds the UART by the USB interface it is of, the debugger's
 second, where the system says, and else by the order of the two ports'
-names. A port is known to be a debugger's by the serial number they
-share, so of two debuggers with no serial number neither has a UART to
-go by, and both are left out. A UART that cannot be opened (another program has it, or the user
+names. A port is known to be a debugger's by the ids and the serial number
+they share, so where another device on the bus has the same (two
+debuggers with one number or with none) neither has a UART to go by, and
+both are left out. A UART that cannot be opened (another program has it, or the user
 may not) leaves the board out of the scan with a warning: what it runs is
 then not known, and it is not loaded.
 

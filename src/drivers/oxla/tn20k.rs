@@ -371,19 +371,25 @@ fn is_debugger(usb: &UsbDeviceInfo) -> bool {
 /// A USB bus that cannot be listed.
 pub fn boards() -> Result<Vec<Board>> {
     let ports = crate::serial::list_usb_ports();
-    let debuggers: Vec<UsbDeviceInfo> =
-        crate::usb::list_devices()?.into_iter().filter(is_debugger).collect();
-    // A port is its debugger's by the serial number alone: of several
-    // debuggers with none, no port is known to be any one's.
-    let unnamed = debuggers.iter().filter(|usb| usb.serial.is_none()).count();
-    Ok(debuggers
-        .into_iter()
+    let devices = crate::usb::list_devices()?;
+    // A port is its debugger's by the ids and the serial number alone:
+    // where another device on the bus has the same (two debuggers with one
+    // number or with none, an FT2232 with none), no port is known to be
+    // this one's.
+    let alike = |usb: &UsbDeviceInfo| {
+        devices
+            .iter()
+            .filter(|d| {
+                d.vendor_id == VENDOR_ID && d.product_id == PRODUCT_ID && d.serial == usb.serial
+            })
+            .count()
+    };
+    Ok(devices
+        .iter()
+        .filter(|usb| is_debugger(usb))
         .map(|usb| {
-            let port = match &usb.serial {
-                None if unnamed > 1 => None,
-                serial => uart_of(serial.as_deref(), &ports),
-            };
-            Board { usb, port }
+            let port = if alike(usb) == 1 { uart_of(usb.serial.as_deref(), &ports) } else { None };
+            Board { usb: usb.clone(), port }
         })
         .collect())
 }
