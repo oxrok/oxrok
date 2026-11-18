@@ -228,17 +228,24 @@ pub fn probe(port: &mut dyn Port) -> Result<Option<Found>> {
 
 /// [`probe`], at `pace`.
 fn probe_within(port: &mut dyn Port, pace: Pace) -> Result<Option<Found>> {
-    probe_logging(port, pace, log::Level::Error)
+    probe_logging(port, pace, log::Level::Error, None)
 }
 
 /// [`probe`] of a board that may well run something else: what answers
 /// with other bytes is no error to report.
 fn probe_board(port: &mut dyn Port) -> Result<Option<Found>> {
-    probe_logging(port, PACE, log::Level::Debug)
+    probe_logging(port, PACE, log::Level::Debug, None)
 }
 
 /// [`probe`], at `pace`, with an answer that is no ID logged at `level`.
-fn probe_logging(port: &mut dyn Port, pace: Pace, level: log::Level) -> Result<Option<Found>> {
+/// With a variant to `expect`, an ID of another is no device either, and
+/// is not asked anything more: it may be an answer of what ran before.
+fn probe_logging(
+    port: &mut dyn Port,
+    pace: Pace,
+    level: log::Level,
+    expect: Option<&str>,
+) -> Result<Option<Found>> {
     resync(port)?;
     let id = match ask_id(port, pace)? {
         (Ok(id), _) => id,
@@ -251,6 +258,10 @@ fn probe_logging(port: &mut dyn Port, pace: Pace, level: log::Level) -> Result<O
             return Ok(None);
         }
     };
+    if expect.is_some_and(|variant| id.variant() != variant) {
+        log::log!(level, "An ID of a {}.", id.variant());
+        return Ok(None);
+    }
     // A device that describes itself says what its clocks are, and is
     // left at the one it has.
     if id.has_description()
@@ -698,10 +709,10 @@ impl Device for OxlaDevice {
             // An answer of the variant that ran before is one of those too.
             // The variant is what was asked for; the rest is the board's
             // to say.
+            let variant = self.id.variant();
             let mut found = None;
             for _ in 0..LOAD_PROBES {
-                found = probe_logging(port.as_mut(), self.pace, log::Level::Debug)?
-                    .filter(|f| f.id.variant() == self.id.variant());
+                found = probe_logging(port.as_mut(), self.pace, log::Level::Debug, Some(&variant))?;
                 if found.is_some() {
                     break;
                 }

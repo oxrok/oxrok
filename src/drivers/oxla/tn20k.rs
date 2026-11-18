@@ -339,7 +339,15 @@ fn uart_of(serial: Option<&str>, ports: &[crate::serial::UsbPort]) -> Option<Str
         let mut uarts = ours.iter().filter(|p| p.interface == Some(UART_INTERFACE));
         return match (uarts.next(), uarts.next()) {
             (Some(uart), None) => Some(uart.name.clone()),
-            _ => None,
+            (Some(_), Some(_)) => None,
+            // Two ports, one known to be another interface and one not
+            // known: the UART is the one not known.
+            (None, _) => match ours.as_slice() {
+                [a, b] if a.interface.is_some() != b.interface.is_some() => {
+                    Some(if a.interface.is_none() { a } else { b }.name.clone())
+                }
+                _ => None,
+            },
         };
     }
     match ours.as_slice() {
@@ -363,11 +371,18 @@ fn is_debugger(usb: &UsbDeviceInfo) -> bool {
 /// A USB bus that cannot be listed.
 pub fn boards() -> Result<Vec<Board>> {
     let ports = crate::serial::list_usb_ports();
-    Ok(crate::usb::list_devices()?
+    let debuggers: Vec<UsbDeviceInfo> =
+        crate::usb::list_devices()?.into_iter().filter(is_debugger).collect();
+    // A port is its debugger's by the serial number alone: of several
+    // debuggers with none, no port is known to be any one's.
+    let unnamed = debuggers.iter().filter(|usb| usb.serial.is_none()).count();
+    Ok(debuggers
         .into_iter()
-        .filter(is_debugger)
         .map(|usb| {
-            let port = uart_of(usb.serial.as_deref(), &ports);
+            let port = match &usb.serial {
+                None if unnamed > 1 => None,
+                serial => uart_of(serial.as_deref(), &ports),
+            };
             Board { usb, port }
         })
         .collect())
@@ -485,7 +500,7 @@ impl Driver for OxlaTn20kDriver {
         for board in boards {
             let Some(port) = board.port.clone() else {
                 log::warn!(
-                    "A {MODEL} (serial number {}) with no serial port of its UART.",
+                    "A {MODEL} (serial number {}) with no serial port known to be its UART.",
                     board.serial()
                 );
                 continue;
@@ -549,6 +564,11 @@ mod tests {
         // The JTAG port alone, as while its driver is detached, is no UART.
         assert_eq!(uart_of(Some("A"), &ports[..1]), None);
         assert_eq!(uart_of(Some("A"), &ports[1..]).as_deref(), Some("/dev/ttyUSB1"));
+        // One port known to be JTAG and one of no known interface.
+        let ports = [of("/dev/ttyUSB5", 0), port("/dev/ttyUSB4", "A")];
+        assert_eq!(uart_of(Some("A"), &ports).as_deref(), Some("/dev/ttyUSB4"));
+        let ports = [of("/dev/ttyUSB5", 1), of("/dev/ttyUSB4", 1)];
+        assert_eq!(uart_of(Some("A"), &ports), None);
     }
 
     /// The description of `la14-ddr` in release 0.2.0, as `make release`
