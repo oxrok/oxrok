@@ -695,17 +695,19 @@ impl Device for OxlaDevice {
             let mut port = load()?;
             // What the board's bridge still held of the design that ran
             // before can come in place of the first answers.
+            // An answer of the variant that ran before is one of those too.
+            // The variant is what was asked for; the rest is the board's
+            // to say.
             let mut found = None;
             for _ in 0..LOAD_PROBES {
-                found = probe_logging(port.as_mut(), self.pace, log::Level::Debug)?;
+                found = probe_logging(port.as_mut(), self.pace, log::Level::Debug)?
+                    .filter(|f| f.id.variant() == self.id.variant());
                 if found.is_some() {
                     break;
                 }
                 std::thread::sleep(self.pace.answer.min(LOAD_SETTLE));
             }
-            // The variant is what was asked for; the rest is the board's
-            // to say.
-            let Some(found) = found.filter(|f| f.id.variant() == self.id.variant()) else {
+            let Some(found) = found else {
                 return Err(Error::device(format!(
                     "{} does not answer as a {} after the load of its bitstream",
                     self.conn,

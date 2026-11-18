@@ -1100,6 +1100,15 @@ fn what_the_bridge_still_held_is_not_the_answer_after_a_load() {
     let (mut dev, loads) = to_load("la8-ddr", vec![Box::new(stale)]);
     dev.open().unwrap();
     assert_eq!((loads.load(Ordering::SeqCst), dev.needs_load()), (1, false));
+
+    // Nor is a whole ID of the variant that ran before.
+    let (before, _) = Board::new(la16(), Manner::default());
+    let (board, _seen) = Board::new(la8(), Manner::default());
+    let stale = Stale { board, junk: Some(before.id_bytes()) };
+    let (mut dev, loads) = to_load("la8-ddr", vec![Box::new(stale)]);
+    dev.open().unwrap();
+    assert_eq!((loads.load(Ordering::SeqCst), dev.needs_load()), (1, false));
+    assert_eq!(dev.id().variant(), "la8-ddr");
 }
 
 #[test]

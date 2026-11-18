@@ -677,6 +677,9 @@ pub struct UsbPort {
     pub manufacturer: Option<String>,
     /// The product's string, when it has one.
     pub product: Option<String>,
+    /// The number of the USB interface the port is of, where the system
+    /// says: which port of an adapter with several it is.
+    pub interface: Option<u8>,
 }
 
 /// What `/dev/tty.X` is the dial-in side of, on macOS: `/dev/cu.X`.
@@ -714,6 +717,7 @@ pub fn list_usb_ports() -> Vec<UsbPort> {
                 serial: usb.serial_number,
                 manufacturer: usb.manufacturer,
                 product: usb.product,
+                interface: usb.interface,
             }),
             _ => None,
         })
