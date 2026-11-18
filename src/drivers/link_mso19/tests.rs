@@ -704,6 +704,7 @@ fn channels_are_as_c_lists_them() {
 
 fn usb_port(vid: u16, pid: u16, number: Option<&str>) -> serial::UsbPort {
     serial::UsbPort {
+        interface: None,
         name: "/dev/ttyACM0".to_owned(),
         vid,
         pid,

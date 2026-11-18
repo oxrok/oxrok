@@ -321,18 +321,29 @@ fn port_order(name: &str) -> (usize, &str) {
     (name.len(), name)
 }
 
-/// The UART of the debugger with serial number `serial` among `ports`:
-/// the second of its two ports.
+/// The USB interface of the debugger's UART: its second port.
+const UART_INTERFACE: u8 = 1;
+
+/// The UART of the debugger with serial number `serial` among `ports`: the
+/// port of its second interface. Where the system does not say which
+/// interface a port is of, the second of its two ports by name, which is
+/// the order they are given their names in when the board is plugged in.
 fn uart_of(serial: Option<&str>, ports: &[crate::serial::UsbPort]) -> Option<String> {
-    let mut names: Vec<&str> = ports
+    let mut ours: Vec<&crate::serial::UsbPort> = ports
         .iter()
         .filter(|p| p.vid == VENDOR_ID && p.pid == PRODUCT_ID && p.serial.as_deref() == serial)
-        .map(|p| p.name.as_str())
         .collect();
-    names.sort_by_key(|n| port_order(n));
-    names.dedup();
-    match names.as_slice() {
-        [_, uart] => Some((*uart).to_owned()),
+    ours.sort_by_key(|p| port_order(&p.name));
+    ours.dedup_by_key(|p| p.name.as_str());
+    if ours.iter().any(|p| p.interface.is_some()) {
+        let mut uarts = ours.iter().filter(|p| p.interface == Some(UART_INTERFACE));
+        return match (uarts.next(), uarts.next()) {
+            (Some(uart), None) => Some(uart.name.clone()),
+            _ => None,
+        };
+    }
+    match ours.as_slice() {
+        [_, uart] => Some(uart.name.clone()),
         _ => None,
     }
 }
@@ -366,33 +377,29 @@ pub fn boards() -> Result<Vec<Board>> {
 /// kept for the open, or the one `variants` has for it at the open, when
 /// `want` names another variant or it runs none. None when it runs none
 /// and there is none to give it.
+///
+/// # Errors
+///
+/// A UART that cannot be opened or asked: what the board runs is then not
+/// known, and it is not one to load. Another program may have it, in the
+/// middle of a capture.
 fn device(
     board: &Board,
     port_name: &str,
     want: Option<&Sidecar>,
     variants: &[Sidecar],
-) -> Option<OxlaDevice> {
+) -> Result<Option<OxlaDevice>> {
     let params = Params::parse(protocol::SERIALCOMM).expect("the default parses");
-    let running = match crate::serial::open(port_name, params) {
-        Ok(mut port) => match super::probe_board(port.as_mut()) {
-            Ok(Some(found)) => Some((found, port)),
-            Ok(None) => None,
-            Err(e) => {
-                log::debug!("{port_name}: {e}");
-                None
-            }
-        },
-        Err(e) => {
-            log::debug!("{port_name}: {e}");
-            None
-        }
-    };
+    let mut port = crate::serial::open(port_name, params)?;
+    let running = super::probe_board(port.as_mut())?.map(|found| (found, port));
     let device = match running {
         Some((found, port)) if want.is_none_or(|w| w.variant == found.id.variant()) => {
             OxlaDevice::with_params(found, port_name.to_owned(), params, Some(port))
         }
         _ => {
-            let sidecar = want.or_else(|| default_of(variants))?.clone();
+            let Some(sidecar) = want.or_else(|| default_of(variants)).cloned() else {
+                return Ok(None);
+            };
             let (id, clocks_hz) = (sidecar.id, sidecar.clocks_hz.clone());
             let board = board.clone();
             let name = port_name.to_owned();
@@ -404,7 +411,7 @@ fn device(
             OxlaDevice::to_load(id, &clocks_hz, port_name.to_owned(), load)
         }
     };
-    Some(device.listed_as("oxla-tn20k", MODEL, board.serial()))
+    Ok(Some(device.listed_as("oxla-tn20k", MODEL, board.serial())))
 }
 
 /// The `oxla-tn20k` driver.
@@ -487,11 +494,13 @@ impl Driver for OxlaTn20kDriver {
                 continue;
             }
             match device(&board, &port, want, &variants) {
-                Some(device) => devices.push(Box::new(device)),
-                None => {
+                Ok(Some(device)) => devices.push(Box::new(device)),
+                Ok(None) => {
                     // Nothing to list it as: say what gets it.
                     log::warn!("A {MODEL} at {port} that does not run oxla: {}.", missing());
                 }
+                // Not known to run nothing, so not one to load.
+                Err(e) => log::warn!("A {MODEL} at {port} that cannot be asked what it runs: {e}."),
             }
         }
         Ok(devices)
@@ -512,6 +521,7 @@ mod tests {
             serial: Some(serial.to_owned()),
             manufacturer: None,
             product: None,
+            interface: None,
         }
     }
 
@@ -530,6 +540,15 @@ mod tests {
         assert_eq!(uart_of(Some("A"), &ports[..1]), None);
         let other = UsbPort { pid: 0x6001, ..port("/dev/ttyUSB11", "A") };
         assert_eq!(uart_of(Some("A"), &[ports[0].clone(), other]), None);
+
+        // Where the interface is known it decides, whatever the names: a
+        // first port that came back after the second has a higher number.
+        let of = |name: &str, interface| UsbPort { interface: Some(interface), ..port(name, "A") };
+        let ports = [of("/dev/ttyUSB2", 0), of("/dev/ttyUSB1", 1)];
+        assert_eq!(uart_of(Some("A"), &ports).as_deref(), Some("/dev/ttyUSB1"));
+        // The JTAG port alone, as while its driver is detached, is no UART.
+        assert_eq!(uart_of(Some("A"), &ports[..1]), None);
+        assert_eq!(uart_of(Some("A"), &ports[1..]).as_deref(), Some("/dev/ttyUSB1"));
     }
 
     /// The description of `la14-ddr` in release 0.2.0, as `make release`

@@ -629,9 +629,17 @@ of (its SHA-256) is not loaded. Once loaded, what the board says counts.
 channels, RLE; the one a board gets when none is named), `la16`,
 `la14-ddr` (14 channels, 270 MHz), `la8-rle`, `la8-ddr` (8 channels,
 270 MHz) and `la8-adc`. `oxrok firmware fetch oxla-tn20k` downloads the
-files, and a run that misses them says so, or asks on a terminal. Every
-file of a release passed the gateware's self test on a board before it
-was packed.
+files, and a run that misses them says so, or asks on a terminal. By
+hand, the release's archive unpacked into one of the firmware directories
+(`~/.local/share/oxrok-firmware`, or what `OXROK_FIRMWARE_DIR` names) is
+the same: the `.fs` files and the `.fs.json` beside each. Every file of a
+release passed the gateware's self test on a board before it was packed.
+
+The scan finds the UART by the USB interface it is of, the debugger's
+second, where the system says, and else by the order of the two ports'
+names. A UART that cannot be opened (another program has it, or the user
+may not) leaves the board out of the scan with a warning: what it runs is
+then not known, and it is not loaded.
 
 Verified 2026-11-18 on one Tang Nano 20K (debugger serial number
 2025030317) on macOS, with the files of release `oxla-tn20k-v0.2.0`:
