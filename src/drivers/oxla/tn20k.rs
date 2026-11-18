@@ -582,10 +582,10 @@ mod tests {
         // Another board, or another part, is not this board's.
         let mut s = Sidecar::parse(LA14_DDR, file()).unwrap().unwrap();
         s.board = "sipeed-tang-primer-25k".to_owned();
-        assert!(for_this_board(vec![s.clone()]).is_empty());
+        assert_eq!(for_this_board(vec![s.clone()]), []);
         s.board = BOARD.to_owned();
         s.idcode = 0x0001_281b;
-        assert!(for_this_board(vec![s]).is_empty());
+        assert_eq!(for_this_board(vec![s]), []);
     }
 
     #[test]

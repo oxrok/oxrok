@@ -219,7 +219,7 @@ fn an_overflow_fails_the_capture() {
         &[pattern(), (Key::Rle, Value::Bool(true)), (Key::LimitSamples, Value::U64(100_000))],
     );
     let got = run(dev, None);
-    assert!(got.samples.is_empty());
+    assert_eq!(got.samples.len(), 0);
     assert!(
         matches!(&got.outcome, Err(Error::CaptureFailed(m)) if m.contains("overflowed")),
         "{:?}",
