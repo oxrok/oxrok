@@ -12,6 +12,11 @@ EMU_MODEL=oxla
 EMU_CDC=1
 EMU_DRIVER=oxla
 EMU_FULL=$EMU_DRIVER
+# The goldens are not blessed yet (docs/ROADMAP.md): with none to hold
+# oxrok to, every case would fail for the lack of one. Until tests/emu/oxla
+# is there the model is skipped by name, which a run says; a bless runs it.
+[ -d "${EMU_GOLDEN:-}/oxla" ] || [ "${EMU_BLESS:-0}" != 0 ] \
+    || EMU_SKIP="no goldens yet: EMU_BLESS=missing sh tools/diffcli.sh --emu-model oxla writes them, and each wants reading"
 
 # oxla_case NAME [emu_case's flags] -- ARGS...
 oxla_case() {

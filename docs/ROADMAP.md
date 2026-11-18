@@ -174,7 +174,9 @@ The models are plain Rust with no I/O for this reason; see
   exercised.
 - `oxla`'s cases have never run: the model (`emu/src/models/oxla.rs`) and
   the scenario (`tools/emu/oxla.sh`, 138 cases, all `--no-oracle-only`)
-  were written on macOS, where the harness does not run. Run
+  were written on macOS, where the harness does not run. Until
+  `tests/emu/oxla` exists the scenario skips itself by name, so that the
+  emulator tier does not fail for goldens there are none of. Run
   `EMU_BLESS=missing sh tools/diffcli.sh --emu-model oxla` on Linux, read
   each golden and fix the cases that guessed wrong (the stderr texts, the
   cases with `--timeout`), then name the model in `docs/drivers.toml`

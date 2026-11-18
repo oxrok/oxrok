@@ -631,13 +631,16 @@ channels, RLE; the one a board gets when none is named), `la16`,
 270 MHz) and `la8-adc`. `oxrok firmware fetch oxla-tn20k` downloads the
 files, and a run that misses them says so, or asks on a terminal. By
 hand, the release's archive unpacked into one of the firmware directories
-(`~/.local/share/oxrok-firmware`, or what `OXROK_FIRMWARE_DIR` names) is
-the same: the `.fs` files and the `.fs.json` beside each. Every file of a
+(what `OXROK_FIRMWARE_DIR` names, or `oxrok-firmware` under
+`$XDG_DATA_HOME`, which is `~/.local/share` when it is not set) is the
+same: the `.fs` files and the `.fs.json` beside each. Every file of a
 release passed the gateware's self test on a board before it was packed.
 
 The scan finds the UART by the USB interface it is of, the debugger's
 second, where the system says, and else by the order of the two ports'
-names. A UART that cannot be opened (another program has it, or the user
+names. A port is known to be a debugger's by the serial number they
+share, so of two debuggers with no serial number neither has a UART to
+go by, and both are left out. A UART that cannot be opened (another program has it, or the user
 may not) leaves the board out of the scan with a warning: what it runs is
 then not known, and it is not loaded.
 
