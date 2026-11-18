@@ -452,6 +452,212 @@ two recorded sessions are the replay tests. Not yet exercised: a real
 signal on the inputs (a wire from the ESP32 to GPIO 2 would do) and the
 larger digital-only firmware variants.
 
+## oxla logic analyzer gateware (oxla)
+
+`oxla`: a Sipeed Tang Nano 20K running the oxla gateware, on its own USB
+serial port (the second of the two the board shows; `/dev/cu.usbserial-*1`
+on macOS, `/dev/ttyUSB1` on Linux). 8, 14 or 16 channels by the bitstream,
+two million words of sample memory, a two term trigger in the FPGA, run
+length encoding where the bitstream has it. New here (src/drivers/oxla):
+libsigrok has no such driver. `conn=` is required; `serialcomm=` overrides
+3000000/8n1.
+
+```
+oxrok -d oxla:conn=/dev/ttyUSB1 --show
+oxrok -d oxla:conn=/dev/ttyUSB1 -c samplerate=27m --samples 10000 -O bits
+oxrok -d oxla:conn=/dev/ttyUSB1 -c captureratio=20 --samples 10000 -t D0=r,D3=1 -O csv:trigger=true
+oxrok -d oxla:conn=/dev/ttyUSB1 -c rle=on:samplerate=54m --samples 10m -t 'D0=f;D1=r' -o capture.sr
+oxrok -d oxla:conn=/dev/ttyUSB1 -c pattern=Internal --samples 1000 -O hex
+```
+
+Everything about the device comes from its ID: the channels (`D0` up), the
+memory, whether there is RLE, a rate of two samples per clock, an ADC
+behind the channels. Nothing in the driver names a clock. A bitstream
+that describes itself (release 0.2.0 of the gateware on: registers that
+say what clocks it has, the lowest divider, and more that is read and not
+yet used) is asked, and left at the clock it has. One that does not, where
+its ID says the host can change the capture clock, has each of the three
+settings of the `CLOCK` register set once and is asked what clock that is
+(81, 108 and 135 MHz), and is left at the last. A capture asks for the ID
+again and changes the clock when the rate needs another. The scan resets
+the device. The release a bitstream says it is of is listed with its
+variant: `la16-rle 0.2.0`.
+
+- `samplerate`: any rate from the lowest to the highest (5 Hz to 135 MHz,
+  or 270 MHz with two samples per clock; from half the clock down with an
+  ADC). The nearest one a clock gives is set and read back: a clock times
+  two, or a clock divided by 1 to 2^24. Of the clocks that give it, the
+  one the last rate had. `samplerate=10m` is 10.125 MHz, 81 MHz / 8.
+- `limit_samples`: 1 to what the memory holds raw (4,194,304 samples of
+  16 channels, 4,793,488 of 14, 8,388,608 of 8), or up to 2^32 - 1 under
+  RLE, where the memory is 2,097,152 runs.
+- `captureratio`: the share of the samples wanted ahead of the trigger.
+  The trigger is looked for from the first sample on, as triggers are
+  here, so one that comes early has fewer samples ahead of it and the
+  capture is that much shorter. Without a trigger the capture is the
+  first `limit_samples` samples.
+- `rle`, on bitstreams with it: runs are expanded, so the output is the
+  same samples. One sample per clock only. A signal that changes with
+  nearly every sample is a word a sample, which the memory has time for
+  from half the clock rate down: above that such a capture overflows.
+- `pattern`: `None` or `Internal`, a counter in the device that goes up
+  by one per sample from 0 and that the trigger sees too. It is what the
+  checks below ran on.
+- Disabled channels are low. The device masks them on its inputs; its
+  counter does not go through that mask, so the driver clears them.
+
+Triggers are the device's two terms, each a condition per channel (0, 1,
+r, f, e):
+
+| `-t` | device |
+|---|---|
+| `D0=r,D1=1` | A |
+| `D0=r,D1=1*5` | A, the fifth time (up to 65536) |
+| `D0=r;D1=f` | A, then B on a later sample |
+| `D0=r\|D1=f` | A or B |
+
+The device can also count a two term event (the third A then B) and take
+B then A; a count belongs to a stage in `-t`, and the device has one for
+the trigger as a whole, so a count with two stages is refused rather than
+given another meaning. Its "A and B on the same sample" is one stage with
+both terms' conditions, which is why `&` (both stages, in any order) is
+refused. A hold-off (`Trigger::holdoff`) is refused too: the device has
+one, `PRE_WORDS`, but in words of memory, not samples.
+
+A stop while the device waits for its trigger sends its STOP and the last
+`limit_samples` samples it had, with no marker. A capture that overflowed
+fails (exit 1, `capture failed: ... the sample memory overflowed`) and
+sends none of its samples, as the device does not vouch for the trigger's
+place then. So does one where the device goes silent: a memory read is
+2048 words a request, as the board's USB bridge loses bytes on longer
+bursts, and a byte that is lost all the same fails the capture after 2 s
+rather than being asked for again. Reading is the slow part, about
+80 kB/s: 100,000 samples of 16 channels take 2.5 s, the whole memory
+105 s.
+
+Verified 2026-11-14 on one Tang Nano 20K, with the bitstreams `la8-rle`,
+`la14-ddr`, `la8-ddr` and `la16` of that day's gateware (each after its
+`tools/oxla.py selftest` said ok), 75 checks, all passing: `--scan`,
+`--show`, `--get`, and captures through the CLI compared sample for
+sample, trigger position included, with the same registers written
+through the Python tool's own `Oxla` class and unpacked by it. On the
+counter: no trigger at 135 MHz (270 with two samples per clock), 54 MHz
+and 20.25 MHz, which are one each of the three clocks, the device left at
+the clock the rate needs; 1 and 12,345 samples (a last word partly
+filled); one stage with levels and with an edge, two stages, or, the
+thousandth edge; a trigger that comes before its share of samples;
+disabled channels. On `la8-rle` also RLE with and without a trigger and
+1,000,000 samples of idle inputs, and an overflow at 135 and at 81 MHz,
+which fails as above. On idle inputs: a raw capture, and SIGINT during a
+wait for a trigger that never comes, which gives the last samples and
+exit 0. Two more captures ran until the ring had been written around
+before the trigger (8 channels, the 65536th edge; 14 channels, where
+samples straddle words): the counter is whole across the wrap and the
+marker is on the trigger sample. Eight recorded sessions are the replay
+tests (`tests/oxla_replay.rs`, fixtures in `tests/fixtures/oxla`).
+
+Not verified: a real signal on the inputs (only idle pins and the counter,
+which enters after the input synchronizer); a 16 channel bitstream with
+RLE (`la16-rle` had no build that day; RLE ran with 8 channels, raw mode
+with 16) and the ADC variant; a capture stopped before its first sample
+under RLE, whose word the driver drops from reading the Verilog; a byte
+lost by the bridge, which only the unit tests have; opening the device
+again after a close. The driver was run on macOS only.
+
+Emulator: model `oxla` on the CDC-ACM shell behind a UART at 3000000/8n1
+(a stand-in: the board's bridge shows as an FTDI `0403:6010`, and there is
+no FTDI shell for serial models), written from `docs/PROTOCOL.md` and the
+gateware's Verilog, options channels=, spc=, rle=, adc=, clock=, mem=,
+id=, slow=, polls=, settle=, overflow=, lose=, uart=. Its unit tests
+repeat the Python tool's self test on it. `tools/emu/oxla.sh` has 138
+cases, all `--no-oracle-only`, as there is no C driver to compare with.
+**They have never been run**: the harness is Linux only and this was
+written on macOS, so `tests/emu/oxla` has no goldens yet.
+`EMU_BLESS=missing sh tools/diffcli.sh --emu-model oxla` writes them, and
+each wants reading, the scenario included.
+
+## oxla on a Sipeed Tang Nano 20K (oxla-tn20k)
+
+`oxla-tn20k`: the board of the `oxla` driver above, found on USB, with
+the gateware loaded into it when it does not run it. New here
+(src/drivers/oxla/tn20k.rs); after the load it is the `oxla` driver's
+device, with its options, triggers and limits.
+
+```
+oxrok -d oxla-tn20k --show
+oxrok -d oxla-tn20k -c samplerate=27m --samples 10000 -O bits
+oxrok -d oxla-tn20k:bitstream=la8-ddr -c samplerate=270m --samples 100000 -o capture.sr
+oxrok firmware fetch oxla-tn20k
+```
+
+The board is its debugger on USB (`0403:6010`, "SIPEED", "USB Debugger":
+a BL616 that stands in for an FT2232), whose first port is JTAG to the
+FPGA and whose second is the UART the gateware talks on. The scan finds
+that serial port by the debugger's serial number, so there is no port to
+name; `conn=` picks one board of several, by its serial port or its USB
+`bus.address`. On Linux the debugger needs the udev rules of
+`oxrok --udev-rules`, like every USB device oxrok opens.
+
+A scan asks each board what it runs, on its UART, and loads nothing:
+
+- a board that answers as oxla is listed as what it says it is;
+- one that does not, or that runs another variant than `bitstream=`
+  names, is listed as the variant it is to be given and gets its
+  bitstream when the device is opened.
+
+So `oxrok --scan` leaves every board as it is, and `--show` or a capture
+loads what is missing, in about five seconds. The scan's question is nine
+bytes on the UART, which a board that runs another design gets too. The
+load is into the FPGA over JTAG and is gone at power off: the board's
+flash, and so what it starts with, is not written. The FPGA's ID code is
+read first, and a part that is no GW2A-18 (another Sipeed board, which
+has the same debugger and is listed just the same) is refused before
+anything is erased.
+
+What a board can be given is not in the driver. Every bitstream of a
+release of [fpga-bitstreams](https://github.com/oxrok/fpga-bitstreams/releases)
+has a description beside it, `oxla-tn20k-VARIANT.fs.json`: the variant,
+the board and FPGA it is for, the checksum of the file, and the ID and
+clocks the bitstream gave on a board. The driver reads those from the
+firmware directories and offers the ones for this board, so a board that
+runs nothing is listed with the channels and rates of what it will be
+given, and a new variant needs no new oxrok. A bitstream with no
+description is not offered; one that is not the file its description is
+of (its SHA-256) is not loaded. Once loaded, what the board says counts.
+
+`bitstream=` takes a variant's name. In release 0.2.0: `la16-rle` (16
+channels, RLE; the one a board gets when none is named), `la16`,
+`la14-ddr` (14 channels, 270 MHz), `la8-rle`, `la8-ddr` (8 channels,
+270 MHz) and `la8-adc`. `oxrok firmware fetch oxla-tn20k` downloads the
+files, and a run that misses them says so, or asks on a terminal. Every
+file of a release passed the gateware's self test on a board before it
+was packed.
+
+Verified 2026-11-18 on one Tang Nano 20K (debugger serial number
+2025030317) on macOS, with the files of release `oxla-tn20k-v0.2.0`:
+the board put back to the design in its flash, then each of the six
+variants named in turn, each a load and a capture of eight samples of the
+counter at the highest rate (135 MHz, 270 MHz with two samples per clock,
+67.5 MHz on the ADC variant), all right; `--scan` of a board with another
+design, loading nothing and listing it as `la16-rle`; with no file
+installed, the scan's warning and the error of a named variant; an unknown
+variant, with the list of those there are. A bitstream of release 0.1.0,
+which has no description registers, loaded with openFPGALoader: found,
+its clocks asked one by one, a capture at 81 MHz. On 2026-11-17, with
+release 0.1.0 and the variants then in the driver: the gateware's Python
+self test passing on a `la14-ddr` the driver had loaded, and six loads in
+a row from the flash's design. After a load the first answer was, five
+times of six, what the bridge still held of the design before: the open
+asks up to four times.
+
+Not verified: Linux and Windows; a board whose flash holds no valid
+bitstream; two boards; a debugger with other firmware. The unit tests
+have the JTAG layer against a model of a TAP behind an MPSSE interpreter,
+the load's command order against a model of the FPGA, the descriptions
+against the one release 0.2.0 has for `la14-ddr`, and the open against
+the fake board of the `oxla` tests; none of them is a recording of the
+board.
+
 ## Rigol and Agilent oscilloscopes
 
 Emulated: model `rigol-ds`, on USBTMC, TCP and a serial port: DS1102E,

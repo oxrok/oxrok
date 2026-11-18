@@ -157,6 +157,7 @@ pub mod drivers {
     pub mod motech_lps_30x;
     pub mod norma_dmm;
     pub mod ols;
+    pub mod oxla;
     pub mod pce_322a;
     pub mod pipistrello_ols;
     pub mod raspberrypi_pico;
@@ -219,6 +220,8 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::asix_omega_rtm_cli::AsixOmegaRtmCliDriver));
     registry.register(Box::new(drivers::arachnid_labs_re_load_pro::ReloadProDriver));
     registry.register(Box::new(drivers::ols::OlsDriver));
+    registry.register(Box::new(drivers::oxla::OxlaDriver));
+    registry.register(Box::new(drivers::oxla::tn20k::OxlaTn20kDriver));
     registry.register(Box::new(drivers::rdtech_um::RdtechUmDriver));
     registry.register(Box::new(drivers::atorch::AtorchDriver));
     registry.register(Box::new(drivers::manson_hcs_3xxx::MansonDriver));

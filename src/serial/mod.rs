@@ -364,14 +364,29 @@ fn termios_handle(name: &str) -> Option<std::fs::File> {
 ///   libsigrok has always sent the opposite parity (`serial.c:652-655`)
 ///   with no check, so a table entry whose parity is wrong works there; a
 ///   check would turn its bytes into errors or NULs here.
+///
+/// Says whether the speed is still the port's. macOS takes a speed its
+/// table lacks (3,000,000 baud, for one) through `IOSSIOSPEED` only, which
+/// the crate uses, and its `tcsetattr` then refuses the termios that
+/// `tcgetattr` gives back with that speed in it. So there the flags go in
+/// at 9600, as the crate writes its own, and the caller sets the speed
+/// again.
 #[cfg(unix)]
-fn as_libserialport(file: &std::fs::File) -> Result<()> {
+fn as_libserialport(file: &std::fs::File) -> Result<bool> {
     use rustix::termios::{ControlModes, InputModes, OptionalActions, tcgetattr, tcsetattr};
     let io = |e: rustix::io::Errno| Error::Io(e.into());
     let mut termios = tcgetattr(file).map_err(io)?;
     termios.control_modes.remove(ControlModes::HUPCL);
     termios.input_modes.remove(InputModes::INPCK);
-    tcsetattr(file, OptionalActions::Now, &termios).map_err(io)
+    match tcsetattr(file, OptionalActions::Now, &termios) {
+        Ok(()) => Ok(true),
+        Err(rustix::io::Errno::INVAL) if cfg!(target_vendor = "apple") => {
+            termios.set_speed(9600).map_err(io)?;
+            tcsetattr(file, OptionalActions::Now, &termios).map_err(io)?;
+            Ok(false)
+        }
+        Err(e) => Err(io(e)),
+    }
 }
 
 /// The speed, frame and flow control `file` has now, as far as [`Params`] says
@@ -455,21 +470,27 @@ impl Native {
             #[cfg(unix)]
             termios,
         };
-        native.settle_termios()?;
+        native.settle_termios(params.baud)?;
         native.set_handshake(rts_to_set(params), params.dtr)?;
         native.port.clear(serialport::ClearBuffer::All).map_err(|e| map_err(&e))?;
         Ok(native)
     }
 
+    /// [`as_libserialport`], at `baud`: where that had to give the speed
+    /// up, the crate sets it again, which keeps the flags.
     #[cfg(unix)]
-    fn settle_termios(&self) -> Result<()> {
-        self.termios.as_ref().map_or(Ok(()), as_libserialport)
+    fn settle_termios(&mut self, baud: u32) -> Result<()> {
+        let kept = self.termios.as_ref().map_or(Ok(true), as_libserialport)?;
+        if !kept {
+            self.port.set_baud_rate(baud).map_err(|e| map_err(&e))?;
+        }
+        Ok(())
     }
 
     /// Windows has neither flag.
     #[cfg(not(unix))]
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    fn settle_termios(&self) -> Result<()> {
+    fn settle_termios(&mut self, _baud: u32) -> Result<()> {
         Ok(())
     }
 }
@@ -486,7 +507,7 @@ impl Port for Native {
         port.set_parity(parity(p)).map_err(|e| map_err(&e))?;
         port.set_stop_bits(stop_bits(p)).map_err(|e| map_err(&e))?;
         port.set_flow_control(flow_control(p)).map_err(|e| map_err(&e))?;
-        self.settle_termios()?;
+        self.settle_termios(p.baud)?;
         self.set_handshake(rts_to_set(p), p.dtr)
     }
 

@@ -53,6 +53,8 @@ Run on real hardware:
 | `fx2lafw` | a Saleae Logic clone (`0925:3881`) | 78 cases, gcov 91.2% | upload and open order changed since the bench run, checked on the emulator only |
 | `rigol-ds` | a Rigol DS1102E | `rigol-ds`, 75 cases, gcov 74.2% | other series emulated, from guesses at their ids and limits |
 | `raspberrypi-pico` | a Pico with the sigrok-pico firmware | no model | digital, analog and mixed captures |
+| `oxla-tn20k` | the same board, found on USB, the gateware loaded into it when it does not run it | no model | six bitstreams loaded from the descriptions beside them, a capture after each; macOS only |
+| `oxla` | a Tang Nano 20K with the oxla gateware (not in libsigrok) | `oxla`, cases not yet run | 75 checks against the gateware's Python tool on its counter pattern; no real signal yet |
 
 Run on a microcontroller standing in for the device, and on the emulator,
 with no real device yet:

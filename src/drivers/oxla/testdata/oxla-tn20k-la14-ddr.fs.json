@@ -1,0 +1,60 @@
+{
+  "format": 1,
+  "design": "oxla",
+  "variant": "la14-ddr",
+  "default": false,
+  "version": "0.2.0",
+  "commit": "d9bafe069996ed4906300292fd4f455b29477aab",
+  "sha256": "f5a1c5a26a3e4586e766e0b102858c723242595a7880682dc4280cc884ff1181",
+  "target": {
+    "board": "sipeed-tang-nano-20k",
+    "fpga": "GW2AR-18",
+    "idcode": "0x0000081b",
+    "usb": {
+      "vid": "0403",
+      "pid": "6010",
+      "manufacturer": "SIPEED",
+      "product": "USB Debugger"
+    },
+    "loader": "gowin-jtag-sram"
+  },
+  "id": {
+    "protocol": 1,
+    "caps": 26,
+    "channels": 14,
+    "samples_per_clock": 2,
+    "clock_hz": 108000000,
+    "mem_words": 2097151
+  },
+  "description": {
+    "format": 1,
+    "build": "0.2.0",
+    "clocks_hz": [
+      81000000,
+      108000000,
+      135000000
+    ],
+    "clock_at_start": 1,
+    "logic_channels": 14,
+    "analog_channels": 0,
+    "analog_bits": 0,
+    "trigger_terms": 2,
+    "trigger_count_bits": 16,
+    "trigger_modes": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "div_min": 0,
+    "div_bits": 24,
+    "rle_count_bits": 0
+  },
+  "tested": {
+    "date": "2026-11-18",
+    "selftest": "pass"
+  }
+}

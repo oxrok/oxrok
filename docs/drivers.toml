@@ -107,6 +107,56 @@ limits = [
   "The other series (DS2000, DS1000Z, DS4000, MSO5000, the Agilent DSO1000) are emulated from guesses at their ids and limits; each needs a recording to verify.",
 ]
 
+[drivers.oxla]
+name = "oxla logic analyzer gateware (Tang Nano 20K)"
+libsigrok = ""
+ids = ["oxla"]
+kind = "logic-analyzer"
+connection = "serial"
+vendor = "oxrok"
+models = ["Sipeed Tang Nano 20K"]
+status = ["hardware"]
+emu = []
+evidence = [
+  "One Tang Nano 20K with the la8-rle, la14-ddr, la8-ddr and la16 bitstreams, 2026-11-14: 75 checks of scan, show and captures of the device's counter pattern against the gateware's own Python tool, sample for sample with the trigger position; eight recorded replay fixtures.",
+]
+behaviour = [
+  "8, 14 or 16 channels by the bitstream, up to 135 MHz, or 270 MHz at two samples per clock; everything comes from the device's ID, the capture clocks too, which the driver asks for and changes as the rate needs.",
+  "Triggers in the FPGA: one stage with a count, two stages in sequence or combined with or; run length encoding where the bitstream has it, expanded on the way out.",
+  "A capture whose memory overflowed, or whose readout loses a byte, fails; a stop during the wait for the trigger gives the last samples.",
+]
+limits = [
+  "Only idle inputs and the device's counter pattern have been captured, no real signal; a 16 channel bitstream with RLE and the ADC variant have not been run.",
+  "The emulator model and its scenario are written and its cases never run: tests/emu/oxla has no goldens.",
+  "The readout is about 80 kB/s: the whole memory takes 105 s.",
+]
+
+
+[drivers.oxla-tn20k]
+name = "oxla logic analyzer on a Sipeed Tang Nano 20K"
+libsigrok = ""
+ids = ["oxla-tn20k"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "oxrok"
+models = ["Sipeed Tang Nano 20K"]
+status = ["hardware"]
+emu = []
+evidence = [
+  "One Tang Nano 20K, 2026-11-18, macOS: each of the six bitstreams of release oxla-tn20k-v0.2.0 loaded through the driver from the description beside it, each followed by a capture of the counter pattern at its highest rate; on 2026-11-17, with release 0.1.0, the gateware's Python self test passing on a bitstream the driver loaded and six loads in a row of a board that ran another design.",
+]
+behaviour = [
+  "The board is found by its USB debugger and its UART by the debugger's serial number; what it runs is asked on the UART, and it is then the oxla driver's device.",
+  "A board that does not run the gateware, or runs another variant than bitstream= names, is listed as what it will be and loaded over JTAG when it is opened; a scan loads nothing.",
+  "The variants are those of the descriptions (NAME.fs.json) beside the installed bitstreams, which say what each is and what board it is for; the driver has no list of them.",
+  "The load is into the FPGA and gone at power off; the board's flash is not written.",
+]
+limits = [
+  "Run on macOS only: not on Linux, where the debugger's first port has to be taken from ftdi_sio, nor on Windows.",
+  "Other Sipeed boards have the same debugger and are listed too; one whose FPGA is no GW2A-18 is refused at the load.",
+  "Writing the bitstream to the board's flash is not implemented.",
+]
+
 [drivers.raspberrypi-pico]
 name = "Raspberry Pi Pico (sigrok-pico firmware)"
 libsigrok = "raspberrypi-pico"

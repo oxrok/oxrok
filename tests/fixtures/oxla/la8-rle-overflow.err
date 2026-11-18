@@ -1,0 +1,2 @@
+oxrok: err: oxrok::drivers::oxla: The capture failed: device error: the sample memory overflowed, so the capture is not whole: run length encoding takes up to a word per sample, which the memory has time for from half the clock rate down.
+capture failed: device error: the sample memory overflowed, so the capture is not whole: run length encoding takes up to a word per sample, which the memory has time for from half the clock rate down
