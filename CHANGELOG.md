@@ -6,6 +6,42 @@ release may change the library API.
 
 ## [Unreleased]
 
+### Added
+
+- The `oxla` driver, for the oxla logic analyzer gateware on a Sipeed Tang
+  Nano 20K (8, 14 or 16 channels, up to 270 MS/s, a two term trigger, run
+  length encoding), on its serial port. It has no libsigrok counterpart.
+  The channels, the memory and the capture clocks come from the device;
+  `samplerate` sets the nearest rate one of its clocks gives. Checked on
+  a board against the gateware's own tool (`docs/DEVICES.md`), with an
+  emulator model whose cases are not run yet. A bitstream that describes
+  itself (release 0.2.0 of the gateware on) is asked for its clocks and
+  its lowest divider; an older one is driven as the protocol document
+  has it.
+- The `oxla-tn20k` driver, which finds a Sipeed Tang Nano 20K on USB and
+  makes it an `oxla` device with no port to name: when the board does not
+  run the gateware, or runs another variant than `bitstream=` asks for,
+  the bitstream is loaded into its FPGA over JTAG as the device is
+  opened. The load is gone at power off and the board's flash is not
+  written. The bitstreams are those of a release of oxrok's
+  fpga-bitstreams, which `oxrok firmware fetch oxla-tn20k` downloads;
+  what each is, and what board it is for, is read from the description
+  beside it (`NAME.fs.json`), so the driver has no list of variants.
+  With it come JTAG on an FTDI port in MPSSE mode (`ftdi::mpsse`) and the
+  load of a Gowin GW2A (`drivers::oxla::gowin`). Run on macOS only.
+
+### Changed
+
+- `serde_json` is a dependency of the library with or without the `mcp`
+  feature: the `oxla-tn20k` driver reads the descriptions of its
+  bitstreams with it.
+
+### Fixed
+
+- A serial port opens at a speed macOS has no constant for (3,000,000
+  baud): the open failed with `Invalid argument`, as `tcsetattr` there
+  refuses the termios it reads back after such a speed was set.
+
 ## [0.3.0-alpha.1] - 2026-11-14
 
 The first pre-release of 0.3.0. Every one of libsigrok's 87 hardware

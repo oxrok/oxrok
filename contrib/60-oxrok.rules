@@ -23,7 +23,7 @@ ENV{ID_USB_INTERFACES}=="*:fe0301:*", ENV{ID_OXROK}="1"
 # ChronoVu LA8, LA16 (old ids) (chronovu-la); FTDI FT232R (ftdi-la)
 ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", ENV{ID_OXROK}="1"
 
-# FTDI FT2232H (ftdi-la); Saanlima Pipistrello (an FT2232H) (p-ols)
+# FTDI FT2232H (ftdi-la); Sipeed Tang Nano 20K (its debugger) (oxla-tn20k); Saanlima Pipistrello (an FT2232H) (p-ols)
 ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6010", ENV{ID_OXROK}="1"
 
 # FTDI FT4232H (ftdi-la)

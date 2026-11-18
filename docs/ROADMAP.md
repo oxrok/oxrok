@@ -172,6 +172,15 @@ The models are plain Rust with no I/O for this reason; see
   serial models. Manson, GPD and Atten currently run on a CDC-ACM
   stand-in, so `cp210x`, `ftdi_sio` and `/dev/ttyUSBn` are not
   exercised.
+- `oxla`'s cases have never run: the model (`emu/src/models/oxla.rs`) and
+  the scenario (`tools/emu/oxla.sh`, 138 cases, all `--no-oracle-only`)
+  were written on macOS, where the harness does not run. Run
+  `EMU_BLESS=missing sh tools/diffcli.sh --emu-model oxla` on Linux, read
+  each golden and fix the cases that guessed wrong (the stderr texts, the
+  cases with `--timeout`), then name the model in `docs/drivers.toml`
+  (`emu = ["oxla"]`) and say so in `docs/DEVICES.md` and the README. Its
+  board's bridge shows as an FTDI `0403:6010`, so it too is on a CDC-ACM
+  stand-in until there is an FTDI shell for serial models.
 - `--oracle-bug` accepts any non-zero exit; dslogic's two trigger-fault
   cases still have an empty `.oracle` and pin nothing.
 - `tools/attribution.py --check` would rewrite the headers of
@@ -348,6 +357,44 @@ The models are plain Rust with no I/O for this reason; see
   `yokogawa-dlm` needs `Device::channels_listed_as_they_are()`; a separate
   channel-to-bit map would let a driver keep C's index-32 channels.
 - A VXI-11 transport, the Yokogawa DLM's Ethernet path.
+- `oxla-tn20k` loads the FPGA and does not write the board's flash, so
+  the gateware is gone at power off and loaded again at the next open.
+  Writing it takes the SPI flash behind the GW2A's JTAG (instruction
+  `16`, openFPGALoader's `Gowin::spi_put`) and a command that asks for
+  it: nothing should replace what a board starts with unasked.
+- `oxla-tn20k` asks a board what it runs on its UART, nine bytes that a
+  board with another design gets at every scan. The FPGA's user code,
+  read over JTAG, would tell a release's bitstream from anything else
+  without a byte to the design; the gateware would have to set it.
+- A front end can list the boards without a byte sent to any
+  (`drivers::oxla::tn20k::boards`) and load one (`Board::load`); the UI
+  does neither yet; `Board::variants` gives what there is to offer, from
+  the descriptions installed. A device that still needs its load says so
+  (`OxlaDevice::needs_load`), which the `Device` trait has no word for.
+- `oxla` leaves parts of the device unused. Its hold-off (`PRE_WORDS`)
+  counts words of memory, not samples, so `Trigger::holdoff` is refused:
+  taking it rounded up to a word (2 or 4 samples raw, a run under RLE)
+  needs a word on whether a hold-off may be longer than asked. Its event
+  count on a two term trigger (the third A then B, the fifth A or B) has
+  no place in `-t`, where a count belongs to a stage: a count on the
+  combination would be new syntax, or a driver key (`Key::Custom`) beside
+  `-t`. B then A is A then B with the stages swapped, and needs nothing.
+- `oxla` fails a capture whose memory read loses a byte. The request
+  could be made again: a byte sent during a readout ends it, so eight
+  NOPs, a purge and the same `RMEM` would do, with a bound on the tries.
+  An overflowed capture sends no samples though the device says the data
+  up to there is good: what to send without a trigger position to cut
+  around is undecided.
+- `oxla`'s ADC bitstream (`la8-adc`) is eight logic channels here. The
+  device says the channels are one analog value of eight bits; an analog
+  channel in volts needs the ADC's range, which is the module's on the
+  header and nothing reports: a device option would have to give it.
+- `oxla` reads what a bitstream says of itself (the registers from `90`,
+  from release 0.2.0 of the gateware) and uses its clocks and its lowest
+  divider. The rest is read and kept, and not acted on: the channels that
+  are analog, the trigger's terms, its count's width and its modes, the
+  width of a run's count. A bitstream with three terms, or another count,
+  is still driven as the document has it.
 - `siglent-sds`: an E-series history mode as pull request 247 has it
   (`HSMD`, `FRAM`).
 - The trigger hold-off (`Trigger::holdoff`) beyond `SoftTrigger`:
@@ -564,6 +611,26 @@ the device is attached, and `oxrok-hil` runs the LogicPort bench.
   against sigrok-cli, but a real signal on the inputs (a wire from the
   ESP32 to GPIO 2) and the larger digital-only firmware variants are
   not.
+- `oxla`: captures of the device's counter pattern and of idle inputs are
+  verified against the gateware's Python tool on four bitstreams, but not
+  a real signal on the inputs (the path of two samples per clock above
+  all, which the counter enters after), a 16 channel bitstream with RLE
+  (`la16-rle` had no build on 2026-11-14), the ADC variant, a capture
+  stopped before its first sample under RLE, a second open after a close,
+  and Linux, where the board is `/dev/ttyUSB1` behind `ftdi_sio`.
+- `oxla-tn20k` is one board: the debugger's ids and the board's name are
+  in the driver, and only the variants come from the descriptions beside
+  the bitstreams. A description also says how its board shows on USB and
+  how it is loaded (`target`), which is what a driver for every described
+  board would go by; that wants a second board to be written against.
+- `oxla-tn20k`: loads were run on one board on macOS. Not run: Linux,
+  where the claim of the debugger's first port detaches `ftdi_sio` from
+  it and the UART is found among `/dev/ttyUSB*` by the serial number;
+  Windows; a board whose flash holds nothing valid (the FPGA then reports
+  a CRC error, and the sequence that clears it is openFPGALoader's,
+  unrun here); two boards at once; a debugger with other firmware than
+  this board's (serial number 2025030317). There is no recording of a
+  load to replay: one is a megabyte of bitstream.
 - LogicPort: the clock qualifier input (which input gates the clock),
   the 2.5 ns `before`/`after` sample point (needs a phase-locked source
   with adjustable delay), the duration correction at 100 MHz and

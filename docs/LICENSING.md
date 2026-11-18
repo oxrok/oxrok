@@ -172,7 +172,12 @@ checkout).
 A file that is original (not a port of a sigrok file) carries
 `Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>`
 instead of a `Counterpart in sigrok` comment: the `emu` framework, the
-`tools`, the `tests`, the `examples` and the `hil` bench firmware. The
+`tools`, the `tests`, the `examples`, the `hil` bench firmware and the
+`oxla` driver (`src/drivers/oxla`), which libsigrok has none of. Two of
+its files follow another program, as their headers say: the order of the
+JTAG commands in `src/drivers/oxla/gowin.rs` and of the MPSSE commands in
+`src/ftdi/mpsse.rs` is openFPGALoader's (Apache-2.0), written again here.
+The
 `emu` per-device models are original device-side reimplementations of
 the devices the sigrok drivers talk to; they share only the devices'
 protocol facts (constants, register maps, the clock table's values),

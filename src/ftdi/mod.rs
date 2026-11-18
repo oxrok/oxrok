@@ -18,6 +18,7 @@ use crate::usb::{ControlRequest, Transport};
 use std::time::Duration;
 
 pub mod libftdi;
+pub mod mpsse;
 
 /// Vendor request numbers.
 mod req {
