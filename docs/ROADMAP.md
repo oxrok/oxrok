@@ -540,8 +540,8 @@ The models are plain Rust with no I/O for this reason; see
   makes `vhci_hcd` drop the connection (`cannot find a urb of seqnum`
   in dmesg). The device is gone, the harness says `no tty for 1-1`, and
   every later case of the session fails with `could not put the tty
-  back`: 5 to 112 cases, in 10 of 18 red runs of `main` within a week
-  (issues #89 and #105), most often first in an unplug case of
+  back`: 5 to 112 cases, in 10 runs of `main` within six days (issues
+  #89 and #105), most often first in an unplug case of
   `gwinstek-psp`, `cem-dt-885x` or `mastech-ms6514`. It was put at once
   in about 11,100 attaches; on the hosted runners it is far more
   frequent. The fix is in vusb (CI pins vusb-cli 0.2.1): remember an
