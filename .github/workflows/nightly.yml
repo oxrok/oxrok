@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       seconds:
-        description: Seconds of fuzzing per target
+        description: Seconds of fuzzing per target (the job ends after 45 minutes, the build included)
         default: "300"
 
 permissions:
@@ -72,6 +72,11 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
+          found=$(find "fuzz/artifacts/$TARGET" -type f 2>/dev/null | sort)
+          if [ -z "$found" ]; then
+            echo "### $TARGET: failed with no input written (the build, or a step before it)" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "### $TARGET: an input that panics, hangs or runs out of memory"
             echo
@@ -79,7 +84,7 @@ jobs:
             echo "\`fuzz/artifacts/$TARGET/\`, from the repository root (fuzz/README.md):"
             echo
             echo '```'
-            find "fuzz/artifacts/$TARGET" -type f 2>/dev/null | sort | while IFS= read -r file; do
+            echo "$found" | while IFS= read -r file; do
               echo "cargo +nightly fuzz run $TARGET $file"
             done
             echo '```'

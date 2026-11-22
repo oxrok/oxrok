@@ -53,7 +53,7 @@ def read_lcov(text: str, root: str) -> dict[str, dict[int, int]]:
 def area_of(path: str) -> tuple[str, str]:
     """The table a file belongs to and its row there."""
     parts = PurePosixPath(path).parts
-    if len(parts) >= 3 and parts[:2] == ("src", "drivers"):
+    if len(parts) >= 3 and parts[:2] == ("src", "drivers") and parts[2] != "mod.rs":
         return "drivers", PurePosixPath(parts[2]).stem
     if len(parts) == 3 and parts[:2] == ("src", "decoders") and parts[2] != "mod.rs":
         return "decoders", PurePosixPath(parts[2]).stem
