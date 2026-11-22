@@ -21,6 +21,12 @@ env:
 # The toolchain is the one rust-toolchain.toml pins, with its components:
 # `rustup toolchain install` with no name installs it (rustup 1.28 on).
 # Only the msrv job names another.
+#
+# rust-cache saves on main only (`save-if`). A pull request reads main's
+# caches and cannot share its own with another, and the copies of a few
+# pull requests filled the repository's 10 GB, which evicted main's. The
+# cost: a pull request that changes Cargo.lock builds what changed on
+# each of its pushes.
 jobs:
   # Which slow jobs this run needs (tools/ci/changes.py). A push to main
   # runs everything. A pull request runs the emulator models of the
@@ -70,6 +76,8 @@ jobs:
       - run: python3 -I tools/ci/firmware.py
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: python3 -I tools/ci/test_changes.py
       - run: python3 -I tools/ci/test_firmware.py
@@ -111,6 +119,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
@@ -133,6 +143,8 @@ jobs:
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # rustpython needs 1.96, for its parser.
       - run: cargo check --workspace --features python,libusb --locked
 
@@ -170,6 +182,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.feature }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: needs.changes.outputs.python == 'true'
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -199,6 +212,8 @@ jobs:
           persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sudo apt-get update && sudo apt-get install -y python3-dev
       - run: cargo clippy -p oxrok --features python --all-targets --locked
       - run: cargo clippy -p oxrok --features rustpython --all-targets --locked
@@ -259,7 +274,10 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
+      # The shards share one cache, so one of them saves it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 0 }}
       # The probe loaded it on the same image: here a failure is an error.
       - name: Load vhci-hcd
         run: |
