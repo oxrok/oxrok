@@ -470,7 +470,12 @@ The models are plain Rust with no I/O for this reason; see
   halve them. With the filter in, one job per feature would do, which
   frees three of the 20 job slots on every pull request; the slice
   names are required checks, kept in oxrok/management's `config.toml`,
-  so the ruleset changes in the same step.
+  so the ruleset changes in the same step. The RustPython slices now
+  really decode, and how long they take in CI is not known: 15 to 30
+  minutes each is the guess, against a job limit of 45. Under
+  RustPython the amulet test took 508 s on a loaded Mac, so it has a
+  30-minute limit of its own in `.config/nextest.toml`, which a shorter
+  capture would make unnecessary.
 - `tools/ci/changes.py` balances emulator shards by golden case count,
   a rough proxy (a 12-minute and a 22-minute shard had 1339 and 1789
   cases). `diffcli.sh` printing each model's elapsed time would allow
@@ -501,6 +506,47 @@ The models are plain Rust with no I/O for this reason; see
   model lowers them; refresh them together, drop the label, and say
   which C paths no case reaches any more (stops from a client, the
   no-limit crashes, the waits that never end).
+- Two advisories are ignored in `deny.toml`. chrono is flagged
+  unmaintained (RUSTSEC-2026-0543) and is a direct dependency
+  (`chrono = "0.4.45"`, for the dates the csv and vcd outputs write):
+  move to jiff or time and delete the line. paste (RUSTSEC-2024-0436,
+  unmaintained) comes through RustPython 0.6.0 and malachite-bigint:
+  look again at the next RustPython bump.
+- The `test` job on the three systems passes all 286 native against
+  Python parity tests by returning early, since no decoders are
+  installed there. Say so in the job, or commit reference outputs for
+  the 112 decoder captures, so the native decoders are checked without
+  Python on every OS. Where decoders are required
+  (`OXROK_REQUIRE_DECODERS=1`, the Python jobs), fourteen tests in 12
+  files still return early when the one Python decoder they name is
+  missing from a tree that has others: Ubuntu's `libsigrokdecode4` may
+  lack some the native side has.
+- Both Python features compare against the distribution's
+  `libsigrokdecode4`, not the 0.5.3 tree `make decoders` pins and a
+  release ships: have the Python jobs use the pinned tree.
+- The vendor-firmware guard (`tools/ci/firmware.py`) goes by file name
+  only. Still open: a size limit on non-text files under `tests/` and
+  `tools/emu`; the same check on the release's source tarball; a
+  denylist of hashes, which would have to be built (oxrok-util's
+  extractors know the files); a line in AGENTS.md that names the
+  check. `.gitignore` has the same extensions for the whole tree, so a
+  rightful `.hex` or `.bit` needs `git add -f` and then fails the
+  guard: the guard would need a list of exceptions.
+- The toolchain is pinned in `rust-toolchain.toml` and moved by
+  Dependabot, so each Rust release is a pull request whose new clippy
+  lints are fixed by hand. `release.yml` installs the toolchain the
+  same way and is not run by a pull request: run it by hand
+  (`workflow_dispatch`) after such a bump, and once before the next
+  tag, since `rustup toolchain install` with no name needs rustup 1.28
+  and its arm and Intel macOS runners have not been through it.
+- The daily advisories workflow, the `rust-toolchain` Dependabot entry
+  and any change to Dependabot's grouping are not in the org's baseline
+  (oxrok/management, `docs/HARDENING.md`: "weekly, grouped"): record
+  them there or apply them to the other repositories. Dependabot
+  security updates are still off in the repository's settings. A
+  scheduled run that fails only sends a mail: decide whether a failed
+  advisories run opens an issue (management's ci-doctor may be the
+  place).
 - `tests/emu` is 21,989 of the 23,160 tracked files, with no
   `.gitattributes` rule and no check that runs without the emulator.
   Mark it `linguist-generated=true` (not `-diff`: goldens are there to
