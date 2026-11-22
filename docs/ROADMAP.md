@@ -549,8 +549,13 @@ The models are plain Rust with no I/O for this reason; see
   capture would make unnecessary.
 - `tools/ci/changes.py` balances emulator shards by golden case count,
   a rough proxy (a 12-minute and a 22-minute shard had 1339 and 1789
-  cases). `diffcli.sh` printing each model's elapsed time would allow
-  real weights. A submodule of `src/core`, `src/serial`, `src/usb`,
+  cases), until `tools/ci/emu-weights.json` gives it seconds per model.
+  `diffcli.sh` records them and CI keeps them (the `emu-times-N`
+  artifacts): take them from a few runs of `main`, since one run is
+  noisy (a shard varied from 18 to 28 minutes), average them by hand,
+  as no tool does it, commit the file, and refresh it now and then. The
+  slowest shard should lose 3 to 4 of its 26.8 minutes; 22.1 is the
+  ideal. A submodule of `src/core`, `src/serial`, `src/usb`,
   `src/cli` or `src/formats` selects only the drivers that name it
   when it can tell (`core/softtrig.rs`); the rest still select
   everything, mostly because `cli` or a sibling uses them.
