@@ -83,8 +83,9 @@ are thin wrappers. Two differences remain: a UI analyzer is one decoder,
 not a stack (`TaskSpec` has one `decoder`), so `ui_add_analyzer` refuses
 a stack until the UI gains them; and colour, lanes and visible rows get
 the UI's defaults, which the user can change. The UI catalog does not
-include `scan`/`open`/`capture`: its worker owns the devices, and the UI tools below do the equivalent through it, where
-the user can see it happen.
+include `scan`/`open`/`capture`: its worker owns the devices, and the UI
+tools below do the equivalent through it, where the user can see it
+happen.
 
 UI tools (`ui_` prefix, so a client with both servers can tell them
 apart):
