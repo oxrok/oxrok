@@ -296,6 +296,7 @@ impl Requests {
     }
 
     /// Whether a question is out.
+    #[cfg(test)]
     pub fn is_out(&self) -> bool {
         self.out
     }
@@ -399,6 +400,7 @@ pub enum Next {
 
 /// Why a capture gave up, each in its own words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum GiveUp {
     /// Not a line.
     NoAnswer(Duration),

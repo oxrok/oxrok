@@ -99,7 +99,7 @@
 #![forbid(unsafe_code)]
 
 pub mod profiles;
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,

@@ -40,6 +40,9 @@ release may change the library API.
   `core::session::Flow` are `#[non_exhaustive]`, so a variant can be added in a
   minor release. A `match` on one of them outside the crate needs a `_`
   arm.
+- For library users: a driver's `protocol` module (its registers, its
+  packets and their helpers) is private to the crate. What a driver
+  exports is its `Driver`, its device and their constructors.
 
 ### Fixed
 

@@ -41,6 +41,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 /// The bytes of the stream one notification or write carries.
+#[allow(dead_code)]
 pub const CHUNK: usize = 19;
 /// Notifications held ahead of a gap: one more than these counts as a loss.
 pub const HELD_MAX: usize = 8;
@@ -480,6 +481,7 @@ impl Rx {
     }
 
     /// Whether a notification is still awaited behind others.
+    #[cfg(test)]
     pub fn gap(&self) -> Option<u8> {
         (!self.held.is_empty()).then(|| self.next.unwrap_or(0))
     }

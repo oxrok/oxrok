@@ -49,7 +49,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
@@ -236,7 +236,7 @@ fn probe(wire: &mut dyn Wire) -> Option<Widths> {
         log::warn!("Can't get address and data width from device");
         return None;
     }
-    match protocol::parse_widths(&sizes) {
+    match protocol::parse_widths(sizes) {
         Ok((data, addr)) => {
             log::debug!("addr_width = {addr}, data_width = {data}");
             Some(Widths { data, addr })

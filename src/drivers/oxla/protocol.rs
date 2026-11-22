@@ -115,6 +115,7 @@ pub const FLAG_DDR: u32 = 2;
 pub const FLAG_TEST: u32 = 4;
 
 /// `STATUS`: a capture runs.
+#[allow(dead_code)]
 pub const STATUS_RUNNING: u32 = 1;
 /// `STATUS`: the trigger was seen.
 pub const STATUS_TRIGGERED: u32 = 2;
@@ -155,6 +156,7 @@ pub const DESCRIPTION_REGS: [u8; 5] =
 /// The most clocks a description has: the addresses there are for them.
 pub const MAX_CLOCKS: u32 = 8;
 /// `POST_SAMPLES` for no limit.
+#[allow(dead_code)]
 pub const NO_SAMPLE_LIMIT: u32 = 0xffff_ffff;
 /// The most words one RMEM asks for.
 pub const RMEM_CHUNK: u32 = 2048;
@@ -533,18 +535,22 @@ impl Term {
 }
 
 /// `TMODE`: every sample is the event, so a capture triggers at once.
+#[allow(dead_code)]
 pub const TMODE_NOW: u32 = 0;
 /// `TMODE`: term A.
 pub const TMODE_A: u32 = 1;
 /// `TMODE`: term B.
+#[allow(dead_code)]
 pub const TMODE_B: u32 = 2;
 /// `TMODE`: A or B.
 pub const TMODE_A_OR_B: u32 = 3;
 /// `TMODE`: A and B on the same sample.
+#[allow(dead_code)]
 pub const TMODE_A_AND_B: u32 = 4;
 /// `TMODE`: A, then B on a later sample.
 pub const TMODE_A_THEN_B: u32 = 5;
 /// `TMODE`: B, then A on a later sample.
+#[allow(dead_code)]
 pub const TMODE_B_THEN_A: u32 = 6;
 
 /// The trigger registers.

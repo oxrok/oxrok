@@ -206,6 +206,7 @@ pub fn parse_value(data: &[u8]) -> Option<i64> {
 /// What `strtol(s, NULL, 10)` reads of a file, for what C reads as a number
 /// without checking it: white space, a sign and digits, 0 for nothing, the
 /// extremes on overflow.
+#[cfg(test)]
 pub fn c_strtol(data: &[u8]) -> i64 {
     let mut i = 0;
     while i < data.len() && matches!(data[i], b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c) {
@@ -725,6 +726,7 @@ impl Limits {
 }
 
 /// The path of a test tree's file, for the tests.
+#[cfg(test)]
 pub fn under(root: &Path, path: &str) -> PathBuf {
     root.join(path.trim_start_matches('/'))
 }

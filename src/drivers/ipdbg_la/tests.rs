@@ -333,13 +333,13 @@ fn the_delay_rounds_as_c_does() {
 
 #[test]
 fn widths_read_low_byte_first_and_a_core_cannot_have_more_than_the_limits() {
-    assert_eq!(parse_widths(&[0x10, 0, 0, 0, 9, 0, 0, 0]), Ok((16, 9)));
-    assert_eq!(parse_widths(&[0, 1, 0, 0, 0, 0, 0, 0]), Ok((256, 0)));
+    assert_eq!(parse_widths([0x10, 0, 0, 0, 9, 0, 0, 0]), Ok((16, 9)));
+    assert_eq!(parse_widths([0, 1, 0, 0, 0, 0, 0, 0]), Ok((256, 0)));
     let of = |d: u32, a: u32| {
         let mut b = [0; 8];
         b[..4].copy_from_slice(&d.to_le_bytes());
         b[4..].copy_from_slice(&a.to_le_bytes());
-        parse_widths(&b)
+        parse_widths(b)
     };
     assert_eq!(MAX_ADDR_WIDTH, 30);
     assert_eq!(MAX_DATA_WIDTH, 65536);
@@ -363,7 +363,7 @@ fn what_the_widths_cannot_catch() {
     for bit in 0..64 {
         let mut a = good;
         a[bit / 8] ^= 1 << (bit % 8);
-        match parse_widths(&a) {
+        match parse_widths(a) {
             Err(_) => refused += 1,
             Ok(widths) => wrong.push(widths),
         }

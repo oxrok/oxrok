@@ -905,13 +905,9 @@ impl Decoder {
     }
 
     /// Rows in all.
+    #[cfg(test)]
     pub fn lines_total(&self) -> u64 {
         self.lines_total
-    }
-
-    /// Rows decoded.
-    pub fn lines_done(&self) -> u64 {
-        self.lines_done
     }
 
     /// True when every row is decoded.

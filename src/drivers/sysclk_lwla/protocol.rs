@@ -558,11 +558,6 @@ impl Link {
         Link { transport, model, active: None, short_transfer_quirk: false, load: load_bitstream }
     }
 
-    /// The board.
-    pub fn model(&self) -> Model {
-        self.model
-    }
-
     /// The transport.
     pub fn transport(&mut self) -> &mut dyn Transport {
         self.transport.as_mut()
@@ -807,6 +802,7 @@ pub fn status_request(model: Model) -> StatusRequest {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Status {
     /// The status bits at the LWLA1016's positions.
+    #[allow(clippy::struct_field_names)]
     pub status: u32,
     /// Words in the memory.
     pub mem_fill: u32,

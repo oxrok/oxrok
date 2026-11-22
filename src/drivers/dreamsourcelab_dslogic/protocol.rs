@@ -238,6 +238,7 @@ pub struct Capture {
     /// Samples to take, 0 for no limit.
     pub limit_samples: u64,
     /// Percent of the samples before the trigger.
+    #[allow(clippy::struct_field_names)]
     pub capture_ratio: u64,
     /// Stream mode.
     pub continuous: bool,

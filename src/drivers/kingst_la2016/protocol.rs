@@ -245,6 +245,7 @@ impl Model {
 
 /// How the sample memory packs run length encoded samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::struct_field_names)]
 pub struct Layout {
     /// Bytes per unit (`transfer_size`).
     pub transfer_size: usize,
