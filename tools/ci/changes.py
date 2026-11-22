@@ -67,6 +67,9 @@ IGNORED_FILES = {
     "tools/attribution.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
+    # The release workflow's gate and its tests, which the `check` job runs.
+    "tools/ci/release.py",
+    "tools/ci/test_release.py",
     # The website's data generator, a script (not a directory).
     "tools/site-data",
 }
