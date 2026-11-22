@@ -75,6 +75,35 @@ the process ends. These are one piece of work:
   of `gmc-mh-1x-2x`, `appa-55ii`, `beaglelogic`, `atorch` and
   `atten-pps3xxx` fits the rest; one by one or through a shared
   `PacketSink` change is undecided.
+- The guard over the registry (`tests/close_unread_queue.rs`) reads the
+  source: it passes a driver that bounds only its `End`, or only names
+  `stopped_by` in a comment. The real check is a close on an unread
+  queue per driver (`core::device::close_with_an_unread_queue`), which
+  the core, `demo`, `serial-dmm`, `oxla`, `atorch`, `teleinfo` and
+  `gmc-mh-1x-2x` have.
+- A sink told of its stop flag gives up on a packet that finds no room
+  for 500 ms after a stop (`SEND_AFTER_STOP`), and with it on the rest
+  of the capture. `Session` then makes up the `End` and returns `Ok`,
+  so a consumer that is slow and not gone (output into a blocked pipe
+  or a pager, a Python decoder) loses the tail of a `demo` or
+  `serial-dmm` capture without a word. Say so, raise the bound, or have
+  `Session` tell the sink it is still reading. In a session of several
+  devices a told sink polls beside a driver that blocks, gets the
+  smaller share of a full queue, and could give up while the reader
+  reads; that ends as the drivers migrate.
+- 34 drivers carry a `send_end` of their own that does what the core
+  now does (`gmc-mh-1x-2x` and `teleinfo` show the move to
+  `sink.stopped_by_within`): `agilent_dmm`, `appa_55ii`,
+  `arachnid_labs_re_load_pro`, `atorch`, `atten_pps3xxx`,
+  `baylibre_acme`, `beaglelogic`, `bkprecision_1856d`, `cem_dt_885x`,
+  `center_3xx`, `colead_slm`, `fluke_45`, `gwinstek_psp`, `hp_3457a`,
+  `hp_3478a`, `itech_it8500`, `kern_scale`, `link_mso19`, `logicport`,
+  `mastech_ms6514`, `maynuo_m97`, `mic_985xx`, `motech_lps_30x`,
+  `norma_dmm`, `pce_322a`, `rdtech_dps`, `rigol_dg`, `scpi_dmm`,
+  `serial_lcr`, `siglent_sdl10x0`, `tondaj_sl_814`, `uni_t_ut181a`,
+  `uni_t_ut32x`, `zketech_ebd_usb`. `oxla`'s `Patient` wrapper is the
+  same idea with a wait in total, not per packet. No hang, only code to
+  take out.
 - `Session`'s `End` is sent before the link goes back in its slot, so
   `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
   `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`). The
