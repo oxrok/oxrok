@@ -153,8 +153,9 @@ impl Vcd {
     /// Parses header sections until `$enddefinitions`. Returns how many
     /// bytes were consumed, or `None` when the header is incomplete.
     fn parse_header(&mut self) -> Result<Option<usize>> {
-        let text = String::from_utf8_lossy(&self.buf).into_owned();
-        let bytes = text.as_bytes();
+        // Words are cut in the bytes as they came, so that what is consumed
+        // counts those: a byte that is no UTF-8 is three in the lossy text.
+        let bytes = self.buf.clone();
         let mut i = 0;
         let mut section: Option<(String, Vec<String>)> = None;
         loop {
@@ -168,7 +169,8 @@ impl Vcd {
             while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
-            let word = text[start..i].trim_start_matches('\u{feff}');
+            let word = String::from_utf8_lossy(&bytes[start..i]);
+            let word = word.trim_start_matches('\u{feff}');
             match (&mut section, word) {
                 (Some((name, _)), "$end") => {
                     let done = name == "enddefinitions";
@@ -644,6 +646,26 @@ mod tests {
         assert_eq!(logic(&packets).len(), 17);
         let (_, packets) = run(FILE, &[("compress", "2")]);
         assert_eq!(logic(&packets).len(), 8);
+    }
+
+    /// The header's length is counted in the file's bytes. Counted in its
+    /// lossy text, each of these bytes was three: the first data lines went
+    /// with the header, or the count ran past the buffer and panicked.
+    #[test]
+    fn a_header_with_bytes_that_are_no_utf8_ends_where_it_ends() {
+        let mut file = b"$comment \xff\xfe\xff\xfe\xff\xfe\xff\xfe $end\n".to_vec();
+        file.extend_from_slice(FILE.as_bytes());
+        let mut input = MODULE.instantiate(&crate::formats::input::Options::new()).unwrap();
+        let mut out = Vec::new();
+        input.feed(&file, &mut out).unwrap();
+        input.end(&mut out).unwrap();
+        assert_eq!(logic(&out), logic(&run(FILE, &[]).1));
+
+        // Short enough for the count to pass the end.
+        let mut input = MODULE.instantiate(&crate::formats::input::Options::new()).unwrap();
+        let short = b"$comment \xff\xff\xff $end $enddefinitions $end\n#0\n";
+        input.feed(short, &mut out).unwrap();
+        input.end(&mut out).unwrap();
     }
 
     #[test]
