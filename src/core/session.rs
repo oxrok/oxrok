@@ -214,6 +214,7 @@ mod tests {
     use crate::core::value::Value;
     use std::sync::mpsc::channel;
     use std::thread::JoinHandle;
+    use std::time::Instant;
 
     /// More packets than the queue holds.
     const BURST: usize = QUEUE_DEPTH * 4;
@@ -225,6 +226,8 @@ mod tests {
         info: DeviceInfo,
         channels: Vec<Channel>,
         fail_start: bool,
+        /// Whether the sink is told of `stop`, and how long it then waits.
+        told: Option<Duration>,
         stop: Arc<AtomicBool>,
         worker: Option<JoinHandle<()>>,
     }
@@ -235,9 +238,17 @@ mod tests {
                 info: DeviceInfo::default(),
                 channels: vec![Channel::new(0, ChannelKind::Logic, "D0")],
                 fail_start,
+                told: None,
                 stop: Arc::new(AtomicBool::new(false)),
                 worker: None,
             })
+        }
+
+        /// One whose sink knows its stop flag.
+        fn told(after: Duration) -> Box<Self> {
+            let mut dev = Bursting::new(false);
+            dev.told = Some(after);
+            dev
         }
     }
 
@@ -273,13 +284,19 @@ mod tests {
             if self.fail_start {
                 return Err(Error::device("refused"));
             }
+            let sink = match self.told {
+                Some(after) => sink.stopped_by_within(&self.stop, after),
+                None => sink,
+            };
+            // As most drivers do, it does not look at what `send` says.
+            let heeds = self.told.is_none();
             self.worker = Some(std::thread::spawn(move || {
-                for _ in 0..BURST {
-                    if !sink.send(Packet::logic(1, vec![0])) {
+                for i in 0..BURST {
+                    if !sink.send(Packet::logic(1, vec![i as u8])) && heeds {
                         return;
                     }
                 }
-                sink.send(Packet::End);
+                sink.end(Ok(()));
             }));
             Ok(())
         }
@@ -484,6 +501,102 @@ mod tests {
         assert!(!sink.end_while(Err(Error::Timeout), || false));
         drop(rx);
         assert!(!sink.end(Err(Error::Timeout)));
+    }
+
+    /// A wait after the stop that the tests can tell from none and from
+    /// for ever.
+    const AFTER: Duration = Duration::from_millis(200);
+
+    #[test]
+    fn a_sink_told_of_its_stop_gives_a_reader_that_reads_everything_in_order() {
+        let got = within_limit(|| {
+            let mut session = Session::new();
+            // A reader slower than the thread, stopped at its first packet
+            // with the queue full: it reads, and no packet waits this long.
+            session.add_device(Bursting::told(Duration::from_secs(15)));
+            let mut got = Vec::new();
+            session
+                .run(|_, packet| {
+                    std::thread::sleep(Duration::from_millis(1));
+                    got.push(packet.clone());
+                    Flow::Stop
+                })
+                .unwrap();
+            got
+        });
+        assert_eq!(got.len(), BURST + 1, "every packet and the end");
+        for (i, packet) in got[..BURST].iter().enumerate() {
+            let Packet::Logic(logic) = packet else { panic!("{packet:?}") };
+            assert_eq!(logic.data, [i as u8], "in the order they were sent");
+        }
+        assert!(matches!(got[BURST], Packet::End));
+    }
+
+    #[test]
+    fn a_stop_with_a_queue_nobody_reads_returns() {
+        let (stopped_in, left) = within_limit(|| {
+            let mut dev = Bursting::told(AFTER);
+            let (tx, rx) = sync_channel(4);
+            dev.start(PacketSink::new(tx, 0)).unwrap();
+            // The queue is full and the thread waits on it.
+            std::thread::sleep(Duration::from_millis(50));
+            let before = Instant::now();
+            dev.stop().unwrap();
+            (before.elapsed(), rx.try_iter().map(|(_, packet)| packet).collect::<Vec<_>>())
+        });
+        // One packet's wait, and not one for each of the burst.
+        assert!(stopped_in >= AFTER, "{stopped_in:?}");
+        assert!(stopped_in < AFTER * (BURST as u32 / 8), "{stopped_in:?}");
+        // What was in the queue is its start, with no hole and no end.
+        assert_eq!(left.len(), 4);
+        for (i, packet) in left.iter().enumerate() {
+            let Packet::Logic(logic) = packet else { panic!("{packet:?}") };
+            assert_eq!(logic.data, [i as u8]);
+        }
+    }
+
+    #[test]
+    fn a_sink_told_of_its_stop_waits_for_room_until_the_stop() {
+        let (tx, rx) = sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        // Long enough that a test held up is not taken for a wait.
+        let after = AFTER * 4;
+        let sink = PacketSink::new(tx, 0).stopped_by_within(&stop, after);
+        assert!(sink.send(Packet::FrameBegin));
+        // Longer than the wait after a stop, with no stop: it is waited on.
+        let reader = std::thread::spawn(move || {
+            std::thread::sleep(after + AFTER);
+            (rx.recv().unwrap().1, rx.recv().unwrap().1, rx)
+        });
+        assert!(sink.send(Packet::FrameEnd));
+        let (first, second, rx) = reader.join().unwrap();
+        assert!(matches!((first, second), (Packet::FrameBegin, Packet::FrameEnd)));
+
+        // After the stop a packet that has room goes, one that has none is
+        // given up after the wait, and what follows it at once: a reader
+        // that comes back finds no hole.
+        stop.store(true, Ordering::SeqCst);
+        assert!(sink.send(Packet::FrameBegin));
+        let before = Instant::now();
+        assert!(!sink.send(Packet::FrameEnd));
+        assert!(before.elapsed() >= after);
+        assert!(matches!(rx.recv().unwrap().1, Packet::FrameBegin));
+        let before = Instant::now();
+        assert!(!sink.clone().send(Packet::FrameEnd), "a clone gave up with it");
+        assert!(!sink.end(Err(Error::Timeout)));
+        assert!(before.elapsed() < after);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_sink_told_of_its_stop_says_so_when_the_reader_is_gone() {
+        let (tx, rx) = sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let sink = PacketSink::new(tx, 0).stopped_by(&stop);
+        assert!(sink.send(Packet::FrameBegin));
+        drop(rx);
+        assert!(!sink.send(Packet::FrameEnd));
+        assert!(!sink.end(Ok(())));
     }
 
     #[test]
