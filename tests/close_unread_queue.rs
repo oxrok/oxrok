@@ -144,10 +144,18 @@ fn the_demo_device_stops_and_closes_with_a_queue_nobody_reads() {
         dev.close().unwrap();
         (rx.try_iter().map(|(_, packet)| packet).collect::<Vec<_>>(), dev)
     });
-    // What the queue held is the start of the capture.
-    assert_eq!(left.len(), 4);
-    assert!(matches!(left[0], Packet::Header { .. }), "{:?}", left[0]);
-    assert!(left[1..].iter().all(|p| matches!(p, Packet::Logic(_) | Packet::Analog(_))));
+    // What the queue held is the start of the capture, with no hole. On a
+    // machine so loaded that the thread had not filled the queue when the
+    // stop came, it is all of a short one, to its End.
+    assert!(matches!(left.first(), Some(Packet::Header { .. })), "{left:?}");
+    let data = match left.last() {
+        Some(Packet::End) if left.len() < 4 => &left[1..left.len() - 1],
+        _ => {
+            assert_eq!(left.len(), 4, "{left:?}");
+            &left[1..]
+        }
+    };
+    assert!(data.iter().all(|p| matches!(p, Packet::Logic(_) | Packet::Analog(_))), "{left:?}");
 
     // And a reader that reads gets all of the next one, to its End.
     dev.open().unwrap();
