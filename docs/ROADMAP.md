@@ -684,6 +684,39 @@ The models are plain Rust with no I/O for this reason; see
   no review ruleset, and rebase merges and auto-merge are on. Apply the
   rulesets again (`tools/rulesets.py apply`, there) or write the change
   down, and check for drift on a schedule.
+- The nightly workflow (`nightly.yml`: six fuzz targets for five
+  minutes each, and `cargo llvm-cov nextest`) has not run. To watch on
+  its first nights: guided fuzzing, which has only had a minute per
+  target on macOS, and each finding against the rule in
+  `fuzz/README.md` (an error is fine; a panic, a hang or unbounded
+  memory is a finding, and gets a `#[test]` beside the fix); the
+  coverage job's time under instrumentation with every feature, against
+  its 60 minutes; LeakSanitizer on Linux. Nobody is told when it goes
+  red, since it opens no issue by design, and GitHub switches a
+  schedule off after 60 days without a commit: decide who looks.
+- What the fuzz targets do not reach: seeds for `decoder_any`,
+  `serial_frames` and `scpi_block` (from the decoder fixtures and the
+  payloads in `tests/emu/*.tx`, with the selector bytes in front);
+  decoder options other than the defaults, and the input modules'
+  options; the USBTMC header parser; the replay fixture parser; the
+  drivers' frame parsers outside `src/dmm` and `src/lcr`; the Python
+  decoder hosts. No corpus is kept from one night to the next.
+- Property tests in plain `cargo test`: the same capture fed to an
+  input module or a decoder `Stack` in chunks of one byte, of random
+  sizes and whole gives the same packets and annotations; an `.sr`
+  written and read back, and VCD out then in, give the capture. With
+  proptest as a dev-dependency the licence and notices checks need a
+  look.
+- The nightly coverage is of the unit and integration tests only, so a
+  driver tested mostly in the emulator reads low in its table. An
+  instrumented oxrok in the emulator shards (a profile per shard,
+  merged), on a schedule only because of the cases that are sensitive
+  to timing, would give each driver a second column beside the C gcov
+  figures.
+- `cargo check -p oxrok --no-default-features`, a build with no USB
+  backend, warns of an unreachable statement in `src/usb/mod.rs` (the
+  `OXROK_USB_RECORD` block after a match whose arms all diverge) and
+  would fail under `-D warnings`; no CI job builds it.
 - A merge queue for `main`. A push to `main` runs everything (199
   runner-minutes, 48 times since 2026-11-08), which is the only full
   run of a pull request whose jobs were selected by path. A queue
@@ -808,6 +841,20 @@ oxrok/management.
   with `strtof` (`manson-hcs-3xxx`, `conrad-digi-35-cpu`, and more
   among the serial drivers). The narrowing belongs in the CLI's option
   parsing, not in the drivers.
+- `-P uart,midi` overflows the stack of the uart decoder's thread on a
+  capture whose bit is shorter than a sample (found by the
+  `decoder_any` fuzz target, which fails on it within a minute, so its
+  nightly job is red until this is fixed). With the last 34 bytes of
+  the input `AfAqeF0megoBBQAAAAAAAACqKnhdJnoKAQUAAAAAAAAAqgAK5Q==`
+  (base64) as FILE, `oxrok -I binary:numchannels=2:samplerate=20000
+  -i FILE -P uart:rx=0:tx=1,midi` aborts with "thread decoder uart-1
+  has overflowed its stack"; uart alone does not. At 20 kHz and 115200
+  baud uart's output also differs from sigrok-cli's (data `02` against
+  `FC`), which may be the cause: a data value over 0xff would send
+  midi's `get_next_state` round for ever.
+- The `vcd` input holds every sample up to a far timestamp in memory:
+  a line `#18888888886` asks for gigabytes, where sigrok streams them.
+  The fuzz target goes around it with `compress` and `numchannels`.
 - `docs/CLI.md` is one section of a thousand lines of differences;
   subsections by area (triggers, outputs, inputs, options, per driver)
   would make it a page to look things up in. No test says that a flag
