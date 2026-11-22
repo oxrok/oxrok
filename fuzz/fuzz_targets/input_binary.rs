@@ -5,4 +5,4 @@
 use libfuzzer_sys::fuzz_target;
 use oxrok_fuzz::feed_input;
 
-fuzz_target!(|data: &[u8]| feed_input("binary", data));
+fuzz_target!(|data: &[u8]| feed_input("binary", &[], data));

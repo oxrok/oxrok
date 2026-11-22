@@ -15,7 +15,7 @@ which the rest of the repository does not.
 
 | target | input | what it reaches |
 | --- | --- | --- |
-| `input_vcd` | a file | the `vcd` input module, fed in pieces |
+| `input_vcd` | a file | the `vcd` input module, fed in pieces, with `compress=4096` and `numchannels=64` |
 | `input_binary` | a file | the `binary` input module, fed in pieces |
 | `sr_open` | a file | `formats::sr::SessionReader`: the zip, the metadata, the capture files |
 | `decoder_any` | 2 bytes decoder, 1 byte rate and channels, then samples | any of `decoders::ALL` on a `decode::Stack`, default options; a stacked decoder runs over the decoders below it |
@@ -27,8 +27,10 @@ ends with an error on samples that make no sense is fine, as a Python
 decoder that raises is for libsigrokdecode. What fails: a panic (index,
 slice, `unwrap`, arithmetic overflow: debug assertions are on), a hang
 (over the `-timeout`) or memory without bound. A hang or an out of memory
-report on a file that honestly asks for that much, such as a VCD with one
-far timestamp, is to be weighed, not fixed by reflex.
+report on a file that honestly asks for that much is to be weighed, not
+fixed by reflex. A VCD file with one far timestamp is the known case: the
+module holds the samples up to it in memory, and libFuzzer finds such a
+file in seconds, so `input_vcd` runs with the two options that bound it.
 
 The drivers themselves are not here: their fault cases (short and garbage
 answers, stalls, unplugs) are in the emulator tier, against sigrok-cli.
