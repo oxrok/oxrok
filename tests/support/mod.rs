@@ -97,10 +97,21 @@ pub fn python(id: &str) -> &'static DecoderDef {
         .unwrap_or_else(|| panic!("no Python decoder '{id}'"))
 }
 
-/// True when the Python decoders directory has decoders in it.
+/// True when the Python decoders directory has decoders in it. A test
+/// that compares against a Python decoder returns early when this is
+/// false, and so passes having compared nothing: with
+/// `OXROK_REQUIRE_DECODERS=1`, as CI's Python decoder jobs set it, no
+/// decoders is a failure instead.
 #[cfg(any(feature = "python", feature = "rustpython"))]
 pub fn python_available() -> bool {
-    !oxrok::pydecode::defs().is_empty()
+    let found = !oxrok::pydecode::defs().is_empty();
+    let required = std::env::var_os("OXROK_REQUIRE_DECODERS").is_some_and(|v| v == "1");
+    assert!(
+        found || !required,
+        "OXROK_REQUIRE_DECODERS=1 and no Python decoders found (decoders directory: {:?})",
+        oxrok::pydecode::decoders_dir()
+    );
+    found
 }
 
 /// Parses `pairs` against `info`, as `-P dec:key=value` does.

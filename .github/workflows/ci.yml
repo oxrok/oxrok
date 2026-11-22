@@ -130,8 +130,8 @@ jobs:
 
   # The suite under each Python feature, in nextest slices. The longest
   # single test (decoder_uart_rest's amulet_ascii regression, about four
-  # minutes under CPython) is the floor of a slice; change `of` to
-  # retune.
+  # minutes under CPython, more under RustPython; .config/nextest.toml
+  # gives it 30) is the floor of a slice; change `of` to retune.
   python-decoders:
     name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
     needs: changes
@@ -166,9 +166,16 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - if: needs.changes.outputs.python == 'true' && matrix.feature == 'python'
-        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      # Both features: libsigrokdecode4 is where the decoders the native
+      # ones are compared with come from, and without them every such
+      # test returns early and passes.
       - if: needs.changes.outputs.python == 'true'
+        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      # OXROK_REQUIRE_DECODERS: no decoders found is a failure here
+      # (tests/support/mod.rs), not a run that compared nothing.
+      - if: needs.changes.outputs.python == 'true'
+        env:
+          OXROK_REQUIRE_DECODERS: 1
         run: >-
           cargo nextest run -p oxrok --features ${{ matrix.feature }} --locked --no-fail-fast
           --partition slice:${{ matrix.slice }}/${{ matrix.of }}
