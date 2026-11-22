@@ -15,6 +15,7 @@ categories = ["hardware-support", "command-line-utilities"]
 exclude = [
     "/hil/",
     "/emu/",
+    "/fuzz/",
     "/docs/",
     "/tests/emu/",
     "/tools/*",
@@ -127,6 +128,8 @@ workspace = true
 [workspace]
 resolver = "3"
 members = ["hil/oxrok-hil", "emu"]
+# cargo-fuzz targets, on nightly, with a workspace of their own (fuzz/README.md).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.3.0-alpha.1"

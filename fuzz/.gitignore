@@ -1,0 +1,7 @@
+/target
+/corpus
+/artifacts
+/coverage
+# Made from the workspace's on each run (README.md), so that the targets
+# build against the dependency versions that ship.
+/Cargo.lock
