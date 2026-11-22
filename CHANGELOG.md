@@ -45,6 +45,10 @@ release may change the library API.
   Latin-1 comment, say): the header's length was counted with each such
   byte as three, so the first value changes were dropped with the
   header, or the reader panicked on a short file.
+- `-I vcd` reads a file whose `$timescale` is 0 as one that names no
+  sample rate; it panicked on the division.
+- `-P rgb_led_ws281x` on a line slower than the 50 us of a RESET gives
+  the bit before each RESET as 0, as libsigrokdecode does; it gave 1.
 
 ## [0.3.0-alpha.1] - 2026-11-14
 

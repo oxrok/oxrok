@@ -519,7 +519,9 @@ const UT372_DIGITS: [u8; 10] = [0x7b, 0x60, 0x5e, 0x7c, 0x65, 0x3d, 0x3f, 0x70, 
 /// Two ASCII hex digits, with letters past `9` taken as `A` to `F`.
 fn ut372_pair(b: &[u8]) -> u8 {
     let nibble = |c: u8| {
-        let c = if c > 0x39 { c + 7 } else { c };
+        // Wrapping, as the C `char` does: a byte near 0xff is no digit
+        // either way, and counts as 0.
+        let c = if c > 0x39 { c.wrapping_add(7) } else { c };
         u8::from_str_radix(std::str::from_utf8(&[c]).unwrap_or("0"), 16).unwrap_or(0)
     };
     nibble(b[0]) << 4 | nibble(b[1])
@@ -602,5 +604,17 @@ mod ut372_tests {
         p[23] = b'0';
         p[24] = b'0';
         assert!(!ut372_valid(&p));
+    }
+
+    /// Bytes that are no hex digit, up to 0xff, count as 0 and do not
+    /// overflow the step from `9` to `A`.
+    #[test]
+    fn ut372_bytes_that_are_no_digits() {
+        assert_eq!(ut372_pair(&[0xff, 0xf9]), 0);
+        assert_eq!(ut372_pair(b":?"), 0xaf);
+        let mut p = [0xfe_u8; UT372_SIZE];
+        p[23..].copy_from_slice(b"11\r\n");
+        assert!(ut372_valid(&p));
+        let _ = ut372_parse(&p);
     }
 }

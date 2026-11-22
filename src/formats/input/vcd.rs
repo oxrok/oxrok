@@ -196,10 +196,14 @@ impl Vcd {
                 if self.opts.samplerate == 0 {
                     let (p, q) = parse_period(&contents.join(" "))
                         .ok_or_else(|| Error::arg("Parsing $timescale failed."))?;
-                    if q % p != 0 {
-                        log::warn!("Inexact rounding of samplerate, {q} / {p} to {} Hz.", q / p);
+                    // A period of 0 names no sample rate. libsigrok divides
+                    // by it: 0 Hz and this warning where that does not trap
+                    // (aarch64), a crash where it does.
+                    let rate = q.checked_div(p).unwrap_or(0);
+                    if q.checked_rem(p) != Some(0) {
+                        log::warn!("Inexact rounding of samplerate, {q} / {p} to {rate} Hz.");
                     }
-                    self.samplerate = q / p;
+                    self.samplerate = rate;
                 }
             }
             "scope" => {
@@ -244,7 +248,7 @@ impl Vcd {
             return Err(Error::Arg(format!("Unsupported signal size: '{size_text}'")));
         }
         if self.opts.maxchannels != 0
-            && self.logic_count + self.analog_count + size > self.opts.maxchannels
+            && (self.logic_count + self.analog_count).saturating_add(size) > self.opts.maxchannels
         {
             log::warn!(
                 "Skipping '{reference}{range}', exceeds requested channel count {}.",
@@ -666,6 +670,26 @@ mod tests {
         let short = b"$comment \xff\xff\xff $end $enddefinitions $end\n#0\n";
         input.feed(short, &mut out).unwrap();
         input.end(&mut out).unwrap();
+    }
+
+    /// A `$timescale` of 0 is no sample rate, not a division by zero.
+    #[test]
+    fn a_timescale_of_zero_names_no_samplerate() {
+        let text =
+            "$timescale 0 us $end\n$var wire 1 ! D0 $end\n$enddefinitions $end\n#0 0!\n#5 1!\n#9\n";
+        let (_, packets) = run(text, &[]);
+        assert!(!packets.iter().any(|p| matches!(p, Packet::Meta(_))), "{packets:?}");
+        assert_eq!(logic(&packets), [0, 0, 0, 0, 0, 1, 1, 1, 1]);
+    }
+
+    /// A signal of a width that does not fit a count with the channels
+    /// before it is over `numchannels` as any other, and is skipped.
+    #[test]
+    fn a_signal_wider_than_a_count_is_over_numchannels() {
+        let text = "$timescale 1 us $end\n$var wire 1 ! D0 $end\n$var wire 18446744073709551615 \" wide $end\n$enddefinitions $end\n#0 0!\n#5 1!\n#9\n";
+        let (channels, packets) = run(text, &[("numchannels", "2")]);
+        assert_eq!(channels.len(), 1);
+        assert_eq!(logic(&packets), [0, 0, 0, 0, 0, 1, 1, 1, 1]);
     }
 
     #[test]
