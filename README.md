@@ -518,8 +518,7 @@ a file in `emu/src/models`, a scenario in `tools/emu`, goldens blessed with
 entry in `docs/DEVICES.md`. A bless without `--oracle` writes a case's goldens
 only when its other checks pass, and prints what it wrote per model.
 [docs/USB.md](docs/USB.md#emulation-over-usbip) describes the server and the
-harness, and [docs/ROADMAP.md](docs/ROADMAP.md#emulation-plan) the plan and
-what counts as emulator-verified.
+harness, and [what counts as emulator-verified](docs/USB.md#what-counts-as-emulator-verified).
 
 ## Layout
 
