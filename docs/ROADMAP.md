@@ -576,6 +576,24 @@ The models are plain Rust with no I/O for this reason; see
   test. The small step first: one nextest test per fixture in
   `tests/emu_replay.rs`, in place of one test that starts 65 processes
   at once.
+- A failed emulator shard keeps its models' transaction logs, a dmesg
+  tail and the times (`emu-failed-N`, 7 days), not the `.out` and `.tx`
+  each failed case produced; that needs an option of the harness at its
+  twenty or so comparison sites. A failure counted before a model's
+  session starts is not put down to that model, so its log is not kept
+  when the session then passes. The harness step has 40 of the job's 45
+  minutes: on a cold cache a hang can meet the job's limit first, and
+  then nothing is kept.
+- An apt outage of more than about a minute still fails the Python and
+  emulator jobs (`tools/ci/apt.sh` tries three times; the outage of
+  2026-11-11 lasted 42 minutes). Caching the two `.deb` files of the
+  Python jobs is what is left, with a cache that goes stale as its
+  price. The `vhci-hcd` probe still turns a failed apt into a skipped
+  tier.
+- Only `main` saves the Rust cache, so a pull request that changes
+  `Cargo.lock` (every Dependabot one) builds the changed dependencies
+  on each push: watch whether that costs more than the cache quota it
+  saves.
 - The bench runs by hand: no workflow has a schedule for it,
   `oxrok-hil` prints PASS, FAIL or UNVERIFIED to stdout and knows only
   the LogicPort, and nothing builds `hil/esp32-siggen` (PlatformIO
@@ -652,6 +670,13 @@ oxrok/management.
   knows only #77 and #105. One place should hold them all, with the
   others pointing at it.
 
+- The `test` and Python decoder jobs retry a failed test once and name
+  each test that passed on its second try (FLAKY, in the job summary
+  and in the `junit-*` artifacts). Nothing collects them: feed the
+  JUnit files to oxrok/management's ci-doctor and `flakes.toml`, and
+  add the tests CI has seen flake that this list lacks
+  (`rigol_dg/tests.rs:1195` and `cem_dt_885x/tests.rs:318`, both on
+  macOS). A retry is not a fix: each is a race to remove.
 - Nine unit tests fail with every sleep at six times, a harsher test
   than CI's macOS runner: `gwinstek-gpd` (2), `atten-pps3xxx` (3),
   `rdtech-dps` (2), `rdtech-um` (1), `manson-hcs-3xxx` (1).
