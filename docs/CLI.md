@@ -1088,9 +1088,9 @@ no sigrok-cli flag goes with one.
   - `oxrok firmware info WHAT`: a package's files, its source and how to
     get it.
   - `--dir DIR` installs there instead of the user's firmware directory
-    (`OXROK_FIRMWARE_INSTALL_DIR`, or `oxrok-firmware` under the user's
-    data directory, `~/.local/share` on Linux), and `-l LEVEL` is the
-    log level; both go with any of the four.
+    (`OXROK_FIRMWARE_INSTALL_DIR`, or `oxrok-firmware` under
+    `XDG_DATA_HOME`, which is `~/.local/share` when it is not set), and
+    `-l LEVEL` is the log level; both go with any of the four.
 
   A capture that misses a firmware file names the command that gets it,
   and on a terminal asks whether to download it.

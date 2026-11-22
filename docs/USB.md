@@ -1429,7 +1429,8 @@ of a sigrok driver `DRIVER`:
    `tests/emu/NAME/gcov.txt`. Read the unreached ranges against the C
    source: add cases for the paths a device can take, and leave those
    it cannot (allocation failures, transport errors, model variants
-   nobody has) as the "not emulated" list. The roadmap's criterion 4
+   nobody has) as the "not emulated" list. Criterion 4 of
+   [What counts as emulator-verified](#what-counts-as-emulator-verified)
    stops there.
 8. In `docs/DEVICES.md`, in the driver's entry (or a new one): that it
    is emulated, the model's name and options, the cases, the date, the
