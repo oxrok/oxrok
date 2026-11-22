@@ -237,8 +237,9 @@ jobs:
     needs: [changes, emulator-probe]
     if: needs.emulator-probe.outputs.vhci == 'true'
     # One job takes over an hour. tools/ci/changes.py picks the models
-    # and balances them over up to six jobs by golden case count; a new
-    # model joins a shard by itself.
+    # and balances them over up to six jobs, by the seconds
+    # tools/ci/emu-weights.json has for each, or by golden case count
+    # without that file; a new model joins a shard by itself.
     strategy:
       fail-fast: false
       matrix:
