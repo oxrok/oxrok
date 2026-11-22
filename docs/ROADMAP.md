@@ -193,6 +193,31 @@ first entry comes before the others.
   saves CI nothing, and each feature is one more combination to keep
   building: when a user asks for it.
 
+- The library's surface is smaller (the core enums are
+  `#[non_exhaustive]`, each driver's `protocol` module is private) and
+  nothing watches it: a `cargo-semver-checks` or `cargo public-api` job
+  on pull requests, advisory while the version is 0.x. The dmm parsers,
+  `serial_dmm` and the drivers' other submodules are still `pub`.
+  oxrok-ui, outside the workspace, needs `_` arms where it matches on
+  those enums.
+- `cargo doc` gives 161 private-intra-doc-link warnings, 156 of them in
+  `src/drivers`, where module docs link to items of the now private
+  `protocol`, and 4 older ones (two `pydecode` links in `lib.rs` that
+  do not resolve, `Driver::usb_claims` in `core/udev.rs`, an ambiguous
+  `tools::catalog` in `mcp/mod.rs`). On docs.rs those links are plain
+  text. No CI job builds the docs: choose between code spans, an allow
+  for the crate and `--document-private-items`, then gate it.
+- Dead code the narrowing showed, kept under `allow(dead_code)` or
+  `cfg(test)` and worth a look: `baylibre_acme`'s `c_strtol` is tested
+  and never called; protocol constants nothing uses in `oxla`
+  (`TMODE_B`, `TMODE_A_AND_B`, `TMODE_B_THEN_A`, `NO_SAMPLE_LIMIT`),
+  `ikalogic_scanaplus` (four thresholds), `siglent_sds` (`TRIG_READY`)
+  and `mooshimeter_dmm` (`CHUNK`, where its tests write 19).
+- `CONTRIBUTING.md` ("No `unsafe` code. The one exception is
+  `pydecode`") and the module doc of `src/spawn.rs` do not match the
+  list `src/lib.rs` now has: `pydecode`, `gpib`, `parport`, `spawn`
+  and `bt`.
+
 ## Transports
 
 No USB logic-analyzer driver needs code: every one is ported, has a replay
@@ -680,7 +705,12 @@ The models are plain Rust with no I/O for this reason; see
   change to the harness. Wanted: an index by driver id, and each
   section's status line generated from `drivers.toml` and `tests/emu`
   and checked as `MCP.md`'s tool list is. `tools/site-data`'s check of
-  the libsigrok names runs nowhere in this repository.
+  the libsigrok names runs nowhere in this repository, and nothing
+  checks that a `drivers.toml` entry names every directory of
+  `tests/emu` (it holds today). The README's Status paragraph says 88
+  driver modules and 193 ids, dated 2026-11-09; there are 89 modules
+  and `drivers.toml` lists 195 ids: generate the numbers, test them or
+  drop them.
 - The software cases in `diffcli.sh` (`case_`, about 70 lines: the demo
   driver, input and output modules, the `.sr`/`.vcd` round trips, the
   decoders, 9 of them only with the python feature) compare oxrok with
