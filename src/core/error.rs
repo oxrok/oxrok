@@ -2,7 +2,7 @@
 //   libsigrok/src/error.c.
 // This file is a port of the sigrok counterpart, GPL-3.0-or-later like it.
 
-//! The error type shared by every oxrok crate.
+//! The error type shared by every oxrok module.
 
 /// What can go wrong when talking to a device, a file or a session.
 ///
