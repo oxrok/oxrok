@@ -110,6 +110,11 @@ jobs:
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    # rust-toolchain.toml overrides rustup's default toolchain, which is
+    # all the action below sets: without this the job checks on the
+    # toolchain of that file, not on the MSRV.
+    env:
+      RUSTUP_TOOLCHAIN: "1.95"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
