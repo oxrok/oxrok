@@ -155,7 +155,9 @@ Emulator and replay only, never run on hardware:
 known to differ. If you own one of these devices, a report is worth more
 than another emulator case: the output of a capture next to sigrok-cli's,
 and a recording (`OXROK_USB_RECORD=file oxrok -d DRIVER ...`) if they
-differ.
+differ. The
+[hardware report](https://github.com/oxrok/oxrok/issues/new?template=hardware-report.yml)
+issue form asks for what is needed.
 
 CI runs on Linux, macOS and Windows.
 
