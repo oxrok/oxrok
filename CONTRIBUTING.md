@@ -16,6 +16,14 @@
 - No `unsafe` code. The one exception is `pydecode`, which crosses
   into Python; every block there says why it is sound.
 
+## Plans
+
+A design plan for work not yet done lives in `docs/plans/`, not at the
+repository root. The pull request that completes a step removes that
+step from the plan, moves the reasons worth keeping into the page that
+documents the result, and deletes the plan when nothing is left of it.
+`docs/ROADMAP.md` points at the plan while it is open.
+
 ## Performance
 
 `cargo run --release --example trigger_bench` measures the host
