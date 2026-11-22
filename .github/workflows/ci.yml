@@ -5,6 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request cancels the run of the one before it: one
+# full run is 20 jobs, all the organisation can run at once. A push to
+# main is a group of its own (its run id), so it is never cancelled and
+# never dropped while it waits: every merge gets its result.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
