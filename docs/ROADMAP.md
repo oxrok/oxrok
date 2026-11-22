@@ -21,8 +21,8 @@ the detail, and leaves this list when they are gone.
 
 1. A shutdown that cannot hang: everything under [Shutdown](#shutdown).
    Done when a stop and a close return in bounded time for every driver
-   on a queue nobody reads, with a test over the registry that keeps a
-   new driver from bringing the hang back, and when the CLI closes its
+   on a queue nobody reads (`NOT_BOUNDED` in
+   `tests/close_unread_queue.rs` is empty), and when the CLI closes its
    device on every exit.
 2. The software cases of `diffcli.sh` checked by default again (the
    last entry of [Harness and CI](#harness-and-ci)): the demo driver,
@@ -69,13 +69,31 @@ else on this page can follow it.
 A stop and a close have to return, whoever reads the queue and however
 the process ends. These are one piece of work:
 
-- About 35 drivers block in `sink.send` or `sink.end` while close joins
+- 39 drivers still block in `sink.send` or `sink.end` while close joins
   them; a full queue nobody reads hangs the close. `Session` always reads
   its queue, so this bites a direct `Device` user and the drivers' own
-  unit tests (one hung a CI runner for an hour). The bounded `send_end`
-  of `gmc-mh-1x-2x`, `appa-55ii`, `beaglelogic`, `atorch` and
-  `atten-pps3xxx` fits the rest; one by one or through a shared
-  `PacketSink` change is undecided.
+  unit tests (one hung a CI runner for an hour). The core has the bound
+  (`PacketSink::stopped_by`: after a stop a packet waits 500 ms for
+  room, then the sink gives up), `demo` and `serial-dmm` use it, and
+  `tests/close_unread_queue.rs` names the rest in `NOT_BOUNDED`:
+  `asix_sigma`, `chronovu_la`, `conrad_digi_35_cpu`,
+  `dcttech_usbrelay`, `devantech_eth008`, `dreamsourcelab_dslogic`,
+  `fluke_dmm`, `ftdi_la`, `fx2lafw`, `greatfet`, `gwinstek_gpd`,
+  `hantek_4032l`, `hantek_6xxx`, `hantek_dso`, `hp_59306a`,
+  `icstation_usbrelay`, `ikalogic_scanalogic2`, `ikalogic_scanaplus`,
+  `juntek_jds6600`, `kecheng_kc_330b`, `kingst_la2016`,
+  `korad_kaxxxxp`, `lascar_el_usb`, `lecroy_logicstudio`,
+  `manson_hcs_3xxx`, `microchip_pickit2`, `ols`, `pipistrello_ols`,
+  `raspberrypi_pico`, `rdtech_tc`, `rdtech_um`, `rohde_schwarz_sme_0x`,
+  `saleae_logic16`, `saleae_logic_pro`, `sysclk_lwla`,
+  `sysclk_sla5032`, `testo`, `uni_t_dmm`, `zeroplus_logic_cube`. Each
+  is usually one line (`let sink = sink.stopped_by(&stop);` before the
+  thread takes the sink), a unit test with
+  `core::device::close_with_an_unread_queue`, its name out of the list,
+  and its emulator goldens run again, since a told sink polls a full
+  queue where it used to block. The relay drivers, `hp_59306a`,
+  `conrad_digi_35_cpu`, `juntek_jds6600` and `rohde_schwarz_sme_0x` may
+  join no thread and need only a look.
 - The guard over the registry (`tests/close_unread_queue.rs`) reads the
   source: it passes a driver that bounds only its `End`, or only names
   `stopped_by` in a comment. The real check is a close on an unread
