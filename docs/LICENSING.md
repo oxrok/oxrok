@@ -127,12 +127,16 @@ crates.
 
 ### Checks
 
-`deny.toml`: `cargo deny --workspace check licenses` in CI's `licenses`
-job fails on a licence that is not on its allowlist, for any feature on
-any platform. The LGPL and MPL crates are exceptions by name, each with
+`deny.toml`: `cargo deny --workspace --locked check licenses sources` in
+CI's `licenses` job fails on a licence that is not on its allowlist, for
+any feature on any platform, and on a crate that does not come from
+crates.io. The LGPL and MPL crates are exceptions by name, each with
 the reason. It reads manifests and licence files, so it cannot see bundled
 C: when adding a `-sys` crate or a dependency with a vendored tree, read
-it and add it to the tables above. Licences only, no advisories or bans.
+it and add it to the tables above. RustSec advisories and yanked crates
+are a separate check, `cargo deny check advisories`, which
+`.github/workflows/advisories.yml` runs daily and not on pull requests.
+No bans.
 
 `THIRD-PARTY-NOTICES.txt` is generated, not committed, by
 `tools/third-party/notices.py`, from `make dist` and `make dist-src`, whose

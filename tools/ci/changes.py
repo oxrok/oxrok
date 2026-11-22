@@ -51,6 +51,8 @@ IGNORED_PREFIXES = (
     "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
+    # cargo deny check advisories, on a schedule: no job of ci.yml.
+    ".github/workflows/advisories.yml",
     ".github/ISSUE_TEMPLATE/",
     # udev rules: tests/udev_rules.rs reads them, in the test job.
     "contrib/",
