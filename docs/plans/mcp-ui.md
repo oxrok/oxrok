@@ -108,7 +108,7 @@ apart):
 
 ### Picking tools in the UI
 
-A *Settings → MCP* panel: enable the server, show the socket path and
+An MCP panel in the settings: enable the server, show the socket path and
 the client configuration to copy, and a checklist of every tool in the
 full catalog (library and UI ones) grouped by tag, with *Read-only* and
 *No hardware* presets. The choice persists in the app settings and is
