@@ -33,8 +33,8 @@ the detail, and leaves this list when they are gone.
    the vusb `CMD_UNLINK` race, then the `vhci-hcd` skip). Done when an
    emulator run that was selected and failed, or did not happen, blocks
    the pull request, and the race no longer makes that a coin toss.
-4. A release that cannot go out half done
-   ([Packaging and release](#packaging-and-release), its last entry),
+4. A first release through the rewritten workflow
+   ([Packaging and release](#packaging-and-release), its last entries),
    and with it a stable 0.3.0.
 5. A way in for hardware reports (the head of
    [Open verification](#open-verification)): 80 of the 90 entries of
@@ -47,8 +47,9 @@ the detail, and leaves this list when they are gone.
 A proposal: what a stable 0.3.0 should not ship without. Everything
 else on this page can follow it.
 
-- Items 1 and 4 of [Next](#next): a capture whose close can hang, and a
-  release flow that publishes before it has built, are not stable.
+- Items 1 and 4 of [Next](#next): a capture whose close can hang is
+  not stable, and the release workflow should have run on a pre-release
+  tag before it carries a stable one.
 - `oxla`'s emulator cases have run on Linux and its goldens are read
   ([Models and coverage](#models-and-coverage)): 0.3.0 is the release
   that brings the driver.
@@ -302,21 +303,22 @@ skills and `track.py` are in
   nowhere, since `docs/` is not in the crate, and `documentation` is
   unset. The install section could show `gh attestation verify` beside
   the download once a release carries attestations.
-- Releases are cut by hand, from memory: bump, tag, publish the GitHub
-  release, `cargo publish`. `release.yml` runs on `release: published`,
-  so a release is public before its assets exist (54 minutes for
-  0.3.0-alpha.1) and a failed target leaves it half filled. Nothing
-  compares the tag with `Cargo.toml`'s version, which names the
-  archives, or asks for a `CHANGELOG.md` section. Wanted: a written
-  procedure, a tag, version and changelog check before anything is
-  built, a draft that is published only when every asset is on it, and
-  crates.io published from the same workflow through trusted publishing
-  (OIDC, no stored token), with a decision on what happens when that
-  publish fails after the binaries are out: a crates.io publish cannot
-  be undone.
+- The release workflow was rewritten and has not run: a pushed `v*`
+  tag is checked against the version and `CHANGELOG.md`, built,
+  attested, and left as a draft release with every asset on it. The
+  next tag is its first real run: the tag trigger, the artifacts merged
+  into one directory, the `.sha256` files written on macOS and Windows
+  checked on Linux, the attestation, the draft. A run started again on
+  a tag that already has a release fails only in its last job, after
+  the whole build.
+- Publishing to crates.io is by hand, after the GitHub release.
+  Trusted publishing (OIDC, no stored token) from the workflow needs a
+  one-time setup on crates.io and a decision on what happens when that
+  publish fails after the release is public: it cannot be undone.
 
 Static binaries, the release archives, `make dist`, notices and
-`cargo publish` already work.
+`cargo publish` already work, and [RELEASING.md](RELEASING.md) has the
+procedure and what to do when a step of it fails.
 
 ## Firmware fetching
 
