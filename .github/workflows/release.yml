@@ -1,24 +1,56 @@
 name: Release binaries
 
-# Run by hand from the Actions tab for test builds, and on every
-# published release, where the archives are attached to the release.
+# On a pushed version tag, where the archives end up in a draft release
+# that the owner publishes (docs/RELEASING.md). By hand from the Actions
+# tab too: on a branch for a test build, which publishes nothing, or on a
+# tag to build its release again.
 on:
   workflow_dispatch:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
+# The jobs build and hand over workflow artifacts. Only `publish` writes.
 permissions:
-  contents: write
+  contents: read
+
+# One run per tag at a time, so two cannot both draft its release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_ABOUT_VERSION: 0.9.3
 
 jobs:
+  # Before an hour of builds: the tag is the version in Cargo.toml, which
+  # names the archives, and CHANGELOG.md has that version's section, which
+  # becomes the release notes. A run with no tag has nothing to check.
+  check:
+    name: tag, version and changelog
+    runs-on: ubuntu-latest
+    outputs:
+      prerelease: ${{ steps.release.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: release
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: python3 -I tools/ci/release.py --tag "$TAG" --notes release-notes.md
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.ref_type == 'tag'
+        with:
+          name: release-notes
+          path: release-notes.md
+          if-no-files-found: error
+
   # The source offer of the GPL and the MPL: the tagged tree with its crates
   # vendored, the decoders and the notices. See docs/LICENSING.md.
   source:
     name: vendored source tarball
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -39,8 +71,9 @@ jobs:
           # Already xz.
           compression-level: 0
 
-  # Published only once it builds with no network, and the binaries wait
-  # for this job, so no release has binaries without their source.
+  # Released only once it builds with no network: `publish` waits for this
+  # job and for every binary, so no release has binaries without their
+  # source, or the source without them.
   source-check:
     name: vendored source tarball, built offline
     needs: source
@@ -67,15 +100,12 @@ jobs:
           make dist-src-check TARGET=x86_64-unknown-linux-musl \
             SRC_CHECK="$RUNNER_TEMP/src-check" \
             SRC_CHECK_WRAP="sudo unshare -n setpriv --reuid=$(id -u) --regid=$(id -g) --clear-groups env PATH=$PATH HOME=$HOME"
-      - name: Attach to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/*.tar.xz dist/*.tar.xz.sha256 --clobber
 
+  # Beside the source jobs, not after them: nothing is released until
+  # `publish` has all of it.
   build:
     name: ${{ matrix.target }}
-    needs: source-check
+    needs: check
     strategy:
       fail-fast: false
       matrix:
@@ -132,8 +162,69 @@ jobs:
         with:
           name: oxrok-${{ matrix.target }}
           path: dist/*
-      - name: Attach to the release
-        if: github.event_name == 'release'
+          if-no-files-found: error
+
+  # The one job whose token writes, and it runs nothing from the tree: it
+  # takes what the jobs above built, attests where that was built, and puts
+  # all of it in a draft release in one go. A draft is not public, and has
+  # every asset or does not exist; the owner publishes it
+  # (docs/RELEASING.md).
+  publish:
+    name: draft release
+    if: github.ref_type == 'tag'
+    needs: [check, source-check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      # First, so that a run on a tag that has a release stops before it
+      # attests anything. A release is never written twice: a published one
+      # stays as it is, and a draft is deleted by hand before a new run.
+      - name: No release for the tag yet
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,url; then
+            echo "::error::$TAG has a release already: see docs/RELEASING.md"
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: oxrok-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-notes
+          path: notes
+      # Every archive the release has, each against the .sha256 its build
+      # wrote, then all of them in one SHA256SUMS written here, which is
+      # what the attestation covers.
+      - name: Checksums
+        working-directory: dist
+        run: |
+          ls -l
+          version=${TAG#v}
+          for target in vendored x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+              x86_64-apple-darwin aarch64-apple-darwin x86_64-pc-windows-msvc; do
+            ls "oxrok-$version-$target".*.sha256
+          done
+          test "$(ls | wc -l)" -eq 12
+          for sum in *.sha256; do
+            sha256sum --check --strict "$sum"
+          done
+          sha256sum *.tar.gz *.tar.xz *.zip > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+      # Once, with everything, and no --clobber: there is nothing to replace.
+      - name: Draft the release
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
+            --prerelease="$PRERELEASE" --title "oxrok ${TAG#v}" --notes-file notes/release-notes.md
