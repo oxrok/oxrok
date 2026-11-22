@@ -57,7 +57,7 @@
 //!   without an end.
 //! - A port write that fails is an error; libieee1284 ignores it.
 
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 pub mod protocol;
 #[cfg(test)]

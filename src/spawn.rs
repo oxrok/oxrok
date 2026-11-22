@@ -40,6 +40,8 @@ fn open_fds() -> Vec<i32> {
 
 /// Sets `FD_CLOEXEC` on descriptor `fd`, if it is open.
 #[cfg(unix)]
+// The crate denies unsafe code; this is the module's one unsafe call.
+#[allow(unsafe_code)]
 fn set_cloexec(fd: i32) {
     use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
     // SAFETY: `borrow_raw` asks that `fd` stay open while the borrow lives, which

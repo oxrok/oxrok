@@ -48,6 +48,8 @@
 //! - The top three bits of byte 0x21 cleared on every write
 //!   (`protocol.c:591`).
 
+#![forbid(unsafe_code)]
+
 pub mod protocol;
 
 use crate::core::{
