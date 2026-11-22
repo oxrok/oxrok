@@ -7,3 +7,20 @@ Cargo.lock.orig
 .DS_Store
 .pio/
 __pycache__/
+
+# Vendor firmware and the installers it comes in: never committed
+# (AGENTS.md). tools/ci/firmware.py has the same list, for CI.
+*.fw
+*.rbf
+*.ccf
+*.bitstream
+*.bit
+*.ihx
+*.iic
+*.hex
+*.sof
+*.jed
+*.dfu
+*.exe
+*.msi
+*.cab

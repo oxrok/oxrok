@@ -65,6 +65,9 @@ IGNORED_FILES = {
     ".packit.yaml",
     ".github/dependabot.yml",
     "tools/attribution.py",
+    # The vendor-firmware name check, run in the fmt and clippy job.
+    "tools/ci/firmware.py",
+    "tools/ci/test_firmware.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
     # The website's data generator, a script (not a directory).
