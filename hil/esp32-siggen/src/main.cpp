@@ -15,6 +15,10 @@
 //                                CS GPIO5 (active low, driven around the transfer). Replies the MISO bytes
 //   I2C <hz> <addr> <hex>     -> hardware I2C write: SDA GPIO21, SCL GPIO22 (internal pull-ups).
 //                                Replies I2C <endTransmission code> (2 = address NACK)
+//   UART <baud> <hex> [repeat] [gap_ms]
+//                             -> hardware UART2, 8N1, on TX2 (GPIO17): send the bytes, repeat times
+//                                (default 1) with gap_ms (default 10) of idle between them. A line
+//                                arriving on the serial port ends it early. Replies UART <bytes sent>
 //   ADC <gpio>                -> read a pin with the ADC, replies the level in mV
 //   KICK <gpio> <ms> [ref]    -> sample a pin with the ADC continuously for ms milliseconds,
 //                                alternating with pin ref (if given) to precharge the sample cap
@@ -170,6 +174,35 @@ static void do_i2c(const char *args) {
   Serial.printf("I2C %d\n", r);
 }
 
+static void do_uart(const char *args) {
+  static const int pins[1] = {17};
+  uint32_t baud = 115200, rep = 1, gap = 10; int off = 0;
+  sscanf(args, "%u %n", &baud, &off);
+  // The hex runs to the next space; parse_hex() would read on through it.
+  const char *p = args + off;
+  uint8_t buf[256]; int n = 0;
+  while (isxdigit(p[0]) && isxdigit(p[1]) && n < (int)sizeof(buf)) {
+    char b[3] = {p[0], p[1], 0};
+    buf[n++] = strtoul(b, 0, 16);
+    p += 2;
+  }
+  sscanf(p, "%u %u", &rep, &gap);
+  if (!baud || !n) { Serial.println("ERR uart"); return; }
+  gpio_reset_pin((gpio_num_t)pins[0]);
+  Serial2.begin(baud, SERIAL_8N1, -1, pins[0]);
+  // Two characters of idle, so the first start bit is a clean one.
+  delayMicroseconds(20000000UL / baud + 100);
+  uint32_t sent = 0;
+  for (uint32_t r = 0; r < rep && !Serial.available(); r++) {
+    if (r) delay(gap);
+    Serial2.write(buf, n); Serial2.flush();
+    sent += n;
+  }
+  Serial2.end();
+  restore_pins(pins, 1);
+  Serial.printf("UART %u\n", sent);
+}
+
 static Preferences prefs;
 
 // Plays the stored multimeter packet until its time is up or a byte arrives.
@@ -219,6 +252,8 @@ static void handle(String &line) {
     do_spi(line.c_str() + 4);
   } else if (line.startsWith("I2C ")) {
     do_i2c(line.c_str() + 4);
+  } else if (line.startsWith("UART ")) {
+    do_uart(line.c_str() + 5);
   } else if (line.startsWith("ADC ")) {
     Serial.printf("MV %u\n", analogReadMilliVolts(atoi(line.c_str() + 4)));
   } else if (line.startsWith("KICK ")) {
