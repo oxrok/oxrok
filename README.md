@@ -185,11 +185,13 @@ and command lines for real devices in [docs/DEVICES.md](docs/DEVICES.md).
 With Rust 1.95 or newer:
 
 ```sh
-cargo install oxrok --version 0.3.0-alpha.1 --locked
+cargo install oxrok --locked                           # the stable release, 0.2.0
+cargo install oxrok --version 0.3.0-alpha.1 --locked   # the pre-release
 ```
 
-The version is needed: with only pre-releases published, cargo finds nothing
-without it. Or, from a checkout, which has what was merged since:
+cargo installs a pre-release only when its version is named;
+[CHANGELOG.md](CHANGELOG.md) says what it has that 0.2.0 does not. Or,
+from a checkout, which has what was merged since:
 
 ```sh
 cargo install --path . --locked
