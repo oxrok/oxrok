@@ -7,3 +7,6 @@ Cargo.lock.orig
 .DS_Store
 .pio/
 __pycache__/
+# Local agent and MCP client configuration: paths of this machine.
+opencode.json
+.mcp.json
