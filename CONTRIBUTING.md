@@ -13,8 +13,10 @@
   `changes` job's summary says why). The `ci:full` label runs
   everything.
 - Every change that a user can see gets a line in `CHANGELOG.md`.
-- No `unsafe` code. The one exception is `pydecode`, which crosses
-  into Python; every block there says why it is sound.
+- No `unsafe` code: the crate denies it. The exceptions are the modules
+  the crate docs in `src/lib.rs` list (`pydecode`, which crosses into
+  Python, and four that make a system call); each allows it where it is
+  and every block says why it is sound.
 
 ## Performance
 

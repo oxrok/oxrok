@@ -6,8 +6,8 @@
 //! the child unless asked not to (`G_SPAWN_LEAVE_DESCRIPTORS_OPEN`); Rust's
 //! `Command` passes on every descriptor that lacks `FD_CLOEXEC`. Rust opens its
 //! own with the flag, so what would leak is what oxrok was given when it started
-//! (a CI runner hands over two). This is the one module besides `pydecode` with
-//! unsafe code: one call that names a descriptor by its number.
+//! (a CI runner hands over two). This is one of the few modules with unsafe code
+//! (the crate docs list them): one call that names a descriptor by its number.
 
 /// Marks every descriptor above 2 that oxrok has open close-on-exec, so that a
 /// program started next gets none of them. Call it right before the spawn.
