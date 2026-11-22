@@ -8,6 +8,18 @@ release may change the library API.
 
 ### Added
 
+- The `wch-ch32h417-libusb` driver, for the WeAct Studio Logic Analyzer V2
+  and the CH32H417 board it comes from (`1a86:5537`; 16 channels, 200 MHz
+  over USB 3, 20 or 40 MHz over USB 2, an adjustable threshold, frames, the
+  board's key and LED; the original board's ADC mode). It is not in
+  sigrok: it follows the driver of the vendor's sigrok fork. It has never
+  run on a board or against that driver; an emulator model and its cases
+  are written and not yet run (`docs/DEVICES.md`).
+- `SoftTriggerLogic::arm_when_full` and `SoftTriggerLogic::reset`, the
+  vendor fork's soft trigger: no match until the pre-trigger samples are
+  in, and a new start for each frame.
+- `Transport::usb_version`, `bcdUSB` of the device descriptor without a
+  transfer, kept in a fixture's `device` line as `usb=XXXX`.
 - The `oxla` driver, for the oxla logic analyzer gateware on a Sipeed Tang
   Nano 20K (8, 14 or 16 channels, up to 270 MS/s, a two term trigger, run
   length encoding), on its serial port. It has no libsigrok counterpart.

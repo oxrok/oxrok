@@ -171,6 +171,9 @@ pub struct Fixture {
     /// when the driver asked for them: the OS answers from its cache, so
     /// they are part of the `device` line (`strings=1,2,3`), not a step.
     pub strings: Option<[u8; 3]>,
+    /// `bcdUSB` of the device descriptor, when the driver asked for it:
+    /// from the OS's cache as well, so `usb=0300` of the `device` line.
+    pub usb_version: Option<u16>,
     /// The calls, in order.
     pub steps: Vec<Step>,
 }
@@ -210,6 +213,9 @@ impl Fixture {
         }
         if let Some([m, p, n]) = self.strings {
             let _ = write!(s, " strings={m},{p},{n}");
+        }
+        if let Some(v) = self.usb_version {
+            let _ = write!(s, " usb={v:04x}");
         }
         s.push('\n');
         for step in &self.steps {
@@ -296,7 +302,8 @@ impl Fixture {
             }
             let bad = |what: &str| Error::Arg(format!("fixture line {}: {what}", n + 1));
             if let Some(rest) = line.strip_prefix("device ") {
-                (fixture.device, fixture.strings) = parse_device(rest).map_err(|e| bad(&e))?;
+                (fixture.device, fixture.strings, fixture.usb_version) =
+                    parse_device(rest).map_err(|e| bad(&e))?;
                 have_device = true;
                 continue;
             }
@@ -345,11 +352,12 @@ pub(crate) fn unquote(s: &str) -> std::result::Result<(String, &str), String> {
     Err("unterminated string".into())
 }
 
-type DeviceLine = (UsbDeviceInfo, Option<[u8; 3]>);
+type DeviceLine = (UsbDeviceInfo, Option<[u8; 3]>, Option<u16>);
 
 fn parse_device(s: &str) -> std::result::Result<DeviceLine, String> {
     let mut d = UsbDeviceInfo::default();
     let mut strings = None;
+    let mut usb_version = None;
     let mut rest = s.trim();
     while !rest.is_empty() {
         let (key, after) = rest.split_once('=').ok_or("expected key=value")?;
@@ -377,6 +385,7 @@ fn parse_device(s: &str) -> std::result::Result<DeviceLine, String> {
                     .collect::<std::result::Result<_, _>>()?;
                 strings = Some(<[u8; 3]>::try_from(f).map_err(|_| "bad strings field")?);
             }
+            "usb" => usb_version = Some(hex16(&value)?),
             "interfaces" => {
                 for item in value.split(',') {
                     let f: Vec<&str> = item.split(':').collect();
@@ -394,7 +403,7 @@ fn parse_device(s: &str) -> std::result::Result<DeviceLine, String> {
             other => return Err(format!("unknown device field {other}")),
         }
     }
-    Ok((d, strings))
+    Ok((d, strings, usb_version))
 }
 
 /// Encodes interface descriptors for a fixture: per interface its
@@ -616,7 +625,12 @@ impl Recorder {
         let device = inner.info().clone();
         Recorder {
             inner,
-            fixture: Arc::new(Mutex::new(Fixture { device, strings: None, steps: Vec::new() })),
+            fixture: Arc::new(Mutex::new(Fixture {
+                device,
+                strings: None,
+                usb_version: None,
+                steps: Vec::new(),
+            })),
             file: None,
         }
     }
@@ -678,6 +692,15 @@ impl Transport for Recorder {
         let r = self.inner.string_indexes();
         if let Ok(i) = &r {
             self.fixture.lock().expect("recording lock").strings = Some(*i);
+        }
+        r
+    }
+
+    /// Not a step either: `usb=` of the `device` line.
+    fn usb_version(&mut self) -> Result<u16> {
+        let r = self.inner.usb_version();
+        if let Ok(v) = &r {
+            self.fixture.lock().expect("recording lock").usb_version = Some(*v);
         }
         r
     }
@@ -1081,6 +1104,14 @@ impl Transport for Replay {
             .ok_or_else(|| Error::not_supported("string descriptor indexes (not recorded)"))
     }
 
+    /// From the `usb=` of the `device` line.
+    fn usb_version(&mut self) -> Result<u16> {
+        self.state()
+            .fixture
+            .usb_version
+            .ok_or_else(|| Error::not_supported("the USB version (not recorded)"))
+    }
+
     fn set_configuration(&mut self, configuration: u8) -> Result<()> {
         self.state().unit(&Call::SetConfiguration(configuration))
     }
@@ -1210,6 +1241,18 @@ mod tests {
         assert_eq!(Replay::new(f).string_indexes().unwrap(), [1, 2, 0]);
         let mut r = Replay::from_text(TEXT).unwrap();
         assert!(r.string_indexes().is_err());
+    }
+
+    #[test]
+    fn the_usb_version_comes_from_the_device_line() {
+        let text = "# oxrok usb fixture 1\n\
+            device vid=1a86 pid=5537 version=0100 bus=0 addr=0 usb=0300\n";
+        let f = Fixture::parse(text).unwrap();
+        assert_eq!(f.usb_version, Some(0x0300));
+        assert_eq!(f.to_text(), text);
+        assert_eq!(Replay::new(f).usb_version().unwrap(), 0x0300);
+        let mut r = Replay::from_text(TEXT).unwrap();
+        assert!(r.usb_version().is_err());
     }
 
     #[test]

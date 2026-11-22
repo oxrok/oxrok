@@ -327,6 +327,10 @@ impl Transport for Nusb {
         ])
     }
 
+    fn usb_version(&mut self) -> Result<u16> {
+        Ok(self.device.device_descriptor().usb_version())
+    }
+
     /// nusb's detach is a bare `USBDEVFS_DISCONNECT`, while libusb first
     /// asks for the driver and leaves one called `usbfs`, another program's
     /// claim, alone (`op_detach_kernel_driver`); so this looks first. nusb's

@@ -523,6 +523,38 @@ The models are plain Rust with no I/O for this reason; see
 
 ## Open verification
 
+- `wch-ch32h417-libusb` (the WeAct Studio Logic Analyzer V2, issue 116)
+  has never run, on a board or against its C driver. In order:
+  1. Settle the frame marks. sigrok-cli prints the C driver's frames (no
+     frame begin before an untriggered frame, the begin of a triggered
+     one after its pre-trigger samples, one more begin after the last
+     frame's end), oxrok whole frames, and `--digest` takes the output
+     before the filter, so every capture case differs. Either the C
+     driver's frames are fixed in `oxrok/libsigrok` (against that fork's
+     rule of no behaviour fixes, so a decision), or oxrok sends the C
+     driver's and its cases for whole frames go.
+  2. Build the oracle from `oxrok/libsigrok`'s `oxrok` branch (it needs
+     the driver's commit there) and run
+     `sh tools/diffcli.sh --oracle --emu-model wch-ch32h417-libusb` on a
+     machine where the harness can attach (passwordless sudo, `vhci-hcd`).
+     Every case of `tools/emu/wch-ch32h417-libusb.sh` is a reading's
+     guess: a violation under sigrok-cli is the model's fault until shown
+     otherwise, and the `--oracle-differs` and `--oxrok-fails` marks are
+     what the reading expects. Bless, read each golden, add the model to
+     `docs/drivers.toml` (`emu`, `status`), the README table and
+     `tests/emu_replay.rs` (`RECORDED`: `default capture`, `trigger D1
+     rising`), then `--gcov`.
+  3. On the board (ordered 2026-11-22): whether the firmware answers a
+     start or a stop (the model assumes not), the answers' length (32
+     bytes assumed), `bcdUSB` on a USB 2 port (2.00 assumed), which eight
+     inputs a byte a sample holds, the descriptor's strings, the
+     threshold's real levels, the key, and whether 200 MHz with 16
+     channels (400 MB/s) holds through nusb: the transfers are the C
+     driver's 32 of 256 KiB. Record a capture and hold the model to it.
+  The original board (serial `01`, with the ADC mode) is in nobody's
+  hands; its ADC path follows the C and oxrok's own choices
+  (`docs/DEVICES.md`).
+
 - `mooshimeter-dmm` on a real meter: the per-reading message order, the
   DEPTH/RATE period and the buffers' full scale are the model's reading of
   the vendor's code; radio timing, pairing and more than one link are not

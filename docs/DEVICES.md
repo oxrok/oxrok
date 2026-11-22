@@ -670,6 +670,85 @@ against the one release 0.2.0 has for `la14-ddr`, and the open against
 the fake board of the `oxla` tests; none of them is a recording of the
 board.
 
+## WCH CH32H417 logic analyzers (wch-ch32h417-libusb)
+
+`wch-ch32h417-libusb`: the WeAct Studio Logic Analyzer V2 and the original
+CH32H417 board it comes from, `1a86:5537`: 16 channels, 200 MHz over USB 3,
+an adjustable input threshold. The firmware is on the board and nothing is
+uploaded. Asked for in [issue 116](https://github.com/oxrok/oxrok/issues/116).
+
+```sh
+oxrok -d wch-ch32h417-libusb --show
+oxrok -d wch-ch32h417-libusb -c samplerate=100m --samples 1m -o capture.sr
+oxrok -d wch-ch32h417-libusb -c captureratio=20 --samples 100k -t D0=r,D3=1 -O csv:trigger=true
+oxrok -d wch-ch32h417-libusb -c logic_channels=8:voltage_threshold=1.0-1.0 --samples 10k -O bits
+```
+
+**Status: never run.** Not on a board, and not against its C driver either:
+the harness needs root to attach an emulated device and the machine the
+port was written on had none. What exists is the driver with its unit
+tests (a board of a few lines as the transport: the scan, the open, every
+setting, the capture's commands in order, frames and triggers), the model
+(`emu/src/models/wch-ch32h417-libusb.rs`) with its own, and the scenario
+(`tools/emu/wch-ch32h417-libusb.sh`, 77 cases), which skips itself until
+it has goldens. `docs/ROADMAP.md`, "Open verification", has what is left.
+
+The driver is not in sigrok. Its C counterpart is the vendor's fork
+(WeActStudio.U3LogicAnalyzer at `41b2564`), whose libusb driver is in the
+oracle's fork (`oxrok/libsigrok`, `src/hardware/wch-ch32h417-libusb`). The
+firmware is closed, so the C driver is all there is to read; the protocol
+is in the module documentation of `src/drivers/wch_ch32h417_libusb/protocol.rs`.
+
+Boards, by the start of the serial number: `b5` is the V2 (the full rate
+tables, the threshold as the level at the input); `01` is the original
+board (the first 14 rates over USB 3 and one over USB 2, the threshold as
+DAC counts, two analog inputs and the ADC mode). Any other serial number
+is no device of the driver's.
+
+The link is told by `bcdUSB`: below 3.00 the device is on USB 2 and shows
+6 rates up to 20 MHz, or 8 up to 40 MHz once `logic_channels` is 8 or
+less (a byte a sample). Set `logic_channels` before `samplerate`: changing
+it picks the table's fastest rate again.
+
+Options beyond libsigrok's keys, with the vendor fork's names:
+`hardware_version` (firmware version times 256 plus the hardware version,
+asked when read), `usb_version` (2 or 3), `link_stop_reason` (1 when the
+last capture ended because the samples stopped), `key_start_stop` (the
+board's key ends a capture; firmware 0.2), `key_pressed` (asked when read),
+`led_brightness` (percent), and for the ADC `adc_precision` (8, 10) and
+`adc_channel` (0, 1).
+
+Where oxrok differs from the C driver, each by choice:
+
+- `conn=` selects a board (`BUS.ADDRESS`, `VID.PID`, or the `usb/BUS-PORT`
+  id a scan prints); the C driver logs that it ignores it.
+- Every frame begins with a frame begin and holds its pre-trigger samples
+  and its trigger mark. The C driver begins no frame without a trigger,
+  begins a triggered one after its pre-trigger samples, and begins one
+  more, empty, after the last frame's end when samples were left over in
+  the transfer. So `FRAME-BEGIN` and `FRAME-END` lines differ in every
+  capture's output, and no capture case can match the oracle until that is
+  settled (ROADMAP).
+- A frame that ends exactly with a transfer starts the next from a clean
+  trigger; the C driver resets the trigger only when samples were left
+  over, and with no trigger reads through a null pointer there.
+- A capture that ends on 500 ms without samples fails (exit 1) unless the
+  key ended it; the C driver ends it as any other.
+- A failed sample transfer ends the capture with its error; the C driver
+  submits it again.
+- A trigger in the ADC mode is refused; the C driver matches it on the raw
+  ADC bytes and sends the samples before it as logic.
+- ADC samples are the selected input's; the C driver says each belongs to
+  every enabled analog channel, with one value for the two.
+
+The trigger is the vendor's variant of libsigrok's soft trigger
+(`SoftTriggerLogic::arm_when_full` and `reset`): no match until the
+pre-trigger samples are in, and each frame starts over.
+
+Not done: the firmware update (the `ae` command and the HID boot loader
+`1a86:fe17`), and the Windows CH375 back end, which WinUSB replaces from
+firmware 0.2 on.
+
 ## Rigol and Agilent oscilloscopes
 
 Emulated: model `rigol-ds`, on USBTMC, TCP and a serial port: DS1102E,

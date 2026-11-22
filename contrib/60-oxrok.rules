@@ -182,6 +182,9 @@ ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="05df", ENV{ID_OXROK}="1"
 # Braintechnology USB-LPS (fx2lafw)
 ATTRS{idVendor}=="16d0", ATTRS{idProduct}=="0498", ENV{ID_OXROK}="1"
 
+# WCH CH32H417 logic analyzer (WeAct Studio Logic Analyzer V2) (wch-ch32h417-libusb)
+ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="5537", ENV{ID_OXROK}="1"
+
 # UNI-T UT-D04 cable (WCH CH9325 or Hoitek HE2325U) (bbcgm-2010, brymen-bm25x, brymen-bm52x and 94 more)
 ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="e008", ENV{ID_OXROK}="1"
 
