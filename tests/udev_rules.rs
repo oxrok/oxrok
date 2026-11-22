@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Miguel Angel Ajo Pelayo <miguelangel@ajo.es>
 
 //! `--udev-rules` against the committed `contrib/60-oxrok.rules`, and
-//! every driver that opens USB or HID devices claims them.
+//! every driver that opens USB or HID devices claims them. Also what else
+//! `docs/drivers.toml` says that a test can hold it to: the emulator
+//! models it names are there.
 
 use oxrok::core::{Registry, UsbClaim};
 use std::collections::HashMap;
@@ -131,4 +133,66 @@ fn every_usb_or_hid_driver_claims_its_devices() {
         }
     }
     assert!(missing.is_empty(), "USB drivers with no usb_claims(): {missing:?}");
+}
+
+/// The `emu` directories of every entry of `docs/drivers.toml`, with the
+/// entry's name; empty when the file is not there. An array may run over
+/// several lines.
+fn emu_models() -> Vec<(String, String)> {
+    let Ok(text) =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/drivers.toml"))
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut entry = String::new();
+    let mut in_emu = false;
+    for line in text.lines() {
+        let line = line.trim();
+        let part = if in_emu {
+            line
+        } else if let Some(rest) = line.strip_prefix("emu = [") {
+            rest
+        } else {
+            if let Some(name) = line.strip_prefix("[drivers.").and_then(|l| l.strip_suffix(']')) {
+                name.clone_into(&mut entry);
+            }
+            continue;
+        };
+        let (part, closed) = match part.split_once(']') {
+            Some((before, _)) => (before, true),
+            None => (part.split('#').next().unwrap_or(""), false),
+        };
+        out.extend(
+            part.split(',')
+                .map(|s| s.trim().trim_matches('"'))
+                .filter(|s| !s.is_empty())
+                .map(|s| (entry.clone(), s.to_owned())),
+        );
+        in_emu = !closed;
+    }
+    out
+}
+
+/// tools/site-data takes an entry's case counts and gcov figures from
+/// the `tests/emu` directories it names, and it runs for the site alone:
+/// a directory renamed or mistyped would show there, after the merge.
+#[test]
+fn every_emu_model_of_drivers_toml_is_there() {
+    let models = emu_models();
+    if models.is_empty() {
+        return;
+    }
+    let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/emu"));
+    let missing: Vec<String> = models
+        .iter()
+        .filter(|(_, model)| !root.join(model).is_dir())
+        .map(|(entry, model)| format!("{entry}: tests/emu/{model}"))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "docs/drivers.toml names emulator models that are not there: {missing:?}"
+    );
+    // The parse found what it was written for: nearly every driver has a model.
+    assert!(models.len() > 50, "{} emu models read from docs/drivers.toml", models.len());
 }
