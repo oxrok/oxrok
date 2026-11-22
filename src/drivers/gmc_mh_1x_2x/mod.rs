@@ -593,6 +593,10 @@ impl Device for GmcDevice {
         };
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
+        // `Failed` if it failed and `End` wait for room in the queue for as
+        // long as nobody asked to stop, and after a stop only for
+        // [`END_AFTER_STOP`]: a close joins this thread.
+        let sink = sink.stopped_by_within(&stop, END_AFTER_STOP);
         let capturing = Arc::clone(&self.capturing);
         capturing.store(true, Ordering::SeqCst);
         let spawned = std::thread::Builder::new()
@@ -600,7 +604,7 @@ impl Device for GmcDevice {
             .spawn(move || {
                 let outcome = capture.run(&sink, &stop2);
                 capturing.store(false, Ordering::SeqCst);
-                send_end(&sink, &stop2, outcome);
+                sink.end(outcome);
             });
         match spawned {
             Ok(handle) => {
@@ -622,21 +626,6 @@ impl Device for GmcDevice {
         }
         Ok(())
     }
-}
-
-/// `Failed` if it failed and `End`, waiting for room in the queue for as long as
-/// nobody asked to stop, and after a stop only for [`END_AFTER_STOP`]: a close joins
-/// this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
-    let stopped_at = std::cell::Cell::new(None);
-    sink.end_while(outcome, || {
-        if !stop.load(Ordering::SeqCst) {
-            return true;
-        }
-        let at = stopped_at.get().unwrap_or_else(Instant::now);
-        stopped_at.set(Some(at));
-        at.elapsed() < END_AFTER_STOP
-    });
 }
 
 fn packet(sample: &Sample) -> Packet {
