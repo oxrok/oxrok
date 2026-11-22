@@ -6,8 +6,8 @@
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets
   --all-features` with no warnings, `cargo nextest run --workspace
   --all-features` green. CI runs the same on Linux, macOS and Windows,
-  with clippy from the current stable Rust and a build on the minimum
-  supported version, 1.95.
+  with the Rust release `rust-toolchain.toml` pins and a build on the
+  minimum supported version, 1.95.
   On a pull request the emulator tier and the Python decoder jobs run
   only for what the change touches (`tools/ci/changes.py`; the
   `changes` job's summary says why). The `ci:full` label runs

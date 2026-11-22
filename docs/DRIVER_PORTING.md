@@ -1400,8 +1400,8 @@ would have cost a user a long afternoon.
   and fails the fixture.
 - Run the whole test suite before committing, not one test file; a
   changed listing or default breaks goldens elsewhere. CI runs clippy
-  on the current stable Rust, which may be newer than the local one,
-  and on Windows, where checked out text files would get CRLF without
+  on the Rust release `rust-toolchain.toml` pins, which rustup installs
+  locally too, and on Windows, where checked out text files would get CRLF without
   the `.gitattributes` rules.
 
 - A driver on libftdi talks to libftdi, not to the chip: port the
