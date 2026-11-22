@@ -4,8 +4,9 @@
 over stdio, so an LLM agent (Claude Code, Claude Desktop, Cursor, Zed,
 any client that spawns a process) can ask what oxrok supports and run
 the command line, and, as the server grows, scan, capture, measure and
-decode through the same stack the CLI uses. [PLAN.mcp.md](../PLAN.mcp.md)
-has the design and the phases; this page is what exists.
+decode through the same stack the CLI uses. This page is what exists,
+and [why it is built as it is](#design). The extended server planned
+for oxrok-ui is in [plans/mcp-ui.md](plans/mcp-ui.md).
 
 What is served today:
 
@@ -207,6 +208,60 @@ writer)` runs the protocol over any pair of streams. A tool is a
 `serde`/`schemars` argument struct and a function
 (`oxrok::mcp::function`), so the schema a client sees and the parser
 that reads a call cannot drift.
+
+## Design
+
+The reasons behind the server, kept from its plan.
+
+- One tool model, many servers. A tool is a name, a JSON schema and a
+  function, and nothing in it knows which server offers it; a server is
+  a `Catalog` of tools. `--read-only`, `--no-hardware`, `--tools` and a
+  front end's own checklist all go through `Catalog::select`, so there
+  is one mechanism to test. oxrok-ui's server is to be a second catalog
+  over the same tools.
+- Bounded results. Everything that returns data has a limit and an
+  offset, with small defaults, and gives transitions and statistics
+  before raw samples: the model's context is the scarce resource.
+- sigrok-cli's vocabulary. Driver ids, keys (`samplerate`), value
+  syntax (`1m`, `D0=r`), decoder ids and output module names are the
+  ones sigrok users and the models already know. The tools parse them
+  with the command line's own code, which is why that code is in the
+  library (`oxrok::setup`) and not in the binary.
+- `cli` is the first tool worth having and the last to remove: it gives
+  an agent the whole command line, and stays the way out for what the
+  structured tools do not cover. It is a subprocess so that a driver
+  that hangs does not hang the server.
+- A module behind the `mcp` feature, not an `oxrok-mcp` crate: the
+  tools reach into `core`, `formats`, `decode` and `pydecode`, and
+  oxrok-ui pins `oxrok` by exact version anyway. One binary in the
+  release archives and in `cargo install`, so a subcommand and not a
+  second executable.
+- The protocol layer is written by hand, not taken from `rmcp`, the
+  official SDK. `rmcp` needs tokio and would bring the async model into
+  a crate that has none, and for a stdio server with tools only the
+  protocol is small and stable. The tool model does not depend on the
+  choice: when a Streamable HTTP transport is wanted, `rmcp` pays for
+  itself there and the `Catalog` becomes its `ServerHandler`.
+- Argument structs derive their schema (`schemars`, one small MIT
+  dependency), so the schema and the parser are one thing.
+- The analyzer model, the frame store and the radix rules are in
+  `oxrok::decode`, not in `oxrok::mcp`: they are not MCP's, and the UI
+  can run its decoder panel on them so that both report the same
+  frames with the same text.
+- A decoder supports a radix in one of three ways (`radix_support`):
+  `raw_values`, where its binary output gives each annotation a number
+  and the text is rendered when it is read; `format_option`, where the
+  decoder renders it itself and a change decodes again; `native_only`.
+  A decoder with both (`uart`) goes by its raw values, so its radix is
+  free per request. The default is the UI's: `ascii` for `uart`,
+  `native` otherwise.
+- Several Python analyzers take turns on RustPython's one VM: correct,
+  not parallel. Native decoders run in parallel.
+- A `capture` needs a limit; only `capture_start` runs without one,
+  since nothing could stop a synchronous call that never ends but its
+  timeout.
+- An evicted capture is gone, not written to a temporary directory:
+  `export_capture` is the way to keep one.
 
 ## Tools
 

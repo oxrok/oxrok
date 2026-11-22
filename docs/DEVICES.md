@@ -420,8 +420,9 @@ whose strings are missing or name another vendor or product (the
 emulator is the only one on the bus), the
 `SR_ERR_NA` defaults of `config_get`, `config_set` and `config_list`
 for keys sigrok-cli never asks, `dev_open` on a device already open,
-and the hex dumps at log level 5. Of the emulator-verified criteria of
-the roadmap, a replay fixture is still open.
+and the hex dumps at log level 5. Of the emulator-verified criteria
+([USB.md](USB.md#what-counts-as-emulator-verified)), a replay fixture
+is still open.
 
 ## Raspberry Pi Pico (sigrok-pico firmware)
 

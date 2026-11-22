@@ -1062,6 +1062,44 @@ Deliberate, and kept small:
 - fluke-dmm: a write that finds no room logs a warning, where sigrok-cli
   says nothing.
 
+## What sigrok-cli does not have
+
+Flags and subcommands of oxrok's own. `oxrok --help` and
+`oxrok SUBCOMMAND --help` have every flag; a subcommand comes first, and
+no sigrok-cli flag goes with one.
+
+- `--strict`: a warning fails the run, at any `-l` (above).
+- `--udev-rules`: prints the udev rules for the USB devices the drivers
+  open, the text of `contrib/60-oxrok.rules`, and exits.
+  [USB.md](USB.md#troubleshooting) has where it goes and the access
+  policy file beside it.
+- `oxrok firmware`: the vendor firmware the drivers load, which oxrok
+  does not ship.
+  - `oxrok firmware list`: every file, installed or missing, and the
+    package it comes from.
+  - `oxrok firmware fetch WHAT...`: downloads the vendor's software and
+    extracts the files from it on this machine. `WHAT` is a package id,
+    a firmware file name or a driver id; `--all` takes every package
+    that can be downloaded. A package that cannot is not fetched: its
+    instructions are printed and the command exits 1.
+  - `oxrok firmware import WHAT PATH...`: the same from installers,
+    archives, folders or firmware files you have, for what is behind a
+    vendor login or on a CD. One package at a time.
+  - `oxrok firmware info WHAT`: a package's files, its source and how to
+    get it.
+  - `--dir DIR` installs there instead of the user's firmware directory
+    (`OXROK_FIRMWARE_INSTALL_DIR`, or `oxrok-firmware` under
+    `XDG_DATA_HOME`, which is `~/.local/share` when it is not set), and
+    `-l LEVEL` is the log level; both go with any of the four.
+
+  A capture that misses a firmware file names the command that gets it,
+  and on a terminal asks whether to download it.
+- `oxrok mcp`: a Model Context Protocol server over stdio, for LLM
+  agents. [MCP.md](MCP.md) has its flags (`--read-only`,
+  `--no-hardware`, `--no-cli`, `--tools`, `--drivers`, `--allow-path`,
+  `--max-memory`, `--timeout`, `--list-tools` with `--json` or
+  `--markdown`, `--instructions`, `-l`) and its tools.
+
 ## Exit status
 
 (Where a driver's failure has more to it, its line above says.)
@@ -1115,11 +1153,12 @@ with no end (a panic) counts as failed, and the consumer gets an end for it.
 
 ## Not available yet
 
-- `--protocol-decoder-jsontrace`. Python decoders need the `python`
-  build feature; `docs/DECODERS.md`.
+- `--protocol-decoder-jsontrace`. Python decoders need the `rustpython`
+  or the `python` build feature; `docs/DECODERS.md`.
 - `-T` (transform modules), `--list-supported-wiki`, the `gnuplot` and
   `scale` options of the `csv` output.
 - The `csv` input and the other long tail input modules (ChronoVu LA8,
   STF, Trace32, ISF, WAV, LogicPort .lpf).
-- The other libsigrok hardware drivers: the rest of the serial
-  instruments come next, the rest after them (`docs/ROADMAP.md`).
+- Drivers libsigrok does not have either: every `src/hardware` driver
+  of libsigrok is ported, and the ones proposed upstream that never
+  landed are under "Upstream pull requests" in `docs/ROADMAP.md`.
