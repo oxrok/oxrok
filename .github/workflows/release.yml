@@ -55,7 +55,7 @@ jobs:
       - run: rustup toolchain install
       - run: rustup target add x86_64-unknown-linux-musl
       - name: Install musl-gcc
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sh tools/ci/apt.sh musl-tools
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: oxrok-source
@@ -98,7 +98,7 @@ jobs:
           key: ${{ matrix.target }}
       - name: Install musl-gcc
         if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sh tools/ci/apt.sh musl-tools
       - name: Install make
         if: runner.os == 'Windows'
         run: command -v make || choco install make -y

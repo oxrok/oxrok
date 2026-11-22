@@ -27,6 +27,8 @@ env:
 # pull requests filled the repository's 10 GB, which evicted main's. The
 # cost: a pull request that changes Cargo.lock builds what changed on
 # each of its pushes.
+#
+# apt goes through tools/ci/apt.sh, which tries again when a mirror fails.
 jobs:
   # Which slow jobs this run needs (tools/ci/changes.py). A push to main
   # runs everything. A pull request runs the emulator models of the
@@ -192,7 +194,7 @@ jobs:
       # ones are compared with come from, and without them every such
       # test returns early and passes.
       - if: needs.changes.outputs.python == 'true'
-        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+        run: sh tools/ci/apt.sh python3-dev libsigrokdecode4
       # OXROK_REQUIRE_DECODERS: no decoders found is a failure here
       # (tests/support/mod.rs), not a run that compared nothing.
       - if: needs.changes.outputs.python == 'true'
@@ -215,7 +217,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y python3-dev
+      - run: sh tools/ci/apt.sh python3-dev
       - run: cargo clippy -p oxrok --features python --all-targets --locked
       - run: cargo clippy -p oxrok --features rustpython --all-targets --locked
 
@@ -238,14 +240,17 @@ jobs:
     outputs:
       vhci: ${{ steps.vhci.outputs.vhci }}
     steps:
+      # For tools/ci/apt.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: vhci
         name: Load vhci-hcd
         run: |
           load() {
             [ -d /sys/devices/platform/vhci_hcd.0 ] && return 0
             sudo modprobe vhci-hcd 2>/dev/null && return 0
-            sudo apt-get update -q && sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" \
-              && sudo modprobe vhci-hcd
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd
           }
           if load && [ -d /sys/devices/platform/vhci_hcd.0 ]; then
             echo "vhci-hcd loaded on kernel $(uname -r)"
@@ -283,8 +288,7 @@ jobs:
       - name: Load vhci-hcd
         run: |
           if [ ! -d /sys/devices/platform/vhci_hcd.0 ] && ! sudo modprobe vhci-hcd; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)"
             sudo modprobe vhci-hcd
           fi
           test -d /sys/devices/platform/vhci_hcd.0
@@ -293,8 +297,7 @@ jobs:
       - name: Load cdc-acm
         run: |
           if ! sudo modprobe cdc-acm; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)"
             sudo modprobe cdc-acm
           fi
       # baylibre-acme binds its sysfs tree in a user namespace of each
