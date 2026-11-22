@@ -95,7 +95,8 @@ HARNESS_FILES = {
 }
 
 # nextest's configuration: the Python jobs run nextest, the emulators do not.
-NEXTEST_FILES = {".config/nextest.toml"}
+# flaky.sh reads what nextest's ci profile writes, in the same jobs.
+NEXTEST_FILES = {".config/nextest.toml", "tools/ci/flaky.sh"}
 
 # What a model's session took in CI, in seconds; see Repo.golden_weight.
 # A change to it moves models between the shards, so every model runs.

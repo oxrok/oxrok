@@ -256,6 +256,7 @@ class ChangesTest(unittest.TestCase):
 
     def test_nextest_configuration(self):
         self.assertSelects(self.sel(".config/nextest.toml"), [], python=True)
+        self.assertSelects(self.sel("tools/ci/flaky.sh"), [], python=True)
 
     def test_lint_configuration(self):
         self.assertSelects(self.sel("clippy.toml"), [], python=True)

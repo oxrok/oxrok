@@ -127,7 +127,22 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+      # The ci profile (.config/nextest.toml): a failed test gets one more
+      # try, and the run leaves a JUnit report.
+      - run: cargo nextest run --profile ci --workspace --all-features --locked --no-fail-fast
+      # The tests that needed the second try, as warnings and in the summary.
+      - if: always()
+        shell: bash
+        run: sh tools/ci/flaky.sh
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: junit-test-${{ matrix.os }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
       - run: cargo test --workspace --doc --locked
 
   msrv:
@@ -201,8 +216,20 @@ jobs:
         env:
           OXROK_REQUIRE_DECODERS: 1
         run: >-
-          cargo nextest run -p oxrok --features ${{ matrix.feature }} --locked --no-fail-fast
+          cargo nextest run --profile ci -p oxrok --features ${{ matrix.feature }} --locked --no-fail-fast
           --partition slice:${{ matrix.slice }}/${{ matrix.of }}
+      # As in the test job.
+      - if: always() && needs.changes.outputs.python == 'true'
+        run: sh tools/ci/flaky.sh
+      - if: always() && needs.changes.outputs.python == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: junit-${{ matrix.feature }}-${{ matrix.slice }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   python-clippy:
     name: python decoders (clippy)

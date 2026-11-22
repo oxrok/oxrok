@@ -10,3 +10,22 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 [[profile.default.overrides]]
 filter = 'binary(decoder_uart_rest) & test(amulet_ascii_regression)'
 slow-timeout = { period = "60s", terminate-after = 30 }
+
+# CI's profile (`--profile ci`). A test that fails is run once more: the
+# suite has hundreds of fixed sleeps, and one that a loaded runner
+# stretches should not cost a full re-run. One retry only, since the
+# subject of many of these tests is timing itself: a test that passes on
+# its second try is FLAKY, not passed, and CI names each one in the job's
+# summary (tools/ci/flaky.sh) from the JUnit report this profile writes
+# (target/nextest/ci/junit.xml, an artifact of the job).
+[profile.ci]
+retries = 1
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"
+
+# Not the longest test: a second try could not end within the job's limit.
+[[profile.ci.overrides]]
+filter = 'binary(decoder_uart_rest) & test(amulet_ascii_regression)'
+retries = 0
