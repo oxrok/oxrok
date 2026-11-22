@@ -41,8 +41,9 @@ release may change the library API.
   minor release. A `match` on one of them outside the crate needs a `_`
   arm.
 - For library users: a driver's `protocol` module (its registers, its
-  packets and their helpers) is private to the crate. What a driver
-  exports is its `Driver`, its device and their constructors.
+  packets and their helpers) is private to the crate. A driver's `Driver`,
+  its device, their constructors and its other modules are public as
+  before.
 
 ### Fixed
 
