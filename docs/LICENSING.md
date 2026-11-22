@@ -117,8 +117,9 @@ stands alone.
 
 The release workflow's `source-check` job extracts the tarball in an empty
 directory and runs that with an empty `CARGO_HOME` and the network off
-(`unshare -n`), before attaching it. The binary jobs wait for that job,
-so a release cannot have binaries and no source.
+(`unshare -n`). The `draft release` job waits for that job and for every
+binary, and attaches all of them at once, so a release cannot have
+binaries and no source ([RELEASING.md](RELEASING.md)).
 
 `vendor/` also holds what no release binary links and each with its own
 terms: the features' `libusb1-sys` and `pyo3`, the dev-dependencies, and
