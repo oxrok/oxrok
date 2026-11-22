@@ -120,8 +120,8 @@ package is checked end to end by its `cargo test --test network --
 An MCP server so an agent can scan, capture, measure and decode through
 oxrok: `oxrok mcp` over stdio ([MCP.md](MCP.md) documents it), and an
 extended server in oxrok-ui whose tools the user picks.
-[PLAN.mcp.md](../PLAN.mcp.md) has the design, the phases and the open
-decisions; the CLI side (phases 1 to 5) is in.
+[plans/mcp-ui.md](plans/mcp-ui.md) has the plan for the UI's server, its
+later steps and the open decisions.
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
@@ -138,7 +138,10 @@ decisions; the CLI side (phases 1 to 5) is in.
   three wire decoders on the candidates, and score each by frames
   decoded and the warnings row. An agent does this by hand today over
   `measure`, `capture_logic` and `capture_decode`.
-- Phase 6: the UI server over a local socket, with a per-tool checklist.
+- The UI server over a local socket, with a per-tool checklist. Its
+  first piece is here: the data tools read the `Host`'s own
+  `CaptureStore`, and need a narrow trait (or a store a front end can
+  back) before they can serve the UI's sessions.
 
 ## Pico backend
 
