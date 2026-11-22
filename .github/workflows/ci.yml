@@ -347,9 +347,75 @@ jobs:
       # The harness's default mode, no sigrok-cli: full cases run oxrok
       # alone against the committed .out and .tx goldens, oracle-only
       # cases are skipped and counted. The harness runs oxrok-emu under
-      # sudo -n.
-      - env:
+      # sudo -n. DIFF_LINES: how much of a diff a failed case prints (6
+      # by default). EMULOG keeps each model's transaction log and
+      # EMU_TIMES what each took, for the steps below. The step ends
+      # before the job's limit does, so that they still run.
+      - id: harness
+        timeout-minutes: 40
+        env:
           MODELS: ${{ matrix.models }}
+          DIFF_LINES: 200
+          EMULOG: ${{ runner.temp }}/emu-logs
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
         run: |
           echo "$MODELS"
           sh tools/diffcli.sh --emu-model "$MODELS"
+      # What each model took, slowest first: the measure that
+      # tools/ci/emu-weights.json holds for tools/ci/changes.py's shards.
+      - name: Time by model
+        if: always() && steps.harness.outcome != 'skipped'
+        env:
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
+          SHARD: ${{ matrix.shard }}
+        run: |
+          [ -s "$EMU_TIMES" ] || exit 0
+          {
+            echo "### Emulator shard $SHARD: $(awk '{ s += $2 } END { print s }' "$EMU_TIMES") s"
+            echo
+            echo "| model | seconds | failed |"
+            echo "| --- | --- | --- |"
+            sort -k2,2nr -k1,1 "$EMU_TIMES" | awk '{ print "| " $1 " | " $2 " | " $3 " |" }'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - if: always() && steps.harness.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: emu-times-${{ matrix.shard }}
+          path: ${{ runner.temp }}/emu-times.txt
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+      # After a failure: the transaction log of each model that failed, and
+      # of one the step's limit cut short (a log, but no line in EMU_TIMES),
+      # with the kernel's log, where a lost device shows. Compressed here: a
+      # busy session logs megabytes a second. The server ran as root.
+      - name: Collect the failed models' logs
+        if: failure() && steps.harness.outcome == 'failure'
+        env:
+          EMULOG: ${{ runner.temp }}/emu-logs
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
+          OUT: ${{ runner.temp }}/emu-failed
+        run: |
+          mkdir -p "$OUT"
+          touch "$EMU_TIMES"
+          cp "$EMU_TIMES" "$OUT/emu-times.txt"
+          sudo dmesg | tail -n 2000 >"$OUT/dmesg.txt" || true
+          for log in "$EMULOG"/*.log; do
+            [ -f "$log" ] || continue
+            model=$(basename "$log" .log)
+            case $(awk -v m="$model" '$1 == m { print $3 }' "$EMU_TIMES") in
+              0) continue ;;
+            esac
+            echo "$model: $(sudo du -h "$log" | cut -f1)"
+            sudo cat "$log" | gzip >"$OUT/$model.log.gz"
+          done
+      - if: failure() && steps.harness.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emu-failed-${{ matrix.shard }}
+          path: ${{ runner.temp }}/emu-failed
+          # Already gzip.
+          compression-level: 0
+          retention-days: 7
+          overwrite: true
