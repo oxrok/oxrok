@@ -16,6 +16,7 @@ use crate::core::error::{Error, Result};
 
 /// What a channel must do for a trigger stage to match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TriggerMatch {
     /// The level is low.
     Zero,

@@ -59,9 +59,13 @@ pub fn firmware_list(registry: &Registry) {
                 out.push(',');
             }
             out.push_str("\n      {");
+            // Non-exhaustive, so that the library can add a kind; with
+            // this, clippy says so when one has no arm of its own.
+            #[deny(clippy::wildcard_enum_match_arm)]
             let kind = match dep.kind {
                 oxrok::core::FirmwareKind::Upload => "upload",
                 oxrok::core::FirmwareKind::PreFlashed => "pre-flashed",
+                _ => "unknown",
             };
             let _ = write!(out, "\"kind\": {}", json_string(kind));
             out.push_str(",\n      \"files\": [");
@@ -327,6 +331,9 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
                 _ => println!(),
             }
         }
+        // `ValueKind` is non-exhaustive, so that the library can add a kind;
+        // with this, clippy says so when one has no arm of its own.
+        #[deny(clippy::wildcard_enum_match_arm)]
         _ => match key.kind() {
             // sigrok-cli has no branch for signed integers and prints
             // the key alone.
@@ -517,6 +524,9 @@ fn print_option(device: &dyn Device, key: &Key, access: oxrok::core::Access, gro
                 }
                 println!();
             }
+            // Until it has one: the key alone.
+            #[allow(clippy::match_same_arms)]
+            _ => println!("    {id}"),
         },
     }
 }

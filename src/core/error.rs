@@ -11,6 +11,7 @@
 /// fault, a device error is the hardware's, and a missing firmware file
 /// names the file so the front end can tell the user what to install.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum Error {
     /// An I/O error from the operating system.
     #[error("{0}")]

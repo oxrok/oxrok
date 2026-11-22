@@ -35,6 +35,11 @@ release may change the library API.
 - `serde_json` is a dependency of the library with or without the `mcp`
   feature: the `oxla-tn20k` driver reads the descriptions of its
   bitstreams with it.
+- For library users: `Error`, `Packet`, `Value`, `ValueKind`, `ValueList`,
+  `DeviceClass`, `ChannelKind`, `FirmwareKind`, `TriggerMatch` and
+  `core::session::Flow` are `#[non_exhaustive]`, so a variant can be added in a
+  minor release. A `match` on one of them outside the crate needs a `_`
+  arm.
 
 ### Fixed
 
