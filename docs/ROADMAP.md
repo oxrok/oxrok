@@ -231,6 +231,23 @@ skills and `track.py` are in
 - A Homebrew formula or tap.
 - An AUR `PKGBUILD`.
 
+- Release tags are unprotected: a `v*` tag can be moved or deleted. A
+  tag ruleset (no update, no deletion, the owner still able to create)
+  and GitHub's immutable releases belong in oxrok/management; an
+  immutable release cannot have an asset fixed, which a release that
+  is a draft until it is whole can live with.
+- No CI job runs `cargo publish --dry-run` or the tests from the
+  packaged tree. `tests/package.rs` pins what the crate holds, but
+  names only three of the files its tests read, and allows all of
+  `contrib/` and `tools/emu/` where `Cargo.toml` includes only the
+  rules and the firmware stand-ins. A periodic job, not one per pull
+  request, that unpacks the crate and runs the suite would close it; it
+  passed by hand on 2026-11-22 with the default features, and was not
+  run with `python` or `rustpython`.
+- On crates.io the README's relative links (`docs/`, the logo) lead
+  nowhere, since `docs/` is not in the crate, and `documentation` is
+  unset. The install section could show `gh attestation verify` beside
+  the download once a release carries attestations.
 - Releases are cut by hand, from memory: bump, tag, publish the GitHub
   release, `cargo publish`. `release.yml` runs on `release: published`,
   so a release is public before its assets exist (54 minutes for
