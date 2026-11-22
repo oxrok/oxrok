@@ -43,6 +43,8 @@ IGNORED_PREFIXES = (
     "docs/",
     "examples/",
     "hil/",
+    # cargo-fuzz targets: the nightly workflow builds and runs them.
+    "fuzz/",
     "website/",
     # The RPM spec and its notes: Packit builds them in Copr, not in CI.
     "packaging/",
@@ -51,6 +53,7 @@ IGNORED_PREFIXES = (
     "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
+    ".github/workflows/nightly.yml",
     ".github/ISSUE_TEMPLATE/",
     # udev rules: tests/udev_rules.rs reads them, in the test job.
     "contrib/",
@@ -65,6 +68,8 @@ IGNORED_FILES = {
     ".packit.yaml",
     ".github/dependabot.yml",
     "tools/attribution.py",
+    # The nightly workflow's coverage table.
+    "tools/ci/coverage_summary.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
     # The website's data generator, a script (not a directory).

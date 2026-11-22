@@ -1,0 +1,129 @@
+name: Nightly
+
+# What is too slow or too uncertain for a pull request: the fuzz targets
+# (fuzz/README.md) and the Rust line coverage of the test suite. Neither
+# is a required check, and neither opens an issue: a red run here is read
+# by whoever looks at the Actions tab. Run by hand from there too.
+#
+# A schedule runs on the default branch only, and GitHub stops it after
+# 60 days without a commit to the repository.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds of fuzzing per target
+        default: "300"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # A smoke run of each target: long enough to find the shallow panics a
+  # change brought in, not a campaign. Each night starts from the seeds
+  # alone (fuzz/seed.sh), as no corpus is kept between runs.
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    # Not on a fork's schedule.
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'oxrok/oxrok'
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # The [[bin]] names of fuzz/Cargo.toml.
+        target:
+          - input_vcd
+          - input_binary
+          - sr_open
+          - decoder_any
+          - serial_frames
+          - scpi_block
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # cargo-fuzz needs nightly's sanitizer flags.
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - run: cargo install --locked --version 0.13.2 cargo-fuzz
+      # The workspace's lock file, so that the targets build against the
+      # dependency versions that ship; cargo adds libfuzzer-sys to the copy.
+      - run: cp Cargo.lock fuzz/Cargo.lock
+      - run: sh fuzz/seed.sh "$TARGET"
+        env:
+          TARGET: ${{ matrix.target }}
+      # +nightly: the repository's rust-toolchain.toml says stable here.
+      # An input that takes over 30 s counts as a hang.
+      - name: Fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_PER_TARGET: ${{ inputs.seconds || '300' }}
+        run: >-
+          cargo +nightly fuzz run "$TARGET" --
+          -max_total_time="$SECONDS_PER_TARGET" -timeout=30 -print_final_stats=1
+      - name: Say how to reproduce
+        if: failure()
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          {
+            echo "### $TARGET: an input that panics, hangs or runs out of memory"
+            echo
+            echo "It is in the artifact \`fuzz-$TARGET\` of this run. With it unpacked into"
+            echo "\`fuzz/artifacts/$TARGET/\`, from the repository root (fuzz/README.md):"
+            echo
+            echo '```'
+            find "fuzz/artifacts/$TARGET" -type f 2>/dev/null | sort | while IFS= read -r file; do
+              echo "cargo +nightly fuzz run $TARGET $file"
+            done
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          # A build that failed left none.
+          if-no-files-found: ignore
+
+  # Which lines of the Rust code the unit and integration tests reach
+  # (cargo nextest, as the test job of ci.yml runs it), by area, driver
+  # and decoder, in the step summary; the lcov file is an artifact. The
+  # emulator tier is not instrumented: its timing-sensitive cases would
+  # run against a slower oxrok.
+  coverage:
+    name: coverage (unit and integration tests)
+    if: github.event_name == 'workflow_dispatch' || github.repository == 'oxrok/oxrok'
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: nextest,cargo-llvm-cov@0.9.1
+      # A test that fails here fails the job, and the report below is
+      # still written from the tests that ran.
+      - run: cargo llvm-cov --no-report nextest --workspace --all-features --no-fail-fast
+      - name: Report
+        if: ${{ !cancelled() }}
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          python3 -I tools/ci/coverage_summary.py lcov.info >>"$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lcov
+          path: lcov.info
+          if-no-files-found: ignore
