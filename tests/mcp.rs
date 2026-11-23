@@ -557,8 +557,12 @@ fn flags_narrow_the_catalog() {
 fn the_docs_carry_the_tool_reference() {
     let (markdown, ok) = list_tools(&["--markdown"]);
     assert!(ok);
-    let path = format!("{}/docs/MCP.md", env!("CARGO_MANIFEST_DIR"));
-    let docs = std::fs::read_to_string(&path).unwrap();
+    // A crate checkout has no `docs/`.
+    let dir = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/docs"));
+    if !dir.is_dir() {
+        return;
+    }
+    let docs = std::fs::read_to_string(dir.join("MCP.md")).unwrap();
     let begin = "<!-- tools:begin -->\n";
     let end = "<!-- tools:end -->";
     let start = docs.find(begin).expect("tools:begin marker") + begin.len();

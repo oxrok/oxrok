@@ -82,6 +82,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: python3 -I tools/ci/test_changes.py
+      - run: python3 -I tools/ci/test_release.py
       - run: python3 -I tools/ci/test_firmware.py
       - run: cargo clippy --workspace --all-targets --all-features --locked
 
