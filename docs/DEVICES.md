@@ -89,8 +89,8 @@ up, and proceeds.
 
 Emulated by `emu/src/models/intronix-logicport.rs`, scenario
 `tools/emu/intronix-logicport.sh`. The oracle is the C driver of libsigrok
-pull request 315, folded into the main oracle as
-`tools/oracle-patches/libsigrok-pr315-intronix-logicport.patch`. 121 cases
+pull request 315, which the oracle's libsigrok carries
+(`oxrok/libsigrok`, `0bc24877..fdfc4063`). 121 cases
 run under both tools (110 full, 5 `--oracle-bug`, 6 `--oracle-differs`)
 and 33 are oxrok's alone (extended triggers, options, the `.rbf` fallback,
 oxrok's failure messages); gcov on the C driver 92.0% (940 of 1022) on
@@ -2110,7 +2110,7 @@ No capture is known, so the model's Size, Unused and Decimal exponent
 bytes are invented zeros. Ported, 69 cases: 54 full, 13 --oracle-bug, 2
 --oracle-differs; gcov 91.3% (from the last `--oracle --gcov` run, which still had the library-only cases). **This oracle has one line
 restored: `sdi->driver = di;`, removed by b258c09f
-(tools/oracle-patches/libsigrok-testo-sdi-driver.patch). Stock libsigrok
+(oxrok/libsigrok 5c08d885). Stock libsigrok
 finds no Testo: libsigrok 0.5.1, 0.5.2 and unreleased lack the line,
 0.5.0 has it. This rests on device.c:730, api.c and the commit, not on a
 run.** The C's capture path has met no device in those versions, so its
@@ -2858,7 +2858,7 @@ packets' room, so every scan ends at `:839`. That doubling is from
 commit (`13b72fa9`, 2019-08-17), which already had the same 36 and 36.
 **So every case here is against a patched C:** the oracle's `api.c:85`
 asks for 18 bytes, one frame
-(`tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch`). `gcov.txt`
+(`oxrok/libsigrok ed326604`). `gcov.txt`
 doesn't say so, and its figures are that patched C's.
 
 Emulated: model `mastech-ms6514` on the CDC-ACM shell (options `frame=`,
@@ -3482,7 +3482,7 @@ Emulated, not on hardware: model `teleinfo`, 106 cases on 2026-11-06,
 gcov 98.9% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Stock libsigrok has found no such device since
 0.5.2: `api.c:79` passes a packet of 292 with a buffer of 292, and
 `serial.c:833` has wanted two packets since `d03815a0` (2019). The
-oracle carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`,
+oracle carries `oxrok/libsigrok eac41e7a`,
 which looks at byte 292 as 0.5.1 did, and all cases compare against it.
 Model built from Enedis-NOI-CPT_02E; no recording of a real line was
 found.
@@ -4164,52 +4164,55 @@ meter.
 
 ## Oracle
 
-The oracle is libsigrok 0bc24877 with four patches, in
-`tools/oracle-patches/`. Apply all when building the oracle, and mark
-each file `git update-index --assume-unchanged`, or `--dirty` changes
-attribution and gcov headers.
+The oracle is sigrok-cli on the libsigrok of
+[`oxrok/libsigrok`](https://github.com/oxrok/libsigrok), branch `oxrok`:
+upstream master (`0bc24877`, the fork's `master`) with the drivers
+upstream never merged and the fixes without which a driver finds no
+device. Its `OXROK.md` has the rules: additions only, no fix to a
+driver's behaviour beyond reaching it, no vendor firmware.
+`tools/oracle-build.sh` pins the commit, builds the four projects below
+under `~/work/sigrok` with their own prefix (`~/work/sigrok/install`) and
+writes `~/work/sigrok/env.sh`, which puts that prefix on `PATH` and
+`LD_LIBRARY_PATH`, so no distribution package is involved. A driver the
+oracle lacks goes to the fork first, by pull request, then the pin in
+`tools/oracle-build.sh` moves in the pull request that ports it.
 
-- `libsigrok-testo-sdi-driver.patch` restores the `sdi->driver = di;`
-  that `b258c09f` (2017) removed from testo's scan: without it,
-  `testo_probe_channels()` calls `sr_dev_open()` on an instance with no
-  driver, which fails (`device.c:730`), so stock libsigrok finds no Testo
-  and no capture is reachable.
-- `libsigrok-mastech-ms6514-scan.patch` makes the MS6514's scan ask for
-  one frame: asking for two with a buffer of two refuses every scan, so
-  stock libsigrok finds no MS6514.
-- `libsigrok-pr315-intronix-logicport.patch` is pull request 315, the
-  `intronix-logicport` driver (`0bc24877..9692e249`, six commits, one of
-  them `usb.c` taking bus number 0). It builds only with libftdi's headers
-  (`libftdi-devel`). The emulator's other models don't use it.
-- `libsigrok-teleinfo-scan.patch` gives teleinfo's scan a buffer of two
-  packets, for the same reason: `d03815a0` left stock libsigrok finding
-  no Teleinfo since 0.5.2. It looks at byte 292 as 0.5.1 did, and differs
-  from 0.5.1 only on an option past that byte.
+What the fork has over upstream, at the pinned commit:
 
-The sigrok build that `tools/diffcli.sh` and the emulation work of
-phase 9 compare against, built from source under `~/work/sigrok` with
-its own prefix (`~/work/sigrok/install`; `. ~/work/sigrok/env.sh` puts
-it on `PATH` and `LD_LIBRARY_PATH`), so no distribution package is
-involved. Set up 2026-11-02 on Fedora 44:
+- `intronix-logicport`, upstream pull request 315
+  (`0bc24877..fdfc4063`, six commits, one of them `usb.c` taking bus
+  number 0). It builds only with libftdi's headers (`libftdi-devel`).
+- `5c08d885` restores the `sdi->driver = di;` assignment that `b258c09f`
+  removed from testo's scan. Without it `sr_dev_open()` is called on an
+  instance with no driver, which fails (`device.c:730`), so stock
+  libsigrok finds no Testo and no capture is reachable.
+- `ed326604` makes the MS6514's scan ask for one frame: asking for two
+  with a buffer of two refuses every scan, so stock libsigrok finds no
+  MS6514.
+- `eac41e7a` gives teleinfo's scan a buffer of two packets, for the same
+  reason: `d03815a0` left stock libsigrok finding no Teleinfo since
+  0.5.2. It looks at byte 292 as 0.5.1 did, and differs from 0.5.1 only
+  on an option past that byte.
+- `wch-ch32h417-libusb` (`4ed8c99c`), the driver of WeAct Studio's fork
+  (`WeActStudio.U3LogicAnalyzer`, `41b2564`), with its soft trigger kept
+  as a private copy and eight config keys appended to `libsigrok.h`.
+
+Until 2026-11-23 these were upstream `0bc24877` and four patch files in
+`tools/oracle-patches/`; the fork's tree before the WeAct driver
+(`ac1754e0`) is that tree plus `OXROK.md`, so the goldens recorded
+against the patched build stand.
 
 | Project | Commit | Notes |
 |---|---|---|
 | libserialport | `21b3dfe5f68c205be4086469335fd2fc2ce11ed2` | master, 2024-09-24 |
-| libsigrok | `0bc2487778e660f4d3116729b6f4aee2b1996bb0` | master, 2025-11-20, `0.6.0-git-0bc24877`; built with `CFLAGS="-O0 -g --coverage" LDFLAGS="--coverage"` for the phase 9b gcov reports, `--disable-bindings`; 86 of the 87 drivers enabled, `hp-3478a` off for want of libgpib (linux-gpib is not packaged for Fedora) |
-| libsigrokdecode | `1577c4354b4caba6fcb62d5919a1d4a196ae4512` | the `libsigrokdecode-0.5.3` tag, the decoders oxrok follows (`docs/DECODERS.md`), with two one-line local patches to build against Python 3.14: `python3-embed` added to the module list in `configure.ac`, and the `PyEval_InitThreads()` call removed (a no-op since 3.7, gone in 3.13). master (`71f45144`, 2024-10-01) renamed the uart and spi annotation classes after 0.5.3, and 17 decoder cases differ against it; its library also refuses to load the 0.5.3 decoders |
+| libsigrok | `49f29969285dc006b9ea249d21311811d1144a0f` | `oxrok/libsigrok`, branch `oxrok`, 2026-11-23, `0.6.0-git-49f29969`; built with `CFLAGS="-O0 -g --coverage" LDFLAGS="--coverage"` for the phase 9b gcov reports, `--disable-bindings`; `hp-3478a` is off for want of libgpib (linux-gpib is not packaged for Fedora) |
+| libsigrokdecode | `97991a3919da6a07c4c87308ae66fb441bd512e3` | the `libsigrokdecode-0.5.3` tag (tag object `1577c435`), the decoders oxrok follows (`docs/DECODERS.md`), with two one-line edits the script makes to build against Python 3.14: `python3-embed` added to the module list in `configure.ac`, and the `PyEval_InitThreads()` call removed (a no-op since 3.7, gone in 3.13). master (`71f45144`, 2024-10-01) renamed the uart and spi annotation classes after 0.5.3, and 17 decoder cases differ against it; its library also refuses to load the 0.5.3 decoders |
 | sigrok-cli | `f44dd91347e7ac797cefc23162b9fcf0b7329f1f` | master, 2024-08-26, `0.8.0-git-f44dd91` |
-
-The roadmap's inventory named libsigrok `e6907e1e`, and the
-attribution headers `20baa77f`; neither commit exists on sigrok.org
-or the GitHub mirror, whose tips are both `0bc24877`, so they belong
-to the fork that carries the LogicPort driver. `0bc24877` is the
-upstream base used here until that checkout is available.
 
 Build dependencies, in Fedora's names: `autoconf automake libtool
 pkgconf-pkg-config glib2-devel libzip-devel libusb1-devel libftdi-devel
 hidapi-devel bluez-libs-devel libieee1284-devel nettle-devel
 check-devel python3-devel python3-gobject` (nettle for `rdtech-tc`).
-Each project: `./autogen.sh && ./configure --prefix=$HOME/work/sigrok/install`
-with `PKG_CONFIG_PATH=$HOME/work/sigrok/install/lib/pkgconfig`, in the
-order of the table. The 46 software cases of `tools/diffcli.sh` pass
-against this build.
+The script runs, for each project in the order of the table,
+`./autogen.sh && ./configure --prefix=$HOME/work/sigrok/install` with
+`PKG_CONFIG_PATH=$HOME/work/sigrok/install/lib/pkgconfig`.

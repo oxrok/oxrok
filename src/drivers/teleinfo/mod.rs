@@ -20,7 +20,7 @@
 //! found no such device since 0.5.2: `api.c:79` asks `serial_stream_detect` for a
 //! packet of 292 bytes with a buffer of 292, and `serial.c:833` wants a buffer of two
 //! packets since d03815a0 (2019, `maxlen < packet_size / 2` became `* 2`). The oracle
-//! carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`, a buffer of twice 292
+//! carries `oxrok/libsigrok eac41e7a`, a buffer of twice 292
 //! and a packet of half of that, and it looks at byte 292 as 0.5.1 did, so it can
 //! differ from what this does only on an option past that byte.
 //!

@@ -13,7 +13,7 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # doubling is from d03815a0 (2019-05-01, / 2 until then), ahead of the driver's
 # first commit (13b72fa9, 2019-08-17), which had the same 36 and 36. So the oracle
 # carries a one-line patch of api.c:85, which asks for one
-# frame (tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch).
+# frame (oxrok/libsigrok ed326604).
 
 # A frame: main, aux (16 bit hex), then the bytes 10, 11, 12.
 ms_f() {

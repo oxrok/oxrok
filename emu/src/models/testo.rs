@@ -33,7 +33,7 @@
 //! The C's capture path has met no device since 2017: `b258c09f` dropped the
 //! `sdi->driver` its scan needs, so stock libsigrok finds no Testo, and the
 //! oracle here has that one line restored
-//! (`tools/oracle-patches/libsigrok-testo-sdi-driver.patch`). What the C does
+//! (`oxrok/libsigrok 5c08d885`). What the C does
 //! past its scan is weak evidence of the device.
 //!
 //! The driver's sequence, which [`Testo435`] holds it to: 4 vendor requests

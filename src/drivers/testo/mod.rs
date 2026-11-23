@@ -22,7 +22,7 @@
 //! of `sdi->driver` from `scan()` as already done by `std_scan_complete()`,
 //! but the probe runs before that and `sr_dev_open()` refuses a NULL driver
 //! (`device.c:730`). The oracle this port is compared with has that line
-//! restored (`tools/oracle-patches/libsigrok-testo-sdi-driver.patch`). So
+//! restored (`oxrok/libsigrok 5c08d885`). So
 //! no libsigrok since then has driven this device; the C's capture path is
 //! weak evidence, and neither it nor this port has met one here.
 //!

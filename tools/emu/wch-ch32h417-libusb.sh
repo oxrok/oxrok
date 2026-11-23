@@ -4,8 +4,8 @@
 # see docs/USB.md, "Writing a device model".
 #
 # The C driver is not sigrok's: it is the vendor's, which the oracle
-# carries (oxrok/libsigrok, src/hardware/wch-ch32h417-libusb), so --oracle
-# needs an oracle built from that branch.
+# carries (oxrok/libsigrok, src/hardware/wch-ch32h417-libusb, from
+# 49f29969; tools/oracle-build.sh builds it).
 #
 # NEVER RUN. These cases were written from a reading of the C driver, on a
 # machine where the harness could not attach a device. The first run with

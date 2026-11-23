@@ -47,8 +47,6 @@ IGNORED_PREFIXES = (
     # The RPM spec and its notes: Packit builds them in Copr, not in CI.
     "packaging/",
     "tools/third-party/",
-    # Applied to the sigrok oracle, which CI does not build (no --oracle).
-    "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
     ".github/ISSUE_TEMPLATE/",
@@ -66,6 +64,8 @@ IGNORED_FILES = {
     ".github/dependabot.yml",
     "tools/attribution.py",
     "tools/libsigrok-drivers.txt",
+    # Builds the sigrok oracle, which CI does not run (no --oracle).
+    "tools/oracle-build.sh",
     "tools/udev-diff.py",
     # The website's data generator, a script (not a directory).
     "tools/site-data",

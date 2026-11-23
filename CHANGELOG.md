@@ -153,6 +153,10 @@ needs an update (see Changed).
   sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request
   315, now part of the oracle.
+- `tools/oracle-build.sh` builds the sigrok oracle of `--oracle` runs, whose
+  libsigrok is now `oxrok/libsigrok` at a pinned commit: upstream with the
+  drivers it never merged. It replaces the patch files of
+  `tools/oracle-patches/`.
 - The software trigger (`SoftTrigger`) takes value ranges and the two
   stage or/and combines. A device still takes only what it advertises:
   `demo` and `fx2lafw` take every `-t` extra, `raspberrypi-pico` one

@@ -1412,7 +1412,7 @@ of a sigrok driver `DRIVER`:
    `conn=`, and the error answers the driver handles), and
    `tools/emu/NAME.firmware` when the driver uploads files.
 5. Run it with the oracle, alone, without the software cases:
-   `cargo build --workspace && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --oracle --emu-model NAME`.
+   `cargo build --workspace && sh tools/oracle-build.sh && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --oracle --emu-model NAME`.
    A new model is checked against sigrok-cli this way; a later change to
    a model or a driver already ported runs without `--oracle` (step 9).
    Every case must pass and log no violation under sigrok-cli; a

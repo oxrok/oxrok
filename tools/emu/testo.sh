@@ -5,7 +5,7 @@
 # Stock libsigrok finds no Testo at all: b258c09f dropped the sdi->driver
 # assignment that sr_dev_open() (device.c:730) needs during the scan. Every
 # golden here comes from the oracle with that one line restored
-# (tools/oracle-patches/libsigrok-testo-sdi-driver.patch). api.c lines here
+# (oxrok/libsigrok 5c08d885). api.c lines here
 # are that patched file's: upstream's plus one from its line 131 on.
 #
 # Lines of the C no case reaches (gcov.txt): api.c's scan 68 (no other scan

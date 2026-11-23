@@ -584,10 +584,9 @@ The models are plain Rust with no I/O for this reason; see
   with `EMU_TCP`, if the replay tests cover the other drivers' use.
 - Nothing checks the goldens against libsigrok again: `EMU_BLESS=1`
   without `--oracle` re-records them from oxrok, CI runs no oracle, and
-  the oracle's build (libsigrok 0bc24877 with the four patches of
-  `tools/oracle-patches`, a pinned libserialport, a patched
-  libsigrokdecode and sigrok-cli f44dd913, on Fedora) is prose in
-  `DEVICES.md`. Wanted: that build as a container file, and a scheduled
+  the oracle's build (`tools/oracle-build.sh`: `oxrok/libsigrok` at a
+  pinned commit, a pinned libserialport, a patched libsigrokdecode and
+  sigrok-cli f44dd913) runs on a prepared Fedora machine alone. Wanted: that build as a container file, and a scheduled
   workflow, sharded as the emulator job is, that runs
   `diffcli.sh --oracle` and says when a golden no longer matches. It
   could run `--gcov` as well, which is the refresh the next entry asks
@@ -1068,8 +1067,9 @@ What each driver still needs from a device:
      driver's frames are fixed in `oxrok/libsigrok` (against that fork's
      rule of no behaviour fixes, so a decision), or oxrok sends the C
      driver's and its cases for whole frames go.
-  2. Build the oracle from `oxrok/libsigrok`'s `oxrok` branch (the
-     driver is there from `49f29969`) and run
+  2. Build the oracle (`sh tools/oracle-build.sh`, which pins
+     `oxrok/libsigrok` at `49f29969`, the first commit with the driver)
+     and run
      `sh tools/diffcli.sh --oracle --emu-model wch-ch32h417-libusb` on a
      machine where the harness can attach (passwordless sudo, `vhci-hcd`).
      Every case of `tools/emu/wch-ch32h417-libusb.sh` is a reading's
