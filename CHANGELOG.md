@@ -47,6 +47,13 @@ release may change the library API.
 
 ### Fixed
 
+- A stop or a close of the `demo` device or of a `serial-dmm` meter no
+  longer waits for ever when nobody reads the packet queue, which a
+  client of the library that drives a `Device` with no `Session` could
+  see. `PacketSink::stopped_by` gives a sink its device's stop flag: once
+  it is set a packet waits half a second for room, and a reader that goes
+  on reading gets every packet as before. The other drivers get it one by
+  one.
 - A serial port opens at a speed macOS has no constant for (3,000,000
   baud): the open failed with `Invalid argument`, as `tcsetattr` there
   refuses the termios it reads back after such a speed was set.

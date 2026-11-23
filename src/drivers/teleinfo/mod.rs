@@ -638,12 +638,16 @@ impl Device for TeleinfoDevice {
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
+        // `End` waits for room for as long as nobody asked to stop, and
+        // after a stop only for [`END_AFTER_STOP`]: a close joins this
+        // thread.
+        let sink = sink.stopped_by_within(&stop, END_AFTER_STOP);
         let handle = std::thread::Builder::new()
             .name("teleinfo acquisition".to_owned())
             .spawn(move || {
                 let outcome = capture.run(port.as_mut(), &sink, &stop2);
                 *slot.lock().expect("port lock") = Some(port);
-                send_end(&sink, &stop2, outcome);
+                sink.end(outcome);
             })
             .map_err(Error::Io)?;
         self.worker = Some(Worker { stop, handle });
@@ -663,20 +667,6 @@ impl Drop for TeleinfoDevice {
     fn drop(&mut self) {
         self.join();
     }
-}
-
-/// `End`, waiting for room for as long as nobody asked to stop, and after a stop only
-/// for [`END_AFTER_STOP`]: a close joins this thread.
-fn send_end(sink: &PacketSink, stop: &AtomicBool, outcome: Result<()>) {
-    let stopped_at = std::cell::Cell::new(None);
-    sink.end_while(outcome, || {
-        if !stop.load(Ordering::SeqCst) {
-            return true;
-        }
-        let at = stopped_at.get().unwrap_or_else(Instant::now);
-        stopped_at.set(Some(at));
-        at.elapsed() < END_AFTER_STOP
-    });
 }
 
 /// One capture, on its own thread.
