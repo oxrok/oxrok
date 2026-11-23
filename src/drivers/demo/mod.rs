@@ -426,6 +426,9 @@ impl Device for DemoDevice {
         let num_logic = self.num_logic;
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
+        // The stop joins the thread: it does not wait on a queue nobody
+        // reads.
+        let sink = sink.stopped_by(&stop);
         let handle = std::thread::Builder::new()
             .name("demo acquisition".into())
             .spawn(move || {
@@ -832,6 +835,26 @@ mod tests {
         }
         dev.stop().unwrap();
         packets
+    }
+
+    #[test]
+    fn a_stop_does_not_wait_on_a_queue_nobody_reads() {
+        // No limit, and a rate that fills any queue: the thread is sending
+        // when the stop comes.
+        let mut dev = DemoDriver.scan(&[]).unwrap().remove(0);
+        dev.set(&Key::Samplerate, &Value::U64(1_000_000), None).unwrap();
+        let dev = crate::core::device::close_with_an_unread_queue(
+            dev,
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_secs(30),
+        );
+        // And it is there for the next capture.
+        let (tx, rx) = sync_channel(64);
+        let mut dev = dev;
+        dev.set(&Key::LimitSamples, &Value::U64(16), None).unwrap();
+        dev.start(PacketSink::new(tx, 0)).unwrap();
+        assert!(rx.iter().any(|(_, p)| matches!(p, Packet::End)));
+        dev.stop().unwrap();
     }
 
     fn logic_bytes(packets: &[Packet]) -> Vec<u8> {

@@ -14,7 +14,11 @@ use crate::core::packet::Packet;
 use crate::core::trigger::{Trigger, TriggerFeatures};
 use crate::core::value::Value;
 use crate::usb::UsbId;
+use std::cell::Cell;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError};
+use std::time::{Duration, Instant};
 
 /// What kind of instrument a device is. A device can be several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -101,26 +105,106 @@ pub struct DeviceInfo {
     pub conn: Option<String>,
 }
 
+/// How long a sink that was told of its device's stop flag waits for room
+/// in the queue once the flag is set, for each packet: what a reader that
+/// reads needs to take one, and what a close waits for one that does not.
+pub const SEND_AFTER_STOP: Duration = Duration::from_millis(500);
+
+/// How often a sender that waits for room in the queue looks at it, and at
+/// whether it should go on waiting.
+const LOOK: Duration = Duration::from_millis(2);
+
+/// The first of those looks for a sink told of its stop flag, which waits
+/// this way on every full queue and not only at the end of a capture: a
+/// reader that is a little behind is not waited on for [`LOOK`].
+const FIRST_LOOK: Duration = Duration::from_micros(50);
+
 /// Where a device sends its packets.
 ///
 /// Sending blocks when the consumer falls behind, which is the
 /// backpressure that keeps memory bounded. `send` returns false once the
 /// consumer is gone, and the acquisition thread should then stop.
+///
+/// A stop or a close joins that thread, and must not wait for ever on a
+/// queue nobody reads any more: the driver tells the sink of its stop flag
+/// with [`PacketSink::stopped_by`] before the thread gets it, and a consumer
+/// that stopped reading is then one that is gone.
 #[derive(Clone, Debug)]
 pub struct PacketSink {
     tx: SyncSender<(usize, Packet)>,
     device: usize,
+    stop: Option<Arc<Stop>>,
+}
+
+/// The stop flag a sink was told of, and whether a packet was given up
+/// for it. The clones of a sink share it.
+#[derive(Debug)]
+struct Stop {
+    asked: Arc<AtomicBool>,
+    after: Duration,
+    gave_up: AtomicBool,
 }
 
 impl PacketSink {
     /// A sink that tags packets with `device` on `tx`.
     pub fn new(tx: SyncSender<(usize, Packet)>, device: usize) -> Self {
-        PacketSink { tx, device }
+        PacketSink { tx, device, stop: None }
     }
 
-    /// Sends one packet. False when nobody listens any more.
+    /// This sink, told of the flag that asks its acquisition to stop: once
+    /// `stop` is set, a packet waits for room in the queue for
+    /// [`SEND_AFTER_STOP`] and no longer.
+    ///
+    /// A reader that goes on reading gets every packet it got before, in the
+    /// same order, however long the capture takes to end. With one that does
+    /// not, the first packet that finds no room within that time is given
+    /// up, and so is all that follows it, at once and with no further wait:
+    /// `send` and `end` return false as they do when nobody listens, so what
+    /// was sent never has a hole in it, and the thread ends for whoever
+    /// joins it. Before the flag is set a full queue is waited on for as
+    /// long as it takes, as without this.
+    #[must_use]
+    pub fn stopped_by(self, stop: &Arc<AtomicBool>) -> Self {
+        self.stopped_by_within(stop, SEND_AFTER_STOP)
+    }
+
+    /// [`PacketSink::stopped_by`] with a wait of `after` in place of
+    /// [`SEND_AFTER_STOP`].
+    #[must_use]
+    pub fn stopped_by_within(mut self, stop: &Arc<AtomicBool>, after: Duration) -> Self {
+        self.stop = Some(Arc::new(Stop {
+            asked: Arc::clone(stop),
+            after,
+            gave_up: AtomicBool::new(false),
+        }));
+        self
+    }
+
+    /// Sends one packet. False when nobody listens any more, which for a
+    /// sink told of its stop flag ([`PacketSink::stopped_by`]) includes a
+    /// queue that stayed full after the stop.
     pub fn send(&self, packet: Packet) -> bool {
-        self.tx.send((self.device, packet)).is_ok()
+        let Some(stop) = &self.stop else {
+            return self.tx.send((self.device, packet)).is_ok();
+        };
+        if stop.gave_up.load(Ordering::SeqCst) {
+            return false;
+        }
+        // The wait is counted from when this packet first found the flag
+        // set: a reader that is slow, and reads, loses nothing.
+        let stopped_at = Cell::new(None);
+        let sent = self.send_looking(packet, FIRST_LOOK, || {
+            if !stop.asked.load(Ordering::SeqCst) {
+                return true;
+            }
+            let at = stopped_at.get().unwrap_or_else(Instant::now);
+            stopped_at.set(Some(at));
+            at.elapsed() < stop.after
+        });
+        if !sent && stopped_at.get().is_some() {
+            stop.gave_up.store(true, Ordering::SeqCst);
+        }
+        sent
     }
 
     /// Ends an acquisition: [`Packet::Failed`] when `outcome` is an error,
@@ -128,7 +212,7 @@ impl PacketSink {
     /// says whether it failed. `Err` is for a capture that ended for any
     /// reason other than a limit, a stop or the natural end of the data; an
     /// error the driver retried past or only warns about is `Ok`. False when
-    /// nobody listens any more.
+    /// nobody listens any more, as [`PacketSink::send`] says it.
     pub fn end(&self, outcome: Result<()>) -> bool {
         if let Err(e) = outcome
             && !self.send(Packet::Failed(e.to_string()))
@@ -150,9 +234,16 @@ impl PacketSink {
 
     /// Sends one packet, waiting for room only while `go_on` says so: a thread
     /// that a close will join must not block for ever on a queue no one is
-    /// reading any more. False when nobody listens, or `go_on` said no.
+    /// reading any more. False when nobody listens, or `go_on` said no. The
+    /// stop flag of [`PacketSink::stopped_by`] is not looked at here: `go_on`
+    /// is the whole of the condition.
     pub fn send_while(&self, packet: Packet, go_on: impl Fn() -> bool) -> bool {
-        const LOOK: std::time::Duration = std::time::Duration::from_millis(2);
+        self.send_looking(packet, LOOK, go_on)
+    }
+
+    /// [`PacketSink::send_while`], looking at the queue again after `look`
+    /// at first and after twice as long each time, up to [`LOOK`].
+    fn send_looking(&self, packet: Packet, mut look: Duration, go_on: impl Fn() -> bool) -> bool {
         let mut item = (self.device, packet);
         loop {
             match self.tx.try_send(item) {
@@ -163,11 +254,43 @@ impl PacketSink {
                         return false;
                     }
                     item = back;
-                    std::thread::sleep(LOOK);
+                    std::thread::sleep(look);
+                    look = (look * 2).min(LOOK);
                 }
             }
         }
     }
+}
+
+/// Starts `dev` on a queue with room for one packet that nobody reads,
+/// leaves it `settle` to fill it, and stops and closes it: what the tests
+/// of a driver ask of its stop and of its close. One that waits on the
+/// queue fails here, and does not hold the suite.
+///
+/// # Panics
+///
+/// When the start, the stop or the close fails, or the two take more than
+/// `within`.
+#[cfg(test)]
+pub(crate) fn close_with_an_unread_queue(
+    mut dev: Box<dyn Device>,
+    settle: Duration,
+    within: Duration,
+) -> Box<dyn Device> {
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    dev.start(PacketSink::new(tx, 0)).expect("the start");
+    std::thread::sleep(settle);
+    let (done, closed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome = dev.stop().and_then(|()| dev.close());
+        let _ = done.send((dev, outcome));
+    });
+    let (dev, outcome) = closed
+        .recv_timeout(within)
+        .unwrap_or_else(|_| panic!("the close waited on a queue nobody reads for {within:?}"));
+    outcome.expect("the stop and the close");
+    drop(rx);
+    dev
 }
 
 /// An open or openable device.
@@ -285,10 +408,17 @@ pub trait Device: Send {
     /// thread, starting with [`Packet::Header`] and ending with
     /// [`PacketSink::end`]. An `Err` here is a capture that never started;
     /// one that fails later reports it through the sink.
+    ///
+    /// A driver whose `stop` or `close` joins that thread tells the sink of
+    /// the flag they set ([`PacketSink::stopped_by`]) before the thread
+    /// takes it, or bounds its sends itself ([`PacketSink::send_while`]):
+    /// the caller need not be reading the queue when it stops or closes.
     fn start(&mut self, sink: PacketSink) -> Result<()>;
 
     /// Asks a running acquisition to end. The thread sends
-    /// [`Packet::End`] when it does. Safe to call when not running.
+    /// [`Packet::End`] when it does. Safe to call when not running. It
+    /// returns in a bounded time whether or not anybody reads the queue,
+    /// and so does [`Device::close`].
     fn stop(&mut self) -> Result<()>;
 
     /// The option descriptor of `key`, if the device has it.
