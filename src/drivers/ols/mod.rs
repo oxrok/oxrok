@@ -28,7 +28,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::util::parse_probe_names;
 use crate::core::{

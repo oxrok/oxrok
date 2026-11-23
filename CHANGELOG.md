@@ -44,6 +44,15 @@ release may change the library API.
 - The crate on crates.io holds the sources, the tests with their
   fixtures, the udev rules and the licences, and no longer the packaging,
   agent and planning files of the repository.
+- For library users: `Error`, `Packet`, `Value`, `ValueKind`, `ValueList`,
+  `DeviceClass`, `ChannelKind`, `FirmwareKind`, `TriggerMatch` and
+  `core::session::Flow` are `#[non_exhaustive]`, so a variant can be added in a
+  minor release. A `match` on one of them outside the crate needs a `_`
+  arm.
+- For library users: a driver's `protocol` module (its registers, its
+  packets and their helpers) is private to the crate. A driver's `Driver`,
+  its device, their constructors and its other modules are public as
+  before.
 
 ### Fixed
 

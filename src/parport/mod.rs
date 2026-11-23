@@ -251,6 +251,9 @@ impl Parport {
 mod sys {
     //! The `ppdev` ioctls (`include/uapi/linux/ppdev.h`).
 
+    // The crate denies unsafe code; an ioctl is an unsafe call.
+    #![allow(unsafe_code)]
+
     use super::{Error, Result};
     use rustix::ioctl::{Getter, NoArg, Opcode, Setter, ioctl, opcode};
     use std::os::fd::AsFd;

@@ -18,6 +18,7 @@ const QUEUE_DEPTH: usize = 64;
 
 /// What the consumer wants after a packet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Flow {
     /// Keep going.
     Continue,

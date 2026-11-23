@@ -70,6 +70,12 @@
 //! descriptors close-on-exec by their numbers before a driver starts a
 //! program; and `bt`, whose L2CAP address (`sockaddr_l2`) is built in one
 //! unsafe block.
+//!
+//! The crate denies unsafe code, so a new module has none unless it says
+//! so; those modules allow it for the calls above, and the others forbid
+//! it, which nothing inside them can lift.
+
+#![deny(unsafe_code)]
 
 pub mod bt;
 pub mod core;

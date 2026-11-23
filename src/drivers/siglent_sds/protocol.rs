@@ -25,6 +25,7 @@ use crate::core::{Error, Result};
 use std::time::{Duration, Instant};
 
 /// `:INR?`: a trigger is ready.
+#[allow(dead_code)]
 pub const TRIG_READY: u32 = 8192;
 /// `:INR?`: a signal was acquired.
 pub const DATA_ACQUIRED: u32 = 1;
@@ -353,6 +354,7 @@ impl Silence {
     }
 
     /// Whether a sample has come.
+    #[cfg(test)]
     pub fn has_sampled(&self) -> bool {
         self.sampled
     }

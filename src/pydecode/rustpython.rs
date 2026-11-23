@@ -13,6 +13,10 @@
 //! Python gets its own virtual machine on the shared interpreter, and
 //! `wait` detaches the thread while it blocks for samples.
 
+// The crate denies unsafe code; the decoder's context crosses into Python
+// as a raw pointer.
+#![allow(unsafe_code)]
+
 use super::{CONF_SAMPLERATE, leak};
 use crate::core::{Error, Result};
 use crate::decode::{

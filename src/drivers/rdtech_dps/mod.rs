@@ -55,7 +55,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key,

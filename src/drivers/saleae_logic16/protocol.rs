@@ -407,11 +407,6 @@ impl Link {
         self.transport.as_mut()
     }
 
-    /// Gives the transport back.
-    pub fn into_transport(self) -> Box<dyn Transport> {
-        self.transport
-    }
-
     fn map(&self) -> &'static RegisterMap {
         self.variant.map()
     }

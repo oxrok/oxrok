@@ -35,6 +35,8 @@
 //! Scan options and the open are here as well: a Modbus driver takes `conn=`,
 //! `serialcomm=` and `modbusaddr=` alike.
 
+#![forbid(unsafe_code)]
+
 use crate::core::{Error, Key, Result, Value};
 use crate::serial::{self, Params, Port, read_blocking};
 use std::time::{Duration, Instant};

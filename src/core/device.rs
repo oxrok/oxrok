@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 /// What kind of instrument a device is. A device can be several.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DeviceClass {
     /// A logic analyzer.
     LogicAnalyzer,

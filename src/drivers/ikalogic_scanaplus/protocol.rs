@@ -63,12 +63,16 @@ pub const SAMPLERATE: u64 = 100_000_000;
 pub const COMPRESSED_BUF_SIZE: usize = 64 * 1024;
 
 /// Threshold of a 1.2 V system: 0.6 V.
+#[allow(dead_code)]
 pub const THRESHOLD_1_2V: u8 = 0x2e;
 /// Threshold of a 1.5 V system: 0.75 V.
+#[allow(dead_code)]
 pub const THRESHOLD_1_5V: u8 = 0x39;
 /// Threshold of a 1.8 V system: 0.9 V.
+#[allow(dead_code)]
 pub const THRESHOLD_1_8V: u8 = 0x45;
 /// Threshold of a 2.8 V system: 1.4 V.
+#[allow(dead_code)]
 pub const THRESHOLD_2_8V: u8 = 0x6c;
 /// Threshold of a 3.3 V system: 1.65 V, what an acquisition sets.
 pub const THRESHOLD_3_3V: u8 = 0x7f;

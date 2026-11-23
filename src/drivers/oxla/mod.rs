@@ -44,7 +44,7 @@
 #![forbid(unsafe_code)]
 
 pub mod gowin;
-pub mod protocol;
+pub(crate) mod protocol;
 #[cfg(test)]
 mod tests;
 pub mod tn20k;

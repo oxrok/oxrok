@@ -316,7 +316,7 @@ pub struct Head {
 
 impl Head {
     /// `ut181a_get_range_from_packet_bytes`.
-    pub fn range_text(&self) -> Option<&'static str> {
+    pub fn range_text(self) -> Option<&'static str> {
         if self.auto_range {
             return Some(RANGE_AUTO);
         }

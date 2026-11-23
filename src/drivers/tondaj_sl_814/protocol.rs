@@ -128,6 +128,7 @@ pub enum Next {
 
 /// Why a capture gave up, each said in its own words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum GiveUp {
     /// Not a byte came for init.
     NoInitReply,

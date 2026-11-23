@@ -574,11 +574,6 @@ impl Decoder {
         self.samples.len()
     }
 
-    /// Whether nothing was decoded yet.
-    pub fn is_empty(&self) -> bool {
-        self.samples.is_empty()
-    }
-
     /// A word of the bytes of the groups in `groups` as a sample of all
     /// 32 channels, the other groups 0.
     fn expand(bytes: &[u8], groups: u8) -> u32 {
