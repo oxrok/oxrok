@@ -141,10 +141,6 @@ the process ends. These are one piece of work:
   only sets a flag (`src/cli/run.rs`) while the main thread waits in the
   write. `oxrok --continuous -O binary | (sleep 8; ...)` then SIGINT:
   still running after 10 s, and the driver's `close` never goes out.
-- Issue #82: on macOS nextest hung for 67 minutes in
-  `atten_pps3xxx::tests::a_capture_with_something_to_say_notes_it`. That
-  driver bounds its `End`, so it is another wait: the stop flag against
-  the fake port's read is the suspect.
 
 ### Structure
 
@@ -285,8 +281,7 @@ skills and `track.py` are in
 [oxrok/management](https://github.com/oxrok/management). The workstreams:
 
 - `bug-check`: upstream fixes for bugs oxrok may share (USB bus 0 on
-  macOS, macOS HID paths, RD6006 multipliers, Kingst stream stalls,
-  center-3xx recovery, crafted VCD input, demo, R&S RTM/RTB).
+  macOS, Kingst stream stalls, crafted VCD input, R&S RTM/RTB).
 - `tooling`: firmware extractors in oxrok-util.
 - `firmware-build`: firmware-fx2lafw built on Linux, macOS and Windows
   in CI, WCID descriptors, and the open Kingst FX2 firmware.
@@ -453,9 +448,11 @@ The models are plain Rust with no I/O for this reason; see
   `saleae-logic-pro`, `dreamsourcelab-dslogic` and `kingst-la2016`; the
   same stop race may be open in `hantek-4032l` and `sysclk-lwla`.
 - `saleae-logic-pro`'s `usb.c` gcov varies from run to run (76–79%).
-- Three unexplained rare failures: the emulator's `usbtmc` unplug case,
-  `hantek-dso`'s `interrupt continuous` transaction log, and a
-  `cem-dt-885x` session lost after an interrupt's close.
+- Four unexplained rare failures: the emulator's `usbtmc` unplug case,
+  `hantek-dso`'s `interrupt continuous` transaction log, a
+  `cem-dt-885x` session lost after an interrupt's close, and
+  `cem-dt-885x`'s "power off on a deaf meter", where the set did not
+  fail (once, run 45143792700).
 
 ### Harness and CI
 
@@ -540,8 +537,8 @@ The models are plain Rust with no I/O for this reason; see
   makes `vhci_hcd` drop the connection (`cannot find a urb of seqnum`
   in dmesg). The device is gone, the harness says `no tty for 1-1`, and
   every later case of the session fails with `could not put the tty
-  back`: 5 to 112 cases, in 10 runs of `main` within six days (issues
-  #89 and #105), most often first in an unplug case of
+  back`: 5 to 112 cases, in 10 runs of `main` within six days (issue
+  #89), most often first in an unplug case of
   `gwinstek-psp`, `cem-dt-885x` or `mastech-ms6514`. It was put at once
   in about 11,100 attaches; on the hosted runners it is far more
   frequent. The fix is in vusb (CI pins vusb-cli 0.2.1): remember an
@@ -796,12 +793,12 @@ oxrok/management.
 ### Flakes and test gaps
 
 - The flakes CI has met are issues, not entries here: #77 (`greatfet`
-  "unplug at start" passes on rerun), #88 (`lecroy-logicstudio` "lib
-  bitstream missing" prints an extra firmware line), #89 and #105 (a
-  lost tty, the vusb race under [Harness and CI](#harness-and-ci)) and
-  #82 (under [Shutdown](#shutdown)). oxrok/management's `flakes.toml`
-  knows only #77 and #105. One place should hold them all, with the
-  others pointing at it.
+  "unplug at start" passes on rerun; again on 2026-11-11, run
+  43067135614) and #89 (a lost tty, the vusb race under
+  [Harness and CI](#harness-and-ci)). oxrok/management's `flakes.toml`
+  counts #77 once and has the lost tty under #105, closed as a duplicate
+  of #89. One place should hold them all, with the others pointing at
+  it.
 
 - The `test` and Python decoder jobs retry a failed test once and name
   each test that passed on its second try (FLAKY, in the job summary
@@ -905,6 +902,18 @@ oxrok/management.
   changes the outputs `demo_cli` holds.
 - Analog samples are `f32` in the core (`AnalogData.samples`): `rigol-dg`'s
   counter gives 10 digits and keeps about 7.
+- `demo`'s `incremental` pattern counts over all channels as one number,
+  where libsigrok repeats the low byte of its counter every 8 channels:
+  with 16 channels D8 is the counter's bit 8 here and D0 again there.
+  libsigrok's own wide output is wrong until pull request 319. Take its
+  pattern, or say in `docs/CLI.md` that ours differs; a unit test
+  (`wide_units_are_little_endian`) holds ours.
+- A HID port name cannot hold a macOS path: `HidInfo::path` is `None`
+  off Linux, so a path given in `conn=` matches no device, and the
+  `DevSrvsID:ID` form is refused before that, as a scan option, for its
+  colon. A scan goes by USB id and needs no path, so this bites only a
+  user with two alike cables and no serial number. No HID meter has been
+  tried on macOS.
 - A core output maps a logic channel to its bit by its listing index, so
   `yokogawa-dlm` needs `Device::channels_listed_as_they_are()`; a separate
   channel-to-bit map would let a driver keep C's index-32 channels.
