@@ -34,6 +34,15 @@ its sample rate. Run it before and after a change to them; `--min`
 fails a run below a rate, and a trigger that fires on data built so it
 never should fails it too.
 
+## Releases
+
+`docs/RELEASING.md` has the steps: the release commit, the tag that
+starts the `Release binaries` workflow, the draft release it leaves to
+publish, and `cargo publish` by hand. `tests/package.rs` fails when a
+file outside the places it names would be in the crate; a new top level
+file a test of the crate reads goes in `include` in `Cargo.toml` and
+there.
+
 ## License
 
 oxrok is GPL-3.0-or-later, like the sigrok code it ports
