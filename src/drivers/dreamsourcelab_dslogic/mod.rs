@@ -81,7 +81,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::doc_markdown)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error,

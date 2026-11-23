@@ -1,0 +1,48 @@
+name: Bug
+description: oxrok did something wrong, with or without a device attached.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this is about a real device you ran, the hardware report
+        template is the better one. Paste commands and output as they
+        were, without editing.
+  - type: input
+    id: version
+    attributes:
+      label: oxrok version
+      description: The first line of `oxrok --version`, and how it was installed (release archive, cargo, COPR, a checkout).
+    required: true
+  - type: input
+    id: system
+    attributes:
+      label: Operating system
+      placeholder: Fedora 43, macOS 26 on arm64, Windows 11
+    required: true
+  - type: textarea
+    id: ran
+    attributes:
+      label: What you ran
+      description: The commands, as typed. `-l 5` adds the debug log.
+      render: bash
+    required: true
+  - type: textarea
+    id: out
+    attributes:
+      label: What it said
+      description: The output, pasted as it was, and the exit status if it matters.
+      render: bash
+    required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: If sigrok-cli does it differently, its output for the same command helps most.
+    required: false
+  - type: textarea
+    id: note
+    attributes:
+      label: Anything else
+      description: An input file that shows it, or a recording (`OXROK_USB_RECORD=FILE`, `OXROK_HID_RECORD`, `OXROK_SERIAL_RECORD`, `OXROK_SCPI_RECORD`). A recording holds what the device sent, its serial number included; read it before attaching.
+    required: false

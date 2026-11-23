@@ -1,6 +1,6 @@
 //! Core types of oxrok, a sigrok compatible logic analyzer stack.
 //!
-//! This crate holds everything a driver, a file format or a front end
+//! This module holds everything a driver, a file format or a front end
 //! needs to talk to each other:
 //!
 //! - [`Key`] and [`Value`]: the configuration model. The well known
@@ -14,7 +14,7 @@
 //! - [`util`]: parsing and formatting helpers shared by the CLI and the
 //!   formats (sample rate strings, size suffixes, time strings).
 //!
-//! Nothing here touches USB or files. Those live in their own crates.
+//! Nothing here touches USB or files. Those live in their own modules.
 
 #![forbid(unsafe_code)]
 

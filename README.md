@@ -155,7 +155,9 @@ Emulator and replay only, never run on hardware:
 known to differ. If you own one of these devices, a report is worth more
 than another emulator case: the output of a capture next to sigrok-cli's,
 and a recording (`OXROK_USB_RECORD=file oxrok -d DRIVER ...`) if they
-differ.
+differ. The
+[hardware report](https://github.com/oxrok/oxrok/issues/new?template=hardware-report.yml)
+issue form asks for what is needed.
 
 CI runs on Linux, macOS and Windows.
 
@@ -185,11 +187,13 @@ and command lines for real devices in [docs/DEVICES.md](docs/DEVICES.md).
 With Rust 1.95 or newer:
 
 ```sh
-cargo install oxrok --version 0.3.0-alpha.1 --locked
+cargo install oxrok --locked                           # the stable release, 0.2.0
+cargo install oxrok --version 0.3.0-alpha.1 --locked   # the pre-release
 ```
 
-The version is needed: with only pre-releases published, cargo finds nothing
-without it. Or, from a checkout, which has what was merged since:
+cargo installs a pre-release only when its version is named;
+[CHANGELOG.md](CHANGELOG.md) says what it has that 0.2.0 does not. Or,
+from a checkout, which has what was merged since:
 
 ```sh
 cargo install --path . --locked
@@ -267,7 +271,7 @@ as long. [docs/DECODERS.md](docs/DECODERS.md) describes the host.
 
 A GitHub release holds these, built by `make dist` and `make dist-src` in the
 `Release binaries` workflow (`.github/workflows/release.yml`), each file with a
-`.sha256`:
+`.sha256`, and one `SHA256SUMS` for all of them:
 
 - One archive per target: Linux x86_64 and aarch64 (static, musl), macOS
   x86_64 and arm64, Windows x86_64. It has `oxrok` built with `rustpython`,
@@ -279,7 +283,10 @@ A GitHub release holds these, built by `make dist` and `make dist-src` in the
   so that `make dist` works in it with no network.
 
 No firmware is in either. [docs/LICENSING.md](docs/LICENSING.md) has the
-details.
+details. From the release after 0.3.0-alpha.1 on, the files carry a build
+provenance attestation: `gh attestation verify FILE --repo oxrok/oxrok`
+says that the workflow built it, and from which commit.
+[docs/RELEASING.md](docs/RELEASING.md) has how a release is made.
 
 ## How drivers are tested
 
@@ -514,8 +521,7 @@ a file in `emu/src/models`, a scenario in `tools/emu`, goldens blessed with
 entry in `docs/DEVICES.md`. A bless without `--oracle` writes a case's goldens
 only when its other checks pass, and prints what it wrote per model.
 [docs/USB.md](docs/USB.md#emulation-over-usbip) describes the server and the
-harness, and [docs/ROADMAP.md](docs/ROADMAP.md#emulation-plan) the plan and
-what counts as emulator-verified.
+harness, and [what counts as emulator-verified](docs/USB.md#what-counts-as-emulator-verified).
 
 ## Layout
 

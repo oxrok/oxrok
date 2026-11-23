@@ -270,7 +270,7 @@ impl DeviceTrigger {
 /// match on a disabled channel is ignored; of the others the last decides,
 /// as the device has one trigger channel (protocol.c:495-513). All four on
 /// any edge is the code for all channels.
-pub fn convert_trigger(trigger: Option<&Trigger>, enabled: &[bool; NUM_CHANNELS]) -> DeviceTrigger {
+pub fn convert_trigger(trigger: Option<&Trigger>, enabled: [bool; NUM_CHANNELS]) -> DeviceTrigger {
     let mut out = DeviceTrigger::NONE;
     let Some(trigger) = trigger else { return out };
     let mut matches = 0;
@@ -828,36 +828,36 @@ mod tests {
     fn triggers_convert_as_the_c_does() {
         use TriggerMatch::{Edge as E, Falling as F, Rising as R};
         let all = [true; 4];
-        assert_eq!(convert_trigger(None, &all), DeviceTrigger::NONE);
+        assert_eq!(convert_trigger(None, all), DeviceTrigger::NONE);
         let t = trigger(&[&[(0, R)]]);
-        assert_eq!(convert_trigger(Some(&t), &all), RISING_0);
+        assert_eq!(convert_trigger(Some(&t), all), RISING_0);
         let t = trigger(&[&[(3, F)]]);
         assert_eq!(
-            convert_trigger(Some(&t), &all),
+            convert_trigger(Some(&t), all),
             DeviceTrigger { channel: 4, kind: 0, ignored: 0 }
         );
         // All four on any edge.
         let t = trigger(&[&[(0, E), (1, E), (2, E), (3, E)]]);
         assert_eq!(
-            convert_trigger(Some(&t), &all),
+            convert_trigger(Some(&t), all),
             DeviceTrigger { channel: 0, kind: 2, ignored: 0 }
         );
         // Three of them, and a mix: the last wins, and the rest are counted.
         let t = trigger(&[&[(0, E), (1, E), (2, E)]]);
         assert_eq!(
-            convert_trigger(Some(&t), &all),
+            convert_trigger(Some(&t), all),
             DeviceTrigger { channel: 3, kind: 2, ignored: 2 }
         );
         let t = trigger(&[&[(0, R), (3, F)]]);
         assert_eq!(
-            convert_trigger(Some(&t), &all),
+            convert_trigger(Some(&t), all),
             DeviceTrigger { channel: 4, kind: 0, ignored: 1 }
         );
         // A disabled channel's match counts for nothing.
         let t = trigger(&[&[(0, R), (3, F)]]);
-        assert_eq!(convert_trigger(Some(&t), &[true, true, true, false]), RISING_0);
+        assert_eq!(convert_trigger(Some(&t), [true, true, true, false]), RISING_0);
         let t = trigger(&[&[(3, F)]]);
-        assert_eq!(convert_trigger(Some(&t), &[true, true, true, false]), DeviceTrigger::NONE);
+        assert_eq!(convert_trigger(Some(&t), [true, true, true, false]), DeviceTrigger::NONE);
     }
 
     #[test]

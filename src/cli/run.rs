@@ -65,6 +65,9 @@ pub fn get_options(registry: &Registry, args: &Args) -> Result<()> {
 /// (`{'k': 'v'}`). Strings escape what `g_unichar_isprint` rejects
 /// except unassigned code points, which would need the Unicode tables
 /// `GLib` was built with.
+// `Value` is non-exhaustive, so that the library can add a variant; with
+// this, clippy says so when one has no arm of its own below.
+#[deny(clippy::wildcard_enum_match_arm)]
 fn get_text(value: &Value) -> String {
     match value {
         Value::Str(s) => glib_string(s),
@@ -73,6 +76,8 @@ fn get_text(value: &Value) -> String {
         Value::RangeF64(a, b) => format!("({}, {})", glib_double(*a), glib_double(*b)),
         Value::KeyValue(k, v) => format!("{{{}: {}}}", glib_string(k), glib_string(v)),
         Value::Bool(_) | Value::U64(_) | Value::I32(_) | Value::Mq(..) => value.to_string(),
+        #[allow(clippy::match_same_arms)]
+        _ => value.to_string(),
     }
 }
 

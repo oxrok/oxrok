@@ -6,8 +6,8 @@
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets
   --all-features` with no warnings, `cargo nextest run --workspace
   --all-features` green. CI runs the same on Linux, macOS and Windows,
-  with clippy from the current stable Rust and a build on the minimum
-  supported version, 1.95.
+  with the Rust release `rust-toolchain.toml` pins and a build on the
+  minimum supported version, 1.95.
   On a pull request the emulator tier and the Python decoder jobs run
   only for what the change touches (`tools/ci/changes.py`; the
   `changes` job's summary says why). The `ci:full` label runs
@@ -16,8 +16,18 @@
   untrusted input (`fuzz/README.md`) and reports the Rust line coverage
   of the test suite in its summary.
 - Every change that a user can see gets a line in `CHANGELOG.md`.
-- No `unsafe` code. The one exception is `pydecode`, which crosses
-  into Python; every block there says why it is sound.
+- No `unsafe` code: the crate denies it. The exceptions are the modules
+  the crate docs in `src/lib.rs` list (`pydecode`, which crosses into
+  Python, and four that make a system call); each allows it where it is
+  and every block says why it is sound.
+
+## Plans
+
+A design plan for work not yet done lives in `docs/plans/`, not at the
+repository root. The pull request that completes a step removes that
+step from the plan, moves the reasons worth keeping into the page that
+documents the result, and deletes the plan when nothing is left of it.
+`docs/ROADMAP.md` points at the plan while it is open.
 
 ## Performance
 
@@ -28,6 +38,15 @@ A streaming driver that triggers on the host needs them faster than
 its sample rate. Run it before and after a change to them; `--min`
 fails a run below a rate, and a trigger that fires on data built so it
 never should fails it too.
+
+## Releases
+
+`docs/RELEASING.md` has the steps: the release commit, the tag that
+starts the `Release binaries` workflow, the draft release it leaves to
+publish, and `cargo publish` by hand. `tests/package.rs` fails when a
+file outside the places it names would be in the crate; a new top level
+file a test of the crate reads goes in `include` in `Cargo.toml` and
+there.
 
 ## License
 

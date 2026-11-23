@@ -35,9 +35,34 @@ release may change the library API.
 - `serde_json` is a dependency of the library with or without the `mcp`
   feature: the `oxla-tn20k` driver reads the descriptions of its
   bitstreams with it.
+- A GitHub release appears with all of its archives or not at all: the
+  release workflow runs on the pushed tag, refuses a tag that is not the
+  version in `Cargo.toml` or has no changelog section, and fills a draft
+  that is then published (`docs/RELEASING.md`). A release gains one
+  `SHA256SUMS` beside the `.sha256` files, and a build provenance
+  attestation of every archive, which `gh attestation verify` checks.
+- The crate on crates.io holds the sources, the tests with their
+  fixtures, the udev rules and the licences, and no longer the packaging,
+  agent and planning files of the repository.
+- For library users: `Error`, `Packet`, `Value`, `ValueKind`, `ValueList`,
+  `DeviceClass`, `ChannelKind`, `FirmwareKind`, `TriggerMatch` and
+  `core::session::Flow` are `#[non_exhaustive]`, so a variant can be added in a
+  minor release. A `match` on one of them outside the crate needs a `_`
+  arm.
+- For library users: a driver's `protocol` module (its registers, its
+  packets and their helpers) is private to the crate. A driver's `Driver`,
+  its device, their constructors and its other modules are public as
+  before.
 
 ### Fixed
 
+- A stop or a close of the `demo` device or of a `serial-dmm` meter no
+  longer waits for ever when nobody reads the packet queue, which a
+  client of the library that drives a `Device` with no `Session` could
+  see. `PacketSink::stopped_by` gives a sink its device's stop flag: once
+  it is set a packet waits half a second for room, and a reader that goes
+  on reading gets every packet as before. The other drivers get it one by
+  one.
 - A serial port opens at a speed macOS has no constant for (3,000,000
   baud): the open failed with `Invalid argument`, as `tcsetattr` there
   refuses the termios it reads back after such a speed was set.

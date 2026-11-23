@@ -218,6 +218,7 @@ pub fn package_status(pkg: &fetch::Package) -> PackageStatus {
 
 /// How a driver's firmware gets onto the device.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FirmwareKind {
     /// The driver uploads it on open.
     Upload,

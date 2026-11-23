@@ -56,7 +56,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::analog::{Mq, MqFlags, Unit};
 use crate::core::{
@@ -340,7 +340,7 @@ fn run_log(
         let want = protocol::log_request(done, total);
         let answer = match t.bulk_in(
             protocol::EP_IN,
-            protocol::log_answer_len(&want),
+            protocol::log_answer_len(want),
             protocol::DATA_TIMEOUT,
         ) {
             Ok(a) => a,

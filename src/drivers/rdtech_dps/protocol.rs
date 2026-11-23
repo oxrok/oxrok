@@ -164,7 +164,7 @@ pub struct Identity {
 
 impl Identity {
     /// The version as `api.c` prints it for a family.
-    pub fn version_text(&self, family: Family) -> String {
+    pub fn version_text(self, family: Family) -> String {
         match family {
             Family::Dps => format!("v{}", self.version),
             Family::Rd => format!("v{}.{}", self.version / 100, self.version % 100),
@@ -263,7 +263,7 @@ fn scaled(raw: u16, multiplier: f64) -> f32 {
 /// `esphome-dps` have a current in hundredths there, `rfinnie/rdserialtool` in
 /// thousandths on every model, and it was tested on a DPS5005 alone. The DPS5020
 /// protocol V1.2 was not read. Power is in hundredths, as in C.
-pub fn decode_dps(block: &[u16; DPS_BLOCK], thresholds: &[u16; 2], link: &Multipliers) -> State {
+pub fn decode_dps(block: &[u16; DPS_BLOCK], thresholds: [u16; 2], link: &Multipliers) -> State {
     State {
         voltage_target: scaled(block[0], link.voltage),
         current_limit: scaled(block[1], link.current),
@@ -285,7 +285,7 @@ pub fn decode_dps(block: &[u16; DPS_BLOCK], thresholds: &[u16; 2], link: &Multip
 /// 13 in hundredths, as in C, and this is unproven: the `riden` Python library
 /// has thousandths on the P models and register 12 as its high word, which C and
 /// this ignore.
-pub fn decode_rd(block: &[u16], thresholds: &[u16; 2], link: &Multipliers) -> State {
+pub fn decode_rd(block: &[u16], thresholds: [u16; 2], link: &Multipliers) -> State {
     State {
         voltage_target: scaled(block[0], link.voltage),
         current_limit: scaled(block[1], link.current),
@@ -453,7 +453,7 @@ impl Link {
                 let mut block = [0; DPS_BLOCK];
                 read_registers_until(bus, DPS_USET, &mut block, stop)?;
                 read_registers_until(bus, DPS_OVPSET, &mut thresholds, stop)?;
-                Ok(decode_dps(&block, &thresholds, &multipliers))
+                Ok(decode_dps(&block, thresholds, &multipliers))
             }
             Family::Rd => {
                 let mut block = [0; RD_BLOCK_WITH_RANGE];
@@ -461,7 +461,7 @@ impl Link {
                 let block = &mut block[..count];
                 read_registers_until(bus, RD_VOLT_TGT, block, stop)?;
                 read_registers_until(bus, RD_OVP_THR, &mut thresholds, stop)?;
-                Ok(decode_rd(block, &thresholds, &multipliers))
+                Ok(decode_rd(block, thresholds, &multipliers))
             }
         }
     }
@@ -559,7 +559,7 @@ mod tests {
     #[test]
     fn a_dps_block_decodes_in_its_scale() {
         let block = [1200, 2000, 1199, 1500, 1798, 2400, 1, 1, 1, 1];
-        let s = decode_dps(&block, &[4000, 5500], &multipliers(5005, Family::Dps));
+        let s = decode_dps(&block, [4000, 5500], &multipliers(5005, Family::Dps));
         assert_eq!(s.voltage_target, 12.0);
         assert_eq!(s.current_limit, 2.0);
         assert_eq!(s.voltage, 11.99);
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn opp_is_neither_ovp_nor_ocp() {
         let block = [0, 0, 0, 0, 0, 0, 0, 3, 0, 0];
-        let s = decode_dps(&block, &[0, 0], &multipliers(5005, Family::Dps));
+        let s = decode_dps(&block, [0, 0], &multipliers(5005, Family::Dps));
         assert!(!s.protect_ovp && !s.protect_ocp);
     }
 
@@ -582,7 +582,7 @@ mod tests {
     fn an_rd_block_decodes_in_its_scale() {
         let m = multipliers(60125, Family::Rd);
         let mut block = [12000, 20000, 11999, 10000, 7, 1200, 0, 0, 2, 1, 1, 9, 5];
-        let s = decode_rd(&block, &[62000, 62000], &m);
+        let s = decode_rd(&block, [62000, 62000], &m);
         assert_eq!(s.voltage_target, 12.0);
         assert_eq!(s.current_limit, 2.0);
         assert_eq!(s.voltage, 11.999);
@@ -594,8 +594,8 @@ mod tests {
         assert_eq!(s.ocp_threshold, 6.2);
         assert_eq!(s.range, 1, "any nonzero is the second");
         block[12] = 0;
-        assert_eq!(decode_rd(&block, &[0, 0], &m).range, 0);
-        assert_eq!(decode_rd(&block[..11], &[0, 0], &m).range, 0, "no register, one range");
+        assert_eq!(decode_rd(&block, [0, 0], &m).range, 0);
+        assert_eq!(decode_rd(&block[..11], [0, 0], &m).range, 0, "no register, one range");
     }
 
     #[test]

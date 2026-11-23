@@ -246,13 +246,13 @@ pub struct Recording {
 impl Recording {
     /// `0c` is dB(C), and anything else is dB(A).
     #[must_use]
-    pub fn c_weight(&self) -> bool {
+    pub fn c_weight(self) -> bool {
         self.weight == 0x0c
     }
 
     /// What is logged of it, in C's words.
     #[must_use]
-    pub fn describe(&self) -> String {
+    pub fn describe(self) -> String {
         let [y, mo, d, h, mi, s] = self.date;
         format!(
             "Recording dB({:X}) {y:02x}/{mo:02x}/{d:02x} {:02x}:{mi:02x}:{s:02x} ",

@@ -446,6 +446,7 @@ impl Link {
     }
 
     /// Whether the next command goes on a new connection.
+    #[cfg(test)]
     pub fn is_stale(&self) -> bool {
         self.stale
     }

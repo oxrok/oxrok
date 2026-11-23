@@ -48,7 +48,9 @@
 //! - The top three bits of byte 0x21 cleared on every write
 //!   (`protocol.c:591`).
 
-pub mod protocol;
+#![forbid(unsafe_code)]
+
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,

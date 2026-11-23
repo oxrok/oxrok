@@ -254,6 +254,9 @@ pub fn connect(addr: [u8; 6], timeout: Duration) -> io::Result<Box<dyn Bearer>> 
 mod linux {
     //! The socket, through socket2: one `unsafe` block, for the address.
 
+    // The crate denies unsafe code; the address cannot be built without.
+    #![allow(unsafe_code)]
+
     use std::io::{self, Read as _};
     use std::os::fd::AsRawFd;
     use std::time::Duration;

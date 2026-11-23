@@ -222,13 +222,20 @@ fn real_captures_match_libsigrokdecode() {
 
 /// The Python host, with the python feature and a libsigrokdecode
 /// installation. Without the decoders the tests pass vacuously and say
-/// so.
+/// so; with `OXROK_REQUIRE_DECODERS=1`, as CI's Python decoder jobs set
+/// it, they fail instead (as `python_available` of tests/support does).
 #[cfg(any(feature = "python", feature = "rustpython"))]
 mod python {
     use super::*;
 
     fn available() -> bool {
         let found = !oxrok::pydecode::defs().is_empty();
+        let required = std::env::var_os("OXROK_REQUIRE_DECODERS").is_some_and(|v| v == "1");
+        assert!(
+            found || !required,
+            "OXROK_REQUIRE_DECODERS=1 and no Python decoders found (decoders directory: {:?})",
+            oxrok::pydecode::decoders_dir()
+        );
         if !found {
             eprintln!("no libsigrokdecode decoders found, skipping");
         }

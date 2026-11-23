@@ -6,30 +6,28 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+homepage = "https://oxrok.dev"
 authors.workspace = true
 keywords = ["sigrok", "logic-analyzer", "oscilloscope", "multimeter"]
 categories = ["hardware-support", "command-line-utilities"]
-# Anchored: a bare "emu/" also matches tests/emu/, the goldens, which was only
-# right by accident. tools/emu/*.firmware stay, as tests/emu_replay.rs builds
-# its firmware stand-ins from those lists of names and sizes.
-exclude = [
-    "/hil/",
-    "/emu/",
-    "/fuzz/",
-    "/docs/",
-    "/tests/emu/",
-    "/tools/*",
-    "!/tools/emu/",
-    "/tools/emu/*",
-    "!/tools/emu/*.firmware",
-    "/.github/",
-    "/.gitattributes",
-    "/.gitignore",
-    "/Makefile",
-    "/clippy.toml",
-    "/deny.toml",
-    "/rust-toolchain.toml",
-    "/rustfmt.toml",
+# What a crate needs and no more, so that a new file at the top of the
+# repository is not published until it is named here; tests/package.rs
+# pins the list. Anchored: a bare "tests/" would also match a directory of
+# that name below src/. tests/emu/, the goldens, stays out. tools/emu/*.firmware
+# is in, as tests/emu_replay.rs builds its firmware stand-ins from those
+# lists of names and sizes, and contrib/, which tests/udev_rules.rs reads.
+include = [
+    "/src/",
+    "/tests/*.rs",
+    "/tests/support/",
+    "/tests/fixtures/",
+    "/tools/emu/*.firmware",
+    "/examples/",
+    "/contrib/*.rules",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+    "/NOTICE",
 ]
 
 [lib]

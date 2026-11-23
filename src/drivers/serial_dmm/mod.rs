@@ -406,6 +406,9 @@ impl Device for DmmDevice {
         let slot = Arc::clone(&self.port);
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = Arc::clone(&stop);
+        // The stop and the close join the thread: they do not wait on a
+        // queue nobody reads.
+        let sink = sink.stopped_by(&stop);
         let handle = std::thread::Builder::new()
             .name(format!("{} acquisition", self.model.id))
             .spawn(move || {
@@ -680,6 +683,48 @@ mod tests {
         0x00, 0x00, 0x01, 0xa0, 0xdb, 0xf8, 0xe4, 0x7c, 0x01, 0x00, 0x7c, 0xbe, 0xbf, 0x00, 0x04,
         0x00, 0x86, 0x86, 0x86, 0x86, 0x00, 0x00, 0x00, 0x00,
     ];
+
+    /// A meter that never stops sending its packet.
+    struct Streaming;
+
+    impl Port for Streaming {
+        fn name(&self) -> &'static str {
+            "/dev/ttyUSB0"
+        }
+        fn set_params(&mut self, _: Params) -> Result<()> {
+            Ok(())
+        }
+        fn set_handshake(&mut self, _: Option<bool>, _: Option<bool>) -> Result<()> {
+            Ok(())
+        }
+        fn read(&mut self, buf: &mut [u8], _: Duration) -> Result<usize> {
+            std::thread::sleep(Duration::from_millis(1));
+            let n = buf.len() / FS9922_PACKET.len() * FS9922_PACKET.len();
+            for packet in buf[..n].chunks_mut(FS9922_PACKET.len()) {
+                packet.copy_from_slice(FS9922_PACKET);
+            }
+            Ok(n)
+        }
+        fn write(&mut self, _: &[u8]) -> Result<()> {
+            Ok(())
+        }
+        fn purge(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_close_does_not_wait_on_a_queue_nobody_reads() {
+        let model = models::find("victor-dmm").unwrap();
+        let mut dev = DmmDevice::from_port(model, Box::new(Streaming));
+        dev.open().unwrap();
+        // The meter sends on, and the second reading finds the queue full.
+        crate::core::device::close_with_an_unread_queue(
+            Box::new(dev),
+            Duration::from_millis(100),
+            Duration::from_secs(30),
+        );
+    }
 
     #[test]
     fn the_scan_gives_up_when_its_buffer_is_full() {

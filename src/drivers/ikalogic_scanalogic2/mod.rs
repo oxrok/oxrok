@@ -58,7 +58,7 @@
 
 #![forbid(unsafe_code)]
 
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, Channel, ChannelKind, Device, DeviceClass, DeviceInfo, Driver, Error, Key, OptionDesc,
@@ -196,7 +196,7 @@ impl Scanalogic2Device {
     /// `dev_acquisition_start()`'s numbers.
     fn plan(&self) -> Plan {
         let enabled = self.enabled();
-        let trigger = protocol::convert_trigger(self.trigger.as_ref(), &enabled);
+        let trigger = protocol::convert_trigger(self.trigger.as_ref(), enabled);
         if trigger.ignored > 0 {
             log::warn!(
                 "The device triggers on one channel: only the last match counts, on channel {}.",
