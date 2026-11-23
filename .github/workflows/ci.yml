@@ -5,10 +5,30 @@ on:
     branches: [main]
   pull_request:
 
+# A new push to a pull request cancels the run of the one before it: one
+# full run is 20 jobs, all the organisation can run at once. A push to
+# main is a group of its own (its run id), so it is never cancelled and
+# never dropped while it waits: every merge gets its result.
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
 
+# The toolchain is the one rust-toolchain.toml pins, with its components:
+# `rustup toolchain install` with no name installs it (rustup 1.28 on).
+# Only the msrv job names another.
+#
+# rust-cache saves on main only (`save-if`). A pull request reads main's
+# caches and cannot share its own with another, and the copies of a few
+# pull requests filled the repository's 10 GB, which evicted main's. The
+# cost: a pull request that changes Cargo.lock builds what changed on
+# each of its pushes.
+#
+# apt goes through tools/ci/apt.sh, which tries again when a mirror fails.
 jobs:
   # Which slow jobs this run needs (tools/ci/changes.py). A push to main
   # runs everything. A pull request runs the emulator models of the
@@ -53,18 +73,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
+      # AGENTS.md, "Vendor firmware": no tracked file is named like one.
+      # By extension only; it does not read contents.
+      - run: python3 -I tools/ci/firmware.py
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fmt --all --check
       - run: python3 -I tools/ci/test_changes.py
       - run: python3 -I tools/ci/test_release.py
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: python3 -I tools/ci/test_firmware.py
+      - run: cargo clippy --workspace --all-targets --all-features --locked
 
   # Fails on a dependency with a licence deny.toml does not allow, for any
-  # feature on any platform. Licences only; see docs/LICENSING.md.
+  # feature on any platform, or one that is not from crates.io. See
+  # docs/LICENSING.md. Advisories are advisories.yml's, on a schedule.
   licenses:
     name: licenses
     runs-on: ubuntu-latest
@@ -72,16 +96,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
+      # cargo-about as its release binary: release.yml builds the same
+      # version with cargo, since not every runner there has a binary.
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-deny@0.20.2
-      - run: cargo deny --workspace --locked check licenses
+          tool: cargo-deny@0.20.2,cargo-about@0.9.3
+      - run: cargo deny --workspace --locked check licenses sources
       # What the release generates, so that a new dependency that needs a
       # line in tools/third-party shows here and not on the release tag.
-      - run: cargo install --locked --features cli --version 0.9.3 cargo-about
       - run: make notices-all
 
   test:
@@ -98,19 +121,39 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - run: cargo nextest run --workspace --all-features --no-fail-fast
-      - run: cargo test --workspace --doc
+      # The ci profile (.config/nextest.toml): a failed test gets one more
+      # try, and the run leaves a JUnit report.
+      - run: cargo nextest run --profile ci --workspace --all-features --locked --no-fail-fast
+      # The tests that needed the second try, as warnings and in the summary.
+      - if: always()
+        shell: bash
+        run: sh tools/ci/flaky.sh
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: junit-test-${{ matrix.os }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+      - run: cargo test --workspace --doc --locked
 
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    # rust-toolchain.toml overrides rustup's default toolchain, which is
+    # all the action below sets: without this the job checks on the
+    # toolchain of that file, not on the MSRV.
+    env:
+      RUSTUP_TOOLCHAIN: "1.95"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,13 +162,15 @@ jobs:
         with:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # rustpython needs 1.96, for its parser.
-      - run: cargo check --workspace --features python,libusb
+      - run: cargo check --workspace --features python,libusb --locked
 
   # The suite under each Python feature, in nextest slices. The longest
   # single test (decoder_uart_rest's amulet_ascii regression, about four
-  # minutes under CPython) is the floor of a slice; change `of` to
-  # retune.
+  # minutes under CPython, more under RustPython; .config/nextest.toml
+  # gives it 30) is the floor of a slice; change `of` to retune.
   python-decoders:
     name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
     needs: changes
@@ -151,23 +196,41 @@ jobs:
         with:
           persist-credentials: false
       - if: needs.changes.outputs.python == 'true'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+        run: rustup toolchain install
       - if: needs.changes.outputs.python == 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.feature }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: needs.changes.outputs.python == 'true'
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - if: needs.changes.outputs.python == 'true' && matrix.feature == 'python'
-        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      # Both features: libsigrokdecode4 is where the decoders the native
+      # ones are compared with come from, and without them every such
+      # test returns early and passes.
       - if: needs.changes.outputs.python == 'true'
+        run: sh tools/ci/apt.sh python3-dev libsigrokdecode4
+      # OXROK_REQUIRE_DECODERS: no decoders found is a failure here
+      # (tests/support/mod.rs), not a run that compared nothing.
+      - if: needs.changes.outputs.python == 'true'
+        env:
+          OXROK_REQUIRE_DECODERS: 1
         run: >-
-          cargo nextest run -p oxrok --features ${{ matrix.feature }} --no-fail-fast
+          cargo nextest run --profile ci -p oxrok --features ${{ matrix.feature }} --locked --no-fail-fast
           --partition slice:${{ matrix.slice }}/${{ matrix.of }}
+      # As in the test job.
+      - if: always() && needs.changes.outputs.python == 'true'
+        run: sh tools/ci/flaky.sh
+      - if: always() && needs.changes.outputs.python == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: junit-${{ matrix.feature }}-${{ matrix.slice }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
 
   python-clippy:
     name: python decoders (clippy)
@@ -178,14 +241,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: clippy
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: sudo apt-get update && sudo apt-get install -y python3-dev
-      - run: cargo clippy -p oxrok --features python --all-targets
-      - run: cargo clippy -p oxrok --features rustpython --all-targets
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: sh tools/ci/apt.sh python3-dev
+      - run: cargo clippy -p oxrok --features python --all-targets --locked
+      - run: cargo clippy -p oxrok --features rustpython --all-targets --locked
 
   # The emulator tier (docs/USB.md, "Emulation over USB/IP"): oxrok
   # against the committed goldens, through vhci-hcd. When the
@@ -206,14 +268,17 @@ jobs:
     outputs:
       vhci: ${{ steps.vhci.outputs.vhci }}
     steps:
+      # For tools/ci/apt.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: vhci
         name: Load vhci-hcd
         run: |
           load() {
             [ -d /sys/devices/platform/vhci_hcd.0 ] && return 0
             sudo modprobe vhci-hcd 2>/dev/null && return 0
-            sudo apt-get update -q && sudo apt-get install -y -q "linux-modules-extra-$(uname -r)" \
-              && sudo modprobe vhci-hcd
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd
           }
           if load && [ -d /sys/devices/platform/vhci_hcd.0 ]; then
             echo "vhci-hcd loaded on kernel $(uname -r)"
@@ -229,8 +294,9 @@ jobs:
     needs: [changes, emulator-probe]
     if: needs.emulator-probe.outputs.vhci == 'true'
     # One job takes over an hour. tools/ci/changes.py picks the models
-    # and balances them over up to six jobs by golden case count; a new
-    # model joins a shard by itself.
+    # and balances them over up to six jobs, by the seconds
+    # tools/ci/emu-weights.json has for each, or by golden case count
+    # without that file; a new model joins a shard by itself.
     strategy:
       fail-fast: false
       matrix:
@@ -241,16 +307,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
+      # The shards share one cache, so one of them saves it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 0 }}
       # The probe loaded it on the same image: here a failure is an error.
       - name: Load vhci-hcd
         run: |
           if [ ! -d /sys/devices/platform/vhci_hcd.0 ] && ! sudo modprobe vhci-hcd; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)"
             sudo modprobe vhci-hcd
           fi
           test -d /sys/devices/platform/vhci_hcd.0
@@ -259,8 +325,7 @@ jobs:
       - name: Load cdc-acm
         run: |
           if ! sudo modprobe cdc-acm; then
-            sudo apt-get update -q
-            sudo apt-get install -y -q "linux-modules-extra-$(uname -r)"
+            sh tools/ci/apt.sh "linux-modules-extra-$(uname -r)"
             sudo modprobe cdc-acm
           fi
       # baylibre-acme binds its sysfs tree in a user namespace of each
@@ -277,15 +342,81 @@ jobs:
           sudo modprobe hci_vhci || true
           sudo modprobe -a ppdev uss720 || true
           sudo systemctl stop bluetooth 2>/dev/null || true
-      - run: cargo build -p oxrok -p oxrok-emu
+      - run: cargo build -p oxrok -p oxrok-emu --locked
       # What the harness drives the server with.
       - run: cargo install vusb-cli --version 0.2.1 --locked
       # The harness's default mode, no sigrok-cli: full cases run oxrok
       # alone against the committed .out and .tx goldens, oracle-only
       # cases are skipped and counted. The harness runs oxrok-emu under
-      # sudo -n.
-      - env:
+      # sudo -n. DIFF_LINES: how much of a diff a failed case prints (6
+      # by default). EMULOG keeps each model's transaction log and
+      # EMU_TIMES what each took, for the steps below. The step ends
+      # before the job's limit does, so that they still run.
+      - id: harness
+        timeout-minutes: 40
+        env:
           MODELS: ${{ matrix.models }}
+          DIFF_LINES: 200
+          EMULOG: ${{ runner.temp }}/emu-logs
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
         run: |
           echo "$MODELS"
           sh tools/diffcli.sh --emu-model "$MODELS"
+      # What each model took, slowest first: the measure that
+      # tools/ci/emu-weights.json holds for tools/ci/changes.py's shards.
+      - name: Time by model
+        if: always() && steps.harness.outcome != 'skipped'
+        env:
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
+          SHARD: ${{ matrix.shard }}
+        run: |
+          [ -s "$EMU_TIMES" ] || exit 0
+          {
+            echo "### Emulator shard $SHARD: $(awk '{ s += $2 } END { print s }' "$EMU_TIMES") s"
+            echo
+            echo "| model | seconds | failed |"
+            echo "| --- | --- | --- |"
+            sort -k2,2nr -k1,1 "$EMU_TIMES" | awk '{ print "| " $1 " | " $2 " | " $3 " |" }'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - if: always() && steps.harness.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
+        with:
+          name: emu-times-${{ matrix.shard }}
+          path: ${{ runner.temp }}/emu-times.txt
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+      # After a failure: the transaction log of each model that failed, and
+      # of one the step's limit cut short (a log, but no line in EMU_TIMES),
+      # with the kernel's log, where a lost device shows. Compressed here: a
+      # busy session logs megabytes a second. The server ran as root.
+      - name: Collect the failed models' logs
+        if: failure() && steps.harness.outcome == 'failure'
+        env:
+          EMULOG: ${{ runner.temp }}/emu-logs
+          EMU_TIMES: ${{ runner.temp }}/emu-times.txt
+          OUT: ${{ runner.temp }}/emu-failed
+        run: |
+          mkdir -p "$OUT"
+          touch "$EMU_TIMES"
+          cp "$EMU_TIMES" "$OUT/emu-times.txt"
+          sudo dmesg | tail -n 2000 >"$OUT/dmesg.txt" || true
+          for log in "$EMULOG"/*.log; do
+            [ -f "$log" ] || continue
+            model=$(basename "$log" .log)
+            case $(awk -v m="$model" '$1 == m { print $3 }' "$EMU_TIMES") in
+              0) continue ;;
+            esac
+            echo "$model: $(sudo du -h "$log" | cut -f1)"
+            sudo cat "$log" | gzip >"$OUT/$model.log.gz"
+          done
+      - if: failure() && steps.harness.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: emu-failed-${{ matrix.shard }}
+          path: ${{ runner.temp }}/emu-failed
+          # Already gzip.
+          compression-level: 0
+          retention-days: 7
+          overwrite: true

@@ -172,8 +172,8 @@ checks on a firmware upload in `shells/ezusb.rs`, which know sigrok's
 fixtures, and the `oxrok-emu` commands. It re-exports vusb's paths, so a
 model says `crate::model` or `crate::shells::cdc` whichever crate holds
 them. It is how a driver is verified against sigrok-cli without the
-hardware (`docs/ROADMAP.md`, "Emulation plan"). `oxrok-emu` also builds
-on Windows; attaching a device is Linux only.
+hardware ([What counts as emulator-verified](#what-counts-as-emulator-verified)).
+`oxrok-emu` also builds on Windows; attaching a device is Linux only.
 
 - A device is a `DeviceModel` (`vusb::model`): its descriptors,
   `control(setup, data)`, `out(ep, data)`, `in_transfer(ep, max)`
@@ -412,6 +412,35 @@ on Windows; attaching a device is Linux only.
   lengths other than 8, report ids, unknown commands, relay numbers
   beyond the board). A clean run under sigrok-cli validates the
   model, a clean run under oxrok validates the port.
+
+### What counts as emulator-verified
+
+Most drivers cannot be run against their hardware here. A driver is
+ported against a model of the device and checked with sigrok-cli as the
+oracle through `vhci-hcd`. A driver is emulator-verified when:
+
+1. sigrok-cli and oxrok produce identical output for the scenario list
+   in `diffcli.sh`, after the header line.
+2. The model's pedantic mode logged no violation under either tool. A
+   clean run under sigrok-cli validates the model; one under oxrok
+   validates the port.
+3. The transaction logs of the two runs are identical after the fixture
+   layer's normalisation.
+4. The gcov report of the C driver, from a libsigrok built with
+   `--coverage`, is attached to the driver's entry in
+   [DEVICES.md](DEVICES.md), with the unreached paths named as "not
+   emulated" on purpose.
+5. A replay fixture is recorded from the emulator run, so `cargo test`
+   needs neither the model nor root.
+6. `diffcli.sh --oracle --hw` runs the same scenarios against the real device
+   with one command, so a user who has it can promote the driver to
+   hardware-verified.
+
+What this cannot prove: a model built from the same C source can share
+its misreading; quirks the C driver relies on without saying so cannot
+be found; and timing, lost samples at speed, short packet framing and
+real analog front ends need hardware. Device firmware sources outrank a
+model's guesses where they exist.
 
 ### Scenarios
 
@@ -1400,7 +1429,8 @@ of a sigrok driver `DRIVER`:
    `tests/emu/NAME/gcov.txt`. Read the unreached ranges against the C
    source: add cases for the paths a device can take, and leave those
    it cannot (allocation failures, transport errors, model variants
-   nobody has) as the "not emulated" list. The roadmap's criterion 4
+   nobody has) as the "not emulated" list. Criterion 4 of
+   [What counts as emulator-verified](#what-counts-as-emulator-verified)
    stops there.
 8. In `docs/DEVICES.md`, in the driver's entry (or a new one): that it
    is emulated, the model's name and options, the cases, the date, the

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Is my device supported?
+    url: https://github.com/oxrok/oxrok/blob/main/docs/DEVICES.md
+    about: What each driver has been checked against, device by device, and what is known to differ.
+  - name: What is already known to be open
+    url: https://github.com/oxrok/oxrok/blob/main/docs/ROADMAP.md
+    about: The roadmap lists the open work, including the differences from sigrok-cli not yet closed.

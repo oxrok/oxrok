@@ -155,7 +155,9 @@ Emulator and replay only, never run on hardware:
 known to differ. If you own one of these devices, a report is worth more
 than another emulator case: the output of a capture next to sigrok-cli's,
 and a recording (`OXROK_USB_RECORD=file oxrok -d DRIVER ...`) if they
-differ.
+differ. The
+[hardware report](https://github.com/oxrok/oxrok/issues/new?template=hardware-report.yml)
+issue form asks for what is needed.
 
 CI runs on Linux, macOS and Windows.
 
@@ -185,11 +187,13 @@ and command lines for real devices in [docs/DEVICES.md](docs/DEVICES.md).
 With Rust 1.95 or newer:
 
 ```sh
-cargo install oxrok --version 0.3.0-alpha.1 --locked
+cargo install oxrok --locked                           # the stable release, 0.2.0
+cargo install oxrok --version 0.3.0-alpha.1 --locked   # the pre-release
 ```
 
-The version is needed: with only pre-releases published, cargo finds nothing
-without it. Or, from a checkout, which has what was merged since:
+cargo installs a pre-release only when its version is named;
+[CHANGELOG.md](CHANGELOG.md) says what it has that 0.2.0 does not. Or,
+from a checkout, which has what was merged since:
 
 ```sh
 cargo install --path . --locked
@@ -517,8 +521,7 @@ a file in `emu/src/models`, a scenario in `tools/emu`, goldens blessed with
 entry in `docs/DEVICES.md`. A bless without `--oracle` writes a case's goldens
 only when its other checks pass, and prints what it wrote per model.
 [docs/USB.md](docs/USB.md#emulation-over-usbip) describes the server and the
-harness, and [docs/ROADMAP.md](docs/ROADMAP.md#emulation-plan) the plan and
-what counts as emulator-verified.
+harness, and [what counts as emulator-verified](docs/USB.md#what-counts-as-emulator-verified).
 
 ## Layout
 

@@ -34,7 +34,7 @@ libc = "0.2"
 # the --ble controller's socket.
 rustix = { version = "1.1", features = ["event", "fs", "net"] }
 # Its fanotify permission events: a read waits for the tree (shells/sysfs.rs).
-nix = { version = "0.31", default-features = false, features = ["fanotify"] }
+nix = { version = "0.32", default-features = false, features = ["fanotify"] }
 
 [lints]
 workspace = true

@@ -6,8 +6,8 @@
 - `cargo fmt --all`, `cargo clippy --workspace --all-targets
   --all-features` with no warnings, `cargo nextest run --workspace
   --all-features` green. CI runs the same on Linux, macOS and Windows,
-  with clippy from the current stable Rust and a build on the minimum
-  supported version, 1.95.
+  with the Rust release `rust-toolchain.toml` pins and a build on the
+  minimum supported version, 1.95.
   On a pull request the emulator tier and the Python decoder jobs run
   only for what the change touches (`tools/ci/changes.py`; the
   `changes` job's summary says why). The `ci:full` label runs
@@ -15,6 +15,14 @@
 - Every change that a user can see gets a line in `CHANGELOG.md`.
 - No `unsafe` code. The one exception is `pydecode`, which crosses
   into Python; every block there says why it is sound.
+
+## Plans
+
+A design plan for work not yet done lives in `docs/plans/`, not at the
+repository root. The pull request that completes a step removes that
+step from the plan, moves the reasons worth keeping into the page that
+documents the result, and deletes the plan when nothing is left of it.
+`docs/ROADMAP.md` points at the plan while it is open.
 
 ## Performance
 

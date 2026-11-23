@@ -19,7 +19,11 @@ request selects everything. With $GITHUB_OUTPUT set it writes
 $GITHUB_STEP_SUMMARY; otherwise it prints both.
 
 `emu_shards` is a JSON list of {"shard": N, "models": "a,b,c"}, the
-models balanced over at most --shards jobs by their golden case count.
+models balanced over at most --shards jobs by how long each runs:
+the seconds tools/ci/emu-weights.json has for it, when that file is
+there ({"MODEL": SECONDS}, from the `time MODEL: N s` lines of
+tools/diffcli.sh, which the emulator job keeps as its emu-times
+artifact), else its golden case count.
 
 The tests are tools/ci/test_changes.py.
 """
@@ -51,6 +55,8 @@ IGNORED_PREFIXES = (
     "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
+    # cargo deny check advisories, on a schedule: no job of ci.yml.
+    ".github/workflows/advisories.yml",
     ".github/ISSUE_TEMPLATE/",
     # udev rules: tests/udev_rules.rs reads them, in the test job.
     "contrib/",
@@ -65,6 +71,9 @@ IGNORED_FILES = {
     ".packit.yaml",
     ".github/dependabot.yml",
     "tools/attribution.py",
+    # The vendor-firmware name check, run in the fmt and clippy job.
+    "tools/ci/firmware.py",
+    "tools/ci/test_firmware.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
     # The release workflow's gate and its tests, which the `check` job runs.
@@ -89,7 +98,12 @@ HARNESS_FILES = {
 }
 
 # nextest's configuration: the Python jobs run nextest, the emulators do not.
-NEXTEST_FILES = {".config/nextest.toml"}
+# flaky.sh reads what nextest's ci profile writes, in the same jobs.
+NEXTEST_FILES = {".config/nextest.toml", "tools/ci/flaky.sh"}
+
+# What a model's session took in CI, in seconds; see Repo.golden_weight.
+# A change to it moves models between the shards, so every model runs.
+EMU_WEIGHTS = "tools/ci/emu-weights.json"
 
 # Lint configuration: the Python clippy job reads it, the emulators do not.
 LINT_FILES = {"clippy.toml", "rustfmt.toml"}
@@ -136,6 +150,7 @@ class Repo:
             for p in (root / "src").iterdir()
             if p.is_dir() and p.name != "drivers"
         )
+        self._measured: dict[str, float] | None = None
         self._sources: dict[str, str] = {}
         self._dir_models = self._models_by_driver_dir()
         self._refs = {d: self._crate_refs(f"src/drivers/{d}") for d in self.driver_dirs}
@@ -337,12 +352,41 @@ class Repo:
                 return None
         return mods, drivers
 
-    def golden_weight(self, model: str) -> int:
-        """How long a model runs, by its golden case count."""
+    def golden_cases(self, model: str) -> int:
         d = self.root / "tests/emu" / model
         if not d.is_dir():
             return 1
         return max(1, sum(1 for p in d.iterdir() if p.suffix in (".out", ".oracle")))
+
+    def measured(self) -> dict[str, float]:
+        """EMU_WEIGHTS: the seconds of each model it names; {} without the file."""
+        if self._measured is None:
+            path = self.root / EMU_WEIGHTS
+            got = json.loads(path.read_text()) if path.is_file() else {}
+            if not isinstance(got, dict) or not all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0
+                for v in got.values()
+            ):
+                raise ValueError(f"{EMU_WEIGHTS}: not an object of MODEL: seconds above 0")
+            # A model that is gone does not set the scale below.
+            self._measured = {m: float(v) for m, v in got.items() if m in self.models}
+        return self._measured
+
+    def golden_weight(self, model: str) -> int:
+        """How long a model runs: its measured seconds, else by its golden case count.
+
+        With no measurement at all the weight is the case count. With some,
+        a model that has none (a new one) gets its case count at the seconds
+        per case of the measured ones, so that both are in one unit.
+        """
+        measured = self.measured()
+        if model in measured:
+            return max(1, round(measured[model]))
+        cases = self.golden_cases(model)
+        if not measured:
+            return cases
+        per_case = sum(measured.values()) / sum(self.golden_cases(m) for m in measured)
+        return max(1, round(cases * per_case))
 
 
 # A line of src/lib.rs that only declares or registers one driver.
@@ -384,6 +428,9 @@ def classify(
         elif path in HARNESS_FILES:
             sel.all_models = True
             sel.note(path, "emulator harness: every model")
+        elif path == EMU_WEIGHTS:
+            sel.all_models = True
+            sel.note(path, "emulator shard weights: every model")
         elif path in NEXTEST_FILES:
             sel.python = True
             sel.note(path, "nextest configuration: python")
