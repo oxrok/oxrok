@@ -1,11 +1,14 @@
 # cargo deny check licenses: every crate that any feature on any platform
 # can pull in must be under a licence compatible with GPL-3.0-or-later,
-# the licence of the binary as a whole. Licences only: advisories and
-# bans are not this file's job. See docs/LICENSING.md.
+# the licence of the binary as a whole. See docs/LICENSING.md.
 #
 # Not legal advice. What this reads is the `license` field and the
 # clarifications below, not the bundled sources; docs/LICENSING.md lists
 # the bundled C by hand.
+#
+# Two more checks, at the end: sources, with the licences on every pull
+# request (CI's `licenses` job), and advisories, on a schedule
+# (.github/workflows/advisories.yml). No bans.
 
 [graph]
 all-features = true
@@ -82,3 +85,28 @@ license-files = [{ path = "Lib/PSF-LICENSE", hash = 0xe5f4697b }]
 crate = "syn-ext"
 expression = "BSD-2-Clause"
 license-files = [{ path = "LICENSE", hash = 0xcab66e35 }]
+
+# cargo deny check sources: every crate comes from crates.io. A git
+# dependency or another registry needs a line in `allow-git` or
+# `allow-registry`, with the reason.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# cargo deny check advisories: RustSec advisories against Cargo.lock.
+# Not run on pull requests, where a new advisory would fail a change
+# that has nothing to do with it; .github/workflows/advisories.yml runs
+# it daily. An advisory that cannot be acted on goes in `ignore`, by id,
+# with the reason.
+[advisories]
+# A yanked version is one its author withdrew: move off it.
+yanked = "deny"
+# Both are "unmaintained" notices, not vulnerabilities.
+ignore = [
+    # Through RustPython 0.6.0 and malachite-bigint only: it leaves with
+    # a RustPython that drops it.
+    { id = "RUSTSEC-2024-0436", reason = "paste, a dependency of rustpython and malachite-bigint, not ours to replace" },
+    # A direct dependency, of the oxrok crate. Open work: move to jiff or
+    # time, then delete this line.
+    { id = "RUSTSEC-2026-0543", reason = "chrono, until oxrok moves to another date and time crate" },
+]

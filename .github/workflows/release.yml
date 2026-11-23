@@ -12,6 +12,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   CARGO_ABOUT_VERSION: 0.9.3
 
 jobs:
@@ -24,9 +25,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      # What rust-toolchain.toml pins, as in ci.yml.
+      - run: rustup toolchain install
       - run: cargo install --locked --features cli --version "$CARGO_ABOUT_VERSION" cargo-about
       - run: make dist-src
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -49,15 +49,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # All of rust-toolchain.toml's components: rustup would go and fetch
-      # the missing ones once the network is off.
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          targets: x86_64-unknown-linux-musl
-          components: rustfmt, clippy
+      # The toolchain rust-toolchain.toml pins, with all its components
+      # and the target: rustup would go and fetch what is missing once the
+      # network is off.
+      - run: rustup toolchain install
+      - run: rustup target add x86_64-unknown-linux-musl
       - name: Install musl-gcc
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sh tools/ci/apt.sh musl-tools
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: oxrok-source
@@ -93,16 +91,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
+      - run: rustup toolchain install
+      - run: rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: ${{ matrix.target }}
       - name: Install musl-gcc
         if: contains(matrix.target, 'musl')
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        run: sh tools/ci/apt.sh musl-tools
       - name: Install make
         if: runner.os == 'Windows'
         run: command -v make || choco install make -y

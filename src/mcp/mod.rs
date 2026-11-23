@@ -19,7 +19,8 @@
 //! [`tools::catalog`] builds the library's catalog over a [`Host`];
 //! `oxrok mcp` serves it over stdio. The protocol layer is written by
 //! hand and synchronous: a few hundred lines on `serde_json`, no tokio.
-//! `PLAN.mcp.md` in the repository has the design and the phases.
+//! `docs/MCP.md` in the repository has the reasons, and
+//! `docs/plans/mcp-ui.md` what is planned for oxrok-ui.
 
 #![forbid(unsafe_code)]
 

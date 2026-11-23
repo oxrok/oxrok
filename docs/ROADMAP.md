@@ -1,15 +1,241 @@
 # Roadmap
 
-Status: 2026-11-14. `v0.3.0-alpha.1` is the current release, a pre-release
-on GitHub and crates.io; `v0.2.0` is the current stable one. All 87 of
+Status: 2026-11-22. `v0.2.0` is the stable release and `v0.3.0-alpha.1`
+the newest pre-release, both on GitHub and crates.io. All 87 of
 libsigrok's `src/hardware` drivers are ported. Native decoder porting is
 complete: all 111 decoders of libsigrokdecode 0.5.3 are native.
 
-The work that remains is transports, packaging, the Pico backend, and
-the emulator, CLI and hardware-verification gaps listed here. Completed
-phases and per-batch history have been removed; the evidence per driver
-is in [DEVICES.md](DEVICES.md) and the decoder checklist in
-[NATIVE_DECODERS.md](NATIVE_DECODERS.md).
+The work that remains is the core's shutdown, transports, packaging,
+the Pico backend, and the emulator, CLI and hardware-verification gaps
+listed here. [Next](#next) ranks what comes first and
+[0.3.0 stable blockers](#030-stable-blockers) says what the next stable
+release waits for; everything after them is the backlog by area, in no
+order. Completed phases and per-batch history have been removed; the
+evidence per driver is in [DEVICES.md](DEVICES.md) and the decoder
+checklist in [NATIVE_DECODERS.md](NATIVE_DECODERS.md).
+
+## Next
+
+In this order. Each item stands for entries further down, which have
+the detail, and leaves this list when they are gone.
+
+1. A shutdown that cannot hang: everything under [Shutdown](#shutdown).
+   Done when a stop and a close return in bounded time for every driver
+   on a queue nobody reads (`NOT_BOUNDED` in
+   `tests/close_unread_queue.rs` is empty), and when the CLI closes its
+   device on every exit.
+2. The software cases of `diffcli.sh` checked by default again (the
+   last entry of [Harness and CI](#harness-and-ci)): the demo driver,
+   the formats and the decoders on the command line have had no check
+   outside `--oracle` since the goldens replaced the oracle. Done when
+   each has a golden or a `cargo test` that covers it, and CI runs them.
+3. An emulator tier that gates a merge ([Harness and CI](#harness-and-ci):
+   the vusb `CMD_UNLINK` race, then the `vhci-hcd` skip). Done when an
+   emulator run that was selected and failed, or did not happen, blocks
+   the pull request, and the race no longer makes that a coin toss.
+4. A first release through the rewritten workflow
+   ([Packaging and release](#packaging-and-release), its last entries),
+   and with it a stable 0.3.0.
+5. A way in for hardware reports (the head of
+   [Open verification](#open-verification)): 80 of the 90 entries of
+   `docs/drivers.toml` have met only the emulator, 6 a real device. Done
+   when a user with a device can file a report that has what a
+   maintainer needs, and it is labelled and found.
+
+## 0.3.0 stable blockers
+
+A proposal: what a stable 0.3.0 should not ship without. Everything
+else on this page can follow it.
+
+- Items 1 and 4 of [Next](#next): a capture whose close can hang is
+  not stable, and the release workflow should have run on a pre-release
+  tag before it carries a stable one.
+- `oxla`'s emulator cases have run on Linux and its goldens are read
+  ([Models and coverage](#models-and-coverage)): 0.3.0 is the release
+  that brings the driver.
+- Item 2 of [Next](#next), at least for the demo driver and the
+  outputs: the part of the command line every user meets.
+- `Serial::read_data` drops a CR from a binary block
+  ([Driver behaviour](#driver-behaviour)): `rigol-ds` on a serial port
+  loses a sample byte today.
+- A decision on the breaking changes under [Structure](#structure) (the
+  `Device` trait's channel defaults, the typed failure kind): in before
+  0.3.0 is stable, or kept for 0.4.
+
+## Core and library
+
+### Shutdown
+
+A stop and a close have to return, whoever reads the queue and however
+the process ends. These are one piece of work:
+
+- 39 drivers still block in `sink.send` or `sink.end` while close joins
+  them; a full queue nobody reads hangs the close. `Session` always reads
+  its queue, so this bites a direct `Device` user and the drivers' own
+  unit tests (one hung a CI runner for an hour). The core has the bound
+  (`PacketSink::stopped_by`: after a stop a packet waits 500 ms for
+  room, then the sink gives up), `demo` and `serial-dmm` use it, and
+  `tests/close_unread_queue.rs` names the rest in `NOT_BOUNDED`:
+  `asix_sigma`, `chronovu_la`, `conrad_digi_35_cpu`,
+  `dcttech_usbrelay`, `devantech_eth008`, `dreamsourcelab_dslogic`,
+  `fluke_dmm`, `ftdi_la`, `fx2lafw`, `greatfet`, `gwinstek_gpd`,
+  `hantek_4032l`, `hantek_6xxx`, `hantek_dso`, `hp_59306a`,
+  `icstation_usbrelay`, `ikalogic_scanalogic2`, `ikalogic_scanaplus`,
+  `juntek_jds6600`, `kecheng_kc_330b`, `kingst_la2016`,
+  `korad_kaxxxxp`, `lascar_el_usb`, `lecroy_logicstudio`,
+  `manson_hcs_3xxx`, `microchip_pickit2`, `ols`, `pipistrello_ols`,
+  `raspberrypi_pico`, `rdtech_tc`, `rdtech_um`, `rohde_schwarz_sme_0x`,
+  `saleae_logic16`, `saleae_logic_pro`, `sysclk_lwla`,
+  `sysclk_sla5032`, `testo`, `uni_t_dmm`, `zeroplus_logic_cube`. Each
+  is usually one line (`let sink = sink.stopped_by(&stop);` before the
+  thread takes the sink), a unit test with
+  `core::device::close_with_an_unread_queue`, its name out of the list,
+  and its emulator goldens run again, since a told sink polls a full
+  queue where it used to block. The relay drivers, `hp_59306a`,
+  `conrad_digi_35_cpu`, `juntek_jds6600` and `rohde_schwarz_sme_0x` may
+  join no thread and need only a look.
+- The guard over the registry (`tests/close_unread_queue.rs`) reads the
+  source: it passes a driver that bounds only its `End`, or only names
+  `stopped_by` in a comment. The real check is a close on an unread
+  queue per driver (`core::device::close_with_an_unread_queue`), which
+  the core, `demo`, `serial-dmm`, `oxla`, `atorch`, `teleinfo` and
+  `gmc-mh-1x-2x` have.
+- A sink told of its stop flag gives up on a packet that finds no room
+  for 500 ms after a stop (`SEND_AFTER_STOP`), and with it on the rest
+  of the capture. `Session` then makes up the `End` and returns `Ok`,
+  so a consumer that is slow and not gone (output into a blocked pipe
+  or a pager, a Python decoder) loses the tail of a `demo` or
+  `serial-dmm` capture without a word. Say so, raise the bound, or have
+  `Session` tell the sink it is still reading. In a session of several
+  devices a told sink polls beside a driver that blocks, gets the
+  smaller share of a full queue, and could give up while the reader
+  reads; that ends as the drivers migrate.
+- 34 drivers carry a `send_end` of their own that does what the core
+  now does (`gmc-mh-1x-2x` and `teleinfo` show the move to
+  `sink.stopped_by_within`): `agilent_dmm`, `appa_55ii`,
+  `arachnid_labs_re_load_pro`, `atorch`, `atten_pps3xxx`,
+  `baylibre_acme`, `beaglelogic`, `bkprecision_1856d`, `cem_dt_885x`,
+  `center_3xx`, `colead_slm`, `fluke_45`, `gwinstek_psp`, `hp_3457a`,
+  `hp_3478a`, `itech_it8500`, `kern_scale`, `link_mso19`, `logicport`,
+  `mastech_ms6514`, `maynuo_m97`, `mic_985xx`, `motech_lps_30x`,
+  `norma_dmm`, `pce_322a`, `rdtech_dps`, `rigol_dg`, `scpi_dmm`,
+  `serial_lcr`, `siglent_sdl10x0`, `tondaj_sl_814`, `uni_t_ut181a`,
+  `uni_t_ut32x`, `zketech_ebd_usb`. `oxla`'s `Patient` wrapper is the
+  same idea with a wait in total, not per packet. No hang, only code to
+  take out.
+- `Session`'s `End` is sent before the link goes back in its slot, so
+  `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
+  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`). The
+  fixed order of `sysclk-sla5032`, or a busy flag cleared before the End
+  as in `rdtech-dps`, fits each of them.
+- A driver whose acquisition ends on its limit is only stopped (its
+  thread joined) by the MCP server's run thread; the CLI runs one
+  capture per process and never needed it. `Session::run` could stop
+  the devices itself when every `End` came, so every caller gets an
+  idle device; a driver whose `stop` writes to the device would then
+  write once more, which its goldens pin.
+- The CLI closes a device only on its happy path, and `ctrlc` is built
+  without `termination`: a driver that writes at close (`rdtech-dps`'s
+  panel lock) needs its own `Drop`. Close on every exit.
+- SIGINT doesn't end a run whose stdout is blocked: the `ctrlc` handler
+  only sets a flag (`src/cli/run.rs`) while the main thread waits in the
+  write. `oxrok --continuous -O binary | (sleep 8; ...)` then SIGINT:
+  still running after 10 s, and the driver's `close` never goes out.
+- Issue #82: on macOS nextest hung for 67 minutes in
+  `atten_pps3xxx::tests::a_capture_with_something_to_say_notes_it`. That
+  driver bounds its `End`, so it is another wait: the stop flag against
+  the fake port's read is the suspect.
+
+### Structure
+
+How the library is put together. None of it is a bug a user meets; the
+first entry comes before the others.
+
+- Rust module paths are part of the goldens: 69 files under `tests/emu`
+  hold log targets, as in `oxrok: err: oxrok::drivers::bkprecision_1856d:
+  unable to send gate time command`, so a `log::` call that moves to
+  another module changes stderr a golden pins. Give the drivers an
+  explicit `target:` equal to the driver id, which is also nearer
+  libsigrok's `LOG_PREFIX`, and re-record those goldens once, before
+  any entry below moves code.
+- The acquisition thread is copied per driver: `struct Worker { stop,
+  handle }` in 79 driver files, `fn send_end` in 35, `END_AFTER_STOP`
+  33 times (500 ms; 1 s in `atorch`, `pce_322a` and `zketech_ebd_usb`),
+  a `Limits` of atomics 20 times, and 26 drivers still call
+  `is_finished()` in `start`, which `DRIVER_PORTING.md` warns against.
+  A `core::acquire` with a `Worker` (the port out of its slot, the
+  `Busy` check, the named thread, the port back, the bounded `End`) and
+  an `SwLimits` after libsigrok's `sr_sw_limits` would hold it once.
+  Each driver checks its limits and gives its port back where the C
+  driver does, so one shape will not fit all: family by family, the
+  serial meters first, with the emulator corpus as the gate.
+- A poisoned lock has no policy: 395 `lock().expect(..)` in the drivers
+  against about 9 that recover. A worker that panics is reported by
+  `Session::run` and the MCP server forgets its handle, but a later
+  `get`, `set` or `close` panics in turn, and six drivers' `Drop` call
+  a `close` that takes the lock (`rdtech_dps`, `maynuo_m97`,
+  `itech_it8500`, `link_mso19`, `cem_dt_885x`, `siglent_sdl10x0`),
+  which aborts the process when it happens during an unwind. Recover in
+  `close`, `Drop` and `stop`; in `get`, `set` and `start` a poisoned
+  lock is an `Err`, not a recovery, since a supply's link may be half
+  updated. One type (a `core::sync::Shared`) rather than 395 call
+  sites, and a test that a device whose worker panicked still closes.
+- `Device::enable_channel` and `rename_channel` are required and
+  written 88 times, about 80 of them the same three lines with two
+  wordings of one error (`No channel {pos}.` and `no such channel`);
+  `fn no_group` is in 12 drivers and the `conn`/`serialcomm` scan loop
+  in every serial one. Defaults over a `channels_mut`, an
+  `Error::no_channel` and `unknown_key`, and a `SerialScan::parse`
+  would take 800 to 1,000 lines out. The drivers that react to an
+  enable keep their override; one missed loses its side effect with
+  only an emulator case that toggles channels to notice. A new required
+  method breaks the trait.
+- A failed capture loses its kind: `PacketSink::end` sends
+  `Packet::Failed(e.to_string())`, `Session::run` returns
+  `Error::CaptureFailed(String)` and the MCP server keeps the text, so
+  a consumer cannot tell a disconnect from a timeout. "device is not
+  open" is built as a string 112 times and `invalid value for KEY` 89.
+  Wanted: typed `NotOpen` and `InvalidValue` variants and a
+  `FailureKind` (io, disconnected, timeout, firmware, device, other)
+  carried by `Failed` and `CaptureFailed`, with `Display` unchanged so
+  that no golden moves. It breaks every match on the two, and helps
+  only as far as drivers return typed errors: many build
+  `Error::device(format!(..))` for a disconnect.
+- Every build of the library compiles 191,000 lines of drivers and
+  54,000 of decoders with their dependencies (`aes` for one driver,
+  `serialport`, `async-hid`): the features are `cli`,
+  `firmware-download`, `mcp`, `nusb`, `libusb`, `python` and
+  `rustpython` only. Group features (`drivers`, `decoders`,
+  `transport-serial`, `transport-hid`), all in `default`, would let a
+  library user leave them out. It is more than a few `cfg` lines
+  (`mcp`, `setup` and the driver support modules name the drivers), it
+  saves CI nothing, and each feature is one more combination to keep
+  building: when a user asks for it.
+
+- The library's surface is smaller (the core enums are
+  `#[non_exhaustive]`, each driver's `protocol` module is private) and
+  nothing watches it: a `cargo-semver-checks` or `cargo public-api` job
+  on pull requests, advisory while the version is 0.x. The dmm parsers,
+  `serial_dmm` and the drivers' other submodules are still `pub`.
+  oxrok-ui, outside the workspace, needs `_` arms where it matches on
+  those enums.
+- `cargo doc` gives 161 private-intra-doc-link warnings, 156 of them in
+  `src/drivers`, where module docs link to items of the now private
+  `protocol`, and 4 older ones (two `pydecode` links in `lib.rs` that
+  do not resolve, `Driver::usb_claims` in `core/udev.rs`, an ambiguous
+  `tools::catalog` in `mcp/mod.rs`). On docs.rs those links are plain
+  text. No CI job builds the docs: choose between code spans, an allow
+  for the crate and `--document-private-items`, then gate it.
+- Dead code the narrowing showed, kept under `allow(dead_code)` or
+  `cfg(test)` and worth a look: `baylibre_acme`'s `c_strtol` is tested
+  and never called; protocol constants nothing uses in `oxla`
+  (`TMODE_B`, `TMODE_A_AND_B`, `TMODE_B_THEN_A`, `NO_SAMPLE_LIMIT`),
+  `ikalogic_scanaplus` (four thresholds), `siglent_sds` (`TRIG_READY`)
+  and `mooshimeter_dmm` (`CHUNK`, where its tests write 19).
+- `CONTRIBUTING.md` ("No `unsafe` code. The one exception is
+  `pydecode`") and the module doc of `src/spawn.rs` do not match the
+  list `src/lib.rs` now has: `pydecode`, `gpib`, `parport`, `spawn`
+  and `bt`.
 
 ## Transports
 
@@ -28,8 +254,9 @@ shell (`emu/src/shells/ble.rs`, a controller on `hci_vhci`). Open:
   fragmentation if a unit asks for one. RFCOMM (`bt/rfcomm`) is still open:
   the shell has no BR/EDR.
 - The BLE model is skipped by name where the kernel has no `hci_vhci`
-  (presumably GitHub's hosted runners), so CI gives it no coverage; a
-  self-hosted runner with `hci_vhci` and no bluetoothd would run it.
+  (presumably GitHub's hosted runners), so CI gives it no coverage; the
+  self-hosted runner under [Harness and CI](#harness-and-ci), with
+  `hci_vhci` and no bluetoothd, would run it.
 
 ### GPIB
 
@@ -42,10 +269,9 @@ shell (`emu/src/shells/ble.rs`, a controller on `hci_vhci`). Open:
 - Other SCPI drivers over `conn=gpib/...`: the transport is shared, but no
   case covers one.
 - A CI runner without `ni_usb_gpib` skips the model by name with a warning
-  and runs none of its cases.
+  and runs none of its cases; the self-hosted runner under
+  [Harness and CI](#harness-and-ci) would run them.
 - Waiting on SRQ (`IBWAIT`) instead of the 100 ms serial poll.
-- usbtester4 has minor 0 left configured by an early `gpib-config` with no
-  marker: take it offline by hand (or reboot).
 - Prologix adapters over serial remain an oxrok extra.
 
 ## Upstream pull requests
@@ -77,11 +303,40 @@ skills and `track.py` are in
   bundled decoders in the RPM there.
 - A Homebrew formula or tap.
 - An AUR `PKGBUILD`.
-- A stable release. Every published version so far is a pre-release, so
-  `cargo install oxrok` needs an explicit `--version`.
+
+- Release tags are unprotected: a `v*` tag can be moved or deleted. A
+  tag ruleset (no update, no deletion, the owner still able to create)
+  and GitHub's immutable releases belong in oxrok/management; an
+  immutable release cannot have an asset fixed, which a release that
+  is a draft until it is whole can live with.
+- No CI job runs `cargo publish --dry-run` or the tests from the
+  packaged tree. `tests/package.rs` pins what the crate holds, but
+  names only three of the files its tests read, and allows all of
+  `contrib/` and `tools/emu/` where `Cargo.toml` includes only the
+  rules and the firmware stand-ins. A periodic job, not one per pull
+  request, that unpacks the crate and runs the suite would close it; it
+  passed by hand on 2026-11-22 with the default features, and was not
+  run with `python` or `rustpython`.
+- On crates.io the README's relative links (`docs/`, the logo) lead
+  nowhere, since `docs/` is not in the crate, and `documentation` is
+  unset. The install section could show `gh attestation verify` beside
+  the download once a release carries attestations.
+- The release workflow was rewritten and has not run: a pushed `v*`
+  tag is checked against the version and `CHANGELOG.md`, built,
+  attested, and left as a draft release with every asset on it. The
+  next tag is its first real run: the tag trigger, the artifacts merged
+  into one directory, the `.sha256` files written on macOS and Windows
+  checked on Linux, the attestation, the draft. A run started again on
+  a tag that already has a release fails only in its last job, after
+  the whole build.
+- Publishing to crates.io is by hand, after the GitHub release.
+  Trusted publishing (OIDC, no stored token) from the workflow needs a
+  one-time setup on crates.io and a decision on what happens when that
+  publish fails after the release is public: it cannot be undone.
 
 Static binaries, the release archives, `make dist`, notices and
-`cargo publish` already work.
+`cargo publish` already work, and [RELEASING.md](RELEASING.md) has the
+procedure and what to do when a step of it fails.
 
 ## Firmware fetching
 
@@ -89,7 +344,6 @@ Static binaries, the release archives, `make dist`, notices and
 oxrok-util) fetch, import and list vendor firmware; every downloadable
 package is checked end to end by its `cargo test --test network --
 --ignored`, which reproduces sigrok-util's outputs byte for byte.
-
 
 - LeCroy LogicStudio: the extractors (`LS16Lib.dll`, and the FX2LP
   firmware from `LogicStudio16Load.spt`) are checked on synthetic input
@@ -120,17 +374,13 @@ package is checked end to end by its `cargo test --test network --
 An MCP server so an agent can scan, capture, measure and decode through
 oxrok: `oxrok mcp` over stdio ([MCP.md](MCP.md) documents it), and an
 extended server in oxrok-ui whose tools the user picks.
-[PLAN.mcp.md](../PLAN.mcp.md) has the design, the phases and the open
-decisions; the CLI side (phases 1 to 5) is in.
+[plans/mcp-ui.md](plans/mcp-ui.md) has the plan for the UI's server, its
+later steps and the open decisions.
 
 - `driver_info` does not yet report a driver's verification status
   (hardware, stand-in, emulated, replay) from `docs/drivers.toml`: the
   docs are not in the published crate, so the table would have to be
   generated into the source at build time or kept in `tools/site-data`.
-- A driver whose acquisition ends on its limit is only stopped (its
-  thread joined) by the MCP run thread; the CLI runs one capture per
-  process and never needed it. `Session::run` could stop the devices
-  itself when every `End` came, so every caller gets an idle device.
 - A `guess_signals` tool: rank a capture's logic channels as clock,
   data, select or idle from the features `measure` reports (regular
   period, pulse widths that are multiples of another channel's period,
@@ -138,7 +388,10 @@ decisions; the CLI side (phases 1 to 5) is in.
   three wire decoders on the candidates, and score each by frames
   decoded and the warnings row. An agent does this by hand today over
   `measure`, `capture_logic` and `capture_decode`.
-- Phase 6: the UI server over a local socket, with a per-tool checklist.
+- The UI server over a local socket, with a per-tool checklist. Its
+  first piece is here: the data tools read the `Host`'s own
+  `CaptureStore`, and need a narrow trait (or a store a front end can
+  back) before they can serve the UI's sessions.
 
 ## Pico backend
 
@@ -210,15 +463,6 @@ The models are plain Rust with no I/O for this reason; see
   only: shared runners are too noisy for a throughput floor. A quiet
   runner, or a ratio against a baseline loop measured in the same run,
   would let CI hold the software triggers above fx2lafw's 24 MS/s.
-- `uss720` keeps a detached cable's parport number (one per emulator
-  session on kernel 7.2.x), so after 8 sessions on a tester libieee1284
-  finds no ppdev and the `hung-chang-dso-2100` oracle stops; the harness
-  fails such a session and says so. Unloading `parport` doesn't help (the
-  new `parport0` collides in sysfs); only a reboot does. Testers need a
-  reboot between batches, or the harness a way to reset the numbering.
-- Pulling a `uss720` cable while the port is claimed crashed usbtester3's
-  kernel, and usbtester3 did not come back from its reboot: no unplug case
-  for `hung-chang-dso-2100` until that is understood.
 
 - No record/replay path for a driver that runs a program
   (`asix-omega-rtm-cli`): its logic runs in CI only through the emulator's
@@ -234,16 +478,36 @@ The models are plain Rust with no I/O for this reason; see
   so a read's value depends only on the reads and writes before it.
 
 - The emulator CI job skips when the hosted kernel has no `vhci-hcd`,
-  and branch protection counts a skipped required job as satisfied. A
-  self-hosted Linux runner, or a setup that guarantees the module, would
-  close this.
+  and a skipped required job counts as satisfied, which is why the
+  emulator jobs are not required checks at all (oxrok/management,
+  `docs/HARDENING.md`, "Known gaps"): an emulator regression can merge.
+  A setup that guarantees the module, or failing instead of skipping on
+  a push to `main`, would close the skip. One aggregate job
+  (`if: always()`, needing every other job, red when a selected
+  emulator run failed or did not happen) as the only required check
+  would make the tier gate, and let the Python slices go back to a
+  job-level `if`. The required list is oxrok/management's
+  `config.toml`, so it changes there and in `ci.yml` together, and not
+  before the vusb race below is fixed: it would block about one pull
+  request in three that selects a serial model.
+- A self-hosted Linux runner would run what the hosted ones cannot: the
+  BLE model (`hci_vhci`), `hp-3478a` (`ni_usb_gpib`), a `vhci-hcd` that
+  is always there, and the libusb run below. On a public repository it
+  may run only what is on `main` (a schedule or a manual run, never a
+  pull request), and has to fit oxrok/management's hardening rules.
 - The libusb backend has no regular emulator run; the gates use nusb.
   Wanted: a regular `OXROK_USB_BACKEND=libusb` run, comparing output
   only.
 - Several emulator sessions at once are not isolated: libusb lists every
   device and drivers match by VID:PID, and cleanup, port choice and gcov
   counts are global. Test one tool per namespace whose `/dev/bus/usb`
-  holds only its own node.
+  holds only its own node. CI's emulator time waits for this too: a
+  shard runs its 1,600 cases one after another under one host-wide lock
+  (`EMU_LOCK`). Three sessions at once on a 4-vCPU runner need a lock
+  per port, a firmware stand-in directory and an `oxrok-emu cleanup
+  --locked` that are not host-wide, and a serial tail for the models
+  with global state (`hci_vhci`, the parport, sysfs). The cases are
+  sensitive to timing under one session already.
 - The harness follows the address through RENUMERATED, but a case line
   expands `$EMU_USB` before its own reset, so a full case's two tools
   can see different addresses on a board that renumerates. `emu_case`
@@ -263,15 +527,29 @@ The models are plain Rust with no I/O for this reason; see
   `juntek_jds6600`, `rohde_schwarz_sme_0x`, `pipistrello_ols`,
   `ols/protocol.rs` and `modbus`. A panic in a fake can poison a lock
   and abort the test binary; a worker that spins after a stop without
-  writing hangs `close()`.
+  writing hangs `close()`. The drivers hold 64 hand-written
+  `impl Port` fakes and share none: a `ScriptedPort` (expect these
+  bytes, reply, stay silent for a time, hang up) with the write log
+  built in would replace them, these 18 first.
 - Three scenarios carry copies of the lock preload (`gwinstek-gpd`,
   `tondaj-sl-814`, and a larger one in `devantech-eth008`): make one
   shared file and helper.
 - `fn shots/hit` is duplicated in five models.
-- A vusb race, seen once in about 11,100 attaches: the kernel can send
+- A vusb race is the main cause of a red `main`: the kernel can send
   `CMD_UNLINK` ahead of its `CMD_SUBMIT`, and the late `RET_SUBMIT`
-  makes `vhci_hcd` drop the connection. The fix is in vusb: remember an
-  unlink above the highest submitted seqnum and drop that submit.
+  makes `vhci_hcd` drop the connection (`cannot find a urb of seqnum`
+  in dmesg). The device is gone, the harness says `no tty for 1-1`, and
+  every later case of the session fails with `could not put the tty
+  back`: 5 to 112 cases, in 10 runs of `main` within six days (issues
+  #89 and #105), most often first in an unplug case of
+  `gwinstek-psp`, `cem-dt-885x` or `mastech-ms6514`. It was put at once
+  in about 11,100 attaches; on the hosted runners it is far more
+  frequent. The fix is in vusb (CI pins vusb-cli 0.2.1): remember an
+  unlink above the highest submitted seqnum and drop that submit. Only
+  if it stays after that: `diffcli.sh` starts the session again and
+  runs the case once more, counted and shown as a retry, and only when
+  the kernel's line is there, since a device that leaves in an unplug
+  case can be oxrok's or the model's doing.
 - `serve --attach`'s "sudo modprobe vhci-hcd" hint on Windows is
   Linux-specific.
 - CI's Python decoder slices are floored by one test:
@@ -280,17 +558,41 @@ The models are plain Rust with no I/O for this reason; see
   the slice counts in `ci.yml`. Those slices also re-run the whole
   `oxrok` suite, most of which the `test` job already runs; a nextest
   `-E` filter to the decoder tests and the Python-gated code would
-  halve them.
+  halve them. With the filter in, one job per feature would do, which
+  frees three of the 20 job slots on every pull request; the slice
+  names are required checks, kept in oxrok/management's `config.toml`,
+  so the ruleset changes in the same step. The RustPython slices now
+  really decode, and how long they take in CI is not known: 15 to 30
+  minutes each is the guess, against a job limit of 45. Under
+  RustPython the amulet test took 508 s on a loaded Mac, so it has a
+  30-minute limit of its own in `.config/nextest.toml`, which a shorter
+  capture would make unnecessary.
 - `tools/ci/changes.py` balances emulator shards by golden case count,
   a rough proxy (a 12-minute and a 22-minute shard had 1339 and 1789
-  cases). `diffcli.sh` printing each model's elapsed time would allow
-  real weights. A submodule of `src/core`, `src/serial`, `src/usb`,
+  cases), until `tools/ci/emu-weights.json` gives it seconds per model.
+  `diffcli.sh` records them and CI keeps them (the `emu-times-N`
+  artifacts): take them from a few runs of `main`, since one run is
+  noisy (a shard varied from 18 to 28 minutes), average them by hand,
+  as no tool does it, commit the file, and refresh it now and then. The
+  slowest shard should lose 3 to 4 of its 26.8 minutes; 22.1 is the
+  ideal. A submodule of `src/core`, `src/serial`, `src/usb`,
   `src/cli` or `src/formats` selects only the drivers that name it
   when it can tell (`core/softtrig.rs`); the rest still select
   everything, mostly because `cli` or a sibling uses them.
   `serial/tcpraw.rs` is one: `serial::open` hands it any `tcp-raw/`
   port, so it could select the TCP drivers plus the models served
   with `EMU_TCP`, if the replay tests cover the other drivers' use.
+- Nothing checks the goldens against libsigrok again: `EMU_BLESS=1`
+  without `--oracle` re-records them from oxrok, CI runs no oracle, and
+  the oracle's build (libsigrok 0bc24877 with the four patches of
+  `tools/oracle-patches`, a pinned libserialport, a patched
+  libsigrokdecode and sigrok-cli f44dd913, on Fedora) is prose in
+  `DEVICES.md`. Wanted: that build as a container file, and a scheduled
+  workflow, sharded as the emulator job is, that runs
+  `diffcli.sh --oracle` and says when a golden no longer matches. It
+  could run `--gcov` as well, which is the refresh the next entry asks
+  for. Expect noise at first: sigrok-cli's timing on shared runners,
+  `hp-3478a`'s libgpib, the parport numbers.
 - The gcov figures of the 48 models that lost their library-only cases
   (atten-pps3xxx, kecheng-kc-330b, lecroy-logicstudio, sysclk-sla5032,
   greatfet, uni-t-ut181a and others) still count those cases: their
@@ -300,6 +602,173 @@ The models are plain Rust with no I/O for this reason; see
   model lowers them; refresh them together, drop the label, and say
   which C paths no case reaches any more (stops from a client, the
   no-limit crashes, the waits that never end).
+- Two advisories are ignored in `deny.toml`. chrono is flagged
+  unmaintained (RUSTSEC-2026-0543) and is a direct dependency
+  (`chrono = "0.4.45"`, for the dates the csv and vcd outputs write):
+  move to jiff or time and delete the line. paste (RUSTSEC-2024-0436,
+  unmaintained) comes through RustPython 0.6.0 and malachite-bigint:
+  look again at the next RustPython bump.
+- The `test` job on the three systems passes all 286 native against
+  Python parity tests by returning early, since no decoders are
+  installed there. Say so in the job, or commit reference outputs for
+  the 112 decoder captures, so the native decoders are checked without
+  Python on every OS. Where decoders are required
+  (`OXROK_REQUIRE_DECODERS=1`, the Python jobs), fourteen tests in 12
+  files still return early when the one Python decoder they name is
+  missing from a tree that has others: Ubuntu's `libsigrokdecode4` may
+  lack some the native side has.
+- Both Python features compare against the distribution's
+  `libsigrokdecode4`, not the 0.5.3 tree `make decoders` pins and a
+  release ships: have the Python jobs use the pinned tree.
+- The vendor-firmware guard (`tools/ci/firmware.py`) goes by file name
+  only. Still open: a size limit on non-text files under `tests/` and
+  `tools/emu`; the same check on the release's source tarball; a
+  denylist of hashes, which would have to be built (oxrok-util's
+  extractors know the files); a line in AGENTS.md that names the
+  check. `.gitignore` has the same extensions for the whole tree, so a
+  rightful `.hex` or `.bit` needs `git add -f` and then fails the
+  guard: the guard would need a list of exceptions.
+- The toolchain is pinned in `rust-toolchain.toml` and moved by
+  Dependabot, so each Rust release is a pull request whose new clippy
+  lints are fixed by hand. `release.yml` installs the toolchain the
+  same way and is not run by a pull request: run it by hand
+  (`workflow_dispatch`) after such a bump, and once before the next
+  tag, since `rustup toolchain install` with no name needs rustup 1.28
+  and its arm and Intel macOS runners have not been through it.
+- The daily advisories workflow, the `rust-toolchain` Dependabot entry
+  and any change to Dependabot's grouping are not in the org's baseline
+  (oxrok/management, `docs/HARDENING.md`: "weekly, grouped"): record
+  them there or apply them to the other repositories. Dependabot
+  security updates are still off in the repository's settings. A
+  scheduled run that fails only sends a mail: decide whether a failed
+  advisories run opens an issue (management's ci-doctor may be the
+  place).
+- `tests/emu` is 21,989 of the 23,160 tracked files, with no
+  `.gitattributes` rule and no check that runs without the emulator.
+  Mark it `linguist-generated=true` (not `-diff`: goldens are there to
+  be read) and `-text`, as `tests/fixtures` is. A static check in the
+  `fmt and clippy` job, over the cases of each scenario as the
+  harness's dry run lists them (`EMU_DRY`): a golden no case has, a
+  case with no golden (run 44313467058 failed on 138 of `oxla`'s), an
+  `--oracle-bug` case with an empty `.oracle`. Not an empty `.out`:
+  1,854 are empty by right.
+- `tests/` is 48 files, each a binary linked against the whole library,
+  and `--all-features` builds both pyo3 and RustPython in every test
+  job. On Windows the nextest step is 9 minutes of build and link
+  against 4 of tests; on macOS the tests are the larger part (507 s
+  against Linux's 257 s). Measure with `cargo build --timings`, then
+  merge the `*_replay.rs` and `*_cli.rs` groups into a few binaries.
+  The `decoder_*.rs` files keep their names: `tools/ci/changes.py` and
+  the nextest filter of the Python slices go by them. A split into
+  crates would change the log targets the goldens pin
+  ([Structure](#structure)).
+- The emulator cases run on Linux only. A third carrier beside USB/IP
+  and replay, a `usb::Transport` and a `serial::Port` that call the
+  `DeviceModel` directly, would run them in `cargo test` on every OS.
+  The `.tx` goldens record what the kernel carrier did (how URBs split,
+  unbinds, renumeration), so it needs a normalisation or goldens of its
+  own; the 30 s cases are oxrok's real timeouts and stay; and it goes
+  around nusb, usbfs and the tty layer, which the tier is there to
+  test. The small step first: one nextest test per fixture in
+  `tests/emu_replay.rs`, in place of one test that starts 65 processes
+  at once.
+- A failed emulator shard keeps its models' transaction logs, a dmesg
+  tail and the times (`emu-failed-N`, 7 days), not the `.out` and `.tx`
+  each failed case produced; that needs an option of the harness at its
+  twenty or so comparison sites. A failure counted before a model's
+  session starts is not put down to that model, so its log is not kept
+  when the session then passes. The harness step has 40 of the job's 45
+  minutes: on a cold cache a hang can meet the job's limit first, and
+  then nothing is kept.
+- An apt outage of more than about a minute still fails the Python and
+  emulator jobs (`tools/ci/apt.sh` tries three times; the outage of
+  2026-11-11 lasted 42 minutes). Caching the two `.deb` files of the
+  Python jobs is what is left, with a cache that goes stale as its
+  price. The `vhci-hcd` probe still turns a failed apt into a skipped
+  tier.
+- Only `main` saves the Rust cache, so a pull request that changes
+  `Cargo.lock` (every Dependabot one) builds the changed dependencies
+  on each push: watch whether that costs more than the cache quota it
+  saves.
+- The bench runs by hand: no workflow has a schedule for it,
+  `oxrok-hil` prints PASS, FAIL or UNVERIFIED to stdout and knows only
+  the LogicPort, and nothing builds `hil/esp32-siggen` (PlatformIO
+  C++; `hil/pico-hidcable` is to go, see [Pico backend](#pico-backend)).
+  Wanted: a hosted job that builds the ESP32 firmware when `hil/`
+  changes; a JSON or JUnit report from `oxrok-hil`, with the device's
+  serial number and firmware, so the evidence in `docs/drivers.toml`
+  gets a date; and on the self-hosted runner above a scheduled
+  `diffcli.sh --hw`, which needs the oracle's build there, with a
+  device that is not attached reported as absent, not as failed. The
+  bench is not ready to run unattended ([Test machines](#test-machines)),
+  and the Pico is reflashed between roles.
+- The repository's settings are not what oxrok/management's
+  `docs/HARDENING.md` says, and nothing enforces AGENTS.md's "no direct
+  push, by anyone": the one live ruleset has no pull request rule and
+  an organization admin bypass (edited by hand on 2026-11-14), there is
+  no review ruleset, and rebase merges and auto-merge are on. Apply the
+  rulesets again (`tools/rulesets.py apply`, there) or write the change
+  down, and check for drift on a schedule.
+- The nightly workflow (`nightly.yml`: six fuzz targets for five
+  minutes each, and `cargo llvm-cov nextest`) has not run. To watch on
+  its first nights: guided fuzzing, which has only had a minute per
+  target on macOS, and each finding against the rule in
+  `fuzz/README.md` (an error is fine; a panic, a hang or unbounded
+  memory is a finding, and gets a `#[test]` beside the fix); the
+  coverage job's time under instrumentation with every feature, against
+  its 60 minutes; LeakSanitizer on Linux. Nobody is told when it goes
+  red, since it opens no issue by design, and GitHub switches a
+  schedule off after 60 days without a commit: decide who looks.
+- What the fuzz targets do not reach: seeds for `decoder_any`,
+  `serial_frames` and `scpi_block` (from the decoder fixtures and the
+  payloads in `tests/emu/*.tx`, with the selector bytes in front);
+  decoder options other than the defaults, and the input modules'
+  options; the USBTMC header parser; the replay fixture parser; the
+  drivers' frame parsers outside `src/dmm` and `src/lcr`; the Python
+  decoder hosts. No corpus is kept from one night to the next.
+- Property tests in plain `cargo test`: the same capture fed to an
+  input module or a decoder `Stack` in chunks of one byte, of random
+  sizes and whole gives the same packets and annotations; an `.sr`
+  written and read back, and VCD out then in, give the capture. With
+  proptest as a dev-dependency the licence and notices checks need a
+  look.
+- The nightly coverage is of the unit and integration tests only, so a
+  driver tested mostly in the emulator reads low in its table. An
+  instrumented oxrok in the emulator shards (a profile per shard,
+  merged), on a schedule only because of the cases that are sensitive
+  to timing, would give each driver a second column beside the C gcov
+  figures.
+- `cargo check -p oxrok --no-default-features`, a build with no USB
+  backend, warns of an unreachable statement in `src/usb/mod.rs` (the
+  `OXROK_USB_RECORD` block after a match whose arms all diverge) and
+  would fail under `-D warnings`; no CI job builds it.
+- A merge queue for `main`. A push to `main` runs everything (199
+  runner-minutes, 48 times since 2026-11-08), which is the only full
+  run of a pull request whose jobs were selected by path. A queue
+  (`merge_group` in `ci.yml`, a push to `changes.py`) tests the merged
+  commit before it lands. It allows one merge method, where batch pull
+  requests use `merge` and others squash, costs a 25-minute run per
+  entry, and throws a batch out on a flake: after the aggregate check,
+  not before.
+- The pull request template's boxes are not checked by anything. Of
+  the last 31 merges that touched `src/`, 24 did not touch
+  `CHANGELOG.md`, so a check that fails would fail most of them: a
+  warning from the `changes` job is the most that fits.
+  `tools/attribution.py --check` in CI needs full clones of libsigrok
+  and sigrok-cli, which no job has.
+- `docs/DEVICES.md` (4,135 lines, 91 sections in porting order, no
+  index), `docs/drivers.toml`, the README's table and
+  `tests/emu/*/gcov.txt` hold the same case counts and gcov figures by
+  hand: two commits rewrote 189 and 92 lines of `DEVICES.md` for one
+  change to the harness. Wanted: an index by driver id, and each
+  section's status line generated from `drivers.toml` and `tests/emu`
+  and checked as `MCP.md`'s tool list is. `tools/site-data`'s check of
+  the libsigrok names runs nowhere in this repository, and nothing
+  checks that a `drivers.toml` entry names every directory of
+  `tests/emu` (it holds today). The README's Status paragraph says 88
+  driver modules and 193 ids, dated 2026-11-09; there are 89 modules
+  and `drivers.toml` lists 195 ids: generate the numbers, test them or
+  drop them.
 - The software cases in `diffcli.sh` (`case_`, about 70 lines: the demo
   driver, input and output modules, the `.sr`/`.vcd` round trips, the
   decoders, 9 of them only with the python feature) compare oxrok with
@@ -308,11 +777,69 @@ The models are plain Rust with no I/O for this reason; see
   `tests/cli/` directory compared like the emulator's), or confirm that
   `cargo test` covers each, then run them in the default mode and in CI.
 
-### CLI and format correctness
+### Test machines
 
-- The CLI closes a device only on its happy path, and `ctrlc` is built
-  without `termination`: a driver that writes at close (`rdtech-dps`'s
-  panel lock) needs its own `Drop`. Close on every exit.
+Notes about the testers, kept here until they have a place in
+oxrok/management.
+
+- usbtester4 has GPIB minor 0 left configured by an early `gpib-config`
+  with no marker: take it offline by hand (or reboot).
+- `uss720` keeps a detached cable's parport number (one per emulator
+  session on kernel 7.2.x), so after 8 sessions on a tester libieee1284
+  finds no ppdev and the `hung-chang-dso-2100` oracle stops; the harness
+  fails such a session and says so. Unloading `parport` doesn't help (the
+  new `parport0` collides in sysfs); only a reboot does. Testers need a
+  reboot between batches, or the harness a way to reset the numbering.
+- Pulling a `uss720` cable while the port is claimed crashed usbtester3's
+  kernel, and usbtester3 did not come back from its reboot: no unplug case
+  for `hung-chang-dso-2100` until that is understood.
+
+### Flakes and test gaps
+
+- The flakes CI has met are issues, not entries here: #77 (`greatfet`
+  "unplug at start" passes on rerun), #88 (`lecroy-logicstudio` "lib
+  bitstream missing" prints an extra firmware line), #89 and #105 (a
+  lost tty, the vusb race under [Harness and CI](#harness-and-ci)) and
+  #82 (under [Shutdown](#shutdown)). oxrok/management's `flakes.toml`
+  knows only #77 and #105. One place should hold them all, with the
+  others pointing at it.
+
+- The `test` and Python decoder jobs retry a failed test once and name
+  each test that passed on its second try (FLAKY, in the job summary
+  and in the `junit-*` artifacts). Nothing collects them: feed the
+  JUnit files to oxrok/management's ci-doctor and `flakes.toml`, and
+  add the tests CI has seen flake that this list lacks
+  (`rigol_dg/tests.rs:1195` and `cem_dt_885x/tests.rs:318`, both on
+  macOS). A retry is not a fix: each is a race to remove.
+- Nine unit tests fail with every sleep at six times, a harsher test
+  than CI's macOS runner: `gwinstek-gpd` (2), `atten-pps3xxx` (3),
+  `rdtech-dps` (2), `rdtech-um` (1), `manson-hcs-3xxx` (1).
+- `csv_matches_sigrok_cli` fails about 2 of 30 here with an extra row at
+  5 µs, likely `dedup` flushing at a demo packet boundary. Under
+  injected stalls: `motech_lps_30x::a_status_that_is_no_number_keeps_its_sample_only_with_no_expiry`
+  about 1 in 3 at 150 ms; at 400 ms two `fluke_dmm`, `gwinstek`
+  `the_second_half_of_a_line_end` and `korad` `a_long_gap`.
+- The unit tests wait on the wall clock: 262 tests of a second or more
+  are 666 s of the 981 s of test time on Linux, and the suite runs
+  twice as long on macOS. A clock that a fake port advances
+  (`Port::now` and `sleep`, or a `core::clock`) would test a 2 s
+  silence bound in microseconds, for the serial drivers only (the USB
+  ones are on `Transport`). It changes a public trait, and a test of a
+  stop against a running worker has to stay on real time: those races
+  are what such a test is for. `core::softtrig`'s
+  `pulse_widths_with_or_and_and` takes 16 to 23 s on every OS and waits
+  for nothing: find out why.
+- `tcp_raw_cli::nothing_listening_is_no_device` failed once in a
+  `norma-dmm` gate run and passed on rerun; a sibling's listener may
+  have taken the freed port.
+- Scenario filters hide oxrok's own text: the `bkprecision-1856d`
+  review found `A` and `O` patterns hiding `: invalid value for ...` and
+  `: device error: ...` after "Failed to open device"; motech, rdtech
+  and others use the same patterns. Sweep them, and pin the real
+  wordings with `--oracle-differs` or `--no-oracle-only` cases.
+
+## CLI and format correctness
+
 - `-O csv` mixes units in a column for a driver that sends one packet
   per reading (`gwinstek-gpd`), and holds pending rows in memory: all 13
   `demo` channels at 200 kHz reach 171 MB in 30 s and 624 MB in 100 s
@@ -325,14 +852,38 @@ The models are plain Rust with no I/O for this reason; see
   refusal.
 - `src/cli/pipeline.rs`'s `check_limit` sums readings across channels,
   so a capture cut short with at least half its samples gets no warning.
-- `-O analog:digits=spec` shows the same digits as `all`; `AnalogData`
-  holds one digit count. `-O analog --show` also words `digits`
-  differently from sigrok-cli. `-O ols` is absent, and `0x10`/`3.3V`
-  are refused where sigrok-cli's `strtof` takes them.
+- `-O analog:digits=spec` is accepted and ignored:
+  `src/formats/output/analog.rs` never reads it and `AnalogData` holds
+  one digit count, so it shows the same digits as `all`. sigrok-cli
+  prints `0.1 A` where oxrok prints `0.12 V`. `-O analog --show` also
+  words `digits` differently from sigrok-cli. `-O ols` is absent, and
+  `0x10`/`3.3V` are refused where sigrok-cli's `strtof` takes them.
+- `-O csv` invents a value for an enabled channel that sends nothing:
+  `fluke-45` with P2 enabled and silent, `--samples 3
+  -O csv:header=false:time=false`, prints `1.0001,0`, a 0 nobody
+  measured. Leave the cell empty, with a case.
 - Several drivers narrow settings to `f32` where only sigrok-cli parses
   with `strtof` (`manson-hcs-3xxx`, `conrad-digi-35-cpu`, and more
   among the serial drivers). The narrowing belongs in the CLI's option
   parsing, not in the drivers.
+- `-P uart,midi` overflows the stack of the uart decoder's thread on a
+  capture whose bit is shorter than a sample (found by the
+  `decoder_any` fuzz target, which fails on it within a minute, so its
+  nightly job is red until this is fixed). With the last 34 bytes of
+  the input `AfAqeF0megoBBQAAAAAAAACqKnhdJnoKAQUAAAAAAAAAqgAK5Q==`
+  (base64) as FILE, `oxrok -I binary:numchannels=2:samplerate=20000
+  -i FILE -P uart:rx=0:tx=1,midi` aborts with "thread decoder uart-1
+  has overflowed its stack"; uart alone does not. At 20 kHz and 115200
+  baud uart's output also differs from sigrok-cli's (data `02` against
+  `FC`), which may be the cause: a data value over 0xff would send
+  midi's `get_next_state` round for ever.
+- The `vcd` input holds every sample up to a far timestamp in memory:
+  a line `#18888888886` asks for gigabytes, where sigrok streams them.
+  The fuzz target goes around it with `compress` and `numchannels`.
+- `docs/CLI.md` is one section of a thousand lines of differences;
+  subsections by area (triggers, outputs, inputs, options, per driver)
+  would make it a page to look things up in. No test says that a flag
+  of `src/cli/args.rs` is in it or in `MCP.md`.
 - `--show -g GROUP` behaves differently: sigrok-cli stops after the
   device line when `sr_dev_options` fails for the group, oxrok prints
   the groups and an empty option list; `--get` with a group fails with
@@ -345,7 +896,7 @@ The models are plain Rust with no I/O for this reason; see
   under the two tools, with or without an analog channel, so `-P i2c`
   differs there too.
 
-### Driver behaviour
+## Driver behaviour
 
 - `demo`'s software trigger sends every sample of the triggering call
   before the trigger, on top of the pre-trigger buffer, where libsigrok
@@ -434,15 +985,6 @@ The models are plain Rust with no I/O for this reason; see
 - `ipdbg-la`: run-length compression (core id `idbg`, commands 0x10 and 0x60),
   as on the core maintainer's libsigrok branch; check it against a real core
   behind OpenOCD, including OpenOCD's one connection per core.
-- SIGINT doesn't end a run whose stdout is blocked: the `ctrlc` handler only
-  sets a flag (`src/cli/run.rs`) while the main thread waits in the write.
-  `oxrok --continuous -O binary | (sleep 8; ...)` then SIGINT: still running
-  after 10 s, and the driver's `close` never goes out.
-- csv invents a value for an enabled channel that sends nothing: `fluke-45`
-  with P2 enabled and silent, `--samples 3 -O csv:header=false:time=false`,
-  prints `1.0001,0`, a 0 nobody measured. Leave the cell empty, with a case.
-- `-O analog:digits=spec` is accepted and ignored: `src/formats/output/analog.rs`
-  never reads it. sigrok-cli prints `0.1 A` where oxrok prints `0.12 V`.
 - A VICP transport (LeCroy's network interface, TCP port 1861, 8-byte headers,
   per the X-Stream Remote Control Manual WM-RCM-E Rev C), for `lecroy-xstream`.
 
@@ -458,18 +1000,6 @@ The models are plain Rust with no I/O for this reason; see
   blocks without the strip, and add a `rigol-ds-serial` case that places
   those bytes.
 
-- `Session`'s `End` is sent before the link goes back in its slot, so
-  `start()` right after `End` can get `Busy` (`lecroy-logicstudio`,
-  `saleae-logic16`, `kingst-la2016`, `hantek-6xxx`, `sysclk-lwla`). The
-  fixed order of `sysclk-sla5032`, or a busy flag cleared before the End
-  as in `rdtech-dps`, fits each of them.
-- About 35 drivers block in `sink.send` or `sink.end` while close joins
-  them; a full queue nobody reads hangs the close. `Session` always reads
-  its queue, so this bites a direct `Device` user and the drivers' own
-  unit tests (one hung a CI runner for an hour). The bounded `send_end`
-  of `gmc-mh-1x-2x`, `appa-55ii`, `beaglelogic`, `atorch` and
-  `atten-pps3xxx` fits the rest; one by one or through a shared
-  `PacketSink` change is undecided.
 - The rusb stream thread exits on any non-timeout error, keeps one read
   in flight, and is not joined on drop, so one transient error loses
   the rest of a capture. `nusb_backend`'s `bulk_out` takes `Cancelled`
@@ -502,26 +1032,31 @@ The models are plain Rust with no I/O for this reason; see
   each oxrok open sends the line state twice (the `.tx` normalisation
   hides it). Kept rather than relaxing `forbid(unsafe_code)`.
 
-### Flakes and test gaps
-
-- Nine unit tests fail with every sleep at six times, a harsher test
-  than CI's macOS runner: `gwinstek-gpd` (2), `atten-pps3xxx` (3),
-  `rdtech-dps` (2), `rdtech-um` (1), `manson-hcs-3xxx` (1).
-- `csv_matches_sigrok_cli` fails about 2 of 30 here with an extra row at
-  5 µs, likely `dedup` flushing at a demo packet boundary. Under
-  injected stalls: `motech_lps_30x::a_status_that_is_no_number_keeps_its_sample_only_with_no_expiry`
-  about 1 in 3 at 150 ms; at 400 ms two `fluke_dmm`, `gwinstek`
-  `the_second_half_of_a_line_end` and `korad` `a_long_gap`.
-- `tcp_raw_cli::nothing_listening_is_no_device` failed once in a
-  `norma-dmm` gate run and passed on rerun; a sibling's listener may
-  have taken the freed port.
-- Scenario filters hide oxrok's own text: the `bkprecision-1856d`
-  review found `A` and `O` patterns hiding `: invalid value for ...` and
-  `: device error: ...` after "Failed to open device"; motech, rdtech
-  and others use the same patterns. Sweep them, and pin the real
-  wordings with `--oracle-differs` or `--no-oracle-only` cases.
-
 ## Open verification
+
+`docs/drivers.toml` has 90 entries: 6 have met a real device
+(`intronix-logicport`, `fx2lafw`, `rigol-ds`, `raspberrypi-pico`, `oxla`,
+`oxla-tn20k`), 3 a stand-in, 1 is software, and 80 have met only the
+emulator. A report from a device's owner is the only thing that moves
+those numbers, and the way in is thin:
+
+- The hardware report issue form asks for a `hardware` label the
+  repository does not have, so a report arrives unlabelled; no issue,
+  open or closed, is one. The label is a repository setting (the owner,
+  or oxrok/management). Issue #116, a user asking for a device with no
+  form that fits, shows the demand.
+- A report command (`oxrok report -d DRIVER`, say) that runs the scan,
+  `--show` and a short capture with the recorders on
+  (`OXROK_USB_RECORD` and the others) and writes one archive to attach,
+  so the form asks for a file and not for commands typed by hand. A
+  recording holds serial numbers and network addresses: the command has
+  to say so, or strip them.
+- A "wanted" list by device: the entries of `docs/drivers.toml` without
+  a `hardware` status and their `limits`, generated into the site and
+  `DEVICES.md`, so an owner finds their device by name. The entries
+  below are prose a search does not reach.
+
+What each driver still needs from a device:
 
 - `mooshimeter-dmm` on a real meter: the per-reading message order, the
   DEPTH/RATE period and the buffers' full scale are the model's reading of
@@ -639,33 +1174,3 @@ the device is attached, and `oxrok-hil` runs the LogicPort bench.
   500 MHz DDR, inversion with the clock edge, counter source 1
   (`D0=1*2` on the pulse train), and the frequency counter above 1 MHz
   (up to the vendor's 300 MHz).
-
-## Emulation plan
-
-Most drivers cannot be run against their hardware here. A driver is
-ported against a model of the device and checked with sigrok-cli as the
-oracle through Linux's USB/IP `vhci-hcd`; [USB.md](USB.md) describes the
-server and the harness. A driver is emulator-verified when:
-
-1. sigrok-cli and oxrok produce identical output for the scenario list
-   in `diffcli.sh`, after the header line.
-2. The model's pedantic mode logged no violation under either tool. A
-   clean run under sigrok-cli validates the model; one under oxrok
-   validates the port.
-3. The transaction logs of the two runs are identical after the fixture
-   layer's normalisation.
-4. The gcov report of the C driver, from a libsigrok built with
-   `--coverage`, is attached to the driver's entry in
-   [DEVICES.md](DEVICES.md), with the unreached paths named as "not
-   emulated" on purpose.
-5. A replay fixture is recorded from the emulator run, so `cargo test`
-   needs neither the model nor root.
-6. `diffcli.sh --oracle --hw` runs the same scenarios against the real device
-   with one command, so a user who has it can promote the driver to
-   hardware-verified.
-
-What this cannot prove: a model built from the same C source can share
-its misreading; quirks the C driver relies on without saying so cannot
-be found; and timing, lost samples at speed, short packet framing and
-real analog front ends need hardware. Device firmware sources outrank a
-model's guesses where they exist.

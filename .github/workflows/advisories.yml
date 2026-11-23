@@ -1,0 +1,32 @@
+name: Advisories
+
+# RustSec advisories and yanked crates, against Cargo.lock (deny.toml,
+# [advisories]). Daily and by hand, not on pull requests: an advisory
+# published today is no fault of the pull request open today, and would
+# turn it red. A failure here is fixed by a dependency update, or by an
+# entry in deny.toml's `ignore` with the reason.
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  advisories:
+    name: advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # What rust-toolchain.toml pins, as in ci.yml.
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-deny@0.20.2
+      - run: cargo deny --workspace --locked check advisories

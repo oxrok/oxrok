@@ -81,6 +81,9 @@
 # exclusive lock on EMU_LOCK (default /tmp/oxrok-emu.lock), so
 # concurrent runs on one machine take turns; EMULOG=DIR keeps the
 # transaction logs as DIR/MODEL.log (default: a temporary directory).
+# Each session ends with a line `time MODEL: N s, F failed`; EMU_TIMES=FILE
+# appends `MODEL N F` to FILE as well (CI: the weights of
+# tools/ci/changes.py's shards, and which models' logs to keep).
 # Firmware stand-ins (tools/emu-firmware.sh) go to EMU_FIRMWARE_DIR,
 # exported to both tools as SIGROK_FIRMWARE_DIR. Linux only, needs
 # passwordless sudo and `modprobe vhci-hcd`.
@@ -2290,6 +2293,16 @@ EOF
         return $gst
     }
 
+    # What the session of a model took, the wait for EMU_LOCK included,
+    # and how many failures it added.
+    emu_session_timed() {
+        emu_t0=$(date +%s); emu_fail0=$fail
+        emu_session
+        emu_secs=$(($(date +%s) - emu_t0))
+        echo "time $EMU_MODEL: $emu_secs s, $((fail - emu_fail0)) failed"
+        [ -z "${EMU_TIMES:-}" ] || echo "$EMU_MODEL $emu_secs $((fail - emu_fail0))" >>"$EMU_TIMES"
+    }
+
     # A model whose scenario can't run here, by name: on standard output, and on
     # GitHub as a warning and in the step summary, as the vhci-hcd probe does.
     emu_skip_model() {
@@ -2361,7 +2374,7 @@ EOF
                 continue
             fi
         fi
-        emu_session
+        emu_session_timed
     done
     for m in $emu_models; do
         case " $found " in *" $m "*) ;; *) emu_fail "--emu-model $m: no tools/emu/*.sh sets EMU_MODEL=$m" ;; esac
