@@ -19,22 +19,23 @@ checklist in [NATIVE_DECODERS.md](NATIVE_DECODERS.md).
 In this order. Each item stands for entries further down, which have
 the detail, and leaves this list when they are gone.
 
-1. A shutdown that cannot hang: everything under [Shutdown](#shutdown).
-   Done when a stop and a close return in bounded time for every driver
-   on a queue nobody reads (`NOT_BOUNDED` in
+1. A shutdown that cannot hang (#134): everything under
+   [Shutdown](#shutdown). Done when a stop and a close return in bounded
+   time for every driver on a queue nobody reads (`NOT_BOUNDED` in
    `tests/close_unread_queue.rs` is empty), and when the CLI closes its
    device on every exit.
-2. The software cases of `diffcli.sh` checked by default again (the
-   last entry of [Harness and CI](#harness-and-ci)): the demo driver,
-   the formats and the decoders on the command line have had no check
-   outside `--oracle` since the goldens replaced the oracle. Done when
-   each has a golden or a `cargo test` that covers it, and CI runs them.
+2. The software cases of `diffcli.sh` checked by default again (#136;
+   the last entry of [Harness and CI](#harness-and-ci)): the demo
+   driver, the formats and the decoders on the command line have had no
+   check outside `--oracle` since the goldens replaced the oracle. Done
+   when each has a golden or a `cargo test` that covers it, and CI runs
+   them.
 3. An emulator tier that gates a merge ([Harness and CI](#harness-and-ci):
    the vusb `CMD_UNLINK` race, then the `vhci-hcd` skip). Done when an
    emulator run that was selected and failed, or did not happen, blocks
    the pull request, and the race no longer makes that a coin toss.
-4. A first release through the rewritten workflow
-   ([Packaging and release](#packaging-and-release), its last entries),
+4. A first release through the rewritten workflow (#139;
+   [Packaging and release](#packaging-and-release), its last entries),
    and with it a stable 0.3.0.
 5. A way in for hardware reports (the head of
    [Open verification](#open-verification)): 81 of the 91 entries of
@@ -44,22 +45,22 @@ the detail, and leaves this list when they are gone.
 
 ## 0.3.0 stable blockers
 
-A proposal: what a stable 0.3.0 should not ship without. Everything
-else on this page can follow it.
+What a stable 0.3.0 does not ship without: the issues #134 to #139 of
+the `0.3.0` milestone. Everything else on this page can follow it.
 
-- Items 1 and 4 of [Next](#next): a capture whose close can hang is
-  not stable, and the release workflow should have run on a pre-release
-  tag before it carries a stable one.
+- Items 1 and 4 of [Next](#next) (#134, #139): a capture whose close can
+  hang is not stable, and the release workflow should have run on a
+  pre-release tag before it carries a stable one.
 - `oxla`'s emulator cases have run on Linux and its goldens are read
-  ([Models and coverage](#models-and-coverage)): 0.3.0 is the release
-  that brings the driver.
-- Item 2 of [Next](#next), at least for the demo driver and the
+  (#137; [Models and coverage](#models-and-coverage)): 0.3.0 is the
+  release that brings the driver.
+- Item 2 of [Next](#next) (#136), at least for the demo driver and the
   outputs: the part of the command line every user meets.
 - `Serial::read_data` drops a CR from a binary block
-  ([Driver behaviour](#driver-behaviour)): `rigol-ds` on a serial port
-  loses a sample byte today.
-- A decision on the breaking changes under [Structure](#structure) (the
-  `Device` trait's channel defaults, the typed failure kind): in before
+  (#135; [Driver behaviour](#driver-behaviour)): `rigol-ds` on a serial
+  port loses a sample byte today.
+- A decision on the breaking changes under [Structure](#structure) (#138:
+  the `Device` trait's channel defaults, the typed failure kind): in before
   0.3.0 is stable, or kept for 0.4.
 
 ## Core and library
@@ -1048,11 +1049,8 @@ oxrok/management.
 emulator. A report from a device's owner is the only thing that moves
 those numbers, and the way in is thin:
 
-- The hardware report issue form asks for a `hardware` label the
-  repository does not have, so a report arrives unlabelled; no issue,
-  open or closed, is one. The label is a repository setting (the owner,
-  or oxrok/management). Issue #116, a user asking for a device with no
-  form that fits, shows the demand.
+- No issue, open or closed, is a hardware report. Issue #116, a user
+  asking for a device with no form that fits, shows the demand.
 - A report command (`oxrok report -d DRIVER`, say) that runs the scan,
   `--show` and a short capture with the recorders on
   (`OXROK_USB_RECORD` and the others) and writes one archive to attach,
