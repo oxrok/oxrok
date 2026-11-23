@@ -13,6 +13,8 @@
 //! status, EEPROM reads, and FIFO reads that strip the two status bytes
 //! of every USB packet. EEPROM writes are not implemented on purpose.
 
+#![forbid(unsafe_code)]
+
 use crate::core::{Error, Result};
 use crate::usb::{ControlRequest, Transport};
 use std::time::Duration;

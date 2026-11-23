@@ -12,6 +12,9 @@
 //! `wait` releases the interpreter while it blocks for samples.
 
 #![allow(clippy::doc_markdown)]
+// The crate denies unsafe code; the decoder's context crosses into Python
+// as a raw pointer.
+#![allow(unsafe_code)]
 
 use crate::core::{Error, Result};
 use crate::decode::{

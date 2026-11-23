@@ -1,0 +1,61 @@
+# Fuzz targets for cargo-fuzz (README.md beside this file). Its own
+# workspace, on nightly: neither the root workspace nor the published
+# crate knows of it, and nothing here ships.
+[package]
+name = "oxrok-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# The library without the command line: the targets reach parsers only.
+oxrok = { path = "..", default-features = false, features = ["nusb"] }
+
+[workspace]
+
+[[bin]]
+name = "input_vcd"
+path = "fuzz_targets/input_vcd.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "input_binary"
+path = "fuzz_targets/input_binary.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sr_open"
+path = "fuzz_targets/sr_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decoder_any"
+path = "fuzz_targets/decoder_any.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serial_frames"
+path = "fuzz_targets/serial_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scpi_block"
+path = "fuzz_targets/scpi_block.rs"
+test = false
+doc = false
+bench = false

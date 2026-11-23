@@ -272,7 +272,7 @@ as long. [docs/DECODERS.md](docs/DECODERS.md) describes the host.
 
 A GitHub release holds these, built by `make dist` and `make dist-src` in the
 `Release binaries` workflow (`.github/workflows/release.yml`), each file with a
-`.sha256`:
+`.sha256`, and one `SHA256SUMS` for all of them:
 
 - One archive per target: Linux x86_64 and aarch64 (static, musl), macOS
   x86_64 and arm64, Windows x86_64. It has `oxrok` built with `rustpython`,
@@ -284,7 +284,10 @@ A GitHub release holds these, built by `make dist` and `make dist-src` in the
   so that `make dist` works in it with no network.
 
 No firmware is in either. [docs/LICENSING.md](docs/LICENSING.md) has the
-details.
+details. From the release after 0.3.0-alpha.1 on, the files carry a build
+provenance attestation: `gh attestation verify FILE --repo oxrok/oxrok`
+says that the workflow built it, and from which commit.
+[docs/RELEASING.md](docs/RELEASING.md) has how a release is made.
 
 ## How drivers are tested
 

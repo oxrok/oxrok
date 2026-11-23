@@ -33,7 +33,7 @@
 #![forbid(unsafe_code)]
 
 pub mod models;
-pub mod protocol;
+pub(crate) mod protocol;
 
 use crate::core::{
     Access, AnalogData, Channel, ChannelGroup, ChannelKind, Device, DeviceClass, DeviceInfo,

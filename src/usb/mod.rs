@@ -21,6 +21,8 @@
 //! fails on the first deviation. That is how drivers get CI coverage
 //! without hardware.
 
+#![forbid(unsafe_code)]
+
 use crate::core::{Error, Result};
 use std::fmt;
 use std::time::Duration;

@@ -240,6 +240,7 @@ pub fn current_command(amps: f64) -> String {
 /// What a query asks for, in `protocol.h`'s order, which `get_all_values`
 /// walks up to [`Target::Status`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(clippy::enum_variant_names)]
 pub enum Target {
     /// `IOUT1?`.
     Current,

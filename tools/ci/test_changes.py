@@ -256,6 +256,7 @@ class ChangesTest(unittest.TestCase):
 
     def test_nextest_configuration(self):
         self.assertSelects(self.sel(".config/nextest.toml"), [], python=True)
+        self.assertSelects(self.sel("tools/ci/flaky.sh"), [], python=True)
 
     def test_lint_configuration(self):
         self.assertSelects(self.sel("clippy.toml"), [], python=True)
@@ -268,6 +269,53 @@ class ChangesTest(unittest.TestCase):
         weights = {m: self.repo.golden_weight(m) for m in self.repo.models}
         self.assertEqual(sum(s["weight"] for s in plan), sum(weights.values()))
         self.assertEqual(weights["alpha"], 4)  # .out and .oracle, not .tx
+
+    def with_weights(self, text):
+        """A Repo of the made-up tree with this tools/ci/emu-weights.json."""
+        path = Path(self.tmp.name) / changes.EMU_WEIGHTS
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        self.addCleanup(path.unlink, missing_ok=True)
+        return changes.Repo(Path(self.tmp.name))
+
+    def test_no_weights_file_is_the_case_count(self):
+        self.assertFalse((Path(self.tmp.name) / changes.EMU_WEIGHTS).exists())
+        self.assertEqual(self.repo.measured(), {})
+        for m in self.repo.models:
+            self.assertEqual(self.repo.golden_weight(m), self.repo.golden_cases(m))
+
+    def test_empty_weights_file_is_the_case_count(self):
+        repo = self.with_weights("{}\n")
+        self.assertEqual(
+            changes.shards(set(repo.models), repo, 3),
+            changes.shards(set(self.repo.models), self.repo, 3),
+        )
+
+    def test_measured_seconds_are_the_weight(self):
+        # alpha has 4 cases: 10 s a case. A model that is gone is not counted.
+        repo = self.with_weights('{"alpha": 40, "pair": 300.4, "gone": 9999}')
+        self.assertEqual(repo.golden_weight("alpha"), 40)
+        self.assertEqual(repo.golden_weight("pair"), 300)
+        # No measurement: the case count at the measured seconds per case.
+        per_case = 340.4 / (4 + repo.golden_cases("pair"))
+        for m in ("beta", "meter", "sniff"):
+            self.assertEqual(
+                repo.golden_weight(m), max(1, round(repo.golden_cases(m) * per_case))
+            )
+        # The slow model has a shard of its own, whatever its case count.
+        plan = changes.shards(set(repo.models), repo, 2)
+        self.assertEqual(sorted(s["models"] for s in plan), ["alpha,beta,meter,sniff", "pair"])
+        self.assertEqual(sum(s["weight"] for s in plan), sum(map(repo.golden_weight, repo.models)))
+
+    def test_weights_file_that_is_not_seconds_fails(self):
+        for text in ("[]", '{"alpha": "40"}', '{"alpha": 0}', '{"alpha": true}', "{"):
+            with self.assertRaises(ValueError, msg=text):
+                self.with_weights(text).golden_weight("alpha")
+
+    def test_weights_file_selects_every_model(self):
+        s = self.sel(changes.EMU_WEIGHTS)
+        self.assertTrue(s.all_models)
+        self.assertFalse(s.python)
 
     def test_few_models_take_few_shards(self):
         self.assertEqual(len(changes.shards({"pair"}, self.repo, 6)), 1)

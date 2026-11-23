@@ -75,7 +75,7 @@ pub const MAX_DATA_WIDTH: u32 = 1 << 16;
 /// # Errors
 ///
 /// The message for a width past [`MAX_DATA_WIDTH`] or [`MAX_ADDR_WIDTH`].
-pub fn parse_widths(answer: &[u8; 8]) -> Result<(u32, u32), String> {
+pub fn parse_widths(answer: [u8; 8]) -> Result<(u32, u32), String> {
     let data = u32::from_le_bytes([answer[0], answer[1], answer[2], answer[3]]);
     let addr = u32::from_le_bytes([answer[4], answer[5], answer[6], answer[7]]);
     if data > MAX_DATA_WIDTH {

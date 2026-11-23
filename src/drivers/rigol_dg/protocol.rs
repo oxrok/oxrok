@@ -715,6 +715,7 @@ impl Patience {
     }
 
     /// The readings so far.
+    #[cfg(test)]
     pub fn samples(&self) -> u64 {
         self.samples
     }

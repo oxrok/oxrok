@@ -1,6 +1,31 @@
 # A test that hangs is ended and reported as TIMEOUT rather than holding
 # its runner until the job's limit. A period is 60 s, so a test is ended
-# after 10 minutes; the longest today (decoder_uart_rest's amulet_ascii
-# regression under CPython) takes about four.
+# after 10 minutes.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# The longest test by far: about four minutes under CPython in CI, and
+# RustPython is slower on long decodes (docs/DECODERS.md), eight and a
+# half minutes on a loaded laptop. 30 minutes, under the 45 of CI's jobs.
+[[profile.default.overrides]]
+filter = 'binary(decoder_uart_rest) & test(amulet_ascii_regression)'
+slow-timeout = { period = "60s", terminate-after = 30 }
+
+# CI's profile (`--profile ci`). A test that fails is run once more: the
+# suite has hundreds of fixed sleeps, and one that a loaded runner
+# stretches should not cost a full re-run. One retry only, since the
+# subject of many of these tests is timing itself: a test that passes on
+# its second try is FLAKY, not passed, and CI names each one in the job's
+# summary (tools/ci/flaky.sh) from the JUnit report this profile writes
+# (target/nextest/ci/junit.xml, an artifact of the job).
+[profile.ci]
+retries = 1
+failure-output = "immediate-final"
+
+[profile.ci.junit]
+path = "junit.xml"
+
+# Not the longest test: a second try could not end within the job's limit.
+[[profile.ci.overrides]]
+filter = 'binary(decoder_uart_rest) & test(amulet_ascii_regression)'
+retries = 0

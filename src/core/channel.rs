@@ -7,6 +7,7 @@
 /// Whether a channel carries logic (one bit per sample) or analog
 /// (one float per sample) data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ChannelKind {
     /// A digital input.
     Logic,

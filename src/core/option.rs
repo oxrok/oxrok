@@ -67,6 +67,7 @@ impl OptionDesc {
 
 /// The allowed values of a key, as `list()` reports them.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ValueList {
     /// A list of unsigned integers, e.g. supported sample rates.
     U64(Vec<u64>),

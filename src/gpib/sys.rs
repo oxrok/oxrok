@@ -8,6 +8,9 @@
 
 //! The ioctls of `/dev/gpibN`, each with the struct `gpib_ioctl.h` gives it.
 
+// The crate denies unsafe code; an ioctl is an unsafe call.
+#![allow(unsafe_code)]
+
 use super::{Address, IO_TIMEOUT, errno_error, receive_setup, send_setup, usec};
 use crate::core::{Error, Result};
 use rustix::ioctl::{Opcode, Updater, ioctl, opcode};

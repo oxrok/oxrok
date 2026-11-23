@@ -16,6 +16,7 @@ use std::fmt;
 /// value types, so a key keeps the meaning it has in sigrok-cli and in
 /// `.sr` metadata.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ValueKind {
     /// On or off.
     Bool,
@@ -43,6 +44,7 @@ pub enum ValueKind {
 
 /// A configuration value.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Value {
     /// On or off.
     Bool(bool),

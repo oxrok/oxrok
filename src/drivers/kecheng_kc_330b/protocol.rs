@@ -228,7 +228,7 @@ pub fn log_request(done: usize, total: usize) -> [u8; 4] {
 }
 
 /// The bytes a log request's answer holds.
-pub fn log_answer_len(request: &[u8; 4]) -> usize {
+pub fn log_answer_len(request: [u8; 4]) -> usize {
     1 + usize::from(request[3]) * 2
 }
 
@@ -300,7 +300,7 @@ mod tests {
         assert_eq!(log_request(63, 64), [7, 0, 1, 1]);
         assert_eq!(log_request(31500, 32000), [7, 1, 244, 63]);
         assert_eq!(log_request(31941, 32000), [7, 1, 251, 59]);
-        assert_eq!(log_answer_len(&[7, 0, 0, 63]), 127);
-        assert_eq!(log_answer_len(&[7, 0, 0, 1]), 3);
+        assert_eq!(log_answer_len([7, 0, 0, 63]), 127);
+        assert_eq!(log_answer_len([7, 0, 0, 1]), 3);
     }
 }

@@ -76,6 +76,7 @@ impl AnalogData {
 /// The variants mirror the sigrok datafeed packets, so a session file
 /// writer or a front end written against libsigrok maps them one to one.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Packet {
     /// The first packet of an acquisition.
     Header {

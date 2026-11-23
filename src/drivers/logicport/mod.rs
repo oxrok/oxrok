@@ -15,7 +15,7 @@
 #![allow(clippy::doc_markdown)]
 
 pub mod firmware;
-pub mod protocol;
+pub(crate) mod protocol;
 pub mod readout;
 
 use crate::core::key::CustomKey;
