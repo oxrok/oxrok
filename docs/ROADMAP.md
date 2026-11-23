@@ -37,7 +37,7 @@ the detail, and leaves this list when they are gone.
    ([Packaging and release](#packaging-and-release), its last entries),
    and with it a stable 0.3.0.
 5. A way in for hardware reports (the head of
-   [Open verification](#open-verification)): 80 of the 91 entries of
+   [Open verification](#open-verification)): 81 of the 91 entries of
    `docs/drivers.toml` have met only the emulator, 6 a real device. Done
    when a user with a device can file a report that has what a
    maintainer needs, and it is labelled and found.
@@ -1035,8 +1035,8 @@ oxrok/management.
 
 `docs/drivers.toml` has 91 entries: 6 have met a real device
 (`intronix-logicport`, `fx2lafw`, `rigol-ds`, `raspberrypi-pico`, `oxla`,
-`oxla-tn20k`), 3 a stand-in, 1 is software, 80 have met only the
-emulator, and 1 (`wch-ch32h417-libusb`) has met nothing yet. A report from a device's owner is the only thing that moves
+`oxla-tn20k`), 3 a stand-in, 1 is software, 81 have met only the
+emulator. A report from a device's owner is the only thing that moves
 those numbers, and the way in is thin:
 
 - The hardware report issue form asks for a `hardware` label the
@@ -1058,34 +1058,13 @@ those numbers, and the way in is thin:
 What each driver still needs from a device:
 
 - `wch-ch32h417-libusb` (the WeAct Studio Logic Analyzer V2, issue 116)
-  has never run, on a board or against its C driver. In order:
-  1. Settle the frame marks. sigrok-cli prints the C driver's frames (no
-     frame begin before an untriggered frame, the begin of a triggered
-     one after its pre-trigger samples, one more begin after the last
-     frame's end), oxrok whole frames, and `--digest` takes the output
-     before the filter, so every capture case differs. Either the C
-     driver's frames are fixed in `oxrok/libsigrok` (against that fork's
-     rule of no behaviour fixes, so a decision), or oxrok sends the C
-     driver's and its cases for whole frames go.
-  2. Build the oracle (`sh tools/oracle-build.sh`, which pins
-     `oxrok/libsigrok` at `49f29969`, the first commit with the driver)
-     and run
-     `sh tools/diffcli.sh --oracle --emu-model wch-ch32h417-libusb` on a
-     machine where the harness can attach (passwordless sudo, `vhci-hcd`).
-     Every case of `tools/emu/wch-ch32h417-libusb.sh` is a reading's
-     guess: a violation under sigrok-cli is the model's fault until shown
-     otherwise, and the `--oracle-differs` and `--oxrok-fails` marks are
-     what the reading expects. Bless, read each golden, add the model to
-     `docs/drivers.toml` (`emu`, `status`), the README table and
-     `tests/emu_replay.rs` (`RECORDED`: `default capture`, `trigger D1
-     rising`), then `--gcov`.
-  3. On the board (ordered 2026-11-22): whether the firmware answers a
-     start or a stop (the model assumes not), the answers' length (32
-     bytes assumed), `bcdUSB` on a USB 2 port (2.00 assumed), which eight
-     inputs a byte a sample holds, the descriptor's strings, the
-     threshold's real levels, the key, and whether 200 MHz with 16
-     channels (400 MB/s) holds through nusb: the transfers are the C
-     driver's 32 of 256 KiB. Record a capture and hold the model to it.
+  on the board (ordered 2026-11-22): whether the firmware answers a
+  start or a stop (the model assumes not), the answers' length (32
+  bytes assumed), `bcdUSB` on a USB 2 port (2.00 assumed), which eight
+  inputs a byte a sample holds, the descriptor's strings, the
+  threshold's real levels, the key, and whether 200 MHz with 16
+  channels (400 MB/s) holds through nusb: the transfers are the C
+  driver's 32 of 256 KiB. Record a capture and hold the model to it.
   The original board (serial `01`, with the ADC mode) is in nobody's
   hands; its ADC path follows the C and oxrok's own choices
   (`docs/DEVICES.md`).

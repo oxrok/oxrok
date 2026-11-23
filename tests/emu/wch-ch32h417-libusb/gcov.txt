@@ -1,0 +1,98 @@
+gcov wch-ch32h417-libusb (libsigrok libsigrok-unreleased-1862-g49f29969): executable lines reached
+  api.c              81.6%  347 of 425
+  libusb_wrapper.c   72.0%  384 of 533
+  protocol.c         75.1%  465 of 619
+  soft-trigger.c     91.9%  125 of 136
+  total              77.1%  1321 of 1713
+never reached, by function (line ranges hold no reached line):
+  api.c
+    ch32h417_libusb_flush_cmd_endpoint: 130, 139, 148-149
+    ch32h417_libusb_init_comm_params: 170
+    extract_usb_serial: 201, 206, 212, 218, 222
+    str_startswith: 242, 246
+    scan: 291-292, 322, 354
+    index_is_ours: 442, 445
+    dev_clear_private: 455
+    dev_open: 548-556, 569
+    dev_close: 606-608
+    config_get: 630, 638, 653-655, 689-696, 700-701
+    config_set: 717, 741-742, 809, 820, 832-861, 906-907, 915-916
+    config_list: 943, 960, 985, 1006-1007
+  libusb_wrapper.c
+    stream_transfer_done: 221, 229-235, 244, 270-272, 298
+    stream_transfer_cb: 313
+    stream_quiesce: 354-355
+    stream_start: 368, 380-384, 389-393, 426-427
+    stream_free: 486-494
+    stream_push_staged: 531-535
+    stream_drain_locked: 567
+    pump_thread_proc: 645-648
+    pump_thread_start: 661-665
+    pump_thread_stop: never called (670-680)
+    ch32h417_libusb_init: 694-696
+    ch32h417_libusb_cleanup: never called (708-725)
+    ch32h417_libusb_is_loaded: never called (728-730)
+    ch32h417_libusb_scan_devices: 760-772, 777-778, 783-785, 812-815, 819
+    ch32h417_libusb_open_device: 875-876, 881-883, 893-895, 902-906
+    ch32h417_libusb_close_device: 919
+    ch32h417_libusb_get_usb_path: 958
+    ch32h417_libusb_get_device_descr: 974, 976-977, 980-981
+    ch32h417_libusb_set_timeout_ex: 1023
+    ch32h417_libusb_write_endpoint: 1044
+    ch32h417_libusb_read_endpoint: 1076, 1107-1109, 1115
+    ch32h417_libusb_abort_endpoint_read: never called (1127-1139)
+    ch32h417_libusb_reset_in_endpoint: never called (1142-1153)
+    ch32h417_libusb_reset_out_endpoint: never called (1156-1167)
+    ch32h417_libusb_set_buf_upload_ex: 1183, 1188
+    ch32h417_libusb_query_buf_upload_ex: 1201, 1205-1207
+    ch32h417_libusb_clear_buf_upload: 1230, 1234
+  protocol.c
+    ch32h417_libusb_send_command: 132-133
+    ch32h417_libusb_receive_response: 185-186, 191, 231-233, 243-245
+    samplerate_to_divider: 285
+    ch32h417_libusb_set_logic_params: 304-305
+    ch32h417_libusb_set_led_brightness: 332, 339
+    ch32h417_libusb_set_threshold_value: 362
+    ch32h417_libusb_get_logic_params: 386, 398, 400
+    ch32h417_libusb_key_seq_changed: 440
+    ch32h417_libusb_get_logic_level: never called (454-474)
+    ch32h417_libusb_set_adc_params: 497-498, 507
+    ch32h417_libusb_set_adc_channel: 530
+    ch32h417_libusb_get_adc_params: never called (538-558)
+    ch32h417_libusb_get_adc_channel: never called (564-582)
+    ch32h417_libusb_enter_iap: never called (626-629)
+    send_stop_command: 644, 652, 660
+    ch32h417_libusb_detect_usb_speed: 721-722, 726-727
+    ch32h417_libusb_get_fw_version: 765-766, 782-783
+    adc_send_data_proc: 890, 895-896, 901-907
+    data_read_thread: 967-971, 992-999, 1028-1034, 1038-1039, 1046-1047, 1162-1165
+    stop_upload_ring: 1178
+    ch32h417_libusb_join_read_thread: 1240, 1246-1248
+    ch32h417_libusb_flush_cmd_endpoint: 1258, 1267, 1271-1279, 1284
+    ch32h417_libusb_acquisition_start: 1313, 1316, 1334, 1367, 1374-1376, 1387, 1405, 1411-1412, 1418-1419, 1424, 1431-1433, 1468-1469, 1490-1491, 1502, 1507-1522
+  soft-trigger.c
+    ch32h417_libusb_soft_trigger_logic_new: 54-55, 62-63
+    ch32h417_libusb_soft_trigger_logic_reset: 77
+    pre_trigger_send: 141
+    ch32h417_libusb_soft_trigger_logic_check: 227, 235, 242, 277, 288
+gcov shared sources (libsigrok libsigrok-unreleased-1862-g49f29969): executable lines the session reached
+  src/usb.c    3.1%  7 of 229
+  total        3.1%  7 of 229
+never reached, by function (line ranges hold no reached line):
+  src/usb.c
+    usb_source_prepare: never called (57-91)
+    usb_source_check: never called (96-111)
+    usb_source_dispatch: never called (116-150)
+    usb_source_finalize: never called (155-170)
+    usb_pollfd_added: never called (174-194)
+    usb_pollfd_removed: never called (199-221)
+    usb_source_free_pollfd: never called (227-230)
+    usb_source_new: never called (251-296)
+    sr_usb_split_conn: never called (316-379)
+    sr_usb_find: never called (393-446)
+    sr_usb_open: never called (449-491)
+    sr_usb_close: never called (494-499)
+    usb_source_add: never called (501-516)
+    usb_source_remove: never called (519-521)
+    usb_get_port_path: 552, 558
+    usb_match_manuf_prod: never called (570-604)

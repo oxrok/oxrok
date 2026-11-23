@@ -147,11 +147,11 @@ static DEV_OPTIONS: [OptionDesc; 16] = [
     OptionDesc::new(KEY_PRESSED, Access::GET),
     OptionDesc::new(LED_BRIGHTNESS, Access::GET_SET),
 ];
-/// `devopts_adc[]`, which `config_list()` gives for any channel group,
-/// `Logic` included and on a board without an ADC too.
-static GROUP_OPTIONS: [OptionDesc; 4] = [
-    OptionDesc::new(Key::Samplerate, Access::GET_SET_LIST),
-    OptionDesc::new(Key::LimitSamples, Access::GET_SET),
+/// The two of `devopts_adc[]` that `devopts[]` lacks. `config_list()`
+/// means that list for a channel group, which `std_opts_config_list()`
+/// refuses (`api.c:934-938`), so in C no group has options and nothing
+/// reaches these two. Here a board with an ADC lists them for the device.
+static ADC_OPTIONS: [OptionDesc; 2] = [
     OptionDesc::new(ADC_PRECISION, Access::GET_SET),
     OptionDesc::new(ADC_CHANNEL, Access::GET_SET),
 ];
@@ -540,16 +540,28 @@ impl Device for Ch32h417Device {
 
     fn options(&self, group: Option<&str>) -> Result<Vec<OptionDesc>> {
         match group {
-            None => Ok(DEV_OPTIONS.to_vec()),
+            None => {
+                let mut options = DEV_OPTIONS.to_vec();
+                if self.profile.adc {
+                    options.extend_from_slice(&ADC_OPTIONS);
+                }
+                Ok(options)
+            }
+            // As in C, where the list of a group fails.
             Some(g) if self.groups.iter().any(|x| x.name.eq_ignore_ascii_case(g)) => {
-                Ok(GROUP_OPTIONS.to_vec())
+                Err(Error::not_supported("options of a channel group"))
             }
             Some(g) => Err(Error::ChannelGroup(g.to_owned())),
         }
     }
 
-    /// `config_get()`, which does not look at the channel group.
-    fn get(&self, key: &Key, _group: Option<&str>) -> Result<Value> {
+    /// `config_get()`. It does not look at the channel group, but libsigrok
+    /// asks for the group's options first, which fail: nothing of a group
+    /// is read or set.
+    fn get(&self, key: &Key, group: Option<&str>) -> Result<Value> {
+        if group.is_some() {
+            return Err(Error::not_supported("options of a channel group"));
+        }
         let s = &self.settings;
         Ok(match key {
             Key::Conn => match &self.info.conn {
@@ -587,8 +599,11 @@ impl Device for Ch32h417Device {
         })
     }
 
-    /// `config_set()`, which does not look at the channel group either.
-    fn set(&mut self, key: &Key, value: &Value, _group: Option<&str>) -> Result<()> {
+    /// `config_set()`, with the same refusal for a group.
+    fn set(&mut self, key: &Key, value: &Value, group: Option<&str>) -> Result<()> {
+        if group.is_some() {
+            return Err(Error::not_supported("options of a channel group"));
+        }
         let bad = || Error::Arg(format!("invalid value for {}", key.id()));
         match key {
             Key::Samplerate => {

@@ -370,10 +370,10 @@ fn the_options_are_the_c_drivers() {
             "led_brightness",
         ]
     );
-    // Any group gets the ADC's options, as config_list() gives them.
-    let ids: Vec<&str> = dev.options(Some("Logic")).unwrap().iter().map(|o| o.key.id()).collect();
-    assert_eq!(ids, ["samplerate", "limit_samples", "adc_precision", "adc_channel"]);
+    // No group has options, as in C; a board without an ADC has no A0.
+    assert!(matches!(dev.options(Some("Logic")), Err(Error::NotSupported(_))));
     assert!(matches!(dev.options(Some("A0")), Err(Error::ChannelGroup(_))));
+    assert!(matches!(dev.get(&Key::Samplerate, Some("Logic")), Err(Error::NotSupported(_))));
 }
 
 #[test]
@@ -482,7 +482,14 @@ fn the_adc_mode_sends_volts_of_the_selected_input() {
     dev.set(&Key::PatternMode, &Value::Str("ADC".into()), None).unwrap();
     assert_eq!(dev.get(&Key::Samplerate, None).unwrap(), Value::U64(20_000_000));
     dev.set(&Key::Samplerate, &Value::U64(13_330_000), None).unwrap();
-    dev.set(&ADC_CHANNEL, &Value::U64(1), Some("A1")).unwrap();
+    dev.set(&ADC_CHANNEL, &Value::U64(1), None).unwrap();
+    // Not through a group, whose options fail as in C.
+    assert!(matches!(
+        dev.set(&ADC_CHANNEL, &Value::U64(0), Some("A1")),
+        Err(Error::NotSupported(_))
+    ));
+    let ids: Vec<&str> = dev.options(None).unwrap().iter().map(|o| o.key.id()).collect();
+    assert_eq!(ids[ids.len() - 2..], ["adc_precision", "adc_channel"]);
     dev.set(&Key::LimitSamples, &Value::U64(2), None).unwrap();
     assert!(dev.set(&ADC_PRECISION, &Value::U64(9), None).is_err());
     assert!(dev.set(&ADC_CHANNEL, &Value::U64(2), None).is_err());

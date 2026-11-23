@@ -685,14 +685,25 @@ oxrok -d wch-ch32h417-libusb -c captureratio=20 --samples 100k -t D0=r,D3=1 -O c
 oxrok -d wch-ch32h417-libusb -c logic_channels=8:voltage_threshold=1.0-1.0 --samples 10k -O bits
 ```
 
-**Status: never run.** Not on a board, and not against its C driver either:
-the harness needs root to attach an emulated device and the machine the
-port was written on had none. What exists is the driver with its unit
-tests (a board of a few lines as the transport: the scan, the open, every
-setting, the capture's commands in order, frames and triggers), the model
-(`emu/src/models/wch-ch32h417-libusb.rs`) with its own, and the scenario
-(`tools/emu/wch-ch32h417-libusb.sh`, 77 cases), which skips itself until
-it has goldens. `docs/ROADMAP.md`, "Open verification", has what is left.
+**Status: emulator only, never run on a board.** 101 cases
+(`tools/emu/wch-ch32h417-libusb.sh`) on the model
+(`emu/src/models/wch-ch32h417-libusb.rs`), against the oracle's C driver
+(`oxrok/libsigrok` at `49f29969`): 93 run under both tools with the same
+output and transactions (3 of them `--oxrok-fails`), 3 are `--oracle-bug`
+and 5 `--oracle-differs`, each for a difference listed below. gcov 77.1%
+(1321 of 1713 lines, `tests/emu/wch-ch32h417-libusb/gcov.txt`). The
+model is built from a reading of the same C driver, so it shares
+whatever that reading got wrong: `docs/ROADMAP.md`, "Open verification",
+has what a board must show.
+
+Not emulated on purpose: the firmware update mode (`enter_iap`) and the
+calls nothing in the driver makes (`get_logic_level`, `get_adc_params`,
+`get_adc_channel`, the endpoint resets and the upload buffer's failure
+paths), libusb's own failures (allocation, a device that cannot be
+opened or claimed, descriptor reads), the read thread's and the stream
+ring's failure and overflow paths, and the C driver's ADC options, which
+nothing reaches (below). `src/usb.c` is not used by this driver, which
+has its own libusb wrapper.
 
 The driver is not in sigrok. Its C counterpart is the vendor's fork
 (WeActStudio.U3LogicAnalyzer at `41b2564`), whose libusb driver is in the
@@ -716,8 +727,8 @@ Options beyond libsigrok's keys, with the vendor fork's names:
 asked when read), `usb_version` (2 or 3), `link_stop_reason` (1 when the
 last capture ended because the samples stopped), `key_start_stop` (the
 board's key ends a capture; firmware 0.2), `key_pressed` (asked when read),
-`led_brightness` (percent), and for the ADC `adc_precision` (8, 10) and
-`adc_channel` (0, 1).
+`led_brightness` (percent), and on the original board, for its ADC,
+`adc_precision` (8, 10) and `adc_channel` (0, 1).
 
 Where oxrok differs from the C driver, each by choice:
 
@@ -727,9 +738,16 @@ Where oxrok differs from the C driver, each by choice:
   and its trigger mark. The C driver begins no frame without a trigger,
   begins a triggered one after its pre-trigger samples, and begins one
   more, empty, after the last frame's end when samples were left over in
-  the transfer. So `FRAME-BEGIN` and `FRAME-END` lines differ in every
-  capture's output, and no capture case can match the oracle until that is
-  settled (ROADMAP).
+  the transfer. The samples and the trigger's place are the same; the
+  harness compares outputs without their `FRAME-` lines, and csv's blank
+  line at a frame's begin comes before the pre-trigger samples, not after.
+- No channel group has options, as in C, and nothing is read or set
+  through one. The C driver means the ADC's options for a group, a list
+  libsigrok's `std_opts_config_list()` refuses (`api.c:934-938`), so
+  there `adc_precision` and `adc_channel` cannot be reached at all; oxrok
+  lists them for the device on a board with an ADC.
+- `captureratio=100` captures; sigrok-cli dies of a segmentation fault
+  there once the pre-trigger samples are out (not traced).
 - A frame that ends exactly with a transfer starts the next from a clean
   trigger; the C driver resets the trigger only when samples were left
   over, and with no trigger reads through a null pointer there.

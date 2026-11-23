@@ -7,25 +7,16 @@
 # carries (oxrok/libsigrok, src/hardware/wch-ch32h417-libusb, from
 # 49f29969; tools/oracle-build.sh builds it).
 #
-# NEVER RUN. These cases were written from a reading of the C driver, on a
-# machine where the harness could not attach a device. The first run with
-# the oracle decides each one: a case marked --oracle-differs or
-# --oxrok-fails here is what the reading expects, not what a run showed,
-# and the plain ones may turn out to differ as well. One difference is
-# known to reach every capture: the frame marks. sigrok-cli prints the C
-# driver's (no FRAME-BEGIN before an untriggered frame, one more after the
-# last FRAME-END), oxrok whole frames, and --digest takes the output before
-# the filter. That is to be settled before the first bless (docs/ROADMAP.md):
-# the C driver's frames fixed in the oracle's fork, or oxrok sending the
-# C driver's. Until tests/emu holds
-# goldens the model is skipped by name, which a run says; a bless runs it.
+# First run against that oracle on 2026-11-23, which is where the marks
+# come from: each --oracle-bug, --oracle-differs and --oxrok-fails case
+# is what sigrok-cli did there. The harness drops the FRAME- lines of
+# every output, so the two drivers' different frame marks show only in
+# csv's blank line ("trigger position"). No board has run any of this.
 EMU_MODEL=wch-ch32h417-libusb
 EMU_DRIVER=wch-ch32h417-libusb
 # oxrok has the driver: its cases must run full.
 EMU_FULL=wch-ch32h417-libusb
 EMU_GCOV_SHARED="src/usb.c"
-[ -d "${EMU_GOLDEN:-}/wch-ch32h417-libusb" ] || [ "${EMU_BLESS:-0}" != 0 ] \
-    || EMU_SKIP="no goldens yet: EMU_BLESS=1 sh tools/diffcli.sh --oracle --emu-model wch-ch32h417-libusb writes them, and each wants reading"
 
 emu_cases() {
     W=wch-ch32h417-libusb
@@ -37,7 +28,7 @@ emu_cases() {
     # The last stderr line, sigrok-cli's own.
     L='$!d'
     # oxrok's wording of a refused option as sigrok-cli's.
-    A='s/(invalid argument).*$/\1./'
+    A='s/(invalid argument).*$/\1./; s/not supported: .*$/not applicable./'
     # The place on the bus, in --scan and --show.
     C='s#usb/[0-9]+-[0-9.]+#usb/BUS-PORT#'
     # What a capture is held to: the first 64 samples, the trigger marker
@@ -50,8 +41,9 @@ emu_cases() {
     emu_options
     emu_case "scan" --keep-header --filter "$C" -- -d $W --scan
     emu_case "show" --keep-header --filter "$C" -- -d $W --show
-    # config_list() gives the ADC's options for any group, on a board
-    # without an ADC too.
+    # config_list() means the ADC's options for a group, which
+    # std_opts_config_list() refuses (api.c:934-938), so a group has no
+    # options: sigrok-cli prints nothing past the device.
     emu_case "show Logic" --keep-header --filter "$C" -- -d $W -g Logic --show
     emu_case "default capture" --record --digest --filter "$B" -- -d $W -C $CH --samples $S -O bits
     emu_case "all channels" --digest --filter '1,40!d' -- -d $W --samples $S -O hex
@@ -93,7 +85,8 @@ emu_cases() {
     done
     emu_case "get conn" --filter "$C" -- -d $W --get conn
     emu_case "get threshold set" -- -d $W -c voltage_threshold=1.2-1.2 --get voltage_threshold
-    emu_case "get adc_precision" -- -d $W -g Logic --get adc_precision
+    # Nothing of a group can be read: its options do not list.
+    emu_case "get of a group" --expect-fail --stderr --filter "$L; s/not supported: .*$/not applicable/" -- -d $W -g Logic --get samplerate
 
     # The soft trigger: the vendor's, which waits for the pre-trigger
     # samples before it matches, so the ratio moves the trigger.
@@ -102,17 +95,24 @@ emu_cases() {
     emu_case "trigger D7 edge" --digest --filter "$B" -- -d $W -C $CH -t D7=e --samples $S -O bits
     emu_case "trigger levels" --digest --filter "$B" -- -d $W -C $CH -t D0=1,D1=0,D2=1 --samples $S -O bits
     emu_case "trigger two stages" --digest --filter "$B" -- -d $W -C $CH -t D2=01 --samples $S -O bits
-    for ratio in 10 50 100; do
+    for ratio in 10 50; do
         emu_case "trigger ratio $ratio" --digest --filter "$B" -- -d $W -C $CH -t D8=r -c captureratio=$ratio --samples $S -O bits
     done
+    # Every sample before the trigger: sigrok-cli dies of a segmentation
+    # fault once the pre-trigger samples are out (not traced: the oracle's
+    # machine had no debugger). They fill the limit, protocol.c:1081-1089.
+    emu_case "trigger ratio 100" --oracle-bug "sigrok-cli segfaults at captureratio=100 (protocol.c:1081-1089, the pre-trigger samples fill the limit)" --digest --filter "$B" -- -d $W -C $CH -t D8=r -c captureratio=100 --samples $S -O bits
     emu_case "trigger eight channels" --digest --filter "$B" -- -d $W -c logic_channels=8 -C D0,D7 -t D7=r -c captureratio=20 --samples $S -O bits
-    emu_case "trigger on a disabled channel" --digest --filter "$B" -- -d $W -C D0 -t D8=r --samples $S -O bits
-    emu_case "trigger position" --digest --filter '/^T/!d' -- -d $W -C D0,D8 -t D8=r -c captureratio=30 --samples $S -O csv:trigger=true:header=false
+    emu_case "trigger on a disabled channel" --expect-fail --stderr --filter "$L" -- -d $W -C D0 -t D8=r --samples $S -O bits
+    # The row the trigger is on, counted with the blank line csv writes at
+    # a frame's begin: the C driver's comes after the pre-trigger samples,
+    # oxrok's before them, so the row is the same and a digest is not.
+    emu_case "trigger position" --filter '/,1$/!d; =' -- -d $W -C D0,D8 -t D8=r -c captureratio=30 --samples $S -O csv:trigger=true:header=false
 
     # Frames. The C driver begins no frame without a trigger, begins one
     # after the pre-trigger samples, and begins an empty one after the
-    # last frame's end; oxrok's frames are whole. The outputs here show no
-    # frame marks, so the samples are what is compared.
+    # last frame's end; oxrok's frames are whole. The harness drops the
+    # FRAME- lines of every output, so the samples are what is compared.
     emu_case "two frames" --digest --filter "$B" -- -d $W -C $CH --samples $S --frames 2 -O bits
     emu_case "three frames triggered" --digest --filter "$B" -- -d $W -C $CH -t D7=r -c captureratio=10 --samples $S --frames 3 -O bits
 
@@ -126,7 +126,8 @@ emu_cases() {
     emu_options usb=3
     emu_case "usb3 show" --keep-header --filter "$C" -- -d $W --show
     emu_case "usb3 default capture" --digest --filter "$B" -- -d $W -C $CH --samples $S -O bits
-    for r in 200M 156.25M 78.125M 4M; do
+    # sigrok-cli reads 156.25M as 156, so the rates with a fraction are in kHz.
+    for r in 200M 156250k 78125k 4M; do
         emu_case "usb3 samplerate $r" --digest --filter '1,3!d' -- -d $W -C D0 -c samplerate=$r --samples $S -O bits
     done
     emu_case "usb3 eight channels" --digest --filter '1,3!d' -- -d $W -c logic_channels=8:samplerate=200M -C D0 --samples $S -O bits
@@ -136,28 +137,32 @@ emu_cases() {
     emu_options key=0 fw=1
     emu_case "fw 0.1 show" --keep-header --filter "$C" -- -d $W --show
     emu_case "fw 0.1 capture" --digest --filter "$B" -- -d $W -C $CH --samples $S -O bits
-    emu_case "fw 0.1 key start stop" --expect-fail --stderr --filter "$L" -- -d $W -c key_start_stop=on --samples $S
+    emu_case "fw 0.1 key start stop" --expect-fail --stderr --filter "$L; $A" -- -d $W -c key_start_stop=on --samples $S
     emu_case "fw 0.1 get hardware_version" -- -d $W --get hardware_version
 
     # The original board: an ADC, two analog channels, one rate over USB 2,
     # the threshold as DAC counts.
     emu_options serial=0123456789ab
     emu_case "original scan" --keep-header --filter "$C" -- -d $W --scan
-    emu_case "original show" --keep-header --filter "$C" -- -d $W --show
+    # oxrok lists the ADC's two options for the device, where they can be
+    # set; the C driver's are for a group, and so out of reach.
+    emu_case "original show" --oracle-differs "api.c:934-938: the ADC options are listed for a channel group, which std_opts_config_list() refuses, so no group has options and nothing reaches them" --keep-header --filter "$C" -- -d $W --show
     emu_case "original show A0" --keep-header --filter "$C" -- -d $W -g A0 --show
     emu_case "original capture" --digest --filter "$B" -- -d $W -C $CH --samples $S -O bits
     emu_case "original threshold 1.5" --digest --filter '1,3!d' -- -d $W -c voltage_threshold=1.5-1.5 -C D0 --samples $S -O bits
     emu_case "original 16M" --expect-fail --stderr --filter "$L; $A" -- -d $W -c samplerate=16M --samples $S
     emu_options serial=0123456789ab usb=3
-    emu_case "original usb3 show" --keep-header --filter "$C" -- -d $W --show
+    emu_case "original usb3 show" --oracle-differs "api.c:934-938: the ADC options are listed for a channel group, which std_opts_config_list() refuses, so no group has options and nothing reaches them" --keep-header --filter "$C" -- -d $W --show
     # The ADC mode. With both analog channels enabled the C driver says its
     # one sample a point belongs to two channels, and the output reads past
-    # the buffer; oxrok sends the selected input's samples as that input's.
-    emu_case "adc capture A0" --oracle-differs "protocol.c:918-923: one float a sample for every enabled analog channel's" --digest --filter '1,8!d' -- -d $W -c "pattern=ADC" -C A0,A1 --samples $S -O analog
+    # the buffer; oxrok sends the selected input's samples as that input's. What
+    # sigrok-cli prints past the buffer changes from run to run, so no
+    # digest: the first lines alone are kept.
+    emu_case "adc capture A0" --oracle-differs "protocol.c:918-923: one float a sample for every enabled analog channel's" --filter '1,8!d' -- -d $W -c "pattern=ADC" -C A0,A1 --samples $S -O analog
     emu_case "adc capture one channel" --digest --filter '1,8!d' -- -d $W -c "pattern=ADC" -C A0 --samples $S -O analog
-    emu_case "adc 10 bit input 1" --digest --filter '1,8!d' -- -d $W -c "pattern=ADC:adc_precision=10:adc_channel=1:samplerate=10M" -C A1 --samples $S -O analog
-    emu_case "adc precision 9" --expect-fail --stderr --filter "$L; $A" -- -d $W -c adc_precision=9 --samples $S
-    emu_case "adc trigger" --oracle-differs "protocol.c:1075: the trigger runs on the raw ADC bytes and its pre-trigger samples go out as logic" --expect-fail --stderr --filter "$L" -- -d $W -c "pattern=ADC" -C A0 -t D0=r --samples $S -O analog
+    emu_case "adc 10 bit input 1" --oracle-bug "api.c:934-938: the ADC options are listed for a channel group, which std_opts_config_list() refuses, so no group has options and nothing reaches them" --digest --filter '1,8!d' -- -d $W -c "pattern=ADC:adc_precision=10:adc_channel=1:samplerate=10M" -C A1 --samples $S -O analog
+    emu_case "adc precision 9" --oracle-bug "api.c:934-938: the ADC options are listed for a channel group, which std_opts_config_list() refuses, so no group has options and nothing reaches them" --expect-fail --stderr --filter "$L; $A" -- -d $W -c adc_precision=9 --samples $S
+    emu_case "adc trigger" --oracle-differs "protocol.c:1075: the trigger runs on the raw ADC bytes and its pre-trigger samples go out as logic" --expect-fail --stderr --filter "$L" -- -d $W -c "pattern=ADC" -C A0,D0 -t D0=r --samples $S -O analog
 
     # No board the driver knows.
     emu_options serial=7f00000000
@@ -169,7 +174,7 @@ emu_cases() {
     emu_options silent=a0
     emu_case "parameters unanswered" --expect-fail --stderr --filter "$E" --timeout 10 -- -d $W --samples $S
     emu_options short=a0
-    emu_case "parameters answered short" --digest --filter '1,3!d' -- -d $W -C D0 --samples $S -O bits
+    emu_case "parameters answered short" --expect-fail --stderr --filter "$E" -- -d $W --samples $S
     emu_options garbage=a0
     emu_case "parameters answered as another command" --expect-fail --stderr --filter "$E" -- -d $W --samples $S
     emu_options stall=a0
@@ -183,8 +188,9 @@ emu_cases() {
     # Answers nobody read, which the drain at the scan meets.
     emu_options unread=3
     emu_case "unread answers" --digest --filter "$B" -- -d $W -C $CH --samples $S -O bits
-    emu_options unread=20
-    emu_case "more unread answers than the drain takes" --stderr --filter "$E" -- -d $W --samples $S -O bits
+    # More of them than the C drain takes (20) leave it reading answers to
+    # other commands, under a rule of the model's that both tools then
+    # break: no case.
 
     # A stream that ends before the limit: the driver's path for a link
     # that cannot carry the rate. The C driver ends the capture as any
@@ -201,7 +207,7 @@ emu_cases() {
     # A sample transfer that fails. The C ring puts it back and goes on;
     # oxrok ends the capture with the error.
     emu_options transfers=3 stall-in=2
-    emu_case "a sample transfer stalls" --oxrok-fails "stalled" --digest --filter '1,3!d' --timeout 10 -- -d $W -C D0 --samples 200k -O bits
+    emu_case "a sample transfer stalls" --oxrok-fails "stalled" --filter '1,3!d' --timeout 10 -- -d $W -C D0 --samples 200k -O bits
 
     emu_options
 }

@@ -13,8 +13,8 @@ release may change the library API.
   over USB 3, 20 or 40 MHz over USB 2, an adjustable threshold, frames, the
   board's key and LED; the original board's ADC mode). It is not in
   sigrok: it follows the driver of the vendor's sigrok fork. It has never
-  run on a board or against that driver; an emulator model and its cases
-  are written and not yet run (`docs/DEVICES.md`).
+  run on a board: an emulator model and 101 cases check it against that
+  driver (`docs/DEVICES.md`).
 - `SoftTriggerLogic::arm_when_full` and `SoftTriggerLogic::reset`, the
   vendor fork's soft trigger: no match until the pre-trigger samples are
   in, and a new start for each frame.
