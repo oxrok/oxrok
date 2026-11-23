@@ -125,8 +125,10 @@ impl Decoder for RgbLedWs281x {
                 let es = self.es.unwrap();
                 let ss = self.ss.unwrap();
 
-                // "Decode last bit value."
-                let th = (es - ss) as f64 / self.samplerate as f64;
+                // "Decode last bit value." The falling edge is noted after
+                // this check, so on a slow line `es` is still the edge
+                // before `ss`: a negative time, and a 0 bit, in Python.
+                let th = (es as f64 - ss as f64) / self.samplerate as f64;
                 let bit = th >= 625e-9;
                 self.bits.push(bit);
                 self.handle_bits(ctx, es);
@@ -175,5 +177,37 @@ impl Decoder for RgbLedWs281x {
 
             self.oldpin = Some(pin);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::decode::{Output, Stack, parse_spec};
+
+    /// A line slower than the 50 us of a RESET: at the falling edge that
+    /// ends a pulse, the last falling edge known is the one before the
+    /// pulse began. What sigrok-cli prints for these samples at 20 kHz:
+    /// `3-2 0`, `2-4 RESET`, `7-4 0`, `4-8 RESET`.
+    #[test]
+    fn a_reset_at_the_falling_edge_of_a_slow_pulse() {
+        let config = parse_spec(&INFO, &[], &["D0".to_owned()]).unwrap();
+        let mut stack = Stack::new();
+        stack.add("ws-1".to_owned(), boxed(), &config, 1, 20_000).unwrap();
+        let rx = stack.outputs().unwrap();
+        stack.feed(&[1, 1, 0, 1, 0, 0, 0, 1, 0]);
+        stack.end();
+        let seen: Vec<(u64, u64, String)> = rx
+            .into_iter()
+            .filter_map(|o| match o {
+                Output::Annotation { ss, es, texts, .. } => Some((ss, es, texts[0].clone())),
+                _ => None,
+            })
+            .collect();
+        stack.join();
+        let want = [(3, 2, "0"), (2, 4, "RESET"), (7, 4, "0"), (4, 8, "RESET")];
+        let want: Vec<(u64, u64, String)> =
+            want.iter().map(|&(ss, es, text)| (ss, es, text.to_owned())).collect();
+        assert_eq!(seen, want);
     }
 }

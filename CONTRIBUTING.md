@@ -12,6 +12,9 @@
   only for what the change touches (`tools/ci/changes.py`; the
   `changes` job's summary says why). The `ci:full` label runs
   everything.
+  A nightly workflow, required by nothing, fuzzes the parsers of
+  untrusted input (`fuzz/README.md`) and reports the Rust line coverage
+  of the test suite in its summary.
 - Every change that a user can see gets a line in `CHANGELOG.md`.
 - No `unsafe` code: the crate denies it. The exceptions are the modules
   the crate docs in `src/lib.rs` list (`pydecode`, which crosses into

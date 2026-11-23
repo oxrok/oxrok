@@ -1,0 +1,4 @@
+# cargo-fuzz needs the nightly sanitizer flags; the workspace above this
+# directory stays on stable.
+[toolchain]
+channel = "nightly"

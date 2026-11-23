@@ -66,6 +66,14 @@ release may change the library API.
 - A serial port opens at a speed macOS has no constant for (3,000,000
   baud): the open failed with `Invalid argument`, as `tcsetattr` there
   refuses the termios it reads back after such a speed was set.
+- `-I vcd` reads a file whose header has bytes that are not UTF-8 (a
+  Latin-1 comment, say): the header's length was counted with each such
+  byte as three, so the first value changes were dropped with the
+  header, or the reader panicked on a short file.
+- `-I vcd` reads a file whose `$timescale` is 0 as one that names no
+  sample rate; it panicked on the division.
+- `-P rgb_led_ws281x` on a line slower than the 50 us of a RESET gives
+  the bit before each RESET as 0, as libsigrokdecode does; it gave 1.
 
 ## [0.3.0-alpha.1] - 2026-11-14
 

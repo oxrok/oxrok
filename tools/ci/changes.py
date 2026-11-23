@@ -47,6 +47,8 @@ IGNORED_PREFIXES = (
     "docs/",
     "examples/",
     "hil/",
+    # cargo-fuzz targets: the nightly workflow builds and runs them.
+    "fuzz/",
     "website/",
     # The RPM spec and its notes: Packit builds them in Copr, not in CI.
     "packaging/",
@@ -57,6 +59,7 @@ IGNORED_PREFIXES = (
     ".github/workflows/release.yml",
     # cargo deny check advisories, on a schedule: no job of ci.yml.
     ".github/workflows/advisories.yml",
+    ".github/workflows/nightly.yml",
     ".github/ISSUE_TEMPLATE/",
     # udev rules: tests/udev_rules.rs reads them, in the test job.
     "contrib/",
@@ -74,6 +77,8 @@ IGNORED_FILES = {
     # The vendor-firmware name check, run in the fmt and clippy job.
     "tools/ci/firmware.py",
     "tools/ci/test_firmware.py",
+    # The nightly workflow's coverage table.
+    "tools/ci/coverage_summary.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
     # The release workflow's gate and its tests, which the `check` job runs.
