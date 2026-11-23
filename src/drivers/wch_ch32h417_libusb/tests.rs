@@ -177,6 +177,17 @@ fn capture(dev: &mut Ch32h417Device) -> Vec<Packet> {
     packets
 }
 
+#[test]
+fn a_close_does_not_wait_on_a_queue_nobody_reads() {
+    let (dev, _state) = open_v2();
+    // No limit: the samples come on, and the queue of one packet is full.
+    crate::core::device::close_with_an_unread_queue(
+        Box::new(dev),
+        Duration::from_millis(100),
+        Duration::from_secs(30),
+    );
+}
+
 fn until_end(rx: &Receiver<(usize, Packet)>) -> Vec<Packet> {
     let mut out = Vec::new();
     loop {

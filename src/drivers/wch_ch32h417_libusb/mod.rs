@@ -801,6 +801,9 @@ impl Device for Ch32h417Device {
                 let slot = Arc::clone(&self.link);
                 let stop = Arc::new(AtomicBool::new(false));
                 let stop2 = Arc::clone(&stop);
+                // A stop or a close joins the thread, which must not wait on
+                // a queue nobody reads.
+                let sink = sink.stopped_by(&stop);
                 let handle = std::thread::Builder::new()
                     .name("wch-ch32h417 acquisition".into())
                     .spawn(move || {
