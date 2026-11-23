@@ -8,6 +8,18 @@ release may change the library API.
 
 ### Added
 
+- The `wch-ch32h417-libusb` driver, for the WeAct Studio Logic Analyzer V2
+  and the CH32H417 board it comes from (`1a86:5537`; 16 channels, 200 MHz
+  over USB 3, 20 or 40 MHz over USB 2, an adjustable threshold, frames, the
+  board's key and LED; the original board's ADC mode). It is not in
+  sigrok: it follows the driver of the vendor's sigrok fork. It has never
+  run on a board: an emulator model and 101 cases check it against that
+  driver (`docs/DEVICES.md`).
+- `SoftTriggerLogic::arm_when_full` and `SoftTriggerLogic::reset`, the
+  vendor fork's soft trigger: no match until the pre-trigger samples are
+  in, and a new start for each frame.
+- `Transport::usb_version`, `bcdUSB` of the device descriptor without a
+  transfer, kept in a fixture's `device` line as `usb=XXXX`.
 - The `oxla` driver, for the oxla logic analyzer gateware on a Sipeed Tang
   Nano 20K (8, 14 or 16 channels, up to 270 MS/s, a two term trigger, run
   length encoding), on its serial port. It has no libsigrok counterpart.
@@ -174,6 +186,10 @@ needs an update (see Changed).
   sockets keep alive.
 - An emulator model of the Intronix LogicPort, against libsigrok pull request
   315, now part of the oracle.
+- `tools/oracle-build.sh` builds the sigrok oracle of `--oracle` runs, whose
+  libsigrok is now `oxrok/libsigrok` at a pinned commit: upstream with the
+  drivers it never merged. It replaces the patch files of
+  `tools/oracle-patches/`.
 - The software trigger (`SoftTrigger`) takes value ranges and the two
   stage or/and combines. A device still takes only what it advertises:
   `demo` and `fx2lafw` take every `-t` extra, `raspberrypi-pico` one

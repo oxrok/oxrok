@@ -53,8 +53,6 @@ IGNORED_PREFIXES = (
     # The RPM spec and its notes: Packit builds them in Copr, not in CI.
     "packaging/",
     "tools/third-party/",
-    # Applied to the sigrok oracle, which CI does not build (no --oracle).
-    "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
     # cargo deny check advisories, on a schedule: no job of ci.yml.
@@ -80,6 +78,8 @@ IGNORED_FILES = {
     # The nightly workflow's coverage table.
     "tools/ci/coverage_summary.py",
     "tools/libsigrok-drivers.txt",
+    # Builds the sigrok oracle, which CI does not run (no --oracle).
+    "tools/oracle-build.sh",
     "tools/udev-diff.py",
     # The release workflow's gate and its tests, which the `check` job runs.
     "tools/ci/release.py",

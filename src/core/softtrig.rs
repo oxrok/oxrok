@@ -799,6 +799,11 @@ pub struct SoftTriggerLogic {
     ring: Vec<u8>,
     head: usize,
     fill: usize,
+    /// Samples still to pass unmatched, see
+    /// [`SoftTriggerLogic::arm_when_full`].
+    until_armed: u64,
+    /// What [`SoftTriggerLogic::reset`] sets `until_armed` to again.
+    arm_after: u64,
 }
 
 /// A stage of [`SoftTriggerLogic`] as masks over a sample word. A
@@ -888,7 +893,34 @@ impl SoftTriggerLogic {
             ring: vec![0; unit_size * pre_trigger_samples],
             head: 0,
             fill: 0,
+            until_armed: 0,
+            arm_after: 0,
         }
+    }
+
+    /// Matching starts only once the pre-trigger ring is full: the
+    /// samples before go into the ring unmatched, and the last of them
+    /// is the previous sample of the first one matched, so an edge from
+    /// it counts. Not libsigrok's: the `WeAct` tree's `soft-trigger.c`
+    /// (`arm_when_full`), for `wch-ch32h417-libusb`. With no pre-trigger
+    /// samples it changes nothing.
+    #[must_use]
+    pub fn arm_when_full(mut self) -> Self {
+        self.arm_after = (self.ring.len() / self.unit_size.max(1)) as u64;
+        self.until_armed = self.arm_after;
+        self
+    }
+
+    /// The `WeAct` tree's `soft_trigger_logic_reset()`, for the start of a
+    /// new frame: stage 0, an empty ring, no previous sample, and the
+    /// wait of [`SoftTriggerLogic::arm_when_full`] again.
+    pub fn reset(&mut self) {
+        self.cur_stage = 0;
+        self.evaluated = false;
+        self.fill = 0;
+        self.head = 0;
+        self.until_armed = self.arm_after;
+        self.prev.fill(0);
     }
 
     fn append(&mut self, mut buf: &[u8]) {
@@ -1011,6 +1043,32 @@ impl SoftTriggerLogic {
     /// the trigger point and the pre-trigger packets to send before it,
     /// or `None` (the samples go into the pre-trigger ring).
     pub fn check(&mut self, buf: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+        if self.until_armed == 0 {
+            return self.check_armed(buf);
+        }
+        // The WeAct tree's wait: as many whole samples as are still to
+        // pass, or all of `buf` when it holds no more than that.
+        let unit = self.unit_size;
+        let avail = (buf.len() / unit) as u64;
+        let held =
+            if avail <= self.until_armed { buf.len() } else { self.until_armed as usize * unit };
+        self.append(&buf[..held]);
+        self.until_armed -= (held / unit) as u64;
+        if held >= unit {
+            self.prev.copy_from_slice(&buf[held - unit..held]);
+        }
+        // `stl->count = MAX(stl->count, 1)`: an edge is no longer the
+        // first match evaluated.
+        self.evaluated = true;
+        let rest = &buf[held..];
+        if rest.is_empty() {
+            return None;
+        }
+        self.check_armed(rest).map(|(offset, pre)| (offset + held / unit, pre))
+    }
+
+    /// [`SoftTriggerLogic::check`] once the matcher is armed.
+    fn check_armed(&mut self, buf: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
         let unit = self.unit_size as isize;
         let len = buf.len() as isize;
         // Whole samples of at most 8 bytes match as words; the previous
@@ -1074,6 +1132,57 @@ impl SoftTriggerLogic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `WeAct` tree's wait: nothing matches until the ring is full, an
+    /// edge from the last held sample counts, and the ring holds what
+    /// came before the trigger.
+    #[test]
+    fn logic_armed_when_full_waits_for_the_pre_trigger_samples() {
+        // The offset, and the pre-trigger packets as one run of bytes (a
+        // ring that wrapped gives two).
+        let fired = |t: &mut SoftTriggerLogic, data: &[u8]| {
+            t.check(data).map(|(offset, pre)| (offset, pre.concat()))
+        };
+        let rising = vec![vec![(0usize, TriggerMatch::Rising)]];
+        // Rises at samples 1, 4 and 6.
+        let data = [0u8, 1, 1, 0, 1, 0, 1, 1];
+        let mut stock = SoftTriggerLogic::new(rising.clone(), 1, 3);
+        assert_eq!(fired(&mut stock, &data), Some((1, vec![0])));
+        let mut held = SoftTriggerLogic::new(rising.clone(), 1, 3).arm_when_full();
+        assert_eq!(fired(&mut held, &data), Some((4, vec![1, 1, 0])));
+        // The wait goes across calls, and an edge from its last sample
+        // to the first one after it fires.
+        let mut split = SoftTriggerLogic::new(rising.clone(), 1, 3).arm_when_full();
+        assert_eq!(fired(&mut split, &[1, 1]), None);
+        assert_eq!(fired(&mut split, &[0]), None);
+        assert_eq!(fired(&mut split, &[1, 0]), Some((0, vec![1, 1, 0])));
+        // No pre-trigger samples, no wait.
+        let mut none = SoftTriggerLogic::new(rising.clone(), 1, 0).arm_when_full();
+        assert_eq!(fired(&mut none, &data), Some((1, vec![])));
+        // Two byte samples: the offset is in samples of the buffer given.
+        let wide: Vec<u8> = data.iter().flat_map(|&b| [b, 0]).collect();
+        let mut two = SoftTriggerLogic::new(rising, 2, 3).arm_when_full();
+        assert_eq!(fired(&mut two, &wide), Some((4, vec![1, 0, 1, 0, 0, 0])));
+    }
+
+    /// A reset starts a frame over: the wait again, and nothing of the
+    /// frame before in the ring.
+    #[test]
+    fn logic_reset_starts_over() {
+        let fired = |t: &mut SoftTriggerLogic, data: &[u8]| {
+            t.check(data).map(|(offset, pre)| (offset, pre.concat()))
+        };
+        let rising = vec![vec![(0usize, TriggerMatch::Rising)]];
+        let mut t = SoftTriggerLogic::new(rising, 1, 2).arm_when_full();
+        assert_eq!(fired(&mut t, &[0, 0, 1]), Some((2, vec![0, 0])));
+        t.reset();
+        assert_eq!(fired(&mut t, &[0, 1, 0]), None);
+        assert_eq!(fired(&mut t, &[1]), Some((0, vec![1, 0])));
+        // The frame before leaves nothing: the wait runs again, and the
+        // edge it holds does not fire.
+        t.reset();
+        assert_eq!(fired(&mut t, &[1, 1, 1, 0, 1]), Some((4, vec![1, 0])));
+    }
 
     /// Rearmed inside a counted range, the samples still in it are no new
     /// entry: the count starts with the next time the value comes back.

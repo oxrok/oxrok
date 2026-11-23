@@ -189,6 +189,7 @@ pub mod drivers {
     pub mod uni_t_dmm;
     pub mod uni_t_ut181a;
     pub mod uni_t_ut32x;
+    pub mod wch_ch32h417_libusb;
     pub mod yokogawa_dlm;
     pub mod zeroplus_logic_cube;
     pub mod zketech_ebd_usb;
@@ -294,6 +295,7 @@ pub fn register_all(registry: &mut core::Registry) {
     registry.register(Box::new(drivers::colead_slm::ColeadSlmDriver));
     registry.register(Box::new(drivers::tondaj_sl_814::TondajSl814Driver));
     registry.register(Box::new(drivers::beaglelogic::BeagleLogicDriver));
+    registry.register(Box::new(drivers::wch_ch32h417_libusb::Ch32h417Driver));
     registry.register(Box::new(drivers::yokogawa_dlm::YokogawaDlmDriver));
     registry.register(Box::new(drivers::pce_322a::Pce322aDriver));
     registry.register(Box::new(drivers::lascar_el_usb::LascarDriver));

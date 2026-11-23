@@ -10,7 +10,7 @@ EMU_GCOV_SHARED="src/serial.c src/serial_libsp.c"
 # api.c:79 asks serial_stream_detect for a packet of 292 bytes with a buffer of
 # 292, and serial.c:833 has wanted a buffer of two packets since d03815a0 (2019,
 # `maxlen < packet_size / 2` became `* 2`, in 0.5.2): stock sigrok-cli finds no
-# device. So the oracle carries tools/oracle-patches/libsigrok-teleinfo-scan.patch,
+# device. So the oracle carries oxrok/libsigrok eac41e7a,
 # and every case here compares against that C. It looks at byte 292, as 0.5.1 did.
 
 emu_conns() {

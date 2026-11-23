@@ -89,8 +89,8 @@ up, and proceeds.
 
 Emulated by `emu/src/models/intronix-logicport.rs`, scenario
 `tools/emu/intronix-logicport.sh`. The oracle is the C driver of libsigrok
-pull request 315, folded into the main oracle as
-`tools/oracle-patches/libsigrok-pr315-intronix-logicport.patch`. 121 cases
+pull request 315, which the oracle's libsigrok carries
+(`oxrok/libsigrok`, `0bc24877..fdfc4063`). 121 cases
 run under both tools (110 full, 5 `--oracle-bug`, 6 `--oracle-differs`)
 and 33 are oxrok's alone (extended triggers, options, the `.rbf` fallback,
 oxrok's failure messages); gcov on the C driver 92.0% (940 of 1022) on
@@ -670,6 +670,103 @@ the load's command order against a model of the FPGA, the descriptions
 against the one release 0.2.0 has for `la14-ddr`, and the open against
 the fake board of the `oxla` tests; none of them is a recording of the
 board.
+
+## WCH CH32H417 logic analyzers (wch-ch32h417-libusb)
+
+`wch-ch32h417-libusb`: the WeAct Studio Logic Analyzer V2 and the original
+CH32H417 board it comes from, `1a86:5537`: 16 channels, 200 MHz over USB 3,
+an adjustable input threshold. The firmware is on the board and nothing is
+uploaded. Asked for in [issue 116](https://github.com/oxrok/oxrok/issues/116).
+
+```sh
+oxrok -d wch-ch32h417-libusb --show
+oxrok -d wch-ch32h417-libusb -c samplerate=100m --samples 1m -o capture.sr
+oxrok -d wch-ch32h417-libusb -c captureratio=20 --samples 100k -t D0=r,D3=1 -O csv:trigger=true
+oxrok -d wch-ch32h417-libusb -c logic_channels=8:voltage_threshold=1.0-1.0 --samples 10k -O bits
+```
+
+**Status: emulator only, never run on a board.** 101 cases
+(`tools/emu/wch-ch32h417-libusb.sh`) on the model
+(`emu/src/models/wch-ch32h417-libusb.rs`), against the oracle's C driver
+(`oxrok/libsigrok` at `49f29969`): 93 run under both tools with the same
+output and transactions (3 of them `--oxrok-fails`), 3 are `--oracle-bug`
+and 5 `--oracle-differs`, each for a difference listed below. gcov 77.1%
+(1321 of 1713 lines, `tests/emu/wch-ch32h417-libusb/gcov.txt`). The
+model is built from a reading of the same C driver, so it shares
+whatever that reading got wrong: `docs/ROADMAP.md`, "Open verification",
+has what a board must show.
+
+Not emulated on purpose: the firmware update mode (`enter_iap`) and the
+calls nothing in the driver makes (`get_logic_level`, `get_adc_params`,
+`get_adc_channel`, the endpoint resets and the upload buffer's failure
+paths), libusb's own failures (allocation, a device that cannot be
+opened or claimed, descriptor reads), the read thread's and the stream
+ring's failure and overflow paths, and the C driver's ADC options, which
+nothing reaches (below). `src/usb.c` is not used by this driver, which
+has its own libusb wrapper.
+
+The driver is not in sigrok. Its C counterpart is the vendor's fork
+(WeActStudio.U3LogicAnalyzer at `41b2564`), whose libusb driver is in the
+oracle's fork (`oxrok/libsigrok`, `src/hardware/wch-ch32h417-libusb`). The
+firmware is closed, so the C driver is all there is to read; the protocol
+is in the module documentation of `src/drivers/wch_ch32h417_libusb/protocol.rs`.
+
+Boards, by the start of the serial number: `b5` is the V2 (the full rate
+tables, the threshold as the level at the input); `01` is the original
+board (the first 14 rates over USB 3 and one over USB 2, the threshold as
+DAC counts, two analog inputs and the ADC mode). Any other serial number
+is no device of the driver's.
+
+The link is told by `bcdUSB`: below 3.00 the device is on USB 2 and shows
+6 rates up to 20 MHz, or 8 up to 40 MHz once `logic_channels` is 8 or
+less (a byte a sample). Set `logic_channels` before `samplerate`: changing
+it picks the table's fastest rate again.
+
+Options beyond libsigrok's keys, with the vendor fork's names:
+`hardware_version` (firmware version times 256 plus the hardware version,
+asked when read), `usb_version` (2 or 3), `link_stop_reason` (1 when the
+last capture ended because the samples stopped), `key_start_stop` (the
+board's key ends a capture; firmware 0.2), `key_pressed` (asked when read),
+`led_brightness` (percent), and on the original board, for its ADC,
+`adc_precision` (8, 10) and `adc_channel` (0, 1).
+
+Where oxrok differs from the C driver, each by choice:
+
+- `conn=` selects a board (`BUS.ADDRESS`, `VID.PID`, or the `usb/BUS-PORT`
+  id a scan prints); the C driver logs that it ignores it.
+- Every frame begins with a frame begin and holds its pre-trigger samples
+  and its trigger mark. The C driver begins no frame without a trigger,
+  begins a triggered one after its pre-trigger samples, and begins one
+  more, empty, after the last frame's end when samples were left over in
+  the transfer. The samples and the trigger's place are the same; the
+  harness compares outputs without their `FRAME-` lines, and csv's blank
+  line at a frame's begin comes before the pre-trigger samples, not after.
+- No channel group has options, as in C, and nothing is read or set
+  through one. The C driver means the ADC's options for a group, a list
+  libsigrok's `std_opts_config_list()` refuses (`api.c:934-938`), so
+  there `adc_precision` and `adc_channel` cannot be reached at all; oxrok
+  lists them for the device on a board with an ADC.
+- `captureratio=100` captures; sigrok-cli dies of a segmentation fault
+  there once the pre-trigger samples are out (not traced).
+- A frame that ends exactly with a transfer starts the next from a clean
+  trigger; the C driver resets the trigger only when samples were left
+  over, and with no trigger reads through a null pointer there.
+- A capture that ends on 500 ms without samples fails (exit 1) unless the
+  key ended it; the C driver ends it as any other.
+- A failed sample transfer ends the capture with its error; the C driver
+  submits it again.
+- A trigger in the ADC mode is refused; the C driver matches it on the raw
+  ADC bytes and sends the samples before it as logic.
+- ADC samples are the selected input's; the C driver says each belongs to
+  every enabled analog channel, with one value for the two.
+
+The trigger is the vendor's variant of libsigrok's soft trigger
+(`SoftTriggerLogic::arm_when_full` and `reset`): no match until the
+pre-trigger samples are in, and each frame starts over.
+
+Not done: the firmware update (the `ae` command and the HID boot loader
+`1a86:fe17`), and the Windows CH375 back end, which WinUSB replaces from
+firmware 0.2 on.
 
 ## Rigol and Agilent oscilloscopes
 
@@ -2031,7 +2128,7 @@ No capture is known, so the model's Size, Unused and Decimal exponent
 bytes are invented zeros. Ported, 69 cases: 54 full, 13 --oracle-bug, 2
 --oracle-differs; gcov 91.3% (from the last `--oracle --gcov` run, which still had the library-only cases). **This oracle has one line
 restored: `sdi->driver = di;`, removed by b258c09f
-(tools/oracle-patches/libsigrok-testo-sdi-driver.patch). Stock libsigrok
+(oxrok/libsigrok 5c08d885). Stock libsigrok
 finds no Testo: libsigrok 0.5.1, 0.5.2 and unreleased lack the line,
 0.5.0 has it. This rests on device.c:730, api.c and the commit, not on a
 run.** The C's capture path has met no device in those versions, so its
@@ -2779,7 +2876,7 @@ packets' room, so every scan ends at `:839`. That doubling is from
 commit (`13b72fa9`, 2019-08-17), which already had the same 36 and 36.
 **So every case here is against a patched C:** the oracle's `api.c:85`
 asks for 18 bytes, one frame
-(`tools/oracle-patches/libsigrok-mastech-ms6514-scan.patch`). `gcov.txt`
+(`oxrok/libsigrok ed326604`). `gcov.txt`
 doesn't say so, and its figures are that patched C's.
 
 Emulated: model `mastech-ms6514` on the CDC-ACM shell (options `frame=`,
@@ -3403,7 +3500,7 @@ Emulated, not on hardware: model `teleinfo`, 106 cases on 2026-11-06,
 gcov 98.9% of the driver (from the last `--oracle --gcov` run, which still had the library-only cases). Stock libsigrok has found no such device since
 0.5.2: `api.c:79` passes a packet of 292 with a buffer of 292, and
 `serial.c:833` has wanted two packets since `d03815a0` (2019). The
-oracle carries `tools/oracle-patches/libsigrok-teleinfo-scan.patch`,
+oracle carries `oxrok/libsigrok eac41e7a`,
 which looks at byte 292 as 0.5.1 did, and all cases compare against it.
 Model built from Enedis-NOI-CPT_02E; no recording of a real line was
 found.
@@ -4085,52 +4182,55 @@ meter.
 
 ## Oracle
 
-The oracle is libsigrok 0bc24877 with four patches, in
-`tools/oracle-patches/`. Apply all when building the oracle, and mark
-each file `git update-index --assume-unchanged`, or `--dirty` changes
-attribution and gcov headers.
+The oracle is sigrok-cli on the libsigrok of
+[`oxrok/libsigrok`](https://github.com/oxrok/libsigrok), branch `oxrok`:
+upstream master (`0bc24877`, the fork's `master`) with the drivers
+upstream never merged and the fixes without which a driver finds no
+device. Its `OXROK.md` has the rules: additions only, no fix to a
+driver's behaviour beyond reaching it, no vendor firmware.
+`tools/oracle-build.sh` pins the commit, builds the four projects below
+under `~/work/sigrok` with their own prefix (`~/work/sigrok/install`) and
+writes `~/work/sigrok/env.sh`, which puts that prefix on `PATH` and
+`LD_LIBRARY_PATH`, so no distribution package is involved. A driver the
+oracle lacks goes to the fork first, by pull request, then the pin in
+`tools/oracle-build.sh` moves in the pull request that ports it.
 
-- `libsigrok-testo-sdi-driver.patch` restores the `sdi->driver = di;`
-  that `b258c09f` (2017) removed from testo's scan: without it,
-  `testo_probe_channels()` calls `sr_dev_open()` on an instance with no
-  driver, which fails (`device.c:730`), so stock libsigrok finds no Testo
-  and no capture is reachable.
-- `libsigrok-mastech-ms6514-scan.patch` makes the MS6514's scan ask for
-  one frame: asking for two with a buffer of two refuses every scan, so
-  stock libsigrok finds no MS6514.
-- `libsigrok-pr315-intronix-logicport.patch` is pull request 315, the
-  `intronix-logicport` driver (`0bc24877..9692e249`, six commits, one of
-  them `usb.c` taking bus number 0). It builds only with libftdi's headers
-  (`libftdi-devel`). The emulator's other models don't use it.
-- `libsigrok-teleinfo-scan.patch` gives teleinfo's scan a buffer of two
-  packets, for the same reason: `d03815a0` left stock libsigrok finding
-  no Teleinfo since 0.5.2. It looks at byte 292 as 0.5.1 did, and differs
-  from 0.5.1 only on an option past that byte.
+What the fork has over upstream, at the pinned commit:
 
-The sigrok build that `tools/diffcli.sh` and the emulation work of
-phase 9 compare against, built from source under `~/work/sigrok` with
-its own prefix (`~/work/sigrok/install`; `. ~/work/sigrok/env.sh` puts
-it on `PATH` and `LD_LIBRARY_PATH`), so no distribution package is
-involved. Set up 2026-11-02 on Fedora 44:
+- `intronix-logicport`, upstream pull request 315
+  (`0bc24877..fdfc4063`, six commits, one of them `usb.c` taking bus
+  number 0). It builds only with libftdi's headers (`libftdi-devel`).
+- `5c08d885` restores the `sdi->driver = di;` assignment that `b258c09f`
+  removed from testo's scan. Without it `sr_dev_open()` is called on an
+  instance with no driver, which fails (`device.c:730`), so stock
+  libsigrok finds no Testo and no capture is reachable.
+- `ed326604` makes the MS6514's scan ask for one frame: asking for two
+  with a buffer of two refuses every scan, so stock libsigrok finds no
+  MS6514.
+- `eac41e7a` gives teleinfo's scan a buffer of two packets, for the same
+  reason: `d03815a0` left stock libsigrok finding no Teleinfo since
+  0.5.2. It looks at byte 292 as 0.5.1 did, and differs from 0.5.1 only
+  on an option past that byte.
+- `wch-ch32h417-libusb` (`4ed8c99c`), the driver of WeAct Studio's fork
+  (`WeActStudio.U3LogicAnalyzer`, `41b2564`), with its soft trigger kept
+  as a private copy and eight config keys appended to `libsigrok.h`.
+
+Until 2026-11-23 these were upstream `0bc24877` and four patch files in
+`tools/oracle-patches/`; the fork's tree before the WeAct driver
+(`ac1754e0`) is that tree plus `OXROK.md`, so the goldens recorded
+against the patched build stand.
 
 | Project | Commit | Notes |
 |---|---|---|
 | libserialport | `21b3dfe5f68c205be4086469335fd2fc2ce11ed2` | master, 2024-09-24 |
-| libsigrok | `0bc2487778e660f4d3116729b6f4aee2b1996bb0` | master, 2025-11-20, `0.6.0-git-0bc24877`; built with `CFLAGS="-O0 -g --coverage" LDFLAGS="--coverage"` for the phase 9b gcov reports, `--disable-bindings`; 86 of the 87 drivers enabled, `hp-3478a` off for want of libgpib (linux-gpib is not packaged for Fedora) |
-| libsigrokdecode | `1577c4354b4caba6fcb62d5919a1d4a196ae4512` | the `libsigrokdecode-0.5.3` tag, the decoders oxrok follows (`docs/DECODERS.md`), with two one-line local patches to build against Python 3.14: `python3-embed` added to the module list in `configure.ac`, and the `PyEval_InitThreads()` call removed (a no-op since 3.7, gone in 3.13). master (`71f45144`, 2024-10-01) renamed the uart and spi annotation classes after 0.5.3, and 17 decoder cases differ against it; its library also refuses to load the 0.5.3 decoders |
+| libsigrok | `49f29969285dc006b9ea249d21311811d1144a0f` | `oxrok/libsigrok`, branch `oxrok`, 2026-11-23, `0.6.0-git-49f29969`; built with `CFLAGS="-O0 -g --coverage" LDFLAGS="--coverage"` for the phase 9b gcov reports, `--disable-bindings`; `hp-3478a` is off for want of libgpib (linux-gpib is not packaged for Fedora) |
+| libsigrokdecode | `97991a3919da6a07c4c87308ae66fb441bd512e3` | the `libsigrokdecode-0.5.3` tag (tag object `1577c435`), the decoders oxrok follows (`docs/DECODERS.md`), with two one-line edits the script makes to build against Python 3.14: `python3-embed` added to the module list in `configure.ac`, and the `PyEval_InitThreads()` call removed (a no-op since 3.7, gone in 3.13). master (`71f45144`, 2024-10-01) renamed the uart and spi annotation classes after 0.5.3, and 17 decoder cases differ against it; its library also refuses to load the 0.5.3 decoders |
 | sigrok-cli | `f44dd91347e7ac797cefc23162b9fcf0b7329f1f` | master, 2024-08-26, `0.8.0-git-f44dd91` |
-
-The roadmap's inventory named libsigrok `e6907e1e`, and the
-attribution headers `20baa77f`; neither commit exists on sigrok.org
-or the GitHub mirror, whose tips are both `0bc24877`, so they belong
-to the fork that carries the LogicPort driver. `0bc24877` is the
-upstream base used here until that checkout is available.
 
 Build dependencies, in Fedora's names: `autoconf automake libtool
 pkgconf-pkg-config glib2-devel libzip-devel libusb1-devel libftdi-devel
 hidapi-devel bluez-libs-devel libieee1284-devel nettle-devel
 check-devel python3-devel python3-gobject` (nettle for `rdtech-tc`).
-Each project: `./autogen.sh && ./configure --prefix=$HOME/work/sigrok/install`
-with `PKG_CONFIG_PATH=$HOME/work/sigrok/install/lib/pkgconfig`, in the
-order of the table. The 46 software cases of `tools/diffcli.sh` pass
-against this build.
+The script runs, for each project in the order of the table,
+`./autogen.sh && ./configure --prefix=$HOME/work/sigrok/install` with
+`PKG_CONFIG_PATH=$HOME/work/sigrok/install/lib/pkgconfig`.

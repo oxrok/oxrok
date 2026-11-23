@@ -1,9 +1,8 @@
 # The Intronix LogicPort LA1034 (emu/src/models/intronix-logicport.rs): an
 # FT245BL in front of a Cyclone FPGA the host configures in bit-bang mode.
 # Sourced by tools/diffcli.sh --emu; see docs/USB.md, "Writing a device
-# model". The oracle is the C driver of libsigrok PR 315, which main's
-# oracle has once its patch is folded in; until then a run sets
-# EMU_ORACLE_ENV and EMU_LIBSIGROK (tools/diffcli.sh).
+# model". The oracle is the C driver of libsigrok PR 315, which the
+# oracle's libsigrok carries (oxrok/libsigrok; tools/oracle-build.sh).
 #
 # The C driver has patterns and edges only, so what is oxrok's alone
 # (counts, durations, ranges, or, and, qualifier, sample point, inversion,

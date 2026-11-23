@@ -268,6 +268,13 @@ pub trait Transport: Send {
         Err(Error::not_supported("string descriptor indexes"))
     }
 
+    /// `bcdUSB` of the device descriptor (`0x0200`, `0x0300`), from what
+    /// the OS cached at enumeration, without a transfer: for a driver
+    /// that tells a USB 2 link from a USB 3 one by it.
+    fn usb_version(&mut self) -> Result<u16> {
+        Err(Error::not_supported("the USB version of the device descriptor"))
+    }
+
     /// Detaches the kernel driver bound to an interface, if any, as
     /// `libusb_kernel_driver_active` and `libusb_detach_kernel_driver` do:
     /// another program's claim is left alone, and the driver stays detached

@@ -37,7 +37,7 @@ the detail, and leaves this list when they are gone.
    ([Packaging and release](#packaging-and-release), its last entries),
    and with it a stable 0.3.0.
 5. A way in for hardware reports (the head of
-   [Open verification](#open-verification)): 80 of the 90 entries of
+   [Open verification](#open-verification)): 81 of the 91 entries of
    `docs/drivers.toml` have met only the emulator, 6 a real device. Done
    when a user with a device can file a report that has what a
    maintainer needs, and it is labelled and found.
@@ -584,10 +584,9 @@ The models are plain Rust with no I/O for this reason; see
   with `EMU_TCP`, if the replay tests cover the other drivers' use.
 - Nothing checks the goldens against libsigrok again: `EMU_BLESS=1`
   without `--oracle` re-records them from oxrok, CI runs no oracle, and
-  the oracle's build (libsigrok 0bc24877 with the four patches of
-  `tools/oracle-patches`, a pinned libserialport, a patched
-  libsigrokdecode and sigrok-cli f44dd913, on Fedora) is prose in
-  `DEVICES.md`. Wanted: that build as a container file, and a scheduled
+  the oracle's build (`tools/oracle-build.sh`: `oxrok/libsigrok` at a
+  pinned commit, a pinned libserialport, a patched libsigrokdecode and
+  sigrok-cli f44dd913) runs on a prepared Fedora machine alone. Wanted: that build as a container file, and a scheduled
   workflow, sharded as the emulator job is, that runs
   `diffcli.sh --oracle` and says when a golden no longer matches. It
   could run `--gcov` as well, which is the refresh the next entry asks
@@ -1034,9 +1033,9 @@ oxrok/management.
 
 ## Open verification
 
-`docs/drivers.toml` has 90 entries: 6 have met a real device
+`docs/drivers.toml` has 91 entries: 6 have met a real device
 (`intronix-logicport`, `fx2lafw`, `rigol-ds`, `raspberrypi-pico`, `oxla`,
-`oxla-tn20k`), 3 a stand-in, 1 is software, and 80 have met only the
+`oxla-tn20k`), 3 a stand-in, 1 is software, 81 have met only the
 emulator. A report from a device's owner is the only thing that moves
 those numbers, and the way in is thin:
 
@@ -1057,6 +1056,18 @@ those numbers, and the way in is thin:
   below are prose a search does not reach.
 
 What each driver still needs from a device:
+
+- `wch-ch32h417-libusb` (the WeAct Studio Logic Analyzer V2, issue 116)
+  on the board (ordered 2026-11-22): whether the firmware answers a
+  start or a stop (the model assumes not), the answers' length (32
+  bytes assumed), `bcdUSB` on a USB 2 port (2.00 assumed), which eight
+  inputs a byte a sample holds, the descriptor's strings, the
+  threshold's real levels, the key, and whether 200 MHz with 16
+  channels (400 MB/s) holds through nusb: the transfers are the C
+  driver's 32 of 256 KiB. Record a capture and hold the model to it.
+  The original board (serial `01`, with the ADC mode) is in nobody's
+  hands; its ADC path follows the C and oxrok's own choices
+  (`docs/DEVICES.md`).
 
 - `mooshimeter-dmm` on a real meter: the per-reading message order, the
   DEPTH/RATE period and the buffers' full scale are the model's reading of

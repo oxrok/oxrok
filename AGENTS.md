@@ -28,8 +28,10 @@ The default check of a driver change is oxrok against the committed
 goldens on the emulator: `sh tools/diffcli.sh --emu-model MODEL` (no
 sigrok needed; the first line it prints names the mode). Run it with
 `--oracle` (sigrok-cli and libsigrok alongside, after
-`. ~/work/sigrok/env.sh`) only for a new port or to verify an upstream
-sigrok change. When a change alters goldens on purpose, re-record them
+`sh tools/oracle-build.sh && . ~/work/sigrok/env.sh`) only for a new port
+or to verify an upstream sigrok change. The oracle's libsigrok is
+`oxrok/libsigrok` at the commit `tools/oracle-build.sh` pins: a C driver
+upstream never merged goes to that fork first, then the pin moves. When a change alters goldens on purpose, re-record them
 with `EMU_BLESS=1 sh tools/diffcli.sh --emu-model MODEL`, read each
 diff, and say in the commit message why they changed.
 

@@ -132,6 +132,31 @@ limits = [
 ]
 
 
+[drivers.wch-ch32h417-libusb]
+name = "WCH CH32H417 logic analyzers (WeAct Studio Logic Analyzer V2)"
+libsigrok = ""
+ids = ["wch-ch32h417-libusb"]
+kind = "logic-analyzer"
+connection = "usb"
+vendor = "WeAct Studio"
+models = ["Logic Analyzer V2", "CH32H417 Logic Analyzer"]
+status = ["emulated"]
+emu = ["wch-ch32h417-libusb"]
+evidence = []
+behaviour = [
+  "16 channels, 4 MHz to 200 MHz over USB 3; over USB 2 up to 20 MHz, or 40 MHz with at most eight channels (logic_channels). The firmware comes with the board; nothing is uploaded.",
+  "Triggers run on the host. With a capture ratio the trigger waits until that share of the samples is in, so a signal already running does not fire it at the first edge.",
+  "Captures come in frames of the sample limit (limit_frames, 1 by default), each from its own trigger.",
+  "The input threshold is the level on the pins (voltage_threshold); led_brightness sets the indicator, and key_start_stop lets the board's key end a capture.",
+  "A capture whose samples stop coming fails, unless the board's key ended it: the device stops sending when the USB link cannot carry the samplerate.",
+  "The original CH32H417 board (serial numbers starting 01) also has an ADC mode, one of two inputs at 8 or 10 bits (adc_channel, adc_precision); a trigger is refused there.",
+]
+limits = [
+  "Never run on a board: checked against the vendor's C driver on an emulator model, itself built from a reading of that driver, as the firmware is closed.",
+  "The firmware update mode is not driven; update with the vendor's application.",
+  "Not in sigrok: the C driver is the vendor's fork of libsigrok, which oxrok's oracle carries (oxrok/libsigrok).",
+]
+
 [drivers.oxla-tn20k]
 name = "oxla logic analyzer on a Sipeed Tang Nano 20K"
 libsigrok = ""

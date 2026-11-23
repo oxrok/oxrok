@@ -147,6 +147,7 @@ Emulator and replay only, never run on hardware:
 | `uni-t-ut32x` | 84 | 94.5%, 87.7% on the cable |
 | `zeroplus-logic-cube` | 134 | 87.6% |
 | `zketech-ebd-usb` | 109 | 86.6% |
+| `wch-ch32h417-libusb` | 101 | 77.1% |
 
 `demo` is software, covered by the software cases of
 `tools/diffcli.sh`. The native decoders were compared with libsigrokdecode on captures from an ESP32.

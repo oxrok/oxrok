@@ -140,6 +140,11 @@ impl Transport for Rusb {
         ])
     }
 
+    fn usb_version(&mut self) -> Result<u16> {
+        let v = self.device.device_descriptor().map_err(map)?.usb_version();
+        Ok(bcd_version(v.major(), v.minor(), v.sub_minor()))
+    }
+
     fn detach_kernel_driver(&mut self, interface: u8) -> Result<()> {
         self.leave_detached = true;
         // Only an answer of "yes" detaches, as the C's `== 1`: usbfs

@@ -105,7 +105,10 @@ OXROK_USB_REPLAY=capture.txt oxrok -d intronix-logicport -c samplerate=10M --sam
 The `device` line also takes `strings=M,P,S`, the string descriptor
 indexes, recorded when the driver asked for them (the OS answers from
 its cache, so they are no step) and answered from there on replay;
-fx2lafw's scan needs them to read the strings.
+fx2lafw's scan needs them to read the strings. `usb=XXXX` is `bcdUSB`
+of the device descriptor, kept the same way when a driver asked for it
+(`Transport::usb_version`): wch-ch32h417-libusb picks its sample rates
+by it.
 
 `OXROK_HID_RECORD=FILE` and `OXROK_HID_REPLAY=FILE` do the same for HID
 devices (`hid::record`): `# oxrok hid fixture 1`, a `device vid= pid=
@@ -1409,7 +1412,7 @@ of a sigrok driver `DRIVER`:
    `conn=`, and the error answers the driver handles), and
    `tools/emu/NAME.firmware` when the driver uploads files.
 5. Run it with the oracle, alone, without the software cases:
-   `cargo build --workspace && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --oracle --emu-model NAME`.
+   `cargo build --workspace && sh tools/oracle-build.sh && . ~/work/sigrok/env.sh && sh tools/diffcli.sh --oracle --emu-model NAME`.
    A new model is checked against sigrok-cli this way; a later change to
    a model or a driver already ported runs without `--oracle` (step 9).
    Every case must pass and log no violation under sigrok-cli; a
