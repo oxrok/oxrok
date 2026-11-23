@@ -1,6 +1,12 @@
 # A test that hangs is ended and reported as TIMEOUT rather than holding
 # its runner until the job's limit. A period is 60 s, so a test is ended
-# after 10 minutes; the longest today (decoder_uart_rest's amulet_ascii
-# regression under CPython) takes about four.
+# after 10 minutes.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# The longest test by far: about four minutes under CPython in CI, and
+# RustPython is slower on long decodes (docs/DECODERS.md), eight and a
+# half minutes on a loaded laptop. 30 minutes, under the 45 of CI's jobs.
+[[profile.default.overrides]]
+filter = 'binary(decoder_uart_rest) & test(amulet_ascii_regression)'
+slow-timeout = { period = "60s", terminate-after = 30 }

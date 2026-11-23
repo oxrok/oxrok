@@ -7,8 +7,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
 
+# The toolchain is the one rust-toolchain.toml pins, with its components:
+# `rustup toolchain install` with no name installs it (rustup 1.28 on).
+# Only the msrv job names another.
 jobs:
   # Which slow jobs this run needs (tools/ci/changes.py). A push to main
   # runs everything. A pull request runs the emulator models of the
@@ -53,17 +57,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: rustfmt, clippy
+      # AGENTS.md, "Vendor firmware": no tracked file is named like one.
+      # By extension only; it does not read contents.
+      - run: python3 -I tools/ci/firmware.py
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --all --check
       - run: python3 -I tools/ci/test_changes.py
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: python3 -I tools/ci/test_firmware.py
+      - run: cargo clippy --workspace --all-targets --all-features --locked
 
   # Fails on a dependency with a licence deny.toml does not allow, for any
-  # feature on any platform. Licences only; see docs/LICENSING.md.
+  # feature on any platform, or one that is not from crates.io. See
+  # docs/LICENSING.md. Advisories are advisories.yml's, on a schedule.
   licenses:
     name: licenses
     runs-on: ubuntu-latest
@@ -71,13 +77,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@0.20.2
-      - run: cargo deny --workspace --locked check licenses
+      - run: cargo deny --workspace --locked check licenses sources
       # What the release generates, so that a new dependency that needs a
       # line in tools/third-party shows here and not on the release tag.
       - run: cargo install --locked --features cli --version 0.9.3 cargo-about
@@ -97,19 +101,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - run: cargo nextest run --workspace --all-features --no-fail-fast
-      - run: cargo test --workspace --doc
+      - run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+      - run: cargo test --workspace --doc --locked
 
   msrv:
     name: msrv
     runs-on: ubuntu-latest
+    # rust-toolchain.toml overrides rustup's default toolchain, which is
+    # all the action below sets: without this the job checks on the
+    # toolchain of that file, not on the MSRV.
+    env:
+      RUSTUP_TOOLCHAIN: "1.95"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,12 +126,12 @@ jobs:
           toolchain: "1.95"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # rustpython needs 1.96, for its parser.
-      - run: cargo check --workspace --features python,libusb
+      - run: cargo check --workspace --features python,libusb --locked
 
   # The suite under each Python feature, in nextest slices. The longest
   # single test (decoder_uart_rest's amulet_ascii regression, about four
-  # minutes under CPython) is the floor of a slice; change `of` to
-  # retune.
+  # minutes under CPython, more under RustPython; .config/nextest.toml
+  # gives it 30) is the floor of a slice; change `of` to retune.
   python-decoders:
     name: python decoders (${{ matrix.feature }} ${{ matrix.slice }}/${{ matrix.of }})
     needs: changes
@@ -150,9 +157,7 @@ jobs:
         with:
           persist-credentials: false
       - if: needs.changes.outputs.python == 'true'
-        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+        run: rustup toolchain install
       - if: needs.changes.outputs.python == 'true'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
@@ -161,11 +166,18 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: nextest
-      - if: needs.changes.outputs.python == 'true' && matrix.feature == 'python'
-        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      # Both features: libsigrokdecode4 is where the decoders the native
+      # ones are compared with come from, and without them every such
+      # test returns early and passes.
       - if: needs.changes.outputs.python == 'true'
+        run: sudo apt-get update && sudo apt-get install -y python3-dev libsigrokdecode4
+      # OXROK_REQUIRE_DECODERS: no decoders found is a failure here
+      # (tests/support/mod.rs), not a run that compared nothing.
+      - if: needs.changes.outputs.python == 'true'
+        env:
+          OXROK_REQUIRE_DECODERS: 1
         run: >-
-          cargo nextest run -p oxrok --features ${{ matrix.feature }} --no-fail-fast
+          cargo nextest run -p oxrok --features ${{ matrix.feature }} --locked --no-fail-fast
           --partition slice:${{ matrix.slice }}/${{ matrix.of }}
 
   python-clippy:
@@ -177,14 +189,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
-          components: clippy
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y python3-dev
-      - run: cargo clippy -p oxrok --features python --all-targets
-      - run: cargo clippy -p oxrok --features rustpython --all-targets
+      - run: cargo clippy -p oxrok --features python --all-targets --locked
+      - run: cargo clippy -p oxrok --features rustpython --all-targets --locked
 
   # The emulator tier (docs/USB.md, "Emulation over USB/IP"): oxrok
   # against the committed goldens, through vhci-hcd. When the
@@ -240,9 +249,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: stable
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       # The probe loaded it on the same image: here a failure is an error.
       - name: Load vhci-hcd
@@ -276,7 +283,7 @@ jobs:
           sudo modprobe hci_vhci || true
           sudo modprobe -a ppdev uss720 || true
           sudo systemctl stop bluetooth 2>/dev/null || true
-      - run: cargo build -p oxrok -p oxrok-emu
+      - run: cargo build -p oxrok -p oxrok-emu --locked
       # What the harness drives the server with.
       - run: cargo install vusb-cli --version 0.2.1 --locked
       # The harness's default mode, no sigrok-cli: full cases run oxrok

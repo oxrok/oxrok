@@ -51,6 +51,8 @@ IGNORED_PREFIXES = (
     "tools/oracle-patches/",
     "tools/attribution.d/",
     ".github/workflows/release.yml",
+    # cargo deny check advisories, on a schedule: no job of ci.yml.
+    ".github/workflows/advisories.yml",
     ".github/ISSUE_TEMPLATE/",
     # udev rules: tests/udev_rules.rs reads them, in the test job.
     "contrib/",
@@ -65,6 +67,9 @@ IGNORED_FILES = {
     ".packit.yaml",
     ".github/dependabot.yml",
     "tools/attribution.py",
+    # The vendor-firmware name check, run in the fmt and clippy job.
+    "tools/ci/firmware.py",
+    "tools/ci/test_firmware.py",
     "tools/libsigrok-drivers.txt",
     "tools/udev-diff.py",
     # The website's data generator, a script (not a directory).
