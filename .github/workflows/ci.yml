@@ -99,7 +99,7 @@ jobs:
       - run: rustup toolchain install
       # cargo-about as its release binary: release.yml builds the same
       # version with cargo, since not every runner there has a binary.
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-deny@0.20.2,cargo-about@0.9.3
       - run: cargo deny --workspace --locked check licenses sources
@@ -125,7 +125,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: nextest
       # The ci profile (.config/nextest.toml): a failed test gets one more
@@ -203,7 +203,7 @@ jobs:
           key: ${{ matrix.feature }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - if: needs.changes.outputs.python == 'true'
-        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: nextest
       # Both features: libsigrokdecode4 is where the decoders the native
