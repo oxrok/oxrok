@@ -9,10 +9,10 @@
 
 # The version as Cargo.toml and the tag have it. RPM writes a pre-release
 # with a tilde, which sorts before the release it leads to.
-%global upstream_version 0.3.0-alpha.1
+%global upstream_version 0.3.0-alpha.2
 
 Name:           oxrok
-Version:        0.3.0~alpha.1
+Version:        0.3.0~alpha.2
 Release:        %autorelease
 Summary:        A sigrok compatible logic analyzer, multimeter and oscilloscope tool
 

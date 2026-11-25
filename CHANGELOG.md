@@ -6,6 +6,27 @@ release may change the library API.
 
 ## [Unreleased]
 
+## [0.3.0-alpha.2] - 2026-11-26
+
+The second pre-release of 0.3.0. It brings three drivers that are not in
+sigrok: `oxla` and `oxla-tn20k`, for oxrok's own logic analyzer gateware
+on a Sipeed Tang Nano 20K, and `wch-ch32h417-libusb`, for the WeAct
+Studio Logic Analyzer V2, which has met only the emulator so far. A stop
+or a close of a device whose packet queue nobody reads no longer waits
+for ever in the core and in the first drivers. Fuzzing of the input
+formats, the decoders and the meters' frame parsers found five bugs,
+fixed here. It is the first release built by the rewritten release
+workflow, with `SHA256SUMS` and a build provenance attestation of every
+archive.
+
+For library users, this release breaks more than a pre-release usually
+does, on purpose, before 0.3.0 is stable: the core's enums are
+`#[non_exhaustive]`, the drivers' `protocol` modules are private, and
+`serial::UsbPort` has a new field (see Changed). `PacketSink::stopped_by`,
+`Transport::usb_version`, `SoftTriggerLogic::arm_when_full` and
+`ftdi::mpsse` are new. More breaking changes may come before the stable
+release (see Known issues).
+
 ### Added
 
 - The `wch-ch32h417-libusb` driver, for the WeAct Studio Logic Analyzer V2
@@ -20,6 +41,9 @@ release may change the library API.
   in, and a new start for each frame.
 - `Transport::usb_version`, `bcdUSB` of the device descriptor without a
   transfer, kept in a fixture's `device` line as `usb=XXXX`.
+- `PacketSink::stopped_by` and `PacketSink::stopped_by_within`, which
+  tell a driver's sink of its device's stop flag, and `SEND_AFTER_STOP`,
+  the half second a packet then waits for room (see Fixed).
 - The `oxla` driver, for the oxla logic analyzer gateware on a Sipeed Tang
   Nano 20K (8, 14 or 16 channels, up to 270 MS/s, a two term trigger, run
   length encoding), on its serial port. It has no libsigrok counterpart.
@@ -65,6 +89,13 @@ release may change the library API.
   packets and their helpers) is private to the crate. A driver's `Driver`,
   its device, their constructors and its other modules are public as
   before.
+- For library users: `serial::UsbPort` has a new field, `interface`, the
+  number of the USB interface a port is of, where the system says. Code
+  that builds one as a struct literal needs it.
+- A build from a checkout of the repository uses Rust 1.100.0, which
+  `rust-toolchain.toml` now names where it said `stable`. The minimum
+  supported version is 1.95 as before, and the crate from crates.io
+  builds with whatever toolchain is installed.
 
 ### Fixed
 
@@ -84,8 +115,50 @@ release may change the library API.
   header, or the reader panicked on a short file.
 - `-I vcd` reads a file whose `$timescale` is 0 as one that names no
   sample rate; it panicked on the division.
+- `-I vcd` with `numchannels` skips a `$var` whose width does not fit a
+  count; the sum it is compared with overflowed.
 - `-P rgb_led_ws281x` on a line slower than the 50 us of a RESET gives
   the bit before each RESET as 0, as libsigrokdecode does; it gave 1.
+- The UNI-T UT372's parser takes a byte over 0xf8 as no digit in a build
+  with overflow checks too, where it panicked.
+
+### Known issues
+
+- A close can still wait for ever on a packet queue nobody reads with 39
+  drivers, `fx2lafw`, `raspberrypi-pico`, `kingst-la2016` and
+  `dreamsourcelab-dslogic` among them (#134; the roadmap's Shutdown
+  section names them all). The command line and `Session` always read
+  their queue: it is a client of the library that drives a `Device`
+  itself that can see it. The command line still closes its device only
+  when a run ends well.
+- With `demo` and `serial-dmm`, a reader that stops reading for more than
+  half a second after a stop (an output into a blocked pipe, a slow
+  Python decoder) loses the end of the capture without a message.
+- `rigol-ds` on a serial port loses a byte of a waveform when a read
+  of it ends in a line feed and a carriage return (#135). USBTMC and TCP
+  are not touched.
+- `wch-ch32h417-libusb` has never run on a board (#116), and `oxla` and
+  `oxla-tn20k` have run on one Tang Nano 20K, on macOS only. The `oxla`
+  emulator cases have never been run (#137).
+- The checks of the `demo` driver, the formats and the decoders on the
+  command line against sigrok-cli run only by hand, with `--oracle`
+  (#136), and the `emulator` CI job still fails now and then for a race
+  in the emulated USB host and is not required for a merge.
+- This is the first run of the rewritten release workflow (#139). Should
+  an archive be missing or wrong, the release stays a draft.
+- Two changes that break library users are still open for the stable
+  0.3.0 (#138) and are not in this release: defaults for
+  `Device::enable_channel` and `Device::rename_channel`, and a typed kind
+  of failure for a capture that fails.
+- `-P uart` keeps the data bits of a frame that a break cuts short, as
+  libsigrokdecode's decoder does, and they go into the value of the next
+  frame, which is then wider than its data bits. `-P uart,midi` can
+  run for ever on such a value, and with more than 32 bits the value is
+  not libsigrokdecode's and a build with overflow checks panics in the
+  decoder. The nightly fuzzing found both, on captures sampled slower
+  than the bit rate. Both are in 0.2.0 too.
+- The trigger hold-off is tested on the `demo` driver and in the
+  software trigger's unit tests, not yet on an fx2lafw or a Pico board.
 
 ## [0.3.0-alpha.1] - 2026-11-14
 

@@ -189,7 +189,7 @@ With Rust 1.95 or newer:
 
 ```sh
 cargo install oxrok --locked                           # the stable release, 0.2.0
-cargo install oxrok --version 0.3.0-alpha.1 --locked   # the pre-release
+cargo install oxrok --version 0.3.0-alpha.2 --locked   # the pre-release
 ```
 
 cargo installs a pre-release only when its version is named;
